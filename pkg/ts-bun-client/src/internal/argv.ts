@@ -49,15 +49,14 @@ import type {
  * bug b.32k. Each field is optional; when undefined the corresponding flag
  * is omitted from argv and the CLI's own default-resolution kicks in.
  *
- * Tilde-expansion is the caller's responsibility (typically done at Client
- * construction time via src/internal/tilde.ts).
+ * Values are forwarded verbatim; the CLI expands `~` in them (b.38a).
  */
 export interface GlobalArgvOptions {
-  /** Tilde-expanded path forwarded to the CLI as `--store-path`. */
+  /** Path forwarded to the CLI as `--store-path`. */
   storePath?: string;
-  /** Tilde-expanded path forwarded to the CLI as `--home`. */
+  /** Path forwarded to the CLI as `--home`. */
   home?: string;
-  /** Tilde-expanded path forwarded to the CLI as `--tmux-command`. */
+  /** Path forwarded to the CLI as `--tmux-command`. */
   tmuxCommand?: string;
 }
 

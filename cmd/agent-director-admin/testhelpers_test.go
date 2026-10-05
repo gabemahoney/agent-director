@@ -102,18 +102,32 @@ func tmuxTmpdir(t *testing.T, home string) string {
 	return dir
 }
 
-// runBin runs bin with args under home, with the fake tmux first on PATH, its
-// log under home and home's private TMUX_TMPDIR, so no run can reach a real
-// tmux server; it returns stdout, stderr and the exit code.
+// fakeTmuxEnv returns a run's environment without HOME: the fake tmux first
+// on PATH, its log under dir and dir's private TMUX_TMPDIR, so no run can
+// reach a real tmux server.
+func fakeTmuxEnv(t *testing.T, dir string) []string {
+	t.Helper()
+	return []string{
+		"PATH=" + faketmuxfix.Dir(t) + ":" + os.Getenv("PATH"),
+		"FAKE_TMUX_LOG=" + filepath.Join(dir, "fake-tmux.log"),
+		"TMUX_TMPDIR=" + tmuxTmpdir(t, dir),
+	}
+}
+
+// runBin runs bin with args under home: HOME is home and the rest of the
+// environment is fakeTmuxEnv(home). It returns stdout, stderr and the exit
+// code.
 func runBin(t *testing.T, bin, home string, args ...string) (string, string, int) {
 	t.Helper()
+	return runBinIn(t, bin, "", append(fakeTmuxEnv(t, home), "HOME="+home), args...)
+}
+
+// runBinIn runs bin with args in cwd (the test's own cwd when empty) with
+// exactly env as its environment; it returns stdout, stderr and the exit code.
+func runBinIn(t *testing.T, bin, cwd string, env []string, args ...string) (string, string, int) {
+	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = []string{
-		"PATH=" + faketmuxfix.Dir(t) + ":" + os.Getenv("PATH"),
-		"HOME=" + home,
-		"FAKE_TMUX_LOG=" + filepath.Join(home, "fake-tmux.log"),
-		"TMUX_TMPDIR=" + tmuxTmpdir(t, home),
-	}
+	cmd.Dir, cmd.Env = cwd, env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := 0

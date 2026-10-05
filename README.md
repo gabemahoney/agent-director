@@ -66,6 +66,10 @@ SQLite file; everything else is tmux.
     whatever tmux shows.
   - No tmux server needs to be running: agent-director starts one when
     it launches an agent.
+  - Agents need `HOME` set. A tmux server started from a systemd system
+    unit with no `User=` gives its panes no `HOME`: Claude Code still
+    runs there, but agent-director's hooks refuse to work without `HOME`,
+    so rows stay `pending`.
 - `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
 
 ### Install the CLI

@@ -121,22 +121,33 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 // Apply applies g to this process and returns the Overrides Open takes.
 //
 // --home replaces the HOME environment variable (its value tilde-expanded
-// against the current HOME) BEFORE anything loads the config: internal/config,
-// pkg/api.expandTilde and internal/store.expandTilde all expand "~/" with
-// os.UserHomeDir(), which reads HOME on POSIX, so the override covers every
-// downstream "~/" store/config path expansion. (A spawn cwd's "~" is not one
-// of them: SRD §7.2 resolves it with user.Current().HomeDir, which ignores
-// HOME.) Safe because the binaries are short-lived and not multi-threaded at
-// startup. b.32k, b.hvf.
+// against the current HOME by ExpandTilde) BEFORE anything loads the config:
+// internal/config, pkg/api.expandTilde and internal/store.expandTilde all
+// expand "~/" with os.UserHomeDir(), which reads HOME on POSIX, so the
+// override covers every downstream "~/" store/config path expansion. (A spawn
+// cwd's "~" is not one of them: SRD §7.2 resolves it with
+// user.Current().HomeDir, which ignores HOME.) Safe because the binaries are
+// short-lived and not multi-threaded at startup. b.32k, b.hvf.
+//
+// A --home of "~" or "~/…" while HOME is unset or empty is refused: there is
+// no home to expand it against, and HOME is never set to an unexpanded "~"
+// value nor resolved against the passwd home (b.38a, the rule b.4uz gave the
+// store).
 //
 // --store-path is passed as given (pkg/api.New tilde-expands it), and
 // --tmux-command tilde-expanded, after --home is applied, so a `~/bin/tmux`
-// argument works (pkg/api uses Options.TmuxCommand as given).
+// argument works (pkg/api uses Options.TmuxCommand as given). A
+// --tmux-command ExpandTilde cannot expand is passed on unexpanded.
 //
-// The only error is a failure to set HOME.
+// The errors are that --home refusal and a failure to set HOME; both binaries
+// print either as ErrInvalidFlags.
 func (g GlobalFlags) Apply() (Overrides, error) {
 	if g.HomeSet {
-		if err := os.Setenv("HOME", ExpandTilde(g.Home)); err != nil {
+		home, ok := ExpandTilde(g.Home)
+		if !ok {
+			return Overrides{}, fmt.Errorf("--home %q: HOME is unset or empty, so there is no home directory to expand \"~\" against", g.Home)
+		}
+		if err := os.Setenv("HOME", home); err != nil {
 			return Overrides{}, fmt.Errorf("set HOME: %w", err)
 		}
 	}
@@ -145,25 +156,28 @@ func (g GlobalFlags) Apply() (Overrides, error) {
 		o.StorePath = g.StorePath
 	}
 	if g.TmuxCommandSet {
-		o.TmuxCommand = ExpandTilde(g.TmuxCommand)
+		// Not ok means no HOME: the value goes on unexpanded, as it always has.
+		o.TmuxCommand, _ = ExpandTilde(g.TmuxCommand)
 	}
 	return o, nil
 }
 
-// ExpandTilde expands a leading "~/" against the current HOME (env, then
-// os.UserHomeDir), returning p unchanged when it has no such prefix or no
-// home is known. Mirrors pkg/api.expandTilde, which is unexported.
-func ExpandTilde(p string) string {
-	if !strings.HasPrefix(p, "~/") {
-		return p
+// ExpandTilde expands a bare "~" or a leading "~/" against the current HOME,
+// read with os.UserHomeDir (on Unix, HOME and nothing else): "~" gives HOME
+// and "~/x" gives HOME + "/x". Any other p, "~user/x" included, is returned
+// unchanged with ok true.
+//
+// When p is "~" or "~/…" and HOME is unset or empty, ok is false and p is
+// returned unchanged. It deliberately does not fall back to another home
+// source such as the passwd entry, which holds the real ~/.agent-director
+// (b.4uz, b.38a); internal/store and pkg/api refuse the same case.
+func ExpandTilde(p string) (expanded string, ok bool) {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p, true
 	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil || home == "" {
-			return p
-		}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p, false
 	}
-	return home + p[1:]
+	return home + p[1:], true
 }

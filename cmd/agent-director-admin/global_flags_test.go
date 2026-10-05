@@ -2,11 +2,13 @@ package main_test
 
 // global_flags_test.go covers agent-director's global flags on
 // agent-director-admin (b.vqr): --store-path and --home, before or after the
-// verb, open the store agent-director created with the same flag, and
-// --tmux-command is the tmux kill-finished runs.
+// verb, open the store agent-director created with the same flag,
+// --tmux-command is the tmux kill-finished runs, and --home ~ with no HOME is
+// refused (b.38a).
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -82,6 +84,31 @@ func TestAdminGlobalFlagsOpenMainCLIStore(t *testing.T) {
 			assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotFound")
 			if _, err := os.Stat(stateDB(home)); !os.IsNotExist(err) {
 				t.Errorf("a store under HOME after the runs (stat: %v); want only the flag's store", err)
+			}
+		})
+	}
+}
+
+// TestAdminHomeTildeWithoutHOMERefused: with HOME empty or unset, --home ~ is
+// ErrInvalidFlags with exit 1, as on agent-director, and creates nothing in the
+// cwd (b.38a).
+func TestAdminHomeTildeWithoutHOMERefused(t *testing.T) {
+	for _, unset := range []bool{false, true} {
+		t.Run(fmt.Sprintf("HOME unset=%t", unset), func(t *testing.T) {
+			cwd := t.TempDir()
+			environ := fakeTmuxEnv(t, t.TempDir())
+			if !unset {
+				environ = append(environ, "HOME=")
+			}
+
+			stdout, stderr, code := runBinIn(t, adminPath, cwd, environ, "--home", "~", "delete", "--claude-instance-id", "x")
+
+			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+			if want := `--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`; env.ErrDescription != want {
+				t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
+			}
+			if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 0 {
+				t.Errorf("cwd holds %v (err %v); want nothing created there", entries, err)
 			}
 		})
 	}

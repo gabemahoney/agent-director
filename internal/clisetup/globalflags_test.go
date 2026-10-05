@@ -1,6 +1,7 @@
 package clisetup_test
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -93,9 +94,9 @@ func TestParseGlobalFlagsMissingValue(t *testing.T) {
 	}
 }
 
-// TestGlobalFlagsApply: Apply sets HOME from --home (a leading "~/" expanded
-// against the HOME before it), then returns --store-path as given and
-// --tmux-command with "~/" expanded against the new HOME; unset flags leave
+// TestGlobalFlagsApply: Apply sets HOME from --home (a bare "~" or a leading
+// "~/" expanded against the HOME before it), then returns --store-path as given
+// and --tmux-command with "~" expanded against the new HOME; unset flags leave
 // HOME and the overrides alone.
 func TestGlobalFlagsApply(t *testing.T) {
 	cases := []struct {
@@ -107,6 +108,9 @@ func TestGlobalFlagsApply(t *testing.T) {
 		{"no flags", clisetup.GlobalFlags{}, "/orig", clisetup.Overrides{}},
 		{"--home absolute", clisetup.GlobalFlags{Home: "/other", HomeSet: true}, "/other", clisetup.Overrides{}},
 		{"--home with a tilde", clisetup.GlobalFlags{Home: "~/sub", HomeSet: true}, "/orig/sub", clisetup.Overrides{}},
+		{"--home bare tilde is HOME, not a literal ~ (b.38a)", clisetup.GlobalFlags{Home: "~", HomeSet: true}, "/orig", clisetup.Overrides{}},
+		{"--tmux-command bare tilde", clisetup.GlobalFlags{TmuxCommand: "~", TmuxCommandSet: true},
+			"/orig", clisetup.Overrides{TmuxCommand: "/orig"}},
 		{"--store-path kept as given", clisetup.GlobalFlags{StorePath: "~/s.db", StorePathSet: true},
 			"/orig", clisetup.Overrides{StorePath: "~/s.db"}},
 		{"--tmux-command expanded against the old HOME", clisetup.GlobalFlags{TmuxCommand: "~/bin/tmux", TmuxCommandSet: true},
@@ -132,14 +136,99 @@ func TestGlobalFlagsApply(t *testing.T) {
 	}
 }
 
-// TestExpandTilde: only a leading "~/" expands, against HOME.
-func TestExpandTilde(t *testing.T) {
-	t.Setenv("HOME", "/h")
-	for in, want := range map[string]string{
-		"~/x/y": "/h/x/y", "~/": "/h/", "~": "~", "~user/x": "~user/x", "/abs/~/x": "/abs/~/x", "rel": "rel", "": "",
-	} {
-		if got := clisetup.ExpandTilde(in); got != want {
-			t.Errorf("ExpandTilde(%q) = %q; want %q", in, got, want)
+// setHome sets HOME to home for the test, or unsets it; cleanup restores it.
+func setHome(t *testing.T, home string, unset bool) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	if unset {
+		if err := os.Unsetenv("HOME"); err != nil {
+			t.Fatalf("Unsetenv HOME: %v", err)
 		}
+	}
+}
+
+// TestGlobalFlagsApplyWithoutHOME: with HOME empty or unset, a --home of "~"
+// or "~/…" is refused and HOME is left as it was, never set to the literal
+// value nor to the passwd home (b.38a); other flags apply as before, a
+// --tmux-command "~/" passed on unexpanded.
+func TestGlobalFlagsApplyWithoutHOME(t *testing.T) {
+	refusal := func(home string) string {
+		return `--home "` + home + `": HOME is unset or empty, so there is no home directory to expand "~" against`
+	}
+	cases := []struct {
+		name     string
+		flags    clisetup.GlobalFlags
+		wantErr  string
+		wantHome string // HOME after a successful Apply; a refusal leaves HOME as it was
+		want     clisetup.Overrides
+	}{
+		{"--home bare tilde", clisetup.GlobalFlags{Home: "~", HomeSet: true}, refusal("~"), "", clisetup.Overrides{}},
+		{"--home tilde path", clisetup.GlobalFlags{Home: "~/x", HomeSet: true}, refusal("~/x"), "", clisetup.Overrides{}},
+		{"--home tilde with the other flags", clisetup.GlobalFlags{Home: "~", HomeSet: true,
+			StorePath: "/abs.db", StorePathSet: true, TmuxCommand: "/t", TmuxCommandSet: true}, refusal("~"), "", clisetup.Overrides{}},
+		{"--home absolute", clisetup.GlobalFlags{Home: "/other", HomeSet: true}, "", "/other", clisetup.Overrides{}},
+		{"--tmux-command tilde passed on unexpanded", clisetup.GlobalFlags{TmuxCommand: "~/bin/tmux", TmuxCommandSet: true},
+			"", "", clisetup.Overrides{TmuxCommand: "~/bin/tmux"}},
+	}
+	for _, unset := range []bool{false, true} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("%s/HOME unset=%t", tc.name, unset), func(t *testing.T) {
+				setHome(t, "", unset)
+				got, err := tc.flags.Apply()
+				if tc.wantErr != "" {
+					if err == nil || err.Error() != tc.wantErr {
+						t.Errorf("Apply error = %v; want %q", err, tc.wantErr)
+					}
+				} else if err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
+				if got != tc.want {
+					t.Errorf("overrides = %+v; want %+v", got, tc.want)
+				}
+				home, set := os.LookupEnv("HOME")
+				if tc.wantHome != "" {
+					if home != tc.wantHome {
+						t.Errorf("HOME = %q; want %q", home, tc.wantHome)
+					}
+				} else if home != "" || set == unset {
+					t.Errorf("HOME = %q (set %t); want it left as it was (empty, set %t)", home, set, !unset)
+				}
+			})
+		}
+	}
+}
+
+// TestExpandTilde: a bare "~" or a leading "~/" expands against HOME, and with
+// HOME empty or unset comes back unchanged with ok false (b.38a); anything
+// else comes back unchanged with ok true.
+func TestExpandTilde(t *testing.T) {
+	cases := []struct {
+		home   string
+		unset  bool
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"/h", false, "~/x/y", "/h/x/y", true},
+		{"/h", false, "~/", "/h/", true},
+		{"/h", false, "~", "/h", true},
+		{"/h", false, "~user/x", "~user/x", true},
+		{"/h", false, "/abs/~/x", "/abs/~/x", true},
+		{"/h", false, "rel", "rel", true},
+		{"/h", false, "", "", true},
+		{"", false, "~", "~", false},
+		{"", false, "~/x", "~/x", false},
+		{"", true, "~", "~", false},
+		{"", true, "~/x", "~/x", false},
+		{"", false, "~user/x", "~user/x", true},
+		{"", true, "/abs", "/abs", true},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("HOME=%q unset=%t/%q", tc.home, tc.unset, tc.in), func(t *testing.T) {
+			setHome(t, tc.home, tc.unset)
+			if got, ok := clisetup.ExpandTilde(tc.in); got != tc.want || ok != tc.wantOK {
+				t.Errorf("ExpandTilde(%q) = %q, %t; want %q, %t", tc.in, got, ok, tc.want, tc.wantOK)
+			}
+		})
 	}
 }

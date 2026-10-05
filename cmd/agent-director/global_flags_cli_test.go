@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -238,6 +240,76 @@ func TestGlobalFlag_EmptyTwoTokenValue_Refused(t *testing.T) {
 					t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
 				}
 				assertHomeTree(t, home)
+			})
+		}
+	}
+}
+
+// TestGlobalFlag_TildeValuesUseHOME: with an absolute HOME, "~" values open the
+// store under HOME and leave the cwd empty; `--home ~` is HOME itself, not a
+// literal "~" directory under the cwd (b.38a).
+func TestGlobalFlag_TildeValuesUseHOME(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		flags     []string
+		wantStore string // relative to HOME
+	}{
+		{"--home ~", []string{"--home", "~"}, filepath.Join(".agent-director", "state.db")},
+		{"--home ~/sub", []string{"--home", "~/sub"}, filepath.Join("sub", ".agent-director", "state.db")},
+		{"--store-path ~/s.db", []string{"--store-path", "~/s.db"}, "s.db"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, cwd := t.TempDir(), t.TempDir()
+			if _, stderr, code := runInDir(t, cwd, home, append(tc.flags, "list")...); code != 0 {
+				t.Fatalf("%q list: exit=%d want 0; stderr=%q", tc.flags, code, stderr)
+			}
+			if _, err := os.Stat(filepath.Join(home, tc.wantStore)); err != nil {
+				t.Errorf("no store at $HOME/%s: %v", tc.wantStore, err)
+			}
+			assertHomeTree(t, cwd)
+		})
+	}
+}
+
+// TestGlobalFlag_HomeTildeWithoutHOME_Refused: with HOME empty or unset,
+// `--home ~` and `--home ~/x` are ErrInvalidFlags with exit 1 and open
+// nothing, under the passwd home or the cwd (b.38a). With no HOME and no
+// --home, every store-opening call is ErrStoreOpen, `--store-path ~/…`
+// included, because the config path ~/.agent-director/config.toml cannot be
+// expanded; the store's own refusal of a "~/" path is
+// internal/store's TestTildeStorePathWithoutHOMERefused (b.4uz).
+func TestGlobalFlag_HomeTildeWithoutHOME_Refused(t *testing.T) {
+	const noHome = `: HOME is unset or empty, so there is no home directory to expand "~" against`
+	for _, tc := range []struct {
+		name, wantErr, wantDesc string
+		argv                    []string
+	}{
+		{"--home ~ list", "ErrInvalidFlags", `--home "~"` + noHome, []string{"--home", "~", "list"}},
+		{"--home=~/x list", "ErrInvalidFlags", `--home "~/x"` + noHome, []string{"--home=~/x", "list"}},
+		{"--home ~ version", "ErrInvalidFlags", `--home "~"` + noHome, []string{"--home", "~", "version"}},
+		{"--store-path ~/s.db list", "ErrStoreOpen", "api: expand config path: expand tilde: $HOME is not defined",
+			[]string{"--store-path", "~/s.db", "list"}},
+	} {
+		for _, unset := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/HOME unset=%t", tc.name, unset), func(t *testing.T) {
+				passwdDir := passwdAgentDir(t)
+				cwd := t.TempDir()
+				environ := []string{"PATH=" + os.Getenv("PATH")}
+				if !unset {
+					environ = append(environ, "HOME=")
+				}
+				stdout, stderr, code, timedOut := runBoundedIn(t, cwd, environ, "", false, noExecFormDeadline, tc.argv...)
+				if timedOut {
+					t.Fatalf("%q still running after %s", tc.argv, noExecFormDeadline)
+				}
+				env := assertOnlyEnvelope(t, stdout, stderr, code, tc.wantErr)
+				if env.ErrDescription != tc.wantDesc {
+					t.Errorf("err_description = %q; want %q", env.ErrDescription, tc.wantDesc)
+				}
+				if _, err := os.Lstat(passwdDir); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%q created %s under the passwd home (Lstat: %v)", tc.argv, passwdDir, err)
+				}
+				assertHomeTree(t, cwd)
 			})
 		}
 	}

@@ -5,13 +5,14 @@
  * SR-6.1–6.5 (callTimeoutMs validation + ErrCallTimeout), plus a public-surface
  * smoke check that index.ts exports are unchanged.
  *
- * Six behaviour cases:
+ * Seven behaviour cases:
  *   1. callTimeoutMs <= 0 at construction → throws config error.
  *   2. Serialization: 5 parallel calls execute strictly in order (no overlap).
  *   3. Rejection-does-not-wedge-queue: call N rejects, call N+1 succeeds.
  *   4. Timeout: fixture sleeping > callTimeoutMs → rejects with ErrCallTimeout.
  *   5. Signal: fixture self-SIGINTs → rejects with ErrConsumerSignal.
  *   6. Public-surface smoke: index.ts exports unchanged (Client + typed errors present).
+ *   7. storePath / home / tmuxCommand forwarded verbatim, `~` unexpanded (b.38a).
  *
  * IMPORT NOTE: Expected exports from src/internal/subprocessClient.ts:
  *   SubprocessClient class — constructor takes ClientOptions (with callTimeoutMs)
@@ -324,6 +325,37 @@ describe("SubprocessClient — version() returns npm package version (b.6o1)", (
     },
     { timeout: 10000 }
   );
+});
+
+// ---------------------------------------------------------------------------
+// b.38a: storePath, home and tmuxCommand reach the CLI verbatim
+// ---------------------------------------------------------------------------
+describe("SubprocessClient — storePath, home and tmuxCommand forwarded verbatim (b.38a)", () => {
+  // The CLI expands `~`; the client must not, whatever HOME holds (undefined unsets it).
+  test.each([
+    ["HOME set", "/b-38a/home"],
+    ["HOME empty", ""],
+    ["HOME unset", undefined],
+  ])("%s: `~` values reach the CLI as given, with no os.homedir() path", async (_label, home) => {
+    const argvFile = path.join(makeTmpDir(), "argv");
+    await withProcessEnv({ HOME: home, ARGV_FILE: argvFile }, async () => {
+      const client = await makeClient(path.join(FIXTURES, "argv-recorder.sh"), {
+        storePath: "~/x.db",
+        home: "~",
+        tmuxCommand: "~/bin/tmux",
+      });
+      await client.version({});
+
+      const argv = fs.readFileSync(argvFile, "utf-8").split("\n").slice(0, -1);
+      expect(argv).toEqual([
+        "--store-path", "~/x.db",
+        "--home", "~",
+        "--tmux-command", "~/bin/tmux",
+        "version",
+      ]);
+      expect(argv.join("\n")).not.toContain(os.homedir());
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

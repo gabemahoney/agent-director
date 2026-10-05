@@ -18,11 +18,16 @@ export interface Logger {
  * does NOT provide a fallback; it forwards user input verbatim to keep the
  * CLI as the single source of truth for default resolution. See bug b.32k.
  *
- * Tilde expansion is handled TS-side by `src/internal/tilde.ts`: in
- * `storePath`, `home` and `tmuxCommand`, a bare `~` or a leading `~/` is
- * expanded against `HOME` (or `os.homedir()` when `HOME` is unset or empty)
- * before the value is forwarded to the CLI subprocess. Other values, relative
- * paths included, are forwarded unchanged and the CLI resolves them.
+ * `storePath`, `home` and `tmuxCommand` are forwarded verbatim; the TS Client
+ * does no tilde expansion of its own. The CLI subprocess, which inherits this
+ * process's environment, expands `~`: a bare `~` or a leading `~/` in `home`
+ * against the inherited `HOME`, then a leading `~/` in `storePath` and
+ * `tmuxCommand` (and a bare `~` in `tmuxCommand`) against the resulting
+ * `HOME`, which is `home` when set. The CLI never resolves `~` against the
+ * passwd home: with `HOME` unset or empty, a `~` or `~/` `home` rejects every
+ * call with `ErrInvalidFlags`, and with no `home` either, every call that
+ * opens the store is refused. Other values, relative paths included, are
+ * forwarded unchanged and the CLI resolves them. b.38a.
  *
  * An empty `storePath`, `home` or `tmuxCommand` is forwarded as given (e.g.
  * `--store-path ""`); the CLI rejects it on every verb call, which then
@@ -30,8 +35,8 @@ export interface Logger {
  */
 export interface ClientOptions {
     /**
-     * Path to the SQLite store file. Tilde-expanded before being forwarded as
-     * `--store-path` to the CLI subprocess.
+     * Path to the SQLite store file. Forwarded verbatim as `--store-path` to the
+     * CLI subprocess, which expands a leading `~/`.
      *
      * When omitted, the CLI's three-tier default resolution applies:
      *   1. CLI flag (this field, when set) → 2. cfg.Store.DbPath in
@@ -42,15 +47,15 @@ export interface ClientOptions {
      */
     storePath?: string;
     /**
-     * Override the tmux binary. Tilde-expanded before being forwarded as
-     * `--tmux-command` to the CLI subprocess. When omitted, the CLI looks up
-     * `tmux` on PATH.
+     * Override the tmux binary. Forwarded verbatim as `--tmux-command` to the
+     * CLI subprocess, which expands a bare `~` or a leading `~/`. When omitted,
+     * the CLI looks up `tmux` on PATH.
      */
     tmuxCommand?: string;
     /**
      * Override HOME for the duration of every subprocess call this Client
-     * issues. Tilde-expanded before being forwarded as `--home` to the CLI
-     * subprocess.
+     * issues. Forwarded verbatim as `--home` to the CLI subprocess, which
+     * expands a bare `~` or a leading `~/` against the inherited `HOME`.
      *
      * When omitted, the CLI subprocess inherits HOME from the calling process
      * environment (which is the correct default — set HOME at the

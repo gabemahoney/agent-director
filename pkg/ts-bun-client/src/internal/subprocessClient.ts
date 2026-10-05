@@ -26,7 +26,6 @@
 
 import { readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { expandTilde } from "./tilde.js";
 import { buildArgv, type GlobalArgvOptions } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
 import { isErrorEnvelope, throwFromEnvelope } from "./errorMap.js";
@@ -156,10 +155,11 @@ export class SubprocessClient {
     this.#binaryPath = init.binaryPath;
     this.#binaryVersion = init.binaryVersion;
 
+    // Forwarded verbatim: the CLI expands `~` (b.38a).
     const g: GlobalArgvOptions = {};
-    if (opts.storePath !== undefined) g.storePath = expandTilde(opts.storePath);
-    if (opts.tmuxCommand !== undefined) g.tmuxCommand = expandTilde(opts.tmuxCommand);
-    if (opts.home !== undefined) g.home = expandTilde(opts.home);
+    if (opts.storePath !== undefined) g.storePath = opts.storePath;
+    if (opts.tmuxCommand !== undefined) g.tmuxCommand = opts.tmuxCommand;
+    if (opts.home !== undefined) g.home = opts.home;
     this.#globalOpts = g;
 
     this.#open = true;

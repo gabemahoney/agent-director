@@ -65,13 +65,21 @@ try {
 }
 ```
 
-All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.agent-director/state.db`) — the CLI is the single source of truth for defaults. Tilde expansion (`~` → home directory) is handled automatically before paths are forwarded to the CLI subprocess. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
+All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.agent-director/state.db`) — the CLI is the single source of truth for defaults. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
 
 `ClientOptions` overrides forward verbatim to the CLI subprocess as global flags:
 
 - `storePath` → `--store-path`
 - `home` → `--home`
 - `tmuxCommand` → `--tmux-command`
+
+The CLI, not the client, expands a `~` in them, against `HOME` and nothing
+else (never the passwd entry's home). It applies `home` first, so with `home`
+set, a `~/` in `storePath` or `tmuxCommand` resolves under `home`. With
+`HOME` unset or empty, a `home` of `~` or `~/…` rejects every call with
+`ErrInvalidFlags`, and with no `home` either, every call that opens the store
+is refused, whatever `storePath` is, because the CLI cannot expand its config
+path `~/.agent-director/config.toml`.
 
 Set them only when the consumer needs to override the CLI's default for that field.
 
