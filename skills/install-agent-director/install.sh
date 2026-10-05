@@ -1121,13 +1121,47 @@ fi
 
 if [[ "$migration_expected" -eq 1 ]]; then
     # A migration was expected. Verify it actually landed.
+    #
+    # Step 5 runs only after step 4's open succeeded, and a successful open
+    # leaves state.db at the binary's version: it runs any authorized
+    # migration and consumes the sentinel (internal/store/schema.go). So a
+    # readable mismatch means state.db changed after the open or the read is
+    # wrong, never a sentinel left for a retry. A re-run does not need one:
+    # its steps 2-3 read the version again and authorize afresh (b.wt9).
+    #
+    # The sentinel delete after a committed migration is fail-open: if it
+    # fails, consumeAuthorization (internal/store/migrate_auth.go) logs
+    # ad.schema.authorization_delete_failed and the open still succeeds, so
+    # the file can outlive its use. The text below need not hedge for that.
+    # The migration it authorized has committed, and a leftover is inert: an
+    # open at the target version never reads it, a later binary's migration
+    # from the target mismatches its `from` and refuses, and any later
+    # install that authorizes a migration overwrites it in step 3. No advice
+    # below, the check or the re-run, depends on whether the file is there.
+    #
+    # A re-run below the target reaches it by one of two paths: at v0 the
+    # step-3 probe's open creates the schema at the target with no sentinel;
+    # above v0 step 3 authorizes the migration and step 4 runs it. So the
+    # text says the re-run brings state.db to the target, not that it
+    # authorizes a migration.
+    #
+    # The check command is a line to copy into a shell, so the path is
+    # quoted with %q: a plain path prints unchanged, and one holding shell
+    # characters ($, `, quotes) prints escaped.
     if [[ "$db_version_after" != "$target_version" ]]; then
         echo "install.sh: schema migration verification FAILED" >&2
         echo "  expected user_version: $target_version" >&2
         echo "  actual   user_version: $db_version_after" >&2
-        echo "  The store open did not migrate state.db to the target version." >&2
-        echo "  The migration sentinel (if written) has NOT been consumed;" >&2
-        echo "  re-run this install to retry, or contact the maintainers." >&2
+        echo "  The store open (agent-director list) succeeded, and a successful" >&2
+        echo "  open leaves state.db at v${target_version}: any migration this install" >&2
+        echo "  authorized has run, and its sentinel is consumed. Yet the read after" >&2
+        echo "  the open gives v${db_version_after}: state.db changed after the open, or" >&2
+        echo "  the read is wrong. Check its version now:" >&2
+        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" %q "PRAGMA user_version;"\n' "$state_db" >&2
+        echo "  A re-run of this install reads the version again: below v${target_version} it" >&2
+        echo "  brings state.db to v${target_version} again, above v${target_version} it stops" >&2
+        echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2
+        echo "  the install. If a re-run fails this same way, contact the maintainers." >&2
         exit 5
     fi
     echo "  schema  : migration verified — state.db now at v${db_version_after}"

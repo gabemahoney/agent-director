@@ -283,9 +283,10 @@ known_broken() {
     fi
 }
 
+# new_home: a new HOME under the private root; its name holds HOME_TAG when set.
 new_home() {
     local h
-    h="$(mktemp -d "$ROOT/home.XXXXXX")"
+    h="$(mktemp -d "$ROOT/home.${HOME_TAG:-}XXXXXX")"
     printf '%s' "$h"
 }
 
@@ -752,11 +753,13 @@ j7_unverified() {
 }
 
 # j7_mismatch: j7_verify_fails with the verification read answering the
-# pre-migration version; checks its advice.
+# pre-migration version; checks its advice (state.db's path shell-quoted).
 j7_mismatch() {
-    j7_verify_fails "$((SCHEMA - 1))" || return 1
-    expect_advice "actual user_version: $((SCHEMA - 1))"
-    expect_advice "The store open did not migrate state.db to the target version. The migration sentinel (if written) has NOT been consumed; re-run this install to retry, or contact the maintainers."
+    local t="$SCHEMA" a="$((SCHEMA - 1))" db
+    j7_verify_fails "$a" || return 1
+    db="$(printf %q "$J7H/.agent-director/state.db")"
+    expect_advice "actual user_version: $a"
+    expect_advice "The store open (agent-director list) succeeded, and a successful open leaves state.db at v$t: any migration this install authorized has run, and its sentinel is consumed. Yet the read after the open gives v$a: state.db changed after the open, or the read is wrong. Check its version now: sqlite3 -batch -init /dev/null -cmd \".timeout 10000\" $db \"PRAGMA user_version;\" A re-run of this install reads the version again: below v$t it brings state.db to v$t again, above v$t it stops at the store open (ErrSchemaMismatch), and at v$t it finishes the install. If a re-run fails this same way, contact the maintainers."
 }
 
 # j7_rerun_verified: re-run J7ARGV with the real sqlite3; it reads and verifies
@@ -774,21 +777,50 @@ test_J7_VerificationFailedRerun() {
     j7_rerun_verified "re-run once the read works"
 }
 
-# J7: "re-run this install to retry, or contact the maintainers." (a readable
-# user_version != target). Contacting the maintainers is a human step; not followed.
+# J7: "A re-run of this install reads the version again: below v<T> it
+# brings state.db to v<T> again, above v<T> it stops at the store open
+# (ErrSchemaMismatch), and at v<T> it finishes the install." with state.db set
+# to each after a readable user_version != target (b.wt9). Contacting the
+# maintainers is a human step; not followed.
 test_J7_VersionMismatchRerun() {
-    j7_mismatch || return
-    j7_rerun_verified "re-run once the read is right"
+    local version
+    for version in $((SCHEMA - 1)) $((SCHEMA + 1)) "$SCHEMA"; do
+        j7_mismatch || continue
+        "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
+        if ((version > SCHEMA)); then
+            run "$J7H" "${J7ARGV[@]}"
+            expect_rc 5 "v$version: re-run" || continue
+            [[ "$(line_after "install.sh: store open (agent-director list) failed after install")" == *'"err_name":"ErrSchemaMismatch"'* ]] \
+                || bad "v$version: the re-run did not stop at the store open with ErrSchemaMismatch: $(flat "$ERR")"
+            [[ "$(db_version "$J7H")" == "$version" ]] || bad "v$version: store moved to v$(db_version "$J7H")"
+            continue
+        fi
+        j7_rerun_verified "v$version: re-run" || continue
+        if ((version < SCHEMA)); then
+            grep -qF "authorized migration v$version→v$SCHEMA " "$OUT" || bad "v$version: the re-run did not authorize the migration: $(flat "$OUT")"
+            [[ ! -e "$(sentinel "$J7H")" ]] || bad "v$version: sentinel left after the re-run"
+        fi
+    done
 }
 
-# J7: "The migration sentinel (if written) has NOT been consumed" (a readable
-# user_version != target; the unreadable failure no longer says it, b.ady).
-# Known broken, b.wt9: step 5 runs only after a successful open, which has
-# already consumed the sentinel.
-test_J7_SentinelNotConsumed() {
-    j7_mismatch || return
-    known_broken J7 "the open migrated the store and consumed the sentinel before the verification read" || return
-    [[ -f "$(sentinel "$J7H")" ]] || bad "the sentinel was consumed, contrary to the text (store at v$(db_version "$J7H"))"
+# J7: "a successful open leaves state.db at v<T>: any migration this install
+# authorized has run, and its sentinel is consumed. ... Check its version now:
+# <command>" (a readable user_version != target, b.wt9): run the command as
+# printed, under a plain HOME and one whose path holds shell characters.
+test_J7_VersionMismatchCheckVersion() {
+    local HOME_TAG cmd
+    for HOME_TAG in "" "\$x\`y\`'q\"z."; do
+        j7_mismatch || continue
+        grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" || bad "HOME $J7H: the install authorized no migration: $(flat "$OUT")"
+        if compgen -G "$(sentinel "$J7H")*" >/dev/null; then
+            bad "HOME $J7H: the sentinel was not consumed: $(compgen -G "$(sentinel "$J7H")*")"
+        fi
+        cmd="$(line_after "Check its version now:")"
+        [[ -n "$cmd" ]] || { bad "HOME $J7H: no advised check command"; continue; }
+        run "$J7H" bash -c "$cmd"
+        expect_rc 0 "advised: $cmd" || continue
+        [[ "$(cat "$OUT")" == "$SCHEMA" ]] || bad "HOME $J7H: the advised check prints \"$(cat "$OUT")\"; want $SCHEMA (state.db at v$SCHEMA)"
+    done
 }
 
 # J7: "Re-running this install retries the read." when step 2 cannot read an

@@ -499,11 +499,12 @@ This skill runs `install.sh` from the same directory. The script:
       fails with `ErrConfigMalformed`, the install stops (**exit 5**)
       with the config advice, not the store advice, and a fresh install
       creates no `state.db`; see "A refused config file" below.
-   5. **Verify and fail loudly** — re-reads `user_version` and
-      confirms it equals the target. On any mismatch (or if state.db
-      wasn't created) the install **aborts non-zero (exit 5)** with a
-      clear message; the sentinel, if written, is left unconsumed so a
-      re-run retries the migration. An unreadable version also exits 5,
+   5. **Verify and fail loudly** — re-reads `user_version` and, when
+      step 3's probe reported a pending migration, confirms it equals
+      the target. On a mismatch (or if state.db wasn't created) the
+      install **aborts non-zero (exit 5)** with a clear message; for a
+      readable mismatch see "A version mismatch after the store open"
+      below. An unreadable version also exits 5,
       whether or not a migration was expected (a fresh install or an
       already-current store included); see "An unreadable schema
       version" below.
@@ -727,10 +728,11 @@ administrator action, so the install writes the sentinel for you.
    install creates state.db at the current version. `ErrConfigMalformed`
    here stops the install (exit 5) with the config advice; see "A
    refused config file" below.
-5. **Verify** the post-open `user_version` equals the target;
-   otherwise **fail the install loudly** (exit 5), leaving any written
-   sentinel unconsumed for a retry. An unreadable version also fails
-   (exit 5), whether or not a migration was expected; see below.
+5. When a migration was expected, **verify** the post-open
+   `user_version` equals the target, and **fail the install loudly**
+   (exit 5) if it does not; see "A version mismatch after the store
+   open" below. An unreadable version also fails (exit 5), whether or
+   not a migration was expected; see below.
 6. **A brief hook-failure window is accepted.** For the few seconds
    between the binary swap and the successful step-4 open, a hook that
    opens the store sees the migration error; it clears once step 4
@@ -747,8 +749,8 @@ is no `rm state.db` step and no data loss: the migration preserves
 your Spawn history. If the install's step 5 fails verification, do NOT
 delete state.db. If it reports `actual user_version: <unreadable>`,
 see "An unreadable schema version" below. If it reports a readable
-version that differs from the expected one, capture the error and the
-leftover `migrate-authorized` sentinel and contact the maintainers.
+version that differs from the expected one, see "A version mismatch
+after the store open" below.
 
 An operator can also author the sentinel by hand (write the JSON
 above, then run any store-opening verb once), but re-running the
@@ -787,6 +789,29 @@ Which read it was:
   was expected, otherwise `reading state.db's schema version after
   the store open FAILED`): the store open succeeded, and the install's
   `state.db:` status line shows `(schema <unreadable>)`.
+
+### A version mismatch after the store open
+
+When a migration was expected and step 5's read gives a whole number
+that is not the target, the install exits 5 with `schema migration
+verification FAILED`, the `expected user_version: <T>` and `actual
+user_version: <A>` lines, and advice. The store open (`agent-director
+list`) succeeded, and a successful open leaves state.db at `v<T>`: any
+migration this install authorized has run, and its sentinel is
+consumed. Yet the read after the open gives `v<A>`, so state.db changed
+after the open, or the read is wrong. Do NOT delete state.db.
+
+1. Check its version now, with the command the report prints:
+
+       sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"
+
+2. Re-run the install with the same flags. It reads the version again:
+   below `v<T>` it brings state.db to `v<T>` again, above `v<T>` it
+   stops at the store open (`ErrSchemaMismatch`, exit 5; see
+   "ErrSchemaMismatch recovery" below), and at `v<T>` it finishes the
+   install.
+3. If a re-run fails this same way, capture the error and contact the
+   maintainers.
 
 ### A refused config file
 

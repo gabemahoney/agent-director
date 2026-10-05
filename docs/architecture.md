@@ -4323,8 +4323,12 @@ when already current or on a fresh install), opens the store once with a
 store-opening verb (`agent-director list`, deliberately not the DB-free
 `help`/`version`) to run the migration and consume the sentinel, then
 verifies the post-open `user_version` and aborts loudly (exit 5) on any
-mismatch. A fresh install is one with no `state.db` on disk, never one
-whose version read failed. Every version read must print a whole number
+mismatch. That check runs only after the open succeeded, which leaves
+`state.db` at the binary's version with any authorized migration run
+and its sentinel consumed; a readable mismatch therefore means
+`state.db` changed after the open or the read is wrong (b.wt9). A
+fresh install is one with no `state.db` on disk, never one whose
+version read failed. Every version read must print a whole number
 (0 or more) before it reaches the sentinel's `printf %d` or the version
 compare. A read that fails exits 5 as `<unreadable>`, showing sqlite3's
 error, and re-running the install retries the read. A read that prints
