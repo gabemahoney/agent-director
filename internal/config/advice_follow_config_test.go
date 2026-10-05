@@ -1,12 +1,13 @@
 package config_test
 
 // advice_follow_config_test.go (b.fji G2): a refused [tmux] table's
-// description, or a refused [defaults] expire_retention_days's (b.sgw) or
-// [relay] or [pause] timeout_seconds's (b.8q2), ends "A missing key, or 0,
-// gives the default."; following it literally (drop each refused key, or set
-// it to 0) must make the file load. A key whose default is itself below its
-// minimum states its own change that loads instead, and the closing sentence
-// leaves it out (b.n4q).
+// description, or a refused [defaults] expire_retention_days's (b.sgw),
+// [relay] or [pause] timeout_seconds's (b.8q2) or [pre_trust]
+// lock_wait_seconds's (b.kr4), ends "A missing key, or 0, gives the
+// default."; following it literally (drop each refused key, or set it to 0)
+// must make the file load. A key whose default is itself below its minimum
+// states its own change that loads instead, and the closing sentence leaves
+// it out (b.n4q).
 
 import (
 	"slices"
@@ -85,6 +86,7 @@ func advRangeFollow(desc string, keys rangeKeys, value string) rangeKeys {
 		{"[defaults] expire_retention_days ", &keys.days},
 		{"[relay] timeout_seconds ", &keys.relay},
 		{"[pause] timeout_seconds ", &keys.pause},
+		{"[pre_trust] lock_wait_seconds ", &keys.preTrust},
 	} {
 		if strings.Contains(desc, k.name) {
 			*k.key = value
@@ -103,6 +105,7 @@ func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 		{"expire_retention_days", cfg.Defaults.EffectiveExpireRetentionDays(), config.DefaultExpireRetentionDays},
 		{"relay timeout_seconds", cfg.Relay.EffectiveTimeoutSeconds(), config.DefaultRelayTimeoutSeconds},
 		{"pause timeout_seconds", cfg.Pause.EffectiveTimeoutSeconds(), config.DefaultPauseTimeoutSeconds},
+		{"pre_trust lock_wait_seconds", cfg.PreTrust.EffectiveLockWaitSeconds(), config.DefaultPreTrustLockWaitSeconds},
 	} {
 		if k.got != k.want {
 			t.Errorf("effective %s = %d after the follow; want its default %d", k.name, k.got, k.want)
@@ -279,8 +282,8 @@ func TestAdviceFollow_G2_MixedRefusalOtherKeysGiveDefault(t *testing.T) {
 
 // TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault: G2 "refused
 // [defaults] values: ... . A missing key, or 0, gives the default." (b.sgw),
-// and the same for [relay] and [pause] timeout_seconds (b.8q2), alone or
-// listed with other tables. Each refused file is rewritten as the tail says
+// and the same for [relay] and [pause] timeout_seconds (b.8q2) and [pre_trust]
+// lock_wait_seconds (b.kr4), alone or listed with other tables. Each refused file is rewritten as the tail says
 // and must then load with the defaults.
 func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 	cases := []struct {
@@ -294,7 +297,9 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 		{"relay timeout negative", rangeKeys{relay: "-1"}, nil},
 		{"relay timeout above the largest", rangeKeys{relay: "2147484"}, nil},
 		{"pause timeout above the largest", rangeKeys{pause: "9223372037"}, nil},
-		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1"}, killNegativeTmux},
+		{"pre_trust lock wait negative", rangeKeys{preTrust: "-1"}, nil},
+		{"pre_trust lock wait above the largest", rangeKeys{preTrust: "9223372037"}, nil},
+		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", preTrust: "-1"}, killNegativeTmux},
 	}
 	for _, tc := range cases {
 		for _, f := range advPaneFollows {

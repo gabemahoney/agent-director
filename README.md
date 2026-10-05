@@ -336,6 +336,9 @@ permission_request_cap = 1000   # 0 = unbounded; negative = use default (1000)
 [pause]
 timeout_seconds = 30   # 1 to 9223372036; 0 = use default (30)
 
+[pre_trust]
+lock_wait_seconds = 12   # 1 to 9223372036; 0 = use default (12)
+
 [store]
 db_path = "~/.agent-director/state.db"
 
@@ -370,9 +373,25 @@ capped, with the same effect as a refused timing setting (see
 for `decide` before it is denied: whole seconds from 1 to 2147483 (about
 24.8 days, the longest hook timeout Claude Code honours). `[pause]
 timeout_seconds` is how long `pause` waits for the agent to exit: whole
-seconds from 1 to 9223372036. For each, a missing key, or 0, gives the
-default, and a negative value or one above its range is refused the same
-way as `expire_retention_days`.
+seconds from 1 to 9223372036. `[pre_trust] lock_wait_seconds` is how long
+`spawn` and `resume` wait to mark the folder as trusted while another
+process holds Claude Code's lock on `.claude.json`: whole seconds from 1 to
+9223372036. For each of the three, a missing key, or 0, gives the default,
+and a negative value or one above its range is refused the same way as
+`expire_retention_days`.
+
+`lock_wait_seconds` defaults to 12, just over the 10 s after which a lock
+left by a killed process counts as abandoned and is cleared. If the wait
+runs out, the launch still goes ahead with `pre_trust` `failed`, and the
+agent may stop at the folder-trust prompt. A `spawn` or `resume` that
+finds the lock held takes up to `lock_wait_seconds` longer: at the
+defaults its tmux calls and the wait take at most about 23 s (10.9 s plus
+12 s, not counting start-up or a wait for a busy store), under the
+TypeScript client's default 30 s call timeout. Each
+second added to `lock_wait_seconds` adds up to a second, so above about
+19 s such a launch can outlast that timeout, which then returns
+`ErrCallTimeout` while the launch may still complete — raise TypeScript
+callers' `callTimeoutMs` to match.
 
 `db_path` moves the store, and `install.sh` follows it. Keep the file in
 the one-line form shown; `install.sh` refuses anything else and says

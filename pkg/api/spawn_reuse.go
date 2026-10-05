@@ -247,8 +247,10 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     A failure writes nothing.
 //  5. Pre-trust (spawn.PreTrust) for the new request's cwd and extra env, by
 //     the call's own NoPreTrust, after every check that refuses without a
-//     write and before the reset. Best effort: it never refuses, and its
-//     outcome is the result's pre_trust.
+//     write and before the reset, waiting for a held lock on .claude.json
+//     for at most the config's effective pre_trust.lock_wait_seconds
+//     (b.kr4). Best effort: it never refuses, and its outcome is the
+//     result's pre_trust.
 //  6. One reading of the Client clock: the fresh row's started_at and
 //     last_seen_at, and its launch start in milliseconds.
 //  7. The reset (ResetForReuse), conditional on the row still being finished
@@ -303,7 +305,7 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	}
 
 	// A failure never fails the spawn; the outcome goes into the result.
-	preTrust := spawn.PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust)
+	preTrust := spawn.PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust, d.cfg.PreTrust)
 
 	now := d.now()
 	fresh := c.Row

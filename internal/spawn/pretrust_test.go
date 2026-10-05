@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cwdfix"
 )
 
@@ -48,7 +50,7 @@ func TestPreTrustCreatesEntryInExistingFile(t *testing.T) {
 	}
 
 	cwd := "/tmp/cd-smoke-new"
-	if err := preTrustCwd(cwd, nil); err != nil {
+	if err := preTrustCwd(cwd, nil, defaultLockWait); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -104,7 +106,7 @@ func TestPreTrustUpdatesExistingEntry(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := preTrustCwd("/tmp/cd-existing", nil); err != nil {
+	if err := preTrustCwd("/tmp/cd-existing", nil, defaultLockWait); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -131,7 +133,7 @@ func TestPreTrustAtomicRenameLeavesNoTempFile(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := preTrustCwd("/tmp/x", nil); err != nil {
+	if err := preTrustCwd("/tmp/x", nil, defaultLockWait); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 	assertNoStray(t, filepath.Dir(path))
@@ -149,7 +151,7 @@ func TestPreTrustConcurrentSpawnsDoNotCorrupt(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = preTrustCwd(fmt.Sprintf("/tmp/concurrent/%d", i), env)
+			errs[i] = preTrustCwd(fmt.Sprintf("/tmp/concurrent/%d", i), env, defaultLockWait)
 		}()
 	}
 	wg.Wait()
@@ -185,7 +187,7 @@ func TestPreTrustEmptyFileTreatedAsEmptyObject(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := preTrustCwd("/tmp/empty-case", nil); err != nil {
+	if err := preTrustCwd("/tmp/empty-case", nil, defaultLockWait); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -221,7 +223,7 @@ func TestPreTrustUsesClaudeConfigDirOverride(t *testing.T) {
 
 	cwd := "/tmp/override-cwd"
 	extraEnv := map[string]string{"CLAUDE_CONFIG_DIR": overrideDir}
-	if err := preTrustCwd(cwd, extraEnv); err != nil {
+	if err := preTrustCwd(cwd, extraEnv, defaultLockWait); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -268,7 +270,7 @@ func TestPreTrustEmptyClaudeConfigDirFallsBack(t *testing.T) {
 
 	cwd := "/tmp/fallback-cwd"
 	extraEnv := map[string]string{"CLAUDE_CONFIG_DIR": ""} // empty → fall back
-	if err := preTrustCwd(cwd, extraEnv); err != nil {
+	if err := preTrustCwd(cwd, extraEnv, defaultLockWait); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -330,7 +332,7 @@ func TestPreTrustOutcome(t *testing.T) {
 			}
 			warn := capturePreTrustWarn(t)
 
-			if got := PreTrust(cwd, map[string]string{"CLAUDE_CONFIG_DIR": dir}, tc.off); got != tc.want {
+			if got := PreTrust(cwd, map[string]string{"CLAUDE_CONFIG_DIR": dir}, tc.off, config.PreTrust{}); got != tc.want {
 				t.Fatalf("PreTrust = %q; want %q", got, tc.want)
 			}
 
@@ -370,7 +372,7 @@ func TestPreTrustFailedWithoutConfigDir(t *testing.T) {
 	t.Run("home file missing", func(t *testing.T) {
 		home := withStubClaudeJSON(t)
 		warn := capturePreTrustWarn(t)
-		if got := PreTrust("/tmp/x", nil, false); got != PreTrustFailed {
+		if got := PreTrust("/tmp/x", nil, false, config.PreTrust{}); got != PreTrustFailed {
 			t.Fatalf("PreTrust = %q; want failed", got)
 		}
 		assertOneFailedLine(t, warn.String(), home, "file does not exist")
@@ -383,7 +385,7 @@ func TestPreTrustFailedWithoutConfigDir(t *testing.T) {
 		claudeJSONPath = func() (string, error) { return "", errors.New("no home dir") }
 		t.Cleanup(func() { claudeJSONPath = saved })
 		warn := capturePreTrustWarn(t)
-		if got := PreTrust("/tmp/x", nil, false); got != PreTrustFailed {
+		if got := PreTrust("/tmp/x", nil, false, config.PreTrust{}); got != PreTrustFailed {
 			t.Fatalf("PreTrust = %q; want failed", got)
 		}
 		assertOneFailedLine(t, warn.String(), "no home dir", "")
@@ -406,7 +408,7 @@ func TestPreTrustRefusesUnusableConfigDir(t *testing.T) {
 			seedFile(t, path, lockTestSeed)
 			warn := capturePreTrustWarn(t)
 
-			if got := PreTrust("/tmp/bnje-cwd", map[string]string{"CLAUDE_CONFIG_DIR": v}, false); got != PreTrustFailed {
+			if got := PreTrust("/tmp/bnje-cwd", map[string]string{"CLAUDE_CONFIG_DIR": v}, false, config.PreTrust{}); got != PreTrustFailed {
 				t.Fatalf("PreTrust = %q; want failed", got)
 			}
 			if got := mustReadFile(t, path); string(got) != lockTestSeed {
@@ -483,6 +485,10 @@ func seedConfigDir(t *testing.T) (map[string]string, string) {
 	seedFile(t, path, lockTestSeed)
 	return map[string]string{"CLAUDE_CONFIG_DIR": dir}, path
 }
+
+// defaultLockWait is pre-trust's wait for a held lock when lock_wait_seconds is
+// missing (b.kr4).
+var defaultLockWait = time.Duration(config.DefaultPreTrustLockWaitSeconds) * time.Second
 
 // lockTestSeed is the .claude.json seedConfigDir writes.
 const lockTestSeed = `{"projects":{},"userID":"u"}`

@@ -5,10 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // fakeLockClock is the config lock's clock in a test: it starts at the real
@@ -84,7 +87,7 @@ func TestPreTrustWaitsForConfigLockHolder(t *testing.T) {
 	done := make(chan PreTrustOutcome, 1)
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); done <- PreTrust(cwd, env, false) }()
+	go func() { defer wg.Done(); done <- PreTrust(cwd, env, false, config.PreTrust{}) }()
 	t.Cleanup(wg.Wait)
 	select {
 	case got := <-done:
@@ -113,53 +116,76 @@ func TestPreTrustWaitsForConfigLockHolder(t *testing.T) {
 	assertNoStray(t, filepath.Dir(path))
 }
 
-// TestPreTrustHeldLockFailsAfterBoundedWait pins b.zjm: a fresh lock held
-// throughout makes pre-trust wait 5 s, then report failed, touching nothing.
-func TestPreTrustHeldLockFailsAfterBoundedWait(t *testing.T) {
-	clock := withFakeLockClock(t, 0)
-	env, path := seedConfigDir(t)
-	held := holdLock(t, path, clock.now)
-	warn := capturePreTrustWarn(t)
+// TestPreTrustHeldLockFailsAfterConfiguredWait pins b.kr4 (and b.zjm): a fresh
+// lock held throughout makes pre-trust wait exactly the configured
+// lock_wait_seconds, then report failed naming it, touching nothing.
+func TestPreTrustHeldLockFailsAfterConfiguredWait(t *testing.T) {
+	for _, secs := range []int{1, 5} {
+		wait := time.Duration(secs) * time.Second
+		t.Run(wait.String(), func(t *testing.T) {
+			clock := withFakeLockClock(t, 0)
+			env, path := seedConfigDir(t)
+			held := holdLock(t, path, clock.now)
+			warn := capturePreTrustWarn(t)
 
-	if got := PreTrust("/tmp/held-cwd", env, false); got != PreTrustFailed {
-		t.Fatalf("PreTrust = %q; want failed", got)
+			if got := PreTrust("/tmp/held-cwd", env, false, config.PreTrust{LockWaitSeconds: secs}); got != PreTrustFailed {
+				t.Fatalf("PreTrust = %q; want failed", got)
+			}
+			if clock.slept != wait {
+				t.Errorf("waited %s for the held lock; want the configured %s", clock.slept, wait)
+			}
+			assertOneFailedLine(t, warn.String(), path+".lock", "held by another process",
+				"gave up after waiting "+wait.String())
+			assertSeedKept(t, path)
+			assertLockKept(t, path, held)
+		})
 	}
-	if clock.slept != 5*time.Second {
-		t.Errorf("waited %s for the held lock; want 5s", clock.slept)
-	}
-	assertOneFailedLine(t, warn.String(), path+".lock", "held by another process")
-	assertSeedKept(t, path)
-	assertLockKept(t, path, held)
 }
 
 // TestPreTrustLockStaleness pins proper-lockfile's stale rule: a lock dir last
-// refreshed over 10 s ago is broken and taken; a younger one is waited on.
+// refreshed over 10 s ago is broken and taken; a younger one is waited on. With
+// lock_wait_seconds missing (12 s), a fresh lock never refreshed goes stale
+// within the wait, so pre-trust reports ok (b.kr4; the old fixed 5 s gave up).
+// So it does with the largest value Load accepts, whose wait does not wrap
+// to 0 or below and give up at the first attempt.
 func TestPreTrustLockStaleness(t *testing.T) {
 	const cwd = "/tmp/stale-cwd"
+	// largest is config.MaxPreTrustLockWaitSeconds held in a variable, so its
+	// int conversion happens at run time and the file builds where int is 32
+	// bits (GOARCH=386), where the row using it is skipped.
+	largest := config.MaxPreTrustLockWaitSeconds
 	cases := []struct {
-		name     string
-		age      time.Duration // the lock dir's mtime age when pre-trust starts
-		wait     time.Duration // configLockWait
-		minSlept time.Duration // fake wait before the lock was taken
+		name               string
+		age                time.Duration   // the lock dir's mtime age when pre-trust starts
+		cfg                config.PreTrust // the launch's [pre_trust] table
+		wide               bool            // cfg needs a 64-bit int
+		minSlept, maxSlept time.Duration   // fake wait before the lock was taken
 	}{
 		{name: "11s old lock is broken at once", age: 11 * time.Second},
-		{name: "9s old lock is broken once over 10s", age: 9 * time.Second, wait: 5 * time.Second, minSlept: time.Second},
+		{name: "9s old lock is broken once over 10s", age: 9 * time.Second, cfg: config.PreTrust{LockWaitSeconds: 5},
+			minSlept: time.Second, maxSlept: 5 * time.Second},
+		{name: "fresh lock never refreshed is broken within the default wait",
+			minSlept: 10 * time.Second, maxSlept: 12 * time.Second},
+		{name: "fresh lock never refreshed is broken within the largest wait",
+			cfg: config.PreTrust{LockWaitSeconds: int(largest)}, wide: true,
+			minSlept: 10 * time.Second, maxSlept: 12 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.wide && strconv.IntSize < 64 {
+				t.Skipf("lock_wait_seconds %d does not fit a %d-bit int", largest, strconv.IntSize)
+			}
 			clock := withFakeLockClock(t, 0)
-			saved := configLockWait
-			configLockWait = tc.wait
-			t.Cleanup(func() { configLockWait = saved })
 			env, path := seedConfigDir(t)
 			holdLock(t, path, clock.now.Add(-tc.age))
-			capturePreTrustWarn(t)
+			warn := capturePreTrustWarn(t)
 
-			if got := PreTrust(cwd, env, false); got != PreTrustOK {
-				t.Fatalf("PreTrust = %q; want ok", got)
+			if got := PreTrust(cwd, env, false, tc.cfg); got != PreTrustOK {
+				t.Fatalf("PreTrust = %q (waited %s, warning %q); want ok", got, clock.slept, warn)
 			}
-			if clock.slept < tc.minSlept {
-				t.Errorf("took the lock after waiting %s; want at least %s (not before it was over 10s old)", clock.slept, tc.minSlept)
+			if clock.slept < tc.minSlept || clock.slept > tc.maxSlept {
+				t.Errorf("took the lock after waiting %s; want %s to %s (not before it was over 10s old)",
+					clock.slept, tc.minSlept, tc.maxSlept)
 			}
 			if got := readClaudeJSON(t, path); !trusts(got, cwd) || got["userID"] != "u" {
 				t.Errorf("claude.json = %v; want projects[%q] trusted and userID kept", got, cwd)
@@ -208,7 +234,7 @@ func TestPreTrustWritesNothingUnderLostLock(t *testing.T) {
 			}
 			t.Cleanup(func() { preTrustBeforeCommit = saved })
 
-			if got := PreTrust(cwd, env, false); got != PreTrustFailed {
+			if got := PreTrust(cwd, env, false, config.PreTrust{}); got != PreTrustFailed {
 				t.Fatalf("PreTrust = %q; want failed", got)
 			}
 			assertOneFailedLine(t, warn.String(), path+".lock", tc.reason)
@@ -230,7 +256,7 @@ func TestPreTrustWritesNothingUnderLostLock(t *testing.T) {
 // takes its own, checkHold reports the takeover and unlock leaves theirs alone.
 func TestConfigLockReplacedLock(t *testing.T) {
 	_, path := seedConfigDir(t)
-	l, err := lockConfig(path)
+	l, err := lockConfig(path, defaultLockWait)
 	if err != nil {
 		t.Fatalf("lockConfig: %v", err)
 	}

@@ -19,7 +19,8 @@
 // MaxExpireRetentionDays the same way. So do [relay] timeout_seconds and
 // [pause] timeout_seconds (b.8q2), with DefaultRelayTimeoutSeconds and
 // MaxRelayTimeoutSeconds, and DefaultPauseTimeoutSeconds and
-// MaxPauseTimeoutSeconds.
+// MaxPauseTimeoutSeconds; and [pre_trust] lock_wait_seconds (b.kr4), with
+// DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds.
 package config
 
 import (
@@ -39,6 +40,7 @@ type Config struct {
 	Defaults Defaults `toml:"defaults"`
 	Relay    Relay    `toml:"relay"`
 	Pause    Pause    `toml:"pause"`
+	PreTrust PreTrust `toml:"pre_trust"`
 	Store    Store    `toml:"store"`
 	Log      Log      `toml:"log"`
 	Tmux     Tmux     `toml:"tmux"`
@@ -208,6 +210,61 @@ func (p Pause) refusals() []string {
 	return nil
 }
 
+// DefaultPreTrustLockWaitSeconds is the default of pre_trust.lock_wait_seconds,
+// in whole seconds (12): just above the 10 s stale limit of Claude Code's lock
+// on .claude.json, so a lock dir left by a holder killed while holding it goes
+// stale, and pre-trust breaks it and takes the lock, within the wait (b.kr4).
+// It is the value Default() seeds into PreTrust.LockWaitSeconds AND the
+// fallback EffectiveLockWaitSeconds returns for a missing or 0 key, so the two
+// never drift.
+const DefaultPreTrustLockWaitSeconds = 12
+
+// MaxPreTrustLockWaitSeconds is the largest whole number of seconds a
+// time.Duration holds (9223372036): the upper limit of
+// pre_trust.lock_wait_seconds, which Load refuses above it (b.kr4). A larger
+// count would wrap pre-trust's wait, at worst to zero or below, which gives up
+// on a held lock at the first attempt. It is an int64 for the reason
+// MaxPauseTimeoutSeconds is: the value does not fit a 32-bit int.
+const MaxPreTrustLockWaitSeconds = math.MaxInt64 / int64(time.Second)
+
+// PreTrust holds the settings of the folder-trust pre-trust every launch runs
+// (spawn.PreTrust).
+type PreTrust struct {
+	// LockWaitSeconds is pre-trust's total wait for Claude Code's lock on
+	// .claude.json while another process holds it and it is not stale, in
+	// whole seconds: the file's value when the key is set (0 included),
+	// otherwise DefaultPreTrustLockWaitSeconds. Read it only through
+	// EffectiveLockWaitSeconds, which gives the default for 0. Load refuses a
+	// negative value and one above MaxPreTrustLockWaitSeconds (b.kr4).
+	LockWaitSeconds int `toml:"lock_wait_seconds"`
+}
+
+// EffectiveLockWaitSeconds returns pre-trust's wait for a held lock in whole
+// seconds (pre_trust.lock_wait_seconds): the configured value when positive,
+// otherwise DefaultPreTrustLockWaitSeconds (12). It never returns 0 or a
+// negative count, so pre-trust never gives up on a held lock without waiting.
+// It performs no maximum check; Load refuses a value above
+// MaxPreTrustLockWaitSeconds.
+func (p PreTrust) EffectiveLockWaitSeconds() int {
+	if p.LockWaitSeconds > 0 {
+		return p.LockWaitSeconds
+	}
+	return DefaultPreTrustLockWaitSeconds
+}
+
+// refusals returns the description of each refused [pre_trust] value, in
+// table order, or nil when every value loads. Only lock_wait_seconds is
+// checked: a negative value and one above MaxPreTrustLockWaitSeconds are
+// refused, never replaced by the default or capped; 0 gives the default
+// (b.kr4).
+func (p PreTrust) refusals() []string {
+	if v := p.LockWaitSeconds; v < 0 || int64(v) > MaxPreTrustLockWaitSeconds {
+		return []string{fmt.Sprintf("[pre_trust] lock_wait_seconds = %d, outside its range 1 to %d seconds",
+			v, MaxPreTrustLockWaitSeconds)}
+	}
+	return nil
+}
+
 // Store holds storage backend paths.
 type Store struct {
 	DbPath string `toml:"db_path"`
@@ -235,6 +292,9 @@ func Default() Config {
 		},
 		Pause: Pause{
 			TimeoutSeconds: DefaultPauseTimeoutSeconds,
+		},
+		PreTrust: PreTrust{
+			LockWaitSeconds: DefaultPreTrustLockWaitSeconds,
 		},
 		Store: Store{
 			DbPath: "~/.agent-director/state.db",
@@ -283,14 +343,14 @@ func (e *ConfigError) Unwrap() error {
 // minimum (for the pending grace period, the default too when its key is
 // missing or 0 and the default is below the derived minimum), are refused,
 // never raised to the minimum or replaced by the default. It validates
-// [defaults] expire_retention_days the same way (b.sgw), and [relay]
-// timeout_seconds and [pause] timeout_seconds too (b.8q2): a negative value
-// and one above the key's maximum (MaxExpireRetentionDays,
-// MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds) are refused, never
-// replaced by the default or capped. A refusal behaves exactly like a
-// malformed file: Load returns a *ConfigError for the file whose Err
-// describes every refused key (validate). A value that is not a TOML integer
-// already fails the parse.
+// [defaults] expire_retention_days the same way (b.sgw), [relay]
+// timeout_seconds and [pause] timeout_seconds too (b.8q2), and [pre_trust]
+// lock_wait_seconds (b.kr4): a negative value and one above the key's maximum
+// (MaxExpireRetentionDays, MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds,
+// MaxPreTrustLockWaitSeconds) are refused, never replaced by the default or
+// capped. A refusal behaves exactly like a malformed file: Load returns a
+// *ConfigError for the file whose Err describes every refused key
+// (validate). A value that is not a TOML integer already fails the parse.
 // The Config returned alongside any *ConfigError exists only to mirror the
 // parse-failure contract pinned by TestLoadMalformedReturnsTypedError; no
 // caller may run with it.
@@ -332,9 +392,9 @@ func Load(path string) (Config, error) {
 // as a list (tableList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
-// [pause], [tmux] and each table in its own order, then missingKeyAdvice. A
-// file refused only for [tmux] values gets the SR-4.1 description unchanged.
-// Values are never changed.
+// [pause], [pre_trust], [tmux] and each table in its own order, then
+// missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
+// description unchanged. Values are never changed.
 func validate(cfg Config, meta toml.MetaData) error {
 	var tables, refused, defaultRefused []string
 	for _, t := range []struct {
@@ -344,6 +404,7 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[defaults]", cfg.Defaults.refusals()},
 		{"[relay]", cfg.Relay.refusals()},
 		{"[pause]", cfg.Pause.refusals()},
+		{"[pre_trust]", cfg.PreTrust.refusals()},
 	} {
 		if len(t.refusals) > 0 {
 			tables, refused = append(tables, t.name), append(refused, t.refusals...)

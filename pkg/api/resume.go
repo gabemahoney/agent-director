@@ -491,9 +491,11 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     for the row's cwd and extra env (so CLAUDE_CONFIG_DIR resolves the file
 //     a spawn of the row used), off when the row records the opt-out of the
 //     spawn that began its life (row.NoPreTrust, which the move and the
-//     restore keep, so a retry after a restored failure follows it too). Best
-//     effort: its outcome never changes resume's control flow or error, and a
-//     failure prints the "pre-trust failed" line and the launch proceeds.
+//     restore keep, so a retry after a restored failure follows it too),
+//     waiting for a held lock on .claude.json for at most the config's
+//     effective pre_trust.lock_wait_seconds (b.kr4). Best effort: its
+//     outcome never changes resume's control flow or error, and a failure
+//     prints the "pre-trust failed" line and the launch proceeds.
 //     The outcome is reported as ResumeResult.PreTrust on success.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
@@ -568,7 +570,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	}
 
 	// A failure never fails the launch; the outcome goes into the result.
-	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust)
+	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
 
 	parent := spawn.ParentIDFromEnv()
 	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent)

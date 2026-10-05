@@ -21,7 +21,8 @@
 //     [tmux] settings; see its doc comment for the usage rules.
 //     WriteRetentionConfig adds [defaults] expire_retention_days, and
 //     WriteKeysConfig the keys outside [tmux] with a range (ConfigKeys:
-//     that one, [relay] and [pause] timeout_seconds).
+//     that one, [relay] and [pause] timeout_seconds, and [pre_trust]
+//     lock_wait_seconds).
 //
 // # Schema-v5 seeding and store reads (SR-20.2, SR-20.3)
 //

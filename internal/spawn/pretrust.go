@@ -7,6 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // PreTrustOutcome is what one pre-trust step did for a launch (SR-22.6 "The
@@ -36,9 +39,14 @@ const (
 var preTrustWarn io.Writer = os.Stderr
 
 // PreTrust is the one best-effort folder-trust pre-trust step every launch
-// runs (SR-22.6): plain spawn (Launch) before its insert, and resume before
-// its move to pending. off is whether pre-trust is off for this launch: the
-// spawn caller's NoPreTrust, or for resume the row's recorded NoPreTrust.
+// runs (SR-22.6): plain spawn (Launch) before its insert, spawn with reuse
+// before its reset, and resume before its move to pending. off is whether
+// pre-trust is off for this launch: the spawn caller's NoPreTrust, or for
+// resume the row's recorded NoPreTrust. cfg is the loaded config's
+// [pre_trust] table: its effective lock_wait_seconds
+// (cfg.EffectiveLockWaitSeconds, 12 s by default; b.kr4) bounds the wait for
+// Claude Code's lock on the file while another process holds it, so a launch
+// that finds the lock held takes at most that much longer.
 //
 // When off is true it attempts nothing, opens and creates no file, prints
 // nothing and returns PreTrustSkipped. Otherwise it runs preTrustCwd for cwd,
@@ -52,11 +60,13 @@ var preTrustWarn io.Writer = os.Stderr
 // prompt; it names no label, token or environment value other than
 // CLAUDE_CONFIG_DIR. PreTrust never returns an error and never fails a
 // launch.
-func PreTrust(cwd string, extraEnv map[string]string, off bool) PreTrustOutcome {
+func PreTrust(cwd string, extraEnv map[string]string, off bool, cfg config.PreTrust) PreTrustOutcome {
 	if off {
 		return PreTrustSkipped
 	}
-	err := preTrustCwd(cwd, extraEnv)
+	// Load has refused a value too large for a time.Duration
+	// (config.MaxPreTrustLockWaitSeconds), so the conversion cannot wrap.
+	err := preTrustCwd(cwd, extraEnv, time.Duration(cfg.EffectiveLockWaitSeconds())*time.Second)
 	if err == nil {
 		return PreTrustOK
 	}
@@ -161,7 +171,8 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 //     that lock and re-reads it under the lock before each save, so
 //     neither side's update is lost to the other, and concurrent
 //     agent-director pre-trusts of one file run one at a time. The wait
-//     for a held lock is bounded (configLockWait); when it runs out, or
+//     for a held lock is bounded by lockWait (PreTrust passes the
+//     effective pre_trust.lock_wait_seconds, b.kr4); when it runs out, or
 //     the lock cannot be taken at all, nothing is written and the error
 //     makes PreTrust report failed. The same holds when, just before the
 //     write, lock.checkHold finds the lock held too long or taken over
@@ -181,7 +192,7 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 // The function preserves unknown top-level keys and unknown per-project
 // keys verbatim via the json.RawMessage typed map. A future Claude Code
 // release adding a new key under .projects.<path> will round-trip safely.
-func preTrustCwd(cwd string, extraEnv map[string]string) error {
+func preTrustCwd(cwd string, extraEnv map[string]string, lockWait time.Duration) error {
 	path, err := claudeJSONFor(extraEnv)
 	if err != nil {
 		return fmt.Errorf("pre-trust: %w", err)
@@ -190,7 +201,7 @@ func preTrustCwd(cwd string, extraEnv map[string]string) error {
 	if _, err := os.Stat(path); err != nil {
 		return claudeJSONReadError(path, err)
 	}
-	lock, err := lockConfig(path)
+	lock, err := lockConfig(path, lockWait)
 	if err != nil {
 		return fmt.Errorf("pre-trust: %w", err)
 	}

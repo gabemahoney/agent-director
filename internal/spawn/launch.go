@@ -29,8 +29,10 @@ var claudeBinary = "claude"
 //  2. Composes the launch through ComposeLaunch: the session environment,
 //     the synthesized --settings, the claude argv, the parent id and the
 //     row's request fields. A composition failure writes nothing.
-//  3. Pre-trusts the cwd through PreTrust, off when NoPreTrust (best effort;
-//     a failure never fails the spawn, SR-22.6).
+//  3. Pre-trusts the cwd through PreTrust, off when NoPreTrust, waiting for
+//     a held lock on .claude.json for at most cfg's effective
+//     pre_trust.lock_wait_seconds (best effort; a failure never fails the
+//     spawn, SR-22.6).
 //  4. INSERTs step 2's row with the launch start (one read of now, in
 //     milliseconds), the token and the socket; the row carries the
 //     NoPreTrust choice step 3 used, so it records what the spawn did for its
@@ -89,7 +91,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	}
 
 	// A failure never fails the spawn; the outcome is returned on success.
-	preTrust := PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust)
+	preTrust := PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust, cfg.PreTrust)
 
 	// Read once, so a held-name outcome carries exactly what the insert wrote.
 	launchStart := now().UnixMilli()

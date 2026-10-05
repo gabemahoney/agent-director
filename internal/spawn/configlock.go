@@ -22,12 +22,16 @@ import (
 const (
 	// configLockStale is proper-lockfile's stale threshold as Claude Code
 	// uses it: a lock dir whose mtime is older than this is abandoned, and
-	// any taker may remove it.
+	// any taker may remove it. It is Claude Code's protocol, not
+	// agent-director's choice, so it is a fixed constant and not a setting:
+	// every taker of the lock must judge staleness alike.
 	configLockStale = 10 * time.Second
 	// configLockMaxHold bounds how long pre-trust may hold the lock before
 	// it commits its write. Pre-trust does not refresh the lock dir's mtime,
 	// so it must commit well inside configLockStale; half of it is
-	// proper-lockfile's own refresh interval.
+	// proper-lockfile's own refresh interval. It follows from Claude Code's
+	// protocol (configLockStale), so it is a fixed constant and not a
+	// setting.
 	configLockMaxHold = configLockStale / 2
 	// configLockFirstDelay and configLockMaxDelay shape the wait between
 	// attempts on a held lock: doubling from the first, capped at the max,
@@ -36,19 +40,19 @@ const (
 	configLockMaxDelay   = 500 * time.Millisecond
 )
 
-// configLockNow, configLockSleep and configLockWait are the lock's clock, its
-// sleep between attempts and its total wait for a held lock. Held as vars so
-// tests can drive the clock or shorten the wait.
+// configLockNow and configLockSleep are the lock's clock and its sleep
+// between attempts. Held as vars so tests can drive the clock. The total wait
+// for a held lock is not here: it is the launch's configured
+// pre_trust.lock_wait_seconds, passed to lockConfig through PreTrust (b.kr4).
 var (
 	configLockNow   = time.Now
 	configLockSleep = time.Sleep
-	configLockWait  = 5 * time.Second
 )
 
 // errConfigLockHeld is the condition behind a lock attempt that found the
 // lock held by another process (Claude Code or another agent-director) and
-// not stale. lockConfig retries it until configLockWait runs out, then
-// returns it wrapped.
+// not stale. lockConfig retries it until its wait runs out, then returns it
+// wrapped.
 var errConfigLockHeld = errors.New("held by another process")
 
 // errConfigLockTakenOver is the condition behind a held lock whose lock dir is
@@ -66,12 +70,18 @@ type configLock struct {
 
 // lockConfig takes Claude Code's lock on the config file at path. While the
 // lock is held and not stale it waits and tries again, with backoff, for at
-// most configLockWait in total; then it returns an error matching
-// errConfigLockHeld that names the lock dir and the wait. Any other failure
-// to take the lock is returned at once. The caller must unlock a returned lock.
-func lockConfig(path string) (*configLock, error) {
+// most wait in total; then it returns an error matching errConfigLockHeld
+// that names the lock dir and the wait. Any other failure to take the lock is
+// returned at once. The caller must unlock a returned lock.
+//
+// wait is PreTrust's effective pre_trust.lock_wait_seconds (b.kr4), 12 s by
+// default: above configLockStale, so a lock dir abandoned by a killed holder
+// goes stale and is broken within the wait. A wait at or below
+// configLockStale can give up on such a lock before it goes stale. A wait of
+// 0 or less makes one attempt and gives up on a held lock without sleeping.
+func lockConfig(path string, wait time.Duration) (*configLock, error) {
 	dir := path + ".lock"
-	deadline := configLockNow().Add(configLockWait)
+	deadline := configLockNow().Add(wait)
 	delay := configLockFirstDelay
 	for {
 		l, err := tryLockConfig(dir)
@@ -80,7 +90,7 @@ func lockConfig(path string) (*configLock, error) {
 		}
 		left := deadline.Sub(configLockNow())
 		if left <= 0 {
-			return nil, fmt.Errorf("lock %s %w; gave up after waiting %s", dir, err, configLockWait)
+			return nil, fmt.Errorf("lock %s %w; gave up after waiting %s", dir, err, wait)
 		}
 		configLockSleep(min(time.Duration(float64(delay)*(1+rand.Float64())), left))
 		delay = min(2*delay, configLockMaxDelay)

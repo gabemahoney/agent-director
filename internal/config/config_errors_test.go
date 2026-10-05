@@ -37,7 +37,8 @@ func loadConfigError(t *testing.T, path string) *config.ConfigError {
 		t.Errorf("path fields not resolved on error: %+v", cfg)
 	}
 	def := config.Default()
-	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause || cfg.Tmux != def.Tmux {
+	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause || cfg.PreTrust != def.PreTrust ||
+		cfg.Tmux != def.Tmux {
 		t.Errorf("non-path defaults drifted on error: got=%+v want=%+v", cfg, def)
 	}
 	return ce
@@ -77,11 +78,12 @@ var statedMinimum = regexp.MustCompile(`safe minimum (\d+) `)
 // least" change, no other key has one, and the closing sentence gives the
 // default for exactly the other refused keys: all of them, all but those
 // named, or, when none is left, there is no closing sentence. The refused
-// keys outside [tmux] (b.sgw, b.8q2) all have a default that loads.
+// keys outside [tmux] (b.sgw, b.8q2, b.kr4) all have a default that loads.
 func checkAdvice(t *testing.T, desc string) {
 	t.Helper()
 	refused := 0
-	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds "} {
+	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
+		"[pre_trust] lock_wait_seconds "} {
 		refused += strings.Count(desc, k)
 	}
 	var own []string

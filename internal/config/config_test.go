@@ -47,6 +47,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 86400},
 		{"Relay.PermissionRequestCap", d.Relay.PermissionRequestCap, 1000},
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
+		{"PreTrust.LockWaitSeconds", d.PreTrust.LockWaitSeconds, 12},
 		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
 		// [tmux] defaults, pinned to the SR-4.1 table's literals.
@@ -99,7 +100,7 @@ func TestLoadMissingFileReturnsResolvedDefaults(t *testing.T) {
 	}
 	// All non-path defaults must still match Default() unchanged.
 	def := config.Default()
-	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause {
+	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause || cfg.PreTrust != def.PreTrust {
 		t.Errorf("non-path defaults drifted from Default():\n got=%+v\nwant=%+v", cfg, def)
 	}
 }
@@ -125,6 +126,9 @@ func TestLoadPartialOverridePreservesDefaults(t *testing.T) {
 	}
 	if cfg.Pause.TimeoutSeconds != 30 {
 		t.Errorf("Pause.TimeoutSeconds default lost: got %d", cfg.Pause.TimeoutSeconds)
+	}
+	if cfg.PreTrust.LockWaitSeconds != 12 {
+		t.Errorf("PreTrust.LockWaitSeconds default lost: got %d, want 12", cfg.PreTrust.LockWaitSeconds)
 	}
 }
 
