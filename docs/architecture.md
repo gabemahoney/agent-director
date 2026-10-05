@@ -4464,16 +4464,24 @@ and its sentinel consumed; a readable mismatch therefore means
 fresh install is one with no `state.db` on disk, never one whose
 version read failed. Every version read must print a whole number
 (0 or more) before it reaches the sentinel's `printf %d` or the version
-compare. A read that fails exits 5 as `<unreadable>`, showing sqlite3's
-error, and re-running the install retries the read. That error is kept
+compare. A read that fails is reported as `<unreadable>`, showing
+sqlite3's error; a failure report adds that re-running the install
+retries the read. That error is kept
 in a mktemp file; if mktemp cannot create it (a full TMPDIR, say), both
 reads still run and a failed one is reported without it. A read that prints
-anything else also exits 5 as `<unreadable>`, showing that output and
-naming the sqlite3 on PATH; a re-run gets the same output unless that
-sqlite3 or state.db changes. Either kind at the first read stops the
-install before any sentinel is written or the store is opened; at the
-post-open read it stops the install whether or not a migration was
-expected. The sentinel is written to a temp file and moved into place;
+anything else is also reported as `<unreadable>`, showing that output; a
+failure report names the sqlite3 on PATH and says a re-run gets the same
+output unless that sqlite3 or state.db changes. Either kind at the first
+read stops the install (exit 5) before any sentinel is written or the
+store is opened; at the post-open read it stops the install (exit 5)
+only when a migration was expected. With none expected (a fresh install
+or an already-current store), the open has already left `state.db`
+usable at the binary's version, so that read only reports the version:
+install.sh prints the same `<unreadable>` lines as a stderr warning
+(`ad_show_unreadable_version`, shared with the failure report), then the
+command to read the version later, and the install carries on to the
+hooks, the config merge and MCP registration (b.xd9). The sentinel is
+written to a temp file and moved into place;
 the EXIT trap removes a temp file that was never moved. A brief
 hook-failure window between the binary swap and that open is accepted,
 not worked around. That same open gives the store its store id: the

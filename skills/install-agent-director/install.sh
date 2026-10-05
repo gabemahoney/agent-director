@@ -79,8 +79,9 @@
 #   4  hook merge failure (~/.claude/settings.json malformed)
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
-#      existing state.db's user_version unreadable before or after the
-#      open, or post-open user_version != target)
+#      existing state.db's user_version unreadable before the open, or
+#      post-open user_version unreadable or != target when a migration
+#      was expected)
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -928,7 +929,8 @@ fi
 #            the store advice (exit 5).
 #   Step 5 — verify user_version == target; FAIL the install loudly
 #            (non-zero exit) on any mismatch, or when the version cannot
-#            be read, whether or not a migration was expected.
+#            be read, if a migration was expected. With none expected, an
+#            unreadable version is a warning and the install carries on.
 #   Step 6 — between the binary swap and the successful step-4 open there
 #            is a brief (seconds, install-controlled) window where a
 #            concurrent hook firing `$CANONICAL list` against the not-yet-
@@ -969,6 +971,20 @@ ad_is_version() {
     [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]
 }
 
+# ad_show_unreadable_version <output> — print on stderr the <unreadable>
+# line of a user_version read that gave no version, with <output> (what the
+# read printed: empty when it failed) and sqlite3's own error indented
+# under it.
+ad_show_unreadable_version() {
+    echo "  actual   user_version: <unreadable>" >&2
+    if [[ -n "$1" ]]; then
+        printf '%s\n' "$1" | sed 's/^/    /' >&2
+    fi
+    if [[ -s "$user_version_err" ]]; then
+        sed 's/^/    /' "$user_version_err" >&2
+    fi
+}
+
 # ad_fail_unreadable_version <output> <what the install could not do>
 # [<line>...] — finish a user_version read's failure report and exit 5.
 # <output> is what the read printed: empty when the read failed, otherwise
@@ -988,13 +1004,7 @@ ad_is_version() {
 ad_fail_unreadable_version() {
     local output="$1" could_not="$2" line
     shift 2
-    echo "  actual   user_version: <unreadable>" >&2
-    if [[ -n "$output" ]]; then
-        printf '%s\n' "$output" | sed 's/^/    /' >&2
-    fi
-    if [[ -s "$user_version_err" ]]; then
-        sed 's/^/    /' "$user_version_err" >&2
-    fi
+    ad_show_unreadable_version "$output"
     echo "  Reading state.db's user_version (sqlite3 PRAGMA user_version)" >&2
     if [[ -z "$output" ]]; then
         echo "  failed, so the install could not ${could_not}." >&2
@@ -1165,13 +1175,20 @@ migration_expected=0
 if ! ad_is_version "$db_version_after"; then
     # The read gave no version, which says nothing about the store: the
     # step-4 open succeeded. Never silent, migration expected or not.
+    # With no migration to check, the read only reports the version: warn,
+    # show how to read it later (%q as below), and carry on (b.xd9). The
+    # warning says none was authorized, not none expected: step 3 may not
+    # have been able to tell whether one was needed.
     if [[ "$migration_expected" -eq 1 ]]; then
         echo "install.sh: schema migration verification FAILED" >&2
         echo "  expected user_version: $target_version" >&2
         ad_fail_unreadable_version "$db_version_after" "check the migration"
     fi
-    echo "install.sh: reading state.db's schema version after the store open FAILED" >&2
-    ad_fail_unreadable_version "$db_version_after" "check state.db's schema version"
+    echo "install.sh: warning: state.db's schema version is unreadable after the store open" >&2
+    ad_show_unreadable_version "$db_version_after"
+    echo "  The store open (agent-director list) succeeded and no migration was" >&2
+    echo "  authorized, so the install carries on. Check the version later with:" >&2
+    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" %q "PRAGMA user_version;"\n' "$state_db" >&2
 fi
 
 if [[ "$migration_expected" -eq 1 ]]; then

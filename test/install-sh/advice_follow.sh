@@ -744,6 +744,10 @@ test_J6_NewerStoreInstallNewer() {
 # ---- J7: migration verification failed, or state.db's version unreadable ------
 
 J7ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+# J7FULL: J7ARGV with the steps after step 5 that it skips run too: hook
+# injection, the config.toml merge and MCP registration. A test makes it its
+# J7ARGV with `local -a J7ARGV=("${J7FULL[@]}")`.
+J7FULL=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink --register-mcp)
 
 # j7_installed: a new HOME in J7H with J7ARGV installed.
 j7_installed() {
@@ -802,6 +806,30 @@ j7_unreadable() {
 j7_schema_unreadable() {
     grep -qF "at $J7H/.agent-director/state.db (schema <unreadable>)" "$OUT" \
         || bad "no \"(schema <unreadable>)\" state.db line: $(flat "$OUT")"
+}
+
+# j7_warned <next>: step 5's warning for a read that gave no version with no
+# migration expected, its advice word for word, <next> (as for j7_unreadable)
+# the line after "<unreadable>", no failure wording, stdout's state.db line at
+# <unreadable>, and the install carried on past step 5: hooks, this run's
+# config.toml merge and MCP registration done (J7FULL) and the install's last
+# line printed (b.xd9).
+j7_warned() {
+    local want="install.sh: warning: state.db's schema version is unreadable after the store open" db line
+    db="$(printf %q "$J7H/.agent-director/state.db")"
+    [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+    j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout 10000\" $db \"PRAGMA user_version;\"" "$1"
+    if grep -qiE 'FAILED|could not|re-run' "$ERR"; then
+        bad "the warning speaks as if the install failed: $(flat "$ERR")"
+    fi
+    j7_schema_unreadable
+    for line in "  hooks   : injected into $J7H/.claude/settings.json" "  mcp     : registered with claude mcp" \
+        "install.sh: done. Try: $J7H/.agent-director/bin/agent-director help"; do
+        grep -qxF "$line" "$OUT" || bad "no \"$line\" line: the install stopped at step 5: $(flat "$OUT")"
+    done
+    grep -qE '^  config  : (merged|created) ' "$OUT" \
+        || bad "no \"config  : merged/created\" line: this run skipped the config merge: $(flat "$OUT")"
+    expect_installed "$J7H" "$BIN" "$ADMIN"
 }
 
 # j7_unverified: j7_verify_fails with the verification read failing; checks
@@ -899,23 +927,33 @@ test_J7_UnreadableBeforeOpenRerun() {
     j7_rerun_verified "re-run once the read works"
 }
 
-# J7: "Re-running this install retries the read." when step 5 cannot read the
-# version of a fresh or already-current store, no migration expected (b.n5a).
-test_J7_UnreadableAfterOpenRerun() {
-    local store call want="install.sh: reading state.db's schema version after the store open FAILED"
-    for store in fresh current; do
-        if [[ "$store" == fresh ]]; then
-            J7H="$(new_home)" call=1 # no state.db: step 5's read is the first
-        else
-            j7_installed || continue
-            call=2
-        fi
-        j7_run "$call"
-        expect_rc 5 "$store store, step 5's read failed" || continue
-        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store: first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-        j7_schema_unreadable
-        j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not check state.db's schema version. Re-running this install retries the read."
-        j7_rerun_verified "$store store, re-run once the read works"
+# J7: "Check the version later with: <command>" when step 5's read of a fresh
+# or already-current store, no migration expected, gives no version: it fails
+# (a lock outlasting its busy timeout) or prints no whole number (JSON, b.hk7).
+# The install warns and carries on (b.xd9). Once the read works, the command
+# as printed prints the store's version: each case under a plain HOME, and a
+# fresh store's failed read under one whose path holds shell characters (the
+# quoting depends on neither the store nor the read's output). A current
+# store's JSON read: test_J7_NotAVersionAfterOpenRerun's re-run.
+test_J7_UnreadableAfterOpenCheckVersion() {
+    local -a J7ARGV=("${J7FULL[@]}") # the steps after step 5 run too
+    local HOME_TAG spec store answer call what cmd json="[{\"user_version\":$SCHEMA}]"
+    for spec in "|fresh|" "|current|" "|fresh|$json" "\$x\`y\`'q\"z.|fresh|"; do
+        IFS='|' read -r HOME_TAG store answer <<<"$spec"
+        case "$store" in
+            fresh) J7H="$(new_home)" call=1 ;; # no state.db: step 5's read is the first
+            current) j7_installed || continue; call=2 ;;
+        esac
+        what="$store store, step 5's read failed"
+        [[ -n "$answer" ]] && what="$store store, step 5's read printed \"$answer\""
+        j7_run "$call" "$answer"
+        expect_rc 0 "$what" || continue
+        j7_warned "    ${answer:-$SHIM_LOCK_ERR}"
+        cmd="$(line_after "Check the version later with:")"
+        [[ -n "$cmd" ]] || { bad "HOME $J7H, $what: no advised check command"; continue; }
+        run "$J7H" bash -c "$cmd"
+        expect_rc 0 "HOME $J7H, $what: advised: $cmd" || continue
+        [[ "$(cat "$OUT")" == "$SCHEMA" ]] || bad "HOME $J7H, $what: the advised check prints \"$(cat "$OUT")\"; want $SCHEMA (state.db at v$SCHEMA)"
     done
 }
 
@@ -951,10 +989,10 @@ test_J7_NoErrorFileUnreadableRerun() {
     done
 }
 
-# j7_shown: the lines the report shows under "<unreadable>": the read's output,
-# then sqlite3's error.
+# j7_shown: the lines the report (a failure's, or step 5's warning) shows under
+# "<unreadable>": the read's output, then sqlite3's error.
 j7_shown() {
-    awk '/^  Reading state\.db/ { f = 0 } f; $0 == "  actual   user_version: <unreadable>" { f = 1 }' "$ERR"
+    awk '/^  (Reading state\.db|The store open)/ { f = 0 } f; $0 == "  actual   user_version: <unreadable>" { f = 1 }' "$ERR"
 }
 
 # j7_not_a_version <answer> <cause>: the report of a read that printed <answer>
@@ -974,12 +1012,13 @@ j7_not_a_version() {
     fi
 }
 
-# j7_rerun_same <call> [<answer>]: re-run as the last j7_run did, with that
-# sqlite3 and state.db: exit 5 again, showing the same output.
+# j7_rerun_same <rc> <call> [<answer>]: re-run as the last j7_run did, with
+# that sqlite3 and state.db: exit <rc>, showing the same output.
 j7_rerun_same() {
-    local shown; shown="$(j7_shown)"
+    local rc="$1" shown; shown="$(j7_shown)"
+    shift
     j7_run "$@"
-    expect_rc 5 "re-run with that sqlite3 and state.db unchanged" || return 1
+    expect_rc "$rc" "re-run with that sqlite3 and state.db unchanged" || return 1
     [[ "$(j7_shown)" == "$shown" ]] || bad "the re-run shows \"$(j7_shown)\" under \"<unreadable>\"; the first run showed \"$shown\""
 }
 
@@ -1003,7 +1042,7 @@ test_J7_NotAVersionBeforeOpenRerun() {
         expect_rc 5 "step 2's read printed \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not tell whether state.db needs a migration. No migration was authorized."
-        j7_rerun_same "$call" "$stand_in" || continue
+        j7_rerun_same 5 "$call" "$stand_in" || continue
         [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$answer\": store moved off v$version: v$(db_version "$J7H")"
         if [[ "$changed" == state.db ]]; then
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
@@ -1014,29 +1053,26 @@ test_J7_NotAVersionBeforeOpenRerun() {
 
 # J7: "A re-run gets the same output unless that sqlite3 or state.db changes."
 # when step 5's read prints no whole number (a sqlite3 printing JSON, as a
-# .mode json ~/.sqliterc does), after an open that migrated an older store,
-# created a fresh one or found it current, or the target version with a leading
-# zero after a migration (which the version compare holds different from the
-# target); the re-run with the real sqlite3 at that path verifies it (b.hk7).
+# .mode json ~/.sqliterc does, or the target version with a leading zero,
+# which the version compare holds different from the target) after an open
+# that migrated an older store. That open left state.db at the target, so the
+# re-run expects no migration: it shows the same output in step 5's warning
+# and finishes the install (b.xd9). The re-run with the real sqlite3 at that
+# path verifies it (b.hk7). Fresh and current stores:
+# test_J7_UnreadableAfterOpenCheckVersion.
 test_J7_NotAVersionAfterOpenRerun() {
-    local spec store call want could answer json="[{\"user_version\":$SCHEMA}]"
-    for spec in "older|$json" "older|0$SCHEMA" "fresh|$json" "current|$json"; do
-        store="${spec%%|*}" answer="${spec#*|}"
-        want="install.sh: reading state.db's schema version after the store open FAILED" could="check state.db's schema version"
-        case "$store" in
-            older)
-                j7_older_store || continue
-                call=2 want="install.sh: schema migration verification FAILED" could="check the migration" ;;
-            fresh) J7H="$(new_home)" call=1 ;; # no state.db: step 5's read is the first
-            current) j7_installed || continue; call=2 ;;
-        esac
-        j7_run "$call" "$answer"
-        expect_rc 5 "$store store, step 5's read printed \"$answer\"" || continue
-        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store store, \"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+    local -a J7ARGV=("${J7FULL[@]}") # the re-run's steps after step 5 run too
+    local answer want="install.sh: schema migration verification FAILED"
+    for answer in "[{\"user_version\":$SCHEMA}]" "0$SCHEMA"; do
+        j7_older_store || continue
+        j7_run 2 "$answer"
+        expect_rc 5 "older store, step 5's read printed \"$answer\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         j7_schema_unreadable
-        j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not $could."
-        j7_rerun_same 2 "$answer" || continue # state.db exists now: step 5's read is the second
-        j7_rerun_verified "$store store, \"$answer\", re-run with the real sqlite3"
+        j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not check the migration."
+        j7_rerun_same 0 2 "$answer" || continue # step 2's read is the first
+        j7_warned "    $answer"
+        j7_rerun_verified "\"$answer\", re-run with the real sqlite3"
     done
 }
 

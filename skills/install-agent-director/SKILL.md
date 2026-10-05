@@ -514,10 +514,10 @@ This skill runs `install.sh` from the same directory. The script:
       the target. On a mismatch (or if state.db wasn't created) the
       install **aborts non-zero (exit 5)** with a clear message; for a
       readable mismatch see "A version mismatch after the store open"
-      below. An unreadable version also exits 5,
-      whether or not a migration was expected (a fresh install or an
-      already-current store included); see "An unreadable schema
-      version" below.
+      below. An unreadable version also exits 5 when a migration was
+      expected; with none expected (a fresh install or an
+      already-current store) it is a warning and the install carries
+      on. See "An unreadable schema version" below.
    6. **Brief hook-failure window (accepted).** Between the binary
       swap (step 1/3) and the successful step-4 open there is a short
       (seconds, install-controlled) window in which a concurrently
@@ -750,8 +750,9 @@ administrator action, so the install writes the sentinel for you.
 5. When a migration was expected, **verify** the post-open
    `user_version` equals the target, and **fail the install loudly**
    (exit 5) if it does not; see "A version mismatch after the store
-   open" below. An unreadable version also fails (exit 5), whether or
-   not a migration was expected; see below.
+   open" below. An unreadable version also fails (exit 5) when a
+   migration was expected; with none expected it is a warning and the
+   install carries on. See below.
 6. **A brief hook-failure window is accepted.** For the few seconds
    between the binary swap and the successful step-4 open, a hook that
    opens the store sees the migration error; it clears once step 4
@@ -780,9 +781,11 @@ verification for you.
 
 The install reads state.db's `user_version` twice: at step 2, before
 the store open, and at step 5, after it. If either read fails, or
-prints anything but a whole number (0 or more), the install exits 5
-and reports `actual user_version: <unreadable>`. Do NOT delete
-state.db. The rest of the report depends on which happened:
+prints anything but a whole number (0 or more), the install reports
+`actual user_version: <unreadable>` and exits 5, except at step 5
+with no migration expected, where it warns and carries on (see "Which
+read it was" below). Do NOT delete state.db. The rest of an exit 5's
+report depends on which happened:
 
 - **The read failed** (it printed nothing): sqlite3's own error,
   indented under that line, shows why (for example a lock held longer
@@ -806,10 +809,19 @@ Which read it was:
   state.db is as it was. The new binaries are already in place, so an
   older state.db is refused with `ErrSchemaMigrationRequired` until a
   re-run succeeds.
-- **Step 5** (`schema migration verification FAILED` when a migration
-  was expected, otherwise `reading state.db's schema version after
-  the store open FAILED`): the store open succeeded, and the install's
-  `state.db:` status line shows `(schema <unreadable>)`.
+- **Step 5, a migration expected** (`schema migration verification
+  FAILED`): the store open succeeded, and the install's `state.db:`
+  status line shows `(schema <unreadable>)`.
+- **Step 5, no migration expected** (a fresh install or an
+  already-current store; `warning: state.db's schema version is
+  unreadable after the store open`): not a failure. The store open
+  succeeded, so the read only reports the version. The warning shows
+  sqlite3's error, or the read's output, under the `<unreadable>`
+  line, then `Check the version later with:` and the `sqlite3 ...
+  "PRAGMA user_version;"` command for this state.db. The install
+  carries on (hooks, the config.toml merge, MCP registration) and
+  exits 0 unless a later step fails; its `state.db:` status line shows
+  `(schema <unreadable>)`.
 
 ### A version mismatch after the store open
 
