@@ -4348,7 +4348,9 @@ fresh install is one with no `state.db` on disk, never one whose
 version read failed. Every version read must print a whole number
 (0 or more) before it reaches the sentinel's `printf %d` or the version
 compare. A read that fails exits 5 as `<unreadable>`, showing sqlite3's
-error, and re-running the install retries the read. A read that prints
+error, and re-running the install retries the read. That error is kept
+in a mktemp file; if mktemp cannot create it (a full TMPDIR, say), both
+reads still run and a failed one is reported without it. A read that prints
 anything else also exits 5 as `<unreadable>`, showing that output and
 naming the sqlite3 on PATH; a re-run gets the same output unless that
 sqlite3 or state.db changes. Either kind at the first read stops the

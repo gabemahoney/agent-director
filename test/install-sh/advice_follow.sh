@@ -270,6 +270,22 @@ fi
 exec "$SQLITE" "\$@"
 EOF
 chmod 0755 "$SQLITE_SHIM"
+# mktemp stand-in for J7 (a test puts MKTEMP_FAILS on PATH_EXTRA): for the
+# template of install.sh's sqlite3 error file it fails as mktemp does in a full
+# TMPDIR, logging the template to MKTEMP_REFUSALS; every other call runs the
+# real one (b.wfe).
+MKTEMP_FAILS="$ROOT/mktemp-fails" MKTEMP_REFUSALS="$ROOT/mktemp-refusals"
+mkdir -p "$MKTEMP_FAILS" || die "mkdir $MKTEMP_FAILS"
+cat >"$MKTEMP_FAILS/mktemp" <<EOF
+#!/bin/bash
+if [[ "\${!#}" == agent-director-sqlite3.* ]]; then
+    echo "\${!#}" >>"$MKTEMP_REFUSALS"
+    echo "mktemp: failed to create file via template '\${!#}': No space left on device" >&2
+    exit 1
+fi
+exec "$(type -P mktemp)" "\$@"
+EOF
+chmod 0755 "$MKTEMP_FAILS/mktemp"
 
 # ---- harness ---------------------------------------------------------------
 
@@ -768,12 +784,13 @@ j7_verify_fails() {
     expect_advice "schema migration verification FAILED"
 }
 
-# j7_unreadable <advice>: sqlite3's own error indented under the <unreadable>
-# line, <advice> word for word, and no pointer to a human (time may resolve a lock, b.ady).
+# j7_unreadable <advice> [<next>]: <next> (default: sqlite3's own error,
+# indented) the line after the <unreadable> line, <advice> word for word, and no
+# pointer to a human (time may resolve a lock, b.ady).
 j7_unreadable() {
-    local reason
+    local reason want="${2:-    $SHIM_LOCK_ERR}"
     reason="$(grep -xF -A1 "  actual   user_version: <unreadable>" "$ERR" | tail -n +2)"
-    [[ "$reason" == "    $SHIM_LOCK_ERR" ]] || bad "the line after \"<unreadable>\" is \"$reason\"; want sqlite3's error \"    $SHIM_LOCK_ERR\""
+    [[ "$reason" == "$want" ]] || bad "the line after \"<unreadable>\" is \"$reason\"; want \"$want\""
     expect_advice "$1"
     if grep -qF "contact the maintainers" "$ERR"; then
         bad "the unreadable-version failure tells the operator to contact the maintainers"
@@ -899,6 +916,38 @@ test_J7_UnreadableAfterOpenRerun() {
         j7_schema_unreadable
         j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not check state.db's schema version. Re-running this install retries the read."
         j7_rerun_verified "$store store, re-run once the read works"
+    done
+}
+
+# J7: "Re-running this install retries the read." when mktemp cannot create the
+# reads' sqlite3 error file: a failed read at step 2 or 5 is reported without
+# sqlite3's error, and the re-run, mktemp still failing, verifies the store
+# (b.wfe).
+test_J7_NoErrorFileUnreadableRerun() {
+    local call want could refused
+    for call in 1 2; do # step 2's read, then step 5's after the migrating open
+        PATH_EXTRA=""
+        j7_older_store || continue
+        PATH_EXTRA="$MKTEMP_FAILS"
+        rm -f "$MKTEMP_REFUSALS"
+        j7_run "$call"
+        expect_rc 5 "no error file, read $call failed" || continue
+        want="install.sh: reading state.db's schema version FAILED"
+        could="tell whether state.db needs a migration. No migration was authorized."
+        if [[ "$call" == 2 ]]; then
+            want="install.sh: schema migration verification FAILED" could="check the migration."
+            j7_schema_unreadable
+        fi
+        grep -qxF "$want" "$ERR" || bad "read $call: no \"$want\" line: $(flat "$ERR")"
+        j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read." \
+            "  Reading state.db's user_version (sqlite3 PRAGMA user_version)"
+        j7_rerun_verified "read $call: re-run, mktemp still failing" || continue
+        if [[ "$call" == 1 ]]; then
+            grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
+                || bad "read 1: the re-run did not verify the migration: $(flat "$OUT")"
+        fi
+        refused="$(cat "$MKTEMP_REFUSALS" 2>/dev/null | wc -l)"
+        [[ "$refused" == 2 ]] || bad "read $call: mktemp refused the sqlite3 error file $refused times; want 2, once per run"
     done
 }
 

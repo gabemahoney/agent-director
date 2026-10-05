@@ -786,7 +786,9 @@ state.db. The rest of the report depends on which happened:
 
 - **The read failed** (it printed nothing): sqlite3's own error,
   indented under that line, shows why (for example a lock held longer
-  than the 10 s wait). Re-running the install retries the read.
+  than the 10 s wait). If the install could not create a temp file for
+  that error (a full TMPDIR, say), the report has none. Re-running the
+  install retries the read.
 - **The read printed something else** ("printed the output above,
   not a whole number (0 or more)"): that output, then any sqlite3
   error, is indented under that line, and the report names the

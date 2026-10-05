@@ -74,14 +74,25 @@ build:
 test: envelope-diff-ts test-install-sh
 	go test ./...
 
-# test-install-sh exercises install.sh's --from-release CDN-propagation
-# retry path against a fake curl (b.kym), for both release assets
-# (b.vqr). It builds and runs agent-director and agent-director-admin
-# binaries, so it runs in the sandbox only (retry.sh refuses anywhere
-# else, b.8dr); no network. test-sandbox runs it too, through
-# test/install-sh/retry_test.go. This target runs the script alone. Fast —
-# a fake sleep makes the backoffs cost no wall time, and the scenarios pick
-# small fail-first counts.
+# test-install-sh runs test/install-sh/retry.sh, which checks install.sh's:
+#   - --from-release download retries against a fake curl (b.kym), for both
+#     release assets (b.vqr); a release before 0.11.0 is refused at once
+#     (exit 3, no retry; b.vqr)
+#   - --sha256 and --admin-sha256 checks; either flag without --from-release
+#     exits 2 (b.vqr)
+#   - PATH symlink: agent-director only, never agent-director-admin (b.vqr)
+#   - user_version reads in an upgrade: they wait out a held store lock
+#     (b.ady), and a ~/.sqliterc that changes sqlite3's output (.headers on,
+#     .mode json) still lets the migration run and verify (b.hk7)
+#   - umask: installs and upgrades succeed under 0777 and 0222, and a hooks-on
+#     install's new ~/.claude and settings.json get the owner's access and the
+#     umask's group/other bits (b.7j2)
+#   - step-3 sentinel: a failed mv leaves no temp file behind (b.hk7)
+# It builds and runs agent-director and agent-director-admin binaries, so it
+# runs in the sandbox only (retry.sh refuses anywhere else, b.8dr); no
+# network. test-sandbox runs it too, through test/install-sh/retry_test.go.
+# This target runs the script alone. Fast — a fake sleep makes the backoffs
+# cost no wall time, and the scenarios pick small fail-first counts.
 test-install-sh: _sandbox-build
 	$(_SANDBOX_RUN) bash test/install-sh/retry.sh
 
