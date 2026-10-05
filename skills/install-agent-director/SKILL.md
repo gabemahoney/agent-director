@@ -471,14 +471,34 @@ This skill runs `install.sh` from the same directory. The script:
       containing `{"from": <actual>, "to": <target>}`, where
       `<target>` is the schema version this binary requires. **Skipped
       when `from == target`** (the DB is already current) and on a
-      fresh install (no DB).
+      fresh install (no DB). The install decides with one probe
+      `agent-director list` against the existing store, by the error
+      name (`err_name`) it fails with, never by its message text:
+      - it opens, or fails with `ErrSchemaMismatch`: nothing to
+        authorize (`schema  : state.db at vN; no migration
+        authorization needed`); an `ErrSchemaMismatch` fails step 4's
+        open again, with the store advice.
+      - `ErrSchemaMigrationRequired`: its message names `<target>`,
+        and the sentinel authorizes that migration.
+      - `ErrConfigMalformed`: the config file was refused, so the probe
+        never reached state.db. The install stops here (**exit 5**)
+        with no sentinel written; see "A refused config file" below.
+      - any other error: no sentinel is written; the install prints
+        `schema  : state.db at vN; could not tell whether a migration
+        is needed (agent-director list failed: <err_name>)` (`<no
+        err_name>` when the probe's output holds no error envelope)
+        and goes on to step 4, which reports the failure if it
+        persists.
    4. **Trigger exactly one store-opening open** — runs
       `agent-director list` once. `list` opens the store, so the
       authorized migration runs and the sentinel is consumed on
       success; on a fresh install this creates `state.db` (mode 0600)
       at the current schema version. **NOT `help`/`version`** — those
       verbs become DB-free (SR-4), so a help-based warmup would never
-      open the store and step 5 would fail on every upgrade.
+      open the store and step 5 would fail on every upgrade. If it
+      fails with `ErrConfigMalformed`, the install stops (**exit 5**)
+      with the config advice, not the store advice, and a fresh install
+      creates no `state.db`; see "A refused config file" below.
    5. **Verify and fail loudly** — re-reads `user_version` and
       confirms it equals the target. On any mismatch (or if state.db
       wasn't created) the install **aborts non-zero (exit 5)** with a
@@ -693,11 +713,20 @@ administrator action, so the install writes the sentinel for you.
    state.db — **skipped when `from == to`** (already current) and on a
    fresh install. `<target>` is the schema version the new binary
    requires; the install learns it from the binary's own migration
-   refusal message.
+   refusal message. A probe `agent-director list` against the existing
+   store decides, by its `err_name`: an open or `ErrSchemaMismatch`
+   needs no authorization; `ErrSchemaMigrationRequired` names
+   `<target>` and gets the sentinel; `ErrConfigMalformed` stops the
+   install (exit 5, no sentinel; see "A refused config file" below);
+   any other error writes no sentinel, prints `could not tell whether a
+   migration is needed (agent-director list failed: <err_name>)` and
+   goes on to step 4.
 4. **Open the store once** with `agent-director list` (a store-opening
    verb — *not* `help`/`version`, which are DB-free per SR-4). The
    authorized migration runs and the sentinel is consumed; a fresh
-   install creates state.db at the current version.
+   install creates state.db at the current version. `ErrConfigMalformed`
+   here stops the install (exit 5) with the config advice; see "A
+   refused config file" below.
 5. **Verify** the post-open `user_version` equals the target;
    otherwise **fail the install loudly** (exit 5), leaving any written
    sentinel unconsumed for a retry. An unreadable version also fails
@@ -758,6 +787,41 @@ Which read it was:
   was expected, otherwise `reading state.db's schema version after
   the store open FAILED`): the store open succeeded, and the install's
   `state.db:` status line shows `(schema <unreadable>)`.
+
+### A refused config file
+
+agent-director loads `~/.agent-director/config.toml` before it opens
+state.db, so a config it refuses (`ErrConfigMalformed`: for example a
+refused `[tmux]` timing or `[defaults] expire_retention_days` value, or
+a TOML syntax error) fails every store-opening verb, the install's own
+included. The install stops (exit 5) at its first store-opening verb:
+step 3's probe when state.db exists, step 4's open on a fresh install.
+It reports:
+
+    install.sh: agent-director refused its config file (ErrConfigMalformed)
+      config  : /home/<you>/.agent-director/config.toml
+      {"err_name":"ErrConfigMalformed","err_description":"config <path>: refused [defaults] values: ..."}
+      Fix what the error above names in the config file, then re-run this
+      install. A missing key gives that key's default; for a refused value,
+      so does 0.
+
+Nothing was done to state.db: no sentinel was written, no migration
+ran, and a fresh install created no state.db. The new binaries are
+already in place (and the PATH symlink, if any), but the hooks were
+not merged and MCP was not registered. Do NOT delete state.db: the
+refusal says nothing about it.
+
+1. Fix the value(s) the envelope names in the `config  :` file: set
+   each to a value in its range, or remove it or set it to 0 to get its
+   default, unless the envelope says that default is itself refused
+   (`is missing or 0, and its default, <n>, is below its safe minimum
+   <m>`); then set it to at least `<m>`. Or fix the syntax error.
+2. Re-run the install with the same flags. It probes the store again
+   and authorizes any pending migration.
+
+Until the config is fixed, every store-backed verb fails with
+`ErrConfigMalformed`; after the fix and before the re-run, an older
+state.db is refused with `ErrSchemaMigrationRequired`.
 
 ## Upgrade rollback
 

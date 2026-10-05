@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J12). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J13). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -634,12 +634,15 @@ j6_failing_migration() {
 }
 
 # J6: "If a migration was authorized above it was NOT consumed; re-running this
-# install will retry it."
+# install will retry it." The re-run's step-3 probe fails too, and says it could
+# not tell, not that no migration is needed (b.7b4).
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
     expect_rc 5 "re-run while store_meta is still bad" || return
     expect_advice "re-running this install will retry it."
+    local could="  schema  : state.db at v$((SCHEMA - 1)); could not tell whether a migration is needed (agent-director list failed: ErrStoreOpen)"
+    grep -qxF "$could" "$OUT" || bad "no \"$could\" line: $(grep -F "  schema  : " "$OUT")"
     [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)) on a failed re-run"
     "$SQLITE" "$J6H/.agent-director/state.db" "DROP TABLE store_meta;" || { bad "repair store"; return; }
     run "$J6H" "${J6ARGV[@]}"
@@ -668,6 +671,8 @@ test_J6_NewerStoreInstallNewer() {
     "$SQLITE" "$h/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
     run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 5 "store newer than the binary" || return
+    local none="  schema  : state.db at v$((SCHEMA + 1)); no migration authorization needed"
+    grep -qxF "$none" "$OUT" || bad "no \"$none\" line: $(grep -F "  schema  : " "$OUT")"
     expect_advice "ErrSchemaMismatch"
     expect_advice "If state.db is NEWER than this binary (ErrSchemaMismatch), install a newer agent-director instead."
     run "$h" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink
@@ -1145,6 +1150,69 @@ test_J12_OneHashPassNeither() {
         expect_rc 0 "$flag dropped" || continue
         expect_installed "$h" "$BIN" "$ADMIN"
         grep -q ": verified$" "$OUT" && bad "$flag dropped: a verified line with no hash given: $(flat "$OUT")"
+    done
+}
+
+# ---- J13: config file refused (b.7b4) ---------------------------------------------
+
+# J13: "Fix what the error above names in the config file, then re-run this
+# install. A missing key gives that key's default; for a refused value, so does
+# 0." A fresh, older or current store: the refusal speaks only of the config and
+# authorizes nothing; fixing what the envelope names at the printed path and
+# re-running installs, migrating an older store.
+test_J13_ConfigRefusedFixAndRerun() {
+    local spec store config named fix before path key
+    local want="install.sh: agent-director refused its config file (ErrConfigMalformed)"
+    local none="  schema  : state.db at v$SCHEMA; no migration authorization needed"
+    for spec in \
+        "fresh|[defaults]\nexpire_retention_days = -1|[defaults] expire_retention_days = -1|remove" \
+        "older|[defaults]\nexpire_retention_days = -1|[defaults] expire_retention_days = -1|zero" \
+        "current|[tmux]\nquery_timeout_ms = -5|[tmux] query_timeout_ms = -5|zero" \
+        "older|[defaults|toml: line|syntax"; do
+        IFS='|' read -r store config named fix <<<"$spec"
+        case "$store" in
+            fresh) J7H="$(new_home)" before=none; mkdir -p "$J7H/.agent-director" ;;
+            older) j7_older_store || continue; before=$((SCHEMA - 1)) ;;
+            current) j7_installed || continue; before="$SCHEMA" ;;
+        esac
+        printf '%b\n' "$config" >"$J7H/.agent-director/config.toml"
+        run "$J7H" "${J7ARGV[@]}"
+        expect_rc 5 "$store store, config \"$named\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store, \"$named\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        grep -qF '  {"err_name":"ErrConfigMalformed",' "$ERR" || bad "$store, \"$named\": no ErrConfigMalformed envelope: $(flat "$ERR")"
+        expect_advice "$named"
+        expect_advice "Fix what the error above names in the config file, then re-run this install. A missing key gives that key's default; for a refused value, so does 0."
+        if grep -qiE 'state\.db|migrat|ErrSchemaMismatch' "$ERR"; then
+            bad "$store, \"$named\": the config refusal speaks of the store: $(flat "$ERR")"
+        fi
+        if grep -qE '^  schema  : (state\.db|authorized)' "$OUT"; then
+            bad "$store, \"$named\": a step-3 verdict on a store the probe never opened: $(grep -F "  schema  : " "$OUT")"
+        fi
+        [[ ! -e "$(sentinel "$J7H")" ]] || bad "$store, \"$named\": a migration was authorized under a refused config"
+        if [[ "$before" == none ]]; then
+            [[ ! -e "$J7H/.agent-director/state.db" ]] || bad "$store, \"$named\": state.db created under a refused config"
+        elif [[ "$(db_version "$J7H")" != "$before" ]]; then
+            bad "$store, \"$named\": store moved off v$before: v$(db_version "$J7H")"
+        fi
+        path="$(advice_after "  config  : ")" || { bad "$store, \"$named\": no config line"; continue; }
+        [[ "$path" == "$J7H/.agent-director/config.toml" ]] || bad "$store, \"$named\": config line names $path"
+        key="${named#*] }"
+        key="${key%% =*}"
+        case "$fix" in
+            remove) sed -i "/^$key = /d" "$path" ;;
+            zero) sed -i "s/^$key = .*/$key = 0/" "$path" ;;
+            syntax) sed -i 's/^\[defaults$/[defaults]/' "$path" ;;
+        esac
+        j7_rerun_verified "$store store, re-run after the $fix fix of \"$named\"" || continue
+        expect_installed "$J7H" "$BIN" "$ADMIN"
+        [[ ! -e "$(sentinel "$J7H")" ]] || bad "$store, \"$named\": sentinel left after the re-run"
+        if [[ "$store" == older ]]; then
+            grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" \
+                || bad "$store, \"$named\": the re-run did not authorize the pending migration: $(flat "$OUT")"
+        elif [[ "$store" == current ]]; then
+            # The probe opened the store (no err_name): step 3 says nothing to authorize.
+            grep -qxF "$none" "$OUT" || bad "$store, \"$named\": no \"$none\" line: $(grep -F "  schema  : " "$OUT")"
+        fi
     done
 }
 

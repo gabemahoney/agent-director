@@ -4340,6 +4340,30 @@ not worked around. That same open gives the store its store id: the
 v4→v5 hop creates it on an upgrade, and `createSchema` on a fresh
 install. `install.sh` never reads or writes `store_meta`.
 
+**The probe, and a refused config (b.7b4).** On an existing `state.db`,
+the install learns whether a migration is pending from one probe open
+(`agent-director list`, before any sentinel is written) and decides by
+the `err_name` of the probe's stderr envelope (`ad_err_name`, via jq),
+never by its description text:
+
+| Probe outcome | Install |
+|---|---|
+| opens, or `ErrSchemaMismatch` | no sentinel; `no migration authorization needed` (an `ErrSchemaMismatch` fails step 4's open again, with the store advice) |
+| `ErrSchemaMigrationRequired` | sentinel written, `to` read from the refusal's `requires v<N>` (`ad_target_version`) |
+| `ErrConfigMalformed` | stops, exit 5, config advice |
+| any other error, or no envelope (`<no err_name>`) | no sentinel; `could not tell whether a migration is needed (agent-director list failed: <err_name>)`; step 4's open reports the failure if it persists |
+
+The binary loads its config before it opens the store (`pkg/api`'s
+`New`, `internal/clisetup`'s `Open`), so `ErrConfigMalformed`, at the probe
+or at step 4's open, says nothing about `state.db`. Both stop the install
+with exit 5 and the config advice (`ad_fail_config_refused`: the config
+path, the envelope, "fix what the error above names in the config file,
+then re-run this install"), never the store advice, having written no
+sentinel and, on a fresh install, created no `state.db`. A re-run after
+the fix probes again and authorizes any pending migration. **Must use:**
+an `install.sh` decision on a verb's failure branches on `ad_err_name`,
+never on the description's text.
+
 The full ordered six-step flow — including how `<target>` is learned
 from the binary's own refusal message and why `list` rather than
 `help`/`version` is the warm-up verb — is documented in

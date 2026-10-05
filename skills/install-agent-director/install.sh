@@ -72,9 +72,10 @@
 #      agent-director-admin binary), or the two binaries' version
 #      stamps differ or carry no commit stamp
 #   4  hook merge failure (~/.claude/settings.json malformed)
-#   5  store open / schema-migration failure (open failed, state.db not
-#      created, an existing state.db's user_version unreadable before or
-#      after the open, or post-open user_version != target)
+#   5  store open / schema-migration failure (open failed, the config
+#      file refused with ErrConfigMalformed, state.db not created, an
+#      existing state.db's user_version unreadable before or after the
+#      open, or post-open user_version != target)
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -858,11 +859,17 @@ fi
 #            agent-director opens the store.
 #   Step 3 — write the sentinel {"from":<actual>,"to":<target>} beside
 #            state.db, SKIPPING when from==target (already current).
+#            <target> comes from a probe open of the existing store,
+#            decided by the probe's err_name. A config the binary
+#            refuses (ErrConfigMalformed) stops the install here (exit 5):
+#            the probe never reached state.db.
 #   Step 4 — trigger exactly one store-opening open (`$CANONICAL list`)
 #            so the store runs the migration and consumes the sentinel.
 #            NOT `help`/`version`: SR-4 (Part D) makes those DB-free, and
 #            Parts A/D land in either order, so a help-warmup would never
-#            open the store and step 5 would fail on every upgrade.
+#            open the store and step 5 would fail on every upgrade. A
+#            refused config stops the install with the config advice, not
+#            the store advice (exit 5).
 #   Step 5 — verify user_version == target; FAIL the install loudly
 #            (non-zero exit) on any mismatch, or when the version cannot
 #            be read, whether or not a migration was expected.
@@ -951,22 +958,45 @@ ad_fail_unreadable_version() {
     exit 5
 }
 
-# ad_target_version — the schema version THIS binary requires. There is
-# no public "print my schema version" verb (and SR-4 forbids leaning on
-# help/version for DB facts), so we read it from the binary's own
-# authoritative refusal: opening an older DB with no valid sentinel emits
-# "... this binary requires v<N>." on the stderr envelope. We parse <N>
-# from that message. If the running open does NOT refuse (DB already
-# current, or fresh create), the target equals the DB's post-open
-# user_version, which step 5 reads directly — so this helper is only
-# consulted when a migration is actually pending.
+# ad_target_version <stderr> — the schema version THIS binary requires.
+# There is no public "print my schema version" verb (and SR-4 forbids
+# leaning on help/version for DB facts), so step 3 reads it from the
+# binary's own authoritative refusal: opening an older DB with no valid
+# sentinel refuses with ErrSchemaMigrationRequired, whose description says
+# "... this binary requires v<N>.". <stderr> is that refusal's stderr; this
+# prints <N>, or nothing when it names none. If the open does NOT refuse
+# (DB already current, or fresh create), the target equals the DB's
+# post-open user_version, which step 5 reads directly — so this helper is
+# only consulted when a migration is actually pending.
 ad_target_version() {
-    local msg
-    # A store-opening verb against the current (older) DB. With no valid
-    # sentinel yet this refuses with ErrSchemaMigrationRequired, carrying
-    # the required version in its message.
-    msg="$("$CANONICAL" list 2>&1 >/dev/null || true)"
-    printf '%s' "$msg" | grep -oE 'requires v[0-9]+' | head -n1 | grep -oE '[0-9]+' || true
+    printf '%s' "$1" | grep -oE 'requires v[0-9]+' | head -n1 | grep -oE '[0-9]+' || true
+}
+
+# ad_err_name <stderr> — the err_name of the JSON error envelope
+# ({"err_name":…,"err_description":…}) in a verb's captured stderr, or
+# nothing when it holds none; lines that are not an envelope are skipped.
+# The install branches on this name, never on the description's English
+# text (b.7b4).
+ad_err_name() {
+    printf '%s\n' "$1" | jq -Rr '(fromjson | .err_name | strings)?' 2>/dev/null | tail -n1 || true
+}
+
+# ad_fail_config_refused <stderr> — agent-director refused its config file
+# (ErrConfigMalformed) at a store-opening verb: report it and exit 5.
+# <stderr> is that verb's stderr, whose envelope names the file and what is
+# wrong with it. The binary loads the config before it opens the store, so
+# the refusal says nothing about state.db: the store was not opened, no
+# migration ran, and none can be authorized until the config loads. A
+# re-run after the fix starts over, and its step-3 probe then authorizes any
+# pending migration (b.7b4).
+ad_fail_config_refused() {
+    echo "install.sh: agent-director refused its config file (ErrConfigMalformed)" >&2
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
+    printf '%s\n' "$1" | sed 's/^/  /' >&2
+    echo "  Fix what the error above names in the config file, then re-run this" >&2
+    echo "  install. A missing key gives that key's default; for a refused value," >&2
+    echo "  so does 0." >&2
+    exit 5
 }
 
 # ---- Step 2: read the DB's ACTUAL current schema version ----
@@ -993,13 +1023,35 @@ else
     fi
 
     # ---- Step 3: write the migration sentinel (skip when already current) ----
-    target_version="$(ad_target_version)"
+    # The probe: one store-opening verb against the existing store, with no
+    # sentinel written yet. Its err_name decides what step 3 does (b.7b4):
+    #   - none (it opened): the DB is current; nothing to authorize.
+    #   - ErrSchemaMismatch: the DB is newer than this binary (or has no
+    #     valid store id); nothing to authorize, and step 4 surfaces it.
+    #   - ErrSchemaMigrationRequired: the DB is older; its message names the
+    #     target, and the sentinel authorizes that migration.
+    #   - ErrConfigMalformed: the config, loaded before the store, was
+    #     refused, so the probe never reached state.db. Stop here: a re-run
+    #     after the config is fixed probes again and authorizes any pending
+    #     migration.
+    #   - anything else: the probe could not tell. Step 4's open reports
+    #     the failure if it persists.
+    probe_name=""
+    if ! probe_err="$("$CANONICAL" list 2>&1 >/dev/null)"; then
+        probe_name="$(ad_err_name "$probe_err")"
+        probe_name="${probe_name:-<no err_name>}"
+    fi
+    target_version=""
+    if [[ "$probe_name" == ErrConfigMalformed ]]; then
+        ad_fail_config_refused "$probe_err"
+    elif [[ "$probe_name" == ErrSchemaMigrationRequired ]]; then
+        target_version="$(ad_target_version "$probe_err")"
+    fi
 
-    if [[ -z "$target_version" ]]; then
-        # The store-opening probe did not refuse: the DB is already at (or
-        # newer than) the binary's version, so there is nothing to
-        # authorize. If it were NEWER, step 4/5 surface ErrSchemaMismatch.
+    if [[ -z "$probe_name" || "$probe_name" == ErrSchemaMismatch ]]; then
         echo "  schema  : state.db at v${db_version_before}; no migration authorization needed"
+    elif [[ -z "$target_version" ]]; then
+        echo "  schema  : state.db at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})"
     elif [[ "$db_version_before" == "$target_version" ]]; then
         # Defensive: probe reported a target equal to current. Nothing to do.
         echo "  schema  : state.db already at target v${target_version}; no sentinel written"
@@ -1025,6 +1077,11 @@ fi
 if open_err="$("$CANONICAL" list 2>&1 >/dev/null)"; then
     :
 else
+    # A refused config stopped the open before it reached state.db, so the
+    # store advice below does not apply (b.7b4).
+    if [[ "$(ad_err_name "$open_err")" == ErrConfigMalformed ]]; then
+        ad_fail_config_refused "$open_err"
+    fi
     echo "install.sh: store open (agent-director list) failed after install" >&2
     if [[ -n "$open_err" ]]; then
         printf '  %s\n' "$open_err" >&2
