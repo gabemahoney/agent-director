@@ -15,6 +15,18 @@ import (
 // `working` per SRD §5.2.
 const ToolAskUserQuestion = "AskUserQuestion"
 
+// NotificationTypeIdlePrompt is the notification_type of Claude Code's
+// idle-prompt Notification. Claude Code sends it only while its main agent is
+// idle at the prompt, no main-agent turn running, once
+// messageIdleNotifThresholdMs (60 s by default) has passed since the last turn
+// ended (b.svb). Idle is the main agent's alone: before Claude Code 2.1.288
+// (anthropics/claude-code#93672) it also fires while a background subagent is
+// still running, and a row that subagent's hook moved to working then reads
+// waiting, its tool possibly still running, until the subagent's next tool
+// hook. Every other notification_type (permission_prompt, auth_success,
+// elicitation_dialog, ...) is a soft refresh.
+const NotificationTypeIdlePrompt = "idle_prompt"
+
 // terminalSessionEndReasons enumerates the SessionEnd reason / matcher
 // values that indicate the Claude Code session truly exited. Everything
 // else — including missing-reason, "clear", "compact", auto-compaction —
@@ -52,6 +64,9 @@ type payload struct {
 	EndReason      string `json:"endReason"`
 	TranscriptPath string `json:"transcript_path"`
 	AgentID        string `json:"agent_id"`
+	// NotificationType is a Notification's kind; see
+	// NotificationTypeIdlePrompt.
+	NotificationType string `json:"notification_type"`
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -92,7 +107,19 @@ type ClassifyResult struct {
 
 	// SoftRefresh is true for events that should bump last_seen_at without
 	// changing state — SessionEnd reason=clear|compact, Notification, and unknown events.
+	// An idle-prompt Notification keeps it true as well; see WaitingIfWorking.
 	SoftRefresh bool
+
+	// WaitingIfWorking is true for the main agent's idle-prompt Notification
+	// (notification_type idle_prompt, no agent_id; b.svb): a row that is
+	// working when the write lands returns to waiting, and a row in any other
+	// state gets the soft refresh. The idle prompt means the main agent's turn
+	// has ended, so a working row was left there by a hook with no Stop after
+	// it, such as a PreToolUse from a background fork after the turn's Stop
+	// or, before Claude Code 2.1.288, from a background subagent still
+	// running (see NotificationTypeIdlePrompt). SoftRefresh stays true alongside it, so a writer that does not act on
+	// WaitingIfWorking makes the soft refresh.
+	WaitingIfWorking bool
 
 	// SessionID is the basename-without-extension of transcript_path, for
 	// every event whose payload carries the path. It is recorded, never a
@@ -191,7 +218,13 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 	case "Stop":
 		res.NewState = store.StateWaiting
 	case "Notification":
+		// b.svb: the main agent's idle-prompt Notification returns a working
+		// row to waiting (before Claude Code 2.1.288 also while a background
+		// subagent still runs; see NotificationTypeIdlePrompt); any other
+		// Notification, and an idle prompt from a subagent or in-process
+		// teammate, is a soft refresh.
 		res.SoftRefresh = true
+		res.WaitingIfWorking = p.NotificationType == NotificationTypeIdlePrompt && p.AgentID == ""
 	case "PermissionRequest":
 		res.NewState = store.StateCheckPermission
 	case "SessionEnd":

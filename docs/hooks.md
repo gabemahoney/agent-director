@@ -52,7 +52,8 @@ absent or invalid), and `row_session_id`, `row_pane_pid` and
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
 | `PostToolUse` | — | `working` |
 | `Stop` | — | `waiting` |
-| `Notification` | — | soft refresh — bumps `last_seen_at`, state unchanged |
+| `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`; any other state: soft refresh (see "The idle-prompt Notification" below) |
+| `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`) |
 | `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
@@ -61,6 +62,56 @@ Unknown event names are treated as soft refreshes — the row's
 `last_seen_at` updates and an info-level log line records the unknown
 name so operators can spot new Claude Code events that need a classifier
 update.
+
+### The idle-prompt Notification
+
+A turn's `Stop` sets `waiting`. A hook that fires after `Stop`, with no
+`Stop` after it, can leave the row `working` while the agent sits idle
+at the prompt. One source is Claude Code's end-of-turn background
+forks, such as the prompt-suggestion fork. Such a fork runs the
+session's `PreToolUse` hooks from the agent's own process, but its tool
+call never runs, so no `PostToolUse` follows. The payload does not tell
+a fork from the agent.
+
+Claude Code sends a `Notification` with `notification_type`
+`idle_prompt` only while the main agent is idle at the prompt, about
+60 s after its turn ended (Claude Code's default). Before Claude Code
+2.1.288 it can fire while a background subagent is still running (see
+"Limits" below). For that Notification, when the payload carries no
+`agent_id`:
+
+- a row that is `working` when the write lands returns to `waiting`.
+  The write is one statement under the same gate as every hook (see
+  "Only the row's own agent moves the row"). The trail records an
+  `ad.spawn.state_transition` from `working` to `waiting` with
+  `soft_refresh` false and `triggering_event_name` `Notification`;
+- a row in any other state gets the soft refresh: `last_seen_at` is
+  bumped and the state does not change.
+
+Every other Notification (`permission_prompt`, `auth_success`,
+`elicitation_dialog`, a missing or unknown type), and an idle-prompt
+Notification whose payload carries `agent_id`, is a soft refresh.
+
+Limits:
+
+- The row reads `working` until the idle-prompt Notification arrives,
+  about 60 s after the turn ended.
+- A stray hook whose write lands after the idle-prompt Notification's
+  leaves the row `working` until the agent's next hook.
+- If a new turn starts as the idle-prompt Notification fires, the
+  Notification's write can land after the new turn's first hook. The
+  row then reads `waiting` until the turn's next hook.
+- On Claude Code 2.1.280 through 2.1.287, the idle-prompt Notification
+  can fire while a background subagent is still running (fixed in
+  2.1.288, anthropics/claude-code#93672). If that subagent's hook had
+  moved the row to `working`, the row reads `waiting`, possibly while
+  the subagent's tool still runs, until the subagent's next tool hook
+  (`PreToolUse`, `PostToolUse` or `PermissionRequest`).
+
+Setting `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` in the agent's
+environment (`spawn`'s `extra_env`) turns off Claude Code's prompt
+suggestions, so the prompt-suggestion fork's stray `PreToolUse` does not
+fire.
 
 ## Only the row's own agent moves the row
 
@@ -205,7 +256,9 @@ carries it and is the agent itself.
   like any hook from the agent's process, but it records no session id
   and no transcript path. A subagent's tool and permission events
   therefore move the row's state and use its relay: the row reflects the
-  process.
+  process. The one exception is an idle-prompt `Notification` with
+  `agent_id`: it is a soft refresh and never returns the row to
+  `waiting` (see "The idle-prompt Notification").
 
 ### The `ad.hook.ignored` reasons
 

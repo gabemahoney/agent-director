@@ -38,6 +38,14 @@ type outcomeTransitioner interface {
 	ApplyHookTransitionResult(instanceID string, gate store.HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
 }
 
+// waitingIfWorkingTransitioner is an optional extension of HookStore for the
+// main agent's idle-prompt Notification (ClassifyResult.WaitingIfWorking,
+// b.svb). *store.Store satisfies it; a test double that does not gets the
+// soft refresh the classification also carries.
+type waitingIfWorkingTransitioner interface {
+	ApplyHookWaitingIfWorking(instanceID string, gate store.HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
+}
+
 // HandleConfig bundles the inputs Handle takes beyond the store and
 // stdin reader. Bundling them keeps the cmd/-side wiring tidy and
 // lets future relay knobs land here without churning the signature.
@@ -130,7 +138,10 @@ type HandleConfig struct {
 // SessionStart waits, a subagent's never does, and the wait makes no tmux
 // call. Every other event is one gated
 // ApplyHookTransitionResult with the payload's session id, transcript path and
-// its presence on disk; the session id is recorded, never a gate.
+// its presence on disk; the session id is recorded, never a gate. The main
+// agent's idle-prompt Notification is ApplyHookWaitingIfWorking instead, with
+// the same gate and records: a row working when it lands returns to waiting,
+// and any other row is soft refreshed (applyOrdinaryHook; b.svb).
 //
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow has stronger fail-closed semantics
@@ -276,21 +287,8 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			return nil
 		}
 	} else {
-		// Use the outcome-aware variant when available so the trail
-		// captures the exact result. Test doubles that don't implement
-		// outcomeTransitioner fall back to store.UpsertNoChange as a
-		// conservative sentinel.
 		var upsertOutcome store.UpsertOutcome
-		if ot, ok := st.(outcomeTransitioner); ok {
-			upsertOutcome, applied, err = ot.ApplyHookTransitionResult(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, transcriptPath, jsonlPresent)
-		} else {
-			applied, err = st.ApplyHookTransition(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, transcriptPath, jsonlPresent)
-			if err != nil {
-				upsertOutcome = store.UpsertError
-			} else {
-				upsertOutcome = store.UpsertNoChange
-			}
-		}
+		upsertOutcome, applied, err = applyOrdinaryHook(st, instanceID, gate, res, transcriptPath, jsonlPresent)
 		fields["upsert_outcome"] = string(upsertOutcome)
 		if err != nil {
 			failClosed(fmt.Sprintf("apply transition (instance=%s, event=%s): %v", instanceID, res.EventName, err))
@@ -334,6 +332,31 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	}
 
 	return nil
+}
+
+// applyOrdinaryHook is Handle's gated write of every event but SessionStart,
+// with ad.hook.fired's upsert_outcome. The main agent's idle-prompt
+// Notification (res.WaitingIfWorking) is ApplyHookWaitingIfWorking: a row
+// working when the write lands returns to waiting, any other row is soft
+// refreshed (b.svb). Every other event is one ApplyHookTransitionResult. A
+// store without those (a test double) gets ApplyHookTransition, which for the
+// idle-prompt Notification is the soft refresh res also carries, and the
+// outcome is store.UpsertNoChange as a conservative sentinel (store.UpsertError
+// on an error).
+func applyOrdinaryHook(st HookStore, instanceID string, gate store.HookGate, res ClassifyResult, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error) {
+	if res.WaitingIfWorking {
+		if wt, ok := st.(waitingIfWorkingTransitioner); ok {
+			return wt.ApplyHookWaitingIfWorking(instanceID, gate, res.EventName, jsonlPath, jsonlPresent)
+		}
+	}
+	if ot, ok := st.(outcomeTransitioner); ok {
+		return ot.ApplyHookTransitionResult(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, jsonlPath, jsonlPresent)
+	}
+	applied, err := st.ApplyHookTransition(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, jsonlPath, jsonlPresent)
+	if err != nil {
+		return store.UpsertError, applied, err
+	}
+	return store.UpsertNoChange, applied, nil
 }
 
 // sessionStartWaitInterval is how often SessionStart re-reads its row while it
@@ -524,3 +547,4 @@ func logf(logger *log.Logger, format string, args ...any) {
 // honest if the store or interfaces grow.
 var _ HookStore = (*store.Store)(nil)
 var _ outcomeTransitioner = (*store.Store)(nil)
+var _ waitingIfWorkingTransitioner = (*store.Store)(nil)

@@ -234,6 +234,75 @@ func hgAssertApplied(t *testing.T, before, after apitest.SpawnColumns, to string
 	}
 }
 
+// TestHookGateWaitingIfWorking pins b.svb's idle-prompt write: from the own pane
+// process a working row returns to waiting and any other row is soft refreshed
+// (an open request held or not); on a working row any other parent changes
+// nothing and gets its reason.
+func TestHookGateWaitingIfWorking(t *testing.T) {
+	rows := []struct {
+		name, state string
+		openRequest bool
+	}{
+		{"working", store.StateWorking, false},
+		{"pending", store.StatePending, false},
+		{"waiting", store.StateWaiting, false},
+		{"ask_user", store.StateAskUser, false},
+		{"check_permission", store.StateCheckPermission, false},
+		{"check_permission with open request", store.StateCheckPermission, true},
+		{"ended", store.StateEnded, false},
+		{"missing", store.StateMissing, false},
+	}
+	f := newV5Store(t)
+	for _, r := range rows {
+		// Other states only need the own pane process: the refusals there are
+		// TestHookGateOrdinaryTable's soft-refresh cases.
+		parents := hgParents[:1]
+		if r.state == store.StateWorking {
+			parents = hgParents
+		}
+		for _, g := range parents {
+			t.Run(r.name+"/"+g.name, func(t *testing.T) {
+				id := hgSeed(t, f, hgRow{state: r.state, noPane: g.noPane})
+				if r.openRequest {
+					if _, err := apitest.SeedPermissionRequest(f.path, id, "Bash"); err != nil {
+						t.Fatalf("SeedPermissionRequest: %v", err)
+					}
+				}
+				before, requests, mark := hgColumns(t, f, id), hgOpenRequests(t, f, id), store.TrailMark(t)
+				gate := hgGate("Notification", g.parent(hgAgentParent(t, f, id)), hgHookSession)
+				out, got, err := f.s.ApplyHookWaitingIfWorking(id, gate, "Notification", hgHookPath, true)
+				if err != nil {
+					t.Fatalf("ApplyHookWaitingIfWorking: %v", err)
+				}
+				if n := hgOpenRequests(t, f, id); n != requests {
+					t.Errorf("open requests %d -> %d; want unchanged", requests, n)
+				}
+				if g.reason != "" {
+					if out != store.UpsertNoChange {
+						t.Errorf("outcome = %q; want %q", out, store.UpsertNoChange)
+					}
+					hgAssertIgnored(t, f, id, mark, got, store.HookApplied{Reason: g.reason}, before)
+					return
+				}
+				if out != store.UpsertUpdated || !got.Applied {
+					t.Fatalf("result = %q, %+v; want %q, applied", out, got, store.UpsertUpdated)
+				}
+				moved := r.state == store.StateWorking
+				to, want := "", r.state
+				if moved {
+					to, want = store.StateWaiting, store.StateWaiting
+				}
+				hgAssertApplied(t, before, hgColumns(t, f, id), to, !moved)
+				lines := store.TrailEventsSince(t, mark, "ad.spawn.state_transition", id)
+				if len(lines) != 1 || lines[0]["prior_state"] != r.state || lines[0]["new_state"] != want ||
+					lines[0]["soft_refresh"] != !moved || lines[0]["triggering_event_name"] != "Notification" {
+					t.Errorf("transition lines = %v; want one %s -> %s, soft_refresh %v, trigger Notification", lines, r.state, want, !moved)
+				}
+			})
+		}
+	}
+}
+
 // TestHookGateNullPaneStarttime pins SR-22.9's NULL pane_starttime: the pid
 // alone decides and the first applied hook records its parent's start time;
 // from then a parent with another start time is refused.
@@ -307,7 +376,8 @@ func TestHookGateSessionIDNotAGate(t *testing.T) {
 // TestHookGateReasonOrder pins decision A1's one read after the statement: no
 // row gives no reason; a row with no pane gives no_pane_recorded even when the
 // parent's start time is unreadable; a row with a pane and an unreadable parent
-// start time gives pid_mismatch. Ordinary and SessionStart writes alike.
+// start time gives pid_mismatch. Ordinary, SessionStart and idle-prompt
+// (b.svb) writes alike.
 func TestHookGateReasonOrder(t *testing.T) {
 	f := newV5Store(t)
 	unreadable := hgParent{apitest.TestPanePID, ""}
@@ -337,6 +407,13 @@ func TestHookGateReasonOrder(t *testing.T) {
 			got, changed, err := hgSessionStart(t, f, id, unreadable, hgHookSession)
 			if err != nil || changed || got != c.want {
 				t.Errorf("RecordSessionStartIdentity = %+v, changed %v, %v; want %+v, false, nil", got, changed, err, c.want)
+			}
+		})
+		t.Run(c.name+"/idle prompt", func(t *testing.T) {
+			id := c.seed(t)
+			out, got, err := f.s.ApplyHookWaitingIfWorking(id, hgGate("Notification", unreadable, ""), "Notification", "", false)
+			if err != nil || out != store.UpsertNoChange || got != c.want {
+				t.Errorf("ApplyHookWaitingIfWorking = %q, %+v, %v; want %q, %+v, nil", out, got, err, store.UpsertNoChange, c.want)
 			}
 		})
 	}

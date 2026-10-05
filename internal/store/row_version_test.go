@@ -249,6 +249,15 @@ func rvSoftRefresh(t *testing.T, f *v5Store, id string) {
 	}
 }
 
+// waitingIfWorking is the idle-prompt write by id's own agent (b.svb); it must apply.
+func waitingIfWorking(t *testing.T, f *v5Store, id string) {
+	t.Helper()
+	out, applied, err := f.s.ApplyHookWaitingIfWorking(id, rvAgentGate(t, f, id), "row_version_test", "", false)
+	if err != nil || !applied.Applied || out != store.UpsertUpdated {
+		t.Fatalf("ApplyHookWaitingIfWorking = %q, %+v, %v; want %q, applied", out, applied, err, store.UpsertUpdated)
+	}
+}
+
 // adoptWrite returns an AdoptIdentityIfUnchanged write of createdIdentity
 // against id's row as examined now, after mutate edits the examined snapshot
 // (nil keeps it), expecting want.
@@ -509,6 +518,12 @@ func rowVersionWrites() []rowVersionCase {
 					t.Fatalf("history entries %d -> %d, want one archived entry", n, got)
 				}
 			}},
+		// b.svb: the idle-prompt write returns a working row to waiting and
+		// clears the launch start; any other row gets the soft refresh.
+		rowVersionCase{name: "ApplyHookWaitingIfWorking/working to waiting", state: "working", clears: true, wantState: "waiting",
+			write: waitingIfWorking},
+		rowVersionCase{name: "ApplyHookWaitingIfWorking/soft refresh of waiting row", state: "waiting", wantState: "waiting",
+			write: waitingIfWorking},
 		rowVersionCase{name: "HealJsonlPath/path NULL", state: "waiting", session: "sess-heal",
 			write: func(t *testing.T, f *v5Store, id string) {
 				got, err := f.s.HealJsonlPath(id, "sess-heal", "/tmp/rv/healed.jsonl")

@@ -14,6 +14,7 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		wantState   string
 		wantSoft    bool
 		wantUnknown bool
+		wantIdle    bool // WaitingIfWorking (b.svb)
 	}{
 		{
 			name:      "SessionStart",
@@ -53,6 +54,23 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{
 			name:     "Notification",
 			payload:  map[string]any{"hook_event_name": "Notification"},
+			wantSoft: true,
+		},
+		{
+			// b.svb: the main agent's idle prompt returns a working row to waiting.
+			name:     "Notification_idle_prompt",
+			payload:  map[string]any{"hook_event_name": "Notification", "notification_type": "idle_prompt"},
+			wantSoft: true,
+			wantIdle: true,
+		},
+		{
+			name:     "Notification_idle_prompt_subagent",
+			payload:  map[string]any{"hook_event_name": "Notification", "notification_type": "idle_prompt", "agent_id": "a1"},
+			wantSoft: true,
+		},
+		{
+			name:     "Notification_permission_prompt",
+			payload:  map[string]any{"hook_event_name": "Notification", "notification_type": "permission_prompt"},
 			wantSoft: true,
 		},
 		{
@@ -139,6 +157,9 @@ func TestClassifyEventSRDTable(t *testing.T) {
 			}
 			if res.UnknownEvent != tc.wantUnknown {
 				t.Errorf("UnknownEvent = %v; want %v", res.UnknownEvent, tc.wantUnknown)
+			}
+			if res.WaitingIfWorking != tc.wantIdle {
+				t.Errorf("WaitingIfWorking = %v; want %v", res.WaitingIfWorking, tc.wantIdle)
 			}
 		})
 	}

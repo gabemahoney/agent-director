@@ -17,8 +17,9 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 }
 
 // ApplyHookTransitionResult is the gated write of an ordinary hook (every
-// event but SessionStart, which RecordSessionStartIdentity writes). The
-// transition follows SRD §5.2:
+// event but SessionStart, which RecordSessionStartIdentity writes; the main
+// agent's idle-prompt Notification is ApplyHookWaitingIfWorking, whose soft
+// refresh is this write). The transition follows SRD §5.2:
 //   - When newState is non-empty, the row's state moves to newState and
 //     last_seen_at is bumped; a state other than ended clears ended_at.
 //   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP.
@@ -155,6 +156,66 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		"new_state":             trailNew,
 		"triggering_event_name": triggeringEventName,
 		"soft_refresh":          softRefresh,
+		"source":                "ad_spawn_store",
+	})
+	return UpsertUpdated, HookApplied{Applied: true}, nil
+}
+
+// ApplyHookWaitingIfWorking is the gated write of the main agent's
+// idle-prompt Notification (b.svb). Claude Code sends that Notification only
+// while its main agent is idle at the prompt, so a row still working then was
+// left there by a hook with no Stop after it (a background fork's PreToolUse
+// after the turn's Stop): the row returns to waiting. A row in any other state
+// gets the ordinary soft refresh. Idle is the main agent's alone: before
+// Claude Code 2.1.288 (anthropics/claude-code#93672) the Notification also
+// fires while a background subagent is still running, and a row that
+// subagent's hook moved to working then reads waiting, its tool possibly still
+// running, until the subagent's next tool hook.
+//
+// The return to waiting is one statement whose WHERE carries the state
+// condition (state = working) with the gate (hookGateSQL), so it applies only
+// to a working row, for the row's own agent, at the moment it runs; no read
+// decides it. It writes what a non-terminal ApplyHookTransitionResult
+// transition writes (the state; last_seen_at bumped; ended_at,
+// launch_started_at and the liveness markers NULLed; the session record; the
+// pane start time when NULL; row_version advanced by one) and emits
+// ad.spawn.state_transition from working to waiting with soft_refresh false.
+// The retention hold does not apply: it holds transitions to working only.
+//
+// When that statement matches no row (the row is not working, the gate does
+// not hold, or no row has the id), the write is ApplyHookTransitionResult's
+// soft refresh, which tells those apart and reports and emits exactly as for
+// any soft-refresh hook. A row that becomes working between the two
+// statements gets the soft refresh: the Notification is then ordered before
+// the hook that moved the row.
+//
+// The outcome and errors are ApplyHookTransitionResult's.
+func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
+	const errPrefix = "store: waiting-if-working transition"
+	recordSet, recordArgs := hookSessionRecordSet(gate, jsonlPath, jsonlPresent)
+	q := `UPDATE spawns
+	         SET state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `,
+	             liveness_unverified_since = NULL, liveness_note = NULL,
+	             ` + recordSet + hookPaneStartSet + `,
+	             ` + rowVersionAdvance + `
+	       WHERE claude_instance_id = ? AND state = ? AND ` + hookGateSQL
+	args := append([]any{StateWaiting}, recordArgs...)
+	args = append(args, gate.ParentStart, instanceID, StateWorking)
+	args = append(args, hookGateArgs(gate)...)
+
+	moved, err := s.execGuarded(q, args, errPrefix)
+	if err != nil {
+		return UpsertError, HookApplied{}, err
+	}
+	if !moved {
+		return s.ApplyHookTransitionResult(instanceID, gate, "", true, triggeringEventName, jsonlPath, jsonlPresent)
+	}
+	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+		"claude_instance_id":    instanceID,
+		"prior_state":           StateWorking,
+		"new_state":             StateWaiting,
+		"triggering_event_name": triggeringEventName,
+		"soft_refresh":          false,
 		"source":                "ad_spawn_store",
 	})
 	return UpsertUpdated, HookApplied{Applied: true}, nil

@@ -29,13 +29,15 @@ import (
 const gateLaunchToken = "0123456789abcdef"
 
 // gateEvent is one ordinary hook event, its fixture and the state an applied
-// hook sets (soft: the state is kept).
+// hook sets (soft: the state is kept; idle: except a working row, which
+// returns to waiting, b.svb).
 type gateEvent struct {
 	name    string
 	fixture string // "" = an unknown event, built from stop.json
 	event   string
 	state   string
 	soft    bool
+	idle    bool
 }
 
 // gateEvents is every ordinary event the settings register, and an unknown one.
@@ -45,7 +47,7 @@ var gateEvents = []gateEvent{
 	{name: "PreToolUse/AskUserQuestion", fixture: "pre-tool-use-ask-user-question.json", event: "PreToolUse", state: store.StateAskUser},
 	{name: "PostToolUse", fixture: "post-tool-use.json", event: "PostToolUse", state: store.StateWorking},
 	{name: "Stop", fixture: "stop.json", event: "Stop", state: store.StateWaiting},
-	{name: "Notification", fixture: "notification.json", event: "Notification", soft: true},
+	{name: "Notification/idle_prompt", fixture: "notification.json", event: "Notification", soft: true, idle: true},
 	{name: "PermissionRequest", fixture: "permission-request.json", event: "PermissionRequest", state: store.StateCheckPermission},
 	{name: "SessionEnd/prompt_input_exit", fixture: "session-end-prompt-input-exit.json", event: "SessionEnd", state: store.StateEnded},
 	{name: "SessionEnd/clear", fixture: "session-end-clear.json", event: "SessionEnd", soft: true},
@@ -54,7 +56,10 @@ var gateEvents = []gateEvent{
 
 // wantState is the row's state after ev applied to a row in prior.
 func (ev gateEvent) wantState(prior string) string {
-	if ev.soft {
+	switch {
+	case ev.idle && prior == store.StateWorking:
+		return store.StateWaiting
+	case ev.soft:
 		return prior
 	}
 	return ev.state
