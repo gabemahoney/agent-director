@@ -3171,7 +3171,9 @@ exactly one sentinel:
   a plain spawn of the id now collides") make up the opted-in retry
   sentence. Plain spawn's explicit-id timeout ending and `pkg/api`'s
   held-name retry sentences (`heldRetryFree`, `heldRetryWait`) are built
-  from them.
+  from them. `pkg/api`'s `launchInProgressNoSessionStep`, resume's
+  launch-in-progress step for a `pending` row with no session id, is built
+  on `ReuseOptIn` directly.
 
 `plainSpawnCreateError` and the outcome mapping resume and reuse share
 (`finishedLaunch.outcome`, `pkg/api/finished_launch.go`) are both built
@@ -5754,10 +5756,26 @@ written, harmlessly:
    decoded `LaunchStartedAtMillis`, formatted as `launch_started_at` is
    (`launchStartedAt`), or "no launch start is recorded". It also says
    that `resume` applies only to an `ended` or `missing` row, and what
-   happens next.
+   happens next: the row becomes live if the agent reports in, and if
+   the launch was abandoned or failed, `find-missing` marks it `missing`
+   once the pending grace period has passed since its launch start. A
+   row with no session id (typically a spawn's or reuse's launch), whose
+   `resume` step 3 refuses once the row is `missing`, also gets the step
+   after that (`launchInProgressNoSessionStep`, b.uey): once `find-missing`
+   marks it `missing`, if `get` still shows no session id, spawn the id
+   again with the reuse opt-in, in its one spelling (`spawn.ReuseOptIn`),
+   since there is no conversation to resume. The step is conditional
+   because an agent that reports in late records a session id, and once
+   that row is `missing` it can be resumed; a reuse would discard its
+   conversation. A row with a session id (typically a resume's launch,
+   though a spawn's `pending` row can gain one while still `pending`)
+   gets no such step; once `missing`, it can be resumed.
 3. `claude_session_id` populated → otherwise `ErrNoSessionId`. A
    Spawn killed before its first SessionStart hook fired has no
-   rotated session id to point `--resume` at. Recourse: spawn again
+   rotated session id to point `--resume` at, nor does a spawn's or
+   reuse's launch that never reported in and that `find-missing` marked
+   `missing` (the step-2 refusal of its `pending` row named this
+   recourse). Recourse: spawn again
    with the same id, opting in to reuse (`--reuse-finished`); the new
    life starts with no memory of the old one.
 4. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
@@ -10996,11 +11014,17 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     lookup cases unchanged ("nothing was done"); only the pane refusals
     carry the verb's sentence.
   - Resume (`descriptions_resume.go`):
-    - `DescResumeLaunchInProgress(LaunchInProgress{InstanceID, LaunchStart})`:
+    - `DescResumeLaunchInProgress(LaunchInProgress{InstanceID, LaunchStart, NoSessionID})`:
       `ErrSpawnNotResumable` for a `pending` row. A zero `LaunchStart`
       requires "no launch start is recorded"; otherwise the start as RFC3339
       UTC, the form `get` shows. The other form, "dead", "gone" and any
-      statement that the refusal ends are must-nots.
+      statement that the refusal ends are must-nots. `NoSessionID`
+      (typically a spawn's or reuse's launch, b.uey) requires the step
+      after find-missing (`noSessionStep`): "once find-missing marks it
+      missing, if get still shows no session id, spawn the id again with"
+      the reuse opt-in in its one spelling (`reuseOptIn`), before "nothing
+      was written"; without it, "session id", the reuse opt-in and "spawn
+      the id" are must-nots.
     - `DescResumeLostRace()`: `ErrSpawnNotResumable`, the row changed
       after resume examined it.
     - `DescResumeMoveStoreError()`: `ErrInternal`, the move to pending

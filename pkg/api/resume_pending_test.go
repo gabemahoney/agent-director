@@ -247,7 +247,8 @@ func pendRefuse(t *testing.T, e *resumeEnv, id, callerParent string) pendRefusal
 }
 
 // TestResumeRefusesLaunchInProgress: a resume of any pending row gets the
-// launch-in-progress refusal, makes no tmux call and writes nothing.
+// launch-in-progress refusal (with the reuse-opt-in step for a row with no
+// session id, b.uey), makes no tmux call and writes nothing.
 func TestResumeRefusesLaunchInProgress(t *testing.T) {
 	// seededNoStart seeds a pending row whose launch_started_at is raw: nil
 	// (NULL) or an int64 outside years 0 to 9999, which reads as absent (SR-5.5).
@@ -327,7 +328,8 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 			if got.before.State != store.StatePending {
 				t.Fatalf("row before the refusal is %v; want pending", got.before.State)
 			}
-			p := apitest.LaunchInProgress{InstanceID: id}
+			sid, _ := got.before.ClaudeSessionID.(string)
+			p := apitest.LaunchInProgress{InstanceID: id, NoSessionID: sid == ""}
 			if wantStart != 0 {
 				p.LaunchStart = time.UnixMilli(wantStart).UTC()
 				if got.before.LaunchStartedAt != wantStart {

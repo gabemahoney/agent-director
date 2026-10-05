@@ -99,18 +99,27 @@ func (c DescCase) AfterResumeRestore(r ResumeRestore) DescCase {
 }
 
 // LaunchInProgress parameterises DescResumeLaunchInProgress: the pending
-// row's instance id and its launch start (the zero time: no launch start is
-// recorded).
+// row's instance id, its launch start (the zero time: no launch start is
+// recorded) and NoSessionID, set when the row has no session id (typically a
+// spawn's or reuse's launch, b.uey).
 type LaunchInProgress struct {
 	InstanceID  string
 	LaunchStart time.Time
+	NoSessionID bool
 }
 
 // launchBegan and noLaunchStart are the launch-in-progress refusal's two
-// forms of the launch start (SR-1.4).
+// forms of the launch start (SR-1.4). afterGrace ends the find-missing
+// sentence; noSessionStep follows it for a row with no session id (typically
+// a spawn's or reuse's launch), whose resume once missing is ErrNoSessionId:
+// once find-missing marks the row missing, if get still shows no session id, a
+// spawn of the id with the reuse opt-in in its one spelling (b.uey, b.c4u);
+// "nothing was written" closes either.
 const (
 	launchBegan   = "a launch of this row began at "
 	noLaunchStart = "no launch start is recorded"
+	afterGrace    = "since its launch start; "
+	noSessionStep = "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + reuseOptIn
 )
 
 // DescResumeLaunchInProgress is ErrSpawnNotResumable for a resume of a
@@ -118,9 +127,12 @@ const (
 // UTC exactly as get shows launch_started_at, or that no launch start is
 // recorded; that its agent has not reported in; that resume applies only to
 // an ended or missing row; that the row becomes live if the agent reports in;
-// that find-missing marks it missing after the pending grace period; that
-// nothing was written. It must not say the refusal ends when the agent
-// reports in, nor "dead" or "gone" (naming find-missing is allowed).
+// that find-missing marks it missing after the pending grace period; with
+// NoSessionID, that the step after that, if get still shows no session id, is
+// a spawn of the id with the reuse opt-in (b.uey); that nothing was written.
+// Without NoSessionID it must not name a session id, the reuse opt-in or a
+// spawn. It must not say the refusal ends when the agent reports in, nor
+// "dead" or "gone" (naming find-missing is allowed).
 func DescResumeLaunchInProgress(p LaunchInProgress) DescCase {
 	req := []string{p.InstanceID}
 	mustNot := []string{
@@ -143,6 +155,12 @@ func DescResumeLaunchInProgress(p LaunchInProgress) DescCase {
 		"find-missing marks the row missing once the pending grace period has passed since its launch start",
 		"nothing was written",
 	)
+	if p.NoSessionID {
+		req = append(req, afterGrace+noSessionStep+"; nothing was written")
+	} else {
+		req = append(req, afterGrace+"nothing was written")
+		mustNot = append(mustNot, "session id", "reuse opt-in", reuseOptInName, "spawn the id")
+	}
 	return DescCase{Name: "ErrSpawnNotResumable, launch in progress", Require: req, MustNot: mustNot}
 }
 

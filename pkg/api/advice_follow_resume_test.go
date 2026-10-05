@@ -26,11 +26,14 @@ import (
 
 // The advice B1-B6 pin, exactly as the description or the Go doc words it.
 const (
-	advResumeLaunchInProgress = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written"
-	advResumeLostRaceChanged  = "the row changed after resume examined it and nothing was written; nothing was launched"
-	advResumeLostRaceRemoved  = "was removed after resume examined it; nothing was written and nothing was launched"
-	advResumeLiveDoc          = "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
-	advResumeReuseRecourse    = "recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
+	advResumeLaunchInProgress          = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written"
+	advResumeLaunchInProgressNoSession = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI); nothing was written"
+	advResumeLaunchInProgressDoc       = "find-missing marks it missing once the pending grace period has passed since its launch start; then a row with a session id (typically a resume's launch) can be resumed, and a row with none (typically a spawn's or reuse's launch), whose resume would return ErrNoSessionId, is spawned again with the same id, opting in to reuse (SpawnParams.ReuseFinished), if get still shows no session id"
+	advResumeLaunchNoSessionErrDoc     = "the step after that: if get still shows no session id, spawn the id again, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished), since there is no conversation to resume"
+	advResumeLostRaceChanged           = "the row changed after resume examined it and nothing was written; nothing was launched"
+	advResumeLostRaceRemoved           = "was removed after resume examined it; nothing was written and nothing was launched"
+	advResumeLiveDoc                   = "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
+	advResumeReuseRecourse             = "recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
 )
 
 // advResumeState is id's state as get shows it; "" when get finds no row.
@@ -113,16 +116,15 @@ func advResumeAgentDies(t *testing.T, e *killEnv, id string) {
 }
 
 // advResumePending is a pending row whose agent never reports in, by origin;
-// broken says why resume still fails once find-missing marked it missing.
+// noSession: a spawn's or reuse's row, which has no session id.
 type advResumePending struct {
-	name   string
-	pend   func(t *testing.T, e *killEnv, c *api.Client) string
-	broken string
+	name      string
+	pend      func(t *testing.T, e *killEnv, c *api.Client) string
+	noSession bool
 }
 
 // advResumePendings is a pending row of each origin: spawn's, reuse's and resume's.
 func advResumePendings() []advResumePending {
-	const noSessionID = "a spawn's or reuse's row whose agent never reported in has no claude_session_id, so resume of the missing row returns ErrNoSessionId"
 	return []advResumePending{
 		{"spawn: create timed out", func(t *testing.T, e *killEnv, c *api.Client) string {
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallCreate)
@@ -131,10 +133,10 @@ func advResumePendings() []advResumePending {
 				t.Fatalf("spawn = %v; want ErrTmuxUnresponsive", err)
 			}
 			return id
-		}, noSessionID},
+		}, true},
 		{"reuse: create timed out", func(t *testing.T, e *killEnv, _ *api.Client) string {
 			return e.reuseTimesOut(t, e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)}), reuseRequest{}, false).ID
-		}, noSessionID},
+		}, true},
 		{"resume: launched, agent died before reporting in", func(t *testing.T, e *killEnv, _ *api.Client) string {
 			r := e.seedResumable(t, rlkSettled(e), agentGone)
 			e.agentOnCreate(r.ID, agentAlive)
@@ -143,23 +145,30 @@ func advResumePendings() []advResumePending {
 			}
 			advResumeAgentDies(t, e, r.ID)
 			return r.ID
-		}, ""},
+		}, false},
 	}
 }
 
-// TestAdviceFollow_B1_LaunchInProgressFindMissing: refused alike inside the grace period; then find-missing, get, resume.
-// B1: "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written"
+// TestAdviceFollow_B1_LaunchInProgressFindMissing: refused alike inside the grace period; then find-missing, get,
+// and resume a row with a session id, or (none, b.uey) spawn the id with the reuse opt-in.
+// B1: "... since its launch start; nothing was written" / "... since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI); nothing was written"
 func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
+	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeLaunchInProgressDoc)
+	adviceAssertGoDoc(t, "errors.go", "ErrSpawnNotResumable", advResumeLaunchNoSessionErrDoc)
 	for _, o := range advResumePendings() {
 		t.Run(o.name, func(t *testing.T) {
 			e := newKillEnv(t)
 			c, _ := e.client(t)
 			id := o.pend(t, e, c)
 			before := e.columns(t, id)
+			advice := advResumeLaunchInProgress
+			if o.noSession {
+				advice = advResumeLaunchInProgressNoSession
+			}
 
 			_, refused := e.resume(id)
 
-			adviceAssertAdvice(t, refused, api.ErrSpawnNotResumable, advResumeLaunchInProgress)
+			adviceAssertAdvice(t, refused, api.ErrSpawnNotResumable, advice)
 			e.assertRowUnchanged(t, id, before)
 			if st := adviceAwaitFinished(t, c, e.clock, id, func() {
 				if _, err := e.resume(id); err == nil || err.Error() != refused.Error() {
@@ -168,10 +177,20 @@ func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 			}); st != store.StateMissing {
 				t.Fatalf("get %s past the pending grace period: state %q; want missing", id, st)
 			}
-			if o.broken != "" {
-				knownBrokenAdvice(t, "B1", o.broken)
+			row, err := c.Get(id)
+			if err != nil || (row.ClaudeSessionID == "") != o.noSession {
+				t.Fatalf("get %s once missing = session id %q, %v; want it empty: %v", id, row.ClaudeSessionID, err, o.noSession)
 			}
-			advResumeLaunches(t, e, id)
+			if row.ClaudeSessionID != "" {
+				advResumeLaunches(t, e, id)
+				return
+			}
+			creates := len(e.rec.SocketCallsOf(tmux.CallCreate))
+			res, err := c.Spawn(fgcSpawnParams(t, id, true))
+			advSpawnLaunched(t, e.dbPath, id, advSpawnNextLife(before), res, err)
+			if n := len(e.rec.SocketCallsOf(tmux.CallCreate)) - creates; n != 1 {
+				t.Errorf("creates by the spawn with the reuse opt-in = %d; want 1", n)
+			}
 		})
 	}
 }

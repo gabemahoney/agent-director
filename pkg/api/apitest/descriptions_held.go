@@ -71,7 +71,8 @@ const (
 // MCP and TypeScript name, then its CLI flag. reuseOptIn is how every
 // plain-spawn retry sentence names it (the explicit id's launch timeout, and
 // after "duplicate session" the unanswered re-lookup's, the vanished
-// holder's and the unended row's); no resume, reuse or pre-launch
+// holder's and the unended row's) and resume's launch-in-progress refusal of
+// a row with no session id (b.uey); no other resume, reuse or pre-launch
 // description names reuseOptInName at all.
 const (
 	reuseOptInName     = "reuse_finished"

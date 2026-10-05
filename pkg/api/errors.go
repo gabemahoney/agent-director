@@ -52,14 +52,24 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 // finished row. A live row is refused because its agent is running. A
 // `pending` row is refused too: it is a launch (spawn, reuse or resume) in
 // progress whose agent has not reported in, a resumed row included, and the
-// description says when the launch began. It is also returned when resume
+// description says when the launch began and that, if the launch was
+// abandoned or failed, find-missing marks the row missing once the pending
+// grace period has passed since its launch start. For a row with no session
+// id (typically a spawn's or reuse's launch), whose resume once missing
+// returns ErrNoSessionId, the description names the step after that: if get
+// still shows no session id, spawn the id again, opting in to reuse
+// (SpawnParams.ReuseFinished, --reuse-finished), since there is no
+// conversation to resume. It is also returned when resume
 // loses a race: the row changed between resume's read and its move to
 // `pending`, and nothing was written.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 
 // ErrNoSessionId is returned by the resume verb when the row's
 // claude_session_id column is empty — typically because the Spawn
-// was killed before its first SessionStart hook fired. With no
+// was killed before its first SessionStart hook fired, or because a spawn's
+// or reuse's launch never reported in and find-missing marked its pending
+// row missing (resume's launch-in-progress refusal of that pending row,
+// ErrSpawnNotResumable, names this recourse). With no
 // session id there is no JSONL to point `claude --resume` at; the
 // caller's recourse is to spawn again with the same id, opting in to reuse
 // (SpawnParams.ReuseFinished, --reuse-finished). The reused id starts a new

@@ -205,10 +205,17 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     `pending` row is a launch in progress whose agent has not reported in
 //     (SR-8.4) and gets the launch-in-progress description: when the launch
 //     began (or that no launch start is recorded), that resume applies only
-//     to an ended or missing row, and what happens next.
+//     to an ended or missing row, and what happens next; for a row with no
+//     session id (typically a spawn's or reuse's launch), whose resume once
+//     missing guard 3 refuses, that once find-missing marks it missing, if
+//     get still shows no session id, the step is a spawn of the id with the
+//     reuse opt-in.
 //  3. `claude_session_id` must be populated → otherwise
 //     ErrNoSessionId. A Spawn killed before its first SessionStart
-//     hook fired has no rotated session id to point --resume at.
+//     hook fired has no rotated session id to point --resume at, nor does
+//     a spawn's or reuse's launch that never reported in and that
+//     find-missing marked missing (guard 2's refusal of its pending row
+//     named the recourse: a spawn of the id with the reuse opt-in).
 //  4. JSONL transcript file must exist on disk → otherwise
 //     ErrJsonlMissing. Pure os.Stat pre-flight; no read. Candidate
 //     resolution follows a strict precedence (decision of record,
@@ -636,18 +643,37 @@ func resumeLostRace(s ResumeStore, row Spawn) error {
 	return nil
 }
 
+// launchInProgressNoSessionStep is the launch-in-progress refusal's next step
+// for a pending row with no session id (b.uey): typically a spawn's or
+// reuse's launch whose agent has not reported in. Once find-missing marks
+// that row missing, resume of it returns ErrNoSessionId, so the step is a
+// spawn of the id with the reuse opt-in in its one spelling
+// (spawn.ReuseOptIn; b.c4u). The step is conditional on get still showing no
+// session id: an agent that reports in late records one, and once that row is
+// missing it is resumable, so a reuse would discard its conversation.
+const launchInProgressNoSessionStep = "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + spawn.ReuseOptIn
+
 // launchInProgressError is resume's refusal of a pending row (SR-8.4,
 // SR-1.4): a launch in progress whose agent has not reported in. The launch
 // start is the row's decoded LaunchStartedAtMillis (0 = none recorded),
 // formatted as RFC3339 UTC exactly as get, status and list show
-// launch_started_at. It names no session-ending command.
+// launch_started_at. A row with a session id (typically a resume's launch)
+// ends with find-missing marking it missing, after which resume applies; a
+// row with none (typically a spawn's or reuse's launch) also gets
+// launchInProgressNoSessionStep, since resume of it once missing returns
+// ErrNoSessionId unless its agent reported in first. It names no
+// session-ending command.
 func launchInProgressError(row Spawn) error {
 	began := "no launch start is recorded"
 	if at := launchStartedAt(row.State, row.LaunchStartedAtMillis); at != nil {
 		began = "a launch of this row began at " + at.Format(time.RFC3339Nano)
 	}
-	return fmt.Errorf("%w: spawn %s is pending: %s and its agent has not reported in; resume applies only to an ended or missing row; if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written",
-		ErrSpawnNotResumable, row.ClaudeInstanceID, began)
+	next := ""
+	if row.ClaudeSessionID == "" {
+		next = "; " + launchInProgressNoSessionStep
+	}
+	return fmt.Errorf("%w: spawn %s is pending: %s and its agent has not reported in; resume applies only to an ended or missing row; if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start%s; nothing was written",
+		ErrSpawnNotResumable, row.ClaudeInstanceID, began, next)
 }
 
 // Resume relaunches a finished (ended/missing) row by launching
@@ -727,13 +753,21 @@ func launchInProgressError(row Spawn) error {
 //     must be paused, or killed and then marked by find-missing, before it
 //     can be resumed: follow the live-row sequence in kill's description); a
 //     pending row is a launch in progress whose agent has not reported in.
-//     Also a lost race: the row changed after resume examined it (found by
-//     the move, or by the one re-read after the pre-launch check found a
-//     left-over session), and nothing was written.
+//     If its launch was abandoned or failed, find-missing marks it missing
+//     once the pending grace period has passed since its launch start; then
+//     a row with a session id (typically a resume's launch) can be resumed,
+//     and a row with none (typically a spawn's or reuse's launch), whose
+//     resume would return ErrNoSessionId, is spawned again with the same id,
+//     opting in to reuse (SpawnParams.ReuseFinished), if get still shows no
+//     session id, as its description says. Nothing was written. Also a lost race: the row changed after resume examined it
+//     (found by the move, or by the one re-read after the pre-launch check
+//     found a left-over session), and nothing was written.
 //   - [ErrNoSessionId]: claude_session_id is empty — the Spawn was killed
-//     before its first SessionStart hook. Recourse: spawn again with the
-//     same id, opting in to reuse (SpawnParams.ReuseFinished); the reused id
-//     starts a new life with no memory of the earlier one.
+//     before its first SessionStart hook, or a spawn's or reuse's launch
+//     never reported in and find-missing marked its pending row missing (the
+//     launch-in-progress refusal above names this recourse). Recourse: spawn
+//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished);
+//     the reused id starts a new life with no memory of the earlier one.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
 //     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
 //     fallback, nor any transcript of the visible history (the message
