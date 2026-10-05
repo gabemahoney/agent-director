@@ -45,37 +45,44 @@ func TestApplyDefaultsMintsUuid4(t *testing.T) {
 }
 
 // TestApplyDefaultsPreCheckOutcomes pins SR-9.3's one pre-check read: minted,
-// no row, finished row and nil checker each give their IDCheck; a live row collides.
+// no row, nil checker and a finished row with the reuse opt-in each give their
+// IDCheck; a live row, and a finished row without the opt-in (b.hjs), collide.
 func TestApplyDefaultsPreCheckOutcomes(t *testing.T) {
 	const id = "deadbeef-0000-4000-8000-000000000001"
+	const finished = "ErrInstanceIdCollision: " + id // no "already live", no reuse hint
+	const live = finished + " already live"
 	cases := []struct {
 		name      string
 		id        string
+		reuse     bool
 		checker   *fakeChecker // nil passes no CollisionChecker
 		want      IDCheck
-		collides  bool
+		wantErr   string // the exact ErrInstanceIdCollision text; "" for none
 		wantReads int
 	}{
-		{"minted id makes no read", "", &fakeChecker{state: "waiting", exists: true}, IDMinted, false, 0},
-		{"no row", id, &fakeChecker{}, IDNoRow, false, 1},
-		{"ended row", id, &fakeChecker{state: "ended", exists: true}, IDFinishedRow, false, 1},
-		{"missing row", id, &fakeChecker{state: "missing", exists: true}, IDFinishedRow, false, 1},
-		{"no checker", id, nil, IDNotChecked, false, 0},
-		{"pending row", id, &fakeChecker{state: "pending", exists: true}, 0, true, 1},
-		{"waiting row", id, &fakeChecker{state: "waiting", exists: true}, 0, true, 1},
-		{"check_permission row", id, &fakeChecker{state: "check_permission", exists: true}, 0, true, 1},
+		{"minted id makes no read", "", false, &fakeChecker{state: "waiting", exists: true}, IDMinted, "", 0},
+		{"no row", id, false, &fakeChecker{}, IDNoRow, "", 1},
+		{"ended row", id, false, &fakeChecker{state: "ended", exists: true}, 0, finished, 1},
+		{"missing row", id, false, &fakeChecker{state: "missing", exists: true}, 0, finished, 1},
+		{"ended row with reuse", id, true, &fakeChecker{state: "ended", exists: true}, IDFinishedRow, "", 1},
+		{"missing row with reuse", id, true, &fakeChecker{state: "missing", exists: true}, IDFinishedRow, "", 1},
+		{"no checker", id, false, nil, IDNotChecked, "", 0},
+		{"pending row", id, false, &fakeChecker{state: "pending", exists: true}, 0, live, 1},
+		{"waiting row", id, false, &fakeChecker{state: "waiting", exists: true}, 0, live, 1},
+		{"waiting row with reuse", id, true, &fakeChecker{state: "waiting", exists: true}, 0, live, 1},
+		{"check_permission row", id, false, &fakeChecker{state: "check_permission", exists: true}, 0, live, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: tc.id}}
+			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: tc.id, ReuseFinished: tc.reuse}}
 			var checker CollisionChecker
 			if tc.checker != nil {
 				checker = tc.checker
 			}
 			got, err := ApplyDefaults(&r, config.Default(), checker)
-			if tc.collides {
-				if !errors.Is(err, ErrInstanceIdCollision) {
-					t.Fatalf("err = %v; want ErrInstanceIdCollision", err)
+			if tc.wantErr != "" {
+				if !errors.Is(err, ErrInstanceIdCollision) || err.Error() != tc.wantErr {
+					t.Fatalf("err = %v; want ErrInstanceIdCollision %q", err, tc.wantErr)
 				}
 			} else if err != nil || got != tc.want {
 				t.Fatalf("ApplyDefaults = (%v, %v); want (%v, nil)", got, err, tc.want)

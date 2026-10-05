@@ -45,10 +45,11 @@ var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 // ErrInstanceIdCollision is returned when the caller supplied an explicit
 // claude_instance_id that already has a row. Without the reuse opt-in
 // (ReuseFinished) any existing row collides, finished or live: the
-// pre-check refuses a live row and SQLite's PRIMARY KEY at INSERT refuses
-// a finished one, and the pair keeps the check race-safe. With the opt-in
-// it means a live row (pending included), or a row that changed or was
-// removed after this spawn examined it (a lost race); nothing was changed.
+// collision pre-check refuses it before anything is written, and SQLite's
+// PRIMARY KEY at INSERT refuses a row inserted after the pre-check's read,
+// so the pair keeps the check race-safe. With the opt-in it means a live
+// row (pending included), or a row that changed or was removed after this
+// spawn examined it (a lost race); nothing was changed.
 // A pre-check that cannot read the store is ErrInternal, never this error.
 var ErrInstanceIdCollision = errors.New("ErrInstanceIdCollision")
 

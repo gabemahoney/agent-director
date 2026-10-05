@@ -446,14 +446,15 @@ func TestLaunchPassesUserSuppliedTmuxSessionName(t *testing.T) {
 	}
 }
 
-// TestLaunchSecondInsertSurfacesCollision: a second Launch of the same id
-// collides at the insert and makes no create call.
+// TestLaunchSecondInsertSurfacesCollision: a second Launch of the same id (a
+// row the pre-check missed, a race) collides at the insert with the
+// pre-check's finished-row text (b.hjs) and makes no create call.
 func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {
 	e := newLaunchEnv(t)
-	e.mustLaunch()
+	id := e.mustLaunch()
 	e.rec.Reset()
-	if _, _, err := e.launch(); !errors.Is(err, ErrInstanceIdCollision) {
-		t.Fatalf("second Launch err = %v; want ErrInstanceIdCollision", err)
+	if _, _, err := e.launch(); !errors.Is(err, ErrInstanceIdCollision) || err.Error() != "ErrInstanceIdCollision: "+id {
+		t.Fatalf("second Launch err = %v; want ErrInstanceIdCollision: %s", err, id)
 	}
 	if calls := e.rec.SocketCalls(); len(calls) != 0 {
 		t.Errorf("tmux calls after collision = %+v; want none", calls)

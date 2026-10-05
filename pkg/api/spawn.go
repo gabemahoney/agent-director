@@ -65,9 +65,11 @@ type spawnTmux interface {
 // A caller-supplied id whose pre-check finds no row gets the label scan
 // (scanForLeftover) next, before Launch resolves its socket, mints its token,
 // pre-trusts and inserts, so a refusal writes nothing (SR-9.3). A minted id
-// and a finished row are not scanned. pc, now and lg are the Client's
-// start-time reader, clock and logger, which Launch uses for the identity
-// write, the launch start and the identity write's WARN line.
+// is not scanned, and a finished row never reaches the scan: without the
+// reuse opt-in the pre-check refuses it (ErrInstanceIdCollision) before
+// anything is written, and with it the reuse path takes it. pc, now and lg
+// are the Client's start-time reader, clock and logger, which Launch uses for
+// the identity write, the launch start and the identity write's WARN line.
 //
 // When the create answers "duplicate session", Launch returns a
 // *spawn.HeldNameError with the new pending row's facts, and runSpawn hands
@@ -93,14 +95,15 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 // The reuse branch is taken only when the caller opted in (ReuseFinished)
 // and supplied a non-empty instance id, after the control-character check,
 // template resolution and validation; a minted id, and every call without
-// the opt-in, take exactly the plain path above (without the opt-in a
-// finished row still collides at the insert). On the branch, rs.ReadForReuse
-// is the one pre-check read: its answer feeds ApplyDefaults through
-// reusePreCheck, so the live-row collision (ErrInstanceIdCollision, a pending
-// row included, with no tmux call and nothing written) and the read failure
-// (spawn.PreCheckReadError, ErrInternal) keep their single mappings, and
-// collisions is not read. No row hands over to the ordinary fresh spawn: the
-// label scan, then Launch, whose insert collision in a race is
+// the opt-in, take exactly the plain path above (without the opt-in the
+// pre-check refuses a finished row too, with ErrInstanceIdCollision, before
+// Launch resolves its socket, pre-trusts or inserts). On the branch,
+// rs.ReadForReuse is the one pre-check read: its answer feeds ApplyDefaults
+// through reusePreCheck, so the live-row collision (ErrInstanceIdCollision, a
+// pending row included, with no tmux call and nothing written) and the read
+// failure (spawn.PreCheckReadError, ErrInternal) keep their single mappings,
+// and collisions is not read. No row hands over to the ordinary fresh spawn:
+// the label scan, then Launch, whose insert collision in a race is
 // ErrInstanceIdCollision (SR-9.3). A finished row goes to spawnReuse.
 func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, rs reuseStore, t spawnTmux, pc ProcChecker, cfg config.Config, now func() time.Time, lg *log.Logger, params spawn.SpawnParams) (SpawnResult, error) {
 	if err := validateExplicitInstanceID(params.ClaudeInstanceID); err != nil {
@@ -225,10 +228,10 @@ func hasControlChar(id string) bool {
 //   - ErrInvalidFlags: ClaudeInstanceID contains an ASCII control character.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
 //     for the explicit ClaudeInstanceID, in any state (the pre-check refuses
-//     a live row and the insert's primary key a finished one). With
-//     ReuseFinished, the row is live (pending included), or it changed or
-//     was removed after this spawn examined it (a lost race); nothing was
-//     changed.
+//     it before anything is written; the insert's primary key refuses a row
+//     created after the pre-check). With ReuseFinished, the row is live
+//     (pending included), or it changed or was removed after this spawn
+//     examined it (a lost race); nothing was changed.
 //   - ErrTmuxSessionNameEmpty: TmuxSessionName was supplied but is empty.
 //   - ErrTmuxSessionNameInvalid: TmuxSessionName contains illegal characters.
 //   - ErrTmuxSessionNameTooLong: TmuxSessionName exceeds 64 bytes.

@@ -28,8 +28,9 @@ const ReuseOptIn = "the reuse opt-in " + manifest.ReuseOptInSpelling
 
 // ReuseRetry names the retry that works for a plain spawn whose row for this
 // id is, or will be, finished (b.1qq): a plain spawn of the id collides with
-// that row at the insert (ErrInstanceIdCollision), so the retry uses the
-// reuse opt-in (ReuseOptIn). Its reason follows it as PlainSpawnCollides.
+// that row at the collision pre-check (ErrInstanceIdCollision), so the retry
+// uses the reuse opt-in (ReuseOptIn). Its reason follows it as
+// PlainSpawnCollides.
 // pkg/api's held-name retry sentences build on both.
 const ReuseRetry = "a retry with this id uses " + ReuseOptIn
 

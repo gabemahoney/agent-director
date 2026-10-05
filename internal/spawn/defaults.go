@@ -15,9 +15,10 @@ import (
 // claude_instance_id, exists false when there is no row, and an error only
 // when the store cannot be read. So the one read tells no row, a live row
 // and a finished row apart (SR-9.3). A live state (see store.IsLiveState)
-// becomes ErrInstanceIdCollision; a read error, whatever it wraps, becomes
-// PreCheckReadError's uncatalogued error (ErrInternal on every surface),
-// never a collision and never "no row". Production callers pass
+// becomes ErrInstanceIdCollision, and so does a finished row unless the
+// caller opted in to reuse (ReuseFinished); a read error, whatever it wraps,
+// becomes PreCheckReadError's uncatalogued error (ErrInternal on every
+// surface), never a collision and never "no row". Production callers pass
 // *store.Store; tests pass a fake or a failing wrapper to drive either
 // outcome.
 type CollisionChecker interface {
@@ -38,9 +39,10 @@ const (
 	// IDNoRow: a caller-supplied id with no row of any state: the plain
 	// spawn's label scan runs for it.
 	IDNoRow
-	// IDFinishedRow: a caller-supplied id whose row is finished (not live):
-	// not scanned; without the reuse parameter the insert still collides
-	// with ErrInstanceIdCollision (AC-SPN-03).
+	// IDFinishedRow: a caller-supplied id whose row is finished (not live),
+	// with the reuse opt-in (ReuseFinished): not scanned; the reuse path
+	// takes it. Without the opt-in a finished row is never this answer: the
+	// pre-check refuses it with ErrInstanceIdCollision (AC-SPN-03).
 	IDFinishedRow
 	// IDNotChecked: a caller-supplied id and no CollisionChecker given; no
 	// read was made.
@@ -81,12 +83,14 @@ func PreCheckReadError(err error) error {
 //   - RelayMode ← cfg.Defaults.RelayMode if the caller left it empty.
 //   - Caller-supplied ClaudeInstanceID triggers one pre-check read of the
 //     row's state. A live row (`pending` included) returns
-//     ErrInstanceIdCollision. A failed read returns PreCheckReadError's
-//     error, which surfaces as ErrInternal, not as a collision. Either way
-//     nothing is created: the pre-check runs before Launch, so no row, no
-//     pre-trust write and no tmux call follow. No row gives IDNoRow and a
-//     finished row IDFinishedRow; SQLite's PRIMARY KEY catches the finished
-//     row, and any TOCTOU race, at INSERT.
+//     ErrInstanceIdCollision, and so does a finished row unless the caller
+//     opted in to reuse (ReuseFinished). A failed read returns
+//     PreCheckReadError's error, which surfaces as ErrInternal, not as a
+//     collision. Either way nothing is created: the pre-check runs before
+//     Launch, so no socket directory, row, pre-trust write or tmux call
+//     follows. No row gives IDNoRow and a finished row with the opt-in
+//     IDFinishedRow; SQLite's PRIMARY KEY catches a row inserted after the
+//     read (a TOCTOU race) at INSERT.
 func ApplyDefaults(r *Resolved, cfg config.Config, checker CollisionChecker) (IDCheck, error) {
 	check, err := preCheckID(r, checker)
 	if err != nil {
@@ -102,7 +106,10 @@ func ApplyDefaults(r *Resolved, cfg config.Config, checker CollisionChecker) (ID
 }
 
 // preCheckID mints an absent instance id, or runs the collision pre-check's
-// one read for a caller-supplied one (SR-9.3).
+// one read for a caller-supplied one (SR-9.3). Without the reuse opt-in every
+// existing row is refused here, so no refusal of an existing row comes after
+// Launch's socket resolution, settings synthesis or pre-trust (b.hjs); the
+// insert's PRIMARY KEY is left only a row inserted after this read.
 func preCheckID(r *Resolved, checker CollisionChecker) (IDCheck, error) {
 	if r.ClaudeInstanceID == "" {
 		r.ClaudeInstanceID = uuid.NewString()
@@ -119,8 +126,18 @@ func preCheckID(r *Resolved, checker CollisionChecker) (IDCheck, error) {
 		return IDNoRow, nil
 	case store.IsLiveState(state):
 		return 0, fmt.Errorf("%w: %s already live", ErrInstanceIdCollision, r.ClaudeInstanceID)
+	case !r.ReuseFinished:
+		return 0, rowExistsCollision(r.ClaudeInstanceID)
 	}
 	return IDFinishedRow, nil
+}
+
+// rowExistsCollision is plain spawn's ErrInstanceIdCollision for an explicit
+// id that already has a row and no "already live" finding: a finished row the
+// pre-check refuses without the reuse opt-in, or a row the insert's PRIMARY
+// KEY refuses after a race. Both give the same text, the sentinel and the id.
+func rowExistsCollision(instanceID string) error {
+	return fmt.Errorf("%w: %s", ErrInstanceIdCollision, instanceID)
 }
 
 // composeSessionName builds the canonical session name from the canonical

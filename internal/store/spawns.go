@@ -55,7 +55,7 @@ const (
 // The collision pre-check on a caller-supplied claude_instance_id tests the
 // row's state against this set (IsLiveState): a live row collides, while a
 // finished row's id is reused only by a spawn with the reuse opt-in (SR-10.2)
-// and otherwise collides at the insert (resume relaunches a finished row
+// and otherwise collides at the pre-check (resume relaunches a finished row
 // under its own life instead). A terminal state is not proof
 // that the agent is dead: `missing` is the sweep's judgement on the evidence
 // available to it, not proof that the agent has exited, and neither `ended`
@@ -158,9 +158,9 @@ type Spawn struct {
 //
 // On PRIMARY KEY collision (claude_instance_id already exists, in any
 // state) it returns ErrPrimaryKeyCollision; spawn.Launch maps that to
-// ErrInstanceIdCollision. This is where a plain spawn's finished row
-// collides (the pre-check refuses only a live row) and where a row inserted
-// after the pre-check is caught.
+// ErrInstanceIdCollision. The collision pre-check has already refused every
+// existing row a plain spawn may not use, a finished one included, so this
+// is where a row inserted after the pre-check's read (a race) is caught.
 //
 // The insert is one of the writes that begin a launch (SR-5.2): in the same
 // statement it writes launch_started_at from sp.LaunchStartedAtMillis

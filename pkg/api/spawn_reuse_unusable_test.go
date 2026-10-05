@@ -91,7 +91,9 @@ func TestSpawnReuseUnusableName(t *testing.T) {
 }
 
 // TestSpawnReuseUnusableNameCollides: a finished row without the opt-in, or a
-// live row with it, whose recorded name is unusable is ErrInstanceIdCollision with no tmux call or store write.
+// live row with it, whose recorded name is unusable is ErrInstanceIdCollision
+// at the pre-check with no tmux call and nothing written, the trust file
+// included (b.hjs).
 func TestSpawnReuseUnusableNameCollides(t *testing.T) {
 	cases := []struct {
 		state string
@@ -120,11 +122,7 @@ func TestSpawnReuseUnusableNameCollides(t *testing.T) {
 
 				assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
 				e.rtabNoNewCalls(t, before)
-				var except []wroteNothingExcept
-				if !tc.reuse {
-					except = append(except, exceptTrust) // a plain spawn pre-trusts before its insert collides (AC-SPN-03)
-				}
-				e.assertWroteNothing(t, before, except...)
+				e.assertWroteNothing(t, before)
 			})
 		}
 	}

@@ -3,13 +3,16 @@ package api_test
 // spawn_reuse_test.go covers SpawnParams.ReuseFinished (SR-10.1, AC-REUSE-13)
 // at the parameter level: with no explicit id it is an ordinary fresh spawn;
 // a control-character id is still ErrInvalidFlags; without the opt-in a
-// finished row still collides with ErrInstanceIdCollision. It also covers
+// finished row collides with ErrInstanceIdCollision at the pre-check, writing
+// nothing (b.hjs). It also covers
 // SR-10.2's rows that need no lookup of an old row (AC-REUSE-05, AC-REUSE-14,
 // AC-REUSE-18): no row (a fresh spawn after the label scan, and the insert
 // race), every live state, and a failed pre-check read.
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -143,20 +146,28 @@ func TestSpawnReuseFinishedControlCharacterID(t *testing.T) {
 }
 
 // TestSpawnFinishedRowCollidesWithoutReuse: without the opt-in an ended or
-// missing row is ErrInstanceIdCollision; the row, its history and permission
-// requests are unchanged and no session is created.
+// missing row is ErrInstanceIdCollision at the pre-check (b.hjs): no tmux call,
+// no socket directory, .claude.json byte-identical, and the row unchanged.
 func TestSpawnFinishedRowCollidesWithoutReuse(t *testing.T) {
 	for _, state := range finishedStates {
 		t.Run(state, func(t *testing.T) {
 			env := newSpawnEnv(t)
 			id, before := seedFinishedRow(t, env.dbPath, state)
+			trust := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			cwd := t.TempDir()
 
-			_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id, ReuseFinished: false})
+			_, err := env.c.Spawn(api.SpawnParams{CWD: cwd, ClaudeInstanceID: id, ReuseFinished: false,
+				ExtraEnv: trust.extraEnv()})
 
 			assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
+			if err != nil && err.Error() != "ErrInstanceIdCollision: "+id {
+				t.Errorf("err = %q; want %q", err, "ErrInstanceIdCollision: "+id)
+			}
 			assertRowStateUnchanged(t, env.dbPath, id, before)
-			if n := len(env.rec.SocketCallsOf(tmux.CallCreate)); n != 0 {
-				t.Errorf("create calls = %d; want 0", n)
+			assertNoTmuxCalls(t, env.rec)
+			trust.check(t, cwd, false, "after the refused spawn")
+			if _, serr := os.Lstat(filepath.Dir(env.socket)); !errors.Is(serr, os.ErrNotExist) {
+				t.Errorf("socket directory %s: Lstat err = %v; want it not created", filepath.Dir(env.socket), serr)
 			}
 		})
 	}

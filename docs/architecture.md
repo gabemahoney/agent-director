@@ -2604,8 +2604,9 @@ so each stage can be tested in isolation against synthesized input.
    └────┬───────┘   relay_mode from config. Explicit id: one collision
         │           pre-check read (SpawnState; live row →
         │           ErrInstanceIdCollision; read failure → ErrInternal).
-        │           Without the reuse opt-in any existing row collides:
-        │           a live one here, a finished one at the insert.
+        │           Without the reuse opt-in any existing row collides
+        │           here, live or finished (the insert's PRIMARY KEY
+        │           catches only a row inserted after this read).
         │           Nothing created on error. Returns an IDCheck.
         │           With the opt-in, a finished row leaves the pipeline
         │           here for the reuse path (see "Reuse of a finished id").
@@ -2671,28 +2672,38 @@ For an explicit `claude_instance_id`, `spawn.ApplyDefaults`
 row and a finished row apart. `ApplyDefaults` returns an `IDCheck`:
 `IDMinted` (no id supplied, nothing read; `runSpawn` derives `Launch`'s
 `minted` from it), `IDNoRow` (the label scan runs; for both, see
-[Launch identity](#launch-identity)), `IDFinishedRow` (not
-scanned; without the reuse opt-in the insert collides, with it the
+[Launch identity](#launch-identity)), `IDFinishedRow` (a finished
+row, returned only with the reuse opt-in: not scanned, the
 [reuse path](#reuse-of-a-finished-id) runs) or `IDNotChecked` (no
 checker given). A read error is never "no row", whatever it wraps.
 Without the reuse opt-in, any existing row with the explicit id
-collides, finished or live. There are two error outcomes here:
+collides here, finished or live. There are three error outcomes here:
 
-- A live row, `pending` included, returns `ErrInstanceIdCollision`,
-  with or without the opt-in.
+- A live row, `pending` included, returns `ErrInstanceIdCollision`
+  ("<id> already live"), with or without the opt-in.
+- A finished row (`ended` or `missing`) without the opt-in returns
+  `ErrInstanceIdCollision` ("<id>"; b.hjs).
 - A failed store read returns `ErrInternal`, with the description "the
   collision pre-check could not read the store: <store error>". A store
   fault says nothing about whether the id is in use, so it must never
   reach a caller as a collision, which callers read as "resume instead".
 
-Either way nothing is created. The pre-check runs before `Launch`, so no
-row, pre-trust write or tmux session follows. An empty id is never
-checked; `ApplyDefaults` mints a fresh UUID4 for it. Without the reuse
-opt-in a finished row passes the pre-check (`IDFinishedRow`) and
-collides at the insert: SQLite's PRIMARY KEY refuses it
-(`store.ErrPrimaryKeyCollision`), and `Launch` reports that as
-`ErrInstanceIdCollision`. The same PRIMARY KEY catches a row inserted by
-a race after the pre-check.
+In every case nothing is created. The pre-check runs before `Launch`, so
+no socket directory, launch token, `--settings` synthesis, pre-trust
+write, row or tmux session follows. An empty id is never checked;
+`ApplyDefaults` mints a fresh UUID4 for it. SQLite's PRIMARY KEY at the
+insert (`store.ErrPrimaryKeyCollision`, which `Launch` reports as
+`ErrInstanceIdCollision`) is only the backstop for a row inserted by a
+race after the pre-check's read. That race is the one refusal of an
+existing row that comes after pre-trust, so only it can leave a refused
+plain spawn's trust entry written (see
+[Workspace-trust pre-write](#workspace-trust-pre-write)).
+
+**Must use:** plain spawn's `ErrInstanceIdCollision` for an existing row
+with no "already live" finding (the pre-check's finished row without the
+opt-in, and the insert's race collision) is built by
+`rowExistsCollision(id)` (`internal/spawn/defaults.go`), so both give
+the same text. Do not format that error inline.
 
 The read-failure mapping lives in one place:
 `spawn.PreCheckReadError(err)`. It formats the store error with `%v`,
@@ -3509,7 +3520,8 @@ pre-check, lookup and new-name pre-check, token and `ComposeLaunch`),
 the move to `pending` for `resume` (after its guards, transcript search,
 control-character check, socket resolution, pre-launch lookup, token and
 `ComposeRelaunch`). A launch refused before pre-trust writes no trust
-entry. A launch refused after it (a `spawn` insert collision, a reuse
+entry. A launch refused after it (a `spawn` whose insert collides with a
+row inserted by a race after its collision pre-check, a reuse
 whose reset finds the row changed or gone or fails in the store, a
 `resume` whose move finds the row changed or gone) leaves the entry
 written, which is harmless: it only marks the folder trusted. Because pre-trust runs before the launch-start
