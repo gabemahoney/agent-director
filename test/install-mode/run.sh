@@ -101,13 +101,25 @@ report "fresh-umask-0777" "$m" "755"
 report "fresh-umask-0777-admin" "$(admin_modes "$H")" "700/755"
 
 # -- scenario 4: --keep-prior upgrade flow -------------------------------
-# First a fresh install (with no --keep-prior, so no .prior yet), then a
-# second install with --keep-prior — the second one must:
+# First a fresh install of an older build (with no --keep-prior, so no
+# .prior yet), then an upgrade to the source binary with --keep-prior —
+# the second one must:
 #   - copy the existing canonical to .prior at 0755
+#   - copy the existing agent-director-admin to its .prior at 0755
 #   - write the new canonical at 0755 via the temp+mv pattern
-# Both files asserted independently.
+# Files asserted independently. The older build is the source binary
+# with one byte appended, installed beside the same
+# agent-director-admin: install.sh decides --keep-prior for the pair
+# (b.2wk), snapshotting neither binary only when agent-director is
+# already byte-identical to its source and agent-director-admin is too
+# (or is not installed). Here agent-director differs, so both are
+# snapshotted, agent-director-admin unchanged as it is.
 H=$(mktemp -d)
-HOME="$H" bash "$INSTALL_SH" --binary "$SOURCE_BINARY" --no-hooks --no-symlink >/dev/null
+OLD_PARENT=$(mktemp -d)
+cp "$SOURCE_BINARY" "$OLD_PARENT/agent-director"
+printf '\0' >>"$OLD_PARENT/agent-director"
+chmod 0755 "$OLD_PARENT/agent-director"
+HOME="$H" bash "$INSTALL_SH" --binary "$OLD_PARENT/agent-director" --no-hooks --no-symlink >/dev/null
 m=$(install_canonical_mode "$H" 022 --keep-prior)
 report "keep-prior-canonical" "$m" "755"
 report "keep-prior-admin" "$(admin_modes "$H")" "700/755"
@@ -117,6 +129,13 @@ if [[ -f "$H/.agent-director/bin/agent-director.prior" ]]; then
 else
     fail=$((fail+1))
     echo "  FAIL  keep-prior-snapshot                missing .prior"
+fi
+if [[ -f "$H/.agent-director/admin/agent-director-admin.prior" ]]; then
+    mp=$(stat -c '%a' "$H/.agent-director/admin/agent-director-admin.prior")
+    report "keep-prior-admin-snapshot" "$mp" "755"
+else
+    fail=$((fail+1))
+    echo "  FAIL  keep-prior-admin-snapshot          missing admin .prior"
 fi
 
 # -- scenario 5: 0644 source MUST be refused -----------------------------

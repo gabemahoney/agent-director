@@ -116,6 +116,12 @@ cp "$BIN" "$WRONG_ARCH"
 printf "$WRONG_MACHINE" | dd of="$WRONG_ARCH" bs=1 seek=18 conv=notrunc status=none || die "patch e_machine"
 cp "$ADMIN" "$WRONG_ARCH_ADMIN"
 printf "$WRONG_MACHINE" | dd of="$WRONG_ARCH_ADMIN" bs=1 seek=18 conv=notrunc status=none || die "patch e_machine (admin)"
+# BIN_NUL and ADMIN_NUL: BIN and ADMIN with one NUL byte appended (different
+# bytes, the same stamps), so either can replace its half of the pair alone (J11).
+BIN_NUL="$ROOT/bin/agent-director-nul"
+ADMIN_NUL="$ROOT/bin/agent-director-admin-nul"
+{ cp "$BIN" "$BIN_NUL" && printf '\0' >>"$BIN_NUL" && cp "$ADMIN" "$ADMIN_NUL" && printf '\0' >>"$ADMIN_NUL"; } \
+    || die "NUL-appended binaries"
 
 # SCHEMA is the schema version $BIN writes; BIN_NEWER is the same source with
 # one more (store.go swapped in through a build overlay, the tree untouched).
@@ -619,12 +625,16 @@ test_J5_StaleBinaryFromRelease() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_failing_migration: install BIN_OLD, then make the store one version older
-# with a store_meta table the migration cannot write; leaves HOME in J6H.
+# j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
+# pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
+# make the store one version older with a store_meta table the migration cannot
+# write, and run J6ARGV, an upgrade with --keep-prior, into that failure;
+# leaves HOME in J6H.
 j6_failing_migration() {
     J6H="$(new_home)"
     run "$J6H" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
+    if [[ "${1:-}" == pre-0.11.0 ]]; then j11_pre_admin "$J6H" || return 1; fi
     "$SQLITE" "$J6H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));
         DROP TABLE store_meta; CREATE TABLE store_meta (bogus TEXT);" || { bad "damage store"; return 1; }
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
@@ -652,15 +662,48 @@ test_J6_MigrationFailedRerunRetries() {
     [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel not consumed by the successful migration"
 }
 
-# J6 with --keep-prior: re-running as advised must keep the rollback copy of
-# the binary that was installed before this install.
+# J6 with --keep-prior: re-running as advised keeps the rollback copies of the
+# pair installed before this install and says so (b.2wk); rolling both back
+# then restores that pair, stamps matching.
 test_J6_RerunKeepsPriorRollbackCopy() {
     j6_failing_migration || return
-    cmp -s "$J6H/.agent-director/bin/agent-director.prior" "$BIN_OLD" || bad "first run did not snapshot the old binary"
-    known_broken J6 "a --keep-prior re-run snapshots the failed new binary over agent-director.prior" || return
+    j11_paths "$J6H"
+    cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
+    cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
     run "$J6H" "${J6ARGV[@]}"
-    cmp -s "$J6H/.agent-director/bin/agent-director.prior" "$BIN_OLD" \
+    expect_rc 5 "advised re-run while store_meta is still bad" || return
+    j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
+    j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
+    cmp -s "$J11C.prior" "$BIN_OLD" \
         || bad "after the advised re-run agent-director.prior is no longer the pre-install binary (rollback copy lost)"
+    cmp -s "$J11A.prior" "$ADMIN_OLD" \
+        || bad "after the advised re-run agent-director-admin.prior is no longer the pre-install binary (rollback copy lost)"
+    j11_roll_back_both "$J6H" 0.0.1-advice-old
+}
+
+# J6 with --keep-prior on an upgrade from before 0.11.0
+# (test_J11_KeepPriorNoAdminRemoveIt's setup): the advised re-run keeps
+# agent-director.prior and still says "to roll back, remove
+# <agent-director-admin>" (b.2wk); doing that restores the old install.
+test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
+    local got
+    j6_failing_migration pre-0.11.0 || return
+    j11_paths "$J6H"
+    grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "first run: no agent-director prior line: $(flat "$OUT")"
+    grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" \
+        || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
+    run "$J6H" "${J6ARGV[@]}"
+    expect_rc 5 "advised re-run while store_meta is still bad" || return
+    j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
+    j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
+    cmp -s "$J11C.prior" "$BIN_OLD" \
+        || bad "after the advised re-run agent-director.prior is no longer the pre-install binary (rollback copy lost)"
+    [[ ! -e "$J11A.prior" ]] || bad "the advised re-run left $J11A.prior, which would pair wrongly"
+    got="$(grep -m1 -F "to roll back, remove " "$OUT")" || return
+    mv "$J11C.prior" "$J11C" || bad "mv $J11C.prior $J11C"
+    rm "${got##*to roll back, remove }" || bad "remove ${got##*to roll back, remove }"
+    cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
+    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the rollback"
 }
 
 # J6: "If state.db is NEWER than this binary (ErrSchemaMismatch), install a
@@ -1081,11 +1124,47 @@ j11_paths() {
     J11C="$1/.agent-director/bin/agent-director" J11A="$1/.agent-director/admin/agent-director-admin"
 }
 
+# The reasons --keep-prior gives for snapshotting neither binary (b.2wk): the
+# installed pair is already the one being installed, or agent-director is and
+# no agent-director-admin is installed.
+J11_SAME_PAIR="the installed agent-director and agent-director-admin are already the ones being installed"
+J11_SAME_NO_ADMIN="the installed agent-director is already the one being installed, and no agent-director-admin is installed"
+
+# j11_not_snapshotted <label> <outcome> <reason> [<advice>]: stdout has
+# --keep-prior's <label> line for a pair it did not snapshot; outcome is
+# "kept <target>.prior" or "none", advice what follows the parenthesis.
+j11_not_snapshotted() {
+    local line="  $1: $2 (not snapshotted: $3)${4:-}"
+    grep -qxF "$line" "$OUT" || bad "no \"$line\" line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+}
+
+# j11_pre_admin <home>: make the install under home look like one from before
+# 0.11.0: no agent-director-admin, and a stale agent-director-admin.prior.
+j11_pre_admin() {
+    j11_paths "$1"
+    rm -f "$J11A" && cp "$ADMIN" "$J11A.prior" || { bad "make the pre-0.11.0 install"; return 1; }
+}
+
+# j11_roll_back_both <home> <version> [<context>]: roll both binaries back with
+# `mv <target>.prior <target>`; the rolled-back pair must be a matching pair,
+# both version stamps (version and commit) the same and naming <version>.
+j11_roll_back_both() {
+    local t stamp ctx="${3:+$3: }"
+    for t in "$J11C" "$J11A"; do
+        mv "$t.prior" "$t" || { bad "${ctx}mv $t.prior $t"; return 1; }
+    done
+    run "$1" "$J11C" version
+    stamp="$(cat "$OUT")"
+    [[ "$stamp" == *"\"$2\""* ]] || bad "${ctx}rolled-back agent-director version: $stamp; want $2"
+    run "$1" "$J11A" version
+    [[ "$(cat "$OUT")" == "$stamp" ]] || bad "${ctx}rolled-back stamps differ: agent-director $stamp, agent-director-admin $(cat "$OUT")"
+}
+
 # J11: "Roll back with `mv <target>.prior <target>`" (--keep-prior, install.sh
 # --help): an upgrade with --keep-prior snapshots both binaries, and rolling
 # both back restores the old pair, whose version stamps match.
 test_J11_KeepPriorRollBackBoth() {
-    local h t stamp; h="$(new_home)"; j11_paths "$h"
+    local h t; h="$(new_home)"; j11_paths "$h"
     run "$h" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
     [[ "$(flat "$OUT")" == *'Roll back with `mv <target>.prior <target>`.'* ]] || bad "--help lacks the rollback advice: $(flat "$OUT")"
@@ -1097,15 +1176,69 @@ test_J11_KeepPriorRollBackBoth() {
     grep -qxF "  admin prior: snapshotted to $J11A.prior" "$OUT" || bad "no agent-director-admin prior line: $(flat "$OUT")"
     for t in "$J11C" "$J11A"; do
         [[ "$(stat -c %a "$t.prior")" == 755 ]] || bad "$t.prior has mode $(stat -c %a "$t.prior"); want 755"
-        mv "$t.prior" "$t" || bad "mv $t.prior $t"
     done
+    j11_roll_back_both "$h" 0.0.1-advice-old || return
     cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
     cmp -s "$J11A" "$ADMIN_OLD" || bad "rolled-back agent-director-admin is not the old one"
-    run "$h" "$J11C" version
-    stamp="$(cat "$OUT")"
-    [[ "$stamp" == *'"0.0.1-advice-old"'* ]] || bad "rolled-back agent-director version: $stamp"
-    run "$h" "$J11A" version
-    [[ "$(cat "$OUT")" == "$stamp" ]] || bad "rolled-back stamps differ: agent-director $stamp, agent-director-admin $(cat "$OUT")"
+}
+
+# J11: "Both binaries are snapshotted ..., so rolling back both restores a
+# matching pair" (install.sh --help) when only one of the pair changes: the
+# snapshot is decided for the pair, not per binary (b.2wk). After an upgrade
+# with --keep-prior, installing a pair that differs from the installed one in
+# agent-director alone, or in agent-director-admin alone, snapshots both again,
+# to the pair installed before this run, and rolling both back restores it.
+test_J11_KeepPriorOneChangedSnapshotsBoth() {
+    local spec c a changed h
+    for spec in "$BIN_NUL|$ADMIN|agent-director" "$BIN|$ADMIN_NUL|agent-director-admin"; do
+        IFS='|' read -r c a changed <<<"$spec"
+        h="$(new_home)"; j11_paths "$h"
+        run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
+        expect_rc 0 "install the old pair" || continue
+        run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink
+        expect_rc 0 "upgrade with --keep-prior" || continue
+        run "$h" bash "$LOOSE" --binary "$c" --admin-binary "$a" --keep-prior --no-hooks --no-symlink
+        expect_rc 0 "$changed alone changed, with --keep-prior" || continue
+        expect_installed "$h" "$c" "$a"
+        grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" \
+            || bad "$changed alone changed: no agent-director prior line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+        grep -qxF "  admin prior: snapshotted to $J11A.prior" "$OUT" \
+            || bad "$changed alone changed: no agent-director-admin prior line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+        cmp -s "$J11C.prior" "$BIN" || bad "$changed alone changed: agent-director.prior is not the agent-director installed before"
+        cmp -s "$J11A.prior" "$ADMIN" || bad "$changed alone changed: agent-director-admin.prior is not the agent-director-admin installed before"
+        j11_roll_back_both "$h" 0.0.2-advice "$changed alone changed"
+    done
+}
+
+# J11: "A re-install of the same pair (agent-director already byte-identical to
+# the one being installed, and agent-director-admin either byte-identical too
+# or not installed) is not snapshotted" (install.sh --help, b.2wk):
+# re-installing the installed pair with --keep-prior and no .prior yet says so
+# for both binaries and creates no .prior; so does a re-install with
+# agent-director-admin gone, which installs it again.
+test_J11_KeepPriorSamePairNotSnapshotted() {
+    local h t; h="$(new_home)"; j11_paths "$h"
+    local argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    run "$h" bash "$LOOSE" --help
+    expect_rc 0 "install.sh --help" || return
+    [[ "$(flat "$OUT")" == *"A re-install of the same pair (agent-director already byte-identical to the one being installed, and agent-director-admin either byte-identical too or not installed) is not snapshotted, so the .prior files from the earlier run are kept."* ]] \
+        || bad "--help lacks the not-snapshotted sentence: $(flat "$OUT")"
+    run "$h" "${argv[@]}"
+    expect_rc 0 "install the pair" || return
+    run "$h" "${argv[@]}" --keep-prior
+    expect_rc 0 "re-install the pair with --keep-prior" || return
+    expect_installed "$h" "$BIN" "$ADMIN"
+    j11_not_snapshotted "prior   " none "$J11_SAME_PAIR"
+    j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR"
+    rm "$J11A" || { bad "rm $J11A"; return; }
+    run "$h" "${argv[@]}" --keep-prior
+    expect_rc 0 "re-install with --keep-prior, agent-director-admin gone" || return
+    expect_installed "$h" "$BIN" "$ADMIN"
+    j11_not_snapshotted "prior   " none "$J11_SAME_NO_ADMIN"
+    j11_not_snapshotted "admin prior" none "$J11_SAME_NO_ADMIN"
+    for t in "$J11C" "$J11A"; do
+        [[ ! -e "$t.prior" ]] || bad "$t.prior created for a binary that was not replaced"
+    done
 }
 
 # J11: "to roll back, remove <agent-director-admin>" (--keep-prior on an
@@ -1116,7 +1249,7 @@ test_J11_KeepPriorNoAdminRemoveIt() {
     local h line got; h="$(new_home)"; j11_paths "$h"
     run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "install the old pair" || return
-    rm -f "$J11A" && cp "$ADMIN" "$J11A.prior" || { bad "make the pre-0.11.0 install"; return; }
+    j11_pre_admin "$h" || return
     run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink
     expect_rc 0 "upgrade with --keep-prior" || return
     expect_installed "$h" "$BIN" "$ADMIN"

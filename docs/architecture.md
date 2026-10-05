@@ -4242,7 +4242,9 @@ claude /install-agent-director (or `bash install.sh`)
   → version-stamp pairing: agent-director and agent-director-admin must
     report the same `version` stamp (version and commit), with a real
     commit, else exit 3
-  → --keep-prior: snapshot both existing binaries to their .prior
+  → --keep-prior: snapshot both existing binaries to their .prior,
+    unless this is a re-install of the same pair (then neither; the
+    .prior files are kept)
   → stage both binaries: create ~/.agent-director/admin/ (0700) and make
     both sibling temp copies (0755); a failure here replaces neither
   → mv both into place, back to back:
@@ -4464,13 +4466,23 @@ EXIT trap removes a temp copy that was never moved.
 Optional `--keep-prior` snapshots each existing binary to its `.prior`
 (`agent-director.prior`, `agent-director-admin.prior`) before either is
 staged, giving a one-step rollback of the matching pair
-(`mv .prior canonical` for each). An upgrade from a release before
-0.11.0 has no admin binary to snapshot: `install.sh` removes any stale
+(`mv .prior canonical` for each). Whether to snapshot is decided once
+for the pair, never per binary. A re-install of the same pair
+(agent-director byte-identical to its source by `cmp -s`,
+agent-director-admin byte-identical too or not installed; a `cmp` that
+cannot compare counts as different) is not snapshotted: the `.prior`
+files are kept, and the `prior` and `admin prior` lines each say
+`kept <path>` or `none`, followed by `(not snapshotted: ...)`. Any
+other install snapshots both, even when only one of them changed. An
+upgrade from a release before 0.11.0 has no admin binary to snapshot:
+when it replaces `agent-director`, `install.sh` removes any stale
 `agent-director-admin.prior` (it would pair wrongly), prints an
-"admin prior: none" line, and rolling back means removing
-`agent-director-admin`. Without it, rollback is a re-install of the
-previous tag via `install.sh --from-release v<old>`, which refuses a tag
-before 0.11.0 (no `agent-director-admin` asset). The
+"admin prior: none" line ending "to roll back, remove <path>", and
+rolling back means removing `agent-director-admin`; a re-run of that
+upgrade keeps `agent-director.prior` and prints the same advice.
+Without `--keep-prior`, rollback is a re-install of the previous tag
+via `install.sh --from-release v<old>`, which refuses a tag before
+0.11.0 (no `agent-director-admin` asset). The
 version-manager pattern (canonical symlink → versioned files) was
 considered and rejected for b.43y: it only earns its complexity when
 multiple concurrent versions are actually being managed.

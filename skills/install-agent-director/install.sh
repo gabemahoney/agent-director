@@ -61,7 +61,12 @@
 #                        restores a matching pair; when no
 #                        agent-director-admin was installed before (an
 #                        upgrade from a release before 0.11.0), roll it
-#                        back by removing it.
+#                        back by removing it. A re-install of the same
+#                        pair (agent-director already byte-identical to
+#                        the one being installed, and
+#                        agent-director-admin either byte-identical too
+#                        or not installed) is not snapshotted, so the
+#                        .prior files from the earlier run are kept.
 #
 # Exit codes:
 #   0  success
@@ -768,26 +773,62 @@ ADMIN_CANONICAL="${DEFAULT_ADMIN_DIR}/agent-director-admin"
 ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
 ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
-if [[ "$KEEP_PRIOR" -eq 1 && -f "$CANONICAL" ]]; then
-    cp -f "$CANONICAL" "$PRIOR"
-    chmod 0755 "$PRIOR"
-    echo "  prior   : snapshotted to $PRIOR"
-fi
-
 # --keep-prior snapshots agent-director-admin too (b.vqr), before either
 # binary is replaced, so rolling both back restores a matching pair.
 # With no agent-director-admin installed yet but an agent-director
 # being replaced (an upgrade from a release before 0.11.0), there is
 # nothing to snapshot: a stale .prior, which would pair wrongly, is
 # removed, and the rollback is removing agent-director-admin.
+#
+# Whether to snapshot is decided once, for the pair (b.2wk). Neither
+# binary is snapshotted when agent-director is already byte-identical
+# to its source and agent-director-admin is too or is not installed:
+# such an install replaces nothing, and snapshotting would overwrite the
+# earlier run's rollback copies with the binaries being installed
+# again, as a re-run after step 4's exit 5 (which advises one) would.
+# Otherwise both are snapshotted as above. Deciding per binary could
+# leave .prior files from different builds: installs of the pairs
+# (A0,M0), (A1,M1) and (A2,M1) would leave A1 beside M0. A cmp that
+# cannot compare (missing, or a file it cannot read) counts as
+# different, so both are snapshotted.
 if [[ "$KEEP_PRIOR" -eq 1 ]]; then
-    if [[ -f "$ADMIN_CANONICAL" ]]; then
-        cp -f "$ADMIN_CANONICAL" "$ADMIN_PRIOR"
-        chmod 0755 "$ADMIN_PRIOR"
-        echo "  admin prior: snapshotted to $ADMIN_PRIOR"
-    elif [[ -f "$CANONICAL" ]]; then
-        rm -f "$ADMIN_PRIOR"
-        echo "  admin prior: none (no agent-director-admin was installed); to roll back, remove $ADMIN_CANONICAL"
+    if [[ -f "$CANONICAL" ]] && cmp -s "$CANONICAL" "$BINARY_SRC" \
+        && { [[ ! -f "$ADMIN_CANONICAL" ]] || cmp -s "$ADMIN_CANONICAL" "$ADMIN_SRC"; }; then
+        if [[ -f "$ADMIN_CANONICAL" ]]; then
+            not_snapshotted="not snapshotted: the installed agent-director and agent-director-admin are already the ones being installed"
+        else
+            not_snapshotted="not snapshotted: the installed agent-director is already the one being installed, and no agent-director-admin is installed"
+        fi
+        if [[ -f "$PRIOR" ]]; then
+            echo "  prior   : kept $PRIOR ($not_snapshotted)"
+        else
+            echo "  prior   : none ($not_snapshotted)"
+        fi
+        if [[ -f "$ADMIN_PRIOR" ]]; then
+            echo "  admin prior: kept $ADMIN_PRIOR ($not_snapshotted)"
+        elif [[ -f "$PRIOR" ]]; then
+            # An agent-director.prior with no admin .prior beside it is
+            # from an upgrade from before 0.11.0, which removed the admin
+            # .prior: rolling back still means removing
+            # agent-director-admin, as that run said.
+            echo "  admin prior: none ($not_snapshotted); to roll back, remove $ADMIN_CANONICAL"
+        else
+            echo "  admin prior: none ($not_snapshotted)"
+        fi
+    else
+        if [[ -f "$CANONICAL" ]]; then
+            cp -f "$CANONICAL" "$PRIOR"
+            chmod 0755 "$PRIOR"
+            echo "  prior   : snapshotted to $PRIOR"
+        fi
+        if [[ -f "$ADMIN_CANONICAL" ]]; then
+            cp -f "$ADMIN_CANONICAL" "$ADMIN_PRIOR"
+            chmod 0755 "$ADMIN_PRIOR"
+            echo "  admin prior: snapshotted to $ADMIN_PRIOR"
+        elif [[ -f "$CANONICAL" ]]; then
+            rm -f "$ADMIN_PRIOR"
+            echo "  admin prior: none (no agent-director-admin was installed); to roll back, remove $ADMIN_CANONICAL"
+        fi
     fi
 fi
 

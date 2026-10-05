@@ -89,11 +89,17 @@ on upgrade to have install.sh snapshot both existing binaries before
 either new one is staged, to `~/.agent-director/bin/agent-director.prior` and
 `~/.agent-director/admin/agent-director-admin.prior`. That gives you a
 one-step rollback of the matching pair (`mv .prior canonical` for
-each). On an upgrade from a release before 0.11.0 there is no
-agent-director-admin to snapshot: install.sh removes any stale admin
-`.prior`, prints an `admin prior: none` line, and rolling back means
-removing `~/.agent-director/admin/agent-director-admin`. Without
-`--keep-prior`, re-install the previous tag via
+each). A re-install of the same pair (agent-director already
+byte-identical to the one being installed, and agent-director-admin
+byte-identical too or not installed) is not snapshotted, so re-running
+the same install (for example after an exit 5) keeps the `.prior`
+files from the earlier run; the `prior` and `admin prior` lines then
+say `not snapshotted`. Any other install snapshots both, even when
+only one of them changed. On an upgrade from a release before 0.11.0
+there is no agent-director-admin to snapshot: install.sh removes any
+stale admin `.prior`, prints an `admin prior: none` line, and rolling
+back means removing `~/.agent-director/admin/agent-director-admin`.
+Without `--keep-prior`, re-install the previous tag via
 `install.sh --from-release v<old>` (this install.sh refuses a tag before
 0.11.0, which has no agent-director-admin).
 
@@ -437,9 +443,13 @@ This skill runs `install.sh` from the same directory. The script:
    in-flight exec is unaffected by the swap. With `--keep-prior` both
    prior binaries are snapshotted (`agent-director.prior`,
    `agent-director-admin.prior`) before either new binary is staged,
-   for a one-step rollback of the pair; on an upgrade from a release
-   before 0.11.0, which installed no admin binary, a stale admin
-   `.prior` is removed instead.
+   for a one-step rollback of the pair. The decision covers the pair:
+   a re-install of the same pair (agent-director byte-identical to its
+   new binary, and agent-director-admin byte-identical too or not
+   installed) snapshots neither and keeps the `.prior` files, and any
+   other install snapshots both. On an upgrade from a release before
+   0.11.0, which installed no admin binary, a stale admin `.prior` is
+   removed instead.
 
 4. **Rejects whitespace in the install path.** Per SRD §4.3 tmux's
    direct-argv invocation does not tolerate spaces in the binary
@@ -863,6 +873,16 @@ the *binaries*, roll back both, so the pair still matches:
 If the previous install was a release before 0.11.0, there is no
 `agent-director-admin.prior` (install.sh said `admin prior: none`):
 roll back by removing `~/.agent-director/admin/agent-director-admin`.
+
+Re-running the same install (for example after an exit 5) does not
+snapshot again, because the installed pair is already the one being
+installed: its `prior` and `admin prior` lines say `kept <path>` or
+`none`, then `(not snapshotted: ...)`, and the `.prior` files are
+still the binaries from before the upgrade. On a re-run of an upgrade
+from a release before 0.11.0, the `admin prior: none` line still ends
+`to roll back, remove <path>`: roll back as above. `none` on the
+`prior` line means the earlier run kept no rollback copy of
+`agent-director`: re-install the previous version as below.
 
 If you didn't pass `--keep-prior`, re-install the previous version via
 `install.sh --from-release v<old-tag>` (0.11.0 or later: this install.sh
