@@ -23,8 +23,9 @@ const (
 	PreTrustSkipped PreTrustOutcome = "skipped"
 	// PreTrustFailed: pre-trust was attempted and did not write the entry
 	// (the .claude.json file is missing, or could not be read, parsed or
-	// written, its lock held by another process included). The launch
-	// proceeds; the agent may stop at the prompt.
+	// written, its lock held by another process included, or the extra
+	// env's CLAUDE_CONFIG_DIR is set but not usable, see ConfigDirUsable).
+	// The launch proceeds; the agent may stop at the prompt.
 	PreTrustFailed PreTrustOutcome = "failed"
 )
 
@@ -41,13 +42,16 @@ var preTrustWarn io.Writer = os.Stderr
 //
 // When off is true it attempts nothing, opens and creates no file, prints
 // nothing and returns PreTrustSkipped. Otherwise it runs preTrustCwd for cwd,
-// resolving the target .claude.json from extraEnv (CLAUDE_CONFIG_DIR first,
-// then $HOME), and returns PreTrustOK when the entry was written. Any failure,
-// a missing file included, returns PreTrustFailed and prints exactly one line
-// to preTrustWarn saying "pre-trust failed", naming the resolved file and
-// saying the agent may stop at Claude Code's folder-trust prompt; it names no
-// label, token or other environment value. PreTrust never returns an error
-// and never fails a launch.
+// resolving the target .claude.json from extraEnv (claudeJSONFor: a usable
+// CLAUDE_CONFIG_DIR first, then $HOME), and returns PreTrustOK when the entry
+// was written. Any failure, a missing file or an unusable CLAUDE_CONFIG_DIR
+// included, returns PreTrustFailed and prints exactly one line to
+// preTrustWarn saying "pre-trust failed", naming the resolved file (when none
+// could be resolved, only the reason: for an unusable CLAUDE_CONFIG_DIR, its
+// quoted value) and saying the agent may stop at Claude Code's folder-trust
+// prompt; it names no label, token or environment value other than
+// CLAUDE_CONFIG_DIR. PreTrust never returns an error and never fails a
+// launch.
 func PreTrust(cwd string, extraEnv map[string]string, off bool) PreTrustOutcome {
 	if off {
 		return PreTrustSkipped
@@ -71,7 +75,7 @@ func PreTrust(cwd string, extraEnv map[string]string, off bool) PreTrustOutcome 
 // claudeJSONPath returns the default $HOME/.claude.json path. Held as a var
 // so tests can swap it for a temp file without monkey-patching os.UserHomeDir.
 // claudeJSONFor uses this only when the launch's extra env does not set
-// CLAUDE_CONFIG_DIR.
+// CLAUDE_CONFIG_DIR (absent or empty).
 var claudeJSONPath = func() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -80,15 +84,50 @@ var claudeJSONPath = func() (string, error) {
 	return filepath.Join(home, ".claude.json"), nil
 }
 
+// ConfigDirUsable reports whether dir, the CLAUDE_CONFIG_DIR value of a
+// launch's or row's extra env, can be used to find that launch's Claude Code
+// files: only an absolute path can (bugs b.1ba, b.nje). Claude Code resolves
+// a relative value against its pane's cwd, while agent-director would resolve
+// it against its own caller's cwd, a different directory for each caller, so
+// a non-absolute value (relative, `~`-prefixed or whitespace-only) is never
+// used. An empty value is not absolute either; it means CLAUDE_CONFIG_DIR is
+// not set.
+//
+// It is the one rule for every reader of the value. Pre-trust's .claude.json
+// (claudeJSONFor) tells an empty value from a set but unusable one: empty
+// targets $HOME/.claude.json, unusable is refused. The transcript paths
+// resume and find-missing compose (pkg/api) treat both alike, falling back to
+// ~/.claude.
+func ConfigDirUsable(dir string) bool {
+	return filepath.IsAbs(dir)
+}
+
+// errConfigDirNotAbsolute is the condition behind a CLAUDE_CONFIG_DIR that is
+// set but not usable (ConfigDirUsable). claudeJSONFor returns it wrapped with
+// the quoted value, so pre-trust reads and writes nothing.
+var errConfigDirNotAbsolute = errors.New("is not an absolute path")
+
 // claudeJSONFor resolves the .claude.json file pre-trust targets for a launch
-// with extraEnv (bug b.18k): <CLAUDE_CONFIG_DIR>/.claude.json when
-// extraEnv["CLAUDE_CONFIG_DIR"] is non-empty, otherwise $HOME/.claude.json
-// (via claudeJSONPath, stubbed by tests).
+// with extraEnv (bugs b.18k, b.nje):
+//   - extraEnv["CLAUDE_CONFIG_DIR"] absent or empty → $HOME/.claude.json (via
+//     claudeJSONPath, stubbed by tests).
+//   - Usable (ConfigDirUsable) → <CLAUDE_CONFIG_DIR>/.claude.json.
+//   - Set but not usable → an error matching errConfigDirNotAbsolute that
+//     quotes the value. Falling back to $HOME/.claude.json instead would
+//     write the entry into a file the launched Claude Code does not read.
 func claudeJSONFor(extraEnv map[string]string) (string, error) {
-	if dir := extraEnv["CLAUDE_CONFIG_DIR"]; dir != "" {
-		return filepath.Join(dir, ".claude.json"), nil
+	dir := extraEnv["CLAUDE_CONFIG_DIR"]
+	switch {
+	case dir == "":
+		path, err := claudeJSONPath()
+		if err != nil {
+			return "", fmt.Errorf("resolve home: %w", err)
+		}
+		return path, nil
+	case !ConfigDirUsable(dir):
+		return "", fmt.Errorf("CLAUDE_CONFIG_DIR %q %w", dir, errConfigDirNotAbsolute)
 	}
-	return claudeJSONPath()
+	return filepath.Join(dir, ".claude.json"), nil
 }
 
 // ErrClaudeJSONMissing is the sentinel preTrustCwd returns, wrapped with the
@@ -105,9 +144,13 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 // It is the write behind PreTrust, which turns any error it returns into
 // PreTrustFailed; it never runs when pre-trust is off for the launch.
 //
-// The target file is resolved from extraEnv by claudeJSONFor (bug b.18k):
-//   - If extraEnv["CLAUDE_CONFIG_DIR"] is non-empty → <CLAUDE_CONFIG_DIR>/.claude.json
-//   - Otherwise → $HOME/.claude.json (via claudeJSONPath, stubbed by tests)
+// The target file is resolved from extraEnv by claudeJSONFor (bugs b.18k,
+// b.nje):
+//   - If extraEnv["CLAUDE_CONFIG_DIR"] is absolute → <CLAUDE_CONFIG_DIR>/.claude.json
+//   - If it is absent or empty → $HOME/.claude.json (via claudeJSONPath,
+//     stubbed by tests)
+//   - If it is set but not absolute (ConfigDirUsable) → an error before any
+//     file I/O: no file is stat'd, read or written and no lock dir is made.
 //
 // Behavior (per bugs b.f75 and b.zjm):
 //
@@ -141,7 +184,7 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 func preTrustCwd(cwd string, extraEnv map[string]string) error {
 	path, err := claudeJSONFor(extraEnv)
 	if err != nil {
-		return fmt.Errorf("pre-trust: resolve home: %w", err)
+		return fmt.Errorf("pre-trust: %w", err)
 	}
 
 	if _, err := os.Stat(path); err != nil {

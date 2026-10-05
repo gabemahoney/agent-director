@@ -21,8 +21,9 @@ import (
 
 // TestSpawnRecordsNoPreTrust: Client.Spawn records NoPreTrust on the row,
 // writes the trust entry into the spawn's CLAUDE_CONFIG_DIR only when allowed,
-// and reports the outcome as pre_trust; a missing or unwritable .claude.json
-// still spawns. $HOME/.claude.json is never touched.
+// and reports the outcome as pre_trust; a missing or unwritable .claude.json,
+// or a relative CLAUDE_CONFIG_DIR (b.nje), still spawns. $HOME/.claude.json is
+// never touched.
 func TestSpawnRecordsNoPreTrust(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -31,11 +32,13 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 		wantCol      int64 // the row's no_pre_trust
 		wantEntry    bool  // the entry is written; otherwise the file is left as seeded
 		wantPreTrust string
+		relative     bool // CLAUDE_CONFIG_DIR is "rel" (seedRelativeTrustConfig)
 	}{
-		{"ok: allowed writes the entry", trustLacksEntry, false, 0, true, "ok"},
-		{"skipped: opted out writes nothing", trustLacksEntry, true, 1, false, "skipped"},
-		{"failed: .claude.json missing still spawns", trustMissing, false, 0, false, "failed"},
-		{"failed: .claude.json unwritable still spawns", trustUnwritable, false, 0, false, "failed"},
+		{"ok: allowed writes the entry", trustLacksEntry, false, 0, true, "ok", false},
+		{"skipped: opted out writes nothing", trustLacksEntry, true, 1, false, "skipped", false},
+		{"failed: .claude.json missing still spawns", trustMissing, false, 0, false, "failed", false},
+		{"failed: .claude.json unwritable still spawns", trustUnwritable, false, 0, false, "failed", false},
+		{"failed: relative CLAUDE_CONFIG_DIR is refused, still spawns", trustLacksEntry, false, 0, false, "failed", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,7 +47,12 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 			if err := os.WriteFile(homeJSON, []byte("{}"), 0o600); err != nil {
 				t.Fatalf("write home .claude.json: %v", err)
 			}
-			c := seedTrustConfig(t, t.TempDir(), tc.file)
+			var c trustConfig
+			if tc.relative {
+				c = seedRelativeTrustConfig(t, tc.file)
+			} else {
+				c = seedTrustConfig(t, t.TempDir(), tc.file)
+			}
 			cwd, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatalf("EvalSymlinks: %v", err)

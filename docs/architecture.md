@@ -3528,14 +3528,37 @@ written, which is harmless: it only marks the folder trusted. Because pre-trust 
 write, it never lengthens the window between the launch start and the
 create.
 
-The step resolves the target `.claude.json` (`claudeJSONFor`): if the
-launch's extra env supplies `CLAUDE_CONFIG_DIR`, that directory is used
-(`<CLAUDE_CONFIG_DIR>/.claude.json`); otherwise the operator's
-`~/.claude.json` is used. For `resume` the extra env is the row's, so it
-targets the same file the row's spawn did. It then sets
+The step resolves the target `.claude.json` (`claudeJSONFor`) from the
+launch's extra env `CLAUDE_CONFIG_DIR`:
+
+- Absent or empty: the operator's `~/.claude.json`.
+- An absolute path: `<CLAUDE_CONFIG_DIR>/.claude.json`.
+- Set but not an absolute path (relative, `~`-prefixed or
+  whitespace-only): refused (b.nje). Pre-trust reads, writes and stats
+  no file, makes no lock dir, and reports `failed` (below). Claude Code
+  resolves a relative value against its pane's cwd, while agent-director
+  would resolve it against its own caller's cwd, which differs for each
+  caller, so the entry could land in a file the agent never reads.
+  Falling back to `~/.claude.json` could also write a file the agent
+  never reads, so pre-trust does not fall back.
+
+For `resume` the extra env is the row's, so it targets the same file the
+row's spawn did. With a file resolved, the step sets
 `projects.<canonical cwd>.hasTrustDialogAccepted = true` and writes
 the file back atomically (temp + rename), so no reader ever sees a torn
 file.
+
+**One rule for `CLAUDE_CONFIG_DIR` (b.1ba, b.nje).** Whether a
+`CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
+(`internal/spawn/pretrust.go`): only an absolute path is. Every reader
+of the value shares it: pre-trust's file resolution above, and the
+transcript paths `resume`'s fallback and `find-missing`'s heal compose
+(see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
+Only the response to an unusable value differs: those read paths treat
+it as absent and look under `~/.claude`, while pre-trust, which writes,
+refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
+launch's or row's extra env decides whether to use it with
+`spawn.ConfigDirUsable`; do not write a second check.
 
 **Config lock (b.zjm).** Claude Code writes the same file, at startup
 and while it runs, and saves it under a lock: it takes the lock,
@@ -3628,20 +3651,25 @@ failed reuse's applied restore writes the previous life's choice back
 with the rest of that life.
 
 Pre-trust is best effort on both verbs: a failure never fails the
-launch. When the write cannot be made (the resolved file does not exist,
-as on a fresh Claude Code install or a fresh `CLAUDE_CONFIG_DIR`, or it
-cannot be read, parsed or written, or its lock cannot be taken, stays
-held by another process through the 5 s wait, was held too long to
-write under, or was taken over by another process before the write),
-`PreTrust` returns `failed` and
+launch. When the write cannot be made (the extra env's
+`CLAUDE_CONFIG_DIR` is set but not an absolute path, or the resolved
+file does not exist, as on a fresh Claude Code install or a fresh
+`CLAUDE_CONFIG_DIR`, or it cannot be read, parsed or written, or its
+lock cannot be taken, stays held by another process through the 5 s
+wait, was held too long to write under, or was taken over by another
+process before the write), `PreTrust` returns `failed` and
 prints one line to stderr (`preTrustWarn`): `agent-director: pre-trust
 failed for <path> (<reason>); the agent may stop at Claude Code's
 folder-trust prompt`, with the reason "file does not exist" for a
 missing file, `pre-trust: lock <path>.lock held by another process;
 gave up after waiting 5s` for a lock that stayed held, and `pre-trust:
 lock <path>.lock was taken over by another process, so wrote nothing`
-for a lock taken over before the write. The launch proceeds, and the
-agent may wait at the trust dialog.
+for a lock taken over before the write. An unusable `CLAUDE_CONFIG_DIR`
+resolves no file, so its line names none and quotes the value (Go `%q`)
+instead: `agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR
+"rel" is not an absolute path); the agent may stop at Claude Code's
+folder-trust prompt`. The launch proceeds, and the agent may wait at the
+trust dialog.
 
 **The `pre_trust` result field.** Every successful `spawn` and `resume`
 result carries `pre_trust`, always exactly one of three values:
@@ -3655,8 +3683,10 @@ result carries `pre_trust`, always exactly one of three values:
   whose row was restored.
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
-  written, its lock held by another process included). The launch still
-  proceeds, and the agent may stop at Claude Code's folder-trust prompt.
+  written, its lock held by another process included, or the extra
+  env's `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
+  was touched). The launch still proceeds, and the agent may stop at
+  Claude Code's folder-trust prompt.
 
 A `failed` pre-trust never fails the launch; a launch that fails returns
 its error, not a result. The value is the `PreTrustOutcome` the shared
@@ -5548,8 +5578,9 @@ written, harmlessly:
       reason (not just ENOENT — a permission-broken persisted path must
       not block an otherwise-resumable row), a fallback path is
       recomputed from the row's `ExtraEnv["CLAUDE_CONFIG_DIR"]` (or
-      `~/.claude` when that key is absent/empty) `+ slug(cwd) + session
-      id`, and that is `os.Stat`'d.
+      `~/.claude` when that value is absent, empty or not an absolute
+      path: `spawn.ConfigDirUsable`, the rule pre-trust shares) `+
+      slug(cwd) + session id`, and that is `os.Stat`'d.
    3. If neither the current session's persisted path nor its fallback
       exists, `resume` walks the row's *visible history* (newest first,
       b.v2c AC6): the `session_history` entries of the row's current life,
@@ -6040,17 +6071,21 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
 - **`spawn.JsonlPathIn(configDir, cwd, sessionID)`** — composes
   `<configDir>/projects/<slug(cwd)>/<session_id>.jsonl`. This is the
   config-dir-aware resolver the fallback uses when the row's
-  `ExtraEnv["CLAUDE_CONFIG_DIR"]` is set, so a Spawn that ran under a
+  `ExtraEnv["CLAUDE_CONFIG_DIR"]` is usable (`spawn.ConfigDirUsable`: an
+  absolute path), so a Spawn that ran under a
   custom config dir finds its transcript under
   `<CLAUDE_CONFIG_DIR>/projects/...` rather than `~/.claude/projects/...`.
   Reuse it whenever you need a transcript path under an explicit config
-  dir — do not re-derive the layout by hand. This follows the
-  established `internal/spawn/pretrust.go` pattern of reading
-  `ExtraEnv["CLAUDE_CONFIG_DIR"]` to locate a per-spawn config dir.
+  dir — do not re-derive the layout by hand. The fallback decides
+  whether to use the value by the rule pre-trust's file resolution
+  shares (see "One rule for `CLAUDE_CONFIG_DIR`" under
+  [Workspace-trust pre-write](#workspace-trust-pre-write)); a relative
+  value would resolve against the resuming process's cwd, which differs
+  for each caller.
 - **`spawn.JsonlPath(cwd, sessionID)`** — a thin wrapper over
   `JsonlPathIn` that resolves the config dir to `$HOME/.claude`. Used
-  for the default-config fallback (no `CLAUDE_CONFIG_DIR` key on the
-  row). It reconstructs the default layout:
+  for the default-config fallback (the row's `CLAUDE_CONFIG_DIR` absent,
+  empty or not an absolute path). It reconstructs the default layout:
 
 ```
 ~/.claude/projects/<slug(cwd)>/<session_id>.jsonl
@@ -9304,6 +9339,35 @@ counterpart. Never write trigger SQL or any other failure SQL in a test.
 Writes behind a store interface fail through a failing wrapper of that
 interface.
 
+### cwdfix: the working-directory fixture (reusable test fixture)
+
+`internal/testsupport/cwdfix` moves a test's process into a fresh temp
+directory for the rest of the test (b.nje), standing in for go 1.24's
+`t.Chdir`, which go 1.22 lacks. The package doc comment carries the
+detail.
+
+- `Temp(t) string` makes a fresh `t.TempDir()` the working directory
+  until `t` ends, restores the previous one in `t.Cleanup`, and returns
+  the temp dir.
+- The working directory is process-wide, so a test using it must not be
+  parallel. `Temp` enforces that the way `t.Chdir` does: it sets `$PWD`
+  with `t.Setenv`, which panics in a parallel test and makes a later
+  `t.Parallel` call panic.
+- Users: `TestPreTrustRefusesUnusableConfigDir`
+  (`internal/spawn/pretrust_test.go`) and `seedRelativeTrustConfig`
+  (see [pkg/api pre-trust fixture](#pkgapi-pre-trust-fixture-package-internal-test-fixture)),
+  which check that a relative `CLAUDE_CONFIG_DIR` touches nothing where
+  it would resolve from the process cwd.
+
+It is a leaf package (standard library only; it imports nothing from
+agent-director), so any test package can use it.
+
+**Must use:** a test that needs the process in a fresh working
+directory calls `cwdfix.Temp`; do not hand-roll `os.Chdir` with a
+restore. Two earlier tests still do: `chdirFor` in
+`test/realtmux/socket_resolution_test.go` and the "relative
+TMUX_TMPDIR" case in `pkg/api/spawn_launch_test.go`.
+
 ### Which tmux test double to use
 
 - In-process verb tests: `tmuxfix.Recorder`
@@ -11260,6 +11324,13 @@ carry the detail.
   `trustLacksEntry` (present, trusting another folder only),
   `trustMissing` (absent) or `trustUnwritable` (present, in a `0500`
   directory; skipped as root).
+- `seedRelativeTrustConfig(t, file)` is `seedTrustConfig` for the
+  relative `CLAUDE_CONFIG_DIR` `"rel"` (b.nje): it moves the process
+  into a fresh temp dir until the test ends (`cwdfix.Temp`, see
+  [cwdfix](#cwdfix-the-working-directory-fixture-reusable-test-fixture))
+  and seeds `file` in its `rel`, where `"rel"` would resolve from there,
+  so a test can check that pre-trust touches nothing there. A test using
+  it must not call `t.Parallel`; `cwdfix.Temp` makes that call panic.
 - `c.env()` is the `apitest.SpawnOption` that points a seeded row's
   `CLAUDE_CONFIG_DIR` at `dir`; `c.extraEnv()` is the same as an extra-env
   map for a launch. Either gives each test its own config directory.

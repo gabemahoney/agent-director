@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/cwdfix"
 )
 
 // withStubClaudeJSON redirects claudeJSONPath to a file under t.TempDir() so
@@ -386,6 +388,66 @@ func TestPreTrustFailedWithoutConfigDir(t *testing.T) {
 		}
 		assertOneFailedLine(t, warn.String(), "no home dir", "")
 	})
+}
+
+// TestPreTrustRefusesUnusableConfigDir pins b.nje: a set but non-absolute
+// CLAUDE_CONFIG_DIR fails with one line quoting it, and no file is touched, not
+// even the one the value names relative to the process cwd. Not parallel.
+func TestPreTrustRefusesUnusableConfigDir(t *testing.T) {
+	for _, v := range []string{"rel", "./rel", "~/cfg", "   ", "rel\nx"} {
+		t.Run(fmt.Sprintf("%q", v), func(t *testing.T) {
+			home := withStubClaudeJSON(t)
+			seedFile(t, home, `{"projects":{}}`)
+			dir := filepath.Join(cwdfix.Temp(t), v)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			path := filepath.Join(dir, ".claude.json")
+			seedFile(t, path, lockTestSeed)
+			warn := capturePreTrustWarn(t)
+
+			if got := PreTrust("/tmp/bnje-cwd", map[string]string{"CLAUDE_CONFIG_DIR": v}, false); got != PreTrustFailed {
+				t.Fatalf("PreTrust = %q; want failed", got)
+			}
+			if got := mustReadFile(t, path); string(got) != lockTestSeed {
+				t.Errorf("%s = %q; want byte-identical %q", path, got, lockTestSeed)
+			}
+			assertNoStray(t, dir)
+			if got := mustReadFile(t, home); string(got) != `{"projects":{}}` {
+				t.Errorf("home claude.json = %q; want untouched", got)
+			}
+			assertNoStray(t, filepath.Dir(home))
+			assertOneFailedLine(t, warn.String(), fmt.Sprintf("CLAUDE_CONFIG_DIR %q is not an absolute path", v))
+		})
+	}
+}
+
+// TestConfigDirUsable pins b.nje's one rule: only an absolute CLAUDE_CONFIG_DIR
+// is usable; claudeJSONFor targets it, takes $HOME when empty, refuses the rest.
+func TestConfigDirUsable(t *testing.T) {
+	home := withStubClaudeJSON(t)
+	cases := []struct {
+		dir    string
+		usable bool
+	}{
+		{"", false}, {"rel", false}, {"./rel", false}, {"~/x", false}, {"   ", false},
+		{"/abs", true}, {"/abs ", true},
+	}
+	for _, tc := range cases {
+		if got := ConfigDirUsable(tc.dir); got != tc.usable {
+			t.Errorf("ConfigDirUsable(%q) = %v; want %v", tc.dir, got, tc.usable)
+		}
+		wantPath, wantErr := filepath.Join(tc.dir, ".claude.json"), error(nil)
+		switch {
+		case tc.dir == "":
+			wantPath = home
+		case !tc.usable:
+			wantPath, wantErr = "", errConfigDirNotAbsolute
+		}
+		if path, err := claudeJSONFor(map[string]string{"CLAUDE_CONFIG_DIR": tc.dir}); path != wantPath || !errors.Is(err, wantErr) {
+			t.Errorf("claudeJSONFor(%q) = %q, %v; want %q, %v", tc.dir, path, err, wantPath, wantErr)
+		}
+	}
 }
 
 // capturePreTrustWarn swaps preTrustWarn for a buffer for the test's life.

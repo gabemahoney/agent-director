@@ -2,8 +2,8 @@ package api_test
 
 // pretrust_fixture_test.go is the shared .claude.json fixture of the pre-trust
 // tests (spawn_pretrust_test.go, resume_pretrust_test.go): a per-test config
-// directory seeded in one of three states, and the one checker of its trust
-// entry.
+// directory (absolute, or named by a relative path) seeded in one of three
+// states, and the one checker of its trust entry.
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/cwdfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -28,8 +29,8 @@ const (
 // any rewrite (which indents) changes its bytes.
 const trustSeedJSON = `{"numStartups":7,"projects":{"/elsewhere":{"hasTrustDialogAccepted":true}}}`
 
-// trustConfig is a config directory and its .claude.json as seeded (before is
-// nil when the file is absent).
+// trustConfig is a config directory (as the extra env names it) and its
+// .claude.json as seeded (before is nil when the file is absent).
 type trustConfig struct {
 	dir, path string
 	before    []byte
@@ -56,6 +57,21 @@ func seedTrustConfig(t *testing.T, dir string, file trustFile) trustConfig {
 		}
 		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	}
+	return c
+}
+
+// seedRelativeTrustConfig is seedTrustConfig for the relative CLAUDE_CONFIG_DIR
+// "rel" (b.nje): the process moves into a fresh temp dir until the test ends
+// (cwdfix.Temp; not parallel) and file is seeded in its rel, where "rel"
+// resolves from there.
+func seedRelativeTrustConfig(t *testing.T, file trustFile) trustConfig {
+	t.Helper()
+	wd := cwdfix.Temp(t)
+	if err := os.Mkdir(filepath.Join(wd, "rel"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	c := seedTrustConfig(t, filepath.Join(wd, "rel"), file)
+	c.dir = "rel"
 	return c
 }
 

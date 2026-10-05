@@ -62,7 +62,9 @@ type SpawnParams struct {
 
 	// NoPreTrust opts out of the folder-trust pre-write (PreTrust) into
 	// <CLAUDE_CONFIG_DIR>/.claude.json when the spawn's extra env sets
-	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise. Default false
+	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR
+	// that is set but not an absolute path (ConfigDirUsable) gets no
+	// pre-write at all, and PreTrust reports it failed. Default false
 	// (= pre-trust IS performed) marks the cwd trusted so the agent skips
 	// Claude Code's folder-trust prompt. True attempts no pre-trust, so the
 	// prompt must be answered for an unseen cwd. The choice is recorded on

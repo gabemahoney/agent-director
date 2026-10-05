@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -222,17 +221,16 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     recomputed from the row's ExtraEnv["CLAUDE_CONFIG_DIR"] (or
 //     ~/.claude when that key is absent/empty) + slug(cwd) + session
 //     id, and that is os.Stat'd. The CLAUDE_CONFIG_DIR value is used
-//     ONLY when it is non-empty AND absolute (filepath.IsAbs): an
-//     empty string is treated as absent (mirroring the `dir != ""` check
-//     of internal/spawn's pre-trust file resolution, claudeJSONFor),
-//     and a non-absolute value (relative, `~`-prefixed, or
-//     whitespace-only) is ALSO treated as absent — in every such
-//     case the fallback resolves to ~/.claude, since a relative dir
-//     would stat against the nondeterministic process cwd. This
-//     heals legacy rows written before the SessionStart hook
-//     persisted jsonl_path, and rows whose recorded path has rotted.
-//     A successful fallback resume re-fires SessionStart, which
-//     re-persists the correct path.
+//     ONLY when it is usable (spawn.ConfigDirUsable: non-empty AND
+//     absolute), the one rule pre-trust's file resolution shares: an
+//     empty string is treated as absent, and a non-absolute value
+//     (relative, `~`-prefixed, or whitespace-only) is ALSO treated as
+//     absent — in every such case the fallback resolves to ~/.claude,
+//     since a relative dir would stat against the nondeterministic
+//     process cwd. This heals legacy rows written before the
+//     SessionStart hook persisted jsonl_path, and rows whose recorded
+//     path has rotted. A successful fallback resume re-fires
+//     SessionStart, which re-persists the correct path.
 //     c. Then each entry of the row's visible history, newest first
 //     (b.v2c AC6): its recorded path, then its recomputed fallback.
 //     Session history belongs to a life, and the visible history is the
@@ -302,25 +300,24 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		}
 	}
 
-	// Fallback: recompute from the persisted CLAUDE_CONFIG_DIR (bug b.1ba),
-	// following the pattern of internal/spawn's pre-trust file resolution
-	// (claudeJSONFor) — fall back to ~/.claude when the key is absent/empty
-	// via spawn.JsonlPath.
+	// Fallback: recompute from the persisted CLAUDE_CONFIG_DIR (bug b.1ba)
+	// — fall back to ~/.claude via spawn.JsonlPath when the value is not
+	// usable.
 	//
-	// CLAUDE_CONFIG_DIR value semantics (decision of record, bug b.1ba):
-	// the ExtraEnv value is used ONLY if it is non-empty AND absolute.
-	// Empty string is treated as absent (mirrors claudeJSONFor's
-	// `dir != ""` check in internal/spawn). A non-empty but non-ABSOLUTE value — relative,
-	// `~`-prefixed, or whitespace-only (whitespace-only is non-absolute,
-	// so the single filepath.IsAbs check covers it) — is ALSO treated as
-	// absent, because a relative dir would stat against the process cwd,
-	// which is nondeterministic across callers. In every absent case the
-	// fallback resolves to ~/.claude via spawn.JsonlPath. This read-path
-	// rule is deliberately stricter than pretrust's write path, which is
-	// out of scope for b.1ba.
+	// CLAUDE_CONFIG_DIR value semantics (decision of record, bugs b.1ba and
+	// b.nje): the ExtraEnv value is used ONLY if spawn.ConfigDirUsable
+	// holds (non-empty AND absolute), the one rule internal/spawn's
+	// pre-trust file resolution (claudeJSONFor) also follows. Empty string
+	// is treated as absent. A non-empty but non-ABSOLUTE value — relative,
+	// `~`-prefixed, or whitespace-only — is ALSO treated as absent, because
+	// a relative dir would stat against the process cwd, which is
+	// nondeterministic across callers. In every absent case the fallback
+	// resolves to ~/.claude via spawn.JsonlPath. Only what each does with
+	// an unusable value differs: this read path falls back, while
+	// pre-trust, which writes, refuses it and writes nothing.
 	var fallback string
 	var ferr error
-	if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; dir != "" && filepath.IsAbs(dir) {
+	if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
 		fallback, ferr = spawn.JsonlPathIn(dir, row.CWD, row.ClaudeSessionID)
 	} else {
 		fallback, ferr = spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
@@ -382,7 +379,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		// a NULL/empty recorded path and a non-empty-but-rotted one.
 		var recomputed string
 		var cerr error
-		if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; dir != "" && filepath.IsAbs(dir) {
+		if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
 			recomputed, cerr = spawn.JsonlPathIn(dir, row.CWD, h.ClaudeSessionID)
 		} else {
 			recomputed, cerr = spawn.JsonlPath(row.CWD, h.ClaudeSessionID)

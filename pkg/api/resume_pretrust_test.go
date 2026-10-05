@@ -74,8 +74,10 @@ func rptAssertLaunched(t *testing.T, e *resumeEnv, id, session string, creates i
 // TestResumePreTrustBeforeMove: an allowed row's entry is on disk when the move
 // runs (ok); a missing or unwritable file (failed) or the row's opt-out
 // (skipped) leaves the file as it was, and every case launches. The
-// archived-session path behaves the same.
+// archived-session path behaves the same. A relative CLAUDE_CONFIG_DIR fails
+// pre-trust and resume finds the transcript under ~/.claude (b.nje).
 func TestResumePreTrustBeforeMove(t *testing.T) {
+	rotted := []apitest.SpawnOption{apitest.WithJsonlPath(filepath.Join(t.TempDir(), "gone", "rotted.jsonl"))}
 	cases := []struct {
 		name         string
 		file         trustFile
@@ -83,19 +85,26 @@ func TestResumePreTrustBeforeMove(t *testing.T) {
 		archived     bool // the current transcript is gone; resume takes the archived session
 		trusted      bool // the entry is written; otherwise the file is left as seeded
 		wantPreTrust string
+		relative     bool // CLAUDE_CONFIG_DIR is "rel" (seedRelativeTrustConfig)
 	}{
-		{"allowed row, entry lacking", trustLacksEntry, nil, false, true, "ok"},
-		{".claude.json missing", trustMissing, nil, false, false, "failed"},
-		{".claude.json unwritable", trustUnwritable, nil, false, false, "failed"},
-		{"opted-out row", trustLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, false, false, "skipped"},
-		{"opted-out row, unusual stored value", trustLacksEntry, []apitest.SpawnOption{apitest.WithRawNoPreTrust("sometimes")}, false, false, "skipped"},
-		{"archived session, allowed row", trustLacksEntry, nil, true, true, "ok"},
-		{"archived session, opted-out row", trustLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, true, false, "skipped"},
+		{"allowed row, entry lacking", trustLacksEntry, nil, false, true, "ok", false},
+		{".claude.json missing", trustMissing, nil, false, false, "failed", false},
+		{".claude.json unwritable", trustUnwritable, nil, false, false, "failed", false},
+		{"opted-out row", trustLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, false, false, "skipped", false},
+		{"opted-out row, unusual stored value", trustLacksEntry, []apitest.SpawnOption{apitest.WithRawNoPreTrust("sometimes")}, false, false, "skipped", false},
+		{"archived session, allowed row", trustLacksEntry, nil, true, true, "ok", false},
+		{"archived session, opted-out row", trustLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, true, false, "skipped", false},
+		{"relative CLAUDE_CONFIG_DIR, persisted path rotted", trustLacksEntry, rotted, false, false, "failed", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			c := seedTrustConfig(t, t.TempDir(), tc.file)
+			var c trustConfig
+			if tc.relative {
+				c = seedRelativeTrustConfig(t, tc.file)
+			} else {
+				c = seedTrustConfig(t, t.TempDir(), tc.file)
+			}
 			r := e.seedResumable(t, store.StateEnded, append([]apitest.SpawnOption{c.env()}, tc.opts...)...)
 			session := r.SessionID
 			if tc.archived {

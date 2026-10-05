@@ -3,8 +3,19 @@
 Launching a Spawn against a different Claude account than the
 operator's default. agent-director's `extra_env` parameter is the
 single mechanism for this — no file mounts, no profile directories.
-If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, the pretrust write
-targets `<CLAUDE_CONFIG_DIR>/.claude.json` instead of `$HOME/.claude.json`.
+If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, it must be an
+absolute path. The pretrust write then targets
+`<CLAUDE_CONFIG_DIR>/.claude.json` instead of `$HOME/.claude.json`, and
+`resume`, when it has to recompute a transcript's path, looks under
+`<CLAUDE_CONFIG_DIR>/projects/`. A relative, `~`-prefixed or
+whitespace-only value is not used by agent-director (Claude Code still
+receives it in the pane's environment and resolves it against the
+pane's cwd): pretrust writes nothing and reports `pre_trust: failed`
+(the spawn still goes ahead, and the agent may stop at Claude Code's
+folder-trust prompt), and `resume` recomputes under `~/.claude`
+instead, so it does not find a transcript Claude Code wrote under the
+relative dir unless the row's recorded `jsonl_path` (or a
+`prior_sessions` entry's) still points at it.
 
 For Claude Code's own auth reference, see:
 
@@ -99,10 +110,10 @@ fighting over a shared credential file. Each Spawn gets a fresh
   read JSONL transcript history that was created by a specific account,
   the JSONL lives in `~/.claude/projects/<slug(cwd)>/` on the host
   filesystem — which is account-scoped. Env-var auth does not redirect
-  this path. `CLAUDE_CONFIG_DIR` in `extra_env` is already honored for
-  the pretrust write (see above), but JSONL resume-path redirection
-  remains unimplemented; for resume use cases (Epic 9), the JSONL must
-  still be on the expected disk path.
+  this path. An absolute `CLAUDE_CONFIG_DIR` in `extra_env` does: the
+  transcript is then under `<CLAUDE_CONFIG_DIR>/projects/<slug(cwd)>/`,
+  and `resume` looks there (see above). Either way, the JSONL must still
+  be on that disk path for `resume` to find it.
 - **Concurrent operator + Spawn sessions on the same account.** Two
   Claude sessions sharing one OAuth token are fine for env-var auth
   (no contention) but share the same usage / rate-limit pool. Use

@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"time"
@@ -536,9 +535,10 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 // session that started before its transcript was written) and records the path
 // for any whose transcript has since appeared on disk (b.v2c AC3). The path is
 // recomposed the same way resume's fallback does: under the row's
-// CLAUDE_CONFIG_DIR when set and absolute, else ~/.claude. Per-row store errors
-// are logged and skipped; a compose or stat miss is a silent no-op (the row
-// stays provisional until the transcript actually appears).
+// CLAUDE_CONFIG_DIR when usable (spawn.ConfigDirUsable), else ~/.claude.
+// Per-row store errors are logged and skipped; a compose or stat miss is a
+// silent no-op (the row stays provisional until the transcript actually
+// appears).
 func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 	provisional, err := s.ListProvisionalTranscripts()
 	if err != nil {
@@ -552,7 +552,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 			path string
 			cerr error
 		)
-		if pt.ConfigDir != "" && filepath.IsAbs(pt.ConfigDir) {
+		if spawn.ConfigDirUsable(pt.ConfigDir) {
 			path, cerr = spawn.JsonlPathIn(pt.ConfigDir, pt.CWD, pt.ClaudeSessionID)
 		} else {
 			path, cerr = spawn.JsonlPath(pt.CWD, pt.ClaudeSessionID)
