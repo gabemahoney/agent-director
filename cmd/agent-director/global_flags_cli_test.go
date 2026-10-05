@@ -187,10 +187,16 @@ func TestGlobalFlag_TmuxCommand_AcceptedByVersionVerb(t *testing.T) {
 // stdin; cwd=home keeps a HOME="" trail write out of the package dir.
 func runInHome(t *testing.T, home string, args ...string) (string, string, int) {
 	t.Helper()
+	return runInDir(t, home, home, args...)
+}
+
+// runInDir is runInHome with cwd dir and HOME=home (which may be "").
+func runInDir(t *testing.T, dir, home string, args ...string) (string, string, int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), noExecFormDeadline)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Dir = home
+	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
 	cmd.Stdin = strings.NewReader(`{"hook_event_name":"SessionStart"}`)
 	var out, errOut strings.Builder

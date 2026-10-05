@@ -16,10 +16,17 @@
 //     fields); if that also fails a single line is written to the operational
 //     logger. The original error is always returned to the caller so verbs can
 //     fail-open per SR-A-3.2.
+//   - The trail file is only ever written at an absolute path under the user's
+//     home directory. When no home directory can be determined (see
+//     resolvePath) the writer has no path: every Emit writes no file anywhere,
+//     writes one line to the operational logger and returns an error wrapping
+//     errNoHome. It never falls back to a path relative to the working
+//     directory or to another home source.
 package trail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -29,14 +36,19 @@ import (
 
 const trailFilename = "ad-trail.jsonl"
 
+// errNoHome reports that no absolute home directory could be determined, so
+// the trail has no path and nothing is written.
+var errNoHome = errors.New("trail: no home directory, trail not written")
+
 // Writer is a process-lifetime JSONL appender for the agent-director audit
 // trail. Obtain the process-singleton via Default(). The zero value is not
 // usable.
 type Writer struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
-	olog *log.Logger // optional; nil silently discards fallback messages
+	mu      sync.Mutex
+	f       *os.File
+	path    string      // absolute trail path; "" when no home directory was found
+	pathErr error       // why path is "" (from resolvePath); nil when path is set
+	olog    *log.Logger // optional; nil silently discards fallback messages
 }
 
 var (
@@ -46,20 +58,27 @@ var (
 
 // Default returns the process-singleton Writer. The singleton is constructed
 // on the first call (with the path resolved from the user's home directory at
-// that moment) and reused for the process lifetime.
+// that moment, see resolvePath) and reused for the process lifetime. When no
+// home directory can be determined at that moment the singleton has no path
+// for the rest of the process: every Emit fails soft and writes no file (it
+// never writes relative to the working directory).
 func Default() *Writer {
 	once.Do(func() {
-		defaultWriter = &Writer{path: resolvePath()}
+		p, err := resolvePath()
+		defaultWriter = &Writer{path: p, pathErr: err}
 	})
 	return defaultWriter
 }
 
 // Path returns the resolved trail file path without opening the file. The
 // directory component is always ~/.agent-director/ (the user's home directory).
-// The filename is always "ad-trail.jsonl". Path is safe to call from multiple
-// goroutines.
+// The filename is always "ad-trail.jsonl". When no home directory can be
+// determined (see resolvePath) Path returns "", meaning the trail is not
+// written; it never returns a relative path. Path is safe to call from
+// multiple goroutines.
 func Path() string {
-	return resolvePath()
+	p, _ := resolvePath() // "" is the documented no-home result
+	return p
 }
 
 // SetLogger wires an operational logger into the process-singleton Writer.
@@ -78,12 +97,27 @@ func Emit(ctx context.Context, event string, fields map[string]any) error {
 	return Default().Emit(ctx, event, fields)
 }
 
-// resolvePath computes the full trail file path. The directory is always
-// ~/.agent-director/, resolved from the user's home directory.
-func resolvePath() string {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".agent-director")
-	return filepath.Join(dir, trailFilename)
+// resolvePath computes the full trail file path,
+// <home>/.agent-director/ad-trail.jsonl, where home is os.UserHomeDir() ($HOME
+// on Unix).
+//
+// When no home directory can be determined — os.UserHomeDir fails (on Unix,
+// HOME unset or empty) or returns a path that is not absolute — it returns ""
+// and an error wrapping errNoHome, and the trail fails soft with no file
+// written. It deliberately does not fall back to another home source such as
+// the passwd entry: an empty HOME is often deliberate isolation, and the
+// passwd home holds the real ~/.agent-director (the b.8dr incident class). It
+// never returns a relative path, so no trail is ever written under the
+// working directory.
+func resolvePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errNoHome, err)
+	}
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("%w: home directory %q is not absolute", errNoHome, home)
+	}
+	return filepath.Join(home, ".agent-director", trailFilename), nil
 }
 
 // Emit writes a single audit event envelope to the trail file.
@@ -97,6 +131,10 @@ func resolvePath() string {
 // ad.trail_meta.emit_failed envelope. If that also fails, one line is written
 // to the operational logger. The original error is always returned so callers
 // can fail-open per SR-A-3.2.
+//
+// When the writer has no absolute path (no home directory, see resolvePath),
+// Emit writes no file, attempts no meta envelope, writes exactly one line to
+// the operational logger and returns an error wrapping errNoHome.
 func (w *Writer) Emit(_ context.Context, event string, fields map[string]any) error {
 	if event == "" {
 		return fmt.Errorf("trail: event is required")
@@ -104,6 +142,12 @@ func (w *Writer) Emit(_ context.Context, event string, fields map[string]any) er
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if !filepath.IsAbs(w.path) {
+		err := w.noPathErr()
+		w.operLog("trail: no trail path; original=%s error_class=no_home cause=%v", event, err)
+		return err
+	}
 
 	line, err := buildEnvelope(event, fields, w.olog)
 	if err != nil {
@@ -124,6 +168,15 @@ func (w *Writer) Emit(_ context.Context, event string, fields map[string]any) er
 		return err
 	}
 	return nil
+}
+
+// noPathErr is the error Emit returns when w has no absolute path: the
+// resolvePath error when there is one, else an errNoHome naming the path.
+func (w *Writer) noPathErr() error {
+	if w.pathErr != nil {
+		return w.pathErr
+	}
+	return fmt.Errorf("%w: trail path %q is not absolute", errNoHome, w.path)
 }
 
 // ensureOpen opens the trail file if not already open. Callers must hold w.mu.

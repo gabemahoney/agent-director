@@ -1236,10 +1236,13 @@ default) is created with mode 0700, and the database file is chmodded to
 under that home, not the real one. With `HOME` unset or empty the three
 differ: `pkg/api` returns an error, `internal/config` leaves the path
 unexpanded, and the store's `expandTilde` falls back to the passwd-entry home
-(`user.Current().HomeDir`, SRD §11). Any other path is used as given. With `HOME` set, the production callers (`pkg/api`, and `runHook`
-via `internal/config`) already expand `~/` before calling the store. With
-`HOME` unset, a `~/` store path from `internal/config` reaches the store
-unexpanded and the store's fallback resolves it.
+(`user.Current().HomeDir`, SRD §11). Any other path is used as given. With
+`HOME` set, the production callers (`pkg/api`, and `runHook` via
+`internal/config`) already expand `~/` before calling the store. With `HOME`
+unset, a `~/` store path from `internal/config` reaches the store unexpanded
+and the store's fallback resolves it. The audit trail (`internal/trail`) has
+none of these fallbacks: with no absolute home it writes nothing (see
+[Location](#location)).
 
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
@@ -5376,6 +5379,19 @@ home. Isolation — for tests or otherwise — is therefore achieved by running
 inside the sandbox, where the resolved `~/.agent-director` does not exist,
 never by relying on redirection.
 
+**No usable home.** The trail is only ever written at an absolute path under
+the home directory. When none can be determined — `os.UserHomeDir` fails
+(on Unix, `HOME` unset or empty) or returns a path that is not absolute —
+the trail has no path and nothing is written anywhere (`resolvePath` in
+`internal/trail/trail.go`). There is no fallback: not to the working
+directory, and not to another home source such as the passwd entry. The
+process-singleton writer resolves its path once, when the process first uses
+it (`Emit` or `SetLogger`), so a writer that found no home stays pathless for
+the rest of the process even if `HOME` is set later. `trail.Path()` returns
+`""` in this case, never a relative path. What each `Emit` does then is
+under [Fail-soft semantics](#fail-soft-semantics). With `HOME` set to an
+absolute path the location is unchanged.
+
 **This is a plain on-disk JSONL file.** It is NOT a SQLite table, NOT a
 column on `state.db`, and NOT any other database. Every line is one
 self-contained JSON object, `\n`-terminated, with no file header or
@@ -5401,7 +5417,10 @@ Relative to the invocation's effective home, the path is always:
 relocates it. The per-invocation `--home` / `--store-path` flags only
 retarget a single invocation, and the trail follows the effective home.
 Operators find the trail at this one path, under whatever home the
-invocation resolves, on every installation.
+invocation resolves, on every installation. An invocation that resolves no
+usable home writes no trail at all (see [Location](#location)): its events
+are not recorded anywhere, and in particular never in a `.agent-director/`
+under its working directory.
 
 ### Per-line envelope
 
@@ -5527,6 +5546,17 @@ writer attempts one `ad.trail_meta.emit_failed` envelope (carrying
 `original_event` and `error_class`). If that also fails, one line is
 written to the operational logger. The original error is always returned
 to the caller so verbs can fail-open (SR-A-3.2).
+
+**No path.** When the writer has no path (no usable home, see
+[Location](#location)), each `Emit` writes no file and attempts no
+`ad.trail_meta.emit_failed` envelope, since there is nowhere to write one.
+It writes exactly one line to the operational logger, if one is set
+(`trail: no trail path; original=<event> error_class=no_home cause=<error>`),
+and returns an error wrapping `errNoHome`. Only `runHook` sets a logger;
+elsewhere the line is dropped. Callers treat it like any other trail error:
+hooks and the no-verb hook record still exit 0, and `trail-emit`, whose
+only job is the write, exits 1 with `ErrTrailWrite` and writes no trail
+file.
 
 ### Reusable writer
 

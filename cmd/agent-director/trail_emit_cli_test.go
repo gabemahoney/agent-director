@@ -182,6 +182,32 @@ func TestTrailEmitRelayAttemptNoDBRequired(t *testing.T) {
 	}
 }
 
+// TestTrailNoHomeWritesNothing: with HOME="" trail-emit fails ErrTrailWrite and
+// a no-verb hook payload exits 0 silently, neither writing under the cwd (b.iin).
+func TestTrailNoHomeWritesNothing(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		wantErr string // "" wants a silent exit 0
+	}{
+		{"trail-emit", []string{"trail-emit", "relay-attempt", "--token", "tok-iin",
+			"--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "iin-x"}, "ErrTrailWrite"},
+		{"no verb hook payload", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			stdout, stderr, code := runInDir(t, dir, "", tc.argv...)
+			if tc.wantErr != "" {
+				assertOnlyEnvelope(t, stdout, stderr, code, tc.wantErr)
+			} else if code != 0 || stdout != "" || stderr != "" {
+				t.Errorf("exit = %d, stdout = %q, stderr = %q; want 0 and both empty", code, stdout, stderr)
+			}
+			assertHomeTree(t, dir)
+		})
+	}
+}
+
 // trailEmitNegativeCase parameterizes TestTrailEmitRelayAttemptFlagErrors.
 type trailEmitNegativeCase struct {
 	name string
