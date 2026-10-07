@@ -35,11 +35,15 @@ const layerEnvRefusedPrefix = "CLAUDE_CODE_USE_"
 // authorization header (any case), the same test run.sh runs in jq.
 var layerEnvValueRE = regexp.MustCompile(`(?i)://|\bbearer\s|authorization\s*:`)
 
+// claudeCredentialsFile is Claude Code's credentials file (its login) in
+// the .claude directory under HOME.
+const claudeCredentialsFile = ".credentials.json"
+
 // layerRefusedFileNames are Claude Code's state file and credentials file:
 // a layer that is, or resolves to, a file of either name is refused. The
 // host runner's refuse_credential_layer (run.sh) refuses the same names;
 // keep the two in step.
-var layerRefusedFileNames = []string{claudeStateFile, ".credentials.json"}
+var layerRefusedFileNames = []string{claudeStateFile, claudeCredentialsFile}
 
 // layerCredentialKeyParts make a layer key credential-like: a key at any
 // depth whose upper-cased name contains one is refused, because its value
@@ -49,6 +53,114 @@ var layerRefusedFileNames = []string{claudeStateFile, ".credentials.json"}
 // the two in step.
 var layerCredentialKeyParts = []string{
 	"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "OAUTH", "AUTHORIZATION", "COOKIE",
+}
+
+// layerCredentialSettings are Claude Code keys refused by their whole name
+// (case ignored, at any depth), because none holds a layerCredentialKeyParts
+// part. Each one's value is a command whose output Claude Code uses as a
+// credential, as request headers or as settings, and no check here can see
+// that output:
+//   - awsAuthRefresh prints refreshed AWS (Bedrock) credentials;
+//   - gcpAuthRefresh prints a Google Cloud access token;
+//   - otelHeadersHelper prints the OpenTelemetry request headers, typically
+//     an auth header;
+//   - policyHelper prints the managed settings, which can hold any
+//     credential or env setting these checks refuse;
+//   - headersHelper, in an MCP server's entry, prints that server's request
+//     headers, typically an Authorization header.
+//
+// The first four come from Claude Code's settings reference
+// (code.claude.com/docs/en/settings-reference), headersHelper from its MCP
+// reference (code.claude.com/docs/en/mcp). The settings reference's other
+// credential commands, apiKeyHelper and awsCredentialExport, are refused by
+// their KEY and CREDENTIAL parts. The host runner's refuse_credential_layer
+// (run.sh LAYER_CREDENTIAL_SETTINGS) refuses the same names; keep the two in
+// step.
+var layerCredentialSettings = []string{
+	"awsAuthRefresh", "gcpAuthRefresh", "otelHeadersHelper", "policyHelper", "headersHelper",
+}
+
+// managedMCPPath is where Claude Code reads its managed MCP file on Linux.
+const managedMCPPath = "/etc/claude-code/managed-mcp.json"
+
+// managedSettingsDropInPath is where Claude Code reads its managed settings
+// drop-in directory on Linux, beside managedSettingsPath.
+const managedSettingsDropInPath = "/etc/claude-code/managed-settings.d"
+
+// refusedFile is a file (or, when dir is set, a directory) at a path Claude
+// Code reads that real mode refuses whenever anything is there, without
+// reading it: kind and path name it in the refusal, and why says what it
+// would carry past the gateway.
+type refusedFile struct {
+	kind, path, why string
+	dir             bool
+}
+
+// what names a refused file in a refusal: its kind, then "file", or
+// "directory" for one Claude Code reads as a directory.
+func (f refusedFile) what() string {
+	if f.dir {
+		return f.kind + " directory"
+	}
+	return f.kind + " file"
+}
+
+// realModeRefusedFiles lists the files real mode refuses outright, not as
+// layers (checkRefusedFiles), at the paths Claude Code reads them:
+//   - $HOME/.claude/.credentials.json, Claude Code's login store on Linux.
+//     Its whole content is a credential, so no check could pass it. The
+//     agents read it under $HOME: the driver never passes CLAUDE_CONFIG_DIR
+//     to a child (forbiddenEnvNames);
+//   - /etc/claude-code/managed-mcp.json, the managed MCP file. It is refused
+//     rather than checked as a layer because nothing legitimate puts it
+//     there: run.sh has no flag to stage it and never mounts it, and the
+//     deployment's MCP servers reach a run through -mcp-config, the mcp
+//     layer. Claude Code's docs also say the file takes exclusive control of
+//     MCP servers and that a session then refuses servers passed with
+//     --mcp-config, so the MCP cases could not run as measured beside it;
+//   - /etc/claude-code/managed-settings.d, the managed settings drop-in
+//     directory. Claude Code merges every *.json file in it, after
+//     managed-settings.json, into the managed settings, which override every
+//     other settings level, so a drop-in's env (ANTHROPIC_BASE_URL, a
+//     credential) or helper command (apiKeyHelper) would take the agents off
+//     the gateway (code.claude.com/docs/en/managed-settings). It is refused
+//     whatever it holds, even empty, for the managed MCP file's reason:
+//     run.sh never mounts it and nothing legitimate puts it there, since the
+//     deployment's managed settings reach a run as the managed layer
+//     (managed-settings.json, which checkLayerFiles checks). The docs also
+//     count a drop-in directory that exists but cannot be read as a present
+//     managed source, so no content test could clear one.
+func realModeRefusedFiles(home string) []refusedFile {
+	return []refusedFile{
+		{kind: "credentials", path: filepath.Join(home, ".claude", claudeCredentialsFile),
+			why: "it holds a login that would carry the agents past the gateway"},
+		{kind: "managed MCP", path: managedMCPPath,
+			why: "it would take exclusive control of the agents' MCP servers (Claude Code then refuses the run's -mcp-config), and its servers' env, headers and headersHelper commands can carry credentials past the gateway; run.sh never mounts it"},
+		{kind: "managed settings drop-in", path: managedSettingsDropInPath, dir: true,
+			why: "Claude Code merges every *.json file in it into the managed settings, which override every other layer, so a drop-in's env (ANTHROPIC_BASE_URL, a credential) or helper command (apiKeyHelper) would carry the agents past the gateway unchecked; run.sh never mounts it"},
+	}
+}
+
+// checkRefusedFiles refuses real mode when anything is at a refused file's
+// path (os.Lstat finds it): a file, a directory or a link, dangling or not
+// (a dangling link's target could be created later in the run). A path that
+// cannot be checked (a directory it cannot search) is refused too. Nothing
+// there is opened or listed, so the refusal names its path and never any
+// content.
+func checkRefusedFiles(files []refusedFile) error {
+	for _, f := range files {
+		_, err := os.Lstat(f.path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			return refuse(ruleRealGatewayOnly,
+				"cannot check for Claude Code's %s %s, so a credential there cannot be ruled out: %v", f.what(), f.path, err)
+		}
+		return refuse(ruleRealGatewayOnly,
+			"Claude Code's %s %s is present (its content is never read or printed): %s; real mode carries only the gateway credential, from the environment, and refuses it outright", f.what(), f.path, f.why)
+	}
+	return nil
 }
 
 // realModeLayerFiles lists the layer files a real run's agents load, as the
@@ -115,7 +227,8 @@ func checkLayerFiles(files []layerFile) error {
 //   - the path it resolves to through symlinks is named after a
 //     layerRefusedFileNames file;
 //   - it cannot be read, or is not JSON, so it cannot be checked;
-//   - any key at any depth is credential-like (findCredentialKey);
+//   - any key at any depth is credential-like or a credential-producing
+//     setting (findCredentialKey);
 //   - an env object at any depth (the settings env, an MCP server's env)
 //     sets a name layerEnvNameRefused refuses, or sets any name to a value
 //     layerEnvValueRE matches (findLayerEnv).
@@ -149,6 +262,10 @@ func checkLayerFile(f layerFile) error {
 		return refuse(ruleRealGatewayOnly, "the %s layer %s is not a JSON document, so it cannot be checked for credentials or env settings that leave the gateway", f.kind, f.path)
 	}
 	if key, found := findCredentialKey(doc); found {
+		if credentialSetting(key) {
+			return refuse(ruleRealGatewayOnly,
+				"the %s layer %s holds the credential-producing setting %s, a command whose output Claude Code would use as a credential, headers or settings that no check sees (values are never printed); real mode carries only the gateway credential, from the environment", f.kind, f.path, key)
+		}
 		return refuse(ruleRealGatewayOnly,
 			"the %s layer %s holds the credential-like key %s (values are never printed); real mode carries only the gateway credential, from the environment", f.kind, f.path, key)
 	}
@@ -190,14 +307,27 @@ func credentialLikeKey(key string) bool {
 	return false
 }
 
-// findCredentialKey returns the first credential-like key, in sorted
-// order, among the keys of every object in a decoded JSON document (at any
-// depth, in arrays too): the key run.sh's check names.
+// credentialSetting reports whether a layer key is, case ignored, a
+// layerCredentialSettings name.
+func credentialSetting(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, n := range layerCredentialSettings {
+		if upper == strings.ToUpper(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// findCredentialKey returns the first key, in sorted order, that is
+// credential-like or a credential-producing setting, among the keys of
+// every object in a decoded JSON document (at any depth, in arrays too):
+// the key run.sh's check names.
 func findCredentialKey(doc any) (key string, found bool) {
 	keys := map[string]bool{}
 	collectKeys(doc, keys)
 	for k := range keys {
-		if credentialLikeKey(k) && (!found || k < key) {
+		if (credentialLikeKey(k) || credentialSetting(k)) && (!found || k < key) {
 			key, found = k, true
 		}
 	}

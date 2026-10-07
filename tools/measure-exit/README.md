@@ -83,12 +83,42 @@ given. It refuses real mode with `real-gateway-only` when one of them
 would be refused by the runner (see
 [Settings layers and MCP servers](#settings-layers-and-mcp-servers)): it
 is, or links to, a `.claude.json` or a `.credentials.json`, it cannot be
-read or is not JSON, a key in it looks like a credential, or an `env`
-object in it breaks the layer env rule. A missing file is skipped, but a
-dangling link is refused, because its target could appear later in the
-run. The runner never stages a dangling link. The refusal names the layer,
-its path and the key, never a value. Dry and probe mode do not run this
-check.
+read or is not JSON, a key in it looks like a credential or is a
+credential-producing setting, or an `env` object in it breaks the layer
+env rule. A missing file is skipped, but a dangling link is refused,
+because its target could appear later in the run. The runner never stages
+a dangling link. The refusal names the layer, its path and the key, never
+a value. Dry and probe mode do not run this check.
+
+Real mode also refuses, with `real-gateway-only`, a container that has
+anything at one of three paths: a file, a directory or a link, dangling or
+not.
+
+- `$HOME/.claude/.credentials.json`, a Claude Code login.
+- `/etc/claude-code/managed-mcp.json`, Claude Code's managed MCP file.
+- `/etc/claude-code/managed-settings.d`, Claude Code's managed settings
+  drop-in directory. It is refused even when empty or unreadable.
+
+A path it cannot check is refused too. Nothing at these paths is opened or
+listed. The refusal names the file or directory and its path, and why it is
+refused (or, for a path it cannot check, the OS error), never its content.
+The runner never mounts any of these paths, and its image creates only
+`/etc/claude-code` itself, so only a container started by hand meets this.
+
+The managed MCP file and the drop-in directory are refused outright, not
+checked as layers, because nothing legitimate puts them there:
+
+- The runner has no way to stage the managed MCP file, and a deployment's
+  MCP servers come through `--mcp-config`. While that file is present,
+  Claude Code refuses `--mcp-config` servers, so the MCP cases could not
+  run as measured.
+- Claude Code merges every `*.json` file in the drop-in directory into the
+  managed settings, which override every other settings level. A drop-in
+  could set `env` or `apiKeyHelper` past the gateway. A deployment's
+  managed settings come through the managed layer
+  (`/etc/claude-code/managed-settings.json`), which is checked as above.
+
+Dry and probe mode do not run this check.
 
 Credentials never come from a Claude account login or from `~/.claude`. The
 runner never forwards `ANTHROPIC_API_KEY`, `TMUX`, `CLAUDE_CONFIG_DIR`,
@@ -193,6 +223,11 @@ make measure-exit-print MEASURE_MODE=measure MEASURE_ARGS="--user-settings /path
     `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `OAUTH`, `AUTHORIZATION`,
     `COOKIE`). That covers `env` blocks, MCP server `env` and `headers`, and
     helpers such as `apiKeyHelper`;
+  - any key anywhere in it is a credential-producing setting: its name is,
+    in any case, `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`,
+    `policyHelper` or `headersHelper` (an MCP server's). Each runs a command
+    whose output Claude Code uses as a credential, request headers or
+    settings, which no check can see;
   - an `env` object at any depth (the settings `env`, an MCP server's
     `env`) breaks the **layer env rule**: it sets, in any case,
     `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, any `CLAUDE_CODE_USE_*`

@@ -95,6 +95,10 @@ func TestPreflightRules(t *testing.T) {
 		return path
 	}
 	const offending = `{"env": {"AWS_REGION": "us-east-1"}}`
+	// creds puts a Claude Code login at $HOME/.claude/.credentials.json (b.tba).
+	creds := func(p *pfSetup) {
+		writeFile(t, filepath.Join(p.home, ".claude", ".credentials.json"), `{"claudeAiOauth": {"accessToken": "`+layerSecret+`"}}`)
+	}
 	// envRules refuse before the private TMUX_TMPDIR is made: nothing is written.
 	envRules := map[string]bool{ruleContainerOnly: true, ruleTmuxUnset: true, ruleHomeSet: true, ruleHomeHasStore: true,
 		ruleSampleFloor: true, ruleCredential: true, ruleModelSet: true, ruleProbeCredential: true, ruleRealGatewayOnly: true}
@@ -160,6 +164,9 @@ func TestPreflightRules(t *testing.T) {
 		{"probe with a refused env name in the user layer", modeProbe, realCC, func(p *pfSetup) {
 			writeFile(t, filepath.Join(p.home, ".claude", "settings.json"), offending)
 		}, ""},
+		{"real with Claude Code's credentials file under HOME", modeReal, realCC, creds, ruleRealGatewayOnly},
+		{"dry with Claude Code's credentials file under HOME", modeDry, stubCC, creds, ""},
+		{"probe with Claude Code's credentials file under HOME", modeProbe, realCC, creds, ""},
 	}
 	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"} {

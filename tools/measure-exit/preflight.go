@@ -107,9 +107,12 @@ type versionReader interface {
 // checkEnvironment runs the checks that need no file system change: the
 // container marker, TMUX, $HOME, both homes free of .agent-director, the
 // sample floor when sampled is true (an RN-6 or RN-2 case is selected) and,
-// in real mode, the gateway-only environment and the layer files, for
+// in real mode, the gateway-only environment, the layer files, for
 // credentials and env settings that leave the gateway (checkLayerFiles; it
-// only reads them). It returns the two homes.
+// only reads them), and the files real mode refuses outright, Claude Code's
+// credentials file, its managed MCP file and its managed settings drop-in
+// directory (checkRefusedFiles; it never opens them). It returns the two
+// homes.
 func checkEnvironment(c config, e environment, sampled bool) (home, passwdHome string, err error) {
 	if e.getenv(containerMarkerEnv) == "" {
 		if c.mode != modeDry || e.getenv(sandboxMarkerEnv) == "" {
@@ -142,6 +145,9 @@ func checkEnvironment(c config, e environment, sampled bool) (home, passwdHome s
 			return "", "", err
 		}
 		if err := checkLayerFiles(realModeLayerFiles(c, home)); err != nil {
+			return "", "", err
+		}
+		if err := checkRefusedFiles(realModeRefusedFiles(home)); err != nil {
 			return "", "", err
 		}
 	}

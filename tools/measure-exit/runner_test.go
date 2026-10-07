@@ -448,8 +448,9 @@ func TestRunnerSessionCounts(t *testing.T) {
 }
 
 // TestRunnerLayerReport: a staged layer that is, or links to, Claude Code's
-// state or credentials file, is not JSON, or holds a credential-like key is
-// refused before anything runs, naming the key and never a value.
+// state or credentials file, is not JSON, or holds a credential-like key or
+// credential-producing setting is refused before anything runs, naming the
+// key and never a value.
 func TestRunnerLayerReport(t *testing.T) {
 	refused := func(t *testing.T, tc credentialLayerCase, extra ...string) {
 		r := newRunnerRig(t)
@@ -466,7 +467,8 @@ func TestRunnerLayerReport(t *testing.T) {
 	t.Run(credentialLayerCases[0].name+" under --run", func(t *testing.T) { refused(t, credentialLayerCases[0], "--run") })
 	t.Run("a clean layer is staged and a missing one reported", func(t *testing.T) {
 		r := newRunnerRig(t)
-		writeFile(t, filepath.Join(r.layers, "user.json"), `{"env": {"PLAIN": "x"}}`)
+		// Near misses of credential-producing setting names pass (b.tba).
+		writeFile(t, filepath.Join(r.layers, "user.json"), `{"env": {"PLAIN": "x"}, "otelHeadersHelperX": "x", "myPolicyHelper": "x"}`)
 		// A dangling link is missing too: run.sh never stages what the driver refuses (b.vyb).
 		dangling := filepath.Join(r.layers, "dangling.json")
 		if err := os.Symlink(filepath.Join(r.layers, "later", ".claude.json"), dangling); err != nil {
@@ -558,9 +560,12 @@ func TestRunnerLayerRefusedEnvInStep(t *testing.T) {
 
 // TestRunnerCredentialLayerInStep: run.sh's refuse_credential_layer case
 // arms list exactly the driver's layerRefusedFileNames and
-// layerCredentialKeyParts, and the driver refuses a layer for each (b.vyb).
+// layerCredentialKeyParts (b.vyb), its LAYER_CREDENTIAL_SETTINGS exactly
+// the driver's layerCredentialSettings (b.tba), and the driver refuses a
+// layer for each.
 func TestRunnerCredentialLayerInStep(t *testing.T) {
-	fn := regexp.MustCompile(`(?ms)^refuse_credential_layer\(\) \{\n(.*?)^\}`).FindStringSubmatch(readFile(t, "run.sh"))
+	script := readFile(t, "run.sh")
+	fn := regexp.MustCompile(`(?ms)^refuse_credential_layer\(\) \{\n(.*?)^\}`).FindStringSubmatch(script)
 	if fn == nil {
 		t.Fatal("run.sh has no refuse_credential_layer() function")
 	}
@@ -605,6 +610,21 @@ func TestRunnerCredentialLayerInStep(t *testing.T) {
 	for _, p := range layerCredentialKeyParts {
 		if !slices.Contains(parts, p) {
 			t.Errorf("the driver refuses a key holding %s; run.sh does not", p)
+		}
+	}
+	m := regexp.MustCompile(`(?m)^readonly LAYER_CREDENTIAL_SETTINGS=\(([^)]*)\)`).FindStringSubmatch(script)
+	if m == nil {
+		t.Fatal("run.sh has no readonly LAYER_CREDENTIAL_SETTINGS=(...) array")
+	}
+	settings := strings.Fields(m[1])
+	for _, n := range settings {
+		if !strings.Contains(refusal("setting-"+n+".json", `{"`+n+`": 1}`), "credential-producing setting "+n) {
+			t.Errorf("run.sh refuses the setting %s; the driver does not", n)
+		}
+	}
+	for _, n := range layerCredentialSettings {
+		if !slices.Contains(settings, n) {
+			t.Errorf("the driver refuses the setting %s; run.sh does not", n)
 		}
 	}
 }

@@ -90,7 +90,10 @@ var credentialLayerCases = []credentialLayerCase{
 		"credential-like key Authorization"},
 	{"a lower-case key in an array", "project", "project.json", "", `{"hooks": {"Stop": [{"hooks": [{"type": "command", "db_passwd": "` + layerSecret + `"}]}]}}`,
 		"credential-like key db_passwd"},
-	{"the sorted first credential-like key", "user", "user.json", "", `{"zSecret": "` + layerSecret + `", "apiKeyHelper": "x", "a": {"Authorization": "x"}}`,
+	// The sorted first key wins over a credential-producing setting too
+	// (the case below pins the other direction).
+	{"the sorted first credential-like key", "user", "user.json", "",
+		`{"zSecret": "` + layerSecret + `", "otelHeadersHelper": "x", "apiKeyHelper": "x", "a": {"Authorization": "x"}}`,
 		"credential-like key Authorization"},
 	{"Claude Code's state file", "user", ".claude.json", "", `{"oauthAccount": {"emailAddress": "` + layerSecret + `"}}`,
 		"is (or links to) Claude Code's .claude.json"},
@@ -99,6 +102,20 @@ var credentialLayerCases = []credentialLayerCase{
 	{"a link to the credentials file", "local", "local.json", ".credentials.json", `{"claudeAiOauth": {"accessToken": "` + layerSecret + `"}}`,
 		"is (or links to) Claude Code's .credentials.json"},
 	{"not JSON", "user", "user.json", "", "token=" + layerSecret, "not a JSON document"},
+	// Credential-producing settings, matched by whole name at any depth (b.tba).
+	{"awsAuthRefresh", "managed", "managed.json", "", `{"awsAuthRefresh": "/bin/echo ` + layerSecret + `"}`,
+		"credential-producing setting awsAuthRefresh"},
+	{"gcpAuthRefresh in another case", "user", "user.json", "", `{"GCPAuthRefresh": "/bin/echo ` + layerSecret + `"}`,
+		"credential-producing setting GCPAuthRefresh"},
+	{"otelHeadersHelper", "project", "project.json", "", `{"otelHeadersHelper": "/bin/echo ` + layerSecret + `"}`,
+		"credential-producing setting otelHeadersHelper"},
+	{"policyHelper", "local", "local.json", "", `{"policyHelper": {"path": "/bin/echo ` + layerSecret + `"}}`,
+		"credential-producing setting policyHelper"},
+	{"an MCP server's headersHelper", "mcp", "mcp.json", "",
+		`{"mcpServers": {"api": {"type": "http", "url": "https://mcp.invalid", "headersHelper": "/bin/echo ` + layerSecret + `"}}}`,
+		"credential-producing setting headersHelper"},
+	{"the sorted first refused key of either kind", "user", "user.json", "", `{"zToken": "` + layerSecret + `", "awsAuthRefresh": "x"}`,
+		"credential-producing setting awsAuthRefresh"},
 }
 
 // write writes the case's layer under fresh temp dirs and returns its path.
@@ -171,6 +188,7 @@ func TestCheckLayerFiles(t *testing.T) {
 		{"a dangling link to a state file", layerFile{"user", laterState}, []string{"user layer " + laterState, unresolved}},
 		{"a link chain dangling at a credentials file", layerFile{"project", laterCreds}, []string{"project layer " + laterCreds, unresolved}},
 		{"credential-like words in a value", layerFile{"user", file("words.json", `{"env": {"PLAIN": "KEY TOKEN SECRET"}}`)}, nil},
+		{"near-miss setting names", layerFile{"user", file("near.json", `{"otelHeadersHelperX": "x", "myPolicyHelper": "x"}`)}, nil},
 		{"the dry run's MCP config", layerFile{"mcp", file("dry-mcp.json", dryMCPConfig)}, nil},
 		{"a link chain to the state file", layerFile{"local", link("chain.json", link("mid.json", state))},
 			[]string{"local layer", "chain.json", "is (or links to) Claude Code's .claude.json"}},
@@ -207,5 +225,110 @@ func TestCheckLayerFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertLayerRefusal(t, checkLayerFiles([]layerFile{{"project", p}}), "cannot read the project layer")
+	})
+}
+
+func TestRealModeRefusedFiles(t *testing.T) {
+	type entry struct {
+		kind, path string
+		dir        bool
+	}
+	home := t.TempDir()
+	var got []entry
+	for _, f := range realModeRefusedFiles(home) {
+		got = append(got, entry{f.kind, f.path, f.dir})
+	}
+	want := []entry{
+		{"credentials", filepath.Join(home, ".claude", ".credentials.json"), false},
+		{"managed MCP", "/etc/claude-code/managed-mcp.json", false},
+		{"managed settings drop-in", "/etc/claude-code/managed-settings.d", true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("refused files %+v; want %+v", got, want)
+	}
+}
+
+// TestCheckRefusedFiles: anything at a refused path is refused by path,
+// without its content; nothing there passes (b.tba).
+func TestCheckRefusedFiles(t *testing.T) {
+	dir := t.TempDir()
+	at := func(name string) refusedFile {
+		return refusedFile{kind: "credentials", path: filepath.Join(dir, name), why: "test reason"}
+	}
+	// dropIn is a refused directory, as the managed settings drop-in is.
+	dropIn := func(name string) refusedFile {
+		return refusedFile{kind: "managed settings drop-in", path: filepath.Join(dir, name), why: "test reason", dir: true}
+	}
+	writeFile(t, filepath.Join(dir, "file.json"), `{"claudeAiOauth": {"accessToken": "`+layerSecret+`"}}`)
+	for _, d := range []string{"dir.json", "empty.d"} {
+		if err := os.Mkdir(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(dir, "full.d", "10-gateway.json"), `{"env": {"ANTHROPIC_BASE_URL": "https://`+layerSecret+`"}}`)
+	if err := os.Symlink(filepath.Join(dir, "absent.json"), filepath.Join(dir, "dangling.json")); err != nil {
+		t.Fatal(err)
+	}
+	const present = "is present (its content is never read or printed): test reason"
+	const dropInDir = "managed settings drop-in directory"
+	for _, tc := range []struct {
+		name, what string
+		f          refusedFile
+	}{
+		{"a regular file", "credentials file", at("file.json")},
+		{"a directory", "credentials file", at("dir.json")},
+		{"a dangling link", "credentials file", at("dangling.json")},
+		{"an empty drop-in directory", dropInDir, dropIn("empty.d")},
+		{"a drop-in directory holding a settings file", dropInDir, dropIn("full.d")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertLayerRefusal(t, checkRefusedFiles([]refusedFile{tc.f}), "Claude Code's "+tc.what+" "+tc.f.path+" "+present)
+		})
+	}
+	t.Run("an unreadable drop-in directory is present, never listed", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root lists a mode-000 directory")
+		}
+		f := dropIn("locked.d")
+		writeFile(t, filepath.Join(f.path, "10-gateway.json"), `{"apiKeyHelper": "/bin/echo `+layerSecret+`"}`)
+		if err := os.Chmod(f.path, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(f.path, 0o700) })
+		assertLayerRefusal(t, checkRefusedFiles([]refusedFile{f}), "Claude Code's "+dropInDir+" "+f.path+" "+present)
+	})
+	t.Run("nothing there passes", func(t *testing.T) {
+		if err := checkRefusedFiles([]refusedFile{at("absent.json"), at("sub/absent.json")}); err != nil {
+			t.Fatalf("want pass, got %v", err)
+		}
+	})
+	t.Run("the first refused file stops the check", func(t *testing.T) {
+		second := at("dir.json")
+		err := checkRefusedFiles([]refusedFile{at("absent.json"), at("file.json"), second})
+		assertLayerRefusal(t, err, filepath.Join(dir, "file.json"))
+		if strings.Contains(err.Error(), second.path) {
+			t.Errorf("the check went on past the first refused file: %v", err)
+		}
+	})
+	t.Run("a path that cannot be checked", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root searches a mode-000 directory")
+		}
+		locked := filepath.Join(t.TempDir(), "locked")
+		writeFile(t, filepath.Join(locked, "managed-mcp.json"), layerSecret)
+		writeFile(t, filepath.Join(locked, "managed-settings.d", "10-gateway.json"), layerSecret)
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		for _, tc := range []struct {
+			what string
+			f    refusedFile
+		}{
+			{"managed MCP file", refusedFile{kind: "managed MCP", path: filepath.Join(locked, "managed-mcp.json")}},
+			{dropInDir, refusedFile{kind: "managed settings drop-in", path: filepath.Join(locked, "managed-settings.d"), dir: true}},
+		} {
+			assertLayerRefusal(t, checkRefusedFiles([]refusedFile{tc.f}), "cannot check for Claude Code's "+tc.what+" "+tc.f.path)
+		}
 	})
 }

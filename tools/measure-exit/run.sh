@@ -65,13 +65,22 @@
 #                             .credentials.json, when it is not JSON, or when
 #                             any key in it looks like a credential (KEY, TOKEN,
 #                             SECRET, PASSWORD, PASSWD, CREDENTIAL, OAUTH,
-#                             AUTHORIZATION, COOKIE), or when an env object in it
+#                             AUTHORIZATION, COOKIE) or is a setting whose
+#                             command produces one (awsAuthRefresh,
+#                             gcpAuthRefresh, otelHeadersHelper, policyHelper,
+#                             headersHelper), or when an env object in it
 #                             sets ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, a
 #                             CLAUDE_CODE_USE_* name or a name real mode refuses,
 #                             or sets any name to a value that looks like a URL
 #                             or an authorization header; the refusal names the
 #                             key, never a value. The driver repeats all of these
-#                             checks over the layer files in real mode.
+#                             checks over the layer files in real mode, and also
+#                             refuses a container holding anything at
+#                             ~/.claude/.credentials.json,
+#                             /etc/claude-code/managed-mcp.json or
+#                             /etc/claude-code/managed-settings.d (the managed
+#                             settings drop-in directory), which this runner
+#                             never mounts.
 #   --host-network            opt in to host networking (hosts with the bridge
 #                             MTU problem, b.rx8); printed as a warning
 #   --guard-mode busy|quiet   guard.sh mode (default busy)
@@ -123,6 +132,14 @@ readonly LAYER_REFUSED_ENV=(ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS
     ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_USE_BEDROCK
     AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK
     AWS_REGION AWS_PROFILE AWS_DEFAULT_REGION)
+# LAYER_CREDENTIAL_SETTINGS are Claude Code keys a staged layer may not
+# hold, at any depth, matched by their whole name (case ignored): each one's
+# value is a command whose output Claude Code uses as a credential, headers
+# or settings (AWS credentials, a Google Cloud token, OpenTelemetry headers,
+# the managed settings, an MCP server's headers), and none holds a part the
+# credential-like key pattern refuses. Keep it in step with the driver's
+# layerCredentialSettings (layerenv.go), which says where each comes from.
+readonly LAYER_CREDENTIAL_SETTINGS=(awsAuthRefresh gcpAuthRefresh otelHeadersHelper policyHelper headersHelper)
 
 # Case ids per mode (the driver's registry: rn6.go, rn2.go, rn9.go). Session
 # counts below are computed from them.
@@ -251,19 +268,22 @@ layer_target() {
 # refuse_credential_layer refuses (exit 2) staging layer $1 from file $2
 # when it is, or resolves to, Claude Code's state file (.claude.json) or its
 # credentials file (.credentials.json), when it is not JSON, or when any key
-# anywhere in it looks like a credential: env blocks, MCP server env and
-# headers, and helpers such as apiKeyHelper. Its value would be mounted into
-# the container, and the run bills to the gateway only. It also refuses a
-# layer with an env object (at any depth: settings env, MCP server env) that
-# sets a LAYER_REFUSED_ENV or CLAUDE_CODE_USE_* name, which would take the
-# agents off the gateway, or that sets any name to a value that looks like a
-# URL or an authorization header (://, "bearer ", "authorization:", any
-# case). The value test runs inside jq, so no value reaches the shell. The
-# refusal names the key, never a value. The driver repeats every one of
-# these checks over the layer files in real mode (layerenv.go's
-# checkLayerFiles), for a container started by hand; the file names and the
-# key pattern below are kept in step with its layerRefusedFileNames and
-# layerCredentialKeyParts.
+# anywhere in it looks like a credential (env blocks, MCP server env and
+# headers, and helpers such as apiKeyHelper) or is a LAYER_CREDENTIAL_SETTINGS
+# name (awsAuthRefresh, otelHeadersHelper, ...); both key tests run on each
+# key in sorted order, so the first refused key is the one named. Its value
+# would be mounted into the container, and the run bills to the gateway
+# only. It also refuses a layer with an env object (at any depth: settings
+# env, MCP server env) that sets a LAYER_REFUSED_ENV or CLAUDE_CODE_USE_*
+# name, which would take the agents off the gateway, or that sets any name
+# to a value that looks like a URL or an authorization header (://,
+# "bearer ", "authorization:", any case). The value test runs inside jq, so
+# no value reaches the shell. The refusal names the key, never a value. The
+# driver repeats every one of these checks over the layer files in real
+# mode (layerenv.go's checkLayerFiles), for a container started by hand; the
+# file names, the key pattern and LAYER_CREDENTIAL_SETTINGS are kept in step
+# with its layerRefusedFileNames, layerCredentialKeyParts and
+# layerCredentialSettings.
 refuse_credential_layer() {
     local k="$1" src="$2" real base key keys entries flag name refused n
     real="$(readlink -f -- "$src" 2>/dev/null || printf '%s' "$src")"
@@ -282,6 +302,11 @@ refuse_credential_layer() {
             *KEY* | *TOKEN* | *SECRET* | *PASSWORD* | *PASSWD* | *CREDENTIAL* | *OAUTH* | *AUTHORIZATION* | *COOKIE*)
                 die 2 "refusing the $k layer $src: it holds the credential-like key $key (its value would be mounted into the container; values are never printed); remove it from the copy you stage (nothing was built or run)" ;;
         esac
+        for n in "${LAYER_CREDENTIAL_SETTINGS[@]}"; do
+            if [[ "${key^^}" == "${n^^}" ]]; then
+                die 2 "refusing the $k layer $src: it holds the credential-producing setting $key, a command whose output Claude Code would use as a credential, headers or settings that no check sees (values are never printed); remove it from the copy you stage (nothing was built or run)"
+            fi
+        done
     done <<<"$keys"
     # One line per env entry: "url" or "-" (whether its value looks like a
     # URL or an authorization header), a tab, then the name.

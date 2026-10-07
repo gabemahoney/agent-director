@@ -9187,9 +9187,10 @@ This section does not repeat it.
   - For `measure` and `rn9` it always passes `-cases`: the mode's ids by
     default, and it refuses (exit 2) a `--cases` id from another mode.
   - It refuses (exit 2) a staged layer that is or links to `.claude.json`
-    or `.credentials.json`, is not JSON, or holds a credential-like key, or
-    whose `env` objects break the layer env rule (`LAYER_REFUSED_ENV`; see
-    the isolation contract below). The refusal applies in print-only too,
+    or `.credentials.json`, is not JSON, or holds a credential-like key or
+    a credential-producing setting (`LAYER_CREDENTIAL_SETTINGS`), or whose
+    `env` objects break the layer env rule (`LAYER_REFUSED_ENV`; see the
+    isolation contract below). The refusal applies in print-only too,
     and names the key, never a value.
   - The probe takes its candidate versions from `npm view` in a
     credential-free base-image container on the host network, or from
@@ -9365,13 +9366,27 @@ This section does not repeat it.
   - it cannot be read, or is not one JSON document. An empty file and
     concatenated documents are refused too, which is stricter than
     `run.sh`'s `jq`;
-  - a key at any depth (arrays included) is credential-like: its
-    upper-cased name contains a `layerCredentialKeyParts` part (`KEY`,
-    `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `OAUTH`,
-    `AUTHORIZATION`, `COOKIE`). That catches `apiKeyHelper`, an env name
-    such as `MY_API_TOKEN` and an `Authorization` header in an MCP
-    server's `headers`. The first such key in sorted order is named
-    (`findCredentialKey`);
+  - a key at any depth (arrays included) is credential-like or a
+    credential-producing setting. The first such key of either kind in
+    sorted order is named (`findCredentialKey`), and the refusal says which
+    kind it is:
+    - credential-like: its upper-cased name contains a
+      `layerCredentialKeyParts` part (`KEY`, `TOKEN`, `SECRET`,
+      `PASSWORD`, `PASSWD`, `CREDENTIAL`, `OAUTH`, `AUTHORIZATION`,
+      `COOKIE`). That catches `apiKeyHelper`, `awsCredentialExport`, an env
+      name such as `MY_API_TOKEN` and an `Authorization` header in an MCP
+      server's `headers`;
+    - credential-producing setting: its whole name, case ignored, is a
+      `layerCredentialSettings` name (`credentialSetting`):
+      `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`,
+      `policyHelper`, and `headersHelper` in an MCP server's entry. Each
+      one's value is a command whose output Claude Code uses as a
+      credential, request headers or settings, which no check can see, and
+      none of the names holds a key part. A name that only contains one of
+      them (`otelHeadersHelperX`) passes. The list comes from Claude Code's
+      settings and MCP references; a new setting there that runs a command
+      producing a credential joins this list and `run.sh`'s
+      `LAYER_CREDENTIAL_SETTINGS`;
   - an `env` object at any depth sets a name `layerEnvNameRefused`
     refuses (any `CLAUDE_CODE_USE_*`, a `realModeRefusedEnv` or
     `credentialEnv` name, `ANTHROPIC_CUSTOM_HEADERS`; case ignored) or a
@@ -9386,10 +9401,53 @@ This section does not repeat it.
   refused names and `realModeRefusedEnv`) and
   `TestRunnerCredentialLayerInStep` (`refuse_credential_layer`'s file-name
   and key-pattern case arms against `layerRefusedFileNames` and
-  `layerCredentialKeyParts`, both ways). The shared `credentialLayerCases`
-  table runs the same refused layers through both `run.sh` and the driver.
-  `TestRunnerLayerReport` checks that `run.sh` reports a dangling layer
-  link as `MISSING` and does not stage it.
+  `layerCredentialKeyParts`, and `LAYER_CREDENTIAL_SETTINGS` against
+  `layerCredentialSettings`, all both ways). The shared
+  `credentialLayerCases` table runs the same refused layers through both
+  `run.sh` and the driver. `TestRunnerLayerReport` checks that `run.sh`
+  reports a dangling layer link as `MISSING` and does not stage it.
+- Real mode also refuses three paths outright, where Claude Code reads
+  them, and never opens or lists them. `checkRefusedFiles` (`layerenv.go`),
+  called from `checkEnvironment` right after `checkLayerFiles`, refuses
+  with `real-gateway-only` when `os.Lstat` finds anything (a file, a
+  directory, a link, dangling or not) at a `realModeRefusedFiles` path:
+  - `$HOME/.claude/.credentials.json`, Claude Code's login store on Linux.
+    Its whole content is a credential that would carry the agents past the
+    gateway, so no check could pass it. The agents read it under `$HOME`,
+    because no child gets `CLAUDE_CONFIG_DIR`;
+  - `/etc/claude-code/managed-mcp.json`, the managed MCP file. It is
+    refused rather than checked as a layer, by choice. Nothing legitimate
+    puts it there: `run.sh` has no flag to stage it and never mounts it,
+    and a deployment's MCP servers reach a run through `-mcp-config`, the
+    MCP layer checked above. And while the file is present Claude Code
+    gives it exclusive control of MCP servers and refuses servers passed
+    with `--mcp-config`, so the MCP cases could not run as measured;
+  - `/etc/claude-code/managed-settings.d`, the managed settings drop-in
+    directory. Claude Code merges every `*.json` file in it, in
+    alphabetical order after `managed-settings.json`, into the managed
+    settings, which override every other settings level. A drop-in's `env`
+    (`ANTHROPIC_BASE_URL`, a credential) or helper command (`apiKeyHelper`)
+    would therefore take the agents off the gateway. It is refused
+    whatever it holds, even when empty or unreadable, for the managed MCP
+    file's reason: nothing legitimate puts it there. `run.sh` never mounts
+    it, the image's `Dockerfile` creates only `/etc/claude-code` itself,
+    and a deployment's managed settings reach a run as the managed layer
+    (`managed-settings.json`, checked above). Claude Code also counts a
+    drop-in directory it cannot read as a present managed source, so no
+    content check could clear one.
+
+  Each `refusedFile` carries a kind, a path, a reason and a `dir` flag;
+  its `what()` names it in the refusal as a "file", or as a "directory"
+  when `dir` is set (the drop-in). A present path is refused with
+  `Claude Code's <kind> file|directory <path> is present (...)` and the
+  reason. Any other `Lstat` error (a parent it cannot search, a parent
+  that is not a directory) is refused too, as
+  `cannot check for Claude Code's <kind> file|directory <path>`, with the
+  OS error, since a credential there cannot be ruled out. The first
+  refused path stops the run, and the refusal never holds content.
+  `run.sh` has no counterpart, because it never mounts any of the three;
+  this check is for a container started by hand. Dry and probe mode do not
+  run it.
 - Mounts are staged settings copies (read-only) and one results directory.
   The host home, `~/.agent-director`, `~/.claude*`, a tmux socket
   directory, `/tmp` and the engine socket are never mounted.
