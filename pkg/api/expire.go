@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"sort"
@@ -154,9 +155,10 @@ func unusableKeptReason(kind tmux.UnusableKind) string {
 	return ""
 }
 
-// farFutureCutoff is the cutoff of a zero or negative retention window: later
-// than any ended_at the store writes, so every finished row with an ended_at
-// is selected (SR-12.1).
+// farFutureCutoff is the cutoff of an explicit zero olderThan window, the
+// only window at or below zero Expire runs with (retentionWindow never gives
+// one, and Expire refuses a negative olderThan): later than any ended_at the
+// store writes, so every finished row with an ended_at is selected (SR-12.1).
 var farFutureCutoff = time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
 
 // expireRow is the outcome of judging one selected row, and the facts its
@@ -197,13 +199,20 @@ func (r expireRow) verdict() string {
 // logger.
 //
 // Selection (SR-12.1): the cutoff is now() minus the retention window, which
-// is olderThan when it is non-nil and retentionDays days otherwise
-// (retentionWindow: never wrapped, so a day count above
-// config.MaxExpireRetentionDays gives the largest window); a zero or
-// negative window selects every finished row with an ended_at. The one
-// candidate read (ExpireStore.ListExpireCandidates) is the only call that can
-// fail the verb: its error is logged on lg and returned, with no tmux call.
-// Expire reads time only through now, never time.Now.
+// is olderThan when it is non-nil and retentionDays days otherwise.
+// retentionDays follows the rule of [defaults] expire_retention_days
+// (retentionWindow, b.f4v): 0 means config.DefaultExpireRetentionDays (31
+// days), as the key's 0 does, and never every finished row; and a count above
+// config.MaxExpireRetentionDays gives the largest window instead of a wrapped
+// one. A negative retentionDays (even when olderThan is non-nil) and a
+// negative olderThan are refused with ErrInvalidFlags and an empty
+// ExpireResult (counts 0, IDs and KeptIDs non-nil and empty) before any read,
+// tmux call or log line (b.f4v), as ParseOlderThan refuses a negative
+// older_than on the CLI and MCP. Only an explicit zero olderThan selects every
+// finished row with an ended_at. These two refusals and the one candidate
+// read (ExpireStore.ListExpireCandidates) are the only failures of the verb:
+// the read's error is logged on lg and returned, with no tmux call. Expire
+// reads time only through now, never time.Now.
 //
 // Each selected row is judged in instance-id order, so the per-socket stop
 // and the budget's cut-off fall on the same rows on every run (SR-12.2):
@@ -250,8 +259,18 @@ func (r expireRow) verdict() string {
 // rows tmux_skipped, and a non-positive one makes no tmux call. s, t, pc and
 // now must not be nil; a nil lg writes no log line.
 func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olderThan *time.Duration, sweepBudget time.Duration, now func() time.Time, lg ExpireLogger) (ExpireResult, error) {
-	window := retentionWindow(retentionDays)
+	// A refusal returns an empty result whose lists are non-nil, as ExpireResult
+	// documents, so it encodes `[]` like a run that selected no row.
+	refused := ExpireResult{IDs: []string{}, KeptIDs: []string{}}
+	window, err := retentionWindow(retentionDays)
+	if err != nil {
+		return refused, err
+	}
 	if olderThan != nil {
+		if *olderThan < 0 {
+			return refused, fmt.Errorf("%w: olderThan = %v is negative; pass a positive duration, nil for the retention window (retentionDays, or the configured expire_retention_days through Client.Expire), or an explicit zero to select every finished row",
+				ErrInvalidFlags, *olderThan)
+		}
 		window = *olderThan
 	}
 	cutoff := farFutureCutoff
@@ -290,22 +309,28 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 	return ExpireResult{Count: len(deleted), IDs: deleted, Kept: len(kept), KeptIDs: kept}, nil
 }
 
-// retentionWindow returns days whole days as expire's window, computed
-// without overflow (b.sgw): a count above config.MaxExpireRetentionDays
+// retentionWindow returns days whole days as expire's window by the rule of
+// [defaults] expire_retention_days, so the same count means the same window
+// in the config key and in Expire (b.f4v). It never returns a zero or
+// negative window, which would select every finished row: 0 gives
+// config.DefaultExpireRetentionDays, as EffectiveExpireRetentionDays gives
+// for the key's 0; a negative count is refused with ErrInvalidFlags, as Load
+// refuses a negative key; and a count above config.MaxExpireRetentionDays
 // gives the largest duration instead of a wrapped, possibly zero or negative,
-// window; a count at or below zero gives zero, which selects every finished
-// row as any window at or below zero does. Load refuses both a negative
-// count and one above the maximum, and Client.Expire passes
-// EffectiveExpireRetentionDays, never below one, so only an in-process
-// caller of Expire reaches either case.
-func retentionWindow(days int) time.Duration {
+// window (b.sgw). Client.Expire passes EffectiveExpireRetentionDays, from 1
+// to the maximum, so only an in-process caller of Expire reaches 0, a
+// negative count or the cap.
+func retentionWindow(days int) (time.Duration, error) {
 	switch {
-	case days <= 0:
-		return 0
+	case days < 0:
+		return 0, fmt.Errorf("%w: retentionDays = %d is negative; pass 0 for the default of %d days or a positive number of days (only an explicit zero olderThan selects every finished row)",
+			ErrInvalidFlags, days, config.DefaultExpireRetentionDays)
+	case days == 0:
+		days = config.DefaultExpireRetentionDays
 	case days > config.MaxExpireRetentionDays:
-		return time.Duration(math.MaxInt64)
+		return time.Duration(math.MaxInt64), nil
 	}
-	return time.Duration(days) * 24 * time.Hour
+	return time.Duration(days) * 24 * time.Hour, nil
 }
 
 // expireRun is one expire run's state: the store, the start-time reader, the
@@ -417,13 +442,15 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 
 // Expire removes finished rows (ended or missing) whose ended_at is older than
 // the retention window, and keeps any whose agent, own session or leftover
-// may still run, or for which it cannot tell. When olderThan is nil the window comes from defaults.expire_retention_days in
-// config.toml (31 days when the key is missing or 0; the configuration
-// refuses a negative value and one above 106751); a non-nil value overrides
-// it, and a zero or negative duration selects every finished row. The CLI and
-// MCP parse their older_than with ParseOlderThan, which refuses a negative
-// value and a day count above 106751. Live rows and rows with a NULL ended_at
-// are never selected.
+// may still run, or for which it cannot tell. When olderThan is nil the
+// window comes from defaults.expire_retention_days in config.toml (31 days
+// when the key is missing or 0; the configuration refuses a negative value
+// and one above 106751); a non-nil value overrides it, and only a zero
+// duration selects every finished row. A negative duration is refused with
+// ErrInvalidFlags before anything runs (b.f4v). The CLI and MCP parse their
+// older_than with ParseOlderThan, which refuses a negative value and a day
+// count above 106751, so they never pass a negative duration. Live rows and
+// rows with a NULL ended_at are never selected.
 //
 // A selected row whose recorded tmux session name cannot be used (it is
 // empty, contains a control character, or contains a character tmux stores
@@ -461,7 +488,8 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 //
 // CLI: agent-director expire
 //
-// Errors: none.
+// Errors: none on the CLI, MCP or TypeScript client. A negative olderThan,
+// which only a Go caller can pass, is refused with ErrInvalidFlags (above).
 //
 // Nondeterminism: none.
 func (c *Client) Expire(olderThan *time.Duration) (ExpireResult, error) {

@@ -85,7 +85,8 @@ const DefaultExpireRetentionDays = 31
 // holds (106751): the upper limit of expire_retention_days, which Load
 // refuses above it, and of older_than's day count, which pkg/api's
 // ParseOlderThan refuses above it (b.sgw). A larger count would wrap expire's
-// window, at worst to zero or below, which selects every finished row.
+// window, at worst to zero, which selects every finished row (pkg/api's
+// Expire refuses a negative window, b.f4v).
 const MaxExpireRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
 
 // EffectiveExpireRetentionDays returns expire's default window in whole

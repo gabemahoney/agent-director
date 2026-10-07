@@ -5599,7 +5599,7 @@ or catalog Go source requires regenerating the corresponding JSON file.
 - `ErrInternal` is the `Classify` fallback for errors that match no catalogued sentinel,
   such as `spawn.PreCheckReadError`'s result. It is not in the Catalog, is listed in no
   verb's `ErrorNames`, and is not enforced by the coherence check.
-- `ErrInvalidFlags` has three sources. First, CLI flag parsing emits it for every verb: the
+- `ErrInvalidFlags` has four sources. First, CLI flag parsing emits it for every verb: the
   `cmd/agent-director` flag handlers write it as a string literal in the error envelope.
   Second, the MCP server returns it for every tool whose `arguments` carry a key that is
   not one of the verb's manifest params or are not a JSON object (`checkParamNames`), or
@@ -5608,11 +5608,21 @@ or catalog Go source requires regenerating the corresponding JSON file.
   neither duration form, is negative or is a day count above 106751 (`expire`); see
   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments).
   Third, the shared verb layer returns it for `spawn` only, from the explicit-id check in
-  `runSpawn` (see [Explicit-id check](#explicit-id-check)). It is in the Catalog. It is
+  `runSpawn` (see [Explicit-id check](#explicit-id-check)). Fourth, the exported Go
+  function `Expire` refuses a negative `retentionDays` or a negative `olderThan` with it
+  before anything runs (b.f4v; see [`expire`](#expire)). `Client.Expire` passes the
+  configured retention, 1 to 106751, so only a negative `olderThan` reaches that refusal
+  through it, and the CLI, MCP and the TypeScript client never pass one: they parse
+  `older_than` with `ParseOlderThan`, which refuses a negative value first (the first two
+  sources). It is in the Catalog. It is
   listed in `spawn`'s manifest `ErrorNames` and its Go "Errors:" list, because spawn is the
-  only verb whose shared verb layer emits it. No other callable verb lists it, because the
+  only verb whose shared verb layer emits it on every surface. No other callable verb lists it, because the
   CLI flag-parse and MCP argument emissions are the surfaces' checks of the caller's
-  arguments, which every verb gets, not emissions of a verb's shared layer. It stays in `check3Exceptions` in
+  arguments, which every verb gets, not emissions of a verb's shared layer, and no
+  `expire` surface reaches `Expire`'s refusal: only a Go caller passing a negative
+  `olderThan` does, so `expire`'s `ErrorNames` stays empty and `Client.Expire`'s godoc
+  says "Errors: none" for the CLI, MCP and TypeScript client and states that Go-only
+  refusal beside it. It stays in `check3Exceptions` in
   `pkg/api/errnames/coherence_diff_test.go`, next to `ErrInternal`; that list feeds the
   (b) ⊆ (c) check ("Check 3" in that file). Because `spawn` lists it, that check passes
   without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
@@ -7709,10 +7719,12 @@ delete by itself (SR-18.2).
 
 **Selection (SR-12.1).** The window is `older_than` (`--older-than` on the
 CLI) when given, else `defaults.expire_retention_days` days of 24 h; the
-cutoff is the injected clock's `now` minus the window. A zero or negative
-window selects every finished row with an `ended_at`: the cutoff is then
-the fixed `farFutureCutoff` (9999-12-31 23:59:59 UTC) and the clock is not
-read.
+cutoff is the injected clock's `now` minus the window. Only an explicit
+zero `older_than` selects every finished row with an `ended_at`: the cutoff
+is then the fixed `farFutureCutoff` (9999-12-31 23:59:59 UTC) and the clock
+is not read. No other input gives a zero window, and none gives a negative
+one: the retention setting never does (below), and a negative `older_than`
+is refused (b.f4v).
 
 - **The retention setting** is a whole number of days from 1 to 106751
   (`config.MaxExpireRetentionDays`, the largest whole number of days a
@@ -7723,10 +7735,14 @@ read.
   and one above 106751 exactly as it refuses a `[tmux]` value (see
   [`[tmux]` timing settings](#tmux-timing-settings)), so store-backed verbs
   fail with `ErrConfigMalformed`, and no verb, server or hook runs on it,
-  until the file is fixed. `Expire` turns the day count into the window with
-  `retentionWindow`, which never wraps: a count above 106751 gives the
-  largest duration and one at or below zero gives zero (every finished
-  row), cases only an in-process caller of `Expire` reaches.
+  until the file is fixed. `Expire` turns its `retentionDays` into the
+  window with `retentionWindow` by the same rule as the key, so one count
+  means one window in both (b.f4v): 0 gives 31 days, never every finished
+  row; a negative count is refused with `ErrInvalidFlags`; and a count
+  above 106751 gives the largest duration instead of a wrapped window
+  (b.sgw). It never gives a zero or negative window. `Client.Expire` passes
+  1 to 106751, so only an in-process caller of the exported `Expire`
+  reaches 0, a negative count or the cap.
 - **`older_than`.** The CLI and MCP parse it with `ParseOlderThan`
   (`pkg/api/older_than.go`): a Go duration, or decimal digits followed by
   `d` for days. It rejects a value in neither form, a negative Go duration
@@ -7734,7 +7750,24 @@ read.
   however long), and each surface refuses such a value with
   `ErrInvalidFlags` stating `OlderThanForm` before `Expire` runs, so a
   sign slip such as `-2h` or a count such as `365000d` deletes nothing. A
-  caller that means every finished row passes `0d` or `0s`.
+  caller that means every finished row passes `0d` or `0s`. The exported
+  `Expire` refuses a negative `olderThan` itself too (b.f4v), so a Go
+  caller of `Expire` or `Client.Expire` that never calls `ParseOlderThan`
+  gets the same protection.
+- **Refusals.** A negative `retentionDays` (even beside a non-nil
+  `olderThan`) and a negative `olderThan` are refused before anything
+  runs: `ErrInvalidFlags`, an empty `ExpireResult` (counts 0, `IDs` and
+  `KeptIDs` non-nil and empty), and no candidate read, tmux call, log line
+  or trail record. As supplementary advice, each description says what to
+  pass instead: `retentionDays = <n> is negative; pass 0 for the default
+  of 31 days or a positive number of days (only an explicit zero olderThan
+  selects every finished row)` and
+  `olderThan = <d> is negative; pass a positive duration, nil for the
+  retention window (retentionDays, or the configured expire_retention_days
+  through Client.Expire), or an explicit zero to select every finished
+  row`. For why `expire`'s manifest `ErrorNames` stays empty, see the
+  `ErrInvalidFlags` item of "Documented exclusions" under
+  [Err-name five-way coherence](#err-name-five-way-coherence).
 
 `ListExpireCandidates(cutoff)` is the one read: rows in `ended` or
 `missing` whose `ended_at` is set and older than the cutoff (compared as
@@ -7744,8 +7777,8 @@ stored text in the `storeTimestamp` layout), in instance-id order, each an
 `claude_args` or `extra_env` and parses no timestamp, so a malformed row is
 judged like any other. Live rows, `pending` included, and rows with a NULL
 `ended_at` are never selected and get no tmux call. A failed candidate read
-is logged and fails the verb, with no tmux call; it is the verb's only
-failure.
+is logged and fails the verb, with no tmux call; besides the two refusals
+above, it is the verb's only failure.
 
 **Per-row order (SR-12.2).** Rows are judged in instance-id order, so the
 per-socket stop and the budget's cut-off fall on the same rows on every
@@ -7848,8 +7881,12 @@ without the examined snapshot. A kept reason is mapped only in
 surface parses `older_than` with `ParseOlderThan` and states
 `OlderThanForm` in its refusal, never with a duration parser of its own.
 The default window is read only through `EffectiveExpireRetentionDays` and
-turned into a duration only by `retentionWindow`; the day limit of both
-inputs is `config.MaxExpireRetentionDays`. `OlderThanForm` spells that
+turned into a duration only by `retentionWindow`, which reads a day count
+by the key's rule (0 the default, negative refused) and never returns a
+zero or negative window; the day limit of both inputs is
+`config.MaxExpireRetentionDays`. Every finished row is selected only for an
+explicit zero `olderThan`; never add another input that maps to a zero or
+negative window. `OlderThanForm` spells that
 limit as the literal `"106751d"`: `TestParseOlderThan` pins the parser's
 limit at 106751, and the exact-wording refusal tests
 (`TestAdviceFollow_H6_OlderThanDurationForm` on the CLI,
@@ -8836,6 +8873,16 @@ meaning and links to the section that describes it in detail.
   is now `ErrInvalidFlags` on the CLI and over MCP, and nothing runs;
   before, the count wrapped to another window, which could select every
   finished row (see [`expire`](#expire)).
+- **Go `api.Expire`'s `retentionDays` of 0 keeps 31 days.** The exported
+  `Expire` reads a `retentionDays` of 0 as the default 31 days, as
+  `[defaults] expire_retention_days = 0` does, and refuses a negative
+  `retentionDays`, and a negative `olderThan` (through `Client.Expire` as
+  well), with `ErrInvalidFlags`, an empty result and nothing deleted.
+  Before, each of these selected every finished row, so a Go caller that
+  passed 0 for the default deleted the whole finished history. Only an
+  explicit zero `olderThan` selects every finished row now. The signature
+  is unchanged, and the CLI, MCP and the TypeScript client behave as
+  before (see [`expire`](#expire)).
 - **A different tmux server.** A row whose recorded server differs gets
   `ErrTmuxNotAvailable` instead of a false "gone", and every call for a row
   goes to its recorded socket (see [The lookup rule](#the-lookup-rule)).
@@ -13185,9 +13232,21 @@ every run, fail-open through the re-exec child). Beside them:
   106752 and up to `math.MaxInt`), and `Client.Expire` under each accepted
   `expire_retention_days` (0, 1, 106751) through `e.expireClientDays`, or,
   through `e.clientFor`, its load refusal (negative, above 106751), which
-  touches no row. Its rows are `finishedSpec` rows seeded with
-  `e.seedRow`. A missing key is `TestClientExpireDefaultRetention`'s case
-  (`expire_test.go`).
+  touches no row. `TestExpireOnlyExplicitZeroSelectsEvery` (b.f4v) calls
+  the exported `Expire` directly: a `retentionDays` of 0 is 31 days, only
+  an explicit zero `olderThan` deletes every finished row, and a negative
+  `retentionDays` (down to `math.MinInt`, and beside a zero `olderThan`) or
+  a negative `olderThan` (down to `math.MinInt64`, through `Client.Expire`
+  too) is refused. `e.assertExpireRefused` checks a refusal: `ErrInvalidFlags`
+  alone, an empty result, no log line, no tmux call, no trail record and
+  every row still stored; the refused cases fail the candidate read
+  (`failList`) so a run that reached it would return another error. Its rows
+  are `finishedSpec` rows seeded with `e.seedRow` (`e.seedRetentionRows`,
+  checked with `e.assertRetentionRun`). A missing key is
+  `TestClientExpireDefaultRetention`'s case (`expire_test.go`). The two
+  refusals' advice is followed literally in `advice_follow_expire_test.go`
+  (`TestAdviceFollow_F4_ExpireRetentionDaysNegative`,
+  `TestAdviceFollow_F5_ExpireOlderThanNegative`).
 - **Call-site table** (`lookup_calltable_expire_test.go`): `expire`'s
   adapter in `callTableVerbs()`, run under two agent states (process gone
   and not recorded). `callTableCell.kept` is the expected kept reason (`""`

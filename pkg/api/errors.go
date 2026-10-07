@@ -138,7 +138,7 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
 // ErrInvalidFlags is returned when a flag or parameter value fails basic
-// validation. It has three sources:
+// validation. It has four sources:
 //   - CLI flag parsing, for every verb: when a required flag is absent or a
 //     flag value fails basic validation (empty string, unrecognised enum
 //     member, etc.), the handlers in cmd/agent-director/*.go write it as the
@@ -160,10 +160,19 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     when an explicit instance id contains an ASCII control character
 //     (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the TypeScript
 //     client all return it (SR-9.1).
+//   - The exported Go function Expire, for a negative retentionDays or a
+//     negative olderThan, before anything runs (b.f4v). Client.Expire passes
+//     the configured retention, from 1 to config.MaxExpireRetentionDays, so
+//     only a negative olderThan reaches the refusal through it; the CLI, MCP
+//     and the TypeScript client never pass one, because they parse
+//     older_than with ParseOlderThan, which refuses a negative value first
+//     (the CLI flag-parse and MCP argument sources above).
 //
 // So spawn's manifest ErrorNames lists it; no other callable verb lists it,
 // because the CLI flag-parse and MCP argument emissions are not
-// verb-specific. (The internal, non-callable trail-emit verb also lists it.)
+// verb-specific and the expire verb's surfaces never reach Expire's refusal:
+// only a Go caller passing Client.Expire a negative olderThan does. (The
+// internal, non-callable trail-emit verb also lists it.)
 // It stays in five-way coherence check 3's exceptions per SR-1.7; while
 // spawn lists it, spawn's listing already satisfies check 3, so the
 // exception changes nothing.

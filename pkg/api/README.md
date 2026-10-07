@@ -470,9 +470,13 @@ if errors.Is(err, api.ErrSpawnNotInteractive) {
 }
 ```
 
-Every `Client` method's godoc enumerates the sentinel errors that
-method may return. The canonical list of all sentinels, with their
-descriptions, lives at the godoc index:
+A verb method's godoc has an "Errors:" block listing its verb's
+manifest error names: the sentinels catalogued for that verb on every
+surface (CLI, MCP, TypeScript client and Go). "Errors: none" means the
+verb has none. Sentinels common to all methods, such as
+`ErrClientClosed`, are not repeated there, and a refusal only a Go
+caller can reach is stated in the method's prose instead. The canonical
+list of all sentinels, with their descriptions, lives at the godoc index:
 
 <https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api>
 
