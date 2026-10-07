@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,18 +27,23 @@ const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"
 // written when non-zero) written, the values its err_description must state
 // as refused (nil: malformed type, only err_name and path are asserted) and
 // the [tmux] settings that fix the file (the keys outside [tmux] dropped).
+// A raw file is written as given instead, and refused for setting one key
+// under the caseVariant names (b.p8n).
 type configRefusal struct {
-	name    string
-	keys    apitest.ConfigKeys
-	bad     []apitest.TmuxSetting
-	refused []apitest.ConfigRefusal
-	fix     []apitest.TmuxSetting
+	name        string
+	keys        apitest.ConfigKeys
+	bad         []apitest.TmuxSetting
+	refused     []apitest.ConfigRefusal
+	raw         string
+	caseVariant []string
+	fix         []apitest.TmuxSetting
 }
 
 // configRefusals is the one table of refused [tmux], [defaults], [relay],
 // [pause] and [pre_trust] values driving every surface check: a minimum, the
-// derived grace rule, every table at once and a malformed type. The per-key
-// refusals are internal/config's config_errors_test.go and config_timeouts_test.go.
+// derived grace rule, every table at once, a malformed type and db_path set
+// under two letter cases of [store] (b.p8n). The per-key refusals are
+// internal/config's config_errors_test.go and config_timeouts_test.go.
 func configRefusals() []configRefusal {
 	window, grace := config.TmuxStoppingWindowSeconds, config.TmuxPendingGraceSeconds
 	create, kill := config.TmuxCreateTimeoutMs, config.TmuxKillExitWaitMs
@@ -76,6 +82,12 @@ func configRefusals() []configRefusal {
 			name: "string_stopping_window",
 			bad:  []apitest.TmuxSetting{apitest.TmuxString(window, "ninety")},
 		},
+		{
+			// One spelling names the seeded store, so a hook that read it would apply.
+			name:        "db_path_under_two_letter_cases",
+			raw:         "[Store]\ndb_path = \"~/.agent-director/state.db\"\n\n[store]\ndb_path = \"~/other.db\"\n",
+			caseVariant: []string{"[Store] db_path", "[store] db_path"},
+		},
 	}
 }
 
@@ -94,7 +106,11 @@ func newRefusedHome(t *testing.T, rc configRefusal) refusedHome {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	h := refusedHome{home: home, cfgPath: filepath.Join(directorDir(home), "config.toml"), instanceID: id}
-	apitest.WriteKeysConfig(t, h.cfgPath, rc.keys, rc.bad...)
+	if rc.raw == "" {
+		apitest.WriteKeysConfig(t, h.cfgPath, rc.keys, rc.bad...)
+	} else if err := os.WriteFile(h.cfgPath, []byte(rc.raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	return h
 }
 
@@ -109,7 +125,11 @@ func (h refusedHome) repair(t *testing.T, rc configRefusal) {
 func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, stderr string, code int) {
 	t.Helper()
 	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrConfigMalformed")
-	apitest.AssertDescription(t, env.ErrDescription, apitest.DescConfigRefused(h.cfgPath, rc.refused...))
+	want := apitest.DescConfigRefused(h.cfgPath, rc.refused...)
+	if rc.caseVariant != nil {
+		want = apitest.DescConfigCaseVariant(h.cfgPath, rc.caseVariant...)
+	}
+	apitest.AssertDescription(t, env.ErrDescription, want)
 }
 
 // assertRowUntouched checks, after the file is fixed, that the seeded row is
@@ -136,8 +156,9 @@ func assertRowUntouched(t *testing.T, h refusedHome) {
 
 // TestConfigRefusalStopsEverySurface drives each refused config, [tmux] values,
 // [defaults] expire_retention_days (b.sgw), [relay] and [pause]
-// timeout_seconds (b.8q2) and [pre_trust] lock_wait_seconds (b.kr4), through
-// every surface (SR-4.1; AC-CFG-03/04, loading half of AC-RES-05).
+// timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4) and a key
+// set under two letter cases (b.p8n), through every surface (SR-4.1;
+// AC-CFG-03/04, loading half of AC-RES-05).
 func TestConfigRefusalStopsEverySurface(t *testing.T) {
 	surfaces := []struct {
 		name string

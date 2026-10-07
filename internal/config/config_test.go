@@ -63,7 +63,8 @@ func TestDefaultMatchesSRD(t *testing.T) {
 // TestLoadKeepsDefaults: a missing file loads Default(), and a file setting
 // some keys changes only those (an unknown key is ignored, so a future strict
 // mode is a conscious choice); either way the "~/" path defaults come back
-// resolved against HOME.
+// resolved against HOME. A table in another letter case, alone or beside a
+// spelling setting other keys, loads, as does an unknown key in two (b.p8n).
 func TestLoadKeepsDefaults(t *testing.T) {
 	home := homeDir(t)
 	cases := []struct {
@@ -77,6 +78,14 @@ func TestLoadKeepsDefaults(t *testing.T) {
 			func(c *config.Config) { c.Relay.PermissionRequestCap = 500 }},
 		{"unknown key ignored", makeConfigFile(t, "unknown_top_level_key = 42\n\n[relay]\npoll_base_ms = 150\n"),
 			func(c *config.Config) { c.Relay.PollBaseMs = 150 }},
+		{"table in another letter case", makeConfigFile(t, "[Store]\ndb_path = \"/x.db\"\n"),
+			func(c *config.Config) { c.Store.DbPath = "/x.db" }},
+		// install.sh appends a [defaults] to a config holding [Defaults].
+		{"two table spellings setting other keys", makeConfigFile(t, "[Defaults]\nrelay_mode = \"on\"\n\n[defaults]\ninject_help_hook = true\n"),
+			func(c *config.Config) { c.Defaults.RelayMode, c.Defaults.InjectHelpHook = "on", true }},
+		{"empty table beside another spelling", makeConfigFile(t, "[Store]\n\n[store]\ndb_path = \"/x.db\"\n"),
+			func(c *config.Config) { c.Store.DbPath = "/x.db" }},
+		{"unknown key in two spellings ignored", makeConfigFile(t, "[foo]\nX = 1\nx = 2\n"), func(*config.Config) {}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

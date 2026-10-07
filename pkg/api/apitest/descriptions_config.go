@@ -14,7 +14,9 @@ import (
 // description names the file and lists the refused tables, states each
 // refused value, then that a missing key, or 0, gives the default for every
 // refused key whose default loads. A key whose default is below its minimum
-// states its own change that loads instead (b.n4q).
+// states its own change that loads instead (b.n4q). A file setting one key
+// under names that differ only in letter case has its own case,
+// DescConfigCaseVariant (b.p8n).
 
 // ConfigRefusal is one refused [tmux] value: Key and its configured Value (0
 // for a missing or 0 key whose default is below the minimum); Minimum, the
@@ -58,9 +60,19 @@ func (r ConfigRefusal) table() string {
 	return "[tmux]"
 }
 
-// configHeader is the description's "refused <tables> values: " for refusals:
-// one table alone, two joined by " and ", more separated by ", " with " and "
-// before the last.
+// nameList joins names as a refusal lists them, the refused tables in
+// configHeader and a key's names in DescConfigCaseVariant: one name alone, two
+// joined by " and ", more separated by ", " with " and " before the last
+// ("[defaults], [relay] and [tmux]").
+func nameList(names []string) string {
+	if len(names) <= 2 {
+		return strings.Join(names, " and ")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// configHeader is the description's "refused <tables> values: " for refusals,
+// the tables listed by nameList.
 func configHeader(refusals []ConfigRefusal) string {
 	var tables []string
 	for _, tb := range configTables {
@@ -71,11 +83,7 @@ func configHeader(refusals []ConfigRefusal) string {
 			}
 		}
 	}
-	list := tables[len(tables)-1]
-	if len(tables) > 1 {
-		list = strings.Join(tables[:len(tables)-1], ", ") + " and " + list
-	}
-	return "refused " + list + " values: "
+	return "refused " + nameList(tables) + " values: "
 }
 
 // DescConfigRefused is ErrConfigMalformed's description for the config file
@@ -140,4 +148,15 @@ func DescConfigRefused(path string, refusals ...ConfigRefusal) DescCase {
 			", a missing key, or 0, gives the default.")
 	}
 	return c
+}
+
+// DescConfigCaseVariant is ErrConfigMalformed's description for the config
+// file at path setting one key under names that differ only in letter case
+// (b.p8n): it names the file and the names as written, in file order, and
+// says to set the key once, never that a missing key gives the default.
+func DescConfigCaseVariant(path string, names ...string) DescCase {
+	return DescCase{Name: "config case variant", Require: []string{path,
+		"refused keys set more than once, under names that differ only in letter case: " + nameList(names) + ".",
+		"Set each key once, removing all but one of the names listed for it."},
+		MustNot: []string{"gives the default"}}
 }

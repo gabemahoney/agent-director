@@ -194,6 +194,8 @@ var Cases = []Case{
 	{Name: "refused-value", Config: "[defaults]\nexpire_retention_days = -1\n", Expect: GoRefuses},
 	{Name: "invalid-utf8-in-value", Config: store("\"/a\xe9\""), Expect: GoRefuses},
 	{Name: "control-char-in-comment", Config: "# \x01\n" + store(`"/x"`), Expect: GoRefuses},
+	// One key of another table under two letter cases (b.p8n).
+	{Name: "other-table-key-two-cases", Config: "[Defaults]\nrelay_mode = \"on\"\n\n[defaults]\nrelay_mode = \"off\"\n", Expect: GoRefuses},
 }
 
 // WriteConfig puts case number i of the matrix in dir and returns its path.

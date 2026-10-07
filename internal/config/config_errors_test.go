@@ -232,6 +232,56 @@ func TestLoadMalformedReturnsTypedError(t *testing.T) {
 	}
 }
 
+// caseVariantAdvice is the letter-case refusal's closing advice (b.p8n; G3).
+const caseVariantAdvice = "Set each key once, removing all but one of the names listed for it."
+
+// caseVariantText is Load's refusal of a file setting keys under names that
+// differ only in letter case (b.p8n), each of groups listing one key's names.
+func caseVariantText(groups ...string) string {
+	return "refused keys set more than once, under names that differ only in letter case: " +
+		strings.Join(groups, "; ") + ". agent-director matches table and key names regardless of letter case," +
+		" so for each key it would read one of its values at random on each load. " + caseVariantAdvice
+}
+
+// TestLoadRefusesCaseVariantKeys is the b.p8n regression: a key set under names
+// equal by strings.EqualFold (ſ, the Kelvin sign) is refused alone, naming them
+// as written in file order, with one text on each of 100 loads (once random).
+func TestLoadRefusesCaseVariantKeys(t *testing.T) {
+	const dbPathTwice = "[Store]\ndb_path = \"/upper.db\"\n\n[store]\ndb_path = \"/lower.db\"\n"
+	cases := []struct{ name, content, want string }{
+		{"two_table_spellings", dbPathTwice, caseVariantText("[Store] db_path and [store] db_path")},
+		{"two_key_spellings", "[store]\nDB_PATH = \"/upper.db\"\ndb_path = \"/lower.db\"\n",
+			caseVariantText("[store] DB_PATH and [store] db_path")},
+		{"long_s_table_quoted", "[\"ſtore\"]\ndb_path = \"/upper.db\"\n\n[store]\ndb_path = \"/lower.db\"\n",
+			caseVariantText(`["ſtore"] db_path and [store] db_path`)},
+		{"kelvin_sign_key_quoted", "[tmux]\n\"\u212aill_exit_wait_ms\" = 1000\nkill_exit_wait_ms = 2000\n",
+			caseVariantText("[tmux] \"\u212aill_exit_wait_ms\" and [tmux] kill_exit_wait_ms")},
+		{"dotted_key", "store.db_path = \"/upper.db\"\n\n[Store]\ndb_path = \"/lower.db\"\n",
+			caseVariantText("[store] db_path and [Store] db_path")},
+		{"inline_table", "store = { db_path = \"/upper.db\", DB_PATH = \"/lower.db\" }\n",
+			caseVariantText("[store] db_path and [store] DB_PATH")},
+		// validate would have checked whichever of the two values the decoder kept.
+		{"refused_value_under_one_name", "[relay]\ntimeout_seconds = -1\n\n[Relay]\ntimeout_seconds = 60\n",
+			caseVariantText("[relay] timeout_seconds and [Relay] timeout_seconds")},
+		{"beside_refused_value", "[pause]\ntimeout_seconds = -1\n\n" + dbPathTwice,
+			caseVariantText("[Store] db_path and [store] db_path")},
+		{"two_keys_interleaved", "[Store]\ndb_path = \"/upper.db\"\n\n[relay]\ntimeout_seconds = 60\n\n" +
+			"[store]\ndb_path = \"/lower.db\"\n\n[RELAY]\ntimeout_seconds = 120\n\n[STORE]\ndb_path = \"/third.db\"\n",
+			caseVariantText("[Store] db_path, [store] db_path and [STORE] db_path",
+				"[relay] timeout_seconds and [RELAY] timeout_seconds")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := makeConfigFile(t, tc.content)
+			for i := range 100 {
+				if got := loadConfigError(t, path).Err.Error(); got != tc.want {
+					t.Fatalf("load %d: description = %q\nwant                %q", i+1, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // TestTmuxRefusesNonInteger checks that a float, string or boolean value of
 // each key fails Load as malformed, never falling back to the default.
 func TestTmuxRefusesNonInteger(t *testing.T) {

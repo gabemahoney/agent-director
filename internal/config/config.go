@@ -21,6 +21,10 @@
 // MaxRelayTimeoutSeconds, and DefaultPauseTimeoutSeconds and
 // MaxPauseTimeoutSeconds; and [pre_trust] lock_wait_seconds (b.kr4), with
 // DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds.
+//
+// Load also refuses a file that sets one key under names differing only in
+// letter case ([Store] and [store] both setting db_path), whose value the
+// decoder would otherwise pick at random (b.p8n).
 package config
 
 import (
@@ -31,6 +35,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 )
@@ -365,11 +370,19 @@ func (e *ConfigError) Unwrap() error {
 // Default() with a nil error. Any other read or parse failure returns
 // Default() wrapped in *ConfigError.
 //
-// After a successful parse, Load validates the [tmux] table (SR-4.1): a
-// negative value of any key, and a positive value below its key's safe
-// minimum (for the pending grace period, the default too when its key is
-// missing or 0 and the default is below the derived minimum), are refused,
-// never raised to the minimum or replaced by the default. It validates
+// After a successful parse, Load refuses a file that sets one key under two
+// or more names differing only in letter case, such as db_path under both
+// [Store] and [store] (caseVariantRefusal, b.p8n): the decoder matches names
+// regardless of letter case, and which of the values it keeps changes from
+// one load to the next. A single spelling ([Store] alone), and two spellings
+// of a table setting different keys, load as before. This refusal comes
+// first, alone, so its text never depends on which value the decoder kept.
+//
+// Load then validates the [tmux] table (SR-4.1): a negative value of any key,
+// and a positive value below its key's safe minimum (for the pending grace
+// period, the default too when its key is missing or 0 and the default is
+// below the derived minimum), are refused, never raised to the minimum or
+// replaced by the default. It validates
 // [defaults] expire_retention_days the same way (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds too (b.8q2), and [pre_trust]
 // lock_wait_seconds (b.kr4): a negative value and one above the key's maximum
@@ -400,6 +413,11 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
+		// Before validate, which would check whichever value of a key set
+		// twice the decoder happened to keep (b.p8n).
+		if err := caseVariantRefusal(meta); err != nil {
+			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
+		}
 		if err := validate(cfg, meta); err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
@@ -413,10 +431,85 @@ func Load(path string) (Config, error) {
 	return resolvePaths(cfg, home), nil
 }
 
+// caseVariantRefusal refuses a file, whose metadata is meta, that sets one key
+// under two or more names differing only in letter case (b.p8n): db_path under
+// both [Store] and [store], say, or DB_PATH and db_path under [store]. TOML
+// reads them as different keys, but the decoder matches each name to a field
+// regardless of letter case (strings.EqualFold), so all of them land on one
+// field, in Go's random map order. Only keys holding a value that the decoder
+// read count: tables do not, so [Store] and [store] setting different keys
+// load, and neither do keys agent-director does not read. It returns nil when
+// no key is set twice, otherwise an error listing each such key's names
+// (keyName, in file order, by nameList), keys in the order of their first
+// name, then the change that loads. MetaData records no line numbers, so the
+// names stand in for them.
+func caseVariantRefusal(meta toml.MetaData) error {
+	undecoded := make(map[string]bool)
+	for _, k := range meta.Undecoded() {
+		undecoded[k.String()] = true
+	}
+	var order []string                 // each key, folded, in the order of its first name
+	names := make(map[string][]string) // each folded key's names, in file order
+	for _, k := range meta.Keys() {
+		// MetaData.Type names a table, inline or not, "Hash", and an array
+		// of tables "ArrayHash".
+		if t := meta.Type(k...); undecoded[k.String()] || t == "Hash" || t == "ArrayHash" {
+			continue
+		}
+		folded := make(toml.Key, len(k))
+		for i, part := range k {
+			folded[i] = foldCase(part)
+		}
+		f := folded.String()
+		if names[f] == nil {
+			order = append(order, f)
+		}
+		names[f] = append(names[f], keyName(k))
+	}
+	var refused []string
+	for _, f := range order {
+		if len(names[f]) > 1 {
+			refused = append(refused, nameList(names[f]))
+		}
+	}
+	if len(refused) == 0 {
+		return nil
+	}
+	return errors.New("refused keys set more than once, under names that differ only in letter case: " +
+		strings.Join(refused, "; ") + ". agent-director matches table and key names regardless of letter case," +
+		" so for each key it would read one of its values at random on each load." +
+		" Set each key once, removing all but one of the names listed for it.")
+}
+
+// foldCase maps each letter of name to the smallest letter of its Unicode
+// case-folding orbit, so two names are equal after foldCase exactly when
+// strings.EqualFold, which the decoder matches names with, holds them equal:
+// s, S and ſ (U+017F) all give S.
+func foldCase(name string) string {
+	return strings.Map(func(r rune) rune {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		return least
+	}, name)
+}
+
+// keyName names key k as caseVariantRefusal lists it, as written in the file:
+// its table in brackets, then its own name ("[Store] db_path"), each part
+// quoted when TOML needs it ("[\"ſtore\"] db_path").
+func keyName(k toml.Key) string {
+	name := toml.Key{k[len(k)-1]}.String()
+	if len(k) == 1 {
+		return name
+	}
+	return "[" + k[:len(k)-1].String() + "] " + name
+}
+
 // validate applies Load's refusal rules to cfg, decoded from a file whose
 // metadata meta says which keys it sets. It returns nil when every value
 // loads, otherwise an error whose text names the tables with a refused value
-// as a list (tableList: "refused [tmux] values: ", "refused [defaults] and
+// as a list (nameList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
 // [pause], [pre_trust], [tmux] and each table in its own order, then
@@ -449,18 +542,19 @@ func validate(cfg Config, meta toml.MetaData) error {
 	if len(refused) == 0 {
 		return nil
 	}
-	return errors.New("refused " + tableList(tables) + " values: " + strings.Join(refused, "; ") + "." +
+	return errors.New("refused " + nameList(tables) + " values: " + strings.Join(refused, "; ") + "." +
 		missingKeyAdvice(len(refused), defaultRefused))
 }
 
-// tableList joins the refused tables' names as a list: one name alone, two
+// nameList joins names as a refusal lists them, the refused tables in
+// validate and a key's names in caseVariantRefusal: one name alone, two
 // joined by " and ", more separated by ", " with " and " before the last
 // ("[defaults], [relay] and [tmux]").
-func tableList(tables []string) string {
-	if len(tables) <= 2 {
-		return strings.Join(tables, " and ")
+func nameList(names []string) string {
+	if len(names) <= 2 {
+		return strings.Join(names, " and ")
 	}
-	return strings.Join(tables[:len(tables)-1], ", ") + " and " + tables[len(tables)-1]
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // missingKeyAdvice is the refusal's closing sentence, with its leading space.

@@ -7,9 +7,12 @@ package config_test
 // default."; following it literally (drop each refused key, or set it to 0)
 // must make the file load. A key whose default is itself below its minimum
 // states its own change that loads instead, and the closing sentence leaves
-// it out (b.n4q).
+// it out (b.n4q). G3 (b.p8n): a key set under names that differ only in
+// letter case is refused, ending with caseVariantAdvice; removing all but one
+// of its names must make the file load that name's value.
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -322,5 +325,98 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 				advRangeAssertDefaults(t, cfg)
 			})
 		}
+	}
+}
+
+// advCaseEntry is one key a G3 file sets: its table and its own name as
+// written, and its TOML value.
+type advCaseEntry struct{ table, key, value string }
+
+// name is e's name as the letter-case refusal lists it.
+func (e advCaseEntry) name() string { return "[" + e.table + "] " + e.key }
+
+// advCaseFile writes entries, each table's keys under one header, tables in
+// the order of their first entry, and returns the file's path.
+func advCaseFile(t *testing.T, entries []advCaseEntry) string {
+	t.Helper()
+	var tables []string
+	lines := make(map[string]string)
+	for _, e := range entries {
+		if _, ok := lines[e.table]; !ok {
+			tables = append(tables, e.table)
+		}
+		lines[e.table] += e.key + " = " + e.value + "\n"
+	}
+	var b strings.Builder
+	for _, tb := range tables {
+		b.WriteString("[" + tb + "]\n" + lines[tb] + "\n")
+	}
+	return makeConfigFile(t, b.String())
+}
+
+// advCaseListed returns the names desc lists for each refused key, as a
+// caller reading the description finds them.
+func advCaseListed(t *testing.T, desc string) [][]string {
+	t.Helper()
+	_, list, ok := strings.Cut(desc, "differ only in letter case: ")
+	list, _, ok2 := strings.Cut(list, ". agent-director matches")
+	if !ok || !ok2 {
+		t.Fatalf("description %q lists no names", desc)
+	}
+	var groups [][]string
+	for _, g := range strings.Split(list, "; ") {
+		groups = append(groups, strings.Split(strings.Replace(g, " and ", ", ", 1), ", "))
+	}
+	return groups
+}
+
+// TestAdviceFollow_G3_CaseVariantKeysSetEachOnce: G3 (b.p8n) "refused keys set
+// more than once, under names that differ only in letter case: ... . Set each
+// key once, removing all but one of the names listed for it." Keeping the first
+// or the last name of each, the file loads the kept values.
+func TestAdviceFollow_G3_CaseVariantKeysSetEachOnce(t *testing.T) {
+	file := []advCaseEntry{
+		{"Store", "db_path", `"/upper.db"`},
+		{"relay", "timeout_seconds", "60"},
+		{"store", "db_path", `"/lower.db"`},
+		{"relay", "TIMEOUT_SECONDS", "120"},
+		{"STORE", "db_path", `"/third.db"`},
+		{"defaults", "relay_mode", `"on"`}, // set once, so never listed
+	}
+	desc := loadConfigError(t, advCaseFile(t, file)).Err.Error()
+	if !strings.HasSuffix(desc, caseVariantAdvice) {
+		t.Fatalf("description %q does not end with the advice %q", desc, caseVariantAdvice)
+	}
+	listed := advCaseListed(t, desc)
+
+	for _, keep := range []struct {
+		name string
+		pick func(names []string) string
+	}{
+		{"keep the first name", func(names []string) string { return names[0] }},
+		{"keep the last name", func(names []string) string { return names[len(names)-1] }},
+	} {
+		t.Run(keep.name, func(t *testing.T) {
+			removed := make(map[string]bool)
+			for _, names := range listed {
+				for _, n := range names {
+					removed[n] = n != keep.pick(names)
+				}
+			}
+			kept := slices.DeleteFunc(slices.Clone(file), func(e advCaseEntry) bool { return removed[e.name()] })
+
+			cfg, err := config.Load(advCaseFile(t, kept))
+
+			if err != nil {
+				t.Fatalf("after following %q (%s of %q), Load: %v", caseVariantAdvice, keep.name, listed, err)
+			}
+			read := map[string]string{"db_path": quoted(cfg.Store.DbPath),
+				"timeout_seconds": fmt.Sprint(cfg.Relay.TimeoutSeconds), "relay_mode": quoted(cfg.Defaults.RelayMode)}
+			for _, e := range kept {
+				if got := read[strings.ToLower(e.key)]; got != e.value {
+					t.Errorf("%s = %s after the follow; want the kept %s", e.name(), got, e.value)
+				}
+			}
+		})
 	}
 }

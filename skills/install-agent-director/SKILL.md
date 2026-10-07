@@ -825,8 +825,9 @@ below it too. A header agent-director ignores is removed with the lines under
 it, never alone, so they cannot fall under another header (`[store]`,
 say). The one change that moves the store, removing a control character
 from `db_path`, says so. A file the reader accepts but agent-director
-refuses (a bad value elsewhere in it) passes pre-flight and stops at
-step 3 or 4 instead; see "A refused config file" below.
+refuses (a bad value elsewhere in it, or a key of another table set under
+two letter cases) passes pre-flight and stops at step 3 or 4 instead; see
+"A refused config file" below.
 
 ### The six steps `install.sh` performs
 
@@ -995,8 +996,10 @@ after the open, or the read is wrong. Do NOT delete state.db.
 
 agent-director loads `~/.agent-director/config.toml` before it opens
 state.db, so a config it refuses (`ErrConfigMalformed`: for example a
-refused `[tmux]` timing or `[defaults] expire_retention_days` value, or
-a TOML syntax error in a value, such as `relay_mode = off` unquoted)
+refused `[tmux]` timing or `[defaults] expire_retention_days` value, a
+TOML syntax error in a value, such as `relay_mode = off` unquoted, or a
+key set under names that differ only in letter case, such as
+`relay_mode` under both `[Defaults]` and `[defaults]`)
 fails every store-opening verb, the install's own included. The install
 stops (exit 5) at its first store-opening verb: step 3's probe when
 state.db exists, step 4's open on a fresh install. (A line install.sh's
@@ -1020,7 +1023,9 @@ refusal says nothing about it.
    each to a value in its range, or remove it or set it to 0 to get its
    default, unless the envelope says that default is itself refused
    (`is missing or 0, and its default, <n>, is below its safe minimum
-   <m>`); then set it to at least `<m>`. Or fix the syntax error.
+   <m>`); then set it to at least `<m>`. Or fix the syntax error. For
+   a key set under names that differ only in letter case, keep one of
+   the names the envelope lists for it and remove the others.
 2. Re-run the install with the same flags. It probes the store again
    and authorizes any pending migration.
 
