@@ -3,12 +3,15 @@ package api_test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -26,9 +29,8 @@ type fakeFindMissingStore struct {
 	rows    []store.LiveSpawnIdentity
 	listErr error
 	// answers is keyed by op ("adopt", "mark", "note", "clear") then instance id.
-	answers  map[string]map[string]fmAnswer
-	closeErr error
-	calls    []storeCall
+	answers map[string]map[string]fmAnswer
+	calls   []storeCall
 	// adopted holds, per row, the snapshot an applied adoption returned: the guard of the row's next write.
 	adopted map[string]store.RowSnapshot
 	// trailAt, when set, is read at every write and kept in storeCall.at.
@@ -131,7 +133,7 @@ func (f *fakeFindMissingStore) ClearLivenessIfSameLife(id string, examined store
 
 func (f *fakeFindMissingStore) CloseOrphanedPermissionRequests(id string) error {
 	f.record(storeCall{op: "close", id: id})
-	return f.closeErr
+	return nil
 }
 
 func (f *fakeFindMissingStore) ListProvisionalTranscripts() ([]store.ProvisionalTranscript, error) {
@@ -285,10 +287,88 @@ func mustSweep(t *testing.T, s api.FindMissingStore, pc api.ProcChecker, o fmSwe
 	return res
 }
 
+// sweepFrom is mustSweep with o (a fresh recordingLogger unless o sets one); it returns the result, the log and
+// the trail checkpoint taken before the sweep.
+func sweepFrom(t *testing.T, s api.FindMissingStore, pc api.ProcChecker, o fmSweep) (api.FindMissingResult, *recordingLogger, int) {
+	t.Helper()
+	lg, ok := o.lg.(*recordingLogger)
+	if !ok {
+		lg = &recordingLogger{}
+		o.lg = lg
+	}
+	before := trailLen(t)
+	return mustSweep(t, s, pc, o), lg, before
+}
+
+// ticksSince returns id's ad.find_missing.tick lines written after the first before trail lines.
+func ticksSince(t *testing.T, before int, id string) []map[string]any {
+	t.Helper()
+	return ptRecords(t, before, "ad.find_missing.tick", id)
+}
+
 // mustFindMissing is mustSweep with every default.
 func mustFindMissing(t *testing.T, s api.FindMissingStore, pc api.ProcChecker) api.FindMissingResult {
 	t.Helper()
 	return mustSweep(t, s, pc, fmSweep{})
+}
+
+// notePanePID is the pane process seedPaneRowAt records (with start time fmStart).
+const notePanePID = 4321
+
+// rowSeed seeds the working row "r" at dbPath (creating the store when create) with sessionID ("" for none).
+type rowSeed func(t *testing.T, dbPath string, create bool, sessionID string)
+
+// openSeeded seeds row "r" with seed in a fresh store and returns the store open, with its path.
+func openSeeded(t *testing.T, seed rowSeed) (*store.Store, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	seed(t, dbPath, true, "")
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, dbPath
+}
+
+// seedPaneRowAt seeds the working row "r" (a fresh token, pane notePanePID) at dbPath with sessionID, then opts.
+func seedPaneRowAt(t *testing.T, dbPath string, create bool, sessionID string, opts ...apitest.SpawnOption) {
+	t.Helper()
+	tok, err := spawn.NewLaunchToken()
+	if err != nil {
+		t.Fatalf("NewLaunchToken: %v", err)
+	}
+	pane := apitest.WithLaunchIdentity(store.LaunchIdentity{
+		Token: tok, Socket: apitest.TestSocket, PaneID: "%1", PanePID: notePanePID, PaneStarttime: fmStart,
+	})
+	if _, err := apitest.SeedSpawn(dbPath, "r", store.StateWorking, "/tmp", "off", sessionID, create, append([]apitest.SpawnOption{pane}, opts...)...); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+}
+
+// seedPaneRow is openSeeded with seedPaneRowAt and opts.
+func seedPaneRow(t *testing.T, opts ...apitest.SpawnOption) (*store.Store, string) {
+	t.Helper()
+	return openSeeded(t, func(t *testing.T, dbPath string, create bool, sessionID string) {
+		seedPaneRowAt(t, dbPath, create, sessionID, opts...)
+	})
+}
+
+// readRow reads row "r"'s columns, failing the test on any error.
+func readRow(t *testing.T, dbPath string) apitest.SpawnColumns {
+	t.Helper()
+	c, err := apitest.ReadSpawnColumns(dbPath, "r")
+	if err != nil {
+		t.Fatalf("ReadSpawnColumns: %v", err)
+	}
+	return c
+}
+
+// paneChecker answers notePanePID with p.
+func paneChecker(p procfix.Process) *procfix.Checker {
+	pc := procfix.New()
+	pc.Set(notePanePID, p)
+	return pc
 }
 
 // fmServer is the tmux server fmOurs binds on apitest.TestSocket; withServer records it on a row.

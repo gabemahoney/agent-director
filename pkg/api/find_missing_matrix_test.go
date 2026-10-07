@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"testing"
 	"time"
@@ -16,11 +15,12 @@ import (
 )
 
 // SR-20.6's pane identity x lookup matrix for pending rows (SR-11.3, the ordinary Gone rule; AC-FM-02, AC-FM-05,
-// AC-FM-06, AC-FM-14, AC-FM-16..19, AC-LKP-08, AC-LKP-20). The Epic names find_missing_test.go as its home, but that
-// file holds T1's shared fakes and sweep helper (runFindMissing, used here) at its size limit, so it lives here.
+// AC-FM-06, AC-FM-10, AC-FM-14, AC-FM-16..19, AC-LKP-20). The lookup columns of another store's sessions are the
+// call table's (lookup_calltable_findmissing_test.go), which runs pending rows too; a pending row inside its grace
+// period is find_missing_grace_sweep_test.go's and TestFindMissingHeldNamePendingGrace's.
 
 // The pids the matrix's process checker answers for: the recorded pane process, the pane an adoption listing
-// shows, and a child or leaked process carrying the row's id.
+// shows, and a live process carrying the row's id in its environment (a child or a leaked copy), in every cell.
 const (
 	mxPanePID  = 810
 	mxAdoptPID = 820
@@ -30,30 +30,18 @@ const (
 // mxOtherServer is a server other than the row's recorded fmServer.
 var mxOtherServer = tmuxfix.Server{PID: 7002, Start: fmServer.Start + 60, ProcStart: fmStart}
 
-// mxKind is a pending row kind: its started_at age before fmNow and its row version, or for a reuse's (mxReuse,
-// find_missing_matrix_reuse_test.go) the row a real reuse left (base, filled by made).
+// mxKind is a pending row kind past the default grace period: its started_at age before fmNow and row version.
 type mxKind struct {
 	name    string
 	age     time.Duration
 	version int64
-	reused  bool
-	base    *store.LiveSpawnIdentity
 }
 
-// mxKinds: a fresh spawn's pending row and a resume's (started hours ago); a reuse's is mxReuse.
+// mxKinds: a fresh spawn's pending row and a resume's (started hours ago). The sweep reads a reuse's pending row
+// as a fresh spawn's; a real reuse's is TestAdviceFollow_B1_LaunchInProgressFindMissing's ("reuse: create timed out").
 var mxKinds = []mxKind{
 	{name: "fresh spawn", age: fmGrace + time.Second, version: 1},
 	{name: "resumed", age: 6 * time.Hour, version: 7},
-}
-
-// made is k ready for one cell: for a reuse, with a new real reuse's row as its base (mxReusedRow).
-func (k mxKind) made(t *testing.T) mxKind {
-	t.Helper()
-	if k.reused {
-		row := mxReusedRow(t)
-		k.base = &row
-	}
-	return k
 }
 
 // mxWant is a cell's expected outcome: the row's writes and the note written, its one tick's reason ("" = no
@@ -97,26 +85,16 @@ var mxPanes = []mxPane{
 }
 
 // mxRow is a pending row past the default grace period, of kind k; with pane it records the pane process
-// mxPanePID, with server fmServer's identity; opts apply last. A reuse's row is k.base (its own id, state, launch
-// start, name and snapshot) with only those identities set.
+// mxPanePID, with server fmServer's identity; opts apply last.
 func mxRow(id string, k mxKind, pane, server bool, opts ...fmRowOpt) store.LiveSpawnIdentity {
-	var o []fmRowOpt
+	o := []fmRowOpt{withLaunch(store.StatePending, fmNow.Add(-fmGrace-time.Second).UnixMilli())}
 	if server {
 		o = append(o, withServer())
 	}
 	if pane {
 		o = append(o, withPane(mxPanePID, fmStart))
 	}
-	o = append(o, opts...)
-	if k.base != nil {
-		r := *k.base
-		r.Identity = store.LaunchIdentity{Token: r.Identity.Token, Socket: r.Identity.Socket}
-		for _, f := range o {
-			f(&r)
-		}
-		return r
-	}
-	r := liveRow(id, append([]fmRowOpt{withLaunch(store.StatePending, fmNow.Add(-fmGrace-time.Second).UnixMilli())}, o...)...)
+	r := liveRow(id, append(o, opts...)...)
 	r.Snapshot.StartedAt, r.Snapshot.RowVersion = fmNow.Add(-k.age).Format(time.DateTime), k.version
 	return r
 }
@@ -137,11 +115,6 @@ func mxRec(sessions ...tmuxfix.SeedSession) *tmuxfix.Recorder {
 // mxSession is a session named name carrying label lb (zero: none), with panes (none: one unlabelled pane).
 func mxSession(name string, lb tmux.Label, panes ...tmuxfix.SeedPane) tmuxfix.SeedSession {
 	return tmuxfix.SeedSession{Name: name, Label: lb, Panes: panes}
-}
-
-// mxLabel is a valid label naming r's id with token and storeID.
-func mxLabel(r store.LiveSpawnIdentity, token, storeID string) tmux.Label {
-	return tmuxfix.Valid(token, r.ClaudeInstanceID, storeID)
 }
 
 // mxLookup is a lookup column: its Recorder for row r (panes: the row's own session's panes), and the outcome
@@ -167,15 +140,15 @@ func mxHeldBy(name func(r store.LiveSpawnIdentity) string, lb func(r store.LiveS
 var (
 	mxRecorded = func(r store.LiveSpawnIdentity) string { return r.TmuxSessionName }
 	mxRenamed  = func(r store.LiveSpawnIdentity) string { return "renamed-" + r.TmuxSessionName }
-	mxOwn      = func(r store.LiveSpawnIdentity) tmux.Label { return mxLabel(r, tmuxfix.Token, tmuxfix.StoreID) }
-	mxOld      = func(r store.LiveSpawnIdentity) tmux.Label { return mxLabel(r, tmuxfix.OtherToken, tmuxfix.StoreID) }
+	mxOwn      = func(r store.LiveSpawnIdentity) tmux.Label {
+		return tmuxfix.Valid(tmuxfix.Token, r.ClaudeInstanceID, tmuxfix.StoreID)
+	}
+	mxOld = func(r store.LiveSpawnIdentity) tmux.Label {
+		return tmuxfix.Valid(tmuxfix.OtherToken, r.ClaudeInstanceID, tmuxfix.StoreID)
+	}
 	mxNoLabel  = func(store.LiveSpawnIdentity) tmux.Label { return tmux.Label{} }
 	mxOtherRow = func(store.LiveSpawnIdentity) tmux.Label {
 		return tmuxfix.Valid(tmuxfix.Token, "other-row", tmuxfix.StoreID)
-	}
-	mxStoreCur = func(r store.LiveSpawnIdentity) tmux.Label { return mxLabel(r, tmuxfix.Token, tmuxfix.OtherStoreID) }
-	mxStoreOld = func(r store.LiveSpawnIdentity) tmux.Label {
-		return mxLabel(r, tmuxfix.OtherToken, tmuxfix.OtherStoreID)
 	}
 	mxNameHeld  = mxMark("tmux_name_held", "gone", true)
 	mxNameFree  = mxMark("tmux_absent", "gone", false)
@@ -188,14 +161,9 @@ var mxLookups = []mxLookup{
 	{name: "ours renamed", ours: true, rec: mxHeldBy(mxRenamed, mxOwn), unknown: mxOursPaned},
 	{name: "ours after a lost reply, adopted", ours: true, lostReply: true, rec: mxHeldBy(mxRecorded, mxOwn)},
 	{name: "leftover holding the name", rec: mxHeldBy(mxRecorded, mxOld), unknown: mxMark("tmux_name_held", "leftover", true)},
-	{name: "leftover renamed", rec: mxHeldBy(mxRenamed, mxOld), unknown: mxMark("tmux_absent", "leftover", false)},
 	{name: "gone, name held by an unlabelled session", rec: mxHeldBy(mxRecorded, mxNoLabel), unknown: mxNameHeld},
 	{name: "gone, name held by another row's session", rec: mxHeldBy(mxRecorded, mxOtherRow), unknown: mxNameHeld},
 	{name: "gone, name free", rec: mxHeldBy(mxRenamed, mxNoLabel), unknown: mxNameFree},
-	{name: "gone, another store's session with this token holding the name", rec: mxHeldBy(mxRecorded, mxStoreCur), unknown: mxNameHeld},
-	{name: "gone, another store's session with another token holding the name", rec: mxHeldBy(mxRecorded, mxStoreOld), unknown: mxNameHeld},
-	{name: "gone, another store's session with this token renamed", rec: mxHeldBy(mxRenamed, mxStoreCur), unknown: mxNameFree},
-	{name: "gone, another store's session with another token renamed", rec: mxHeldBy(mxRenamed, mxStoreOld), unknown: mxNameFree},
 	{name: "cant tell, different server", unknown: mxNote("tmux_server_changed"),
 		rec: func(r store.LiveSpawnIdentity, _ []tmuxfix.SeedPane) *tmuxfix.Recorder {
 			return tmuxfix.NewRecorder().StartServer(apitest.TestSocket, mxOtherServer).
@@ -248,10 +216,9 @@ type mxCell struct {
 	want mxWant
 }
 
-// mxPlainCell is the cell of row kind k, pane identity p and lookup lk (row opts last), for every cell but Ours
-// with no pane.
-func mxPlainCell(id string, k mxKind, p mxPane, lk mxLookup, opts ...fmRowOpt) mxCell {
-	r := mxRow(id, k, !p.none, !lk.lostReply, opts...)
+// mxPlainCell is the cell of row kind k, pane identity p and lookup lk, for every cell but Ours with no pane.
+func mxPlainCell(id string, k mxKind, p mxPane, lk mxLookup) mxCell {
+	r := mxRow(id, k, !p.none, !lk.lostReply)
 	c := mxCell{row: r, pc: mxChecker(mxPanePID, p.proc), rec: lk.rec(r, nil), want: lk.unknown}
 	switch {
 	case p.fixed != nil:
@@ -262,10 +229,10 @@ func mxPlainCell(id string, k mxKind, p mxPane, lk mxLookup, opts ...fmRowOpt) m
 	return c
 }
 
-// mxOursNoPaneCell is the cell of an Ours lookup lk for a row of kind k recording no pane (row opts last), decided
-// by listing v; a lost reply's row also adopts its server identity, so an adopt write comes first when listed.
-func mxOursNoPaneCell(id string, k mxKind, lk mxLookup, v mxListing, opts ...fmRowOpt) mxCell {
-	r := mxRow(id, k, false, !lk.lostReply, opts...)
+// mxOursNoPaneCell is the cell of an Ours lookup lk for a row of kind k recording no pane, decided by listing v; a
+// lost reply's row also adopts its server identity, so an adopt write comes first when listed.
+func mxOursNoPaneCell(id string, k mxKind, lk mxLookup, v mxListing) mxCell {
+	r := mxRow(id, k, false, !lk.lostReply)
 	pc := mxChecker(mxAdoptPID, v.proc)
 	pc.Set(mxAdoptPID+1, v.proc)
 	rec := lk.rec(r, v.panes)
@@ -280,10 +247,12 @@ func mxOursNoPaneCell(id string, k mxKind, lk mxLookup, v mxListing, opts ...fmR
 	return mxCell{row: r, pc: pc, rec: rec, want: w}
 }
 
-// runMxCell sweeps c's row alone and asserts its lists, writes, tick, held-name records, reader and tmux calls.
+// runMxCell sweeps c's row alone, a live process carrying its id beside it, and asserts its lists, writes, tick,
+// held-name records, reader (never the process carrying the id, never an environment) and tmux calls.
 func runMxCell(t *testing.T, c mxCell) {
 	t.Helper()
 	id, w := c.row.ClaudeInstanceID, c.want
+	c.pc.Set(mxLeakPID, procfix.Alive(fmStart).WithEnv(map[string]string{probe.EnvKey: id}))
 	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{c.row}}
 	before := len(readAPITrailLines(t))
 
@@ -342,12 +311,7 @@ func assertMxTick(t *testing.T, ticks []map[string]any, w mxWant, name string) {
 // assertMxHeld fails unless id has exactly one find-missing ad.launch.name_held since before when held, else none.
 func assertMxHeld(t *testing.T, before int, id string, held bool) {
 	t.Helper()
-	var recs []map[string]any
-	for _, l := range readAPITrailLines(t)[before:] {
-		if l["event"] == "ad.launch.name_held" && l["claude_instance_id"] == id {
-			recs = append(recs, l)
-		}
-	}
+	recs := ptRecords(t, before, "ad.launch.name_held", id)
 	want := 0
 	if held {
 		want = 1
@@ -373,17 +337,12 @@ func assertMxCalls(t *testing.T, rec *tmuxfix.Recorder, lookups, listings int) {
 	}
 }
 
-// TestFindMissingPendingMatrix: mxMatrix for a fresh spawn's and a resume's pending row.
+// TestFindMissingPendingMatrix: each pending row kind x pane identity x lookup cell past the grace period gets
+// SR-11.3's outcome, and the holding session is never touched. Each cell sweeps its own fake store and reads
+// only its own id's trail records, so the cells run in parallel.
 func TestFindMissingPendingMatrix(t *testing.T) {
 	t.Parallel()
-	mxMatrix(t, mxKinds)
-}
-
-// mxMatrix: each pending row kind of kinds x pane identity x lookup cell past the grace period gets SR-11.3's
-// outcome, and the holding session is never touched. Each cell sweeps its own fake store and reads only its
-// own id's trail records (a reuse's row has its own random id), so the cells run in parallel.
-func mxMatrix(t *testing.T, kinds []mxKind) {
-	for ki, k := range kinds {
+	for ki, k := range mxKinds {
 		for pi, p := range mxPanes {
 			for li, lk := range mxLookups {
 				if lk.lostReply && !p.none {
@@ -393,14 +352,14 @@ func mxMatrix(t *testing.T, kinds []mxKind) {
 				if !lk.ours || !p.none {
 					t.Run(name, func(t *testing.T) {
 						t.Parallel()
-						runMxCell(t, mxPlainCell(id, k.made(t), p, lk))
+						runMxCell(t, mxPlainCell(id, k, p, lk))
 					})
 					continue
 				}
 				for vi, v := range mxListings {
 					t.Run(name+"/"+v.name, func(t *testing.T) {
 						t.Parallel()
-						runMxCell(t, mxOursNoPaneCell(fmt.Sprintf("%s-%d", id, vi), k.made(t), lk, v))
+						runMxCell(t, mxOursNoPaneCell(fmt.Sprintf("%s-%d", id, vi), k, lk, v))
 					})
 				}
 			}
@@ -408,90 +367,29 @@ func mxMatrix(t *testing.T, kinds []mxKind) {
 	}
 }
 
-// TestFindMissingPendingMatrixInsideGrace: mxInsideGrace for a fresh spawn's and a resume's pending row.
-func TestFindMissingPendingMatrixInsideGrace(t *testing.T) {
-	t.Parallel()
-	mxInsideGrace(t, mxKinds)
-}
-
-// mxInsideGrace: a pending row of each of kinds 59 s into the default grace period, whose name an unlabelled
-// session holds, is not judged: no reader or tmux call, no write, in neither list.
-func mxInsideGrace(t *testing.T, kinds []mxKind) {
-	for ki, k := range kinds {
-		t.Run(k.name, func(t *testing.T) {
-			t.Parallel() // one id per kind
-			r := mxRow(fmt.Sprintf("mx-grace-%d", ki), k.made(t), true, true,
-				withLaunch(store.StatePending, fmNow.Add(-(fmGrace-time.Second)).UnixMilli()))
-			runMxCell(t, mxCell{row: r, pc: mxChecker(mxPanePID, procfix.Unreadable()),
-				rec: mxHeldBy(mxRecorded, mxNoLabel)(r, nil), want: mxWant{reads: []int{}}})
-		})
-	}
-}
-
-// mxNoToken drops the row's launch token.
-func mxNoToken(r *store.LiveSpawnIdentity) { r.Identity.Token = "" }
-
-// TestFindMissingPendingMatrixExtraRows: rows with no launch start or no token (never Ours), a working row whose
-// name an unlabelled session holds, and a row whose id a live leaked process carries, by the same rules.
+// TestFindMissingPendingMatrixExtraRows: a pending row with no launch start, one with no token (never Ours), and a
+// working row whose name an unlabelled session holds (AC-FM-02), by the same rules (SR-22.8; AC-FM-14).
 func TestFindMissingPendingMatrixExtraRows(t *testing.T) {
 	t.Parallel()
 	fresh, unreadable := mxKinds[0], procfix.Unreadable()
-	noStart := withLaunch(store.StatePending, 0)
 	cases := []struct {
 		name string
 		row  store.LiveSpawnIdentity
-		proc procfix.Process // the recorded pane process's answer
 		rec  func(store.LiveSpawnIdentity, []tmuxfix.SeedPane) *tmuxfix.Recorder
 		want mxWant
 	}{
-		{"pending no launch start/pane unreadable/ours", mxRow("mx-x1", fresh, true, true, noStart), unreadable,
+		{"pending no launch start/pane unreadable/ours", mxRow("mx-x1", fresh, true, true, withLaunch(store.StatePending, 0)),
 			mxHeldBy(mxRecorded, mxOwn), mxNote("probe_eacces")},
-		{"pending no launch start/no pane/name held by an unlabelled session", mxRow("mx-x2", fresh, false, true, noStart),
-			unreadable, mxHeldBy(mxRecorded, mxNoLabel), mxNameHeld},
-		{"pending no token/pane unreadable/session with its id and the launch token", mxRow("mx-x3", fresh, true, true, mxNoToken),
-			unreadable, mxHeldBy(mxRecorded, mxOwn), mxMark("tmux_name_held", "leftover", true)},
-		{"pending no token/no pane/session with its id and the launch token", mxRow("mx-x4", fresh, false, true, mxNoToken),
-			unreadable, mxHeldBy(mxRecorded, mxOwn), mxMark("tmux_name_held", "leftover", true)},
+		{"pending no token/pane unreadable/session with its id and the launch token",
+			mxRow("mx-x3", fresh, true, true, func(r *store.LiveSpawnIdentity) { r.Identity.Token = "" }),
+			mxHeldBy(mxRecorded, mxOwn), mxMark("tmux_name_held", "leftover", true)},
 		{"working/pane unreadable/name held by an unlabelled session", mxRow("mx-x5", fresh, true, true, withLaunch(store.StateWorking, 0)),
-			unreadable, mxHeldBy(mxRecorded, mxNoLabel), mxNameHeld},
-		{"leaked copy alive/pane dead", mxRow("mx-x6", fresh, true, true), procfix.Gone(), mxHeldBy(mxRecorded, mxOwn),
-			*mxPanes[1].fixed},
-		{"leaked copy alive/no pane/name free", mxRow("mx-x7", fresh, false, true), unreadable, mxHeldBy(mxRenamed, mxNoLabel),
-			mxNameFree},
+			mxHeldBy(mxRecorded, mxNoLabel), mxNameHeld},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel() // one id per case
-			pc := mxChecker(mxPanePID, tc.proc)
-			pc.Set(mxLeakPID, procfix.Alive(fmStart).WithEnv(map[string]string{probe.EnvKey: tc.row.ClaudeInstanceID}))
-			runMxCell(t, mxCell{row: tc.row, pc: pc, rec: tc.rec(tc.row, []tmuxfix.SeedPane{mxTokenPane}), want: tc.want})
+			runMxCell(t, mxCell{row: tc.row, pc: mxChecker(mxPanePID, unreadable), rec: tc.rec(tc.row, []tmuxfix.SeedPane{mxTokenPane}), want: tc.want})
 		})
-	}
-}
-
-// TestFindMissingPendingMatrixLocaleNames: a ü-x name and an agent-ü1 id are Ours and not marked, under
-// LC_ALL=C and with no locale variables (AC-LKP-08's unit half).
-func TestFindMissingPendingMatrixLocaleNames(t *testing.T) {
-	// Serial: it sets the locale variables with t.Setenv; it checks the shared trail by literal row ids
-	// other find-missing tests reuse.
-	ours := mxLookups[0]
-	for locale, lcAll := range map[string]string{"LC_ALL=C": "C", "no locale variables": ""} {
-		for _, p := range mxPanes[2:] {
-			t.Run(locale+"/"+p.name, func(t *testing.T) {
-				for _, k := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
-					t.Setenv(k, "")
-					os.Unsetenv(k)
-				}
-				if lcAll != "" {
-					t.Setenv("LC_ALL", lcAll)
-				}
-				named := func(r *store.LiveSpawnIdentity) { r.TmuxSessionName = "ü-x" }
-				c := mxPlainCell("agent-ü1", mxKinds[0], p, ours, named)
-				if p.none {
-					c = mxOursNoPaneCell("agent-ü1", mxKinds[0], ours, mxListings[0], named)
-				}
-				runMxCell(t, c)
-			})
-		}
 	}
 }

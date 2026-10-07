@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -91,7 +93,8 @@ type dgCase struct {
 // dgRenamed is the stored name of a row's session that was renamed by hand.
 const dgRenamed = "renamed-by-hand"
 
-// dgCases covers each lookup reason, the listing's own reason, the combined rows and every action.
+// dgCases covers each lookup reason, the listing's own reason, the combined rows, every action, and Ours under the
+// recorded name on the recorded server (no record) for unknown and no evidence.
 func dgCases() []dgCase {
 	// ours: the row's own session "$4" under name ("" = the recorded one) with panes.
 	ours := func(name string, panes ...tmuxfix.SeedPane) func(store.LiveSpawnIdentity) *tmuxfix.Recorder {
@@ -151,6 +154,9 @@ func dgCases() []dgCase {
 		{name: "adoption store error", tmux: ours(dgRenamed, dgTokenPane), op: "adopt",
 			answer: fmAnswer{err: errors.New("disk I/O error")},
 			want:   []dgWant{{"name_changed", "unknown", "ours", "$4", dgRenamed, "store_error"}}},
+		{name: "normal evidence unknown", opts: unverifiedOn, tmux: recorded},
+		{name: "normal no evidence", opts: []fmRowOpt{withServer(), func(r *store.LiveSpawnIdentity) { r.Identity.PaneID = "%1" }},
+			tmux: recorded},
 	}
 }
 
@@ -242,7 +248,8 @@ func assertDisagree(t *testing.T, recs []map[string]any, r store.LiveSpawnIdenti
 }
 
 // TestFindMissingDisagreeReasons: each reason the lookup, its adoption or its listing gives writes exactly one record
-// per row, with the fields of the observation behind it and the row's settled action.
+// per row, with the fields of the observation behind it and the row's settled action; two rows sharing one lookup
+// each get their own, and a second sweep writes one more per row.
 func TestFindMissingDisagreeReasons(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, c := range dgCases() {
@@ -252,61 +259,36 @@ func TestFindMissingDisagreeReasons(t *testing.T) {
 			assertDisagree(t, dgRecords(t, before, run.row.ClaudeInstanceID, run.st), run.row, c.want)
 		})
 	}
-}
-
-// TestFindMissingDisagreeSharedSocketPerSweep: rows sharing one socket's lookup each get their own record, and a
-// second sweep writes one more per row.
-func TestFindMissingDisagreeSharedSocketPerSweep(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	var (
-		rows     []store.LiveSpawnIdentity
-		sessions []tmuxfix.SeedSession
-		wants    []dgWant
-	)
-	for i, sfx := range []string{"a", "b", "c"} {
-		r := liveRow("dg-shared-"+sfx, dgUnknownPane(), withServer())
-		id, name := fmt.Sprintf("$%d", 4+i), dgRenamed+"-"+sfx
-		rows, sessions = append(rows, r), append(sessions, dgSession(r, id, name))
-		wants = append(wants, dgWant{"name_changed", "match", "ours", id, name, "left_unverified"})
-	}
-	rec, st, clock := dgServer(sessions...), dgStore(t, rows...), tmuxfix.NewClock(fmNow)
-	for sweep := 1; sweep <= 2; sweep++ {
-		before := trailLen(t)
-		mustSweep(t, st, dgChecker(nil), fmSweep{tmux: rec, clock: clock})
-		assertLookups(t, rec, sweep)
-		for i, r := range rows {
-			assertDisagree(t, dgRecords(t, before, r.ClaudeInstanceID, st), r, wants[i:i+1])
+	t.Run("two rows sharing one lookup, two sweeps", func(t *testing.T) {
+		var rows []store.LiveSpawnIdentity
+		var sessions []tmuxfix.SeedSession
+		for i, sfx := range []string{"a", "b"} {
+			r := liveRow("dg-shared-"+sfx, dgUnknownPane(), withServer())
+			rows, sessions = append(rows, r), append(sessions, dgSession(r, fmt.Sprintf("$%d", 4+i), dgRenamed+"-"+sfx))
 		}
-	}
+		rec, st, clock := dgServer(sessions...), dgStore(t, rows...), tmuxfix.NewClock(fmNow)
+		for sweep := 1; sweep <= 2; sweep++ {
+			before := trailLen(t)
+			mustSweep(t, st, dgChecker(nil), fmSweep{tmux: rec, clock: clock})
+			assertLookups(t, rec, sweep)
+			for i, r := range rows {
+				s := sessions[i]
+				assertDisagree(t, dgRecords(t, before, r.ClaudeInstanceID, st), r,
+					[]dgWant{{"name_changed", "match", "ours", s.ID, s.Name, "left_unverified"}})
+			}
+		}
+	})
 }
 
-// TestFindMissingDisagreeNoneWhenNormal: Ours under the recorded name on the recorded server writes no record, for
-// unknown evidence and for none recorded.
-func TestFindMissingDisagreeNoneWhenNormal(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	rows := []store.LiveSpawnIdentity{
-		liveRow("dg-normal-unknown", dgUnknownPane(), withServer()),
-		liveRow("dg-normal-none", withServer(), func(r *store.LiveSpawnIdentity) { r.Identity.PaneID = "%1" }),
-	}
-	rec := dgServer(dgSession(rows[0], "$4", rows[0].TmuxSessionName), dgSession(rows[1], "$5", rows[1].TmuxSessionName))
-	st := dgStore(t, rows...)
-	before := trailLen(t)
-	res := mustSweep(t, st, dgChecker(nil), fmSweep{tmux: rec})
-	assertLists(t, res, nil, []string{"dg-normal-none", "dg-normal-unknown"})
-	assertLookups(t, rec, 1)
-	for _, r := range rows {
-		assertDisagree(t, dgRecords(t, before, r.ClaudeInstanceID, st), r, nil)
-	}
-}
+// foChildEnv gates TestFindMissingDisagreeFailOpenChild and carries the id prefix; foLinePrefix marks its lines.
+const (
+	foChildEnv   = "AD_FIND_MISSING_TRAIL_FAIL_CHILD"
+	foLinePrefix = "FO|"
+)
 
-// dgChildEnv gates TestFindMissingDisagreeFailOpenChild and carries the id prefix.
-const dgChildEnv = "AD_FIND_MISSING_DISAGREE_TRAIL_FAIL_CHILD"
-
-// dgLinePrefix marks the child's result lines in its output.
-const dgLinePrefix = "DG|"
-
-// dgFailOpenRuns sweeps every dgCases row under prefix and returns one line each: result lists, writes and log.
-func dgFailOpenRuns(t *testing.T, prefix string) []string {
+// foRuns sweeps every dgCases row and one held-name row per mark result (hnFailOpenRuns) under prefix and returns
+// one line each: result lists, writes or row columns, and log lines.
+func foRuns(t *testing.T, prefix string) []string {
 	t.Helper()
 	var lines []string
 	for _, c := range dgCases() {
@@ -318,32 +300,32 @@ func dgFailOpenRuns(t *testing.T, prefix string) []string {
 		lines = append(lines, fmt.Sprintf("%s ids=%v unverified=%v writes=%v logs=%d", run.row.ClaudeInstanceID,
 			run.res.IDs, run.res.UnverifiedIDs, writes, len(run.lg.lines)))
 	}
-	return lines
+	return append(lines, hnFailOpenRuns(t, prefix)...)
 }
 
-// TestFindMissingDisagreeFailOpen: with the trail unwritable, every disagree case gives the same result lists,
-// writes and log lines as with a working trail.
+// TestFindMissingDisagreeFailOpen: with the trail unwritable, every disagree case and every held-name mark result
+// give the same result lists, writes, rows and log lines as with a working trail.
 func TestFindMissingDisagreeFailOpen(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	prefix := "dg-failopen"
+	prefix := "fo-" + uuid.NewString()[:8]
 	before := trailLen(t)
-	want := dgFailOpenRuns(t, prefix)
+	want := foRuns(t, prefix)
 	wantRecs := 0
 	for _, c := range dgCases() {
 		wantRecs += len(c.want)
 	}
-	if n := len(trailSince(t, before, "ad.provenance.disagree")); n != wantRecs {
-		t.Fatalf("working trail: ad.provenance.disagree records = %d; want %d", n, wantRecs)
+	if d, h := len(trailSince(t, before, "ad.provenance.disagree")), len(trailSince(t, before, "ad.launch.name_held")); d != wantRecs || h != 3 {
+		t.Fatalf("working trail: ad.provenance.disagree records = %d, ad.launch.name_held = %d; want %d, 3", d, h, wantRecs)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestFindMissingDisagreeFailOpenChild$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
-	cmd.Env = append(os.Environ(), dgChildEnv+"="+prefix)
+	cmd.Env = append(os.Environ(), foChildEnv+"="+prefix)
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "--- PASS: TestFindMissingDisagreeFailOpenChild") {
 		t.Fatalf("child: %v\n%s", err, out)
 	}
 	var got []string
 	for _, l := range strings.Split(string(out), "\n") {
-		if rest, ok := strings.CutPrefix(l, dgLinePrefix); ok {
+		if rest, ok := strings.CutPrefix(l, foLinePrefix); ok {
 			got = append(got, rest)
 		}
 	}
@@ -352,26 +334,24 @@ func TestFindMissingDisagreeFailOpen(t *testing.T) {
 	}
 }
 
-// TestFindMissingDisagreeFailOpenChild is TestFindMissingDisagreeFailOpen's child: it sweeps with an unwritable
-// trail and prints the lines.
+// TestFindMissingDisagreeFailOpenChild is TestFindMissingDisagreeFailOpen's child: it makes the trail file
+// read-only, runs the sweeps and prints their lines.
 func TestFindMissingDisagreeFailOpenChild(t *testing.T) {
 	t.Parallel()
-	prefix := os.Getenv(dgChildEnv)
+	prefix := os.Getenv(foChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestFindMissingDisagreeFailOpen's child")
 	}
-	adDir := filepath.Join(apiTrailDir, ".agent-director")
-	if err := os.MkdirAll(adDir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(apiTrailFilePath()), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.Chmod(adDir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
+	if err := os.WriteFile(apiTrailFilePath(), nil, 0o400); err != nil {
+		t.Fatalf("create read-only trail file: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(adDir, 0o700) })
-	if err := trail.Emit(context.Background(), "ad.test.disagree_probe", map[string]any{}); err == nil {
+	if err := trail.Emit(context.Background(), "ad.test.find_missing_fail_probe", map[string]any{}); err == nil {
 		t.Fatal("trail write succeeded; want it to fail")
 	}
-	for _, l := range dgFailOpenRuns(t, prefix) {
-		fmt.Println(dgLinePrefix + l)
+	for _, l := range foRuns(t, prefix) {
+		fmt.Println(foLinePrefix + l)
 	}
 }

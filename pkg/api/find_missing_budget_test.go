@@ -18,7 +18,8 @@ import (
 )
 
 // find-missing's sweep tmux time budget and call bounds (SR-13.5, SR-13.3, SR-11.5, SR-3.15; AC-FM-04, AC-FM-11,
-// AC-CFG-02), in virtual time on the shared tmuxfix.Clock; budgets and timeouts come from internal/config.
+// AC-CFG-02), in virtual time on the shared tmuxfix.Clock; budgets come from internal/config. A hung socket's
+// stop is find_missing_sockets_test.go's.
 
 // fmbCfgBudgetSeconds is the sweep budget AC-CFG-02 configures.
 const fmbCfgBudgetSeconds = 5
@@ -31,11 +32,6 @@ func fmbCallsToSpend(budget, per time.Duration) int {
 
 // fmbSocket is the i-th test socket; the Recorder answers a socket with no server bound as no-socket (Gone).
 func fmbSocket(i int) string { return fmt.Sprintf("%s-%02d", apitest.TestSocket, i) }
-
-// fmbOn records socket as the row's tmux socket.
-func fmbOn(socket string) fmRowOpt {
-	return func(r *store.LiveSpawnIdentity) { r.Identity.Socket = socket }
-}
 
 // fmbToken records token as the row's launch token.
 func fmbToken(token string) fmRowOpt {
@@ -135,50 +131,6 @@ func TestFindMissingBudgetStopsCalls(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestFindMissingBudgetHungSockets: on sockets that all hang (each call charged the query timeout plus the
-// pipe-close wait, at the defaults) there is at most one call per socket and the run's tmux time is at most
-// B + Q + W; every row is unverified with its "not called" note and the run succeeds.
-func TestFindMissingBudgetHungSockets(t *testing.T) {
-	t.Parallel()
-	cfg := config.Tmux{}
-	hung := cfg.EffectiveQueryTimeout() + cfg.EffectivePipeCloseWait()
-	calls := fmbCallsToSpend(fmBudget, hung)
-	clock := tmuxfix.NewClock(fmNow)
-	rec := tmuxfix.NewRecorder().WithVirtualTime(clock, tmux.Timeouts{Query: hung}).
-		Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallLookup)
-	pc := procfix.New()
-	var rows []store.LiveSpawnIdentity
-	var sockets, ids []string
-	want := map[string]string{}
-	for i := range calls + 3 {
-		sock, pid := fmbSocket(i), 600+i
-		pc.Set(pid, procfix.Unreadable())
-		none, unknown := fmt.Sprintf("h%02d-a", i), fmt.Sprintf("h%02d-b", i)
-		rows = append(rows, liveRow(none, fmbOn(sock)), liveRow(unknown, fmbOn(sock), withSessionStart(pid, fmStart)))
-		sockets, ids = append(sockets, sock), append(ids, none, unknown)
-		want[none], want[unknown] = "process_not_seen_tmux_unchecked", "probe_eacces"
-	}
-	st := &fakeFindMissingStore{rows: rows}
-
-	res := mustSweep(t, st, pc, fmSweep{tmux: rec, now: clock.Now})
-	fmbAssertLookups(t, rec, sockets[:calls])
-	if got := clock.Now().Sub(fmNow); got != time.Duration(calls)*hung || got > fmBudget+hung {
-		t.Errorf("tmux time = %v; want %v, at most %v", got, time.Duration(calls)*hung, fmBudget+hung)
-	}
-	assertLists(t, res, nil, ids)
-	got := map[string]string{}
-	for _, c := range st.calls {
-		if c.op != "close" {
-			got[c.id] += c.op + ":" + c.note
-		}
-	}
-	for id, note := range want {
-		if got[id] != "note:"+note {
-			t.Errorf("%s writes = %q; want one note %s", id, got[id], note)
-		}
 	}
 }
 

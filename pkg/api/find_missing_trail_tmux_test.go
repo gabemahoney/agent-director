@@ -1,13 +1,11 @@
 package api_test
 
-// find_missing_trail_tmux_test.go: the ticks of rows find-missing decides by
-// the tmux lookup (SR-11.3, SR-11.4, SR-14; SR-20.6): the mark ticks'
-// reasons and fields per path and their order, and the note ticks written
-// once. Each test sweeps a real store seeded through apitest.SeedSpawn,
-// judged by procfix and asked about through a tmuxfix.Recorder. The shared
-// trail helpers are in find_missing_trail_test.go.
+// find_missing_trail_tmux_test.go: the ticks find-missing writes (SR-11.3, SR-11.4, SR-14; SR-20.6): the mark
+// ticks' reasons and fields per path and their order, and the note ticks written once. Each test sweeps a real
+// store seeded through apitest.SeedSpawn, judged by procfix and asked about through a tmuxfix.Recorder.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +123,7 @@ func runTickOnce(t *testing.T, c trailCase) {
 			ids = []string{c.row.id}
 		}
 		assertLists(t, res, ids, unverified)
-		ticks := trailOf(apiFindMissingTicksAt(t, before), c.row.id)
+		ticks := ticksSince(t, before, c.row.id)
 		if wantTicks == 0 {
 			if len(ticks) != 0 {
 				t.Errorf("sweep %d ticks = %v; want none", sweep+1, ticks)
@@ -136,38 +134,26 @@ func runTickOnce(t *testing.T, c trailCase) {
 	}
 }
 
-// TestFindMissingProbeEaccesEmitsExactlyOnceTick: an unreadable process is decided by its lookup: Gone marks it
-// with one tmux_absent tick and no note tick; Ours or Can't tell tick probe_eacces once, and never on a repeat.
+// TestFindMissingProbeEaccesEmitsExactlyOnceTick: a row whose process cannot decide is decided by its lookup: Gone
+// marks it with one tmux_absent tick and no note tick; Ours, Can't tell, a skipped socket or a spent budget leave it
+// unverified with one tick naming its note on entry and none on a repeat (SR-11.4).
 func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	cases := []trailCase{
-		{name: "gone", tmux: trailNoServer, reason: "tmux_absent", outcome: "gone", marked: true},
-		{name: "ours", tmux: trailSession(), reason: "probe_eacces"},
-		{name: "cant tell unreadable", tmux: trailCantTell, reason: "probe_eacces"},
-	}
-	for _, c := range cases {
+	pane, u := trailRow{panePID: 1301}, procfix.Unreadable()
+	for i, c := range []trailCase{
+		{name: "gone", row: pane, proc: u, tmux: trailNoServer, reason: "tmux_absent", outcome: "gone", marked: true},
+		{name: "ours", row: pane, proc: u, tmux: trailSession(), reason: "probe_eacces"},
+		{name: "cant tell unreadable", row: pane, proc: u, tmux: trailCantTell, reason: "probe_eacces"},
+		{name: "sessionstart unreadable, not called", row: trailRow{ssPID: 1311}, proc: u, budget: fmBudgetSpent, reason: "probe_eacces"},
+		{name: "pid-only pane alive, not called", row: trailRow{panePID: 1312, pidOnly: true}, proc: procfix.Alive(fmStart),
+			budget: fmBudgetSpent, reason: "probe_eacces"},
+		{name: "no identity, socket skipped", budget: fmBudgetSpent, reason: "process_not_seen_tmux_unchecked"},
+		{name: "no identity, ours, listing cant tell", tmux: trailOursUnlisted, reason: "process_not_seen_session_present"},
+	} {
 		t.Run(c.name, func(t *testing.T) {
-			c.row, c.proc = trailRow{id: "pe-" + strings.Fields(c.name)[0], panePID: 1301}, procfix.Unreadable()
+			c.row.id = fmt.Sprintf("pe-%d", i)
 			runTickOnce(t, c)
 		})
-	}
-}
-
-// TestFindMissingUnverifiedNoteTicksOnce: a row whose process cannot decide and whose lookup left it live gets one
-// tick naming its note on entry and none on a repeat; it stays unverified on both (SR-11.4).
-func TestFindMissingUnverifiedNoteTicksOnce(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	for _, c := range []trailCase{
-		{name: "unreadable, not called", row: trailRow{id: "un-unreadable", ssPID: 1311}, proc: procfix.Unreadable(),
-			budget: fmBudgetSpent, reason: "probe_eacces"},
-		{name: "pid-only pane alive, not called", row: trailRow{id: "un-pid-only", panePID: 1312, pidOnly: true},
-			proc: procfix.Alive(fmStart), budget: fmBudgetSpent, reason: "probe_eacces"},
-		{name: "no identity, socket skipped", row: trailRow{id: "un-skipped"}, budget: fmBudgetSpent,
-			reason: "process_not_seen_tmux_unchecked"},
-		{name: "no identity, ours, listing cant tell", row: trailRow{id: "un-ours"}, tmux: trailOursUnlisted,
-			reason: "process_not_seen_session_present"},
-	} {
-		t.Run(c.name, func(t *testing.T) { runTickOnce(t, c) })
 	}
 }
 
@@ -243,7 +229,7 @@ func TestFindMissingMarkOrderTrail(t *testing.T) {
 			if open, err := st.OpenPermissionRequestsForSpawn(id); err != nil || len(open) != 0 {
 				t.Errorf("open permission requests = %v (err %v); want none", open, err)
 			}
-			held := trailOf(trailSince(t, before, "ad.launch.name_held"), id)
+			held := ptRecords(t, before, "ad.launch.name_held", id)
 			switch {
 			case !c.named && len(held) != 0:
 				t.Errorf("ad.launch.name_held = %v; want none", held)

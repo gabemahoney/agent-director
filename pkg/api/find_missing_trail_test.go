@@ -1,13 +1,7 @@
 package api_test
 
-// find_missing_trail_test.go: the trail records find-missing writes on the
-// process path (SR-11.1, SR-11.3, SR-11.4, SR-3.8, SR-14), and the trail
-// helpers the find-missing tests share. Each test sweeps a real store seeded
-// through apitest.SeedSpawn, judged by procfix, and asserts on the trail
-// lines added since a checkpoint. TestMain (example_main_test.go) points the
-// trail at apiTrailDir. The ticks of rows the tmux lookup decides are in
-// find_missing_trail_tmux_test.go, the pending grace period's trail side in
-// find_missing_grace_trail_test.go.
+// find_missing_trail_test.go: the shared trail reader (readAPITrailLines; TestMain, example_main_test.go, points the
+// trail at apiTrailDir) and the find-missing trail helpers: seeded trail rows and the tick assertion.
 
 import (
 	"bytes"
@@ -16,14 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -98,25 +88,6 @@ func readAPITrailLines(t *testing.T) []map[string]any {
 	return apiTrail.lines[:n:n] // full capacity: a caller's append copies
 }
 
-// apiFindMissingTicksAt returns ad.find_missing.tick lines added after prevCount
-// total lines in the api trail file.
-func apiFindMissingTicksAt(t *testing.T, prevCount int) []map[string]any {
-	t.Helper()
-	return trailSince(t, prevCount, "ad.find_missing.tick")
-}
-
-// apiTicksWithReason filters ticks (from apiFindMissingTicksAt) by
-// reconciliation_reason.
-func apiTicksWithReason(ticks []map[string]any, reason string) []map[string]any {
-	var out []map[string]any
-	for _, tick := range ticks {
-		if tick["reconciliation_reason"] == reason {
-			out = append(out, tick)
-		}
-	}
-	return out
-}
-
 // assertAPITrailStr checks row[key] == want.
 func assertAPITrailStr(t *testing.T, row map[string]any, key, want string) {
 	t.Helper()
@@ -130,26 +101,24 @@ func assertAPITrailStr(t *testing.T, row map[string]any, key, want string) {
 	}
 }
 
-// trailClock returns a sweep clock that always reads at.
-func trailClock(at time.Time) func() time.Time { return func() time.Time { return at } }
-
 // trailToken is the launch token every trail row carries; the process path never reads it.
 const trailToken = "5eed0000000000c3"
 
 // trailRow is one working row to seed: its SessionStart and pane pids (0 = none recorded), both with start
-// time fmStart unless pidOnly, plus extra options.
+// time fmStart unless pidOnly.
 type trailRow struct {
 	id             string
 	ssPID, panePID int
 	pidOnly        bool
-	opts           []apitest.SpawnOption
 }
 
 // pid is the row's agent process pid when only one is recorded or both agree (0 = none recorded).
 func (r trailRow) pid() int { return max(r.ssPID, r.panePID) }
 
-// options returns the SeedSpawn options recording r's identities, then r.opts.
-func (r trailRow) options() []apitest.SpawnOption {
+// seedTrailStore seeds r as a working row recording its identities in a fresh store and returns it open with its
+// path.
+func seedTrailStore(t *testing.T, r trailRow) (*store.Store, string) {
+	t.Helper()
 	start := fmStart
 	if r.pidOnly {
 		start = ""
@@ -162,24 +131,11 @@ func (r trailRow) options() []apitest.SpawnOption {
 	if r.ssPID > 0 {
 		opts = append(opts, apitest.WithPID(r.ssPID), apitest.WithProcStarttime(start))
 	}
-	return append(opts, r.opts...)
-}
-
-// seedTrailStore seeds rows as working rows in a fresh store and returns it open with its path.
-func seedTrailStore(t *testing.T, rows ...trailRow) (*store.Store, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	for i, r := range rows {
-		if _, err := apitest.SeedSpawn(dbPath, r.id, store.StateWorking, "/tmp", "off", "", i == 0, r.options()...); err != nil {
+	return openSeeded(t, func(t *testing.T, p string, create bool, _ string) {
+		if _, err := apitest.SeedSpawn(p, r.id, store.StateWorking, "/tmp", "off", "", create, opts...); err != nil {
 			t.Fatalf("SeedSpawn %q: %v", r.id, err)
 		}
-	}
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st, dbPath
+	})
 }
 
 // recordedName is the row id's recorded tmux session name in st.
@@ -190,17 +146,6 @@ func recordedName(t *testing.T, st *store.Store, id string) string {
 		t.Fatalf("GetSpawn %s: %v", id, err)
 	}
 	return sp.TmuxSessionName
-}
-
-// trailOf keeps the lines of recs naming instance id.
-func trailOf(recs []map[string]any, id string) []map[string]any {
-	var out []map[string]any
-	for _, r := range recs {
-		if r["claude_instance_id"] == id {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // tickExtras are the fields SR-11.4 adds to a mark tick by reason: lookup_outcome on the tmux path's ticks,
@@ -232,198 +177,5 @@ func assertTick(t *testing.T, tick map[string]any, reason, prior string, extra m
 		if has != wanted || got != want {
 			t.Errorf("%s tick [%s] = %v (present %v); want %v (present %v)", reason, k, got, has, want, wanted)
 		}
-	}
-}
-
-// assertProcAbsentTick fails unless ticks is one proc_absent tick from prior to missing for id.
-func assertProcAbsentTick(t *testing.T, ticks []map[string]any, id, prior string) {
-	t.Helper()
-	if len(ticks) != 1 {
-		t.Fatalf("%s ticks = %v; want exactly one proc_absent", id, ticks)
-	}
-	assertTick(t, ticks[0], "proc_absent", prior, nil)
-}
-
-// TestFindMissingProcAbsentEmitsTrail: a dead SessionStart or pane process gives its row one proc_absent tick;
-// rows whose process is alive get no record of any kind, and no environment is read.
-func TestFindMissingProcAbsentEmitsTrail(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	cases := []struct {
-		row  trailRow
-		proc procfix.Process // the answer for the row's recorded pid
-		dead bool
-	}{
-		{trailRow{id: "pa-ss-gone", ssPID: 1101}, procfix.Gone(), true},
-		{trailRow{id: "pa-ss-reused", ssPID: 1102}, procfix.Alive(fmOtherStart), true},
-		{trailRow{id: "pa-pane-gone", panePID: 1103}, procfix.Gone(), true},
-		{trailRow{id: "pa-ss-alive", ssPID: 1104}, procfix.Alive(fmStart), false},
-		{trailRow{id: "pa-pane-alive", panePID: 1105}, procfix.Alive(fmStart), false},
-		{trailRow{id: "pa-both-alive", ssPID: 1106, panePID: 1106}, procfix.Alive(fmStart), false},
-	}
-	pc := procfix.New()
-	var rows []trailRow
-	var wantIDs []string
-	for _, c := range cases {
-		pc.Set(c.row.pid(), c.proc)
-		rows = append(rows, c.row)
-		if c.dead {
-			wantIDs = append(wantIDs, c.row.id)
-		}
-	}
-	st, _ := seedTrailStore(t, rows...)
-	before := trailLen(t)
-
-	res, err := runFindMissing(st, pc, fmSweep{})
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	slices.Sort(wantIDs)
-	assertLists(t, res, wantIDs, nil)
-	added := readAPITrailLines(t)[before:]
-	for _, c := range cases {
-		recs := trailOf(added, c.row.id)
-		if c.dead {
-			assertProcAbsentTick(t, recs, c.row.id, store.StateWorking)
-			continue
-		}
-		if len(recs) != 0 {
-			t.Errorf("%s: trail records = %v; want none for an alive row", c.row.id, recs)
-		}
-		if got, err := st.GetSpawnState(c.row.id); err != nil || got != store.StateWorking {
-			t.Errorf("%s state = %q (err %v); want working", c.row.id, got, err)
-		}
-	}
-	if n := pc.EnvReads(); n != 0 {
-		t.Errorf("environment reads = %d; want 0", n)
-	}
-}
-
-// TestFindMissingIdentitiesDisagreePaneDecides: when the SessionStart and pane identities disagree the pane
-// process decides (dead: proc_absent mark; alive: untouched) and no sweep writes ad.provenance.disagree.
-func TestFindMissingIdentitiesDisagreePaneDecides(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	pc := procfix.New()
-	pc.Set(1201, procfix.Alive(fmStart)) // dm-pane-dead's SessionStart process
-	pc.Set(1203, procfix.Alive(fmStart)) // dm-pane-alive's pane process; its SessionStart 1204 is gone
-	st, _ := seedTrailStore(t,
-		trailRow{id: "dm-pane-dead", ssPID: 1201, panePID: 1202},
-		trailRow{id: "dm-pane-alive", ssPID: 1204, panePID: 1203},
-	)
-
-	for sweep := 1; sweep <= 2; sweep++ {
-		before := trailLen(t)
-		res, err := runFindMissing(st, pc, fmSweep{})
-		if err != nil {
-			t.Fatalf("sweep %d: %v", sweep, err)
-		}
-		ticks := apiFindMissingTicksAt(t, before)
-		if sweep == 1 {
-			assertLists(t, res, []string{"dm-pane-dead"}, nil)
-			assertProcAbsentTick(t, trailOf(ticks, "dm-pane-dead"), "dm-pane-dead", store.StateWorking)
-		} else {
-			assertLists(t, res, nil, nil)
-			if got := trailOf(ticks, "dm-pane-dead"); len(got) != 0 {
-				t.Errorf("sweep 2: dm-pane-dead ticks = %v; want none (already missing)", got)
-			}
-		}
-		if got := trailOf(ticks, "dm-pane-alive"); len(got) != 0 {
-			t.Errorf("sweep %d: dm-pane-alive ticks = %v; want none", sweep, got)
-		}
-		if got := trailSince(t, before, "ad.provenance.disagree"); len(got) != 0 {
-			t.Errorf("sweep %d: ad.provenance.disagree = %v; want none", sweep, got)
-		}
-	}
-	if got, err := st.GetSpawnState("dm-pane-alive"); err != nil || got != store.StateWorking {
-		t.Errorf("dm-pane-alive state = %q (err %v); want working", got, err)
-	}
-}
-
-// TestFindMissingAllDeadNoDegradedModeSkip: when every recorded process is gone (after a reboot) every row is
-// marked with only proc_absent ticks; no refusal is recorded.
-func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	st, _ := seedTrailStore(t,
-		trailRow{id: "dg-1", ssPID: 1401},
-		trailRow{id: "dg-2", panePID: 1402},
-	)
-	before := trailLen(t)
-
-	res, err := runFindMissing(st, procfix.New(), fmSweep{})
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	assertLists(t, res, []string{"dg-1", "dg-2"}, nil)
-	for _, tick := range apiFindMissingTicksAt(t, before) {
-		if id := tick["claude_instance_id"]; (id == "dg-1" || id == "dg-2") && tick["reconciliation_reason"] != "proc_absent" {
-			t.Errorf("tick %v; want only proc_absent", tick)
-		}
-	}
-	// The removed guard's reason is assembled at runtime so a repo grep for the literal stays clean.
-	if got := apiTicksWithReason(apiFindMissingTicksAt(t, before), "degraded_mode"+"_skip"); len(got) != 0 {
-		t.Errorf("degraded-mode skip ticks = %v; want none", got)
-	}
-}
-
-// TestFindMissingUnusableNameTrail: per note token, rows with an unusable name (pane and SessionStart pids
-// differing with the pane unreadable, or no evidence) get only their entry tick, with no lookup fields, no
-// disagree or name-held record, nothing of another row or any environment; a second sweep writes nothing.
-func TestFindMissingUnusableNameTrail(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	const marker = "ut-environment-marker"
-	env := map[string]string{"AD_TRAIL_MARKER": marker}
-	for _, f := range fmuReps() {
-		t.Run(f.note, func(t *testing.T) {
-			name := apitest.WithTmuxSessionName(f.raw)
-			pc := procfix.New()
-			pc.Set(1501, procfix.Alive(fmStart).WithEnv(env)) // ut-mismatch's SessionStart process
-			pc.Set(1502, procfix.Unreadable())                // ut-mismatch's pane process, which decides
-			pc.Set(1503, procfix.Alive(fmStart).WithEnv(env)) // ut-other's
-			st, _ := seedTrailStore(t,
-				trailRow{id: "ut-mismatch", ssPID: 1501, panePID: 1502, opts: []apitest.SpawnOption{name}},
-				trailRow{id: "ut-none", opts: []apitest.SpawnOption{name}},
-				trailRow{id: "ut-other", ssPID: 1503},
-			)
-			noted := []string{"ut-mismatch", "ut-none"}
-
-			for sweep := 1; sweep <= 2; sweep++ {
-				before := trailLen(t)
-				res, err := runFindMissing(st, pc, fmSweep{})
-				if err != nil {
-					t.Fatalf("sweep %d: %v", sweep, err)
-				}
-				assertLists(t, res, nil, noted)
-				added := readAPITrailLines(t)[before:]
-				for _, id := range noted {
-					recs := trailOf(added, id)
-					if sweep == 2 {
-						if len(recs) != 0 {
-							t.Errorf("sweep 2: %s records = %v; want none", id, recs)
-						}
-						continue
-					}
-					if len(recs) != 1 || recs[0]["event"] != "ad.find_missing.tick" {
-						t.Fatalf("%s records = %v; want only its entry tick", id, recs)
-					}
-					assertTick(t, recs[0], f.note, "", nil)
-				}
-				for _, l := range added {
-					line, _ := json.Marshal(l)
-					if l["event"] == "ad.provenance.disagree" || l["event"] == "ad.launch.name_held" {
-						t.Errorf("sweep %d wrote %s", sweep, line)
-					}
-					for _, id := range append(noted, "ut-other") {
-						if l["claude_instance_id"] != id && strings.Contains(string(line), `"`+id+`"`) {
-							t.Errorf("sweep %d record names %s: %s", sweep, id, line)
-						}
-					}
-					if strings.Contains(string(line), marker) {
-						t.Errorf("sweep %d record carries environment content: %s", sweep, line)
-					}
-				}
-			}
-			if n := pc.EnvReads(); n != 0 {
-				t.Errorf("environment reads = %d; want 0", n)
-			}
-		})
 	}
 }

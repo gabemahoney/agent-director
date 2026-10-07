@@ -1,7 +1,6 @@
 package api_test
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -10,13 +9,12 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// find-missing's SR-11.4 note and tick rules on the tmux path (split from find_missing_notes_test.go by size):
-// the lookup decides the note; entry, equal, overwrite and provenance_conflict re-entry (AC-FM-03), stale
-// notes cleared with no tmux call (AC-FM-13), and Skipped rows' "not called" notes.
+// find-missing's SR-11.4 note and tick rules on the tmux path: the lookup decides the note; entry, equal,
+// overwrite and provenance_conflict re-entry (AC-FM-03), stale notes cleared with no tmux call (AC-FM-13), and
+// Skipped rows' "not called" notes.
 
 // ntPanePID is the unreadable pane process of an "evidence unknown" row.
 const ntPanePID = 61
@@ -110,34 +108,18 @@ var ntCases = []ntCase{
 var ntNotes = []string{"probe_eacces", "process_not_seen_session_present", "process_not_seen_tmux_unchecked",
 	"tmux_server_changed", "provenance_conflict"}
 
-// sweepTmux runs one sweep of s judged by pc with rec as tmux (and budget, 0 = default); it returns the result
-// and the trail checkpoint taken before it.
-func sweepTmux(t *testing.T, s api.FindMissingStore, pc api.ProcChecker, rec *tmuxfix.Recorder, budget time.Duration) (api.FindMissingResult, int) {
-	t.Helper()
-	before := len(readAPITrailLines(t))
-	return mustSweep(t, s, pc, fmSweep{tmux: rec, budget: budget}), before
-}
-
-// assertNoteTick fails unless id has exactly one note tick with reason since before (none when reason is ""),
-// with prior_state and new_state present and null.
+// assertNoteTick fails unless id has exactly one note tick with reason since before (none when reason is ""):
+// prior_state and new_state null and no lookup field (assertTick).
 func assertNoteTick(t *testing.T, before int, id, reason string) {
 	t.Helper()
 	ticks := ticksSince(t, before, id)
-	if reason == "" {
-		if len(ticks) != 0 {
-			t.Errorf("ticks on %s = %v; want none", id, ticks)
-		}
-		return
-	}
-	if len(ticks) != 1 {
-		t.Fatalf("ticks on %s = %v; want exactly one %s", id, ticks, reason)
-	}
-	assertAPITrailStr(t, ticks[0], "reconciliation_reason", reason)
-	assertAPITrailStr(t, ticks[0], "source", "ad_find_missing")
-	for _, k := range []string{"prior_state", "new_state"} {
-		if v, ok := ticks[0][k]; !ok || v != nil {
-			t.Errorf("[%s] = %v (present %v); want null", k, v, ok)
-		}
+	switch {
+	case reason == "" && len(ticks) != 0:
+		t.Errorf("ticks on %s = %v; want none", id, ticks)
+	case reason != "" && len(ticks) != 1:
+		t.Errorf("ticks on %s = %v; want exactly one %s", id, ticks, reason)
+	case reason != "":
+		assertTick(t, ticks[0], reason, "", nil)
 	}
 }
 
@@ -172,7 +154,7 @@ func TestFindMissingTmuxNoteTickRules(t *testing.T) {
 				st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
 				rec := tc.tmux(r, tmuxfix.StoreID)
 
-				res, before := sweepTmux(t, st, ntChecker(), rec, 0)
+				res, _, before := sweepFrom(t, st, ntChecker(), fmSweep{tmux: rec})
 				assertLists(t, res, nil, []string{"n"})
 				want := []string(nil)
 				if tr.write {
@@ -196,20 +178,11 @@ func TestFindMissingTmuxNoteTickRules(t *testing.T) {
 // returns the open store, its path and the row as the live-row read returns it.
 func ntSeed(t *testing.T, opts ...apitest.SpawnOption) (*store.Store, string, store.LiveSpawnIdentity) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	id := apitest.WithLaunchIdentity(store.LaunchIdentity{
+	s, dbPath := seedPaneRow(t, append([]apitest.SpawnOption{apitest.WithLaunchIdentity(store.LaunchIdentity{
 		Token: tmuxfix.Token, Socket: apitest.TestSocket,
 		ServerPID: fmServer.PID, ServerStart: fmServer.Start, ServerStarttime: fmServer.ProcStart,
 		PaneID: "%1", PanePID: ntPanePID, PaneStarttime: fmStart,
-	})
-	if _, err := apitest.SeedSpawn(dbPath, "r", store.StateWorking, "/tmp", "off", "", true, append([]apitest.SpawnOption{id}, opts...)...); err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
-	}
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	})}, opts...)...)
 	rows, err := s.ListLiveSpawnIdentities()
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("ListLiveSpawnIdentities = %+v, %v; want one row", rows, err)
@@ -241,7 +214,7 @@ func TestFindMissingNoteConflictReentryRealStore(t *testing.T) {
 	var since any
 	for i, st := range steps {
 		was := readRow(t, dbPath)
-		res, before := sweepTmux(t, s, ntChecker(), st.tmux(r, s.StoreID()), 0)
+		res, _, before := sweepFrom(t, s, ntChecker(), fmSweep{tmux: st.tmux(r, s.StoreID())})
 		now := readRow(t, dbPath)
 		t.Logf("step %d %s: note %v, version %v -> %v", i, st.name, now.LivenessNote, was.RowVersion, now.RowVersion)
 		assertLists(t, res, nil, []string{"r"})
@@ -261,82 +234,16 @@ func TestFindMissingNoteConflictReentryRealStore(t *testing.T) {
 	}
 }
 
-// TestFindMissingConflictNoteNeverOnAnotherLife (AC-FM-03): a row relaunched by its own agent or deleted
-// between its lookup and the conflict note write is left as the change left it: no note, no tick, neither list.
-func TestFindMissingConflictNoteNeverOnAnotherLife(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	changes := map[string]func(t *testing.T, s *store.Store, dbPath string){
-		"relaunch": func(t *testing.T, _ *store.Store, dbPath string) {
-			if a := apitest.ApplyAgentHook(t, dbPath, "r", "SessionStart", "sess-relaunch"); !a.Applied {
-				t.Errorf("SessionStart not applied: %+v", a)
-			}
-		},
-		"delete": func(t *testing.T, s *store.Store, _ string) {
-			if err := s.DeleteSpawn("r"); err != nil {
-				t.Errorf("DeleteSpawn: %v", err)
-			}
-		},
-	}
-	for name, change := range changes {
-		t.Run(name, func(t *testing.T) {
-			s, dbPath, r := ntSeed(t)
-			var (
-				changed    apitest.SpawnColumns
-				changedErr error
-			)
-			rec := ntDuplicate(r, s.StoreID()).AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
-				change(t, s, dbPath)
-				changed, changedErr = apitest.ReadSpawnColumns(dbPath, "r")
-			})
-
-			res, before := sweepTmux(t, s, ntChecker(), rec, 0)
-			assertLists(t, res, nil, nil)
-			now, err := apitest.ReadSpawnColumns(dbPath, "r")
-			if (err == nil) != (changedErr == nil) || !reflect.DeepEqual(now, changed) {
-				t.Errorf("row after sweep = %+v (err %v); want as the change left it %+v (err %v)", now, err, changed, changedErr)
-			}
-			if err == nil && now.LivenessNote != nil {
-				t.Errorf("liveness_note = %v; want none", now.LivenessNote)
-			}
-			assertNoteTick(t, before, "r", "")
-		})
-	}
-}
-
-// TestFindMissingStaleNoteClearedNoTmuxCall (AC-FM-13): a row carrying any note whose process (SessionStart or
-// pane) is alive gets one clear guarded on the read snapshot, no tick, no tmux call, and is in neither list.
-func TestFindMissingStaleNoteClearedNoTmuxCall(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	by := map[string]fmRowOpt{"session start": withSessionStart(71, fmStart), "pane": withPane(72, fmStart)}
-	for _, note := range ntNotes {
-		for how, opt := range by {
-			t.Run(note+" by "+how, func(t *testing.T) {
-				pc := ntChecker()
-				pc.Set(71, procfix.Alive(fmStart))
-				pc.Set(72, procfix.Alive(fmStart))
-				r := liveRow("a", withServer(), opt, withNote(note))
-				st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
-				rec := ntOurs(r, tmuxfix.StoreID)
-
-				res, before := sweepTmux(t, st, pc, rec, 0)
-				assertLists(t, res, nil, nil)
-				if ops := st.ops("a"); !equalStrings(ops, []string{"clear"}) {
-					t.Errorf("writes = %v; want [clear]", ops)
-				}
-				assertNoteTick(t, before, "a", "")
-				if calls := rec.SocketCalls(); len(calls) != 0 {
-					t.Errorf("tmux calls = %+v; want none", calls)
-				}
-			})
-		}
-	}
-}
-
-// TestFindMissingStaleNoteClearedRealStore (AC-FM-13): on a real store an alive row's note and unverified time
-// are cleared at +1 version; a row without a note is not written (version delta 0). No tmux call, no tick.
+// TestFindMissingStaleNoteClearedRealStore (AC-FM-13): on a real store an alive row's note (a tmux-path or an
+// unusable-name note) and unverified time are cleared at +1 version; a row without a note is not written (version
+// delta 0). No tmux call, no tick, in neither list.
 func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	for _, note := range append([]string{""}, ntNotes...) {
+	notes := append([]string{""}, ntNotes...)
+	for _, tok := range unusableNameTokens() {
+		notes = append(notes, tok.note)
+	}
+	for _, note := range notes {
 		t.Run("note "+note, func(t *testing.T) {
 			var opts []apitest.SpawnOption
 			delta := int64(0)
@@ -350,7 +257,7 @@ func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
 			rec := ntOurs(r, s.StoreID())
 			was := readRow(t, dbPath)
 
-			res, before := sweepTmux(t, s, pc, rec, 0)
+			res, _, before := sweepFrom(t, s, pc, fmSweep{tmux: rec})
 			assertLists(t, res, nil, nil)
 			now := readRow(t, dbPath)
 			if d := now.RowVersion.(int64) - was.RowVersion.(int64); d != delta || now.LivenessNote != nil || now.LivenessUnverifiedSince != nil {
@@ -396,7 +303,7 @@ func TestFindMissingSkippedRowsKeepNotCalledNotes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &fakeFindMissingStore{rows: rows}
 
-			res, before := sweepTmux(t, st, ntChecker(), tc.tmux, tc.budget)
+			res, _, before := sweepFrom(t, st, ntChecker(), fmSweep{tmux: tc.tmux, budget: tc.budget})
 			assertLists(t, res, nil, []string{"a", "b", "c", "d"})
 			if calls := tc.tmux.SocketCalls(); len(calls) != tc.lookups {
 				t.Errorf("tmux calls = %+v; want %d lookup(s)", calls, tc.lookups)

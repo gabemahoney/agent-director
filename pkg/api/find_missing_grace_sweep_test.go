@@ -1,15 +1,11 @@
 package api_test
 
 import (
-	"math"
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -44,8 +40,9 @@ func assertUntouched(t *testing.T, r store.LiveSpawnIdentity, st *fakeFindMissin
 	}
 }
 
-// TestFindMissingGraceSweep: a pending row inside the grace period (measured from its launch start) is not
-// judged; past it, with no launch start, or in a non-pending state it is judged (tmux can't tell) (SR-11.2, SR-22.8).
+// TestFindMissingGraceSweep: a pending row inside the grace period passed to the sweep (measured from its launch
+// start) is not judged, even with an unusable name; past it, with no launch start, or in a non-pending state it is
+// judged (tmux can't tell) (SR-11.2, SR-22.8). The rule's boundaries are store.InsidePendingGrace's (internal/store).
 func TestFindMissingGraceSweep(t *testing.T) {
 	t.Parallel()
 	floor := time.Duration(config.PendingGraceFloorSeconds) * time.Second
@@ -53,30 +50,20 @@ func TestFindMissingGraceSweep(t *testing.T) {
 		name     string
 		state    string
 		launchMs int64
-		agent    fmRowOpt
+		agent    fmRowOpt        // the recorded agent process (fmuNamed: none, and an unusable name)
 		proc     procfix.Process // the recorded process's answer
 		grace    time.Duration   // 0 = fmGrace (the config default)
 		want     string          // "inside", "marked" or "unverified"
 	}{
 		{name: "pending just inside pane", state: store.StatePending, launchMs: startedAgo(fmGrace - time.Second), agent: gracePane, want: "inside"},
-		{name: "pending just inside sessionstart", state: store.StatePending, launchMs: startedAgo(fmGrace - time.Second), agent: graceSession, want: "inside"},
 		{name: "pending just inside no identity", state: store.StatePending, launchMs: startedAgo(fmGrace - time.Second), agent: graceNone, want: "inside"},
-		{name: "pending past pane gone", state: store.StatePending, launchMs: startedAgo(fmGrace + time.Second), agent: gracePane, want: "marked"},
+		{name: "pending just inside unusable name", state: store.StatePending, launchMs: startedAgo(fmGrace - time.Second), agent: fmuNamed(fmuReps()[0].raw), want: "inside"},
 		{name: "pending past sessionstart gone", state: store.StatePending, launchMs: startedAgo(fmGrace + time.Second), agent: graceSession, want: "marked"},
 		{name: "pending past sessionstart unreadable", state: store.StatePending, launchMs: startedAgo(fmGrace + time.Second), agent: graceSession, proc: procfix.Unreadable(), want: "unverified"},
 		{name: "pending past no identity", state: store.StatePending, launchMs: startedAgo(fmGrace + time.Second), agent: graceNone, want: "unverified"},
-		{name: "pending at exactly grace pane", state: store.StatePending, launchMs: startedAgo(fmGrace), agent: gracePane, want: "marked"},
-		{name: "pending at exactly grace sessionstart", state: store.StatePending, launchMs: startedAgo(fmGrace), agent: graceSession, want: "marked"},
-		{name: "pending future start pane", state: store.StatePending, launchMs: startedAgo(-5 * time.Second), agent: gracePane, want: "inside"},
-		{name: "pending future start sessionstart", state: store.StatePending, launchMs: startedAgo(-5 * time.Second), agent: graceSession, want: "inside"},
-		{name: "pending absent or unreadable start pane", state: store.StatePending, launchMs: 0, agent: gracePane, want: "marked"},
-		{name: "pending absent or unreadable start sessionstart", state: store.StatePending, launchMs: 0, agent: graceSession, want: "marked"},
-		{name: "pending far-past extreme start", state: store.StatePending, launchMs: math.MinInt64, agent: gracePane, want: "marked"},
-		{name: "pending max int64 start", state: store.StatePending, launchMs: math.MaxInt64, agent: gracePane, want: "inside"},
-		{name: "shorter grace inside", state: store.StatePending, launchMs: startedAgo(floor - time.Second), agent: gracePane, grace: floor, want: "inside"},
+		{name: "pending absent or unreadable start", state: store.StatePending, launchMs: 0, agent: gracePane, want: "marked"},
 		{name: "shorter grace past", state: store.StatePending, launchMs: startedAgo(floor + time.Second), agent: gracePane, grace: floor, want: "marked"},
-		{name: "waiting recent start sessionstart", state: store.StateWaiting, launchMs: startedAgo(time.Second), agent: graceSession, want: "marked"},
-		{name: "working recent start pane", state: store.StateWorking, launchMs: startedAgo(time.Second), agent: gracePane, want: "marked"},
+		{name: "waiting recent start", state: store.StateWaiting, launchMs: startedAgo(time.Second), agent: graceSession, want: "marked"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,43 +93,5 @@ func TestFindMissingGraceSweep(t *testing.T) {
 				t.Errorf("StartTime calls = %v; want %v", got, wantCalls)
 			}
 		})
-	}
-}
-
-// TestFindMissingGraceSweepMixed: one sweep skips only the inside-grace row; marked and unverified rows are
-// judged, counts exclude the inside row, and its transcript still heals (SR-11.7).
-func TestFindMissingGraceSweepMixed(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	t.Setenv("HOME", t.TempDir())
-	const session = "boot-session-uuid"
-	transcript, err := spawn.JsonlPath("/tmp/proj", session)
-	if err != nil {
-		t.Fatalf("compute path: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
-
-	pc := procfix.New()
-	pc.Set(12, procfix.Unreadable()) // walled; boot, dead and gone answer gone
-	boot := liveRow("boot", withLaunch(store.StatePending, startedAgo(fmGrace-time.Second)), withPane(10, fmStart))
-	st := &fakeFindMissingStore{
-		rows: []store.LiveSpawnIdentity{
-			boot,
-			liveRow("dead", withSessionStart(11, fmStart)),
-			liveRow("walled", withLaunch(store.StateWaiting, 0), withSessionStart(12, fmStart)),
-			liveRow("gone", withLaunch(store.StateWaiting, 0), withPane(13, fmStart)),
-		},
-		provisional: []store.ProvisionalTranscript{{ClaudeInstanceID: "boot", ClaudeSessionID: session, CWD: "/tmp/proj"}},
-	}
-
-	res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
-	assertLists(t, res, []string{"dead", "gone"}, []string{"walled"})
-	assertUntouched(t, boot, st, pc, res)
-	if len(st.healed) != 1 || st.healed[0].id != "boot" {
-		t.Errorf("healed = %+v; want boot healed (healing runs inside grace)", st.healed)
 	}
 }

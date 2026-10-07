@@ -1,16 +1,12 @@
 package api_test
 
-// find_missing_held_name_test.go: find-missing's held-name path (SR-11.3, SR-14, SR-3.10; AC-FM-02, AC-FM-17,
-// AC-FM-18). A row marked with tick reason tmux_name_held gets exactly one ad.launch.name_held from the sweep and
+// find_missing_held_name_test.go: find-missing's held-name path (SR-11.3, SR-14, SR-3.10; AC-FM-17, AC-FM-18). A row marked with tick reason tmux_name_held gets exactly one ad.launch.name_held from the sweep and
 // the holder gets no call beyond the lookup. Rows are seeded through apitest.SeedSpawn in real stores; tmux
-// answers come from a tmuxfix.Recorder. It holds the hnEnv fixture find_missing_held_name_launch_test.go uses.
+// answers come from a tmuxfix.Recorder.
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -25,7 +21,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -73,23 +68,18 @@ func newHNEnv(t *testing.T) *hnEnv {
 // hnRow is a seeded row's id, recorded session name and launch token, as stored.
 type hnRow struct{ id, name, token string }
 
-// seedAs seeds row id in state with sessionID and opts and returns it as stored.
-func (e *hnEnv) seedAs(t *testing.T, id, state, sessionID string, opts ...apitest.SpawnOption) hnRow {
+// pending seeds a pending row whose create made nothing (no pane), its launch started at the clock's now, with
+// sessionID and opts, and returns it as stored.
+func (e *hnEnv) pending(t *testing.T, id, sessionID string, opts ...apitest.SpawnOption) hnRow {
 	t.Helper()
-	if _, err := apitest.SeedSpawn(e.dbPath, id, state, "", "", sessionID, false, opts...); err != nil {
+	base := []apitest.SpawnOption{apitest.WithNoPane(), apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli())}
+	if _, err := apitest.SeedSpawn(e.dbPath, id, store.StatePending, "", "", sessionID, false, append(base, opts...)...); err != nil {
 		t.Fatalf("SeedSpawn(%s): %v", id, err)
 	}
 	c := e.cols(t, id)
 	name, _ := c.TmuxSessionName.(string)
 	token, _ := c.LaunchToken.(string)
 	return hnRow{id: id, name: name, token: token}
-}
-
-// pending seeds a pending row whose create made nothing (no pane), its launch started at the clock's now.
-func (e *hnEnv) pending(t *testing.T, id, sessionID string, opts ...apitest.SpawnOption) hnRow {
-	t.Helper()
-	base := []apitest.SpawnOption{apitest.WithNoPane(), apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli())}
-	return e.seedAs(t, id, store.StatePending, sessionID, append(base, opts...)...)
 }
 
 // cols reads id's row, failing the test on any error.
@@ -196,8 +186,10 @@ func assertMarkTick(t *testing.T, mark int, r hnRow, reason, lookup string) {
 	}
 }
 
-// TestFindMissingHeldNameRecord: a row past grace whose lookup is Gone or Leftover is marked; exactly when a
-// session holds its name the tick is tmux_name_held and one record names the holder (SR-14, AC-FM-02, AC-FM-18).
+// TestFindMissingHeldNameRecord: a pending row past grace whose lookup is Gone or Leftover is marked; exactly when a
+// session holds its name the tick is tmux_name_held and one record names the holder (SR-14, AC-FM-18). A non-pending
+// row's held name and another store's holder are the call table's (lookup_calltable_findmissing_test.go), which
+// checks the tick reason and one record's source and row_result, not the record's other fields.
 func TestFindMissingHeldNameRecord(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	const dollarName = "held$name" // its stored forms are held$name and held\$name
@@ -209,7 +201,6 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 	}
 	cases := []struct {
 		name     string
-		working  bool   // a working row whose process is unreadable (AC-FM-02); else a no-pane pending row
 		rowName  string // "" keeps SeedSpawn's name
 		holders  func(e *hnEnv, r hnRow) []tmuxfix.SeedSession
 		held     bool // a single holder is identified (holders[0])
@@ -224,9 +215,6 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 		{name: "another row's session", holders: func(e *hnEnv, r hnRow) []tmuxfix.SeedSession {
 			return []tmuxfix.SeedSession{hnHolder(r.name, tmuxfix.Valid(tmuxfix.OtherToken, "other-"+r.id, e.storeID), hnCreated)}
 		}, held: true, carries: false, lookup: "gone"},
-		{name: "another store's session naming this row", holders: func(e *hnEnv, r hnRow) []tmuxfix.SeedSession {
-			return []tmuxfix.SeedSession{hnHolder(r.name, tmuxfix.Valid(r.token, r.id, apitest.OtherStoreID(e.storeID)), hnCreated)}
-		}, held: true, carries: false, lookup: "gone"},
 		{name: "leftover of this agent", holders: leftover(hnCreated), held: true, carries: true, current: false, lookup: "leftover"},
 		{name: "leftover created in the launch start's second", holders: leftover(launchSec),
 			held: true, carries: true, current: false, lookup: "leftover"},
@@ -238,9 +226,6 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 			forms := tmux.StoredForms(dollarName)
 			return []tmuxfix.SeedSession{{ID: "$4", Name: forms[0], Created: hnCreated}, {ID: "$5", Name: forms[1], Created: hnCreated}}
 		}, lookup: "gone"},
-		{name: "working row unreadable, no valid label", working: true, holders: func(_ *hnEnv, r hnRow) []tmuxfix.SeedSession {
-			return []tmuxfix.SeedSession{hnHolder(r.name, tmux.Label{}, hnCreated)}
-		}, held: true, carries: false, lookup: "gone"},
 		{name: "name free", holders: func(*hnEnv, hnRow) []tmuxfix.SeedSession { return nil }, lookup: "gone", absentOK: true},
 		{name: "leftover under another name", holders: func(e *hnEnv, r hnRow) []tmuxfix.SeedSession {
 			return []tmuxfix.SeedSession{hnHolder("old-"+r.id, tmuxfix.Valid(tmuxfix.OtherToken, r.id, e.storeID), hnCreated)}
@@ -253,13 +238,7 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 			if tc.rowName != "" {
 				opts = append(opts, apitest.WithTmuxSessionName(tc.rowName))
 			}
-			var r hnRow
-			if tc.working {
-				e.pc.Set(apitest.TestPanePID, procfix.Unreadable())
-				r = e.seedAs(t, "h-1", store.StateWorking, uuid.NewString(), opts...)
-			} else {
-				r = e.pending(t, "h-1", "", opts...)
-			}
+			r := e.pending(t, "h-1", "", opts...)
 			holders := tc.holders(e, r)
 			if len(holders) > 0 {
 				e.rec.SeedSessions(apitest.TestSocket, holders...)
@@ -291,7 +270,8 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 }
 
 // TestFindMissingHeldNamePendingGrace (AC-FM-17): a fresh or resumed pending row whose name an unlabelled session
-// holds is left alone inside grace and marked by the first sweep past it, with one record; the holder is untouched.
+// holds is left alone inside grace (its permission request open) and marked by the first sweep past it, with one
+// record and the request denied; the holder is untouched.
 func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, kind := range []struct{ name, sessionID string }{{"fresh spawn", ""}, {"resumed", uuid.NewString()}} {
@@ -319,6 +299,9 @@ func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 				}
 				if n := len(e.rec.SocketCalls()); n != 0 || len(readAPITrailLines(t)) != mark {
 					t.Errorf("inside grace: %d tmux calls, trail %d -> %d lines; want none", n, mark, len(readAPITrailLines(t)))
+				}
+				if pr, err := e.s.GetPermissionRequest(r.id, perm.RequestToken); err != nil || pr.Decision != "" {
+					t.Errorf("permission request inside grace = %+v, %v; want it still open", pr, err)
 				}
 
 				res, mark = e.sweep(t, 2*time.Second)
@@ -398,14 +381,8 @@ func TestFindMissingHeldNameGuard(t *testing.T) {
 	}
 }
 
-// hnChildEnv gates TestFindMissingHeldNameTrailFailOpenChild and carries the id prefix.
-const hnChildEnv = "AD_FIND_MISSING_HELD_TRAIL_FAIL_CHILD"
-
-// hnLinePrefix marks the child's result lines in its output.
-const hnLinePrefix = "HN|"
-
 // hnFailOpenRuns sweeps one held-name row per mark result, ids prefix-<name>, and returns one line each: the
-// result lists, the row's columns and the log line count.
+// result lists, the row's columns and the log line count (TestFindMissingDisagreeFailOpen).
 func hnFailOpenRuns(t *testing.T, prefix string) []string {
 	t.Helper()
 	cases := []struct {
@@ -431,58 +408,4 @@ func hnFailOpenRuns(t *testing.T, prefix string) []string {
 			tc.name, res.IDs, res.UnverifiedIDs, c.State, c.RowVersion, c.EndedAt != nil, c.LaunchStartedAt, len(e.lg.lines)))
 	}
 	return lines
-}
-
-// TestFindMissingHeldNameTrailFailOpen: with the trail file unwritable, held-name sweeps give the same results and
-// rows as with a working trail.
-func TestFindMissingHeldNameTrailFailOpen(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	prefix := "hn-failopen-" + uuid.NewString()[:8]
-	mark := trailLen(t)
-	want := hnFailOpenRuns(t, prefix)
-	for _, l := range want {
-		id := prefix + "-" + strings.Fields(l)[0]
-		if n := len(ptRecords(t, mark, "ad.launch.name_held", id)); n != 1 {
-			t.Fatalf("working trail: ad.launch.name_held records for %s = %d; want 1", id, n)
-		}
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run=^TestFindMissingHeldNameTrailFailOpenChild$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
-	cmd.Env = append(os.Environ(), hnChildEnv+"="+prefix)
-	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "--- PASS: TestFindMissingHeldNameTrailFailOpenChild") {
-		t.Fatalf("child: %v\n%s", err, out)
-	}
-	var got []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if rest, ok := strings.CutPrefix(l, hnLinePrefix); ok {
-			got = append(got, rest)
-		}
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("unwritable trail gave\n%s\nwant (working trail)\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-}
-
-// TestFindMissingHeldNameTrailFailOpenChild is TestFindMissingHeldNameTrailFailOpen's child: it makes the trail
-// file read-only, runs the sweeps and prints their lines.
-func TestFindMissingHeldNameTrailFailOpenChild(t *testing.T) {
-	t.Parallel()
-	prefix := os.Getenv(hnChildEnv)
-	if prefix == "" {
-		t.Skip("run only as TestFindMissingHeldNameTrailFailOpen's child")
-	}
-	if err := os.MkdirAll(filepath.Dir(apiTrailFilePath()), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(apiTrailFilePath(), nil, 0o400); err != nil {
-		t.Fatalf("create read-only trail file: %v", err)
-	}
-	if err := trail.Emit(context.Background(), "ad.test.find_missing_held_probe", map[string]any{}); err == nil {
-		t.Fatal("trail write succeeded; want it to fail")
-	}
-
-	for _, l := range hnFailOpenRuns(t, prefix) {
-		fmt.Println(hnLinePrefix + l)
-	}
 }

@@ -1,23 +1,16 @@
 package api_test
 
-// find_missing_grace_test.go covers find-missing's pending grace period at the
-// Client (SR-11.2, SR-11.3, SR-22.8, SR-5.5, SR-4.1, SR-11.1; AC-FM-12,
-// AC-FM-14, AC-FM-19, AC-KILL-17, AC-CFG-02): Client.FindMissing on a real
-// store with the Client's clock, configured grace and sweep budget, its tmux
-// client a tmuxfix.Recorder and its start-time reader the procfix fake. Rows
-// come from killEnv (kill_fixture_test.go); the resumed-row cases are in
-// find_missing_grace_launch_test.go, and a reuse's rows come from real reuses
-// (spawn_reuse_fixture_test.go; AC-FM-15). Inside the grace period a row is never
-// judged; past it a dead recorded pane process is marked proc_absent with no
-// tmux call, and a row whose process cannot be checked is decided by one
-// lookup, which the Recorder (no server on the row's socket) answers Gone:
-// tmux_absent.
+// find_missing_grace_test.go covers find-missing's pending grace period at the Client (SR-11.2, SR-11.3, SR-4.1;
+// AC-FM-12, AC-FM-14, AC-CFG-02): Client.FindMissing on a real store with the Client's clock and configured grace,
+// its tmux client a tmuxfix.Recorder (no server: Gone) and its start-time reader the procfix fake; rows come from
+// killEnv (kill_fixture_test.go). Inside the grace period a row is never judged; past it a dead recorded pane
+// process is marked proc_absent with no tmux call, and a row whose process cannot be checked is decided by one
+// lookup. The grace rule's boundaries and launch-start values are store.InsidePendingGrace's and the live-row
+// read's (internal/store); spawn's, reuse's and resume's rows that never report in are advice_follow_resume_test.go's
+// (B1) through this same Client path.
 
 import (
 	"context"
-	"errors"
-	"math"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -34,61 +27,30 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// fgcMinGraceSeconds is the key's safe minimum at the default create timeout
-// and pipe-close wait (30 s); fmGrace is the default grace period.
+// fgcMinGraceSeconds is the key's safe minimum at the default create timeout and pipe-close wait (30 s).
 var fgcMinGraceSeconds = config.PendingGraceMinimumSeconds(config.DefaultCreateTimeoutMs, config.DefaultPipeCloseWaitMs)
 
 // fgcSetClock moves clock to at.
 func fgcSetClock(clock *tmuxfix.Clock, at time.Time) { clock.Advance(at.Sub(clock.Now())) }
 
-// fgcWant is how a sweep past the grace period marks a row: its tick reason,
-// and the sweep's lookups and start-time reads (its only tmux calls are the lookups).
+// fgcWant is how a sweep past the grace period marks a row: its tick reason, and the sweep's lookups and
+// start-time reads (its only tmux calls are the lookups).
 type fgcWant struct {
 	reason         string
 	lookups, reads int
 }
 
-// fgcProcAbsent is the mark of a row judged by its dead pane process: one read, no tmux call.
-var fgcProcAbsent = fgcWant{"proc_absent", 0, 1}
-
-// fgcEvidence is a pending row's recorded agent process (seed returns the
-// option recording it) and how a sweep past the grace period marks the row.
-type fgcEvidence struct {
+// fgcEvidences: a dead pane is judged by its process; a pane behind a /proc wall whose session is gone (an aborted
+// launch, AC-KILL-17) and a row with no pane (SR-11.3) are judged by the lookup.
+var fgcEvidences = []struct {
 	name string
-	seed func(e *killEnv) apitest.SpawnOption
+	pane bool            // a pane process is recorded
+	proc procfix.Process // its answer
 	want fgcWant
-}
-
-// fgcEvidences: a dead pane is judged by its process; a pane behind a /proc wall
-// whose session is gone (an aborted launch, AC-KILL-17) and a row with no pane
-// (SR-11.3) are judged by the lookup.
-var fgcEvidences = []fgcEvidence{
-	{"dead pane", func(e *killEnv) apitest.SpawnOption { return fgcAgentPane(e, procfix.Gone()) }, fgcProcAbsent},
-	{"pane behind a /proc wall, session gone", func(e *killEnv) apitest.SpawnOption {
-		return fgcAgentPane(e, procfix.Unreadable())
-	}, fgcWant{"tmux_absent", 1, 1}},
-	{"no process identity", func(*killEnv) apitest.SpawnOption { return apitest.WithNoPane() }, fgcWant{"tmux_absent", 1, 0}},
-}
-
-// fgcAgentPane records a fresh pane pid with a start time, p in e.pc, and returns the option recording it.
-func fgcAgentPane(e *killEnv, p procfix.Process) apitest.SpawnOption {
-	pid := e.newPID()
-	e.pc.Set(pid, p)
-	return apitest.WithLaunchIdentity(store.LaunchIdentity{
-		Token:  strings.ReplaceAll(uuid.NewString(), "-", "")[:16],
-		Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime})
-}
-
-// fgcSeedPending seeds a pending row through apitest.SeedSpawn with sessionID
-// ("" for none), the evidence option ev and opts, and returns its id.
-func fgcSeedPending(t *testing.T, e *killEnv, sessionID string, ev apitest.SpawnOption, opts ...apitest.SpawnOption) string {
-	t.Helper()
-	id, err := apitest.SeedSpawn(e.dbPath, "fgc-"+uuid.NewString()[:8], store.StatePending, "", "off", sessionID, false,
-		append([]apitest.SpawnOption{ev}, opts...)...)
-	if err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
-	}
-	return id
+}{
+	{"dead pane", true, procfix.Gone(), fgcWant{"proc_absent", 0, 1}},
+	{"pane behind a /proc wall, session gone", true, procfix.Unreadable(), fgcWant{"tmux_absent", 1, 1}},
+	{"no process identity", false, procfix.Process{}, fgcWant{"tmux_absent", 1, 0}},
 }
 
 // fgcRun is one sweep's result, its tmux calls, lookups and start-time reads.
@@ -109,9 +71,9 @@ func fgcSweep(t *testing.T, c *api.Client, rec *tmuxfix.Recorder, pc *procfix.Ch
 		lookups: len(rec.SocketCallsOf(tmux.CallLookup)) - lookupsBefore, reads: len(pc.StartTimeCalls()) - readsBefore}
 }
 
-// fgcAssertPending fails unless the sweep left id's row alone (pending, no
-// liveness note, no tick, in no list, no tmux call) after wantReads start-time reads.
-func fgcAssertPending(t *testing.T, dbPath, id string, run fgcRun, wantReads int) {
+// fgcAssertInside fails unless the sweep held id's row inside its grace period: pending, no liveness note, no tick,
+// in no list, nothing read and no tmux call.
+func fgcAssertInside(t *testing.T, dbPath, id string, run fgcRun) {
 	t.Helper()
 	cols, err := apitest.ReadSpawnColumns(dbPath, id)
 	if err != nil {
@@ -127,19 +89,13 @@ func fgcAssertPending(t *testing.T, dbPath, id string, run fgcRun, wantReads int
 	if n := len(pendTrail(t, "ad.find_missing.tick", id)); n != 0 {
 		t.Errorf("ad.find_missing.tick lines for the row = %d; want 0", n)
 	}
-	if run.tmux != 0 || run.reads != wantReads {
-		t.Errorf("tmux calls %d, start-time reads %d; want 0 and %d", run.tmux, run.reads, wantReads)
+	if run.tmux != 0 || run.reads != 0 {
+		t.Errorf("tmux calls %d, start-time reads %d; want none", run.tmux, run.reads)
 	}
 }
 
-// fgcAssertInside fails unless the sweep held id's row inside its grace period: untouched, nothing read, no tmux call.
-func fgcAssertInside(t *testing.T, dbPath, id string, run fgcRun) {
-	t.Helper()
-	fgcAssertPending(t, dbPath, id, run, 0)
-}
-
-// fgcAssertMarked fails unless id's row is missing with ended_at set and no
-// launch start, listed in ids, with one tick of want's reason, after want's lookups and reads.
+// fgcAssertMarked fails unless id's row is missing with ended_at set and no launch start, listed in ids, with one
+// tick of want's reason from pending, after want's lookups and reads.
 func fgcAssertMarked(t *testing.T, dbPath, id string, run fgcRun, want fgcWant) {
 	t.Helper()
 	cols, err := apitest.ReadSpawnColumns(dbPath, id)
@@ -151,8 +107,8 @@ func fgcAssertMarked(t *testing.T, dbPath, id string, run fgcRun, want fgcWant) 
 			cols.State, cols.EndedAt, cols.LaunchStartedAt, run.res.IDs)
 	}
 	ticks := pendTrail(t, "ad.find_missing.tick", id)
-	if len(ticks) != 1 || ticks[0]["reconciliation_reason"] != want.reason {
-		t.Errorf("ad.find_missing.tick lines = %v; want one with reason %s", ticks, want.reason)
+	if len(ticks) != 1 || ticks[0]["reconciliation_reason"] != want.reason || ticks[0]["prior_state"] != store.StatePending {
+		t.Errorf("ad.find_missing.tick lines = %v; want one with reason %s from pending", ticks, want.reason)
 	} else if gone := (tmux.Result{Verdict: tmux.Gone}).Token(); want.lookups > 0 && ticks[0]["lookup_outcome"] != gone {
 		t.Errorf("tick lookup_outcome = %#v; want %q", ticks[0]["lookup_outcome"], gone)
 	}
@@ -162,47 +118,9 @@ func fgcAssertMarked(t *testing.T, dbPath, id string, run fgcRun, want fgcWant) 
 	}
 }
 
-// TestFindMissingGraceLaunchKinds: a pending row of each launch kind and recorded
-// agent process is untouched 1 s before the default grace ends, measured from its launch start, and marked 1 s after.
-func TestFindMissingGraceLaunchKinds(t *testing.T) {
-	t.Parallel()
-	kinds := []struct {
-		name, sessionID string
-		opts            func(launch time.Time) []apitest.SpawnOption
-	}{
-		{"fresh spawn", "", func(launch time.Time) []apitest.SpawnOption {
-			return []apitest.SpawnOption{apitest.WithStartedAt(launch), apitest.WithLaunchStartedAt(launch.UnixMilli())}
-		}},
-		{"reuse: a later life, started_at reset", "", func(launch time.Time) []apitest.SpawnOption {
-			return []apitest.SpawnOption{apitest.WithStartedAt(launch), apitest.WithLaunchStartedAt(launch.UnixMilli()),
-				apitest.WithLifeNumber(2), apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "fgc-earlier-life", Life: 1})}
-		}},
-		{"resume: started_at hours old, session kept", "sess-fgc-resumed", func(launch time.Time) []apitest.SpawnOption {
-			return []apitest.SpawnOption{apitest.WithStartedAt(launch.Add(-9 * time.Hour)),
-				apitest.WithLaunchStartedAt(launch.UnixMilli()), apitest.WithLifeNumber(1)}
-		}},
-	}
-	for _, kind := range kinds {
-		for _, ev := range fgcEvidences {
-			t.Run(kind.name+"/"+ev.name, func(t *testing.T) {
-				t.Parallel()
-				e := newKillEnv(t)
-				c, _ := e.client(t)
-				launch := e.clock.Now()
-				id := fgcSeedPending(t, e, kind.sessionID, ev.seed(e), kind.opts(launch)...)
-
-				fgcSetClock(e.clock, launch.Add(fmGrace-time.Second))
-				fgcAssertInside(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc))
-
-				fgcSetClock(e.clock, launch.Add(fmGrace+time.Second))
-				fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc), ev.want)
-			})
-		}
-	}
-}
-
-// TestFindMissingGraceConfigured: pending_grace_seconds at its safe minimum holds a
-// row 1 s before that period ends and marks it 1 s after, by its evidence; a default Client still holds it then.
+// TestFindMissingGraceConfigured: pending_grace_seconds at its safe minimum holds a row 1 s before that period
+// ends, measured from its launch start though its started_at is hours old (AC-FM-16), and marks it 1 s after, by
+// its evidence; a default Client still holds it then.
 func TestFindMissingGraceConfigured(t *testing.T) {
 	t.Parallel()
 	grace := time.Duration(fgcMinGraceSeconds) * time.Second
@@ -216,7 +134,18 @@ func TestFindMissingGraceConfigured(t *testing.T) {
 			configured, _ := e.client(t, apitest.TmuxInt(config.TmuxPendingGraceSeconds, fgcMinGraceSeconds))
 			dflt, _ := e.client(t)
 			launch := e.clock.Now()
-			id := fgcSeedPending(t, e, "", ev.seed(e), apitest.WithStartedAt(launch), apitest.WithLaunchStartedAt(launch.UnixMilli()))
+			agent := apitest.WithNoPane()
+			if ev.pane {
+				pid := e.newPID()
+				e.pc.Set(pid, ev.proc)
+				agent = apitest.WithLaunchIdentity(store.LaunchIdentity{Token: strings.ReplaceAll(uuid.NewString(), "-", "")[:16],
+					Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime})
+			}
+			id, err := apitest.SeedSpawn(e.dbPath, "fgc-"+uuid.NewString()[:8], store.StatePending, "", "off", "", false,
+				agent, apitest.WithStartedAt(launch.Add(-9*time.Hour)), apitest.WithLaunchStartedAt(launch.UnixMilli()))
+			if err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
 
 			fgcSetClock(e.clock, launch.Add(grace-time.Second))
 			fgcAssertInside(t, e.dbPath, id, fgcSweep(t, configured, e.rec, e.pc))
@@ -228,130 +157,8 @@ func TestFindMissingGraceConfigured(t *testing.T) {
 	}
 }
 
-// TestFindMissingGraceLaunchStartValues: with the clock at started_at, a dead
-// agent's row with an absent, unreadable or out-of-range launch start is marked at once; a future one is held.
-func TestFindMissingGraceLaunchStartValues(t *testing.T) {
-	t.Parallel()
-	year10000 := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-	year0 := time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-	cases := []struct {
-		name   string
-		opt    func(now time.Time) apitest.SpawnOption
-		inside bool
-	}{
-		{"absent (NULL)", func(time.Time) apitest.SpawnOption { return apitest.WithNoLaunchStartedAt() }, false},
-		{"stored 0", func(time.Time) apitest.SpawnOption { return apitest.WithLaunchStartedAt(0) }, false},
-		{"non-integer text", func(time.Time) apitest.SpawnOption { return apitest.WithRawLaunchStartedAt("not-a-time") }, false},
-		{"real number", func(time.Time) apitest.SpawnOption { return apitest.WithRawLaunchStartedAt(1.5) }, false},
-		{"year 10000", func(time.Time) apitest.SpawnOption { return apitest.WithLaunchStartedAt(year10000) }, false},
-		{"before year 0", func(time.Time) apitest.SpawnOption { return apitest.WithLaunchStartedAt(year0 - 1) }, false},
-		{"largest int64", func(time.Time) apitest.SpawnOption { return apitest.WithLaunchStartedAt(math.MaxInt64) }, false},
-		{"one hour in the future", func(now time.Time) apitest.SpawnOption {
-			return apitest.WithLaunchStartedAt(now.Add(time.Hour).UnixMilli())
-		}, true},
-		{"last millisecond of year 9999", func(time.Time) apitest.SpawnOption { return apitest.WithLaunchStartedAt(year10000 - 1) }, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			c, _ := e.client(t)
-			now := e.clock.Now()
-			id := fgcSeedPending(t, e, "", fgcAgentPane(e, procfix.Gone()), apitest.WithStartedAt(now), tc.opt(now))
-
-			run := fgcSweep(t, c, e.rec, e.pc)
-			if tc.inside {
-				fgcAssertInside(t, e.dbPath, id, run)
-			} else {
-				fgcAssertMarked(t, e.dbPath, id, run, fgcProcAbsent)
-			}
-		})
-	}
-}
-
 // fgcSpawnParams is a spawn of id (reuse: with the opt-in) pre-trusting in its own new CLAUDE_CONFIG_DIR.
 func fgcSpawnParams(t *testing.T, id string, reuse bool) api.SpawnParams {
 	return api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse, CWD: t.TempDir(),
 		ExtraEnv: map[string]string{"CLAUDE_CONFIG_DIR": t.TempDir()}}
-}
-
-// fgcReuseStopsBeforeCreate reuses r through the store seam, its goroutine stopping (runtime.Goexit) as the
-// reset returns: the row is reset to pending and nothing is created, as when the launching process stops then.
-func fgcReuseStopsBeforeCreate(t *testing.T, e *killEnv, r reuseRow) {
-	t.Helper()
-	rs := &hookedReuseStore{st: e.st}
-	rs.afterReset(runtime.Goexit)
-	c, _ := e.client(t)
-	p := reuseParams(t, r, reuseRequest{})
-	returned := make(chan bool, 1)
-	go func() {
-		defer close(returned)
-		_, _ = api.SpawnWithReuseStore(c, rs, p)
-		returned <- true
-	}()
-	if <-returned || len(e.rec.SocketCallsOf(tmux.CallCreate)) != 0 {
-		t.Fatalf("reuse of %s returned or created (calls %v); want it stopped as its reset returned", r.ID, callKinds(e.rec))
-	}
-}
-
-// TestFindMissingGraceReuseAfterNeverReportedIn (AC-FM-15): a fresh spawn's or a reuse's pending row with no session
-// is held inside grace and marked tmux_absent past it; then resume is ErrNoSessionId and a reuse launches (life + 1).
-func TestFindMissingGraceReuseAfterNeverReportedIn(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name  string
-		setup func(*testing.T, *killEnv, *api.Client) string
-	}{
-		{"fresh spawn: create timed out creating nothing", func(t *testing.T, e *killEnv, c *api.Client) string {
-			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallCreate)
-			id := "fgc-" + uuid.NewString()[:8]
-			if _, err := c.Spawn(fgcSpawnParams(t, id, false)); !errors.Is(err, api.ErrTmuxUnresponsive) {
-				t.Fatalf("Spawn = %v; want ErrTmuxUnresponsive", err)
-			}
-			return id
-		}},
-		{"fresh spawn: launching process stopped before its create", func(t *testing.T, e *killEnv, _ *api.Client) string {
-			now := e.clock.Now()
-			return fgcSeedPending(t, e, "", apitest.WithNoPane(), apitest.WithTmuxSocket(e.defaultSocket),
-				apitest.WithStartedAt(now), apitest.WithLaunchStartedAt(now.UnixMilli()))
-		}},
-		{"Reuse: create timed out creating nothing", func(t *testing.T, e *killEnv, _ *api.Client) string {
-			return e.reuseTimesOut(t, e.seedReusable(t, agentGone, reuseRowSpec{}), reuseRequest{}, false).ID
-		}},
-		{"Reuse: launching process stopped before its create", func(t *testing.T, e *killEnv, _ *api.Client) string {
-			r := e.seedReusable(t, agentGone, reuseRowSpec{})
-			fgcReuseStopsBeforeCreate(t, e, r)
-			return r.ID
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			c, _ := e.client(t)
-			id := tc.setup(t, e, c)
-			cols := e.columns(t, id)
-			start, ok := cols.LaunchStartedAt.(int64)
-			life, _ := cols.LifeNumber.(int64)
-			if cols.State != store.StatePending || !ok || cols.PanePID != nil {
-				t.Fatalf("precondition: {state %v, launch %#v, pane pid %#v}; want pending with a launch start and no pane",
-					cols.State, cols.LaunchStartedAt, cols.PanePID)
-			}
-
-			fgcSetClock(e.clock, time.UnixMilli(start).Add(fmGrace-time.Second))
-			fgcAssertInside(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc))
-			fgcSetClock(e.clock, time.UnixMilli(start).Add(fmGrace+time.Second))
-			fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc), fgcWant{"tmux_absent", 1, 0})
-
-			if _, err := c.Resume(api.ResumeParams{ClaudeInstanceID: id}); !errors.Is(err, api.ErrNoSessionId) {
-				t.Errorf("Resume = %v; want ErrNoSessionId", err)
-			}
-			if res, err := c.Spawn(fgcSpawnParams(t, id, true)); err != nil || res.ClaudeInstanceID != id {
-				t.Fatalf("reuse Spawn = %+v, %v; want %s launched", res, err, id)
-			}
-			if after := e.columns(t, id); after.State != store.StatePending || after.LifeNumber != life+1 {
-				t.Errorf("after the reuse: {state %v, life %#v}; want pending, life %d", after.State, after.LifeNumber, life+1)
-			}
-		})
-	}
 }

@@ -30,10 +30,12 @@ const (
 // fskQueryTimeout is the default lookup timeout the Recorder charges each call in virtual time.
 var fskQueryTimeout = config.Tmux{}.EffectiveQueryTimeout()
 
-// fskChecker returns a process checker that cannot read fskUnreadablePID (every other pid reads gone).
+// fskChecker returns a process checker that cannot read fskUnreadablePID and reads fmServer's process alive (every
+// other pid reads gone).
 func fskChecker() *procfix.Checker {
 	pc := procfix.New()
 	pc.Set(fskUnreadablePID, procfix.Unreadable())
+	pc.Set(fmServer.PID, procfix.Alive(fmServer.ProcStart))
 	return pc
 }
 
@@ -136,39 +138,50 @@ func fskAssertDisagree(t *testing.T, before int, id, socket, server, verdict str
 }
 
 // TestFindMissingSocketsOneLookupPerSocket: rows needing a lookup take exactly one call per socket, each naming
-// that socket; rows the process decides take none.
+// that socket; rows the process decides take none; a different server or a provenance_conflict leaves its row
+// unverified while the socket's later rows are still judged from the one lookup.
 func TestFindMissingSocketsOneLookupPerSocket(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	third := "/tmp/fsk-third/default"
+	conflict := tmuxfix.Valid(tmuxfix.Token, "r1", tmuxfix.StoreID)
 	cases := []struct {
 		name  string
+		rec   *tmuxfix.Recorder
 		rows  []store.LiveSpawnIdentity
 		calls []fskCall
 		want  map[string]fskWant
 	}{
-		{"many rows on one socket", []store.LiveSpawnIdentity{
+		{"many rows on one socket", tmuxfix.NewRecorder(), []store.LiveSpawnIdentity{
 			liveRow("r1", unknownEvidence()), liveRow("r2"), liveRow("r3", unknownEvidence()), liveRow("r4"),
 		}, []fskCall{lookupOn(apitest.TestSocket)}, map[string]fskWant{
 			"r1": fskMarked("tmux_absent"), "r2": fskMarked("tmux_absent"),
 			"r3": fskMarked("tmux_absent"), "r4": fskMarked("tmux_absent"),
 		}},
-		{"rows spread over three sockets", []store.LiveSpawnIdentity{
+		{"rows spread over three sockets", tmuxfix.NewRecorder(), []store.LiveSpawnIdentity{
 			liveRow("r1"), liveRow("r2", onSocket(fskOther)), liveRow("r3", onSocket(third), unknownEvidence()),
 			liveRow("r4", unknownEvidence()), liveRow("r5", onSocket(fskOther)), liveRow("r6", onSocket(third)),
 		}, []fskCall{lookupOn(apitest.TestSocket), lookupOn(fskOther), lookupOn(third)}, map[string]fskWant{
 			"r1": fskMarked("tmux_absent"), "r2": fskMarked("tmux_absent"), "r3": fskMarked("tmux_absent"),
 			"r4": fskMarked("tmux_absent"), "r5": fskMarked("tmux_absent"), "r6": fskMarked("tmux_absent"),
 		}},
-		{"no row needs a lookup", []store.LiveSpawnIdentity{
+		{"no row needs a lookup", tmuxfix.NewRecorder(), []store.LiveSpawnIdentity{
 			liveRow("r1", withSessionStart(9102, fmStart)), liveRow("r2", onSocket(fskOther), withPane(9103, fmStart)),
 		}, nil, map[string]fskWant{"r1": fskMarked("proc_absent"), "r2": fskMarked("proc_absent")}},
+		{"different server stops nothing", tmuxfix.NewRecorder().StartServer(apitest.TestSocket, tmuxfix.Server{}),
+			[]store.LiveSpawnIdentity{liveRow("r1", withServer()), liveRow("r2"), liveRow("r3", unknownEvidence())},
+			[]fskCall{lookupOn(apitest.TestSocket)}, map[string]fskWant{
+				"r1": fskNoted("tmux_server_changed"), "r2": fskMarked("tmux_absent"), "r3": fskMarked("tmux_absent")}},
+		{"provenance conflict stops nothing", tmuxfix.NewRecorder().StartServer(apitest.TestSocket, fmServer).SeedSessions(
+			apitest.TestSocket, tmuxfix.SeedSession{Name: "cd-r1", Label: conflict}, tmuxfix.SeedSession{Name: "cd-r1-copy", Label: conflict}),
+			[]store.LiveSpawnIdentity{liveRow("r1", withServer()), liveRow("r2"), liveRow("r3", unknownEvidence())},
+			[]fskCall{lookupOn(apitest.TestSocket)}, map[string]fskWant{
+				"r1": fskNoted("provenance_conflict"), "r2": fskMarked("tmux_absent"), "r3": fskMarked("tmux_absent")}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rec := tmuxfix.NewRecorder()
-			st, res, before := fskSweep(t, rec, fskChecker(), nil, c.rows...)
+			st, res, before := fskSweep(t, c.rec, fskChecker(), nil, c.rows...)
 			fskAssertRows(t, st, res, before, c.want)
-			fskAssertCalls(t, rec, c.calls...)
+			fskAssertCalls(t, c.rec, c.calls...)
 		})
 	}
 }
@@ -211,40 +224,6 @@ func TestFindMissingSocketsStopRulePerSocket(t *testing.T) {
 			if spent := clock.Now().Sub(fmNow); spent != time.Duration(len(calls))*fskQueryTimeout {
 				t.Errorf("virtual time spent = %v; want %d query timeouts (%v each)", spent, len(calls), fskQueryTimeout)
 			}
-		})
-	}
-}
-
-// TestFindMissingSocketsAnswersThatStopNothing: a different server or a provenance_conflict leaves its row
-// unverified, and the socket's later rows are still judged from the one lookup.
-func TestFindMissingSocketsAnswersThatStopNothing(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	cases := []struct {
-		name string
-		rec  func() *tmuxfix.Recorder
-		note string
-	}{
-		{"different server", func() *tmuxfix.Recorder {
-			return tmuxfix.NewRecorder().StartServer(apitest.TestSocket, tmuxfix.Server{})
-		}, "tmux_server_changed"},
-		{"provenance conflict", func() *tmuxfix.Recorder {
-			label := tmuxfix.Valid(tmuxfix.Token, "r1", tmuxfix.StoreID)
-			return tmuxfix.NewRecorder().StartServer(apitest.TestSocket, fmServer).SeedSessions(apitest.TestSocket,
-				tmuxfix.SeedSession{Name: "cd-r1", Label: label}, tmuxfix.SeedSession{Name: "cd-r1-copy", Label: label})
-		}, "provenance_conflict"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			pc := fskChecker()
-			pc.Set(fmServer.PID, procfix.Alive(fmServer.ProcStart))
-			rec := c.rec()
-			st, res, before := fskSweep(t, rec, pc, nil,
-				liveRow("r1", withServer()), liveRow("r2"), liveRow("r3", unknownEvidence()))
-
-			fskAssertRows(t, st, res, before, map[string]fskWant{
-				"r1": fskNoted(c.note), "r2": fskMarked("tmux_absent"), "r3": fskMarked("tmux_absent"),
-			})
-			fskAssertCalls(t, rec, lookupOn(apitest.TestSocket))
 		})
 	}
 }
@@ -300,10 +279,13 @@ func TestFindMissingSocketsRecordedServerCheck(t *testing.T) {
 }
 
 // TestFindMissingSocketsNoSocketRule: rows with a recorded socket are looked up there whatever the caller's
-// environment; a pre-release row uses the caller's socket, resolved creating nothing, or makes no call when refused.
+// environment; a pre-release row uses the caller's socket, resolved creating nothing, or makes no call when refused;
+// an unusable-name pre-release row read first resolves none and makes no call, and the usable one after it is
+// resolved (or refused) as the first.
 func TestFindMissingSocketsNoSocketRule(t *testing.T) {
 	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv; it checks the shared trail by literal row ids other
 	// find-missing tests reuse.
+	f := fmuReps()[1]
 	t.Run("caller's TMUX names another server", func(t *testing.T) {
 		caller := filepath.Join(t.TempDir(), "caller")
 		t.Setenv("TMUX", caller+",4242,0")
@@ -311,9 +293,9 @@ func TestFindMissingSocketsNoSocketRule(t *testing.T) {
 		agent := liveRow("agent", withServer(), withPane(fskUnreadablePID, fmStart))
 		rec := fmOurs(agent).StartServer(caller, tmuxfix.Server{})
 
-		st, res, before := fskSweep(t, rec, fskChecker(), nil, agent, liveRow("legacy", preRelease()))
+		st, res, before := fskSweep(t, rec, fskChecker(), nil, fskUnusable("a-u", f, preRelease()), agent, liveRow("legacy", preRelease()))
 		fskAssertRows(t, st, res, before, map[string]fskWant{
-			"agent": fskNoted("probe_eacces"), "legacy": fskMarked("tmux_absent"),
+			"a-u": fskNoted(f.note), "agent": fskNoted("probe_eacces"), "legacy": fskMarked("tmux_absent"),
 		})
 		fskAssertCalls(t, rec, lookupOn(apitest.TestSocket), lookupOn(caller))
 	})
@@ -347,9 +329,9 @@ func TestFindMissingSocketsNoSocketRule(t *testing.T) {
 		rec := tmuxfix.NewRecorder()
 		clock := tmuxfix.NewClock(fmNow)
 
-		st, res, before := fskSweep(t, rec, fskChecker(), clock, liveRow("agent"),
+		st, res, before := fskSweep(t, rec, fskChecker(), clock, fskUnusable("a-u", f, preRelease()), liveRow("agent"),
 			liveRow("legacy-1", preRelease()), liveRow("legacy-2", preRelease(), unknownEvidence()))
-		fskAssertRows(t, st, res, before, map[string]fskWant{"agent": fskMarked("tmux_absent"),
+		fskAssertRows(t, st, res, before, map[string]fskWant{"a-u": fskNoted(f.note), "agent": fskMarked("tmux_absent"),
 			"legacy-1": fskNoted("process_not_seen_tmux_unchecked"), "legacy-2": fskNoted("probe_eacces")})
 		fskAssertCalls(t, rec, lookupOn(apitest.TestSocket))
 		if spent := clock.Now().Sub(fmNow); spent != fskQueryTimeout {
@@ -363,118 +345,60 @@ func fskUnusable(id string, f unusableNameFixture, opts ...fmRowOpt) store.LiveS
 	return liveRow(id, append([]fmRowOpt{unknownEvidence(), fmuNamed(f.raw)}, opts...)...)
 }
 
-// TestFindMissingSocketsUnusableNameBesideUsableRows: an unusable-name row read before, between or after two
-// usable rows of its socket is noted with no call; the socket's one lookup still judges the usable rows.
-func TestFindMissingSocketsUnusableNameBesideUsableRows(t *testing.T) {
+// TestFindMissingSocketsUnusableName: an unusable-name row (each kind) read before, between or after usable rows
+// of its socket, alone on its socket, or with every row needing tmux unusable, is noted with no call and charges
+// no budget: a budget for one call still looks up the usable rows; each socket's one lookup judges them. After its
+// socket stopped, or with the budget spent, it still gets its own note, not the "not called" one.
+func TestFindMissingSocketsUnusableName(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
+	third, oneCall := "/tmp/fsk-third/default", fskQueryTimeout*3/2
+	type world struct {
+		name   string
+		rows   []store.LiveSpawnIdentity
+		rec    *tmuxfix.Recorder
+		budget time.Duration
+		calls  []fskCall
+		want   map[string]fskWant
+	}
 	for _, f := range fmuReps() {
+		ours := liveRow("o", withServer(), withPane(fskUnreadablePID, fmStart))
+		worlds := []world{
+			{name: "alone on its socket", rows: []store.LiveSpawnIdentity{fskUnusable("u", f, onSocket(fskOther)), liveRow("g")},
+				calls: []fskCall{lookupOn(apitest.TestSocket)}, want: map[string]fskWant{"u": fskNoted(f.note), "g": fskMarked("tmux_absent")}},
+			{name: "every row needing tmux unusable", rows: []store.LiveSpawnIdentity{fskUnusable("u1", f),
+				fskUnusable("u2", f, onSocket(fskOther)), liveRow("dead", withSessionStart(9102, fmStart))},
+				want: map[string]fskWant{"u1": fskNoted(f.note), "u2": fskNoted(f.note), "dead": fskMarked("proc_absent")}},
+			{name: "budget for one call", budget: oneCall, rows: []store.LiveSpawnIdentity{fskUnusable("a-u", f, onSocket(fskOther)),
+				fskUnusable("b-u", f, onSocket(third)), liveRow("c", unknownEvidence())}, calls: []fskCall{lookupOn(apitest.TestSocket)},
+				want: map[string]fskWant{"a-u": fskNoted(f.note), "b-u": fskNoted(f.note), "c": fskMarked("tmux_absent")}},
+			// The name check comes before the socket's stop and the budget: the unusable row keeps its own note.
+			{name: "after its socket stopped", rows: []store.LiveSpawnIdentity{liveRow("a", unknownEvidence()), fskUnusable("b-u", f)},
+				rec:   tmuxfix.NewRecorder().Script(apitest.TestSocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallLookup),
+				calls: []fskCall{lookupOn(apitest.TestSocket)}, want: map[string]fskWant{"a": fskNoted("probe_eacces"), "b-u": fskNoted(f.note)}},
+			{name: "budget spent", budget: fmBudgetSpent, rows: []store.LiveSpawnIdentity{fskUnusable("u", f), liveRow("g", unknownEvidence())},
+				want: map[string]fskWant{"u": fskNoted(f.note), "g": fskNoted("probe_eacces")}},
+		}
 		for _, uid := range []string{"a-u", "h-u", "z-u"} {
-			t.Run(f.label+"/"+uid, func(t *testing.T) {
-				ours := liveRow("o", withServer(), withPane(fskUnreadablePID, fmStart))
-				rec := fmOurs(ours)
-				st, res, before := fskSweep(t, rec, fskChecker(), nil, ours, fskUnusable(uid, f), liveRow("g", unknownEvidence()))
-
-				fskAssertRows(t, st, res, before, map[string]fskWant{
-					"o": fskNoted("probe_eacces"), "g": fskMarked("tmux_absent"), uid: fskNoted(f.note),
-				})
-				fskAssertCalls(t, rec, lookupOn(apitest.TestSocket))
-			})
+			worlds = append(worlds, world{name: "beside usable rows " + uid, rec: fmOurs(ours),
+				rows:  []store.LiveSpawnIdentity{ours, fskUnusable(uid, f), liveRow("g", unknownEvidence())},
+				calls: []fskCall{lookupOn(apitest.TestSocket)},
+				want:  map[string]fskWant{"o": fskNoted("probe_eacces"), "g": fskMarked("tmux_absent"), uid: fskNoted(f.note)}})
 		}
-	}
-}
-
-// TestFindMissingSocketsUnusableNameAloneTakesNoCall: an unusable-name row alone on its socket, or a sweep whose
-// every row needing tmux has an unusable name, makes no call on that socket and spends no tmux time.
-func TestFindMissingSocketsUnusableNameAloneTakesNoCall(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	f := fmuReps()[2]
-	cases := []struct {
-		name  string
-		rows  []store.LiveSpawnIdentity
-		calls []fskCall
-		want  map[string]fskWant
-	}{
-		{"alone on its socket", []store.LiveSpawnIdentity{fskUnusable("u", f, onSocket(fskOther)), liveRow("g")},
-			[]fskCall{lookupOn(apitest.TestSocket)}, map[string]fskWant{"u": fskNoted(f.note), "g": fskMarked("tmux_absent")}},
-		{"every row needing tmux unusable", []store.LiveSpawnIdentity{fskUnusable("u1", f), fskUnusable("u2", f, onSocket(fskOther)),
-			liveRow("dead", withSessionStart(9102, fmStart))},
-			nil, map[string]fskWant{"u1": fskNoted(f.note), "u2": fskNoted(f.note), "dead": fskMarked("proc_absent")}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rec, clock := tmuxfix.NewRecorder(), tmuxfix.NewClock(fmNow)
-			st, res, before := fskSweep(t, rec, fskChecker(), clock, c.rows...)
-
-			fskAssertRows(t, st, res, before, c.want)
-			fskAssertCalls(t, rec, c.calls...)
-			if spent, want := clock.Now().Sub(fmNow), time.Duration(len(c.calls))*fskQueryTimeout; spent != want {
-				t.Errorf("virtual time spent = %v; want %v", spent, want)
-			}
-		})
-	}
-}
-
-// TestFindMissingSocketsUnusableNameChargesNoBudget: with a budget for one call, unusable-name rows on two sockets
-// read first leave it whole, so a later usable row on a third socket is still looked up and marked.
-func TestFindMissingSocketsUnusableNameChargesNoBudget(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	third := "/tmp/fsk-third/default"
-	for _, f := range fmuReps() {
-		t.Run(f.label, func(t *testing.T) {
-			rec, clock := tmuxfix.NewRecorder(), tmuxfix.NewClock(fmNow)
-			rows := []store.LiveSpawnIdentity{fskUnusable("a-u", f, onSocket(fskOther)), fskUnusable("b-u", f, onSocket(third)),
-				liveRow("c", unknownEvidence())}
-			st := &fakeFindMissingStore{rows: rows}
-			before := trailLen(t)
-
-			res := mustSweep(t, st, fskChecker(), fmSweep{tmux: rec, clock: clock, budget: fskQueryTimeout * 3 / 2})
-			fskAssertRows(t, st, res, before, map[string]fskWant{
-				"a-u": fskNoted(f.note), "b-u": fskNoted(f.note), "c": fskMarked("tmux_absent"),
-			})
-			fskAssertCalls(t, rec, lookupOn(apitest.TestSocket))
-		})
-	}
-}
-
-// TestFindMissingSocketsUnusableNameNoSocket: an unusable-name row recording no socket resolves none and makes no
-// call; a later usable no-socket row is still resolved and looked up (or refused) as the first one.
-func TestFindMissingSocketsUnusableNameNoSocket(t *testing.T) {
-	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv; it checks the shared trail by literal row ids other
-	// find-missing tests reuse.
-	f := fmuReps()[1]
-	t.Run("caller's socket", func(t *testing.T) {
-		caller := filepath.Join(t.TempDir(), "caller")
-		t.Setenv("TMUX", caller+",4242,0")
-		t.Setenv("TMUX_TMPDIR", t.TempDir())
-		for name, legacy := range map[string]bool{"unusable row alone": false, "then a usable row": true} {
-			t.Run(name, func(t *testing.T) {
-				rec := tmuxfix.NewRecorder().StartServer(caller, tmuxfix.Server{})
-				rows := []store.LiveSpawnIdentity{fskUnusable("a-u", f, preRelease())}
-				want, calls := map[string]fskWant{"a-u": fskNoted(f.note)}, []fskCall(nil)
-				if legacy {
-					rows = append(rows, liveRow("legacy", preRelease()))
-					want["legacy"], calls = fskMarked("tmux_absent"), []fskCall{lookupOn(caller)}
+		for _, w := range worlds {
+			t.Run(f.label+"/"+w.name, func(t *testing.T) {
+				rec, clock := w.rec, tmuxfix.NewClock(fmNow)
+				if rec == nil {
+					rec = tmuxfix.NewRecorder()
 				}
-				st, res, before := fskSweep(t, rec, fskChecker(), nil, rows...)
-				fskAssertRows(t, st, res, before, want)
-				fskAssertCalls(t, rec, calls...)
+				st := &fakeFindMissingStore{rows: w.rows}
+				res, _, before := sweepFrom(t, st, fskChecker(), fmSweep{tmux: rec, clock: clock, budget: w.budget})
+
+				fskAssertRows(t, st, res, before, w.want)
+				fskAssertCalls(t, rec, w.calls...)
+				if spent, want := clock.Now().Sub(fmNow), time.Duration(len(w.calls))*fskQueryTimeout; spent != want {
+					t.Errorf("virtual time spent = %v; want %v", spent, want)
+				}
 			})
 		}
-	})
-
-	t.Run("unusable socket directory", func(t *testing.T) {
-		file := filepath.Join(t.TempDir(), "not-a-dir")
-		if err := os.WriteFile(file, nil, 0o600); err != nil {
-			t.Fatalf("write %s: %v", file, err)
-		}
-		t.Setenv("TMUX", "")
-		t.Setenv("TMUX_TMPDIR", file)
-		rec := tmuxfix.NewRecorder()
-
-		st, res, before := fskSweep(t, rec, fskChecker(), nil, fskUnusable("a-u", f, preRelease()), liveRow("legacy", preRelease()))
-		fskAssertRows(t, st, res, before, map[string]fskWant{
-			"a-u": fskNoted(f.note), "legacy": fskNoted("process_not_seen_tmux_unchecked"),
-		})
-		fskAssertCalls(t, rec)
-	})
+	}
 }

@@ -1,21 +1,18 @@
 package api_test
 
 import (
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // find-missing's process-only liveness (SR-3.8, SR-11.1; AC-FM-19, AC-FM-10): a row is judged by its selected
-// agent process alone, never by tmux or a process environment. Fakes and runFindMissing live in
-// find_missing_test.go; the start-time answers by themselves are pinned in find_missing_verdict_test.go.
+// agent process alone, never by tmux or a process environment (a process carrying the row's id is the matrix's,
+// find_missing_matrix_test.go). Fakes and runFindMissing live in find_missing_test.go.
 
 // The SessionStart and pane pids the selection table records.
 const (
@@ -70,15 +67,14 @@ var fpAnswers = []struct {
 	{"unreadable", procfix.Unreadable(), procfix.Alive(fmStart), fpNoted, fpNoted},
 }
 
-// fpLives are the rows past the grace period the table covers: a non-pending row and pending rows of a fresh
-// spawn and of a resumed launch (a later row version, session kept).
+// fpLives are the rows past the grace period the table covers: a non-pending row and a resumed launch's pending
+// row (a later row version, session kept).
 var fpLives = []struct {
 	name string
 	opts []fmRowOpt
 	snap func(*store.RowSnapshot)
 }{
 	{name: "working", snap: func(*store.RowSnapshot) {}},
-	{name: "pending fresh spawn", opts: []fmRowOpt{withLaunch(store.StatePending, fpPastGrace)}, snap: func(*store.RowSnapshot) {}},
 	{name: "pending resumed launch", opts: []fmRowOpt{withLaunch(store.StatePending, fpPastGrace)},
 		snap: func(s *store.RowSnapshot) { s.RowVersion, s.ClaudeSessionID = 9, "sess-fp-resumed" }},
 }
@@ -155,71 +151,11 @@ func TestFindMissingProcessSelectionVerdict(t *testing.T) {
 	}
 }
 
-// TestFindMissingChildOrLeakedIDNeverKeepsRow: a live process carrying the row's id in its environment (a child
-// of the dead agent, an unrelated process) never keeps the row alive; no environment is read.
-func TestFindMissingChildOrLeakedIDNeverKeepsRow(t *testing.T) {
-	t.Parallel()
-	const agent, child, unrelated = 1201, 1202, 1203
-	cases := []struct {
-		name     string
-		identity fmRowOpt
-		dead     procfix.Process
-		leaks    []int
-	}{
-		{"child of a gone pane agent", withPane(agent, fmStart), procfix.Gone(), []int{child}},
-		{"child of a zombie sessionstart agent", withSessionStart(agent, fmStart), procfix.Zombie(), []int{child}},
-		{"unrelated process, agent pid reused", withSessionStart(agent, fmStart), procfix.Alive(fmOtherStart), []int{unrelated}},
-		{"child and unrelated process", withPane(agent, fmStart), procfix.Gone(), []int{child, unrelated}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := liveRow("leaked", tc.identity)
-			pc := procfix.New()
-			pc.Set(agent, tc.dead)
-			for _, pid := range tc.leaks {
-				pc.Set(pid, procfix.Alive(fmStart).WithEnv(map[string]string{probe.EnvKey: r.ClaudeInstanceID}))
-			}
-			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
-
-			res := mustFindMissing(t, st, pc)
-			fpAssertOutcome(t, st, res, r, fpMarked)
-			if got := pc.StartTimeCalls(); !slices.Equal(got, []int{agent}) {
-				t.Errorf("StartTime calls = %v; want [%d] (never the process carrying the id)", got, agent)
-			}
-			if n := pc.EnvReads(); n != 0 {
-				t.Errorf("environment reads = %d; want 0", n)
-			}
-		})
-	}
-}
-
-// TestFindMissingLiveProcessWithoutIDKeepsRow: a recorded process alive with its start time keeps the row live
-// whatever its environment holds; the removed environment tiebreaker would have marked it.
-func TestFindMissingLiveProcessWithoutIDKeepsRow(t *testing.T) {
-	t.Parallel()
-	const agent = 1301
-	for name, env := range map[string]map[string]string{
-		"no environment":             nil,
-		"environment without the id": {"PATH": "/usr/bin"},
-		"another row's id":           {probe.EnvKey: "someone-else"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			pc := procfix.New()
-			pc.Set(agent, procfix.Alive(fmStart).WithEnv(env))
-			r := liveRow("kept", withSessionStart(agent, fmStart), withPane(agent, fmStart))
-			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
-
-			res := mustFindMissing(t, st, pc)
-			fpAssertOutcome(t, st, res, r, fpLive)
-			if n := pc.EnvReads(); n != 0 {
-				t.Errorf("environment reads = %d; want 0", n)
-			}
-		})
-	}
-}
-
 // TestFindMissingMixedProcessSweep: one sweep over alive, dead, unreadable, mismatched and unrecorded rows lists
-// only the dead rows in ids and reads each selected process exactly once, never an unselected one; tmux can't tell.
+// only the dead rows in ids (sorted) and reads each selected process exactly once, never an unselected one; a
+// noted dead row gets the mark alone, its liveness clear folded in; tmux can't tell. The process verdict comes
+// before the unusable-name note (a dead row with an unusable name is marked, an alive one's note cleared), and a
+// pending row inside grace, read first, is skipped alone: every later row is still judged.
 func TestFindMissingMixedProcessSweep(t *testing.T) {
 	t.Parallel()
 	pc := procfix.New()
@@ -227,12 +163,18 @@ func TestFindMissingMixedProcessSweep(t *testing.T) {
 		1401: procfix.Alive(fmStart), 1402: procfix.Gone(), 1403: procfix.Alive(fmOtherStart),
 		1404: procfix.Unreadable(), 1405: procfix.Alive(fmStart), 1406: procfix.Gone(),
 		1407: procfix.Gone(), 1408: procfix.Alive(fmStart), 1409: procfix.Alive(fmStart),
+		1411: procfix.Gone(), 1412: procfix.Alive(fmStart),
 	} {
 		pc.Set(pid, p)
 	}
+	boot := liveRow("0-boot", withLaunch(store.StatePending, startedAgo(fmGrace-time.Second)), withPane(1410, fmStart))
+	u := fmuReps()[0]
 	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
+		boot,
+		liveRow("d-dead-unusable", withPane(1411, fmStart), fmuNamed(u.raw)),
+		liveRow("e-alive-unusable", withSessionStart(1412, fmStart), fmuNamed(u.raw), withNote(u.note)),
 		liveRow("m-alive", withSessionStart(1401, fmStart)),
-		liveRow("z-dead-pane", withPane(1402, fmStart)),
+		liveRow("z-dead-pane", withPane(1402, fmStart), withNote("probe_eacces")),
 		liveRow("b-reused", withSessionStart(1403, fmStart), withPane(1403, fmStart)),
 		liveRow("q-unreadable", withSessionStart(1404, fmStart)),
 		liveRow("c-pane-dead-ss-alive", withSessionStart(1405, fmStart), withPane(1406, fmStart)),
@@ -242,60 +184,18 @@ func TestFindMissingMixedProcessSweep(t *testing.T) {
 	}}
 
 	res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
-	assertLists(t, res, []string{"b-reused", "c-pane-dead-ss-alive", "z-dead-pane"},
+	assertLists(t, res, []string{"b-reused", "c-pane-dead-ss-alive", "d-dead-unusable", "z-dead-pane"},
 		[]string{"a-pid-only-alive", "q-unreadable", "y-no-identity"})
+	if ops := st.ops("z-dead-pane"); !equalStrings(ops, []string{"mark", "close"}) {
+		t.Errorf("writes on z-dead-pane = %v; want [mark close] (no separate clear)", ops)
+	}
+	if ops := st.ops("e-alive-unusable"); !equalStrings(ops, []string{"clear"}) {
+		t.Errorf("writes on e-alive-unusable = %v; want [clear] (alive wins over the unusable name)", ops)
+	}
+	assertUntouched(t, boot, st, pc, res)
 	got := pc.StartTimeCalls()
 	slices.Sort(got)
-	if want := []int{1401, 1402, 1403, 1404, 1406, 1408, 1409}; !slices.Equal(got, want) {
+	if want := []int{1401, 1402, 1403, 1404, 1406, 1408, 1409, 1411, 1412}; !slices.Equal(got, want) {
 		t.Errorf("StartTime calls (sorted) = %v; want %v (each selected pid once)", got, want)
-	}
-}
-
-// TestFindMissingProcessMarkOnStore: on a real store, a dead agent's row is marked missing with its launch start
-// and liveness columns cleared, while live rows, pending included, keep every column.
-func TestFindMissingProcessMarkOnStore(t *testing.T) {
-	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	seed := func(id, state, sessionID string, opts ...apitest.SpawnOption) {
-		t.Helper()
-		if _, err := apitest.SeedSpawn(dbPath, id, state, "", "off", sessionID, true, opts...); err != nil {
-			t.Fatalf("SeedSpawn(%s): %v", id, err)
-		}
-	}
-	pane := func(pid int) apitest.SpawnOption {
-		return apitest.WithLaunchIdentity(store.LaunchIdentity{Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: fmStart})
-	}
-	seed("fp-dead-noted", store.StateWorking, "sess-fp-1", apitest.WithNoPane(), apitest.WithPID(1501), apitest.WithProcStarttime(fmStart),
-		apitest.WithLivenessNote("probe_eacces"), apitest.WithLivenessUnverifiedSince("2026-09-30 11:30:00"))
-	seed("fp-resumed-dead", store.StatePending, "sess-fp-2", apitest.WithLifeNumber(1), apitest.WithLaunchStartedAt(fpPastGrace), pane(1502))
-	seed("fp-alive", store.StateWorking, "sess-fp-3", apitest.WithNoPane(), apitest.WithPID(1503), apitest.WithProcStarttime(fmStart))
-	seed("fp-pending-alive", store.StatePending, "", apitest.WithLaunchStartedAt(fpPastGrace), pane(1504))
-	pc := procfix.New()
-	pc.Set(1502, procfix.Alive(fmOtherStart))
-	pc.Set(1503, procfix.Alive(fmStart))
-	pc.Set(1504, procfix.Alive(fmStart))
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	defer st.Close() //nolint:errcheck
-	mark := trailLen(t)
-
-	res := mustFindMissing(t, st, pc)
-	assertLists(t, res, []string{"fp-dead-noted", "fp-resumed-dead"}, nil)
-	for id, want := range map[string][4]any{
-		"fp-dead-noted":    {store.StateMissing, nil, nil, nil},
-		"fp-resumed-dead":  {store.StateMissing, nil, nil, nil},
-		"fp-alive":         {store.StateWorking, nil, nil, nil},
-		"fp-pending-alive": {store.StatePending, fpPastGrace, nil, nil},
-	} {
-		c, err := apitest.ReadSpawnColumns(dbPath, id)
-		if err != nil {
-			t.Fatalf("ReadSpawnColumns(%s): %v", id, err)
-		}
-		if got := [4]any{c.State, c.LaunchStartedAt, c.LivenessNote, c.LivenessUnverifiedSince}; got != want {
-			t.Errorf("%s {state, launch_started_at, liveness_note, unverified_since} = %v; want %v", id, got, want)
-		}
-		fpAssertNoDisagree(t, mark, id)
 	}
 }
