@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,18 +73,43 @@ type Store struct {
 	storeID string
 }
 
-// Open opens an existing SQLite database at path. It does NOT create the
-// parent directory or the database file; if the file is absent it returns
-// ErrStoreNotInitialized. Use OpenOrInit when create-if-missing behavior is
-// required (e.g. CLI first-run).
+// DefaultBusyTimeoutMs is the busy timeout, in whole milliseconds (10000),
+// with which Open and OpenOrInit open the store: the default of the
+// [store] busy_timeout_ms config key, config.DefaultStoreBusyTimeoutMs, which
+// this package does not import (the dependency arrow points into store,
+// never out). Every opener that loads the config (pkg/api.New, the hook
+// handler) passes the configured value to OpenWithBusyTimeout or
+// OpenOrInitWithBusyTimeout instead, which open with DefaultBusyTimeoutMs in
+// place of a value outside 1 to math.MaxInt32 (busyTimeoutOrDefault; b.c7f).
+const DefaultBusyTimeoutMs = 10000
+
+// Open opens an existing SQLite database at path with the busy timeout
+// DefaultBusyTimeoutMs; see OpenWithBusyTimeout.
+func Open(path string) (*Store, error) {
+	return OpenWithBusyTimeout(path, DefaultBusyTimeoutMs)
+}
+
+// OpenWithBusyTimeout opens an existing SQLite database at path. It does NOT
+// create the parent directory or the database file; if the file is absent it
+// returns ErrStoreNotInitialized. Use OpenOrInitWithBusyTimeout when
+// create-if-missing behavior is required (e.g. CLI first-run).
+//
+// busyTimeoutMs is how long each of the store's connections waits for a lock
+// another connection holds, in whole milliseconds (SQLite's busy timeout; see
+// openDB). Pass config.Store.EffectiveBusyTimeoutMs, which a loaded config
+// keeps between 1 and math.MaxInt32. A value outside that range (0, a
+// negative value, or one above math.MaxInt32), which SQLite would take as
+// turning the wait off, is never passed on: the store opens with
+// DefaultBusyTimeoutMs instead (see busyTimeoutOrDefault).
 //
 // A leading "~/" in path is expanded against $HOME; with HOME unset or empty
 // it is refused, never resolved against another home (see expandTilde). An
 // empty path is refused (see resolvePath).
 //
-// On any error the caller does not need to close anything — Open cleans up
-// the partially-opened *sql.DB before returning.
-func Open(path string) (*Store, error) {
+// On any error the caller does not need to close anything —
+// OpenWithBusyTimeout cleans up the partially-opened *sql.DB before
+// returning.
+func OpenWithBusyTimeout(path string, busyTimeoutMs int) (*Store, error) {
 	resolved, err := resolvePath(path)
 	if err != nil {
 		return nil, err
@@ -95,21 +121,30 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: stat db file: %w", err)
 	}
 
-	return openDB(resolved)
+	return openDB(resolved, busyTimeoutMs)
 }
 
-// OpenOrInit prepares the SQLite database at path, creating its parent
-// directory and the file itself when missing, applying file-mode constraints,
-// opening a single-connection pool, enabling WAL + foreign keys, and ensuring
-// the schema is at the current version.
+// OpenOrInit prepares the SQLite database at path with the busy timeout
+// DefaultBusyTimeoutMs; see OpenOrInitWithBusyTimeout.
+func OpenOrInit(path string) (*Store, error) {
+	return OpenOrInitWithBusyTimeout(path, DefaultBusyTimeoutMs)
+}
+
+// OpenOrInitWithBusyTimeout prepares the SQLite database at path, creating
+// its parent directory and the file itself when missing, applying file-mode
+// constraints, opening a single-connection pool, enabling WAL + foreign keys,
+// and ensuring the schema is at the current version. busyTimeoutMs is as for
+// OpenWithBusyTimeout, a value outside 1 to math.MaxInt32 included: the store
+// opens with DefaultBusyTimeoutMs instead (see busyTimeoutOrDefault).
 //
 // A leading "~/" in path is expanded against $HOME; with HOME unset or empty
 // it is refused, never resolved against another home (see expandTilde). An
 // empty path is refused (see resolvePath).
 //
-// On any error the caller does not need to close anything — OpenOrInit cleans
-// up the partially-opened *sql.DB before returning.
-func OpenOrInit(path string) (*Store, error) {
+// On any error the caller does not need to close anything —
+// OpenOrInitWithBusyTimeout cleans up the partially-opened *sql.DB before
+// returning.
+func OpenOrInitWithBusyTimeout(path string, busyTimeoutMs int) (*Store, error) {
 	resolved, err := resolvePath(path)
 	if err != nil {
 		return nil, err
@@ -120,21 +155,42 @@ func OpenOrInit(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: create parent dir: %w", err)
 	}
 
-	return openDB(resolved)
+	return openDB(resolved, busyTimeoutMs)
+}
+
+// busyTimeoutOrDefault returns busyTimeoutMs when SQLite holds it as a busy
+// timeout, from 1 to math.MaxInt32 milliseconds, and DefaultBusyTimeoutMs
+// otherwise. SQLite turns its wait for a lock off for 0 or a negative value
+// and reads a value above math.MaxInt32 as 0, so passing an out-of-range value
+// on would make every statement on a locked store fail at once instead of
+// waiting (b.c7f). A loaded config never yields one (config.Load refuses it);
+// this guards every other caller of OpenWithBusyTimeout and
+// OpenOrInitWithBusyTimeout.
+func busyTimeoutOrDefault(busyTimeoutMs int) int {
+	if busyTimeoutMs < 1 || int64(busyTimeoutMs) > math.MaxInt32 {
+		return DefaultBusyTimeoutMs
+	}
+	return busyTimeoutMs
 }
 
 // openDB dials a SQLite connection at the given (already-resolved, already-
-// present-or-newly-created) path, verifies PRAGMAs, enforces file mode, and
-// ensures the schema is current. It is the shared backend for Open and
-// OpenOrInit.
-func openDB(resolved string) (*Store, error) {
+// present-or-newly-created) path with the given busy timeout in whole
+// milliseconds (DefaultBusyTimeoutMs in place of one outside 1 to
+// math.MaxInt32; see busyTimeoutOrDefault), verifies PRAGMAs, enforces file
+// mode, and ensures the schema is current. It is the shared backend for
+// OpenWithBusyTimeout and OpenOrInitWithBusyTimeout.
+func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
+	busyTimeoutMs = busyTimeoutOrDefault(busyTimeoutMs)
+
 	// foreign_keys is a per-connection PRAGMA, so set it via DSN so every
 	// connection the pool dials in starts with FKs enforced.
 	//
-	// busy_timeout tells the driver to retry-with-backoff for up to 10s
-	// on SQLITE_BUSY instead of failing on the first lock collision. With
-	// N hook processes hitting the same DB file during burst-spawn, this
-	// is the floor of correctness for any multi-writer SQLite system.
+	// busy_timeout tells the driver to retry-with-backoff for up to
+	// busyTimeoutMs ([store] busy_timeout_ms, 10 s by default) on
+	// SQLITE_BUSY instead of failing on the first lock collision. With N
+	// hook processes hitting the same DB file during burst-spawn, this is
+	// the floor of correctness for any multi-writer SQLite system. It is
+	// per-connection too, so it is set via DSN as well.
 	//
 	// journal_mode is intentionally NOT set here. WAL persists in the DB
 	// header; re-running PRAGMA journal_mode=WAL on every connection forces
@@ -142,7 +198,7 @@ func openDB(resolved string) (*Store, error) {
 	// bug. We set WAL once at fresh-DB init (see ensureJournalModeWAL) and
 	// trust the header thereafter; verifyPragmas keeps reading it
 	// (read-only form, no lock) to confirm.
-	dsn := resolved + "?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)"
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)", resolved, busyTimeoutMs)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

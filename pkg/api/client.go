@@ -101,7 +101,8 @@ type Client struct {
 //  1. Apply defaults (ConfigPath, Logger).
 //  2. Load config from the resolved ConfigPath.
 //  3. Resolve StorePath via three-tier precedence.
-//  4. Open (or init) the store according to opts.CreateIfMissing.
+//  4. Open (or init) the store according to opts.CreateIfMissing, with the
+//     loaded config's [store] busy timeout (Store.EffectiveBusyTimeoutMs).
 //  5. Construct the tmux client: an injected Options.TmuxClient as given,
 //     otherwise the production client for Options.TmuxCommand with the
 //     query, action and create timeouts and the pipe-close wait taken from
@@ -179,12 +180,14 @@ func New(opts Options) (*Client, error) {
 		return nil, fmt.Errorf("api: resolve store path: %w", err)
 	}
 
-	// Step 4 — open the store.
+	// Step 4 — open the store, with the configured busy timeout whichever
+	// tier gave its path (b.c7f).
 	var st *store.Store
+	busyTimeoutMs := cfg.Store.EffectiveBusyTimeoutMs()
 	if opts.CreateIfMissing {
-		st, err = store.OpenOrInit(storePath)
+		st, err = store.OpenOrInitWithBusyTimeout(storePath, busyTimeoutMs)
 	} else {
-		st, err = store.Open(storePath)
+		st, err = store.OpenWithBusyTimeout(storePath, busyTimeoutMs)
 	}
 	if err != nil {
 		// Wrap unconditionally; errors.Is(err, store.ErrStoreNotInitialized)

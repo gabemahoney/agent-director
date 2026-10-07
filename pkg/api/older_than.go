@@ -22,12 +22,12 @@ const OlderThanForm = `a non-negative Go duration like "12h" or trailing-d days 
 // ok is false for a value in neither form, for a Go duration below zero, such
 // as "-2h", and for a day count above 106751 (config.MaxExpireRetentionDays,
 // the largest whole number of days a time.Duration holds), such as "365000d"
-// (b.sgw): Expire selects every finished row for a window at or below zero,
-// so a sign slip, or a day count that wrapped the window, would delete the
-// whole finished history. The day count is checked digit by digit, so no
-// count, however long, wraps. A caller that means every finished row passes
-// "0d" or "0s". Each surface refuses a rejected value with ErrInvalidFlags
-// stating OlderThanForm.
+// (b.sgw): Expire selects every finished row for a zero window, so a day
+// count that wrapped the window could delete the whole finished history
+// (Expire refuses a negative window with ErrInvalidFlags, b.f4v). The day
+// count is checked digit by digit, so no count, however long, wraps. A caller
+// that means every finished row passes "0d" or "0s". Each surface refuses a
+// rejected value with ErrInvalidFlags stating OlderThanForm.
 func ParseOlderThan(s string) (d time.Duration, ok bool) {
 	if n := len(s); n > 1 && s[n-1] == 'd' {
 		var days int

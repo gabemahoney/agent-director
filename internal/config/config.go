@@ -10,8 +10,9 @@
 // The [tmux] table (type Tmux, tmux.go) holds the nine timing settings of
 // agent-director's use of tmux, with their defaults, safe minimums and the
 // pending grace period's minimum rule (SR-4.1). A missing key or 0 gives the
-// default; Load refuses a negative value and a positive value below a key's
-// safe minimum exactly as it refuses a malformed file.
+// default, or for pending_grace_seconds the larger of its default and its
+// derived minimum (b.9e1); Load refuses a negative value and a positive value
+// below a key's safe minimum exactly as it refuses a malformed file.
 //
 // [defaults] expire_retention_days, expire's default window in whole days,
 // follows the same rule (b.sgw): a missing key or 0 gives
@@ -19,8 +20,10 @@
 // MaxExpireRetentionDays the same way. So do [relay] timeout_seconds and
 // [pause] timeout_seconds (b.8q2), with DefaultRelayTimeoutSeconds and
 // MaxRelayTimeoutSeconds, and DefaultPauseTimeoutSeconds and
-// MaxPauseTimeoutSeconds; and [pre_trust] lock_wait_seconds (b.kr4), with
-// DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds.
+// MaxPauseTimeoutSeconds; [pre_trust] lock_wait_seconds (b.kr4), with
+// DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds; and [store]
+// busy_timeout_ms (b.c7f), with DefaultStoreBusyTimeoutMs and
+// MaxStoreBusyTimeoutMs.
 //
 // Load also refuses a file that sets one key under names differing only in
 // letter case ([Store] and [store] both setting db_path), whose value the
@@ -82,7 +85,8 @@ const DefaultExpireRetentionDays = 31
 // holds (106751): the upper limit of expire_retention_days, which Load
 // refuses above it, and of older_than's day count, which pkg/api's
 // ParseOlderThan refuses above it (b.sgw). A larger count would wrap expire's
-// window, at worst to zero or below, which selects every finished row.
+// window, at worst to zero, which selects every finished row (pkg/api's
+// Expire refuses a negative window, b.f4v).
 const MaxExpireRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
 
 // EffectiveExpireRetentionDays returns expire's default window in whole
@@ -272,13 +276,70 @@ func (p PreTrust) refusals() []string {
 	return nil
 }
 
-// Store holds storage backend paths.
+// Store holds the store database's settings.
 type Store struct {
 	// DbPath is the store database, as Load resolved it: the file's value
 	// when the key is set ("" for an empty db_path), otherwise
 	// DefaultDbPath. Read it only through EffectiveDbPath, which gives the
 	// default for "".
 	DbPath string `toml:"db_path"`
+	// BusyTimeoutMs is how long a store connection waits for a lock another
+	// connection holds before its statement fails (SQLite's busy timeout),
+	// in whole milliseconds: the file's value when the key is set (0
+	// included), otherwise DefaultStoreBusyTimeoutMs. Read it only through
+	// EffectiveBusyTimeoutMs, which gives the default for 0. Load refuses a
+	// negative value and one above MaxStoreBusyTimeoutMs (b.c7f).
+	//
+	// Raising it couples with fixed limits nothing adjusts to it. Each store
+	// write can wait up to this long for the lock on a contended store, and
+	// a SessionStart hook's writes outside its bounded wait (up to four) must
+	// fit in the 60 s between internal/hook's sessionStartWaitCap (540 s) and
+	// Claude Code's 600 s hook timeout: that holds at the default (at most
+	// 40 s) but not from about 15 s, when Claude Code can kill the hook. And
+	// the TS client ends a call after its callTimeoutMs (30 s by default), so
+	// a verb whose statements wait that long in total, one at 30 s or more
+	// or several shorter ones, is cut off before SQLite gives up. Nothing
+	// caps this key against either limit.
+	BusyTimeoutMs int `toml:"busy_timeout_ms"`
+}
+
+// DefaultStoreBusyTimeoutMs is the default of [store] busy_timeout_ms, in
+// whole milliseconds (10000). It is the value Default() seeds into
+// Store.BusyTimeoutMs AND the fallback EffectiveBusyTimeoutMs returns for a
+// missing or 0 key, so the two never drift.
+const DefaultStoreBusyTimeoutMs = 10000
+
+// MaxStoreBusyTimeoutMs is the largest [store] busy_timeout_ms Load accepts
+// (2147483647, math.MaxInt32): the largest busy timeout SQLite holds. SQLite
+// reads PRAGMA busy_timeout's value as a 32-bit int and takes a larger one as
+// 0, and the sqlite3 shell's .timeout truncates one to 32 bits, so a larger
+// value would turn the wait off and a locked store would fail at once
+// (b.c7f).
+const MaxStoreBusyTimeoutMs = math.MaxInt32
+
+// EffectiveBusyTimeoutMs returns the busy timeout every store connection
+// uses, in whole milliseconds (store.busy_timeout_ms): the configured value
+// when positive, otherwise DefaultStoreBusyTimeoutMs (10000). It never
+// returns 0 or a negative count, which would turn SQLite's wait for a lock
+// off. It performs no maximum check; Load refuses a value above
+// MaxStoreBusyTimeoutMs.
+func (s Store) EffectiveBusyTimeoutMs() int {
+	if s.BusyTimeoutMs > 0 {
+		return s.BusyTimeoutMs
+	}
+	return DefaultStoreBusyTimeoutMs
+}
+
+// refusals returns the description of each refused [store] value, in table
+// order, or nil when every value loads. Only busy_timeout_ms is checked: a
+// negative value and one above MaxStoreBusyTimeoutMs are refused, never
+// replaced by the default or capped; 0 gives the default (b.c7f).
+func (s Store) refusals() []string {
+	if v := s.BusyTimeoutMs; v < 0 || v > MaxStoreBusyTimeoutMs {
+		return []string{fmt.Sprintf("[store] busy_timeout_ms = %d, outside its range 1 to %d milliseconds",
+			v, MaxStoreBusyTimeoutMs)}
+	}
+	return nil
 }
 
 // DefaultDbPath is the default of [store] db_path. It is the value Default()
@@ -309,7 +370,12 @@ type Log struct {
 	ErrorLogPath string `toml:"error_log_path"`
 }
 
-// Default returns the canonical SRD §11 defaults.
+// Default returns the canonical SRD §11 defaults. Its Tmux.PendingGraceSeconds
+// is pre-filled with DefaultPendingGraceSeconds (60), and nothing but Load
+// checks it against the derived minimum, so a Go caller that raises
+// Tmux.CreateTimeoutMs or Tmux.PipeCloseWaitMs on Default() should set
+// PendingGraceSeconds to 0 to get the larger of 60 and the derived minimum
+// (b.9e1).
 func Default() Config {
 	return Config{
 		Defaults: Defaults{
@@ -331,7 +397,8 @@ func Default() Config {
 			LockWaitSeconds: DefaultPreTrustLockWaitSeconds,
 		},
 		Store: Store{
-			DbPath: DefaultDbPath,
+			DbPath:        DefaultDbPath,
+			BusyTimeoutMs: DefaultStoreBusyTimeoutMs,
 		},
 		Log: Log{
 			ErrorLogPath: "~/.agent-director/errors.log",
@@ -381,17 +448,20 @@ func (e *ConfigError) Unwrap() error {
 // first, alone, so its text never depends on which value the decoder kept.
 //
 // Load then validates the [tmux] table (SR-4.1): a negative value of any key,
-// and a positive value below its key's safe minimum (for the pending grace
-// period, the default too when its key is missing or 0 and the default is
-// below the derived minimum), are refused, never raised to the minimum or
-// replaced by the default. A key is checked whatever the letter case of its
-// name and its table's ([Tmux] STOPPING_WINDOW_SECONDS, b.g7h), as the decoder
-// reads it in any. It validates
+// and a positive value below its key's safe minimum, are refused, never
+// raised to the minimum or replaced by the default. A missing key, or 0, is
+// never refused: it takes its default or its safe minimum, whichever is
+// larger, which only pending_grace_seconds' derived minimum can be (b.9e1);
+// Load writes that value into the field of each key the file does not set
+// (resolveUnsetTmux), and the accessors give it for 0. A key is checked
+// whatever the letter case of its name and its table's ([Tmux]
+// STOPPING_WINDOW_SECONDS, b.g7h), as the decoder reads it in any. It validates
 // [defaults] expire_retention_days the same way (b.sgw), [relay]
-// timeout_seconds and [pause] timeout_seconds too (b.8q2), and [pre_trust]
-// lock_wait_seconds (b.kr4): a negative value and one above the key's maximum
-// (MaxExpireRetentionDays, MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds,
-// MaxPreTrustLockWaitSeconds) are refused, never replaced by the default or
+// timeout_seconds and [pause] timeout_seconds too (b.8q2), [pre_trust]
+// lock_wait_seconds (b.kr4) and [store] busy_timeout_ms (b.c7f): a negative
+// value and one above the key's maximum (MaxExpireRetentionDays,
+// MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds, MaxPreTrustLockWaitSeconds,
+// MaxStoreBusyTimeoutMs) are refused, never replaced by the default or
 // capped. A refusal behaves exactly like a malformed file: Load returns a
 // *ConfigError for the file whose Err describes every refused key
 // (validate). A value that is not a TOML integer already fails the parse.
@@ -425,6 +495,7 @@ func Load(path string) (Config, error) {
 		if err := validate(cfg, meta); err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
+		cfg.Tmux = resolveUnsetTmux(cfg.Tmux, meta)
 	case errors.Is(err, os.ErrNotExist):
 		// fall through with cfg = Default(); path resolution still applies so
 		// callers always get fully-resolved paths regardless of file presence.
@@ -567,11 +638,18 @@ func keyName(k toml.Key) string {
 // as a list (nameList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
-// [pause], [pre_trust], [tmux] and each table in its own order, then
+// [pause], [pre_trust], [store], [tmux] and each table in its own order, then
 // missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
 // description unchanged. Values are never changed.
+//
+// A missing key, or 0, is never refused (b.9e1): for [tmux]
+// pending_grace_seconds it takes the larger of its default and its derived
+// minimum (Tmux.unsetValue), so a raised create_timeout_ms alone never
+// refuses a key the operator did not set. No refused key's description
+// contains "; ", the separator between them.
 func validate(cfg Config, meta toml.MetaData) error {
-	var tables, refused, defaultRefused []string
+	tmuxRefused, raised := tmuxRefusals(cfg.Tmux, meta)
+	var tables, refused []string
 	for _, t := range []struct {
 		name     string
 		refusals []string
@@ -580,25 +658,33 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[relay]", cfg.Relay.refusals()},
 		{"[pause]", cfg.Pause.refusals()},
 		{"[pre_trust]", cfg.PreTrust.refusals()},
+		{"[store]", cfg.Store.refusals()},
+		{"[tmux]", tmuxRefused},
 	} {
 		if len(t.refusals) > 0 {
 			tables, refused = append(tables, t.name), append(refused, t.refusals...)
-		}
-	}
-	if r := tmuxRefusals(cfg.Tmux, meta); len(r) > 0 {
-		tables = append(tables, "[tmux]")
-		for _, x := range r {
-			refused = append(refused, x.text)
-			if x.defaultRefused {
-				defaultRefused = append(defaultRefused, "[tmux] "+x.key.Name())
-			}
 		}
 	}
 	if len(refused) == 0 {
 		return nil
 	}
 	return errors.New("refused " + nameList(tables) + " values: " + strings.Join(refused, "; ") + "." +
-		missingKeyAdvice(len(refused), defaultRefused))
+		missingKeyAdvice(raised))
+}
+
+// missingKeyAdvice is the refusal's closing sentence, with its leading space,
+// true for every refused key: a missing key, or 0, always loads (b.9e1).
+// raised names the refused keys for which it gives their safe minimum, as it
+// is above their default (tmuxRefusals); only [tmux] pending_grace_seconds'
+// derived minimum can be. With none, the sentence is the plain "A missing
+// key, or 0, gives the default."; otherwise it adds that those keys take
+// their safe minimum when that is larger.
+func missingKeyAdvice(raised []string) string {
+	if len(raised) == 0 {
+		return " A missing key, or 0, gives the default."
+	}
+	return " A missing key, or 0, gives the default, or for " + nameList(raised) +
+		" its safe minimum when that is larger."
 }
 
 // nameList joins names as a refusal lists them, the refused tables in
@@ -610,26 +696,6 @@ func nameList(names []string) string {
 		return strings.Join(names, " and ")
 	}
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
-
-// missingKeyAdvice is the refusal's closing sentence, with its leading space.
-// refused counts the refused keys; defaultRefused names those among them
-// whose default is below their safe minimum (b.n4q). A missing key, or 0,
-// gives the default, which loads for every refused key but those, whose own
-// descriptions state a change that loads. So the sentence is the plain "A
-// missing key, or 0, gives the default." when defaultRefused is empty, names
-// the keys it leaves out when only some refused keys are in it, and is empty
-// when every refused key is.
-func missingKeyAdvice(refused int, defaultRefused []string) string {
-	switch len(defaultRefused) {
-	case 0:
-		return " A missing key, or 0, gives the default."
-	case refused:
-		return ""
-	default:
-		return " For every refused key other than " + strings.Join(defaultRefused, " and ") +
-			", a missing key, or 0, gives the default."
-	}
 }
 
 // resolvePaths applies the SRD §11 path rules to every filesystem-bearing

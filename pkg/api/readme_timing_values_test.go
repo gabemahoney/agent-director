@@ -141,17 +141,31 @@ func docTimingStatements() []docStatement {
 			[]string{"pending grace period ("}, fixed(itoa(config.DefaultPendingGraceSeconds))},
 		{"README timing settings: grace period minimum rule", readme, timingSettingsTitle,
 			[]string{"its minimum:", keyCode(pipe)}, fixed(itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds))},
-		{"README timing settings: grace period worked example", readme, timingSettingsTitle,
-			[]string{"`" + create.Name() + " =", "minimum to", "default", keyCode(grace)}, func(got []string) []string {
+		{"README timing settings: grace period table-row example", readme, timingSettingsTitle,
+			[]string{"Example: with `" + create.Name() + " =", "grace period is"}, func(got []string) []string {
+				return []string{got[0], itoa(unsetGrace(got[0]))}
+			}},
+		{"README timing settings: grace period paragraph worked example", readme, timingSettingsTitle,
+			[]string{"For example, `" + create.Name() + " =", "minimum to", "default", keyCode(grace), "setting it to", "set"},
+			func(got []string) []string {
 				in, _ := strconv.ParseInt(got[0], 10, 64)
 				m := config.PendingGraceMinimumSeconds(in, 0)
 				def := itoa(config.DefaultPendingGraceSeconds)
 				if m <= config.DefaultPendingGraceSeconds {
 					def = "(none: the default " + def + " is not below the minimum " + itoa(m) + ")"
 				}
-				return []string{got[0], itoa(m), def, itoa(m)}
+				return []string{got[0], itoa(m), def, itoa(unsetGrace(got[0])), def, itoa(m)}
 			}},
 	}
+}
+
+// unsetGrace is the grace period, in seconds, that an unset
+// pending_grace_seconds gives beside the stated createTimeoutMs, with
+// pipe_close_wait_ms at its default: the larger of the default and the
+// derived minimum (b.9e1).
+func unsetGrace(createTimeoutMs string) int64 {
+	in, _ := strconv.ParseInt(createTimeoutMs, 10, 64)
+	return max(config.DefaultPendingGraceSeconds, config.PendingGraceMinimumSeconds(in, 0))
 }
 
 // TestReadmeTimingValuesStatements: each listed statement of a timing

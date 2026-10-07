@@ -273,7 +273,7 @@ func openRawStore(dbPath string) (*sql.DB, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("store file: %w", err)
 	}
-	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)")
+	raw, err := sql.Open("sqlite", fmt.Sprintf("%s?_pragma=busy_timeout(%d)", dbPath, store.DefaultBusyTimeoutMs))
 	if err != nil {
 		return nil, fmt.Errorf("raw open: %w", err)
 	}

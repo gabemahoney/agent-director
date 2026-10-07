@@ -620,7 +620,9 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // Every write applies only while the row still holds the snapshot the sweep
 // read, or the one its adoption produced. A `pending` row (a spawn's, a
 // reuse's or a resume's launch) inside the pending grace period
-// (pending_grace_seconds from the loaded configuration, 60 s by default),
+// (pending_grace_seconds from the loaded configuration, 60 s by default; an
+// unset grace is larger when a raised create_timeout_ms or pipe_close_wait_ms
+// puts its derived minimum above 60 s, see config.Tmux.EffectivePendingGrace),
 // measured from its launch start, is not judged: it is left as it is and is
 // in neither result list (SR-11.2). Ages and tmux time are read from the
 // Client's clock. Intended for periodic cron use.

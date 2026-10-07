@@ -29,11 +29,15 @@
 //
 // # Error handling
 //
-// All errors returned by Client methods are matched via [errors.Is]. Each verb
-// method that can fail with a typed condition lists its sentinels in an
-// "Errors:" block in its own godoc. Sentinels exported directly from this
-// package (pkg/api) are named api.ErrXxx; some sentinels originate in
-// internal packages but are re-exported here for caller convenience (see
+// All errors returned by Client methods are matched via [errors.Is]. A verb
+// method's "Errors:" block in its own godoc lists its verb's manifest error
+// names: the sentinels catalogued for that verb on every surface (CLI, MCP,
+// TypeScript client and Go); "Errors: none" means the verb has none.
+// Sentinels common to all methods, such as [ErrClientClosed], are not
+// repeated there, and a refusal only a Go caller can reach is stated in the
+// method's prose instead. Sentinels exported directly from this package
+// (pkg/api) are named api.ErrXxx; some sentinels originate in internal
+// packages but are re-exported here for caller convenience (see
 // [ErrSpawnNotFound], [ErrTmuxSessionCreate], etc.).
 //
 // Construction errors from [New] can be detected as follows:

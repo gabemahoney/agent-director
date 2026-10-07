@@ -49,8 +49,9 @@ func (e *killEnv) assertStillStored(t *testing.T, rows ...killRow) {
 }
 
 // TestExpireSelection checks the window (override, else config's retention)
-// selects finished rows by ended_at on the fixture clock; zero or less selects
-// all; a live row and a NULL-ended_at row are never selected.
+// selects finished rows by ended_at on the fixture clock; an explicit zero
+// selects all; a live row and a NULL-ended_at row are never selected. A
+// negative override is refused (TestExpireOnlyExplicitZeroSelectsEvery).
 func TestExpireSelection(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	ages := map[string]time.Duration{
@@ -73,7 +74,6 @@ func TestExpireSelection(t *testing.T) {
 		{"older than 24h", olderThan(24 * time.Hour), []string{"ended-under-retention", "ended-past-retention"}},
 		{"default retention from config", nil, []string{"ended-past-retention"}},
 		{"zero override", olderThan(0), every},
-		{"negative override", olderThan(-time.Hour), every},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

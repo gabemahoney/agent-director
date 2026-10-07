@@ -59,6 +59,12 @@
 # before. A db_path install.sh cannot read stops the install (exit 5) before
 # anything on disk changes, on a fresh HOME and over an installed store.
 #
+# [store] busy_timeout_ms (b.c7f): an upgrade's two user_version reads pass
+# sqlite3 the configured busy timeout (.timeout), or 10000 with no key or 0;
+# with 1 ms the first read gives up on a briefly held store lock that the
+# default waits out, and the install stops at step 2 (exit 5). A
+# busy_timeout_ms install.sh cannot read is advice_follow.sh's J19.
+#
 # config.toml merge (b.onv): a hooks-on install, run twice, sets
 # inject_help_hook = true inside the [defaults] table however its header is
 # spelled (blanks inside or before the brackets, a trailing comment, a CRLF, a
@@ -603,6 +609,56 @@ report db-path-stale-default-verified "$(grep -cxF "  schema  : migration verifi
 report db-path-stale-default-real-version "$(sqlite3 "$real" 'PRAGMA user_version;')" "$v"
 report db-path-stale-default-stale-untouched "$(sha256sum "$stale")" "$stale_sum"
 report db-path-stale-default-sentinel-consumed "$(compgen -G "$H/.agent-director/migrate-authorized*")" ""
+
+# A sqlite3 in $ROOT/timeout-log that logs the value of each -cmd it is given
+# to $ROOT/timeouts.log, then runs the real one (b.c7f).
+mkdir -p "$ROOT/timeout-log"
+{
+    printf '#!/bin/bash\nSQLITE=%q LOG=%q\n' "$(type -P sqlite3)" "$ROOT/timeouts.log"
+    cat <<'EOF'
+prev=""
+for a; do [[ "$prev" == -cmd ]] && printf '%s\n' "$a" >>"$LOG"; prev="$a"; done
+exec "$SQLITE" "$@"
+EOF
+} >"$ROOT/timeout-log/sqlite3"
+chmod 0755 "$ROOT/timeout-log/sqlite3"
+
+# [store] busy_timeout_ms (b.c7f): an upgrade's two user_version reads wait as
+# long as agent-director's store connections do: the configured busy timeout,
+# or the default for no key or 0. Per case <name>|<config>|<ms>.
+while IFS='|' read -r -u 3 name config ms; do
+    name="busy-timeout-$name"
+    older_store "$name"
+    [[ -z "$config" ]] || with_config "$config"
+    : >"$ROOT/timeouts.log"
+    PATH_PREFIX="$ROOT/timeout-log"
+    local_install
+    PATH_PREFIX=""
+    report_upgraded "$name"
+    report "$name-read-timeouts" "$(paste -sd, "$ROOT/timeouts.log")" ".timeout $ms,.timeout $ms"
+done 3<<'EOF'
+none||10000
+zero|[store]\nbusy_timeout_ms = 0|10000
+set|[store]\nbusy_timeout_ms = 1_234 # ms|1234
+crlf-beside-db-path|[store]\r\ndb_path = "~/.agent-director/state.db"\r\nbusy_timeout_ms = 2500\r|2500
+EOF
+
+# With busy_timeout_ms = 1, the upgrade's first read gives up on a briefly held
+# store lock that the default waits out (locked-store above): the install stops
+# at step 2 (exit 5), authorizing nothing (b.c7f).
+older_store busy-timeout-short-locked
+with_config '[store]\nbusy_timeout_ms = 1'
+rm -f "$ROOT/locks.log"
+locking_sqlite3 "$db"
+PATH_PREFIX="$ROOT/locking"
+local_install
+PATH_PREFIX=""
+report busy-timeout-short-locked-exit-code "$RC" "5"
+report busy-timeout-short-locked-first-stderr-line "$(head -n 1 "$ERR")" "install.sh: reading state.db's schema version FAILED"
+report busy-timeout-short-locked-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held"
+report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+# The stand-in's holder may still hold the lock: wait it out.
+report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$((schema - 1))"
 
 # snap: every path under H with its type, mode, size and mtime, and every
 # file's sha256.

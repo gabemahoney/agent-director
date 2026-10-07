@@ -23,8 +23,10 @@ type TmuxSetting struct {
 }
 
 // TmuxInt sets key k to the TOML integer v, the normal case. v is written as
-// given: 0 and negative values are written too, for the default (0 falls back
-// to the key's default) and refusal cases.
+// given: 0 and negative values are written too, for the default and refusal
+// cases. 0 falls back to the key's default; for pending_grace_seconds, to the
+// larger of its default and its derived minimum
+// (config.PendingGraceMinimumSeconds; b.9e1).
 func TmuxInt(k config.TmuxKey, v int64) TmuxSetting {
 	return TmuxSetting{key: k, value: v}
 }
@@ -83,11 +85,11 @@ func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...Tmu
 
 // ConfigKeys are the keys outside [tmux] with a range that WriteKeysConfig
 // sets: [defaults] expire_retention_days (b.sgw), [relay] timeout_seconds and
-// [pause] timeout_seconds (b.8q2), and [pre_trust] lock_wait_seconds (b.kr4).
-// A 0 field leaves its key out, which loads as a written 0 does: the key's
-// default.
+// [pause] timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4) and
+// [store] busy_timeout_ms (b.c7f). A 0 field leaves its key out, which loads
+// as a written 0 does: the key's default.
 type ConfigKeys struct {
-	RetentionDays, RelayTimeoutSeconds, PauseTimeoutSeconds, PreTrustLockWaitSeconds int64
+	RetentionDays, RelayTimeoutSeconds, PauseTimeoutSeconds, PreTrustLockWaitSeconds, StoreBusyTimeoutMs int64
 }
 
 // WriteKeysConfig is WriteTmuxConfig with keys' non-zero fields set as well,
@@ -104,6 +106,7 @@ func WriteKeysConfig(t testing.TB, path string, keys ConfigKeys, settings ...Tmu
 		{"relay", "timeout_seconds", keys.RelayTimeoutSeconds},
 		{"pause", "timeout_seconds", keys.PauseTimeoutSeconds},
 		{"pre_trust", "lock_wait_seconds", keys.PreTrustLockWaitSeconds},
+		{"store", "busy_timeout_ms", keys.StoreBusyTimeoutMs},
 	} {
 		if k.value != 0 {
 			tables[k.table] = map[string]any{k.key: k.value}

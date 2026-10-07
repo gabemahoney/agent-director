@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -149,6 +150,49 @@ func TestHookCLIOpensTheVerbsStore(t *testing.T) {
 			assertHomeTree(t, cwd)
 			if row := assertOneHookFired(t, home); row["claude_instance_id"] != id {
 				t.Errorf("ad.hook.fired = %v; want %s's", row, id)
+			}
+		})
+	}
+}
+
+// TestHookCLIUsesConfiguredBusyTimeout (b.c7f): under a held write lock a SessionStart
+// gives up at once, fail-open, with 1 ms, and waits for the release with 60000.
+func TestHookCLIUsesConfiguredBusyTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ms   int
+		hold time.Duration // the lock's release, unless the hook returns first
+		want string
+	}{
+		{"1 ms gives up", 1, 5 * time.Second, store.StatePending},
+		{"60000 ms waits for the release", 60000, 300 * time.Millisecond, store.StateWaiting},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			const id = "id-c7f-1"
+			if _, err := apitest.SeedSpawn(stateDB(home), id, store.StatePending, "/tmp", "off", "", true,
+				withTestProcessPane(t)); err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+			cfg := fmt.Sprintf("[store]\nbusy_timeout_ms = %d\n", tc.ms)
+			if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(cfg), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			release := apitest.HoldWriteLock(t, stateDB(home), tc.hold)
+			stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id},
+				`{"hook_event_name":"SessionStart","transcript_path":"/x/c7f.jsonl"}`)
+			release()
+
+			if code != 0 || stdout != "" {
+				t.Fatalf("hook exit = %d, stdout = %q; want 0 and empty (stderr=%q)", code, stdout, stderr)
+			}
+			if got := rowColumns(t, home, id).State; got != tc.want {
+				t.Errorf("row state after the hook = %v; want %s", got, tc.want)
+			}
+			log, _ := os.ReadFile(filepath.Join(directorDir(home), "errors.log"))
+			if locked := strings.Contains(string(log), "database is locked"); locked != (tc.want == store.StatePending) {
+				t.Errorf("errors.log = %q; want a locked-store line exactly when the write gave up", log)
 			}
 		})
 	}

@@ -101,10 +101,10 @@
 #      this install may have let it migrate state.db), no temp file for
 #      the migration sentinel (mktemp failed), or post-open
 #      user_version unreadable or != target when a migration was
-#      expected), or a config file
-#      whose [store] db_path install.sh cannot read, or (hooks on) one
-#      that sets defaults as a key before any header (defaults = { ... }),
-#      which the config.toml merge cannot extend (both refused in
+#      expected), or a config file whose [store] db_path or
+#      busy_timeout_ms install.sh cannot read, or (hooks on) one that
+#      sets defaults as a key before any header (defaults = { ... }),
+#      which the config.toml merge cannot extend (all refused in
 #      pre-flight, before anything on disk changes). state.db here is
 #      the store database agent-director opens: ~/.agent-director/state.db,
 #      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
@@ -255,7 +255,7 @@ fi
 #   ErrVersionUnreadable  a user_version read gave no version
 #                         (ad_fail_unreadable_version): re-run.
 #   ErrConfigMalformed    config.toml refused, by agent-director or by
-#                         install.sh's pre-flight reader or merge check:
+#                         install.sh's pre-flight readers or merge check:
 #                         fix it, then re-run.
 #   ErrSchemaMismatch     state.db newer than this binary (step 4's open):
 #                         install a newer agent-director.
@@ -746,6 +746,140 @@ fi
 state_db_name="state.db"
 if [[ "$state_db" != "$(ad_clean_path "${HOME}/.agent-director/state.db")" ]]; then
     state_db_name="$state_db"
+fi
+
+# --------------------------------------------------------------------
+# Store busy timeout: [store] busy_timeout_ms (b.c7f)
+#
+# Every agent-director connection to the store waits up to [store]
+# busy_timeout_ms in ~/.agent-director/config.toml for a lock another
+# connection holds (SQLite's busy timeout; internal/config
+# Store.EffectiveBusyTimeoutMs). install.sh's sqlite3 reads of the store's
+# user_version (ad_user_version) wait the same time, and so does the check
+# command it prints, so install.sh reads the key itself, from the file
+# ad_store_db_path has just accepted. That reader refuses every way to set
+# a [store] key but a bare name = value line under one [store] header, so
+# this reader looks only at those lines.
+#
+# The value resolves as Go resolves it: a missing file or key, or 0, gives
+# the default (internal/config DefaultStoreBusyTimeoutMs); 1 to 2147483647
+# (MaxStoreBusyTimeoutMs) is used as written. A value agent-director
+# refuses, a negative one or one above 2147483647, gives the default here
+# too, for the reads before the binary loads the config only: the binary
+# then refuses the file itself (ErrConfigMalformed) at step 3, or at step 4
+# on a fresh install, before any migration is authorized. The reader reads
+# the value only in TOML's decimal integer form (an optional sign, no
+# leading zero, _ only between two digits), optionally followed by a #
+# comment. It refuses the key in other letter case (agent-director's TOML
+# decoder matches names regardless of case), a second busy_timeout_ms, and
+# any other form of value (quoted, hexadecimal, octal, binary or with a
+# decimal point, say), naming the line and what to write instead. As for
+# db_path, a refusal stops the install (exit 5) here, before anything on
+# disk changes.
+#
+# The block between the >>> and <<< marker lines is self-contained (bash
+# 3.2 or later, builtins only), so a test can extract it with sed and call
+# ad_store_busy_timeout_ms alone.
+# --------------------------------------------------------------------
+
+# >>> ad_store_busy_timeout_ms (b.c7f) >>>
+
+# ad_busy_timeout_refuse <config> <line number> <line> <reason>... — report
+# a busy_timeout_ms line the reader cannot read, with <reason>s saying what
+# to change, then exit 1. Called only inside ad_store_busy_timeout_ms's
+# subshell.
+ad_busy_timeout_refuse() {
+    local config="$1" n="$2" line="$3" reason
+    shift 3
+    echo "install.sh: cannot tell how long agent-director waits for a locked store database; refusing to install." >&2
+    echo "  config  : $config" >&2
+    printf '  line %s  : %s\n' "$n" "$line" >&2
+    for reason in "$@"; do
+        echo "  $reason" >&2
+    done
+    echo "  install.sh reads [store] busy_timeout_ms itself, to wait as long as" >&2
+    echo "  agent-director does for a locked store when it reads the store's schema" >&2
+    echo "  version, and reads it only as a whole number of milliseconds in decimal" >&2
+    echo "  digits (optionally signed, with _ only between two digits) and an" >&2
+    echo "  optional # comment after it." >&2
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    exit 1
+}
+
+# ad_store_busy_timeout_ms <config> — print the busy timeout, in whole
+# milliseconds, that agent-director's store connections use for config file
+# <config>, resolved as above; a missing <config> gives the default. On a
+# busy_timeout_ms line the reader cannot read, print why on stderr and
+# return 1, printing nothing on stdout. Call it only after ad_store_db_path
+# accepted <config>. The body is a subshell under the C locale, as that
+# reader's is.
+ad_store_busy_timeout_ms() (
+    LC_ALL=C
+    # DefaultStoreBusyTimeoutMs and MaxStoreBusyTimeoutMs in internal/config.
+    local default_ms=10000 max_ms=2147483647
+    local config="$1" n=0 line table="" have_value=0 ms="" key rest sign digits
+    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
+    local re_keyval='^[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*=[[:blank:]]*(.*)$'
+    local re_store='^[Ss][Tt][Oo][Rr][Ee]$'
+    local re_key='^[Bb][Uu][Ss][Yy]_[Tt][Ii][Mm][Ee][Oo][Uu][Tt]_[Mm][Ss]$'
+    # TOML's decimal integer: an optional sign, then 0, or digits with no
+    # leading zero and _ only between two of them.
+    local re_int='^([+-]?)(0|[1-9](_?[0-9])*)[[:blank:]]*(#.*)?$'
+
+    if [[ -f "$config" && -r "$config" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            n=$((n + 1))
+            if [[ "$n" -eq 1 ]]; then
+                line="${line#$'\xef\xbb\xbf'}"
+            fi
+            line="${line%$'\r'}"
+            if [[ "$line" =~ $re_header ]]; then
+                table="${BASH_REMATCH[1]}"
+                continue
+            fi
+            if [[ ! "$table" =~ $re_store || ! "$line" =~ $re_keyval ]]; then
+                continue
+            fi
+            key="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+            if [[ ! "$key" =~ $re_key ]]; then
+                continue
+            fi
+            if [[ "$key" != busy_timeout_ms ]]; then
+                ad_busy_timeout_refuse "$config" "$n" "$line" \
+                    "agent-director reads this key as busy_timeout_ms: its TOML decoder" \
+                    "matches names regardless of letter case. Write it as busy_timeout_ms."
+            fi
+            if [[ "$have_value" -eq 1 ]]; then
+                ad_busy_timeout_refuse "$config" "$n" "$line" \
+                    "This sets busy_timeout_ms a second time. Keep one."
+            fi
+            if [[ ! "$rest" =~ $re_int ]]; then
+                ad_busy_timeout_refuse "$config" "$n" "$line" \
+                    "busy_timeout_ms's value is not a whole number in decimal digits, such as" \
+                    "${default_ms}, optionally followed by a # comment. Write it in that form," \
+                    "without quotes, a decimal point or a 0x, 0o or 0b prefix."
+            fi
+            sign="${BASH_REMATCH[1]}"
+            digits="${BASH_REMATCH[2]//_/}"
+            have_value=1
+            # 0 gives the default, and so does a value agent-director refuses
+            # (negative, or above max_ms), which the binary reports itself.
+            # The length check keeps the compare within bash's integers.
+            if [[ "$digits" == 0 || "$sign" == - || ${#digits} -gt ${#max_ms} ]] || ((digits > max_ms)); then
+                ms=""
+            else
+                ms="$digits"
+            fi
+        done <"$config"
+    fi
+    printf '%s\n' "${ms:-$default_ms}"
+)
+
+# <<< ad_store_busy_timeout_ms (b.c7f) <<<
+
+if ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "${DEFAULT_INSTALL_ROOT}/config.toml")"; then
+    ad_exit_5 ErrConfigMalformed
 fi
 
 # --------------------------------------------------------------------
@@ -1530,11 +1664,12 @@ fi
 # a version only when ad_got_version holds. Call it only on a DB that
 # exists: a failed read never means "no DB".
 #
-# The read waits up to 10 s for a lock, the same busy_timeout every
-# agent-director connection uses (internal/store/store.go openDB). A plain
-# sqlite3 waits 0 ms, so any agent-director process briefly holding
-# state.db's locks (opening, exiting, checkpointing or recovering the WAL)
-# would fail the read at once and the install would misread the store (b.ady).
+# The read waits for a lock up to $store_busy_timeout_ms, the busy timeout
+# every agent-director connection uses ([store] busy_timeout_ms, read in
+# pre-flight, b.c7f; internal/store/store.go openDB). A plain sqlite3 waits
+# 0 ms, so any agent-director process briefly holding state.db's locks
+# (opening, exiting, checkpointing or recovering the WAL) would fail the
+# read at once and the install would misread the store (b.ady).
 #
 # -init /dev/null: the sqlite3 shell otherwise runs the operator's
 # ~/.sqliterc first, and a `.headers on` or `.mode` there changes the
@@ -1542,7 +1677,7 @@ fi
 # print "-- Loading resources from /dev/null" to stderr, which would join
 # the read's output and make it no version.
 ad_user_version() {
-    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" "$1" "PRAGMA user_version;" 2>&1
+    sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$1" "PRAGMA user_version;" 2>&1
 }
 
 # ad_is_version <value> — true when <value> is a user_version as sqlite3
@@ -1581,8 +1716,8 @@ ad_show_unreadable_version() {
 # it (on a failed read, sqlite3's own error), the cause, any further
 # <line>s, and the advice.
 #
-# The script cannot tell why a read failed (a lock held past the 10 s
-# busy timeout, a broken sqlite3, permissions, a corrupt file), so it shows
+# The script cannot tell why a read failed (a lock held past the busy
+# timeout, a broken sqlite3, permissions, a corrupt file), so it shows
 # sqlite3's error and says that a re-run reads again. A lock is a
 # condition time may resolve, so this never sends the operator to a human
 # (b.ady, b.n5a). Output that is not a version is no lock or timing
@@ -1850,7 +1985,7 @@ if ! ad_got_version "$db_version_after_rc" "$db_version_after"; then
     ad_show_unreadable_version "$db_version_after"
     echo "  The store open (agent-director list) succeeded and no migration was" >&2
     echo "  authorized, so the install carries on. Check the version later with:" >&2
-    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" %q "PRAGMA user_version;"\n' "$state_db" >&2
+    printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2
 fi
 
 if [[ "$migration_expected" -eq 1 ]]; then
@@ -1896,7 +2031,7 @@ if [[ "$migration_expected" -eq 1 ]]; then
         echo "  has run, and its sentinel is consumed. Yet the read after the open" >&2
         echo "  gives v${db_version_after}: ${state_db_name} changed after the open, or the read" >&2
         echo "  is wrong. Check its version now:" >&2
-        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" %q "PRAGMA user_version;"\n' "$state_db" >&2
+        printf '    sqlite3 -batch -init /dev/null -cmd ".timeout %s" %q "PRAGMA user_version;"\n' "$store_busy_timeout_ms" "$state_db" >&2
         echo "  A re-run of this install reads the version again: below v${target_version} it" >&2
         echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2
         echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2

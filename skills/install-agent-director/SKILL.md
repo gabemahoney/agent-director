@@ -360,29 +360,36 @@ This skill runs `install.sh` from the same directory. The script:
       / `dnf install file`. `sqlite3` is mandatory for the
       schema-migration flow (below): the script reads state.db's
       ACTUAL `user_version` through the WAL with
-      `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" <db> "PRAGMA user_version;"` —
-      raw header bytes are subtly wrong for a WAL-mode DB, and
-      `-init /dev/null` keeps your `~/.sqliterc` from changing the
-      output — both to decide whether a migration sentinel is needed
-      and to verify the post-open version;
-      install via `apt install sqlite3` / `brew install sqlite` /
+      `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <db> "PRAGMA user_version;"`,
+      both to decide whether a migration sentinel is needed and to
+      verify the post-open version. Raw header bytes are subtly wrong
+      for a WAL-mode DB, `-init /dev/null` keeps your `~/.sqliterc` from
+      changing the output, and `<busy_timeout_ms>` is the `[store]
+      busy_timeout_ms` that step 4 reads. Install `sqlite3` via
+      `apt install sqlite3` / `brew install sqlite` /
       `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
-   4. **Store database (`[store] db_path`)** — reads `[store] db_path`
-      from `~/.agent-director/config.toml` to find the database
-      agent-director opens, the one the schema-migration flow (below)
-      reads, authorizes and verifies. When `db_path` moves the store, the
-      `pre-flight OK` block gains a line
+   4. **Store database (`[store] db_path` and `busy_timeout_ms`)** —
+      reads `[store] db_path` from `~/.agent-director/config.toml` to
+      find the database agent-director opens, the one the
+      schema-migration flow (below) reads, authorizes and verifies. When
+      `db_path` moves the store, the `pre-flight OK` block gains a line
       `store   : <path> ([store] db_path in <config>)`; with the default
       store the output is unchanged. A config file whose `db_path` the
       script cannot read stops the install here (exit `5`,
       `ErrConfigMalformed`), before anything is installed or changed.
       See "Which database install.sh checks" below for the accepted form
-      and the refusal. With hooks on (no `--no-hooks`), a config that
-      sets `defaults` as a key before any header (`defaults = { ... }`)
-      stops the install here too (exit `5`, `ErrConfigMalformed`),
-      before anything is installed or changed, because step 6's config
-      merge cannot extend it; see step 6 below.
+      and the refusal. It then reads `[store] busy_timeout_ms`, how long
+      agent-director waits for a locked store, so that its own reads of
+      that database wait as long. A `busy_timeout_ms` line the script
+      cannot read stops the install here too (exit `5`,
+      `ErrConfigMalformed`), before anything is installed or changed;
+      see "How long install.sh waits for a locked state.db" below. With
+      hooks on (no `--no-hooks`), a config that sets `defaults` as a key
+      before any header (`defaults = { ... }`) stops the install here
+      too (exit `5`, `ErrConfigMalformed`), before anything is installed
+      or changed, because step 6's config merge cannot extend it; see
+      step 6 below.
    5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
@@ -524,13 +531,13 @@ This skill runs `install.sh` from the same directory. The script:
    1. **Install the new binary** — already done by step 3/the atomic
       `mv` above.
    2. **Read the DB's ACTUAL `user_version`** via
-      `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" <state.db> "PRAGMA user_version;"`
-      (through the WAL, waiting up to 10 s for a lock, ignoring
-      `~/.sqliterc` — never assume the version, and never read raw
-      header bytes). No `state.db` on disk (fresh install) → nothing to
-      authorize; step 4 fresh-creates it. A `state.db` that exists but
-      whose version cannot be read, or reads as anything but a whole
-      number (0 or more), stops the install here (**exit 5**): no
+      `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <state.db> "PRAGMA user_version;"`
+      (through the WAL, waiting up to `[store] busy_timeout_ms` for a
+      lock, ignoring `~/.sqliterc` — never assume the version, and never
+      read raw header bytes). No `state.db` on disk (fresh install) →
+      nothing to authorize; step 4 fresh-creates it. A `state.db` that
+      exists but whose version cannot be read, or reads as anything but
+      a whole number (0 or more), stops the install here (**exit 5**): no
       sentinel is written and the store is not opened. See "An
       unreadable schema version" below.
    3. **Write the authorization sentinel** — a file
@@ -754,8 +761,8 @@ no other exit status has a cause line.
 
 | `<Name>` | Cause | Remedy |
 |---|---|---|
-| `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past the 10 s wait, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
-| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight reader of `[store] db_path`, or, with hooks on, by its check that the `[defaults]` merge can extend the file (both before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml, then re-run the install with the same flags. See "Which database install.sh checks", step 6 of "What this skill does", and "A refused config file". |
+| `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
+| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its check that the `[defaults]` merge can extend the file (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml, then re-run the install with the same flags. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
 | `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
 | `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open" and "No temp file for the sentinel". |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
@@ -950,9 +957,10 @@ the install shows it.
 **The form install.sh reads.** The reader is narrow and fails closed.
 It accepts only blank lines, `#` comment lines, `[name]` table headers
 and `name = value` lines, a name being letters, digits, `_` and `-`,
-written bare. It reads no value but `db_path`'s, which must be under
-`[store]`, on one line, as a `"..."` holding no backslash or a `'...'`,
-optionally followed by a `#` comment:
+written bare. It reads no value but `db_path`'s and `busy_timeout_ms`'s
+(see "How long install.sh waits for a locked state.db" below). `db_path`
+must be under `[store]`, on one line, as a `"..."` holding no backslash or
+a `'...'`, optionally followed by a `#` comment:
 
 ```toml
 [store]
@@ -1005,6 +1013,49 @@ before any header (`defaults = { ... }`); with hooks on, the check that
 follows it refuses that line in pre-flight (exit 5); see step 6 of "What
 this skill does" above.
 
+### How long install.sh waits for a locked state.db
+
+agent-director waits up to `[store] busy_timeout_ms` for a store database
+another process holds locked, then fails the call. install.sh reads that
+key itself, in pre-flight, from the same `~/.agent-director/config.toml`,
+right after `db_path`. Each sqlite3 read of state.db's `user_version`
+(`.timeout <busy_timeout_ms>`) waits up to that long for a lock, and the
+`sqlite3` check commands the install prints carry the same value.
+
+| `busy_timeout_ms` under `[store]` | install.sh waits |
+|---|---|
+| unset, or `0` | 10000 ms, agent-director's default |
+| `1` to `2147483647` | that many milliseconds |
+| negative, or above `2147483647` | the default; agent-director refuses the file at step 3 or 4 (see "A refused config file" below) |
+
+install.sh reads the value only as a whole number in decimal digits
+(optionally signed, with `_` only between two digits), optionally followed
+by a `#` comment:
+
+```toml
+[store]
+busy_timeout_ms = 30000   # optional comment
+```
+
+Anything else on that line stops the install with **exit 5**
+(`ErrConfigMalformed`) before anything is installed or changed: a quoted value (`"30000"`), a leading
+zero (`030`), a `0x`, `0o` or `0b` prefix, a decimal point (`1.5`), the key
+in another letter case (`BUSY_TIMEOUT_MS`; agent-director matches names
+regardless of letter case), or a second `busy_timeout_ms`. The report
+names the file, the line and what to change:
+
+    install.sh: cannot tell how long agent-director waits for a locked store database; refusing to install.
+      config  : /home/<you>/.agent-director/config.toml
+      line 2  : BUSY_TIMEOUT_MS = 30000
+      agent-director reads this key as busy_timeout_ms: its TOML decoder
+      matches names regardless of letter case. Write it as busy_timeout_ms.
+      install.sh reads [store] busy_timeout_ms itself, to wait as long as
+      ...
+      Nothing was installed or changed. Re-run this install after the change.
+    install.sh: err_name=ErrConfigMalformed
+
+Make the change it names, then re-run the install with the same flags.
+
 ### The six steps `install.sh` performs
 
 `state.db` below is the database the section above names.
@@ -1013,13 +1064,13 @@ this skill does" above.
    `~/.agent-director/bin/`, and `agent-director-admin` into
    `~/.agent-director/admin/`).
 2. **Read the ACTUAL `user_version`** via
-   `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" <state.db> "PRAGMA user_version;"`
-   (through the WAL, waiting up to 10 s for a lock, ignoring
-   `~/.sqliterc`). No `state.db` on disk → fresh install, skip to
-   step 4. An existing `state.db` whose version cannot be read, or
-   reads as anything but a whole number (0 or more), fails the install
-   (exit 5) before any sentinel is written or the store is opened; see
-   below.
+   `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <state.db> "PRAGMA user_version;"`
+   (through the WAL, waiting up to `[store] busy_timeout_ms` for a
+   lock, ignoring `~/.sqliterc`). No `state.db` on disk → fresh
+   install, skip to step 4. An existing `state.db` whose version cannot
+   be read, or reads as anything but a whole number (0 or more), fails
+   the install (exit 5) before any sentinel is written or the store is
+   opened; see below.
 3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
    state.db — **skipped when `from == to`** (already current), on a
    fresh install, and when the probe below has already run the
@@ -1096,8 +1147,8 @@ under that line.
 
 - **The read failed** (sqlite3 exited nonzero, or printed nothing):
   what sqlite3 printed shows why (for example a lock held longer than
-  the 10 s wait). A version printed before the failure is not used.
-  Re-running the install retries the read.
+  `[store] busy_timeout_ms`). A version printed before the failure is
+  not used. Re-running the install retries the read.
 - **The read printed something else** (sqlite3 exited 0; "printed the
   output above, not a whole number (0 or more)"): the report names the
   `sqlite3 on PATH: <path>`. Anything sqlite3 printed counts, including
@@ -1183,10 +1234,11 @@ authorized migration has run, and its sentinel is consumed. Yet the
 read after the open gives `v<A>`, so state.db changed after the open,
 or the read is wrong. Do NOT delete state.db.
 
-1. Check its version now, with the command the report prints (it names
-   your store's path; this is the default store):
+1. Check its version now, with the command the report prints. It names
+   your store's path and its `[store] busy_timeout_ms`; for the default
+   store it is:
 
-       sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"
+       sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.agent-director/state.db "PRAGMA user_version;"
 
 2. Re-run the install with the same flags. It reads the version again:
    below `v<T>` it brings state.db to `v<T>` again, above `v<T>` it
@@ -1200,16 +1252,18 @@ or the read is wrong. Do NOT delete state.db.
 
 agent-director loads `~/.agent-director/config.toml` before it opens
 state.db, so a config it refuses (`ErrConfigMalformed`: for example a
-refused `[tmux]` timing or `[defaults] expire_retention_days` value, a
-TOML syntax error in a value, such as `relay_mode = off` unquoted, or a
-key set under names that differ only in letter case, such as
-`relay_mode` under both `[Defaults]` and `[defaults]`)
-fails every store-opening verb, the install's own included. The install
-stops (exit 5) at its first store-opening verb: step 3's probe when
-state.db exists, step 4's open on a fresh install. (A line install.sh's
-own `db_path` reader cannot read, an unclosed `[header]` say, stops the
-install earlier, in pre-flight; see "Which database install.sh checks"
-above.) It reports:
+refused `[tmux]` timing, `[defaults] expire_retention_days` or `[store]
+busy_timeout_ms` value, a TOML syntax error in a value, such as
+`relay_mode = off` unquoted, or a key set under names that differ only
+in letter case, such as `relay_mode` under both `[Defaults]` and
+`[defaults]`) fails every store-opening verb, the install's own
+included. The install stops (exit 5) at its first store-opening verb:
+step 3's probe when state.db exists, step 4's open on a fresh install.
+(A line install.sh's own `db_path` reader cannot read, an unclosed
+`[header]` say, stops the install earlier, in pre-flight; see "Which
+database install.sh checks" above. So does a `busy_timeout_ms` line its
+own reader cannot read; see "How long install.sh waits for a locked
+state.db" above.) It reports:
 
     install.sh: agent-director refused its config file (ErrConfigMalformed)
       config  : /home/<you>/.agent-director/config.toml
@@ -1226,11 +1280,14 @@ refusal says nothing about it.
 
 1. Fix the value(s) the envelope names in the `config  :` file: set
    each to a value in its range, or remove it or set it to 0 to get its
-   default, unless the envelope says that default is itself refused
-   (`is missing or 0, and its default, <n>, is below its safe minimum
-   <m>`); then set it to at least `<m>`. Or fix the syntax error. For
-   a key set under names that differ only in letter case, keep one of
-   the names the envelope lists for it and remove the others.
+   default. A removed or 0 key always loads; for `[tmux]
+   pending_grace_seconds` it gives the default or the key's safe
+   minimum, whichever is larger (the envelope's `below its safe minimum
+   <m> s (computed from the effective create_timeout_ms ... and
+   pipe_close_wait_ms ...)` names that minimum). Or fix the syntax
+   error. For a key set under names that differ only in letter case,
+   keep one of the names the envelope lists for it and remove the
+   others.
 2. Re-run the install with the same flags. It probes the store again
    and authorizes any pending migration.
 
@@ -1290,10 +1347,12 @@ which.
 user_version=N, want M" with N greater than M). Migrations only run
 forward, and the install will not downgrade a DB.
 
-1. Inspect: `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version"`
+1. Inspect: `sqlite3 -cmd ".timeout <busy_timeout_ms>" ~/.agent-director/state.db "PRAGMA user_version"`
    (with `[store] db_path` set, use the path install.sh's `store` line
-   shows) and compare against the version the binary expects (shown in
-   the error).
+   shows; for `<busy_timeout_ms>`, use your `[store] busy_timeout_ms`,
+   or the default if unset, as "How long install.sh waits for a locked
+   state.db" above gives it) and compare against the version the binary
+   expects (shown in the error).
 2. **Install the agent-director release that matches this schema.**
    This loses nothing; you likely rolled the binary back below the DB.
    Re-run this install skill with `--from-release` (latest) or point

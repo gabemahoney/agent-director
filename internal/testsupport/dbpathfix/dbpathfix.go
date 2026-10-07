@@ -1,7 +1,8 @@
-// Package dbpathfix runs install.sh's [store] db_path reader (b.2io) on its
-// own, and holds the one matrix of config.toml contents and HOME values that
-// the drift guards run through it and through Go's own resolution: pkg/api
-// (config.Load, then resolveStorePath) and internal/store (sentinelPath).
+// Package dbpathfix runs install.sh's [store] db_path reader (b.2io) and its
+// [store] busy_timeout_ms reader (b.c7f) on their own, and holds the one
+// matrix of config.toml contents and HOME values that the db_path drift guards
+// run through it and through Go's own resolution: pkg/api (config.Load, then
+// resolveStorePath) and internal/store (sentinelPath).
 //
 // This is a LEAF test-support package: it imports nothing from agent-director,
 // so any test package can use it. The reader runs under bash, as install.sh
@@ -226,28 +227,44 @@ type Result struct {
 
 // NewReader extracts the block between install.sh's "# >>> ad_store_db_path"
 // and "# <<< ad_store_db_path" lines into a temp file, as a test of it would
-// with sed.
+// with sed. Its Reader runs Resolve and Sentinel.
 func NewReader(t *testing.T, installSh string) *Reader {
+	t.Helper()
+	return newBlockReader(t, installSh, "ad_store_db_path", "b.2io")
+}
+
+// NewBusyTimeoutReader extracts install.sh's [store] busy_timeout_ms reader,
+// the "# >>> ad_store_busy_timeout_ms" block (b.c7f), as NewReader does. Its
+// Reader runs BusyTimeout.
+func NewBusyTimeoutReader(t *testing.T, installSh string) *Reader {
+	t.Helper()
+	return newBlockReader(t, installSh, "ad_store_busy_timeout_ms", "b.c7f")
+}
+
+// newBlockReader extracts the block between install.sh's "# >>> <name>" and
+// "# <<< <name>" lines (bug: the ticket that added it) into a temp file.
+func newBlockReader(t *testing.T, installSh, name, bug string) *Reader {
 	t.Helper()
 	data, err := os.ReadFile(installSh)
 	if err != nil {
 		t.Fatalf("read install.sh: %v", err)
 	}
+	open, end := "# >>> "+name+" ", "# <<< "+name+" "
 	var block []string
 	in := false
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "# >>> ad_store_db_path") {
+		if strings.HasPrefix(line, open) {
 			in = true
 		}
 		if in {
 			block = append(block, line)
 		}
-		if in && strings.HasPrefix(line, "# <<< ad_store_db_path") {
+		if in && strings.HasPrefix(line, end) {
 			break
 		}
 	}
-	if len(block) == 0 || !strings.HasPrefix(block[len(block)-1], "# <<< ad_store_db_path") {
-		t.Fatalf("%s has no complete \"# >>> ad_store_db_path\" ... \"# <<< ad_store_db_path\" block (b.2io)", installSh)
+	if len(block) == 0 || !strings.HasPrefix(block[len(block)-1], end) {
+		t.Fatalf("%s has no complete %q ... %q block (%s)", installSh, open, end, bug)
 	}
 	script := filepath.Join(t.TempDir(), "reader.sh")
 	if err := os.WriteFile(script, []byte(strings.Join(block, "\n")+"\n"), 0o600); err != nil {
@@ -280,6 +297,12 @@ func (r *Reader) run(t *testing.T, fn string, args ...string) Result {
 func (r *Reader) Resolve(t *testing.T, config, home string) Result {
 	t.Helper()
 	return r.run(t, "ad_store_db_path", config, home)
+}
+
+// BusyTimeout runs ad_store_busy_timeout_ms <config>.
+func (r *Reader) BusyTimeout(t *testing.T, config string) Result {
+	t.Helper()
+	return r.run(t, "ad_store_busy_timeout_ms", config)
 }
 
 // Sentinel runs ad_sentinel_path <db> and returns the path it prints.

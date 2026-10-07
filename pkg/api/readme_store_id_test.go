@@ -18,13 +18,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
 // runnableStoreIDLine returns the one sqlite3 line of the README's "This
 // store's id" item (storeIDItemCommands), refusing a line that is not
-// read-only, since the test runs it.
+// read-only, since the test runs it. Its one <busy_timeout_ms> placeholder
+// becomes config.DefaultStoreBusyTimeoutMs, the value of the temp HOME's
+// store, which has no config.toml (b.c7f); sqlite3 would read the
+// placeholder as 0 and never wait for a lock.
 func runnableStoreIDLine(t *testing.T) string {
 	t.Helper()
 	d := readMD(t, mdTopREADME)
@@ -32,7 +36,11 @@ func runnableStoreIDLine(t *testing.T) string {
 	if len(cmds) != 1 || !strings.HasPrefix(cmds[0], "sqlite3 -readonly ") {
 		t.Fatalf("%s %q: want exactly one sqlite3 line, with -readonly, in a code block; found %q", d.path, storeIDItemTitle, cmds)
 	}
-	return cmds[0]
+	if n := strings.Count(cmds[0], storeIDBusyTimeoutPlaceholder); n != 1 {
+		t.Fatalf("%s %q: sqlite3 line %q holds %d %s placeholders; want 1 for the run to substitute",
+			d.path, storeIDItemTitle, cmds[0], n, storeIDBusyTimeoutPlaceholder)
+	}
+	return strings.Replace(cmds[0], storeIDBusyTimeoutPlaceholder, strconv.Itoa(config.DefaultStoreBusyTimeoutMs), 1)
 }
 
 // holdStoreLock has a second connection take path's exclusive lock now and

@@ -375,6 +375,20 @@ const sessionStartWaitInterval = 250 * time.Millisecond
 // no_pane_recorded before Claude Code could kill it silently: cap < timeout.
 // Nothing checks that across the two packages; each value is pinned in its
 // own package's tests.
+//
+// The 60 s between the cap and the timeout is the headroom for the hook's
+// store writes outside the wait, and it assumes [store] busy_timeout_ms is
+// small (the default, 10 s). The cap bounds the wait only, and Claude Code's
+// timeout runs from the hook's start, not from the wait's. On a contended
+// store each RecordSessionStartIdentity write can wait up to busy_timeout_ms
+// for the write lock, and recordSessionStart makes up to four: up to two in
+// the gated write before the wait and up to two in the one after it
+// (writeSessionStart's retry on a snapshot change). At the default that is at
+// most 40 s, inside the headroom; from about 15 s (4 x 15 s = 60 s) the
+// writes can outlast it, and from 30 s the two after the wait alone can, so
+// Claude Code can kill the hook before it writes its result or its
+// no_pane_recorded. Nothing caps busy_timeout_ms against this headroom
+// (b.c7f).
 const sessionStartWaitCap = 540 * time.Second
 
 // recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): the

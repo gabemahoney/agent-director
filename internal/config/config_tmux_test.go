@@ -70,9 +70,10 @@ func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 
 // rangeKeys are the TOML integers a config file sets for the keys outside
 // [tmux] with a range: [defaults] expire_retention_days (b.sgw), [relay]
-// timeout_seconds and [pause] timeout_seconds (b.8q2), and [pre_trust]
-// lock_wait_seconds (b.kr4). "" leaves the table out.
-type rangeKeys struct{ days, relay, pause, preTrust string }
+// timeout_seconds and [pause] timeout_seconds (b.8q2), [pre_trust]
+// lock_wait_seconds (b.kr4) and [store] busy_timeout_ms (b.c7f). "" leaves
+// the table out.
+type rangeKeys struct{ days, relay, pause, preTrust, busyTimeout string }
 
 // keysFile writes a config file setting k's keys, then a [tmux] table holding settings.
 func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
@@ -83,6 +84,7 @@ func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
 		{"relay", "timeout_seconds", k.relay},
 		{"pause", "timeout_seconds", k.pause},
 		{"pre_trust", "lock_wait_seconds", k.preTrust},
+		{"store", "busy_timeout_ms", k.busyTimeout},
 	} {
 		if kv.value != "" {
 			fmt.Fprintf(&b, "[%s]\n%s = %s\n", kv.table, kv.key, kv.value)
@@ -299,31 +301,65 @@ func TestTmuxAccessorOnGoStruct(t *testing.T) {
 	}
 }
 
-// TestTmuxGraceRuleAccepts loads the grace-rule files SR-20.6 says must load
-// (grace 30 at the default create timeout is TestTmuxKeyLoad's lowest value).
+// tmuxCase returns key k's row of tmuxKeyTable.
+func tmuxCase(k config.TmuxKey) tmuxKeyCase {
+	return tmuxKeyTable[slices.IndexFunc(tmuxKeyTable, func(tc tmuxKeyCase) bool { return tc.key == k })]
+}
+
+// goTmux builds a config.Tmux in Go with settings in its fields, every other field 0.
+func goTmux(settings []tmuxSetting) config.Tmux {
+	var tm config.Tmux
+	for _, s := range settings {
+		tmuxCase(s.key).set(&tm, s.value)
+	}
+	return tm
+}
+
+// TestTmuxGraceRuleAccepts loads the grace-rule files that must load, at the
+// default create timeout and at raised ones (SR-20.6; b.9e1): a missing or 0
+// pending_grace_seconds takes its default or its derived minimum, whichever
+// is larger, and a positive value at or above the minimum loads as written.
+// The b.9e1 regression is create_40000_grace_missing, refused before. A
+// config.Tmux built in Go with the same fields reads the same.
 func TestTmuxGraceRuleAccepts(t *testing.T) {
+	grace, create, pipe := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs
+	const sec = time.Second
 	cases := []struct {
-		name       string
-		settings   []tmuxSetting
-		wantGrace  time.Duration
-		wantCreate time.Duration
+		name      string
+		settings  []tmuxSetting
+		wantValue int64 // Value(pending_grace_seconds): the file's value, or for a missing key the value it takes
+		wantGrace time.Duration
 	}{
-		{"create_15000_grace_36",
-			[]tmuxSetting{{config.TmuxCreateTimeoutMs, 15000}, {config.TmuxPendingGraceSeconds, 36}},
-			36 * time.Second, 15 * time.Second},
-		{"create_39900_default_grace",
-			[]tmuxSetting{{config.TmuxCreateTimeoutMs, 39900}},
-			config.DefaultPendingGraceSeconds * time.Second, 39900 * time.Millisecond},
+		{"create_default_grace_missing", nil, 60, 60 * sec},
+		{"create_default_grace_zero", []tmuxSetting{{grace, 0}}, 0, 60 * sec},
+		{"create_default_grace_at_minimum", []tmuxSetting{{grace, 30}}, 30, 30 * sec},
+		{"create_default_grace_above_default", []tmuxSetting{{grace, 90}}, 90, 90 * sec},
+		{"create_15000_grace_36", []tmuxSetting{{create, 15000}, {grace, 36}}, 36, 36 * sec},
+		{"create_39900_grace_missing_minimum_equals_default", []tmuxSetting{{create, 39900}}, 60, 60 * sec},
+		{"create_40000_grace_missing", []tmuxSetting{{create, 40000}}, 61, 61 * sec},
+		{"create_40000_grace_zero", []tmuxSetting{{create, 40000}, {grace, 0}}, 0, 61 * sec},
+		{"create_40000_grace_at_minimum", []tmuxSetting{{create, 40000}, {grace, 61}}, 61, 61 * sec},
+		{"create_40000_grace_above_minimum", []tmuxSetting{{create, 40000}, {grace, 90}}, 90, 90 * sec},
+		{"create_40000_pipe_zero_counts_as_default", []tmuxSetting{{create, 40000}, {pipe, 0}}, 61, 61 * sec},
+		{"create_40000_pipe_2000_grace_missing", []tmuxSetting{{create, 40000}, {pipe, 2000}}, 62, 62 * sec},
+		{"create_largest_grace_missing_saturates", []tmuxSetting{{create, math.MaxInt64}},
+			config.PendingGraceMinimumSeconds(math.MaxInt64, 0), maxDuration},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tm := loadTmux(t, tmuxConfigFile(t, tc.settings...))
-			if got := tm.EffectivePendingGrace(); got != tc.wantGrace {
-				t.Errorf("EffectivePendingGrace() = %v, want %v", got, tc.wantGrace)
+			if got := tm.Value(grace); got != tc.wantValue {
+				t.Errorf("Value(pending_grace_seconds) = %d, want %d", got, tc.wantValue)
 			}
-			if got := tm.EffectiveCreateTimeout(); got != tc.wantCreate {
-				t.Errorf("EffectiveCreateTimeout() = %v, want %v", got, tc.wantCreate)
+			checkEffective(t, tm, tmuxCase(grace), tc.wantGrace)
+			for _, set := range tc.settings {
+				if set.key != grace && tm.Value(set.key) != set.value {
+					t.Errorf("%s = %d, want the file's %d", set.key.Name(), tm.Value(set.key), set.value)
+				}
 			}
+			t.Run("go_struct", func(t *testing.T) {
+				checkEffective(t, goTmux(tc.settings), tmuxCase(grace), tc.wantGrace)
+			})
 		})
 	}
 }
@@ -372,28 +408,35 @@ var tmuxSpellings = []struct {
 
 // TestTmuxCheckedUnderAnySpelling is the b.g7h regression: each tmuxSpellings
 // file is refused with its lowercase file's description, or loads its values.
+// A spelt create timeout raises a missing or 0 grace period to its derived
+// minimum (b.9e1), so a misread one would leave the 60 s default.
 func TestTmuxCheckedUnderAnySpelling(t *testing.T) {
 	grace, create := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs
 	type spellingCase struct {
-		name     string
-		settings []tmuxSetting
-		refused  bool
+		name      string
+		settings  []tmuxSetting
+		refused   bool
+		wantGrace int64 // the effective pending_grace_seconds of a file that loads; 0 leaves it unchecked
 	}
 	var cases []spellingCase
 	for _, tc := range tmuxKeyTable {
 		if tc.minimum == 0 {
-			cases = append(cases, spellingCase{tc.key.Name() + "_negative", []tmuxSetting{{tc.key, -1}}, true})
+			cases = append(cases, spellingCase{tc.key.Name() + "_negative", []tmuxSetting{{tc.key, -1}}, true, 0})
 			continue
 		}
 		cases = append(cases,
-			spellingCase{tc.key.Name() + "_below_minimum", []tmuxSetting{{tc.key, tc.minimum - 1}}, true},
-			spellingCase{tc.key.Name() + "_at_minimum", []tmuxSetting{{tc.key, tc.minimum}}, false})
+			spellingCase{tc.key.Name() + "_below_minimum", []tmuxSetting{{tc.key, tc.minimum - 1}}, true, 0},
+			spellingCase{tc.key.Name() + "_at_minimum", []tmuxSetting{{tc.key, tc.minimum}}, false, 0})
 	}
 	// A spelt create timeout raises the grace minimum to 81 s, above the 60 s default.
 	cases = append(cases,
-		spellingCase{"create_raised_grace_missing", []tmuxSetting{{create, advPaneRaisedCreate}}, true},
-		spellingCase{"create_raised_grace_below", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, advPaneRaisedMinimum - 1}}, true},
-		spellingCase{"create_raised_grace_at_minimum", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, advPaneRaisedMinimum}}, false})
+		spellingCase{"create_raised_grace_missing", []tmuxSetting{{create, advPaneRaisedCreate}}, false, advPaneRaisedMinimum},
+		spellingCase{"create_raised_grace_zero", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, 0}}, false,
+			advPaneRaisedMinimum},
+		spellingCase{"create_raised_grace_below", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, advPaneRaisedMinimum - 1}},
+			true, 0},
+		spellingCase{"create_raised_grace_at_minimum", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, advPaneRaisedMinimum}},
+			false, advPaneRaisedMinimum})
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -418,6 +461,9 @@ func TestTmuxCheckedUnderAnySpelling(t *testing.T) {
 						if got := tm.Value(s.key); got != s.value {
 							t.Errorf("%s = %d, want the file's %d", s.key.Name(), got, s.value)
 						}
+					}
+					if want := time.Duration(c.wantGrace) * time.Second; c.wantGrace != 0 && tm.EffectivePendingGrace() != want {
+						t.Errorf("EffectivePendingGrace() = %v, want %v", tm.EffectivePendingGrace(), want)
 					}
 				})
 			}

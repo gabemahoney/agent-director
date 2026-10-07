@@ -310,7 +310,7 @@ func openRawStore(t *testing.T, dbPath, caller string) *sql.DB {
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Fatalf("storefix.%s: store file %q: %v", caller, dbPath, err)
 	}
-	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)")
+	raw, err := sql.Open("sqlite", fmt.Sprintf("%s?_pragma=busy_timeout(%d)", dbPath, store.DefaultBusyTimeoutMs))
 	if err != nil {
 		t.Fatalf("storefix.%s: open raw db %q: %v", caller, dbPath, err)
 	}

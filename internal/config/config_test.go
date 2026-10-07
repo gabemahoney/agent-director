@@ -51,6 +51,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
 		{"PreTrust.LockWaitSeconds", d.PreTrust.LockWaitSeconds, 12},
 		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
+		{"Store.BusyTimeoutMs", d.Store.BusyTimeoutMs, 10000},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
 	}
 	for _, tc := range cases {
@@ -80,6 +81,9 @@ func TestLoadKeepsDefaults(t *testing.T) {
 			func(c *config.Config) { c.Relay.PollBaseMs = 150 }},
 		{"table in another letter case", makeConfigFile(t, "[Store]\ndb_path = \"/x.db\"\n"),
 			func(c *config.Config) { c.Store.DbPath = "/x.db" }},
+		// install.sh's busy_timeout_ms reader refuses this spelling, which the decoder reads (b.c7f).
+		{"busy_timeout_ms in another letter case", makeConfigFile(t, "[STORE]\nBUSY_TIMEOUT_MS = 2500\n"),
+			func(c *config.Config) { c.Store.BusyTimeoutMs = 2500 }},
 		// install.sh appends a [defaults] to a config holding [Defaults].
 		{"two table spellings setting other keys", makeConfigFile(t, "[Defaults]\nrelay_mode = \"on\"\n\n[defaults]\ninject_help_hook = true\n"),
 			func(c *config.Config) { c.Defaults.RelayMode, c.Defaults.InjectHelpHook = "on", true }},

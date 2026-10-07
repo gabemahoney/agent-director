@@ -508,8 +508,9 @@ prepare, database is locked (5)` and exit 5, and under `set -e` the case
 ends. A case that reads the store just after one agent-director process
 exits and as another starts (a verb, then a hook typed into the pane) can
 open in exactly that window (b.ai5: relay-3 failed 1 run in 6).
-agent-director's own connections wait 10 s (`busy_timeout(10000)` in
-`internal/store/store.go`); `sql.sh` waits up to 5000 ms. To change its
+agent-director's own connections wait up to `[store] busy_timeout_ms`,
+10 s by default (`openDB` in `internal/store/store.go`); `sql.sh` waits up
+to 5000 ms. To change its
 wait, set `SQL_BUSY_TIMEOUT_MS` (whole milliseconds) on the
 `make test-docker` command line:
 `make test-docker EPIC=<slug> SQL_BUSY_TIMEOUT_MS=10000`.
