@@ -2,9 +2,10 @@ package api_test
 
 // kill_optin_fixture_test.go extends the kill fixture (kill_fixture_test.go)
 // for kill's operator-only finished-row opt-in (SR-6.5), which only
-// agent-director-admin's kill-finished runs (b.vqr): the unexported killFinished
-// (through export_test.go), at e.cfg's durations or at a bound and window
-// passed straight to it, and the Client path through internal/adminapi. The finished row itself is the shared startingRow
+// agent-director-admin's kill-finished runs (b.vqr): the unexported
+// killFinished (through export_test.go), at e.cfg's durations or at a bound
+// and window passed straight to it, and the Client path through
+// internal/adminapi. The finished row itself is the shared startingRow
 // (starting_row_fixture_test.go). It holds no tests.
 
 import (

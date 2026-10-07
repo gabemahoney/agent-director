@@ -1,52 +1,35 @@
 package api_test
 
-// sendkeys_test.go: send-keys' guards and their precedence (the unusable-name
-// refusal after the state and relay guards, SR-3.2), its text
-// handling, and which pane it types into (SR-7.1, SR-7.2, SR-3.3, SR-3.7,
-// SR-4.4): always the agent's pane by its pane id on the row's recorded
-// socket, text then Enter, never a session name, a neighbour's session or a
-// session holding the name. On the pane-verb fixture
-// (pane_verb_fixture_test.go) and tmuxfix.Recorder.
+// sendkeys_test.go: send-keys' text handling (empty text too, b.9o4), its
+// state and relay guards (SR-7.1, SR-7.2, SR-4.2, SR-4.4) and the b.kk3
+// fallen-back relay. Which pane it types into, with read-pane and pause, is
+// readpane_pane_test.go's; its failed keys calls and adoption write
+// sendkeys_action_test.go's.
 
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // errSentinel is a stand-in error for injected failures (find_missing_core_test.go uses it).
 var errSentinel = errors.New("test sentinel")
 
-// skDeliver runs send-keys on r with text and fails unless it typed text
-// into r's agent pane by id, then pressed Enter there (assertDelivered).
-func skDeliver(t *testing.T, e *killEnv, r killRow, text string) {
-	t.Helper()
-	if _, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: text}); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text)
-}
-
 // TestSendKeysText: CR bytes are stripped, LF is kept, and one Enter
 // submits. Empty text (Enter only) is TestSendKeysEmptyTextPressesEnterOnly's.
 func TestSendKeysText(t *testing.T) {
 	t.Parallel()
-	cases := []struct{ name, text, want string }{
+	for _, tc := range []struct{ name, text, want string }{
 		{"single line", "hello", "hello"},
 		{"multi-line keeps LF", "line one\nline two", "line one\nline two"},
 		{"CR stripped", "ab\rcd\r\nef", "abcd\nef"},
-	}
-	for _, tc := range cases {
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
@@ -56,18 +39,6 @@ func TestSendKeysText(t *testing.T) {
 			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, tc.want)
 		})
 	}
-}
-
-// TestSendKeysSpawnNotFound: an unknown id is ErrSpawnNotFound with no tmux call.
-func TestSendKeysSpawnNotFound(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	e.seedRow(t, killRowSpec{})
-	_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: "absent", Text: "hi"})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
-	}
-	e.assertNoTmuxCall(t)
 }
 
 // skRelay is a guard case's relay_mode and permission request.
@@ -163,159 +134,148 @@ func TestSendKeysGuardStoreReadError(t *testing.T) {
 	}
 }
 
-// TestSendKeysRenamedSession: the renamed session's agent pane gets the keys
-// by id; a session now holding the recorded name never does.
-func TestSendKeysRenamedSession(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		holder func(r killRow) *tmuxfix.SeedSession
-	}{
-		{"renamed", func(killRow) *tmuxfix.SeedSession { return nil }},
-		{"renamed, unlabelled session holds the name", func(r killRow) *tmuxfix.SeedSession {
-			return &tmuxfix.SeedSession{Name: r.Name}
-		}},
-		{"renamed, another store's session holds the name", func(r killRow) *tmuxfix.SeedSession {
-			return &tmuxfix.SeedSession{Name: r.Name, Label: r.otherStore(newToken()),
-				Panes: []tmuxfix.SeedPane{{AdPane: newToken()}}}
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{NoSession: true})
-			e.seedSession(t, &r, tmuxfix.WithRowSessionName("renamed-"+r.ID))
-			if h := tc.holder(r); h != nil {
-				e.seedOther(t, r.Socket, *h)
-			}
-			skDeliver(t, e, r, "hi")
-		})
-	}
-}
-
-// TestSendKeysNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
-// error and never sends to a prefix-, name- or 8-character-id-sharing neighbour.
-func TestSendKeysNeighbours(t *testing.T) {
+// TestSendKeysEmptyTextPressesEnterOnly (b.9o4): empty text (the Enter-only
+// send the keys-failure advice names, and a dialog's answer on a pending row
+// with allow_pending, CSCB's approver) sends one Enter to the agent's pane by
+// id, nothing typed: a line left typed is submitted once; a pending row's
+// empty input submits nothing.
+func TestSendKeysEmptyTextPressesEnterOnly(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name         string
-		xID, yID     string
-		xName, yName string
+		seed         func(t *testing.T, e *killEnv) killRow
+		allowPending bool
+		typed        string   // left in the agent's input box before the call
+		want         []string // the agent's submissions
 	}{
-		{"name prefix", "", "", "proj-abc", "proj-abc123"},
-		{"same name, held by the other row's session", "", "", "proj-same", "proj-same"},
-		{"ids share first 8 characters, same-named folders", "abcd1234-x-row", "abcd1234-y-row", "work", "work"},
+		{name: "live row, text left typed", typed: skaText, want: []string{skaText},
+			seed: func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{}) }},
+		{name: "pending row with allow_pending", allowPending: true,
+			seed: func(t *testing.T, e *killEnv) killRow { return e.seedPending(t, pendingFresh, pendingOurs) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
-			x := e.seedRow(t, killRowSpec{ID: tc.xID, NoSession: true,
-				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.xName)}})
-			y := e.seedRow(t, killRowSpec{ID: tc.yID, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.yName)}})
-			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: x.ID, Text: "hi"})
-			if !errors.Is(err, tmux.ErrTmuxSendKeys) {
-				t.Fatalf("err = %v; want ErrTmuxSendKeys", err)
+			r := tc.seed(t, e)
+			in := watchPaneInput(e, r.Spawn.Identity.PaneID, false)
+			in.box = tc.typed
+
+			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "", AllowPending: tc.allowPending})
+
+			if err != nil {
+				t.Fatalf("send-keys with empty text: %v; want Enter delivered", err)
 			}
-			apitest.AssertDescription(t, err.Error(), apitest.DescPaneGone(apitest.PaneGone{
-				Verb: apitest.PaneSendKeys, InstanceID: x.ID, Name: x.Name}), y.ID, y.Token)
-			e.assertPaneCalls(t, tmux.CallLookup)
+			e.assertEnterOnly(t, r.Socket, r.Spawn.Identity.PaneID)
+			if !slices.Equal(in.submitted, tc.want) || in.box != "" {
+				t.Errorf("agent got submissions %q with %q left typed; want %q and nothing typed", in.submitted, in.box, tc.want)
+			}
 		})
 	}
 }
 
-// TestSendKeysStoredNames (AC-LKP-09): a row whose recorded name holds $ or \
-// is found by its label under tmux's stored form and sent to by pane id.
-func TestSendKeysStoredNames(t *testing.T) {
+// relayGuardWindow is the effective relay window the relay-guard tests pass.
+// A short window keeps the backdate ages in SeedUndeliverablePermissionRequest
+// small while staying well clear of the safety margin.
+const relayGuardWindow = time.Hour
+
+// seedRelayRow seeds a relay-on check_permission row with its own labelled
+// session and agent pane, and open permission requests for tokens (none when empty).
+func seedRelayRow(t *testing.T, e *killEnv, tokens ...string) killRow {
+	t.Helper()
+	r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})
+	if len(tokens) > 0 {
+		storefix.SeedOpenPermissionRequests(t, e.st, r.ID, tokens)
+	}
+	return r
+}
+
+// TestRelayFallenBackIncidentRegression re-anchors the b.kk3 incident (SR-7.1):
+// a relay-on row whose open request fell out of its window refuses Decide
+// with ErrRelayFallenBack, and a later SendKeys delivers into the agent's pane.
+func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	t.Parallel()
-	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
-			continue
+	e := newKillEnv(t)
+	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
+	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA, 2*relayGuardWindow)
+	now := time.Now()
+
+	_, err := api.Decide(e.st, relayGuardWindow, now, api.DecideParams{
+		ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+	if !errors.Is(err, api.ErrRelayFallenBack) {
+		t.Fatalf("Decide err = %v; want ErrRelayFallenBack", err)
+	}
+	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"}); err != nil {
+		t.Fatalf("SendKeys after fallen-back: %v", err)
+	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "2")
+}
+
+// TestSendKeysRelayGuard pins the per-request guard on a relay-on
+// check_permission row (SR-4.2, SR-7.3): it holds while any request is in its
+// window, decided or not, and with no request at all (mid-insert); it releases
+// once every request aged past the window (and the margin), decided or not.
+// A held guard refuses with no tmux call.
+func TestSendKeysRelayGuard(t *testing.T) {
+	t.Parallel()
+	tokens := []string{storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC}
+	undeliverable := func(idx ...int) func(*testing.T, *killEnv, killRow) time.Time {
+		return func(t *testing.T, e *killEnv, r killRow) time.Time {
+			for _, i := range idx {
+				storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokens[i], 2*relayGuardWindow)
+			}
+			return time.Now()
 		}
-		t.Run(n.Raw, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
-			if r.Session.Name != n.Stored {
-				t.Fatalf("seeded session name %q; want the stored form %q", r.Session.Name, n.Stored)
+	}
+	decided := func(aged bool) func(*testing.T, *killEnv, killRow) time.Time {
+		return func(t *testing.T, e *killEnv, r killRow) time.Time {
+			if ok, err := e.st.DecidePermissionRequest(r.ID, tokens[0], "allow", "", store.WriterProcessDecide); err != nil || !ok {
+				t.Fatalf("DecidePermissionRequest: updated=%v err=%v", ok, err)
 			}
-			skDeliver(t, e, r, "hi")
-		})
-	}
-}
-
-// TestSendKeysUnusableName (SR-3.2, FR1 C7(k)): after the state and relay
-// guards, an unusable recorded name is ErrInternal; their refusals keep their answer.
-func TestSendKeysUnusableName(t *testing.T) {
-	t.Parallel()
-	state := func(s string) func(*killEnv) killRowSpec {
-		return func(*killEnv) killRowSpec { return killRowSpec{State: s} }
-	}
-	pending := func(k pendingKind) func(*killEnv) killRowSpec {
-		return func(e *killEnv) killRowSpec { return e.pendingSpec(k, pendingOurs) }
+			row, err := e.st.GetPermissionRequest(r.ID, tokens[0])
+			if err != nil {
+				t.Fatalf("GetPermissionRequest: %v", err)
+			}
+			if aged {
+				return row.CreatedAt.Add(relayGuardWindow + api.RelayKillSafetyMargin + time.Second)
+			}
+			return time.Now()
+		}
 	}
 	cases := []struct {
 		name    string
-		spec    func(*killEnv) killRowSpec
-		allow   bool
-		relay   bool // relay_mode on, one request still in its window
-		fixture string
-		want    string
+		tokens  []string
+		arrange func(*testing.T, *killEnv, killRow) time.Time // the guard's now; nil: time.Now()
+		refuse  bool
 	}{
-		{"waiting", state(store.StateWaiting), false, false, "empty", "ErrInternal"},
-		{"working", state(store.StateWorking), true, false, "newline", "ErrInternal"},
-		{"ask_user", state(store.StateAskUser), false, false, "escape", "ErrInternal"},
-		{"check_permission, relay off", state(store.StateCheckPermission), false, false, "colon", "ErrInternal"},
-		{"pending fresh spawn, allow_pending", pending(pendingFresh), true, false, "pre-b.gqe default name", "ErrInternal"},
-		{"pending resumed row, allow_pending", pending(pendingResumed), true, false, "invalid UTF-8", "ErrInternal"},
-		{"pending without allow_pending", pending(pendingFresh), false, false, "pre-b.gqe default name", "ErrSpawnNotInteractive"},
-		{"ended", state(store.StateEnded), false, false, "pre-b.gqe default name", "ErrSpawnNotInteractive"},
-		{"ended, allow_pending", state(store.StateEnded), true, false, "dot and newline", "ErrSpawnNotInteractive"},
-		{"missing", state(store.StateMissing), false, false, "empty", "ErrSpawnNotInteractive"},
-		{"missing, allow_pending", state(store.StateMissing), true, false, "colon", "ErrSpawnNotInteractive"},
-		{"relay held on check_permission", func(*killEnv) killRowSpec {
-			return killRowSpec{State: store.StateCheckPermission, RelayOn: true}
-		}, false, true, "pre-b.gqe default name", "ErrSendKeysWhileRelayed"},
+		{"no request (mid-insert) refuses", nil, nil, true},
+		{"all in window refuses", tokens, nil, true},
+		{"one undeliverable, the rest in window refuses", tokens, undeliverable(0), true},
+		{"all but one undeliverable refuses", tokens, undeliverable(0, 1), true},
+		{"all undeliverable delivers", tokens, undeliverable(0, 1, 2), false},
+		{"sole request decided, still in its window, refuses", tokens[:1], decided(false), true},
+		{"sole request decided, aged past window and margin, delivers", tokens[:1], decided(true), false},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name+"/"+tc.fixture, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
-			f := unusableFixture(t, tc.fixture)
-			r := e.seedUnusableRow(t, tc.spec(e), f)
-			if tc.relay {
-				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
+			r := seedRelayRow(t, e, tc.tokens...)
+			now := time.Now()
+			if tc.arrange != nil {
+				now = tc.arrange(t, e, r)
 			}
-			before := e.columns(t, r.ID)
 
-			// The requests are stored at wall-clock time, so the guard is judged against it.
-			_, err := e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{ClaudeInstanceID: r.ID,
-				Text: "1", AllowPending: tc.allow})
+			_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
 
-			assertOneName(t, err, tc.want)
-			if tc.want == "ErrInternal" && err != nil {
-				apitest.AssertDescription(t, err.Error(), f.desc, r.Token)
+			if tc.refuse {
+				assertOneName(t, err, "ErrSendKeysWhileRelayed")
+				e.assertNoTmuxCall(t)
+				return
 			}
-			e.assertNoTmuxCall(t)
-			e.assertRowUnchanged(t, r.ID, before)
+			if err != nil {
+				t.Fatalf("SendKeys: %v; want the guard released", err)
+			}
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
 		})
-	}
-}
-
-// TestSendKeysRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
-// another server, every call names the row's recorded socket.
-func TestSendKeysRecordedSocket(t *testing.T) {
-	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv.
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{})
-	// No commas: TMUX's socket field ends at one.
-	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
-	t.Setenv("TMUX", elsewhere+",4242,0")
-	t.Setenv("TMUX_TMPDIR", t.TempDir())
-	e.seedOther(t, elsewhere, tmuxfix.SeedSession{Name: r.Name, Label: r.current(),
-		Panes: []tmuxfix.SeedPane{{AdPane: r.Token}}})
-	skDeliver(t, e, r, "hi")
-	for _, c := range e.rec.SocketCalls() {
-		if c.Socket != r.Socket {
-			t.Errorf("%v on socket %q; want the recorded %q", c.Call, c.Socket, r.Socket)
-		}
 	}
 }

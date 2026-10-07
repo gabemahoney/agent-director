@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -85,20 +83,11 @@ var securityKillOptInCases = []securityCase{
 		fields: koSecFields("leftover", false),
 	},
 	{
-		name:   "conflicting labels",
-		target: koEnded(killRowSpec{}, time.Second),
-		arrange: func(t *testing.T, s *securityScene) {
-			s.extraSess = s.e.seedOther(t, s.target.Socket,
-				tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
-		},
-		wantErr: api.ErrTmuxSessionConflict,
-		desc: func(s *securityScene) apitest.DescCase {
-			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
-				Sessions: []apitest.DescSession{
-					{Name: s.target.Session.Name, ID: s.target.Session.ID},
-					{Name: s.extraSess.Name, ID: s.extraSess.ID},
-				}})
-		},
+		name:     "conflicting labels",
+		target:   koEnded(killRowSpec{}, time.Second),
+		arrange:  secDuplicateLabel,
+		wantErr:  api.ErrTmuxSessionConflict,
+		desc:     secConflictingLabels,
 		disagree: true,
 		fields:   koSecFields("provenance_conflict", false),
 	},

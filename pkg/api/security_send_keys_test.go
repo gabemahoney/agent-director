@@ -10,8 +10,6 @@ package api_test
 import (
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -108,20 +106,11 @@ func securitySendKeysCases(state string) []securityCase {
 				func(s *securityScene) string { return s.target.Token })),
 		leftover,
 		{
-			name:   "conflicting labels",
-			target: killRowSpec{State: state},
-			arrange: func(t *testing.T, s *securityScene) {
-				s.extraSess = s.e.seedOther(t, s.target.Socket,
-					tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
-			},
-			wantErr: api.ErrTmuxSessionConflict,
-			desc: func(s *securityScene) apitest.DescCase {
-				return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
-					Sessions: []apitest.DescSession{
-						{Name: s.target.Session.Name, ID: s.target.Session.ID},
-						{Name: s.extraSess.Name, ID: s.extraSess.ID},
-					}})
-			},
+			name:     "conflicting labels",
+			target:   killRowSpec{State: state},
+			arrange:  secDuplicateLabel,
+			wantErr:  api.ErrTmuxSessionConflict,
+			desc:     secConflictingLabels,
 			disagree: true,
 			fields:   fields("ErrTmuxSessionConflict"),
 			check:    skSecSends(false),

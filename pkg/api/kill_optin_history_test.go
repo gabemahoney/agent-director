@@ -3,13 +3,14 @@ package api_test
 // kill_optin_history_test.go: kill with the finished-row opt-in (SR-6.5,
 // SR-6.7, SR-20.6) on rows made by real verb history on the kill fixture: a
 // fresh spawn's row and a resumed row finished before their agent reported
-// in (AC-KILL-14), a failed resume's restored row, and a plain spawn's
-// held-name row beside a leftover (AC-SPN-07). Hooks come from the row's own
-// pane (SR-22.9); newReuseEnv is spawn_reuse_fixture_test.go's, the rlf
-// helpers spawn_reuse_history_test.go's.
+// in (AC-KILL-14), and a plain spawn's held-name row beside a leftover
+// (AC-SPN-07). A row's pid, ended_at and its session's creation decide the
+// rest, each at its boundary, in kill_optin_reported_test.go (a failed
+// resume's restore of them is internal/store's resume_restore_test.go). Hooks
+// come from the row's own pane (SR-22.9); newReuseEnv is
+// spawn_reuse_fixture_test.go's, the rlf helpers spawn_reuse_history_test.go's.
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -179,59 +179,6 @@ func TestKillIncludeFinishedNeverReportedInHistory(t *testing.T) {
 					e.cfg.EffectiveStartingSession()), "ours")
 			})
 		}
-	}
-}
-
-// TestKillIncludeFinishedRestoredRow: a failed resume restores a row whose
-// earlier launch reported in; its old session, created before the restored
-// ended_at, is killed, and a session created after the restore is refused.
-func TestKillIncludeFinishedRestoredRow(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
-	for _, after := range []bool{false, true} {
-		name := "old session killed"
-		if after {
-			name = "session created after the restore: never reported in"
-		}
-		t.Run(name, func(t *testing.T) {
-			e := newReuseEnv(t)
-			id := kohSpawn(t, e)
-			rlfReportIn(t, e, id, rlfNewSession(), true)
-			rlfEndLife(t, e, id)
-			ended := rlfRow(t, e, id)
-			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
-			if _, err := e.resume(id); !errors.Is(err, api.ErrTmuxSessionCreate) {
-				t.Fatalf("Resume(%s) = %v; want ErrTmuxSessionCreate", id, err)
-			}
-			row := rlfRow(t, e, id)
-			if row.State != store.StateEnded || row.PID == 0 || row.PID != ended.PID ||
-				row.EndedAtText != ended.EndedAtText || row.Identity != ended.Identity {
-				t.Fatalf("row after the failed resume = %+v; want restored to %+v", row, ended)
-			}
-			created := row.EndedAt.Unix() - 1
-			if after {
-				kohAdvanceTo(e, row.EndedAt.Add(time.Second))
-				created = e.clock.Now().Unix()
-			}
-			// Seeded after the restore: before it, resume's lookup would refuse.
-			own := e.rec.SeedRowSession(t, e.dbPath, id, tmuxfix.WithRowSessionCreated(created))
-			kohPastBoth(t, e, row, created)
-			if after {
-				kohAssertRefused(t, e, id, apitest.DescKillOptInNeverReportedIn(id, row.TmuxSessionName,
-					e.cfg.EffectiveStartingSession()), "ours")
-				return
-			}
-			e.pc.Set(row.PID, procfix.Alive(row.ProcStarttime))
-			e.setAfterCall(tmux.CallKillPane, procfix.Gone(), row.PID)
-			before, mark := e.columns(t, id), len(e.rec.SocketCalls())
-			res, err := e.killOptIn(id)
-			if err != nil || !res.KillSent {
-				t.Fatalf("kill = %+v, %v; want kill_sent true, nil", res, err)
-			}
-			kohAssertKilled(t, e, mark, row.Identity.PaneID, own.ID)
-			e.assertRowUnchanged(t, id, before)
-			kolAssertCalled(t, id, map[string]any{"include_finished": true, "outcome": "ok", "lookup_outcome": "ours",
-				"kill_sent": true})
-		})
 	}
 }
 

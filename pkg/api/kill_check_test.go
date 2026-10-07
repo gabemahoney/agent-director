@@ -25,9 +25,6 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// kcOursCalls are the calls of an Ours kill with no follow-up lookup.
-var kcOursCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession}
-
 // kcRun is one kill call's observations: what kill slept, the virtual time
 // it took, and the row's columns before it.
 type kcRun struct {
@@ -39,7 +36,7 @@ type kcRun struct {
 }
 
 // kcKill runs api.Kill on r as e.kill does but with pc as the start-time
-// reader and every pause recorded, and fails if the row's state or row_version changed.
+// reader and every pause recorded, and fails if the row changed.
 func kcKill(t *testing.T, e *killEnv, r killRow, pc api.ProcChecker) kcRun {
 	t.Helper()
 	run := kcRun{before: e.columns(t, r.ID)}
@@ -49,11 +46,7 @@ func kcKill(t *testing.T, e *killEnv, r killRow, pc api.ProcChecker) kcRun {
 	run.res, run.err = api.Kill(e.store, e.rec, pc, e.cfg.EffectiveStartingSession(), e.cfg.EffectiveStoppingWindow(),
 		e.cfg.EffectiveKillExitWait(), e.clock.Now, e.sleep, api.KillParams{ClaudeInstanceID: r.ID})
 	run.elapsed = e.clock.Now().Sub(start)
-	after := e.columns(t, r.ID)
-	if after.State != run.before.State || after.RowVersion != run.before.RowVersion {
-		t.Errorf("row (state, row_version) = (%v, %v); want unchanged (%v, %v)",
-			after.State, after.RowVersion, run.before.State, run.before.RowVersion)
-	}
+	e.assertRowUnchanged(t, r.ID, run.before)
 	return run
 }
 
@@ -163,7 +156,7 @@ func TestKillCheckWait(t *testing.T) {
 			if want == nil && !run.res.KillSent {
 				t.Error("KillSent = false; want true")
 			}
-			e.assertKillCalls(t, kcOursCalls...)
+			e.assertKillCalls(t, killOursCalls...)
 			if len(run.sleeps) != polls || slices.ContainsFunc(run.sleeps, func(d time.Duration) bool {
 				return d != api.KillPollInterval
 			}) {
@@ -214,11 +207,18 @@ func TestKillCheckFollowUp(t *testing.T) {
 		{"follow-up leftover", agentUnreadable, func(_ *testing.T, e *killEnv, r killRow) {
 			e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "old-" + uuid.NewString()[:8], Label: r.old()})
 		}, "leftover", "", nil},
+		// SR-20.6: formerly TestKillSwallowsTmuxFailure; a failed kill is left to
+		// the follow-up: Ours is ErrTmuxKillFailed, Gone (the next row) success.
 		{"follow-up ours, label still there", agentUnreadable, func(_ *testing.T, e *killEnv, r killRow) {
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallKillPane, tmux.CallKillSession)
 		}, "ours", "ErrTmuxKillFailed", func(_ *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescKillUncheckable(r.ID, r.Name, apitest.KillSent{Pane: true, Session: true})
 		}},
+		{"kills report failure but take effect, follow-up gone", agentUnreadable, func(t *testing.T, e *killEnv, r killRow) {
+			bystander(t, e, r)
+			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Applied: true},
+				tmux.CallKillPane, tmux.CallKillSession)
+		}, "gone", "", nil},
 		{"follow-up unreadable", agentUnreadable, func(t *testing.T, e *killEnv, r killRow) {
 			bystander(t, e, r)
 			scriptFollowUp(tmux.FailTimeout)(t, e, r)
@@ -261,7 +261,7 @@ func TestKillCheckFollowUp(t *testing.T) {
 				t.Error("KillSent = false; want true")
 			}
 			// A row with no pane pid recorded has no pane of its own to kill: the session kill only.
-			calls, kills, check := append(slices.Clone(kcOursCalls), tmux.CallLookup), 2, "unreadable"
+			calls, kills, check := append(slices.Clone(killOursCalls), tmux.CallLookup), 2, "unreadable"
 			if tc.agent == agentNotRecorded {
 				calls, kills, check = slices.Delete(calls, 2, 3), 1, "not_recorded"
 			}
@@ -275,27 +275,6 @@ func TestKillCheckFollowUp(t *testing.T) {
 				t.Errorf("trail = %v; want process_check %s, followup_outcome %s, kill_sent true", rec, check, tc.followup)
 			}
 		})
-	}
-}
-
-// TestKillCheckGoneUnreadableResidual: a Gone lookup with the agent's process
-// unreadable is success with nothing sent, no listing and no follow-up.
-func TestKillCheckGoneUnreadableResidual(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{NoSession: true, Agent: agentUnreadable})
-	run := kcKill(t, e, r, e.pc)
-	kcAssertErr(t, run.err, "", nil)
-	if run.res.KillSent {
-		t.Error("KillSent = true; want false")
-	}
-	e.assertKillCalls(t, tmux.CallLookup)
-	if len(run.sleeps) != 0 {
-		t.Errorf("sleeps = %v; want none", run.sleeps)
-	}
-	if rec := kcTrail(t, r.ID); rec["process_check"] != "unreadable" || rec["followup_outcome"] != tmux.TokenNotRun ||
-		rec["kill_sent"] != false {
-		t.Errorf("trail = %v; want process_check unreadable, followup_outcome not_run, kill_sent false", rec)
 	}
 }
 
@@ -333,7 +312,7 @@ func TestKillCheckPaneIdentityChosen(t *testing.T) {
 				want = &c
 			}
 			kcAssertErr(t, run.err, "ErrTmuxKillFailed", want)
-			e.assertKillCalls(t, kcOursCalls...)
+			e.assertKillCalls(t, killOursCalls...)
 			if rec := kcTrail(t, r.ID); rec["agent_pid"] != float64(panePID) {
 				t.Errorf("trail agent_pid = %v; want the pane pid %d", rec["agent_pid"], panePID)
 			}

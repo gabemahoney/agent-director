@@ -2,18 +2,36 @@ package api_test
 
 // kill_sequence_test.go covers kill's sequence on a live row (SR-6.1, SR-6.2,
 // SR-3.6, SR-3.7): the pane kill then the session kill by ids, shared
-// windows, the Gone viewer pane, teammates, lost-reply adoption, sessions
-// replaced or removed mid-call, failed kills, held names and the socket.
+// windows, the Gone viewer pane, lost-reply adoption, sessions replaced or
+// removed mid-call, failed kills and the socket; on a pending row (AC-KILL-17,
+// AC-KILL-18) its own session's abort, a kill before the session exists, Gone
+// beside an unlabelled session holding its name and the Leftover refusal (kill
+// never reads a pending row's life, so one launch kind does); and with the
+// finished-row opt-in on an ended row whose own session reported in and is
+// past the stopping window and the starting-session bound (SR-6.5, SR-20.6),
+// the same sequence by ids, the wait or one follow-up, a lost reply's pane
+// used without a write, the row unchanged, and AC-KILL-11's kill and later
+// resume launching on an ended row and again on a missing row. After the
+// opt-in's check the sequence is kill's own, so its failed kills and the
+// follow-up's other outcomes are TestKillSequenceCheckDecides' and
+// TestKillCheckFollowUp's; the opt-in never branches on ended against
+// missing. Kill never changes a row's state. A
+// session holding the row's name is TestKillIncludeFinishedTable's (its Gone
+// rows) and the call table's, as is another store's session (AC-LKP-20).
 
 import (
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -42,8 +60,8 @@ type seqOutcome struct {
 }
 
 // seqKill kills r and checks o: result or error, kill_sent (in the trail for
-// an error), the calls, the row's state kept and row_version moved only by
-// the adoption write.
+// an error), the calls, and the row unchanged but for the adoption write
+// (state kept, row_version +1).
 func seqKill(t *testing.T, e *killEnv, r killRow, o seqOutcome) {
 	t.Helper()
 	before := e.columns(t, r.ID)
@@ -63,16 +81,13 @@ func seqKill(t *testing.T, e *killEnv, r killRow, o seqOutcome) {
 		t.Errorf("ad.kill.called kill_sent: records %v; want last %v", rec, o.sent)
 	}
 	e.assertKillCalls(t, o.calls...)
-	after := e.columns(t, r.ID)
-	if after.State != before.State {
-		t.Errorf("state = %v; want %v kept", after.State, before.State)
+	if !o.adopted {
+		e.assertRowUnchanged(t, r.ID, before)
+		return
 	}
-	want := before.RowVersion.(int64)
-	if o.adopted {
-		want++
-	}
-	if got := after.RowVersion.(int64); got != want {
-		t.Errorf("row_version = %d; want %d", got, want)
+	if after := e.columns(t, r.ID); after.State != before.State || after.RowVersion.(int64) != before.RowVersion.(int64)+1 {
+		t.Errorf("state, row_version = %v, %v; want %v kept, %d", after.State, after.RowVersion, before.State,
+			before.RowVersion.(int64)+1)
 	}
 }
 
@@ -90,12 +105,6 @@ func seqWaitExpired(calls []tmux.Call, sent apitest.KillSent, agent, teammates b
 			}
 			return apitest.DescKillWaitExpired(p)
 		}}
-}
-
-// seqSeedOurs seeds r's current-labelled session with panes laid out by hand (e.seedOurs).
-func seqSeedOurs(t *testing.T, e *killEnv, r *killRow, panes ...tmuxfix.SeedPane) {
-	t.Helper()
-	e.seedOurs(t, r, panes...)
 }
 
 // seqAlivePID returns a new pid, alive in the fake until a call of kind exit.
@@ -146,18 +155,21 @@ func seqCharged(e *killEnv, calls []tmux.Call) time.Duration {
 }
 
 // TestKillSequenceEndsAgentPane: the agent's pane is killed by id before the
-// session by id, wherever the window is shared; success once every process is gone.
+// session by id, wherever the window is shared; success once every process is
+// gone (a teammate exiting during the wait is TestKillCheckWait's).
 func TestKillSequenceEndsAgentPane(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name   string
 		spec   killRowSpec
 		setup  func(t *testing.T, e *killEnv, r *killRow)
-		wait   time.Duration // the teammates exit after this much of the wait
 		calls  []tmux.Call
 		reason string // an ad.provenance.disagree reason the call writes
 	}{
+		// SR-20.6: formerly TestKillLiveRowInvokesTmux; the kills target the pane and session ids.
 		{name: "reported-in agent, SessionStart pid is the pane pid (AC-KILL-01)", calls: seqOurs},
+		{name: "a pending row's own session: the launch aborted, the row left pending (AC-KILL-17)",
+			spec: killRowSpec{State: store.StatePending}, calls: seqOurs},
 		{name: "renamed session, killed by id", spec: killRowSpec{NoSession: true}, calls: seqOurs,
 			reason: tmux.ReasonNameChanged, setup: func(t *testing.T, e *killEnv, r *killRow) {
 				e.seedSession(t, r, tmuxfix.WithRowSessionName("renamed-by-hand"))
@@ -168,8 +180,6 @@ func TestKillSequenceEndsAgentPane(t *testing.T) {
 			e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "linker", Panes: []tmuxfix.SeedPane{
 				{}, {Window: 3, ID: r.Spawn.Identity.PaneID, Shared: true}}})
 		}},
-		{name: "teammate pane exits during the wait (AC-KILL-01, AC-KILL-19)", spec: killRowSpec{Teammates: 1},
-			wait: 3 * api.KillPollInterval, calls: seqOurs},
 		{name: "Gone, the pane lives on only in a viewer session", spec: killRowSpec{NoSession: true},
 			calls: seqGonePane, setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedViewer(t, *r) }},
 	}
@@ -182,13 +192,10 @@ func TestKillSequenceEndsAgentPane(t *testing.T) {
 				c.setup(t, e, &r)
 			}
 			e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
-			if len(r.TeammatePIDs) > 0 {
-				e.setAfterWaiting(c.wait, procfix.Gone(), r.TeammatePIDs...)
-			}
 			start := e.clock.Now()
 			seqKill(t, e, r, seqOutcome{calls: c.calls, sent: true})
-			if got, want := e.clock.Now().Sub(start), seqCharged(e, c.calls)+c.wait; got != want {
-				t.Errorf("virtual time = %v; want %v (the calls plus the teammates' exit)", got, want)
+			if got, want := e.clock.Now().Sub(start), seqCharged(e, c.calls); got != want {
+				t.Errorf("virtual time = %v; want %v (the calls, no wait)", got, want)
 			}
 			if got := seqTarget(e, tmux.CallKillPane); got != r.Spawn.Identity.PaneID {
 				t.Errorf("pane kill targets %q; want the agent's pane %q", got, r.Spawn.Identity.PaneID)
@@ -250,11 +257,11 @@ func TestKillSequenceCheckDecides(t *testing.T) {
 			setup: agentGoneAfter(tmux.CallKillPane), out: seqWaitExpired(seqOurs, both, false, true), survivors: true},
 		{name: "agent's pane respawned with another pid", spec: killRowSpec{NoSession: true},
 			setup: func(t *testing.T, e *killEnv, r *killRow) {
-				seqSeedOurs(t, e, r, tmuxfix.SeedPane{ID: r.Spawn.Identity.PaneID,
+				e.seedOurs(t, r, tmuxfix.SeedPane{ID: r.Spawn.Identity.PaneID,
 					PID: seqAlivePID(e, tmux.CallKillSession), AdPane: r.Token})
 			}, out: seqWaitExpired(seqNoPane, session, true, false)},
 		{name: "agent's pane moved out of the session", spec: killRowSpec{NoSession: true},
-			setup: func(t *testing.T, e *killEnv, r *killRow) { seqSeedOurs(t, e, r, tmuxfix.SeedPane{}) },
+			setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedOurs(t, r, tmuxfix.SeedPane{}) },
 			out:   seqWaitExpired(seqNoPane, session, true, false)},
 		{name: "pane kill refused, the session kill ends the agent", out: ok,
 			setup: script(tmux.FailSocketDenied, tmux.CallKillPane, agentGoneAfter(tmux.CallKillSession))},
@@ -338,17 +345,10 @@ func TestKillSequenceAdoptsLostReply(t *testing.T) {
 			calls: seqOurs, adopted: true, panes: func(e *killEnv, r killRow) []tmuxfix.SeedPane {
 				return []tmuxfix.SeedPane{{PID: seqAlivePID(e, tmux.CallKillSession)}, {Index: 1, AdPane: r.Token}}
 			}},
-		{name: "base-index 1, the agent's pane is 1.1", spec: killRowSpec{NoPane: true}, calls: seqOurs, adopted: true,
-			panes: func(e *killEnv, r killRow) []tmuxfix.SeedPane {
-				return []tmuxfix.SeedPane{{Window: 1, Index: 1, AdPane: r.Token}}
-			}},
-		{name: "only the server identity was lost", spec: killRowSpec{NoServerIdentity: true}, calls: seqOurs, adopted: true},
 		{name: "the adoption write is not applied", spec: lost, calls: seqOurs,
 			store: func(s *killStore) { s.refuseAdopt(api.CondChanged) }},
 		{name: "the adoption write fails in the store", spec: lost, calls: seqOurs,
 			store: func(s *killStore) { s.failAdopt(nil) }},
-		{name: "no pane carries @ad_pane, nothing new to adopt", spec: killRowSpec{NoPane: true}, calls: seqFollowUp,
-			panes: func(*killEnv, killRow) []tmuxfix.SeedPane { return []tmuxfix.SeedPane{{}} }},
 		{name: "no pane carries @ad_pane, the server identity adopted", spec: lost, calls: seqFollowUp, adopted: true,
 			panes: func(*killEnv, killRow) []tmuxfix.SeedPane { return []tmuxfix.SeedPane{{}} }},
 	}
@@ -360,7 +360,7 @@ func TestKillSequenceAdoptsLostReply(t *testing.T) {
 			spec.NoSession = c.panes != nil
 			r := e.seedRow(t, spec)
 			if c.panes != nil {
-				seqSeedOurs(t, e, &r, c.panes(e, r)...)
+				e.seedOurs(t, &r, c.panes(e, r)...)
 			}
 			if c.store != nil {
 				c.store(e.store)
@@ -387,56 +387,6 @@ func TestKillSequenceAdoptsLostReply(t *testing.T) {
 				t.Errorf("pane_id = %v; want the adopted %s", cols.PaneID, agentPane)
 			}
 		})
-	}
-}
-
-// TestKillSequenceNameHeldElsewhere: a session holding the row's name with no
-// valid label, or another row's, is never touched (AC-KILL-07).
-func TestKillSequenceNameHeldElsewhere(t *testing.T) {
-	t.Parallel()
-	holders := []struct {
-		name string
-		seed func(t *testing.T, e *killEnv, r *killRow) (sessionID, otherID string)
-	}{
-		{"a session with no label", func(t *testing.T, e *killEnv, r *killRow) (string, string) {
-			e.ensureServer(r)
-			pid := e.newPID()
-			e.pc.Set(pid, procfix.Alive(apitest.LinuxProcStarttime))
-			return e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: r.Name, Panes: []tmuxfix.SeedPane{{PID: pid}}}).ID, ""
-		}},
-		{"another row's session", func(t *testing.T, e *killEnv, r *killRow) (string, string) {
-			o := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(r.Name)}})
-			return o.Session.ID, o.ID
-		}},
-	}
-	for _, h := range holders {
-		for _, alive := range []bool{false, true} {
-			name := h.name + ", agent process gone"
-			out := seqOutcome{calls: []tmux.Call{tmux.CallLookup}}
-			if alive {
-				name = h.name + ", agent process running"
-				out = seqOutcome{calls: []tmux.Call{tmux.CallLookup, tmux.CallListPanes}, errName: "ErrTmuxKillFailed",
-					desc: func(_ *killEnv, r killRow) apitest.DescCase { return apitest.DescKillNoPane(r.ID, r.Name, r.AgentPID) }}
-			}
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-				e := newKillEnv(t)
-				agent := agentGone
-				if alive {
-					agent = agentAlive
-				}
-				r := e.seedRow(t, killRowSpec{NoSession: true, Agent: agent})
-				holder, other := h.seed(t, e, &r)
-				want := out // a copy: the parallel subtests never write a captured outcome
-				if other != "" {
-					want.forbid = []string{other}
-				}
-				seqKill(t, e, r, want)
-				if !seqHas(e, r.Socket, holder) {
-					t.Errorf("holder session %s is gone; want it untouched", holder)
-				}
-			})
-		}
 	}
 }
 
@@ -473,7 +423,7 @@ func TestKillSequenceUsesRowSocket(t *testing.T) {
 			case !c.recorded && c.tmuxEnv:
 				r.Socket = elsewhere
 				id := r.Spawn.Identity
-				seqSeedOurs(t, e, &r, tmuxfix.SeedPane{ID: id.PaneID, PID: id.PanePID, AdPane: r.Token})
+				e.seedOurs(t, &r, tmuxfix.SeedPane{ID: id.PaneID, PID: id.PanePID, AdPane: r.Token})
 			case !c.recorded:
 				if err := os.Remove(filepath.Dir(e.defaultSocket)); err != nil {
 					t.Fatalf("remove per-user directory: %v", err)
@@ -493,6 +443,261 @@ func TestKillSequenceUsesRowSocket(t *testing.T) {
 					t.Errorf("per-user directory: stat err %v; want it still missing", err)
 				}
 			}
+		})
+	}
+}
+
+// kosFinished are the finished states the opt-in acts on.
+var kosFinished = []string{store.StateEnded, store.StateMissing}
+
+// kosReportedIn is a row in state that ended the window ago, records a pid
+// and a session id, and whose own session (agent a) predates ended_at by the bound.
+func kosReportedIn(state string, a agentState) startingRow {
+	return startingRow{state: state, endedAgo: defWindow, agent: a, age: defWindow + defBound}
+}
+
+// kosKill runs kill with the opt-in on r and checks o (seqOutcome): the result
+// or error, kill_sent in the result and the trail, the calls, each kill
+// targeting r's agent pane and session by id, the sleeps (none after a
+// follow-up) and the row unchanged in every column.
+func kosKill(t *testing.T, e *killEnv, r killRow, o seqOutcome) {
+	t.Helper()
+	before := e.columns(t, r.ID)
+	slept := 0
+	prev := e.sleep
+	e.sleep = func(d time.Duration) { slept++; prev(d) }
+	res, err := e.killOptIn(r.ID)
+	if o.errName == "" {
+		if err != nil {
+			t.Fatalf("kill: %v; want success", err)
+		}
+		if res.KillSent != o.sent {
+			t.Errorf("kill_sent = %v; want %v", res.KillSent, o.sent)
+		}
+	} else {
+		assertOneName(t, err, o.errName)
+		apitest.AssertDescription(t, err.Error(), o.desc(e, r), r.Token, r.StoreID)
+	}
+	kolAssertCalled(t, r.ID, map[string]any{"include_finished": true, "lookup_outcome": "ours", "kill_sent": o.sent})
+	e.assertKillCalls(t, o.calls...)
+	if got := seqTarget(e, tmux.CallKillPane); got != "" && got != labelledPane(t, r.Session, r.Token) {
+		t.Errorf("pane kill targets %q; want the agent's pane", got)
+	}
+	if got := seqTarget(e, tmux.CallKillSession); got != r.Session.ID {
+		t.Errorf("session kill targets %q; want the labelled session %s", got, r.Session.ID)
+	}
+	if followUp := len(e.rec.SocketCallsOf(tmux.CallLookup)) > 1; followUp && slept != 0 {
+		t.Errorf("%d sleeps with a follow-up lookup; want the wait or the follow-up, never both", slept)
+	}
+	e.assertRowUnchanged(t, r.ID, before)
+}
+
+// TestKillIncludeFinishedSequence: a reported-in session past both on an
+// ended row is killed by ids, then the wait or one follow-up decides. The
+// kill that ends the agent runs on an ended row and again on a missing row,
+// each followed by a resume of the id that launches (AC-KILL-11; SRD
+// Appendix C, TLA+ v2 F2-1: v2_Vr_NotHumanKillFinished, the human kill still
+// firing with the fix).
+func TestKillIncludeFinishedSequence(t *testing.T) {
+	t.Parallel()
+	both := apitest.KillSent{Pane: true, Session: true}
+	cases := []struct {
+		name   string
+		agent  agentState
+		setup  func(*testing.T, *killEnv, *killRow)
+		out    seqOutcome
+		resume bool // a later resume launches; run on each of kosFinished (AC-KILL-11)
+	}{
+		{name: "agent gone after the pane kill", resume: true, out: seqOutcome{calls: seqOurs, sent: true},
+			setup: func(_ *testing.T, e *killEnv, r *killRow) {
+				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+			}},
+		{name: "agent runs past the exit wait", out: seqWaitExpired(seqOurs, both, true, false)},
+		{name: "agent unreadable, follow-up label gone", agent: agentUnreadable,
+			out: seqOutcome{calls: withFollowUp(seqOurs), sent: true}},
+		{name: "agent unreadable, follow-up label still there", agent: agentUnreadable,
+			setup: func(_ *testing.T, e *killEnv, r *killRow) {
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallKillPane, tmux.CallKillSession)
+			}, out: seqOutcome{calls: withFollowUp(seqOurs), sent: true, errName: "ErrTmuxKillFailed",
+				desc: func(_ *killEnv, r killRow) apitest.DescCase { return apitest.DescKillUncheckable(r.ID, r.Name, both) }}},
+	}
+	for _, tc := range cases {
+		states := []string{store.StateEnded}
+		if tc.resume {
+			states = kosFinished
+		}
+		for _, state := range states {
+			t.Run(state+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				e := newKillEnv(t)
+				r := e.seedStarting(t, kosReportedIn(state, tc.agent))
+				if tc.setup != nil {
+					tc.setup(t, e, &r.killRow)
+				}
+				kosKill(t, e, r.killRow, tc.out)
+				if tc.resume {
+					kosAssertResumeLaunches(t, e, r.ID)
+				}
+			})
+		}
+	}
+}
+
+// kosAssertResumeLaunches fails unless a resume of id through e's Recorder
+// creates one session and moves the row to pending.
+func kosAssertResumeLaunches(t *testing.T, e *killEnv, id string) {
+	t.Helper()
+	if _, err := e.resume(id); err != nil {
+		t.Fatalf("resume after the kill: %v", err)
+	}
+	if n := len(e.rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
+		t.Errorf("session creations after resume = %d; want 1", n)
+	}
+	if got := e.columns(t, id).State; got != store.StatePending {
+		t.Errorf("state after resume = %v; want pending", got)
+	}
+}
+
+// TestKillIncludeFinishedSequenceUsesLostReplyPane: a reported-in row with no
+// pane or server identity recorded has the pane carrying its token killed by
+// id, with no adoption write (row_version and the identity unchanged).
+func TestKillIncludeFinishedSequenceUsesLostReplyPane(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	pid := e.newPID()
+	spec := e.resumableSpec(defWindow, agentAlive, apitest.WithPID(pid), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+	spec.State, spec.NoPane, spec.NoServerIdentity = store.StateEnded, true, true
+	r := e.seedResumableRow(t, spec).killRow
+	r.Session = e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: r.Name, Label: r.current(),
+		Created: e.ruleInstant().Add(-(defWindow + defBound)).Unix(), Panes: []tmuxfix.SeedPane{{PID: pid, AdPane: r.Token}}})
+	e.setAfterCall(tmux.CallKillPane, procfix.Gone(), pid)
+
+	kosKill(t, e, r, seqOutcome{calls: seqOurs, sent: true})
+	if got := seqTarget(e, tmux.CallKillPane); got != r.Session.Panes[0].ID {
+		t.Errorf("pane kill targets %q; want the token's pane %s", got, r.Session.Panes[0].ID)
+	}
+	if e.store.adoptTries != 0 {
+		t.Errorf("adoption writes attempted = %d; want none on a finished row", e.store.adoptTries)
+	}
+}
+
+// killPendSpec is a pending row as a spawn's insert leaves it before its create
+// returns: token and socket, no server, pane or process identity, no session.
+func killPendSpec(state string, opts ...apitest.SpawnOption) killRowSpec {
+	return killRowSpec{State: state, NoSession: true, NoPane: true, NoServerIdentity: true,
+		Agent: agentNotRecorded, Opts: opts}
+}
+
+// killPendCheck fails unless kill of r answered err (want; nil: success) with
+// kill_sent false after the lookup alone, every session and the row
+// untouched, and one ad.kill.called saying no kill was sent.
+func killPendCheck(t *testing.T, e *killEnv, r killRow, before apitest.SpawnColumns, sessions []tmuxfix.SeedSession,
+	res api.KillResult, err, want error) {
+	t.Helper()
+	if !errors.Is(err, want) || (want == nil) != (err == nil) || res.KillSent {
+		t.Fatalf("kill = %+v, %v; want %v with kill_sent false", res, err, want)
+	}
+	e.assertKillCalls(t, tmux.CallLookup)
+	if got := e.rec.Sessions(r.Socket); !reflect.DeepEqual(got, sessions) {
+		t.Errorf("sessions after kill = %+v; want untouched %+v", got, sessions)
+	}
+	e.assertRowUnchanged(t, r.ID, before)
+	if recs := killCalled(t, r.ID); len(recs) != 1 || recs[0]["kill_sent"] != false {
+		t.Errorf("ad.kill.called records = %v; want one with kill_sent false", recs)
+	}
+}
+
+// TestKillPendingGone: a pending row whose launch has no session finds Gone:
+// success with kill_sent false, no kill, every session and the row untouched.
+func TestKillPendingGone(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		spec  killRowSpec
+		setup func(t *testing.T, e *killEnv, r *killRow)
+		// thenCreate runs the launch's create after the kill (AC-KILL-17, FR1 C7(l)).
+		thenCreate bool
+	}{
+		{"before the launch created its session", killPendSpec(store.StatePending),
+			func(t *testing.T, e *killEnv, r *killRow) {
+				e.ensureServer(r)
+				e.seedBystander(t, r.Socket)
+				e.syncServers()
+			}, true},
+		{"no token, an unlabelled session holds its name",
+			killPendSpec(store.StatePending, apitest.WithLaunchIdentity(store.LaunchIdentity{Socket: apitest.TestSocket}),
+				apitest.WithNoLaunchStartedAt()),
+			func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedSession(t, r, tmuxfix.WithRowSessionLabel(tmux.Label{}, false))
+			}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, tc.spec)
+			tc.setup(t, e, &r)
+			before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
+			res, err := e.kill(r.ID)
+			killPendCheck(t, e, r, before, sessions, res, err, nil)
+			if !tc.thenCreate {
+				return
+			}
+			if _, err := e.rec.NewSession(r.Socket, r.Name, "/tmp", nil, nil, r.Token, r.ID, r.StoreID); err != nil {
+				t.Fatalf("create after kill: %v", err)
+			}
+			created := false
+			for _, s := range e.rec.Sessions(r.Socket) {
+				created = created || (s.Name == r.Name && s.Label == r.current())
+			}
+			if !created {
+				t.Errorf("no session %q with the row's label after the create", r.Name)
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+		})
+	}
+}
+
+// TestKillPendingBesideLeftover: a live row (pending, pending with no launch
+// start, or revived to waiting) beside an earlier launch's session, under the
+// recorded name or another, gets ErrTmuxSessionConflict naming it, and
+// nothing is killed.
+func TestKillPendingBesideLeftover(t *testing.T) {
+	t.Parallel()
+	revived := killPendSpec(store.StateWaiting)
+	revived.Agent = agentAlive
+	revived.Opts = []apitest.SpawnOption{apitest.WithPID(apitest.TestPanePID + 50),
+		apitest.WithProcStarttime(apitest.LinuxProcStarttime)}
+	cases := []struct {
+		name    string
+		spec    killRowSpec
+		renamed bool // the leftover runs under another name than the recorded one
+	}{
+		{"pending, recorded name", killPendSpec(store.StatePending), false},
+		{"pending, another name", killPendSpec(store.StatePending), true},
+		{"pending with no launch start and no token", killPendSpec(store.StatePending,
+			apitest.WithLaunchIdentity(store.LaunchIdentity{Socket: apitest.TestSocket}), apitest.WithNoLaunchStartedAt()), false},
+		{"revived to waiting by the leftover's hooks", revived, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			r := e.seedRow(t, tc.spec)
+			opts := []tmuxfix.RowSessionOption{tmuxfix.WithRowSessionLabel(r.old(), true)}
+			if tc.renamed {
+				opts = append(opts, tmuxfix.WithRowSessionName("left-"+uuid.NewString()[:8]))
+			}
+			e.seedSession(t, &r, opts...)
+			before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
+			res, err := e.kill(r.ID)
+			killPendCheck(t, e, r, before, sessions, res, err, api.ErrTmuxSessionConflict)
+			assertOneName(t, err, "ErrTmuxSessionConflict")
+			forbid := []string{tmuxfix.OtherToken, r.StoreID}
+			if r.Token != "" {
+				forbid = append(forbid, r.Token)
+			}
+			apitest.AssertDescription(t, err.Error(),
+				apitest.DescKillLeftover([]apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}}), forbid...)
 		})
 	}
 }

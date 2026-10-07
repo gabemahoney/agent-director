@@ -1,15 +1,18 @@
 package api_test
 
 // pane_verb_fixture_test.go extends the kill fixture (killEnv, killRow) for
-// the pane verbs (read-pane and send-keys; pause's own pieces are
-// pause_fixture_test.go; SR-20.2): their
-// invocations and repeatable runs, per-pane capture texts, extra session and
-// pending-launch seeds, the recorded-call lists and assertions, the
-// between-read-and-send writes and the "changes nothing" readers. It holds no tests.
-// A later verb that acts on the agent's pane must extend this fixture and
-// pause_fixture_test.go, not copy them.
+// the pane verbs (read-pane, send-keys, pause; SR-20.2): their invocations
+// and repeatable runs, the cross-verb adapter (paneVerb) the shared tables run
+// each verb through, per-pane capture texts, extra session and pending-launch
+// seeds (a reuse's included), the recorded-call lists and assertions, the between-read-and-send writes, the "changes nothing"
+// readers, and pause's own pieces (its call sequences with the line cleared
+// before /exit, b.9o4, the wait's poll seam, the SessionEnd that ends the row,
+// the failing state read). It holds no tests. A later verb that acts on the
+// agent's pane extends this fixture, not copies it.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -43,17 +46,15 @@ func (w *killStore) PermissionRequestsForSpawn(id string) ([]api.PermissionRow, 
 func (w *killStore) failPermissionRequests(err error) { w.permErr = orInjected(err) }
 
 // paneClearKey is the key pause sends to the agent's pane before typing
-// /exit (b.9o4): C-u, by name (send-keys -t <pane id> C-u), which Claude
-// Code binds to deleting from the cursor to the start of the line.
+// /exit (b.9o4): C-u, by name, which Claude Code binds to deleting from the
+// cursor to the start of the line.
 const paneClearKey = "C-u"
 
-// callClearLine stands, in the call lists below, for a key send of
-// paneClearKey, which the Recorder records as tmux.CallSendKey with Key
-// paneClearKey (recordedCall).
+// callClearLine stands, in the call lists below, for a key send of paneClearKey.
 const callClearLine = tmux.CallSendKey + " " + paneClearKey
 
 // recordedCall is c's kind as the call lists compare it: callClearLine for a
-// key send of paneClearKey (tmuxfix.SocketCall.Key), else c.Call.
+// key send of paneClearKey, else c.Call.
 func recordedCall(c tmuxfix.SocketCall) tmux.Call {
 	if c.Key == paneClearKey {
 		return callClearLine
@@ -67,11 +68,13 @@ var paneWriteCalls = []tmux.Call{tmux.CallSendText, tmux.CallSendEnter, callClea
 
 // The pane verbs' call sequences: a read (lookup, listing, capture), a
 // delivery (lookup, listing, text, Enter) and a text call that failed (no
-// Enter). pause's, which clear the line first, are pause_fixture_test.go's.
+// Enter). pause's, which clear the line first, are below.
 var (
-	paneReadCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
-	paneSendCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallSendEnter}
-	paneTextCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
+	paneReadCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
+	paneSendCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallSendEnter}
+	paneTextCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText}
+	paneListedCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
+	paneLookupCalls = []tmux.Call{tmux.CallLookup}
 )
 
 // withFollowUp is calls then one follow-up lookup (a failed action's, SR-7.3), in a new slice.
@@ -124,12 +127,6 @@ func (e *killEnv) readPaneClient(t *testing.T, p api.ReadPaneParams, settings ..
 	return c.ReadPane(p)
 }
 
-// readPaneRun runs readPaneClient with p as a verbRun.
-func (e *killEnv) readPaneRun(t *testing.T, p api.ReadPaneParams) verbRun[api.ReadPaneResult] {
-	t.Helper()
-	return runVerb(e, func() (api.ReadPaneResult, error) { return e.readPaneClient(t, p) })
-}
-
 // sendKeysWindow is the relay window e.sendKeys passes: config's default,
 // resolved as Client.SendKeys resolves it.
 func sendKeysWindow() time.Duration {
@@ -157,9 +154,158 @@ func (e *killEnv) sendKeysClient(t *testing.T, p api.SendKeysParams, settings ..
 	return res, buf.String(), err
 }
 
-// sendKeysRun runs sendKeys with p as a verbRun.
-func (e *killEnv) sendKeysRun(p api.SendKeysParams) verbRun[api.SendKeysResult] {
-	return runVerb(e, func() (api.SendKeysResult, error) { return e.sendKeys(p) })
+// skaText is the text the shared tables send (LF kept, no CR).
+const skaText = "run the tests\nthen report"
+
+// skaParams is send-keys on r with skaText.
+func skaParams(r killRow) api.SendKeysParams {
+	return api.SendKeysParams{ClaudeInstanceID: r.ID, Text: skaText}
+}
+
+// rppLines is the n_lines the shared tables read with (not the default), with ANSI on.
+const rppLines = 7
+
+// paneVerb is one pane verb as the shared tables run it: read-pane (through
+// a Client, rppLines lines, ANSI on), send-keys (skaText) or pause (to its
+// wait, pauseToWait). keys marks send-keys and pause, which type, write a
+// lost reply's identity once (SR-3.6) and write disagree records.
+type paneVerb struct {
+	name string
+	verb apitest.PaneVerb
+	keys bool
+	gone string // the gone error's name
+	// run runs the verb on r and returns the text read (read-pane) and its error.
+	run func(t *testing.T, e *killEnv, r killRow) (string, error)
+	// acted fails unless the run (out, err) acted on pane by id with exactly the verb's calls.
+	acted func(t *testing.T, e *killEnv, r killRow, pane, out string, err error)
+}
+
+// paneVerbs are read-pane, send-keys and pause.
+func paneVerbs() []paneVerb { return []paneVerb{readPaneVerb(), sendKeysVerb(), pauseVerb()} }
+
+// keysVerbs are send-keys and pause.
+func keysVerbs() []paneVerb { return []paneVerb{sendKeysVerb(), pauseVerb()} }
+
+// readPaneVerb reads with every pane's own text set (setPaneTexts).
+func readPaneVerb() paneVerb {
+	return paneVerb{name: "read-pane", verb: apitest.PaneReadPane, gone: "ErrTmuxCaptureFailed",
+		run: func(t *testing.T, e *killEnv, r killRow) (string, error) {
+			e.setPaneTexts(r.Socket)
+			res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: rppLines, ANSI: true})
+			return res.Pane, err
+		},
+		acted: func(t *testing.T, e *killEnv, r killRow, pane, out string, err error) {
+			t.Helper()
+			if err != nil || out != paneText(r.Socket, pane) {
+				t.Errorf("ReadPane = %q, %v; want pane %s's text", out, err, pane)
+			}
+			e.assertPaneCalls(t, paneReadCalls...)
+			e.assertCaptured(t, pane, rppLines, true)
+		}}
+}
+
+// sendKeysVerb sends skaText through api.SendKeys.
+func sendKeysVerb() paneVerb {
+	return paneVerb{name: "send-keys", verb: apitest.PaneSendKeys, keys: true, gone: "ErrTmuxSendKeys",
+		run: func(_ *testing.T, e *killEnv, r killRow) (string, error) {
+			_, err := e.sendKeys(skaParams(r))
+			return "", err
+		},
+		acted: func(t *testing.T, e *killEnv, r killRow, pane, _ string, err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatalf("SendKeys: %v; want delivery to %s", err, pane)
+			}
+			e.assertDelivered(t, r.Socket, pane, skaText)
+		}}
+}
+
+// pauseVerb pauses through api.Pause up to its wait (pauseToWait).
+func pauseVerb() paneVerb {
+	return paneVerb{name: "pause", verb: apitest.PanePause, keys: true, gone: "ErrTmuxSendKeys",
+		run: func(_ *testing.T, e *killEnv, r killRow) (string, error) { return "", e.pauseToWait(r) },
+		acted: func(t *testing.T, e *killEnv, r killRow, pane, _ string, err error) {
+			t.Helper()
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Pause = %v; want /exit delivered to %s, then the wait", err, pane)
+			}
+			e.assertExitDelivered(t, r.Socket, pane)
+		}}
+}
+
+// pauseToWait runs api.Pause on r with a context cancelled when an Enter call
+// returns: a delivered /exit's wait returns context.Canceled at once, so no
+// process-wide knob is needed and the test may run in parallel.
+func (e *killEnv) pauseToWait(r killRow) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { cancel() })
+	_, err := e.pauseWithin(ctx, pauseTimeoutSeconds, pauseParams(r))
+	return err
+}
+
+// paneWant is a shared-table case's answer: pane, the pane the verb acts on by
+// id; else the refusal errName (one name) with desc's case for the verb (no
+// value of forbid in it), after calls, nothing acted on.
+type paneWant struct {
+	pane    string
+	errName string
+	desc    func(v apitest.PaneVerb) apitest.DescCase
+	calls   []tmux.Call
+	forbid  []string
+}
+
+// paneNotFound is the pane-not-found conflict naming session name after the listing.
+func paneNotFound(r killRow, name string, lostReply bool) paneWant {
+	return paneWant{errName: "ErrTmuxSessionConflict", calls: paneListedCalls, desc: func(v apitest.PaneVerb) apitest.DescCase {
+		return apitest.DescPaneNotFound(apitest.PaneNotFound{Verb: v, InstanceID: r.ID, Name: name, LostReply: lostReply})
+	}}
+}
+
+// paneGoneWant is the verb's gone error after the lookup alone.
+func paneGoneWant(v paneVerb, r killRow) paneWant {
+	return paneWant{errName: v.gone, calls: paneLookupCalls, desc: func(pv apitest.PaneVerb) apitest.DescCase {
+		return apitest.DescPaneGone(apitest.PaneGone{Verb: pv, InstanceID: r.ID, Name: r.Name})
+	}}
+}
+
+// check runs v on r, fails unless it answers want and returns the run. The
+// row is left as it was, unless v writes a lost reply's identity (keys: a
+// server identity the row lacks, or the one token pane it acts on; that
+// write is TestKeysVerbsAdoptionWrite's); read-pane writes no trail record for r.
+func (v paneVerb) check(t *testing.T, e *killEnv, r killRow, want paneWant) verbRun[string] {
+	t.Helper()
+	before, mark := e.columns(t, r.ID), trailMark(t)
+	run := runVerb(e, func() (string, error) { return v.run(t, e, r) })
+	if want.pane != "" {
+		v.acted(t, e, r, want.pane, run.res, run.err)
+	} else {
+		v.assertRefused(t, e, r, run.err, want)
+	}
+	if id := r.Spawn.Identity; !v.keys || (id.ServerPID > 0 && (id.PaneID != "" || want.pane == "")) {
+		e.assertRowUnchanged(t, r.ID, before)
+	}
+	if !v.keys {
+		assertNoTrailSince(t, mark, r.ID)
+	}
+	return run
+}
+
+// assertRefused fails unless err is want's one name and description for v,
+// the calls are exactly want.calls, nothing was captured, typed or cleared,
+// and no wait polled.
+func (v paneVerb) assertRefused(t *testing.T, e *killEnv, r killRow, err error, want paneWant) {
+	t.Helper()
+	assertOneName(t, err, want.errName)
+	if err != nil && want.desc != nil {
+		apitest.AssertDescription(t, err.Error(), want.desc(v.verb),
+			append([]string{r.Token, r.StoreID, apitest.OtherStoreID(r.StoreID)}, want.forbid...)...)
+	}
+	e.assertNoCalls(t, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter, callClearLine)
+	e.assertPaneCalls(t, want.calls...)
+	if e.store.stateReads != 0 {
+		t.Errorf("state reads = %d; want no wait after a refusal", e.store.stateReads)
+	}
 }
 
 // paneText is the capture text setPaneTexts gives paneID on socket.
@@ -182,6 +328,9 @@ func newToken() string { return strings.ReplaceAll(uuid.NewString(), "-", "")[:1
 func (r killRow) pane() tmuxfix.SeedPane {
 	return tmuxfix.SeedPane{ID: r.Spawn.Identity.PaneID, PID: r.AgentPID, AdPane: r.Token}
 }
+
+// otherPane is a pane that is not the agent's: a new id and pid, no pane label.
+func (e *killEnv) otherPane() tmuxfix.SeedPane { return tmuxfix.SeedPane{PID: e.newPID()} }
 
 // labelledPane is the id of the one pane of s carrying token (non-empty),
 // failing unless exactly one does. labelledPane(t, s, s.Label.Token) is the
@@ -224,25 +373,20 @@ func (e *killEnv) seedLeftover(t *testing.T, r killRow, token string) tmuxfix.Se
 		Label: tmuxfix.Valid(token, r.ID, r.StoreID), Panes: []tmuxfix.SeedPane{{AdPane: token}}})
 }
 
-// pendingKind is the launch a pending row is in (SR-7.1, SR-22.8).
+// pendingKind is the launch a pending row is in (SR-7.1, SR-22.8): a fresh
+// spawn's (seeded) or a reuse's, made by a real reuse (seedReusedPending:
+// life + 1, a new token, no session id). The verbs never branch on the life,
+// so a resumed row's launch is not a kind of its own.
 type pendingKind int
 
 const (
-	pendingFresh   pendingKind = iota // a fresh spawn's launch
-	pendingResumed                    // a resumed row's: its session id, transcript and an archived earlier session
-	pendingReused                     // a reuse's, made by a real reuse (seedReusedPending): life + 1, a new token, no session id
+	pendingFresh  pendingKind = iota // a fresh spawn's launch
+	pendingReused                    // a reuse's, made by a real reuse
 )
-
-// pendingKinds are the launch kinds send-keys meets on a pending row that a
-// pendingSpec seeds; a reuse's (pendingReused) is made by seedPending alone.
-func pendingKinds() []pendingKind { return []pendingKind{pendingFresh, pendingResumed} }
 
 // String names k for subtest names; a reuse's carries "Reuse", so -run Reuse selects it.
 func (k pendingKind) String() string {
-	switch k {
-	case pendingResumed:
-		return "resumed row"
-	case pendingReused:
+	if k == pendingReused {
 		return "Reuse of a finished row"
 	}
 	return "fresh spawn"
@@ -257,17 +401,11 @@ const (
 	pendingLeftover                      // no server or pane recorded, no agent; only a session carrying r.old() (the launching process stopped before its create)
 )
 
-// pendingSpec is the killRowSpec of k's pending row with shape v, launch
-// start at e.clock.Now; opts go last. A reuse's row has none: seedPending makes it.
-func (e *killEnv) pendingSpec(k pendingKind, v pendingShape, opts ...apitest.SpawnOption) killRowSpec {
+// pendingSpec is the killRowSpec of a fresh spawn's pending row with shape v,
+// launch start at e.clock.Now; opts go last.
+func (e *killEnv) pendingSpec(v pendingShape, opts ...apitest.SpawnOption) killRowSpec {
 	spec := killRowSpec{State: store.StatePending,
 		Opts: []apitest.SpawnOption{apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli())}}
-	if k == pendingResumed {
-		n := uuid.NewString()[:8]
-		spec.SessionID = "sess-resumed-" + n
-		spec.Opts = append(spec.Opts, apitest.WithLifeNumber(1), apitest.WithJsonlPath("/tmp/sess-resumed-"+n+".jsonl"),
-			apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-earlier-" + n, Life: 1}))
-	}
 	switch v {
 	case pendingLostReply:
 		spec.NoPane, spec.NoServerIdentity = true, true
@@ -278,22 +416,81 @@ func (e *killEnv) pendingSpec(k pendingKind, v pendingShape, opts ...apitest.Spa
 	return spec
 }
 
-// seedPending seeds k's pending row with shape v (pendingSpec) and its
-// session: the current-labelled one, or for pendingLeftover one labelled r.old().
-// A reuse's row comes from seedReusedPending and takes no opts.
-func (e *killEnv) seedPending(t *testing.T, k pendingKind, v pendingShape, opts ...apitest.SpawnOption) killRow {
+// seedPending seeds k's pending row with shape v and its session: the
+// current-labelled one, or for pendingLeftover one labelled r.old().
+func (e *killEnv) seedPending(t *testing.T, k pendingKind, v pendingShape) killRow {
 	t.Helper()
 	if k == pendingReused {
-		if len(opts) > 0 {
-			t.Fatalf("seedPending: a reuse's pending row takes no seed options (got %d)", len(opts))
-		}
 		return e.seedReusedPending(t, v)
 	}
-	r := e.seedRow(t, e.pendingSpec(k, v, opts...))
+	r := e.seedRow(t, e.pendingSpec(v))
 	if v == pendingLeftover {
 		e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.old(), true))
 	}
 	return r
+}
+
+// seedReusedPending makes a pending row of shape v by a real reuse of a
+// finished row whose agent is gone, then drops the reuse's recorded tmux calls
+// (Recorder.Reset), so a test's call checks see only its own verb's.
+//   - pendingOurs: the labelled create recorded, its pane's agent alive (reusePending);
+//   - pendingLostReply: the create made the labelled session but its reply was lost:
+//     no server or pane recorded, the token pane's agent alive;
+//   - pendingLeftover: the create timed out making nothing (reuseTimesOut), then a
+//     session labelled with the earlier life's token came up under the recorded name.
+func (e *killEnv) seedReusedPending(t *testing.T, v pendingShape) killRow {
+	t.Helper()
+	var r reuseRow
+	switch v {
+	case pendingLostReply:
+		e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, Applied: true, Times: 1}, tmux.CallCreate)
+		r = e.reusePending(t, agentAlive, reuseRowSpec{}, reuseRequest{})
+		e.adoptablePane(&r.killRow)
+	case pendingLeftover:
+		r = e.seedReusable(t, agentGone, reuseRowSpec{})
+		earlier := r.Token
+		r = e.reuseTimesOut(t, r, reuseRequest{}, false)
+		r.Agent = agentNotRecorded
+		e.seedSession(t, &r.killRow, tmuxfix.WithRowSessionLabel(tmuxfix.Valid(earlier, r.ID, r.StoreID), true))
+	default:
+		r = e.reusePending(t, agentAlive, reuseRowSpec{}, reuseRequest{})
+	}
+	e.rec.Reset()
+	return r.killRow
+}
+
+// seedPendingNoSession is k's pending row with shape v and no session: a
+// pendingSpec row seeded with NoSession, or a reuse's row with its session
+// killed by id (the call dropped with Recorder.Reset).
+func (e *killEnv) seedPendingNoSession(t *testing.T, k pendingKind, v pendingShape) killRow {
+	t.Helper()
+	if k != pendingReused {
+		spec := e.pendingSpec(v)
+		spec.NoSession = true
+		return e.seedRow(t, spec)
+	}
+	r := e.seedReusedPending(t, v)
+	if r.Session.ID != "" {
+		if err := e.rec.KillSessionID(r.Socket, r.Session.ID); err != nil {
+			t.Fatalf("KillSessionID(%s, %s): %v", r.Socket, r.Session.ID, err)
+		}
+	}
+	e.rec.Reset()
+	r.Session = tmuxfix.SeedSession{}
+	return r
+}
+
+// reuseTimesOut reuses r (from seedReusable, its agent gone) with q through
+// Client.Spawn, the create timing out (made: it made its labelled session
+// anyway), failing unless that is ErrTmuxUnresponsive with the reset row left
+// pending; it returns r as the reuse left it (reusedAs).
+func (e *killEnv) reuseTimesOut(t *testing.T, r reuseRow, q reuseRequest, made bool) reuseRow {
+	t.Helper()
+	e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout, Applied: made, Times: 1}, tmux.CallCreate)
+	if _, logs, err := e.reuse(t, reuseParams(t, r, q)); !errors.Is(err, api.ErrTmuxUnresponsive) {
+		t.Fatalf("reuse of %s = %v (log %q); want ErrTmuxUnresponsive", r.ID, err, logs)
+	}
+	return e.reusedAs(t, r)
 }
 
 // sessionStartAfter applies a SessionStart (session id sessionID) to r's row
@@ -418,15 +615,21 @@ func (e *killEnv) assertTextSent(t *testing.T, socket, paneID, text string) {
 	}
 }
 
+// assertEnterSent fails unless exactly one Enter call was made, to paneID on socket.
+func (e *killEnv) assertEnterSent(t *testing.T, socket, paneID string) {
+	t.Helper()
+	if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
+		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
+	}
+}
+
 // assertDelivered fails unless the calls were exactly paneSendCalls: text
 // typed into paneID on socket (assertTextSent), then one Enter to paneID.
 func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
 	t.Helper()
 	e.assertPaneCalls(t, paneSendCalls...)
 	e.assertTextSent(t, socket, paneID, text)
-	if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
-		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
-	}
+	e.assertEnterSent(t, socket, paneID)
 }
 
 // assertEnterOnly fails unless the calls were the lookup, the pane listing
@@ -444,9 +647,7 @@ func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {
 	if want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}; !slices.Equal(got, want) {
 		t.Errorf("tmux calls, an empty text call aside = %v; want %v", got, want)
 	}
-	if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
-		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
-	}
+	e.assertEnterSent(t, socket, paneID)
 }
 
 // assertNothingSent fails when a text, Enter or line-clear call was made
@@ -491,4 +692,166 @@ func assertNoTrailSince(t *testing.T, mark int, id string) {
 			t.Errorf("trail record %v for %s; want none", l["event"], id)
 		}
 	}
+}
+
+// killStore is pause's store too.
+var _ api.PauseStore = (*killStore)(nil)
+
+// GetSpawnState counts the read, then returns failStateReads' error, else
+// delegates.
+func (w *killStore) GetSpawnState(id string) (string, error) {
+	w.stateReads++
+	if w.stateErr != nil {
+		return "", w.stateErr
+	}
+	return w.st.GetSpawnState(id)
+}
+
+// failStateReads makes every later state read (pause's wait polls) return
+// err (errInjectedStore when nil).
+func (w *killStore) failStateReads(err error) { w.stateErr = orInjected(err) }
+
+// exitText is what pause types into the agent's pane.
+const exitText = "/exit"
+
+// pause's call sequences (b.9o4): it clears the agent's input line
+// (callClearLine) before typing /exit, so a delivery is lookup, listing,
+// line clear, /exit and Enter, a failed line clear types nothing after it,
+// and a failed /exit call makes no Enter.
+var (
+	pauseSendCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallSendText, tmux.CallSendEnter}
+	pauseTextCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallSendText}
+	pauseClearCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine}
+)
+
+// pauseTimeoutSeconds is the wait e.pause allows: a row nothing ends stays
+// waiting and the wait ends in ErrPauseTimeout after this real-time second.
+const pauseTimeoutSeconds = 1
+
+// fastPausePolls makes the wait poll every millisecond of real sleep
+// (api.SetPauseTestKnobs) until cleanup restores the cadence; not for parallel tests.
+func fastPausePolls(t *testing.T) {
+	t.Helper()
+	interval, sleep := api.PauseTestKnobs()
+	api.SetPauseTestKnobs(time.Millisecond, time.Sleep)
+	t.Cleanup(func() { api.SetPauseTestKnobs(interval, sleep) })
+}
+
+// pauseParams is pause on r.
+func pauseParams(r killRow) api.PauseParams { return api.PauseParams{ClaudeInstanceID: r.ID} }
+
+// pause runs the exported api.Pause with a background context, e.store,
+// e.rec, e.pc (its server and pane checks) and pauseTimeoutSeconds.
+func (e *killEnv) pause(p api.PauseParams) (api.PauseResult, error) {
+	return e.pauseWithin(context.Background(), pauseTimeoutSeconds, p)
+}
+
+// pauseWithin is pause with ctx and the wait's timeout given.
+func (e *killEnv) pauseWithin(ctx context.Context, timeoutSeconds int, p api.PauseParams) (api.PauseResult, error) {
+	return api.Pause(ctx, e.store, e.rec, e.pc, timeoutSeconds, p)
+}
+
+// pauseClient runs Client.Pause (background context, config's pause timeout)
+// on a new e.client, for the trail or [tmux] config cases; logs is its log.
+func (e *killEnv) pauseClient(t *testing.T, p api.PauseParams, settings ...apitest.TmuxSetting) (res api.PauseResult, logs string, err error) {
+	t.Helper()
+	c, buf := e.client(t, settings...)
+	res, err = c.Pause(context.Background(), p)
+	return res, buf.String(), err
+}
+
+// endAsAgent ends r's row as its own agent (a SessionEnd through
+// apitest.ApplyAgentHook, the row's claude_session_id; SR-22.9) and reports
+// whether it applied, and why not. The row must record its pane by then.
+func (e *killEnv) endAsAgent(t *testing.T, r killRow) (bool, string) {
+	t.Helper()
+	row, err := e.st.GetSpawn(r.ID)
+	if err != nil {
+		return false, err.Error()
+	}
+	a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", row.ClaudeSessionID)
+	return a.Applied, a.Reason
+}
+
+// endAfterEnter ends r's row as its own agent (endAsAgent) when the first
+// Enter call returns. The test fails unless it ran and applied.
+func (e *killEnv) endAfterEnter(t *testing.T, r killRow) {
+	t.Helper()
+	e.onceAfter(t, tmux.CallSendEnter, "SessionEnd", func() (bool, string) { return e.endAsAgent(t, r) })
+}
+
+// endAtFirstWait ends r's row as its own agent (endAsAgent) at the pause
+// wait's first sleep (api.SetPauseTestKnobs), so only a wait that sleeps sees
+// it; cleanup restores the knobs and fails the test unless it ran and
+// applied. Not for parallel tests.
+func (e *killEnv) endAtFirstWait(t *testing.T, r killRow) {
+	t.Helper()
+	interval, sleep := api.PauseTestKnobs()
+	ran := false
+	api.SetPauseTestKnobs(time.Millisecond, func(d time.Duration) {
+		if ran {
+			time.Sleep(d)
+			return
+		}
+		ran = true
+		if applied, why := e.endAsAgent(t, r); !applied {
+			t.Errorf("SessionEnd at the wait's first sleep not applied: %s", why)
+		}
+	})
+	t.Cleanup(func() {
+		api.SetPauseTestKnobs(interval, sleep)
+		if !ran {
+			t.Errorf("SessionEnd at the wait's first sleep never ran: the wait never slept")
+		}
+	})
+}
+
+// assertExitDelivered fails unless the calls were exactly pauseSendCalls:
+// paneID's input line cleared on socket (assertLineCleared), exitText typed
+// into it, then one Enter to it.
+func (e *killEnv) assertExitDelivered(t *testing.T, socket, paneID string) {
+	t.Helper()
+	e.assertPaneCalls(t, pauseSendCalls...)
+	e.assertExitTyped(t, socket, paneID)
+	e.assertEnterSent(t, socket, paneID)
+}
+
+// assertExitTyped fails unless paneID's input line was cleared on socket
+// (assertLineCleared) and exactly one text call then typed exitText into
+// it, with Enter asked for (the failed-action cases too).
+func (e *killEnv) assertExitTyped(t *testing.T, socket, paneID string) {
+	t.Helper()
+	e.assertLineCleared(t, socket, paneID)
+	e.assertTextSent(t, socket, paneID, exitText)
+}
+
+// assertLineCleared fails unless exactly one key send was made, paneClearKey
+// to paneID on socket, and it came before every text call (b.9o4).
+func (e *killEnv) assertLineCleared(t *testing.T, socket, paneID string) {
+	t.Helper()
+	var keys []tmuxfix.SocketCall
+	textFirst := false
+	for _, c := range e.rec.SocketCalls() {
+		switch {
+		case c.Key != "":
+			keys = append(keys, c)
+		case c.Call == tmux.CallSendText && len(keys) == 0:
+			textFirst = true
+		}
+	}
+	if len(keys) != 1 {
+		t.Fatalf("key sends = %+v; want one, %s to %s on %s", keys, paneClearKey, paneID, socket)
+	}
+	if c := keys[0]; c.Key != paneClearKey || c.Socket != socket || c.Target != paneID {
+		t.Errorf("key send %q to %q on %s; want %s to %s on %s", c.Key, c.Target, c.Socket, paneClearKey, paneID, socket)
+	}
+	if textFirst {
+		t.Errorf("a text call came before the line was cleared; want %s first", paneClearKey)
+	}
+}
+
+// pauseDisagrees returns id's ad.provenance.disagree records written by pause.
+func pauseDisagrees(t *testing.T, id string) []map[string]any {
+	t.Helper()
+	return verbDisagrees(t, "pause", id)
 }

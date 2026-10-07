@@ -1,15 +1,28 @@
 package api_test
 
-// kill_trail_test.go covers kill's trail (SR-6.4, SR-6.6, SR-14, SR-15):
-// exactly one ad.kill.called per call on every return path, none from a
-// closed Client, and ad.provenance.disagree at most once per reason per call.
-// The fail-open case is in kill_trail_failopen_test.go.
+// kill_trail_test.go covers kill's trail, with and without the finished-row
+// opt-in (SR-6.4, SR-6.6, SR-14, SR-15): exactly one ad.kill.called per call,
+// every field checked, on every return path of kill and on the opt-in's
+// unknown id, unusable name, Gone (agent gone, agent pane in a viewer, agent
+// running with no pane), Leftover, still stopping, still starting, never
+// reported in and reported-in paths, with include_finished and the lookup's
+// token; ad.provenance.disagree at most once per reason per call; and, for
+// kill, send-keys and pause, the fail-open trail. The opt-in's Can't tell,
+// tmux-unavailable and name-held Gone rows are TestKillIncludeFinishedTable's,
+// which checks only their include_finished, outcome, kill_sent and
+// lookup_outcome. A closed Client is TestPaneVerbsUnknownIDAndClosedClient's.
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -17,22 +30,9 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// ktrSentinels maps an ad.kill.called outcome to the sentinel the error wraps
-// (ErrInternal has none).
-var ktrSentinels = map[string]error{
-	"ErrSpawnNotFound":       api.ErrSpawnNotFound,
-	"ErrTmuxNotAvailable":    api.ErrTmuxNotAvailable,
-	"ErrTmuxSessionConflict": api.ErrTmuxSessionConflict,
-	"ErrTmuxUnresponsive":    api.ErrTmuxUnresponsive,
-	"ErrTmuxKillFailed":      api.ErrTmuxKillFailed,
-}
-
-// ktrCallerFields are the four caller fields every kill trail record carries.
-var ktrCallerFields = []string{"caller_process", "caller_pid", "caller_hostname", "caller_user"}
 
 // ktrCalled is one expected ad.kill.called; agentPID and survivors say whether
 // the row's agent pid and teammate pids are recorded (else null and []).
@@ -61,16 +61,45 @@ func ktrRebind(_ *testing.T, e *killEnv, r *killRow) {
 	e.syncServers()
 }
 
-// TestKillTrailCalledPerReturnPath: every return path of Kill writes exactly
-// one ad.kill.called for the id with the path's field values.
+// ktrRestart restarts r's server and seeds r's session on the new one.
+func ktrRestart(t *testing.T, e *killEnv, r *killRow) {
+	e.rec.RestartServer(r.Socket, tmuxfix.Server{})
+	e.syncServers()
+	e.seedSession(t, r)
+}
+
+// ktrRenamed seeds r's session under another stored name.
+func ktrRenamed(t *testing.T, e *killEnv, r *killRow) {
+	e.seedSession(t, r, tmuxfix.WithRowSessionName("renamed-kill"))
+}
+
+// TestKillTrailCalledPerReturnPath: every return path of Kill, and the
+// finished-row opt-in's paths the file header lists (include_finished true;
+// an ended row, as it never branches on ended against missing), writes
+// exactly one ad.kill.called for the id with the path's field values and
+// leaves the row as it was; a path that makes no lookup writes no
+// ad.provenance.disagree, and only the opt-in's "never reported in" has its
+// field combination.
 func TestKillTrailCalledPerReturnPath(t *testing.T) {
 	t.Parallel()
+	ended := func(s startingRow) *startingRow { s.state = store.StateEnded; return &s }
+	past := ended(kosReportedIn("", agentAlive))
+	goneRunning := ended(startingRow{endedAgo: defWindow, noSession: true})
+	viewer := func(t *testing.T, e *killEnv, r *killRow) {
+		e.seedViewer(t, *r)
+		e.syncServers()
+		ktrDies(t, e, r)
+	}
+	notRun := tmux.TokenNotRun
 	cases := []struct {
 		name  string
 		noRow bool
 		spec  killRowSpec
+		row   *startingRow // seeded with seedStarting instead of spec
+		optIn bool
 		setup func(*testing.T, *killEnv, *killRow)
 		want  ktrCalled
+		calls []tmux.Call // the tmux calls, when checked, and nothing else: no wait
 	}{
 		{name: "unknown id", noRow: true,
 			want: ktrCalled{outcome: "ErrSpawnNotFound", lookup: "not_run", followup: "not_run", check: "not_run"}},
@@ -79,8 +108,6 @@ func TestKillTrailCalledPerReturnPath(t *testing.T) {
 		{name: "unusable name", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("kill.name")}},
 			want: ktrCalled{outcome: "ErrInternal", lookup: "not_run", followup: "not_run", check: "not_run"}},
 		{name: "ours success", setup: ktrDies,
-			want: ktrCalled{outcome: "ok", lookup: "ours", followup: "not_run", check: "gone", killSent: true, paneKilled: true, agentPID: true}},
-		{name: "pending ours success", spec: killRowSpec{State: store.StatePending}, setup: ktrDies,
 			want: ktrCalled{outcome: "ok", lookup: "ours", followup: "not_run", check: "gone", killSent: true, paneKilled: true, agentPID: true}},
 		{name: "ours wait expired, agent runs",
 			want: ktrCalled{outcome: "ErrTmuxKillFailed", lookup: "ours", followup: "not_run", check: "alive", killSent: true, paneKilled: true, agentPID: true}},
@@ -105,20 +132,13 @@ func TestKillTrailCalledPerReturnPath(t *testing.T) {
 			want: ktrCalled{outcome: "ErrTmuxSessionConflict", lookup: "leftover", followup: "not_run", check: "not_run"}},
 		{name: "gone, agent gone", spec: killRowSpec{NoSession: true, Agent: agentGone},
 			want: ktrCalled{outcome: "ok", lookup: "gone", followup: "not_run", check: "gone", agentPID: true}},
-		{name: "gone, agent zombie", spec: killRowSpec{NoSession: true, Agent: agentZombie},
-			want: ktrCalled{outcome: "ok", lookup: "gone", followup: "not_run", check: "gone", agentPID: true}},
 		{name: "gone, none recorded", spec: killRowSpec{NoSession: true, Agent: agentNotRecorded},
 			want: ktrCalled{outcome: "ok", lookup: "gone", followup: "not_run", check: "not_recorded"}},
-		{name: "gone, unreadable", spec: killRowSpec{NoSession: true, Agent: agentUnreadable},
-			want: ktrCalled{outcome: "ok", lookup: "gone", followup: "not_run", check: "unreadable", agentPID: true}},
+		{name: "gone, unreadable: nothing sent, no listing, no follow-up", spec: killRowSpec{NoSession: true, Agent: agentUnreadable},
+			want: ktrCalled{outcome: "ok", lookup: "gone", followup: "not_run", check: "unreadable", agentPID: true}, calls: paneLookupCalls},
 		{name: "gone, agent runs, no pane", spec: killRowSpec{NoSession: true},
 			want: ktrCalled{outcome: "ErrTmuxKillFailed", lookup: "gone", followup: "not_run", check: "alive", agentPID: true}},
-		{name: "gone, agent pane in a viewer", spec: killRowSpec{NoSession: true},
-			setup: func(t *testing.T, e *killEnv, r *killRow) {
-				e.seedViewer(t, *r)
-				e.syncServers()
-				ktrDies(t, e, r)
-			},
+		{name: "gone, agent pane in a viewer", spec: killRowSpec{NoSession: true}, setup: viewer,
 			want: ktrCalled{outcome: "ok", lookup: "gone", followup: "not_run", check: "gone", killSent: true, paneKilled: true, agentPID: true}},
 		{name: "different server", setup: ktrRebind,
 			want: ktrCalled{outcome: "ErrTmuxNotAvailable", lookup: "different_server", followup: "not_run", check: "not_run"}},
@@ -131,38 +151,98 @@ func TestKillTrailCalledPerReturnPath(t *testing.T) {
 			want: ktrCalled{outcome: "ErrTmuxUnresponsive", lookup: "cant_tell", followup: "not_run", check: "not_run"}},
 		{name: "tmux unavailable", setup: ktrScript(tmux.FailUnavailable, tmux.CallLookup),
 			want: ktrCalled{outcome: "ErrTmuxNotAvailable", lookup: "tmux_unavailable", followup: "not_run", check: "not_run"}},
-		{name: "socket permission", setup: ktrScript(tmux.FailSocketDenied, tmux.CallLookup),
-			want: ktrCalled{outcome: "ErrTmuxNotAvailable", lookup: "tmux_unavailable", followup: "not_run", check: "not_run"}},
+		{name: "opt-in, unknown id", optIn: true, noRow: true, calls: []tmux.Call{},
+			want: ktrCalled{outcome: "ErrSpawnNotFound", lookup: notRun, followup: notRun, check: notRun}},
+		{name: "opt-in, unusable name", optIn: true, spec: killRowSpec{State: store.StateEnded, NoSession: true,
+			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(preGqeDefaultName)}},
+			want: ktrCalled{outcome: "ErrInternal", lookup: notRun, followup: notRun, check: notRun}},
+		{name: "opt-in, gone, agent gone", optIn: true, row: ended(startingRow{endedAgo: defWindow, agent: agentGone, noSession: true}),
+			want: ktrCalled{outcome: "ok", lookup: "gone", followup: notRun, check: "gone", agentPID: true}},
+		{name: "opt-in, gone, agent pane in a viewer", optIn: true, row: goneRunning, setup: viewer,
+			want: ktrCalled{outcome: "ok", lookup: "gone", followup: notRun, check: "gone", killSent: true, paneKilled: true, agentPID: true}},
+		{name: "opt-in, gone, agent runs, no pane", optIn: true, row: goneRunning,
+			want: ktrCalled{outcome: "ErrTmuxKillFailed", lookup: "gone", followup: notRun, check: "alive", agentPID: true}},
+		{name: "opt-in, leftover", optIn: true, row: ended(startingRow{endedAgo: defWindow, noSession: true}),
+			setup: func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true), e.createdBefore(defWindow+defBound))
+			}, want: ktrCalled{outcome: "ErrTmuxSessionConflict", lookup: "leftover", followup: notRun, check: notRun}},
+		{name: "opt-in, still stopping", optIn: true, row: ended(startingRow{endedAgo: defWindow - time.Second, age: defWindow + defBound}),
+			want: ktrCalled{outcome: "ErrTmuxUnresponsive", lookup: "ours", followup: notRun, check: notRun}},
+		{name: "opt-in, still starting", optIn: true, row: ended(startingRow{endedAgo: defWindow, age: defBound - time.Second}),
+			want: ktrCalled{outcome: "ErrTmuxUnresponsive", lookup: "ours", followup: notRun, check: notRun}},
+		{name: "opt-in, never reported in", optIn: true, row: ended(startingRow{endedAgo: defWindow, noPID: true, age: defWindow + defBound}),
+			want: ktrCalled{outcome: "ErrTmuxSessionConflict", lookup: "ours", followup: notRun, check: notRun}},
+		{name: "opt-in, reported in, killed", optIn: true, row: past, setup: ktrDies,
+			want: ktrCalled{outcome: "ok", lookup: "ours", followup: notRun, check: "gone", killSent: true, paneKilled: true, agentPID: true}},
+		{name: "opt-in, reported in, agent outlives the wait", optIn: true, row: past,
+			want: ktrCalled{outcome: "ErrTmuxKillFailed", lookup: "ours", followup: notRun, check: "alive", killSent: true, paneKilled: true, agentPID: true}},
+		{name: "opt-in, reported in, follow-up unreadable", optIn: true, row: ended(kosReportedIn("", agentUnreadable)),
+			setup: func(_ *testing.T, e *killEnv, r *killRow) {
+				e.rec.Script(r.Socket, tmuxfix.Script{Times: 1}, tmux.CallLookup).
+					Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallLookup)
+			}, want: ktrCalled{outcome: "ErrTmuxUnresponsive", lookup: "ours", followup: "cant_tell", check: "unreadable", killSent: true, paneKilled: true, agentPID: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
 			r := killRow{ID: "kill-unknown-" + uuid.NewString()[:8]}
-			if !tc.noRow {
+			switch {
+			case tc.row != nil:
+				r = e.seedStarting(t, *tc.row).killRow
+			case !tc.noRow:
 				r = e.seedRow(t, tc.spec)
 			}
 			if tc.setup != nil {
 				tc.setup(t, e, &r)
 			}
+			kill := e.kill
+			if tc.optIn {
+				kill = e.killOptIn
+			}
+			var before apitest.SpawnColumns
+			if !tc.noRow {
+				before = e.columns(t, r.ID)
+			}
 
-			res, err := e.kill(r.ID)
+			start := e.clock.Now()
+			res, err := kill(r.ID)
+
+			if elapsed := e.clock.Now().Sub(start); tc.calls != nil && elapsed != seqCharged(e, tc.calls) {
+				t.Errorf("virtual time = %v; want the calls alone, no wait", elapsed)
+			}
+			if !tc.noRow {
+				e.assertRowUnchanged(t, r.ID, before)
+			}
+			if tc.calls != nil {
+				e.assertKillCalls(t, tc.calls...)
+			}
 
 			recs := killCalled(t, r.ID)
 			if len(recs) != 1 {
 				t.Fatalf("ad.kill.called records = %d; want 1: %v", len(recs), recs)
 			}
-			ktrAssertCalled(t, recs[0], r, tc.want)
+			ktrAssertCalled(t, recs[0], r, tc.want, tc.optIn)
 			ktrAssertOutcome(t, err, tc.want.outcome)
 			if err == nil && res.KillSent != tc.want.killSent {
 				t.Errorf("KillResult.KillSent = %t; want %t", res.KillSent, tc.want.killSent)
+			}
+			rec := recs[0]
+			never := rec["include_finished"] == true && rec["lookup_outcome"] == "ours" &&
+				rec["outcome"] == "ErrTmuxSessionConflict" && rec["kill_sent"] == false
+			if want := tc.name == "opt-in, never reported in"; never != want {
+				t.Errorf("never-reported-in fields (include_finished, ours, ErrTmuxSessionConflict, no kill) = %t; want %t", never, want)
+			}
+			if d := killDisagrees(t, r.ID); tc.want.lookup == notRun && len(d) != 0 {
+				t.Errorf("ad.provenance.disagree records = %v; want none", d)
 			}
 		})
 	}
 }
 
-// ktrAssertCalled checks one ad.kill.called record of r against want.
-func ktrAssertCalled(t *testing.T, rec map[string]any, r killRow, want ktrCalled) {
+// ktrAssertCalled checks one ad.kill.called record of r against want, with
+// include_finished optIn.
+func ktrAssertCalled(t *testing.T, rec map[string]any, r killRow, want ktrCalled, optIn bool) {
 	t.Helper()
 	var agent any
 	if want.agentPID {
@@ -178,7 +258,7 @@ func ktrAssertCalled(t *testing.T, rec map[string]any, r killRow, want ktrCalled
 		"claude_instance_id": r.ID, "tmux_session_name": r.Name, "outcome": want.outcome,
 		"lookup_outcome": want.lookup, "followup_outcome": want.followup, "process_check": want.check,
 		"kill_sent": want.killSent, "pane_killed": want.paneKilled, "agent_pid": agent,
-		"include_finished": false, "source": "ad_kill",
+		"include_finished": optIn, "source": "ad_kill",
 	}
 	for k, v := range fields {
 		if got, ok := rec[k]; !ok || got != v {
@@ -191,23 +271,23 @@ func ktrAssertCalled(t *testing.T, rec map[string]any, r killRow, want ktrCalled
 	ktrAssertCaller(t, rec)
 }
 
-// ktrAssertOutcome checks err against an ad.kill.called outcome name.
+// ktrAssertOutcome checks err against an ad.kill.called outcome: nil for ok,
+// else that one catalogued name (ErrInternal: none).
 func ktrAssertOutcome(t *testing.T, err error, outcome string) {
 	t.Helper()
-	switch sentinel, named := ktrSentinels[outcome]; {
-	case outcome == "ok" && err != nil:
-		t.Errorf("err = %v; want nil", err)
-	case outcome != "ok" && err == nil:
-		t.Errorf("err = nil; want %s", outcome)
-	case named && !errors.Is(err, sentinel):
-		t.Errorf("err = %v; want %s", err, outcome)
+	if outcome == "ok" {
+		if err != nil {
+			t.Errorf("err = %v; want nil", err)
+		}
+		return
 	}
+	assertOneName(t, err, outcome)
 }
 
 // ktrAssertCaller fails unless rec carries the four caller fields.
 func ktrAssertCaller(t *testing.T, rec map[string]any) {
 	t.Helper()
-	for _, k := range ktrCallerFields {
+	for _, k := range []string{"caller_process", "caller_pid", "caller_hostname", "caller_user"} {
 		if _, ok := rec[k]; !ok {
 			t.Errorf("record lacks %s: %v", k, rec)
 		}
@@ -224,58 +304,24 @@ func ktrJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
-// TestKillTrailClosedClient: Client.Kill writes one ad.kill.called; on a
-// closed Client it returns ErrClientClosed and writes nothing.
-func TestKillTrailClosedClient(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{})
-	ktrDies(t, e, &r)
-	c, _ := e.client(t)
-
-	if _, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID}); err != nil {
-		t.Fatalf("Kill: %v", err)
-	}
-	if n := len(killCalled(t, r.ID)); n != 1 {
-		t.Fatalf("ad.kill.called records after one Kill = %d; want 1", n)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if _, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID}); !errors.Is(err, api.ErrClientClosed) {
-		t.Fatalf("Kill on a closed Client: err = %v; want ErrClientClosed", err)
-	}
-	if n := len(killCalled(t, r.ID)); n != 1 {
-		t.Errorf("ad.kill.called records after a closed-Client Kill = %d; want still 1", n)
-	}
-	if n := len(killDisagrees(t, r.ID)); n != 0 {
-		t.Errorf("ad.provenance.disagree records = %d; want 0", n)
-	}
-}
-
-// ktrRestart restarts r's server and seeds r's session on the new one.
-func ktrRestart(t *testing.T, e *killEnv, r *killRow) {
-	e.rec.RestartServer(r.Socket, tmuxfix.Server{})
-	e.syncServers()
-	e.seedSession(t, r)
-}
-
-// ktrRenamed seeds r's session under another stored name.
-func ktrRenamed(t *testing.T, e *killEnv, r *killRow) {
-	e.seedSession(t, r, tmuxfix.WithRowSessionName("renamed-kill"))
-}
-
-// TestKillTrailProvenanceDisagree: each reason is written once per Kill call
-// with its fields, never with a label value or another row's id; the normal
-// Ours case writes none.
+// TestKillTrailProvenanceDisagree: each reason is written once per kill call
+// (with the opt-in too, its row never written) with its fields, never with a
+// label value or another row's id; the normal Ours case writes none.
 func TestKillTrailProvenanceDisagree(t *testing.T) {
 	t.Parallel()
 	restarted := disagreeWant{reason: "server_restarted", server: "restarted", verdict: "ours", action: "kill_sent", ours: true}
 	adopted := disagreeWant{reason: "adopted", server: "unknown", verdict: "ours", action: "kill_sent", ours: true}
+	reported := kosReportedIn("", agentAlive)
+	never := reported
+	never.noPID = true
+	renamed := func(action string) disagreeWant {
+		return disagreeWant{reason: "name_changed", server: "match", verdict: "ours", action: action, current: "renamed-kill", ours: true}
+	}
 	cases := []struct {
 		name     string
 		spec     killRowSpec
 		setup    func(*testing.T, *killEnv, *killRow)
+		optIn    func(*testing.T, *killEnv) killRow // the opt-in on the ended row it seeds, in place of spec and setup
 		want     []disagreeWant
 		followup string // the ad.kill.called followup_outcome, when checked
 	}{
@@ -302,12 +348,41 @@ func TestKillTrailProvenanceDisagree(t *testing.T) {
 			spec: killRowSpec{NoServerIdentity: true, NoPane: true, NoSession: true}, setup: ktrRenamed,
 			want: []disagreeWant{adopted,
 				{reason: "name_changed", server: "unknown", verdict: "ours", action: "kill_sent", current: "renamed-kill", ours: true}}},
+		// The opt-in's lookup writes its reasons too, name_changed on a refusal,
+		// but never adopted: a finished row is never written.
+		{name: "opt-in, normal ours writes none", optIn: func(t *testing.T, e *killEnv) killRow { return kotFinished(t, e, reported) }},
+		{name: "opt-in, server_restarted", optIn: func(t *testing.T, e *killEnv) killRow {
+			r := e.seedStarting(t, startingRow{state: store.StateEnded, endedAgo: defWindow, noSession: true}).killRow
+			e.rec.RestartServer(r.Socket, tmuxfix.Server{})
+			e.syncServers()
+			e.seedSession(t, &r, e.createdBefore(kotOldSession))
+			return r
+		}, want: []disagreeWant{restarted}},
+		{name: "opt-in, adoption due, no adopted written", optIn: func(t *testing.T, e *killEnv) killRow {
+			spec := e.resumableSpec(defWindow, agentAlive)
+			spec.NoServerIdentity = true
+			r := e.seedResumableRow(t, spec).killRow
+			e.seedSession(t, &r, e.createdBefore(kotOldSession))
+			return r
+		}},
+		{name: "opt-in, name_changed, killed", optIn: func(t *testing.T, e *killEnv) killRow {
+			return kotFinished(t, e, reported, tmuxfix.WithRowSessionName("renamed-kill"))
+		}, want: []disagreeWant{renamed("kill_sent")}},
+		{name: "opt-in, name_changed, never reported in", optIn: func(t *testing.T, e *killEnv) killRow {
+			return kotFinished(t, e, never, tmuxfix.WithRowSessionName("renamed-kill"))
+		}, want: []disagreeWant{renamed("nothing_sent")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
-			r := e.seedRow(t, tc.spec)
+			var r killRow
+			kill := e.kill
+			if tc.optIn != nil {
+				r, kill = tc.optIn(t, e), e.killOptIn
+			} else {
+				r = e.seedRow(t, tc.spec)
+			}
 			if tc.setup != nil {
 				tc.setup(t, e, &r)
 			}
@@ -317,8 +392,16 @@ func TestKillTrailProvenanceDisagree(t *testing.T) {
 			if r.AgentPID > 0 {
 				e.setAfterCall(tmux.CallKillSession, procfix.Gone(), r.AgentPID)
 			}
+			before := e.columns(t, r.ID)
 
-			_, _ = e.kill(r.ID)
+			_, _ = kill(r.ID)
+
+			if tc.optIn != nil {
+				e.assertRowUnchanged(t, r.ID, before)
+				if e.store.adoptTries != 0 {
+					t.Errorf("adoption writes attempted = %d; want none on a finished row", e.store.adoptTries)
+				}
+			}
 
 			recs := killDisagrees(t, r.ID)
 			if len(recs) != len(tc.want) {
@@ -349,5 +432,162 @@ func ktrAssertNoForeignContent(t *testing.T, rec map[string]any, values ...strin
 		if strings.Contains(text, v) {
 			t.Errorf("record %s contains %q", text, v)
 		}
+	}
+}
+
+// kotOldSession is the age of a reported-in row's own session: past the
+// bound and older than an ended_at the window ago.
+var kotOldSession = defWindow + defBound
+
+// kotFinished seeds s's ended row with no session, then its own session aged
+// kotOldSession with opts, and makes the agent exit at the session kill.
+func kotFinished(t *testing.T, e *killEnv, s startingRow, opts ...tmuxfix.RowSessionOption) killRow {
+	t.Helper()
+	s.state, s.noSession = store.StateEnded, true
+	r := e.seedStarting(t, s).killRow
+	e.seedSession(t, &r, append([]tmuxfix.RowSessionOption{e.createdBefore(kotOldSession)}, opts...)...)
+	e.setAfterCall(tmux.CallKillSession, procfix.Gone(), r.AgentPID)
+	return r
+}
+
+// kotFailOpenRuns runs one reported-in and one never-reported-in opt-in kill
+// and returns one line each. With a working trail each wrote its ad.kill.called.
+func kotFailOpenRuns(t *testing.T, working bool) []string {
+	t.Helper()
+	never := kosReportedIn(store.StateEnded, agentAlive)
+	never.noPID = true
+	var lines []string
+	for i, s := range []startingRow{kosReportedIn(store.StateMissing, agentAlive), never} {
+		e := newKillEnv(t)
+		r := e.seedStarting(t, s).killRow
+		ktrDies(t, e, &r)
+		res, err := e.killOptIn(r.ID)
+		if n := len(killCalled(t, r.ID)); working && n != 1 {
+			t.Fatalf("working trail: ad.kill.called records for %s = %d; want 1", r.ID, n)
+		}
+		name := fmt.Sprintf("opt-in %s kill_sent=%t ended_at=%v", []string{"reported-in", "never-reported-in"}[i],
+			res.KillSent, e.columns(t, r.ID).EndedAt)
+		lines = append(lines, failOpenLine(t, e, name, r.ID, err))
+	}
+	return lines
+}
+
+// ktrFailOpenRuns kills one row per return-path shape, ids prefix-<name>, and
+// returns one line per kill. With a working trail each wrote its ad.kill.called.
+func ktrFailOpenRuns(t *testing.T, prefix string, working bool) []string {
+	t.Helper()
+	cases := []struct {
+		name  string
+		spec  killRowSpec
+		setup func(*testing.T, *killEnv, *killRow)
+	}{
+		{name: "ours", setup: ktrDies},
+		{name: "adopted", spec: killRowSpec{NoServerIdentity: true}, setup: ktrDies},
+		{name: "leftover", spec: killRowSpec{NoSession: true},
+			setup: func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
+			}},
+		{name: "no-pane", spec: killRowSpec{NoSession: true}},
+		{name: "rebound", setup: ktrRebind},
+	}
+	var lines []string
+	for _, tc := range cases {
+		e := newKillEnv(t)
+		tc.spec.ID = prefix + "-" + tc.name
+		r := e.seedRow(t, tc.spec)
+		if tc.setup != nil {
+			tc.setup(t, e, &r)
+		}
+		res, err := e.kill(r.ID)
+		if n := len(killCalled(t, r.ID)); working && n != 1 {
+			t.Fatalf("working trail: ad.kill.called records for %s = %d; want 1", r.ID, n)
+		}
+		lines = append(lines, failOpenLine(t, e, fmt.Sprintf("%s kill_sent=%t", tc.name, res.KillSent), r.ID, err))
+	}
+	return lines
+}
+
+// failOpenLine is one fail-open call's line: name, its error, the tmux calls
+// and the row's state, row_version, pid and identity columns, with id elided
+// (ended_at is not compared: an agent's own SessionEnd stamps the wall clock).
+func failOpenLine(t *testing.T, e *killEnv, name, id string, err error) string {
+	t.Helper()
+	var calls []tmux.Call
+	for _, c := range e.rec.SocketCalls() {
+		calls = append(calls, recordedCall(c))
+	}
+	c := e.columns(t, id)
+	return strings.ReplaceAll(fmt.Sprintf("%s err=%v calls=%v state=%v row_version=%v pid=%v server=%v/%v/%v pane=%v/%v/%v",
+		name, err, calls, c.State, c.RowVersion, c.PID, c.TmuxServerPID, c.TmuxServerStarted,
+		c.TmuxServerStarttime, c.PaneID, c.PanePID, c.PaneStarttime), id, "<id>")
+}
+
+// trailFailOpenChildEnv gates TestTrailFailOpenChild and carries the id prefix.
+const trailFailOpenChildEnv = "AD_TRAIL_FAIL_OPEN_CHILD"
+
+// trailFailOpenLinePrefix marks the child's result lines in its output.
+const trailFailOpenLinePrefix = "TFO|"
+
+// trailFailOpenRuns runs kill's, the opt-in's, send-keys' and pause's
+// fail-open calls, ids under prefix, checking their records when working.
+func trailFailOpenRuns(t *testing.T, prefix string, working bool) []string {
+	t.Helper()
+	return slices.Concat(ktrFailOpenRuns(t, prefix+"-kill", working), kotFailOpenRuns(t, working),
+		sktFailOpenRuns(t, prefix+"-sk", working), ptrFailOpenRuns(t, prefix+"-pause", working))
+}
+
+// TestTrailFailOpen (SR-6.4, SR-7.4, SR-14): with the trail unwritable, kill
+// (with and without the finished-row opt-in), send-keys and pause give the
+// results, errors, tmux calls and rows of a run with a working trail. The
+// unwritable run is a child of this test binary whose HOME's .agent-director
+// is mode 0500 before the trail opens.
+func TestTrailFailOpen(t *testing.T) {
+	t.Parallel()
+	prefix := "failopen-" + uuid.NewString()[:8]
+	want := trailFailOpenRuns(t, prefix, true)
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTrailFailOpenChild$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
+	cmd.Env = append(os.Environ(), trailFailOpenChildEnv+"="+prefix)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestTrailFailOpenChild") {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+	var got []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if rest, ok := strings.CutPrefix(l, trailFailOpenLinePrefix); ok {
+			got = append(got, rest)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("unwritable trail gave\n%s\nwant (working trail)\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestTrailFailOpenChild is TestTrailFailOpen's child: it runs the calls with
+// an unwritable trail, prints their lines and checks no trail file appeared.
+func TestTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
+	prefix := os.Getenv(trailFailOpenChildEnv)
+	if prefix == "" {
+		t.Skip("run only as TestTrailFailOpen's child")
+	}
+	adDir := filepath.Join(apiTrailDir, ".agent-director")
+	if err := os.MkdirAll(adDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(adDir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(adDir, 0o700) })
+	if err := trail.Emit(context.Background(), "ad.test.fail_open_probe", map[string]any{}); err == nil {
+		t.Fatal("trail write succeeded; want it to fail")
+	}
+
+	for _, l := range trailFailOpenRuns(t, prefix, false) {
+		fmt.Println(trailFailOpenLinePrefix + l)
+	}
+
+	if _, err := os.Stat(apiTrailFilePath()); !os.IsNotExist(err) {
+		t.Errorf("trail file stat err = %v; want it never created", err)
 	}
 }

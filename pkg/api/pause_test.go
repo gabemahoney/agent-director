@@ -1,15 +1,20 @@
 package api_test
 
-// pause_test.go: pause's state guards, its refusal of an unusable recorded
-// name on a waiting row (SR-3.2), the agent's pane it types /exit into
-// (by pane id on the row's recorded socket, never a session name, a
-// neighbour's session, a session holding the name or another store's) and
-// its unchanged wait (SR-7.1, SR-7.2, SR-3.3, SR-3.4, SR-3.7, SR-17). On the
-// kill, pane-verb and pause fixtures and tmuxfix.Recorder.
+// pause_test.go: pause's state guards, the input line cleared before /exit
+// (b.9o4), its wait (SR-7.1, SR-7.2, SR-17) and its trail (SR-3.16, SR-14,
+// SR-15): no call event on any return path, and its ad.provenance.disagree
+// records (verb pause, source ad_send_keys) written before the wait whatever
+// ends it. Which pane it types /exit into, with read-pane and send-keys, is
+// readpane_pane_test.go's; its failed keys calls and adoption write
+// sendkeys_action_test.go's; its per-reason disagree records
+// TestKeysVerbsTrailProvenanceDisagree's; a closed Client
+// TestPaneVerbsUnknownIDAndClosedClient's; the unwritable trail
+// TestTrailFailOpen's.
 
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,20 +27,8 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
-
-// pauDeliver pauses r with its row ended by its agent after Enter and fails
-// unless C-u and /exit went to r's agent pane by id, then Enter, and the row ended.
-func pauDeliver(t *testing.T, e *killEnv, r killRow) {
-	t.Helper()
-	fastPausePolls(t)
-	e.endAfterEnter(t, r)
-	if _, err := e.pause(pauseParams(r)); err != nil {
-		t.Fatalf("Pause: %v", err)
-	}
-	e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
-	pauAssertState(t, e, r.ID, store.StateEnded)
-}
 
 // pauAssertState fails unless id's row is in state want.
 func pauAssertState(t *testing.T, e *killEnv, id, want string) {
@@ -69,124 +62,43 @@ func pauSleeps(t *testing.T, interval time.Duration, sleep bool, at func(n int))
 // answered before any tmux call though the row's own session is up; the row is unchanged.
 func TestPauseGuards(t *testing.T) {
 	t.Parallel()
+	seeded := func(state string) func(t *testing.T, e *killEnv) killRow {
+		return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
+	}
 	cases := []struct {
-		name string
-		seed func(t *testing.T, e *killEnv) killRow
-		id   func(r killRow) string
-		want error // nil: no-op success
+		name    string
+		seed    func(t *testing.T, e *killEnv) killRow
+		unknown bool   // pause an id no row has
+		want    string // "": the no-op success
 	}{
-		{"unknown id", pauSeedState(store.StateWaiting), func(killRow) string { return "absent" }, store.ErrSpawnNotFound},
-		{"ended", pauSeedState(store.StateEnded), nil, nil},
-		{"missing", pauSeedState(store.StateMissing), nil, nil},
-		{"pending", pauSeedState(store.StatePending), nil, api.ErrSpawnNotPausable},
+		{"unknown id", seeded(store.StateWaiting), true, "ErrSpawnNotFound"},
+		{"ended", seeded(store.StateEnded), false, ""},
+		{"missing", seeded(store.StateMissing), false, ""},
+		{"pending", seeded(store.StatePending), false, "ErrSpawnNotPausable"},
 		{"pending beside a leftover", func(t *testing.T, e *killEnv) killRow {
 			return e.seedPending(t, pendingFresh, pendingLeftover)
-		}, nil, api.ErrSpawnNotPausable},
-		{"working", pauSeedState(store.StateWorking), nil, api.ErrSpawnNotPausable},
-		{"ask_user", pauSeedState(store.StateAskUser), nil, api.ErrSpawnNotPausable},
-		{"check_permission", pauSeedState(store.StateCheckPermission), nil, api.ErrSpawnNotPausable},
+		}, false, "ErrSpawnNotPausable"},
+		{"working", seeded(store.StateWorking), false, "ErrSpawnNotPausable"},
+		{"ask_user", seeded(store.StateAskUser), false, "ErrSpawnNotPausable"},
+		{"check_permission", seeded(store.StateCheckPermission), false, "ErrSpawnNotPausable"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
 			r := tc.seed(t, e)
 			id := r.ID
-			if tc.id != nil {
-				id = tc.id(r)
+			if tc.unknown {
+				id = "absent"
 			}
 			before := e.columns(t, r.ID)
 			_, err := e.pause(api.PauseParams{ClaudeInstanceID: id})
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("err = %v; want %v", err, tc.want)
-			}
-			e.assertNoTmuxCall(t)
-			e.assertRowUnchanged(t, r.ID, before)
-		})
-	}
-}
-
-// TestPauseUnusableName (SR-3.2, AC-LKP-11): an unusable recorded name is
-// ErrInternal on a waiting row only, with no tmux call and no wait; other states keep their answer.
-func TestPauseUnusableName(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	cases := []struct {
-		state, fixture string
-		want           string // "": no-op success
-	}{
-		{store.StateWaiting, "pre-b.gqe default name", "ErrInternal"},
-		{store.StateWaiting, "escape", "ErrInternal"},
-		{store.StateEnded, "pre-b.gqe default name", ""},
-		{store.StateMissing, "empty", ""},
-		{store.StatePending, "pre-b.gqe default name", "ErrSpawnNotPausable"},
-		{store.StateWorking, "colon", "ErrSpawnNotPausable"},
-		{store.StateAskUser, "invalid UTF-8", "ErrSpawnNotPausable"},
-		{store.StateCheckPermission, "newline", "ErrSpawnNotPausable"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.state+"/"+tc.fixture, func(t *testing.T) {
-			e := newKillEnv(t)
-			f := unusableFixture(t, tc.fixture)
-			r := e.seedUnusableRow(t, killRowSpec{State: tc.state}, f)
-			before := e.columns(t, r.ID)
-			slept := pauSleeps(t, time.Millisecond, false, nil)
-
-			_, err := e.pause(pauseParams(r))
-
-			switch tc.want {
-			case "":
-				if err != nil {
-					t.Fatalf("Pause: %v; want the no-op success", err)
-				}
-			case "ErrInternal":
-				assertOneName(t, err, tc.want)
-				apitest.AssertDescription(t, err.Error(), f.desc, r.Token)
-			default:
+			if tc.want == "" && err != nil {
+				t.Fatalf("err = %v; want the no-op success", err)
+			} else if tc.want != "" {
 				assertOneName(t, err, tc.want)
 			}
 			e.assertNoTmuxCall(t)
 			e.assertRowUnchanged(t, r.ID, before)
-			if len(*slept) != 0 || e.store.stateReads != 0 {
-				t.Errorf("sleeps %v, state reads %d; want no wait", *slept, e.store.stateReads)
-			}
-		})
-	}
-}
-
-// pauSeedState seeds a row in state with its current-labelled session up.
-func pauSeedState(state string) func(t *testing.T, e *killEnv) killRow {
-	return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
-}
-
-// TestPauseDelivers: on Ours, one lookup and one listing, then C-u, /exit
-// and Enter to the agent's pane by id; the row ended by its agent is success.
-func TestPauseDelivers(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	cases := []struct {
-		name      string
-		teammates int
-		client    bool
-	}{
-		{"api.Pause", 0, false},
-		{"agent's pane among teammates", 2, false},
-		{"Client.Pause", 0, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			fastPausePolls(t)
-			r := e.seedRow(t, killRowSpec{Teammates: tc.teammates})
-			e.endAfterEnter(t, r)
-			var err error
-			if tc.client {
-				_, _, err = e.pauseClient(t, pauseParams(r))
-			} else {
-				_, err = e.pause(pauseParams(r))
-			}
-			if err != nil {
-				t.Fatalf("Pause: %v", err)
-			}
-			e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
-			pauAssertState(t, e, r.ID, store.StateEnded)
 		})
 	}
 }
@@ -284,7 +196,8 @@ func TestPauseTimeout(t *testing.T) {
 	start := time.Now()
 	_, err := e.pause(pauseParams(r))
 	elapsed := time.Since(start)
-	if !errors.Is(err, api.ErrPauseTimeout) || !strings.Contains(err.Error(), r.ID+" did not reach ended within 1s") {
+	assertOneName(t, err, "ErrPauseTimeout")
+	if !strings.Contains(err.Error(), r.ID+" did not reach ended within 1s") {
 		t.Fatalf("err = %v; want ErrPauseTimeout for %s within 1s", err, r.ID)
 	}
 	if elapsed < pauseTimeoutSeconds*time.Second {
@@ -304,169 +217,243 @@ func TestPauseTimeout(t *testing.T) {
 	pauAssertState(t, e, r.ID, store.StateWaiting)
 }
 
-// TestPauseRenamedSession: the renamed session's agent pane gets /exit by
-// id; a session now holding the recorded name never does.
-func TestPauseRenamedSession(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	cases := []struct {
-		name   string
-		holder func(r killRow) *tmuxfix.SeedSession
-	}{
-		{"renamed", func(killRow) *tmuxfix.SeedSession { return nil }},
-		{"renamed, unlabelled session holds the name", func(r killRow) *tmuxfix.SeedSession {
-			return &tmuxfix.SeedSession{Name: r.Name}
-		}},
-		{"renamed, another store's session holds the name", func(r killRow) *tmuxfix.SeedSession {
-			return &tmuxfix.SeedSession{Name: r.Name, Label: r.otherStore(r.Token),
-				Panes: []tmuxfix.SeedPane{{AdPane: r.Token}}}
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{NoSession: true})
-			e.seedSession(t, &r, tmuxfix.WithRowSessionName("renamed-"+r.ID))
-			if h := tc.holder(r); h != nil {
-				e.seedOther(t, r.Socket, *h)
-			}
-			pauDeliver(t, e, r)
-		})
-	}
+// ptrEntry is one pause entry point: api.Pause, or Client.Pause when client.
+type ptrEntry struct {
+	name   string
+	client bool
 }
 
-// TestPauseNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
-// error, never sends to a prefix-, name- or 8-character-id-sharing neighbour, and never waits.
-func TestPauseNeighbours(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name         string
-		xID, yID     string
-		xName, yName string
-	}{
-		{"name prefix", "", "", "proj-abc", "proj-abc123"},
-		{"same name, held by the other row's session", "", "", "proj-same", "proj-same"},
-		{"ids share first 8 characters, same-named folders", "abcd1234-x-row", "abcd1234-y-row", "work", "work"},
+// ptrEntries are both entry points.
+var ptrEntries = []ptrEntry{{"Pause", false}, {"Client.Pause", true}}
+
+// pause runs pause on id with ctx through the entry point (api.Pause waits
+// pauseTimeoutSeconds, Client.Pause the config default).
+func (en ptrEntry) pause(ctx context.Context, t *testing.T, e *killEnv, id string) error {
+	t.Helper()
+	p := api.PauseParams{ClaudeInstanceID: id}
+	if en.client {
+		c, _ := e.client(t)
+		_, err := c.Pause(ctx, p)
+		return err
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			x := e.seedRow(t, killRowSpec{ID: tc.xID, NoSession: true,
-				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.xName)}})
-			y := e.seedRow(t, killRowSpec{ID: tc.yID, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.yName)}})
-			before := e.columns(t, x.ID)
-			_, err := e.pause(pauseParams(x))
-			if !errors.Is(err, api.ErrTmuxSendKeys) {
-				t.Fatalf("err = %v; want ErrTmuxSendKeys", err)
-			}
-			apitest.AssertDescription(t, err.Error(), apitest.DescPaneGone(apitest.PaneGone{
-				Verb: apitest.PanePause, InstanceID: x.ID, Name: x.Name}), y.ID, y.Token)
-			e.assertPaneCalls(t, tmux.CallLookup)
-			e.assertRowUnchanged(t, x.ID, before)
-		})
-	}
+	_, err := e.pauseWithin(ctx, pauseTimeoutSeconds, p)
+	return err
 }
 
-// TestPauseStoredNames (AC-LKP-09): a row whose recorded name holds $ or \
-// is found by its label under tmux's stored form and gets /exit by pane id.
-func TestPauseStoredNames(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
+// ptrCancelAfterEnter is a context cancelled when an Enter call returns,
+// so a delivered /exit's wait ends at once.
+func ptrCancelAfterEnter(t *testing.T, e *killEnv) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { cancel() })
+	return ctx
+}
+
+// ptrEnds ends r's row as its own agent after the Enter call.
+func ptrEnds(t *testing.T, e *killEnv, r *killRow) { e.endAfterEnter(t, *r) }
+
+// ptrUnusableSocket seeds a row with no recorded socket whose resolved
+// socket directory is unusable.
+func ptrUnusableSocket(t *testing.T, e *killEnv) killRow {
+	e.ownSocketDir(t)
+	r := e.seedRow(t, killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithNoLaunchToken()}})
+	if err := os.Chmod(filepath.Dir(e.defaultSocket), 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	return r
+}
+
+// ptrAssertOnlyDisagrees fails when a trail record for id written after mark
+// is anything but pause's ad.provenance.disagree (none at all when none) or
+// the state transition of the agent's own SessionEnd.
+func ptrAssertOnlyDisagrees(t *testing.T, mark int, id string, none bool) {
+	t.Helper()
+	for _, l := range readAPITrailLines(t)[mark:] {
+		if l["claude_instance_id"] != id || l["event"] == "ad.spawn.state_transition" {
 			continue
 		}
-		t.Run(n.Raw, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
-			if r.Session.Name != n.Stored {
-				t.Fatalf("seeded session name %q; want the stored form %q", r.Session.Name, n.Stored)
-			}
-			pauDeliver(t, e, r)
-		})
-	}
-}
-
-// TestPauseRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
-// another server, every call names the row's recorded socket.
-func TestPauseRecordedSocket(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs); it sets TMUX,
-	// TMUX_TMPDIR with t.Setenv.
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{})
-	// No commas: TMUX's socket field ends at one.
-	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
-	t.Setenv("TMUX", elsewhere+",4242,0")
-	t.Setenv("TMUX_TMPDIR", t.TempDir())
-	e.seedOther(t, elsewhere, tmuxfix.SeedSession{Name: r.Name, Label: r.current(),
-		Panes: []tmuxfix.SeedPane{{AdPane: r.Token}}})
-	pauDeliver(t, e, r)
-	for _, c := range e.rec.SocketCalls() {
-		if c.Socket != r.Socket {
-			t.Errorf("%v on socket %q; want the recorded %q", c.Call, c.Socket, r.Socket)
+		if none || l["event"] != "ad.provenance.disagree" || l["verb"] != "pause" {
+			t.Errorf("trail record %v (verb %v) for %s; want only pause's disagree records", l["event"], l["verb"], id)
 		}
 	}
 }
 
-// pauOtherStore seeds, under a new name, another store's session labelled
-// with r's id and token, whose one pane carries token.
-func pauOtherStore(t *testing.T, e *killEnv, r killRow, token string) {
-	t.Helper()
-	e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "other-store-" + uuid.NewString()[:8],
-		Label: r.otherStore(token), Panes: []tmuxfix.SeedPane{{AdPane: token}}})
-}
-
-// TestPauseOtherStore (SR-3.4, AC-LKP-20): another store's session naming the
-// row's id is never Ours or Leftover: alone it is Gone; beside this store's session it changes nothing.
-func TestPauseOtherStore(t *testing.T) {
-	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	tokens := []struct {
-		name  string
-		token func(r killRow) string
+// TestPauseTrailNoCallEvent: no return path of pause writes a call event
+// (no ad.pause.*, no ad.send_keys.called); a path with no lookup writes nothing.
+// Each case checks only its own row's records, so the cases run in parallel,
+// except the one that takes its own TMUX_TMPDIR (t.Setenv).
+func TestPauseTrailNoCallEvent(t *testing.T) {
+	// Serial: its unusable-socket-directory case sets TMUX_TMPDIR (t.Setenv); its other cases run in
+	// parallel.
+	cases := []struct {
+		name     string
+		seed     sktSeed // nil: an unknown id
+		outcome  string
+		noLookup bool
+		apiOnly  bool // Client.Pause would wait the config's 30 s
+		ownTmux  bool // the seed takes its own TMUX_TMPDIR (ptrUnusableSocket), so the case is serial
 	}{
-		{"this row's token", func(r killRow) string { return r.Token }},
-		{"another token", func(killRow) string { return newToken() }},
+		{name: "unknown id", outcome: "ErrSpawnNotFound", noLookup: true},
+		{name: "ended row", seed: sktRow(killRowSpec{State: store.StateEnded, NoSession: true}), outcome: "ok", noLookup: true},
+		{name: "missing row", seed: sktRow(killRowSpec{State: store.StateMissing, NoSession: true}), outcome: "ok", noLookup: true},
+		{name: "pending row", seed: sktRow(killRowSpec{State: store.StatePending}), outcome: "ErrSpawnNotPausable", noLookup: true},
+		{name: "working row", seed: sktRow(killRowSpec{State: store.StateWorking}), outcome: "ErrSpawnNotPausable", noLookup: true},
+		{name: "unusable socket directory", seed: ptrUnusableSocket, outcome: "ErrTmuxNotAvailable", noLookup: true,
+			ownTmux: true},
+		{name: "ours, row ends", seed: sktRow(killRowSpec{}, ptrEnds), outcome: "ok"},
+		{name: "ours, wait times out", seed: sktRow(killRowSpec{}), outcome: "ErrPauseTimeout", apiOnly: true},
+		{name: "leftover", seed: sktRow(killRowSpec{NoSession: true}, sktLeftover), outcome: "ErrTmuxSessionConflict"},
+		{name: "pane not found", seed: sktRow(killRowSpec{NoSession: true}, rpnSeedPane), outcome: "ErrTmuxSessionConflict"},
+		{name: "gone", seed: sktRow(killRowSpec{NoSession: true}), outcome: "ErrTmuxSendKeys"},
+		{name: "different server", seed: sktRow(killRowSpec{}, ktrRebind), outcome: "ErrTmuxNotAvailable"},
+		{name: "conflicting labels", seed: sktRow(killRowSpec{}, sktDuplicate), outcome: "ErrTmuxSessionConflict"},
+		{name: "unreadable lookup", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallLookup)),
+			outcome: "ErrTmuxUnresponsive"},
+		{name: "tmux unavailable", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnavailable, tmux.CallLookup)),
+			outcome: "ErrTmuxNotAvailable"},
+		{name: "/exit call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText)),
+			outcome: "ErrTmuxUnresponsive"},
+		{name: "Enter call failed, follow-up ours", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendEnter)),
+			outcome: "ErrTmuxUnresponsive"},
+		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterListing), outcome: "ErrTmuxSendKeys"},
 	}
-	worlds := []struct {
-		name string
-		// seed seeds the sessions beside r (no session yet) and returns the
-		// error and description pause gives (nil: /exit delivered to r's pane).
-		seed func(t *testing.T, e *killEnv, r *killRow, token string) (error, apitest.DescCase)
-	}{
-		{"alone, holding the recorded name and pane", func(t *testing.T, e *killEnv, r *killRow, token string) (error, apitest.DescCase) {
-			e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.otherStore(token), true))
-			return api.ErrTmuxSendKeys, apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PanePause,
-				InstanceID: r.ID, Name: r.Name})
-		}},
-		{"beside this store's Ours", func(t *testing.T, e *killEnv, r *killRow, token string) (error, apitest.DescCase) {
-			e.seedSession(t, r)
-			pauOtherStore(t, e, *r, token)
-			return nil, apitest.DescCase{}
-		}},
-		{"beside this store's leftover", func(t *testing.T, e *killEnv, r *killRow, token string) (error, apitest.DescCase) {
-			lo := e.seedLeftover(t, *r, tmuxfix.OtherToken)
-			pauOtherStore(t, e, *r, token)
-			return api.ErrTmuxSessionConflict, apitest.DescPaneLeftover(apitest.PaneLeftover{Verb: apitest.PanePause,
-				InstanceID: r.ID, Sessions: []apitest.DescSession{{Name: lo.Name, ID: lo.ID}}})
-		}},
-	}
-	for _, tk := range tokens {
-		for _, w := range worlds {
-			t.Run(tk.name+"/"+w.name, func(t *testing.T) {
+	for _, entry := range ptrEntries {
+		for _, tc := range cases {
+			if tc.apiOnly && entry.client {
+				continue
+			}
+			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
+				if !tc.ownTmux {
+					t.Parallel()
+				}
 				e := newKillEnv(t)
-				r := e.seedRow(t, killRowSpec{NoSession: true})
-				want, desc := w.seed(t, e, &r, tk.token(r))
-				if want == nil {
-					pauDeliver(t, e, r)
-					return
+				id := "pause-unknown-" + uuid.NewString()[:8]
+				if tc.seed != nil {
+					id = tc.seed(t, e).ID
 				}
-				before := e.columns(t, r.ID)
-				_, err := e.pause(pauseParams(r))
-				if !errors.Is(err, want) {
-					t.Fatalf("err = %v; want %v", err, want)
+				mark := trailMark(t)
+
+				err := entry.pause(context.Background(), t, e, id)
+
+				if name, _ := errnames.Classify(err); (err == nil) != (tc.outcome == "ok") || (err != nil && name != tc.outcome) {
+					t.Errorf("err = %v (class %q); want outcome %s", err, name, tc.outcome)
 				}
-				apitest.AssertDescription(t, err.Error(), desc)
-				e.assertPaneCalls(t, tmux.CallLookup)
-				e.assertRowUnchanged(t, r.ID, before)
+				ptrAssertOnlyDisagrees(t, mark, id, tc.noLookup)
 			})
 		}
 	}
+}
+
+// ptrLineClearDisagreeCases are pause's own rows of the keys verbs' disagree
+// table (b.9o4): a line clear (C-u) that timed out or failed types no text,
+// so the call's action is nothing_sent.
+func ptrLineClearDisagreeCases() []keysDisagreeCase {
+	type setups = []func(*testing.T, *killEnv, *killRow)
+	nothingSent := []disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "nothing_sent",
+		ours: true}}
+	return []keysDisagreeCase{
+		{name: "server_restarted, line clear timed out",
+			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendKey)}, want: nothingSent},
+		{name: "server_restarted on the lookup and the follow-up, line clear failed",
+			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendKey)}, want: nothingSent},
+	}
+}
+
+// ptrDisagreesAtFirstSleep makes the wait's first sleep read id's pause
+// disagree records; the result is nil until it slept. Knobs restored at cleanup.
+func ptrDisagreesAtFirstSleep(t *testing.T, id string) func() []map[string]any {
+	t.Helper()
+	interval, sleep := api.PauseTestKnobs()
+	t.Cleanup(func() { api.SetPauseTestKnobs(interval, sleep) })
+	var seen []map[string]any
+	api.SetPauseTestKnobs(interval, func(d time.Duration) {
+		if seen == nil {
+			seen = append([]map[string]any{}, pauseDisagrees(t, id)...)
+		}
+		sleep(d)
+	})
+	return func() []map[string]any { return seen }
+}
+
+// TestPauseTrailWrittenBeforeTheWait: the records are written before the wait
+// and are the same whether the row ends, the wait times out or the caller cancels.
+func TestPauseTrailWrittenBeforeTheWait(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
+	var rows []keysDisagreeCase
+	for _, tc := range keysDisagreeCases() {
+		if tc.name == "server_restarted" || tc.name == "adopted and name_changed" {
+			rows = append(rows, tc)
+		}
+	}
+	outcomes := []struct {
+		name    string
+		prepare func(*testing.T, *killEnv, killRow) context.Context
+		want    error // nil: success
+		sleeps  bool  // the wait sleeps before it ends
+	}{
+		{"row ends", func(t *testing.T, e *killEnv, r killRow) context.Context {
+			e.endAfterEnter(t, r)
+			return context.Background()
+		}, nil, false},
+		{"wait times out", func(*testing.T, *killEnv, killRow) context.Context { return context.Background() },
+			api.ErrPauseTimeout, true},
+		{"caller cancels", func(t *testing.T, e *killEnv, _ killRow) context.Context { return ptrCancelAfterEnter(t, e) },
+			context.Canceled, false},
+	}
+	for _, row := range rows {
+		for _, oc := range outcomes {
+			t.Run(row.name+"/"+oc.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				r, other := e.seedKeysDisagreeCase(t, row)
+				atSleep := ptrDisagreesAtFirstSleep(t, r.ID)
+				mark := trailMark(t)
+
+				_, err := e.pauseWithin(oc.prepare(t, e, r), pauseTimeoutSeconds, pauseParams(r))
+
+				if (oc.want == nil) != (err == nil) || !errors.Is(err, oc.want) {
+					t.Fatalf("err = %v; want %v", err, oc.want)
+				}
+				assertKeysDisagrees(t, e, pauseDisagrees(t, r.ID), r, "pause", other, row.want)
+				if oc.sleeps {
+					assertKeysDisagrees(t, e, atSleep(), r, "pause", other, row.want)
+				}
+				ptrAssertOnlyDisagrees(t, mark, r.ID, false)
+			})
+		}
+	}
+}
+
+// ptrFailOpenRuns pauses one row per trail shape, ids prefix-<name>, and
+// returns one line per call: its error, calls and row columns. With a working
+// trail each wrote disagree records.
+func ptrFailOpenRuns(t *testing.T, prefix string, working bool) []string {
+	t.Helper()
+	type setups = []func(*testing.T, *killEnv, *killRow)
+	cases := []struct {
+		name     string
+		spec     killRowSpec
+		setups   setups
+		apiOnly  bool // the wait times out: Client.Pause would wait 30 s
+		disagree int
+	}{
+		{name: "ours", setups: setups{ptrEnds}},
+		{name: "adopted", spec: killRowSpec{NoServerIdentity: true, NoPane: true}, setups: setups{ptrEnds}, disagree: 1},
+		{name: "restarted-timeout", setups: setups{ktrRestart}, apiOnly: true, disagree: 1},
+		{name: "restarted-exit-timeout", setups: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendText)}, disagree: 1},
+		{name: "rebound", setups: setups{ktrRebind}, disagree: 1},
+		{name: "gone", spec: killRowSpec{NoSession: true}},
+	}
+	var lines []string
+	for _, tc := range cases {
+		e := newKillEnv(t)
+		spec := tc.spec
+		spec.ID = prefix + "-" + tc.name
+		r := sktRow(spec, tc.setups...)(t, e)
+		err := ptrEntry{client: !tc.apiOnly}.pause(context.Background(), t, e, r.ID)
+		if n := len(pauseDisagrees(t, r.ID)); working && n != tc.disagree {
+			t.Fatalf("working trail: %s wrote %d disagree records; want %d", r.ID, n, tc.disagree)
+		}
+		lines = append(lines, failOpenLine(t, e, tc.name, r.ID, err))
+	}
+	return lines
 }

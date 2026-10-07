@@ -67,6 +67,20 @@ func rpSecOtherStore(name, token func(s *securityScene) string) func(*testing.T,
 	}
 }
 
+// secDuplicateLabel is the pane verbs' and kill's conflicting-labels arrange: a
+// second session carrying the target's current label (s.extraSess).
+func secDuplicateLabel(t *testing.T, s *securityScene) {
+	s.extraSess = s.e.seedOther(t, s.target.Socket,
+		tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
+}
+
+// secConflictingLabels is secDuplicateLabel's refusal: both sessions named, nothing done.
+func secConflictingLabels(s *securityScene) apitest.DescCase {
+	return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
+		Sessions: []apitest.DescSession{{Name: s.target.Session.Name, ID: s.target.Session.ID},
+			{Name: s.extraSess.Name, ID: s.extraSess.ID}}})
+}
+
 // securityReadPaneCases meet the planted sessions on read-pane's Gone (a
 // holder of each kind), lone-Leftover, conflicting-labels and Ours paths (SR-7.2).
 var securityReadPaneCases = []securityCase{
@@ -113,20 +127,11 @@ var securityReadPaneCases = []securityCase{
 		check: rpSecReads(func(s *securityScene) string { return s.extraSess.Panes[0].ID }),
 	},
 	{
-		name: "conflicting labels",
-		arrange: func(t *testing.T, s *securityScene) {
-			s.extraSess = s.e.seedOther(t, s.target.Socket,
-				tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
-		},
+		name:    "conflicting labels",
+		arrange: secDuplicateLabel,
 		wantErr: api.ErrTmuxSessionConflict,
-		desc: func(s *securityScene) apitest.DescCase {
-			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
-				Sessions: []apitest.DescSession{
-					{Name: s.target.Session.Name, ID: s.target.Session.ID},
-					{Name: s.extraSess.Name, ID: s.extraSess.ID},
-				}})
-		},
-		check: rpSecReads(nil),
+		desc:    secConflictingLabels,
+		check:   rpSecReads(nil),
 	},
 	{
 		name:  "ours, the agent's pane is read",

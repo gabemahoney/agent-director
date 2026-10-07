@@ -1,14 +1,21 @@
 package api_test
 
-// kill_optin_table_test.go: kill with the finished-row opt-in on an ended and
-// a missing row walks SR-6.5's finished-row table in resume's order (Gone,
+// kill_optin_table_test.go: kill with the finished-row opt-in refuses every
+// live row, pending included, with ErrSpawnNotResumable before any lookup
+// (SR-6.5, SR-1.4), refuses a finished row's unusable recorded name next
+// (SR-3.2), then walks SR-6.5's finished-row table in resume's order (Gone,
 // Leftover, Can't tell, tmux unavailable, Ours inside the stopping window,
-// Ours younger than the bound, Ours past both), at SR-4.2's default
-// boundaries (SR-20.6). Every refusal sends nothing and every row stays as it
-// was. The reported-in boundaries are kill_optin_reported_test.go's; the
-// configured values kill_optin_config_test.go's.
+// Ours younger than the bound, Ours past both; SR-20.6), with the window and
+// the bound as configured through api.New or passed to killFinished
+// (AC-CFG-02, SR-4.2). Every refusal sends nothing and every row stays as it
+// was; ad.kill.called records include_finished (SR-6.4). It holds the runner
+// the reported-in boundaries (kill_optin_reported_test.go) use. The opt-in
+// never branches on ended against missing, so these rows are ended. Without
+// the opt-in a live row is looked up as kill always does (SR-6.8):
+// TestKillTrailCalledPerReturnPath and the call table's kill row.
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -17,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -25,7 +33,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// kftStates are the finished states every case runs on.
+// kftStates are the finished states the reported-in boundaries run on.
 var kftStates = []string{store.StateEnded, store.StateMissing}
 
 // kftOutcome is what one opt-in kill must produce: the error name ("" is
@@ -103,6 +111,9 @@ func (e *killEnv) kftCheck(t *testing.T, r resumeRow, before kftBefore, res api.
 		assertOneName(t, err, o.errName)
 		apitest.AssertDescription(t, kftScrub(r, err.Error()), o.desc, append([]string{r.Token, r.StoreID}, o.forbid...)...)
 		outcome = o.errName
+		if res.KillSent {
+			t.Error("kill_sent = true; want false")
+		}
 	}
 	e.assertKillCalls(t, o.calls...)
 	e.assertRowUnchanged(t, r.ID, before.cols)
@@ -136,48 +147,9 @@ func kftOurs(t *testing.T, s startingRow, w kftWant, bound, window time.Duration
 	e.kftCheck(t, r, before, res, err, kftOursOutcome(w, s, r, bound, window))
 }
 
-// kftKill is kftOurs' call through api.Kill at e.cfg's durations.
-func kftKill(e *killEnv, r resumeRow) (api.KillResult, error) { return e.killOptIn(r.ID) }
-
-// TestKillIncludeFinishedTableBoundaries: Ours with ended_at window-1 s or the
-// window ago and a reported-in session bound-1 s or the bound old; the window decides first.
-func TestKillIncludeFinishedTableBoundaries(t *testing.T) {
-	t.Parallel()
-	ended := []struct {
-		name   string
-		ago    time.Duration
-		inside bool
-	}{{"ended window-1 s ago", defWindow - time.Second, true}, {"ended the window ago", defWindow, false}}
-	sessions := []struct {
-		name  string
-		age   time.Duration
-		young bool
-	}{{"session bound-1 s old", defBound - time.Second, true}, {"session the bound old", defBound, false}}
-	for _, state := range kftStates {
-		for _, en := range ended {
-			for _, s := range sessions {
-				want := kftKilled
-				switch {
-				case en.inside:
-					want = kftStopping
-				case s.young:
-					want = kftStarting
-				}
-				t.Run(state+", "+en.name+", "+s.name, func(t *testing.T) {
-					kftOurs(t, startingRow{state: state, endedAgo: en.ago, age: s.age}, want, defBound, defWindow, kftKill)
-				})
-			}
-		}
-		t.Run(state+", ended the window ago, session the bound old, no pid", func(t *testing.T) {
-			kftOurs(t, startingRow{state: state, endedAgo: defWindow, age: defBound, noPID: true},
-				kftNeverReportedIn, defBound, defWindow, kftKill)
-		})
-	}
-}
-
-// kftCase is one non-Ours row of the table: its finished row (state set per
-// run), the world built around it (returning other rows' ids to forbid), the
-// agent's exit at its pane kill, and the outcome.
+// kftCase is one non-Ours row of the table: its finished row, the world built
+// around it (returning other rows' ids to forbid), the agent's exit at its
+// pane kill, and the outcome.
 type kftCase struct {
 	name     string
 	row      startingRow
@@ -244,9 +216,10 @@ func kftCases() []kftCase {
 				return nil
 			}, want: kftFixed(kftOutcome{sent: true, calls: seqGonePane, lookup: "gone"})},
 		{name: "Gone, agent running with no pane found", row: goneRow(agentAlive, defWindow), want: kftNoPane},
-		{name: "Gone, agent running, name held by an unlabelled session", row: goneRow(agentAlive, defWindow),
+		// AC-KILL-07's "agent running, name held" half: no kill sent, the holder still running.
+		{name: "Gone, agent running, name held by an unlabelled session (AC-KILL-07)", row: goneRow(agentAlive, defWindow),
 			world: kftHolder(holderNone), want: kftNoPane},
-		{name: "Gone, agent running, name held by another row's session", row: goneRow(agentAlive, defWindow),
+		{name: "Gone, agent running, name held by another row's session (AC-KILL-07)", row: goneRow(agentAlive, defWindow),
 			world: kftHolder(holderForeign), want: kftNoPane},
 		{name: "Leftover", row: goneRow(agentAlive, defWindow),
 			world: func(t *testing.T, e *killEnv, r *resumeRow) []string {
@@ -314,30 +287,215 @@ func kftCases() []kftCase {
 }
 
 // TestKillIncludeFinishedTable: each Gone, Leftover, Can't tell and
-// tmux-unavailable row on an ended and a missing row; only Ours reaches the
-// window, the bound and the reported-in rule.
+// tmux-unavailable row; only Ours reaches the window, the bound and the
+// reported-in rule.
 func TestKillIncludeFinishedTable(t *testing.T) {
 	t.Parallel()
-	for _, state := range kftStates {
-		for _, tc := range kftCases() {
-			t.Run(state+", "+tc.name, func(t *testing.T) {
-				t.Parallel() // each case has its own fixture and random ids
-				e := newKillEnv(t)
-				row := tc.row
-				row.state = state
-				r := e.seedStarting(t, row)
-				var forbid []string
-				if tc.world != nil {
-					forbid = tc.world(t, e, &r)
-				}
-				if tc.paneEnds {
-					e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
-				}
-				before := e.kftSnap(t, r)
-				res, err := e.killOptIn(r.ID)
-				o := tc.want(e, r)
-				o.forbid = append(o.forbid, forbid...)
-				e.kftCheck(t, r, before, res, err, o)
+	for _, tc := range kftCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel() // each case has its own fixture and random ids
+			e := newKillEnv(t)
+			row := tc.row
+			row.state = store.StateEnded
+			r := e.seedStarting(t, row)
+			var forbid []string
+			if tc.world != nil {
+				forbid = tc.world(t, e, &r)
+			}
+			if tc.paneEnds {
+				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+			}
+			before := e.kftSnap(t, r)
+			res, err := e.killOptIn(r.ID)
+			o := tc.want(e, r)
+			o.forbid = append(o.forbid, forbid...)
+			e.kftCheck(t, r, before, res, err, o)
+		})
+	}
+}
+
+// TestKillIncludeFinishedUnusableName (SR-3.2, SR-6.5): each unusable name on
+// a finished row gets its ErrInternal with no tmux call, no process check and
+// no disagree record, nothing sent or changed.
+func TestKillIncludeFinishedUnusableName(t *testing.T) {
+	t.Parallel()
+	for _, f := range unusableNameFixtures() {
+		t.Run(f.label, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			r := resumeRow{killRow: e.seedRow(t, killRowSpec{State: store.StateEnded, NoSession: true,
+				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(f.raw)}})}
+			before := e.kftSnap(t, r)
+
+			res, err := e.killOptIn(r.ID)
+
+			e.kftCheck(t, r, before, res, err, kftOutcome{errName: "ErrInternal", desc: f.desc, lookup: tmux.TokenNotRun})
+			if n, m := len(e.pc.StartTimeCalls()), e.pc.EnvReads(); n != 0 || m != 0 {
+				t.Errorf("process checker consulted (%d start-time calls, %d env reads); want none", n, m)
+			}
+			if d := killDisagrees(t, r.ID); len(d) != 0 {
+				t.Errorf("ad.provenance.disagree records = %v; want none", d)
+			}
+		})
+	}
+}
+
+// kolAssertCalled fails unless id has exactly one ad.kill.called record holding want's fields.
+func kolAssertCalled(t *testing.T, id string, want map[string]any) {
+	t.Helper()
+	recs := killCalled(t, id)
+	if len(recs) != 1 {
+		t.Fatalf("ad.kill.called records = %d; want 1: %v", len(recs), recs)
+	}
+	for k, v := range want {
+		if got, ok := recs[0][k]; !ok || got != v {
+			t.Errorf("ad.kill.called %s = %v (present %t); want %v", k, got, ok, v)
+		}
+	}
+}
+
+// kolAssertRefused fails unless err is the live-row refusal of r in state, no
+// tmux call was made, the process checker was not consulted, the row and its
+// sessions are unchanged and the one ad.kill.called says so.
+func kolAssertRefused(t *testing.T, e *killEnv, r killRow, state string, res api.KillResult, err error,
+	before apitest.SpawnColumns, sessions []tmuxfix.SeedSession) {
+	t.Helper()
+	if !errors.Is(err, api.ErrSpawnNotResumable) || res.KillSent {
+		t.Fatalf("kill = %+v, %v; want ErrSpawnNotResumable with kill_sent false", res, err)
+	}
+	apitest.AssertDescription(t, err.Error(), apitest.DescKillOptInLiveRow(r.ID, state), r.Token, r.StoreID)
+	e.assertKillCalls(t)
+	if n, m := len(e.pc.StartTimeCalls()), e.pc.EnvReads(); n != 0 || m != 0 {
+		t.Errorf("process checker consulted (%d start-time calls, %d env reads); want none", n, m)
+	}
+	e.assertRowUnchanged(t, r.ID, before)
+	if got := e.rec.Sessions(r.Socket); !reflect.DeepEqual(got, sessions) {
+		t.Errorf("sessions after kill = %+v; want untouched %+v", got, sessions)
+	}
+	if n := len(killDisagrees(t, r.ID)); n != 0 {
+		t.Errorf("ad.provenance.disagree records = %d; want 0", n)
+	}
+	kolAssertCalled(t, r.ID, map[string]any{"include_finished": true, "outcome": "ErrSpawnNotResumable",
+		"lookup_outcome": "not_run", "followup_outcome": "not_run", "process_check": "not_run",
+		"kill_sent": false, "pane_killed": false, "tmux_session_name": r.Name})
+}
+
+// TestKillIncludeFinishedRefusesLiveRow: each live row with the opt-in gets
+// the live-row refusal with no lookup, no process check and no write; its own
+// running session is still there. A live row's unusable recorded name keeps
+// the live-row refusal.
+func TestKillIncludeFinishedRefusesLiveRow(t *testing.T) {
+	t.Parallel()
+	type liveCase struct {
+		name, state string
+		spec        killRowSpec
+		unusable    bool // the recorded name is unusable, no session seeded
+	}
+	var cases []liveCase
+	for _, s := range []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser,
+		store.StateCheckPermission} {
+		cases = append(cases, liveCase{s, s, killRowSpec{State: s}, false})
+	}
+	cases = append(cases, liveCase{"waiting, unusable recorded name", store.StateWaiting,
+		killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("kill.name")}}, true})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			r := e.seedRow(t, tc.spec)
+			before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
+			if before.State != tc.state {
+				t.Fatalf("seeded state %v; want %s", before.State, tc.state)
+			}
+			if !tc.unusable && len(sessions) == 0 {
+				t.Fatalf("no session seeded for %s", r.ID)
+			}
+			res, err := e.killOptIn(r.ID)
+			kolAssertRefused(t, e, r, tc.state, res, err, before, sessions)
+		})
+	}
+}
+
+// kocProbe is one row probing bound and window.
+type kocProbe struct {
+	name string
+	row  startingRow
+	want kftWant
+}
+
+// kocProbes are bound's and window's probes on an ended row whose session
+// reported in: ended window-1 s ago with an old session (stopping), or with a
+// session bound-1 s old (the window decides first); ended the window ago with
+// a session bound-1 s old (starting), or the bound old (killed when created
+// before ended_at, else never reported in).
+func kocProbes(bound, window time.Duration) []kocProbe {
+	atBound := kftKilled
+	if bound <= window {
+		atBound = kftNeverReportedIn
+	}
+	return []kocProbe{
+		{"ended window-1 s ago, old session",
+			startingRow{state: store.StateEnded, endedAgo: window - time.Second, age: window + bound}, kftStopping},
+		{"ended window-1 s ago, session bound-1 s old: the window first",
+			startingRow{state: store.StateEnded, endedAgo: window - time.Second, age: bound - time.Second}, kftStopping},
+		{"ended the window ago, session bound-1 s old",
+			startingRow{state: store.StateEnded, endedAgo: window, age: bound - time.Second}, kftStarting},
+		{"ended the window ago, session the bound old",
+			startingRow{state: store.StateEnded, endedAgo: window, age: bound}, atBound},
+	}
+}
+
+// TestKillIncludeFinishedClientSettings: through api.New, the window and the
+// bound at their safe minimums decide at value-1 s and value, each leaving the other at its default.
+func TestKillIncludeFinishedClientSettings(t *testing.T) {
+	t.Parallel()
+	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
+	cases := []struct {
+		name          string
+		settings      []apitest.TmuxSetting
+		bound, window time.Duration
+	}{
+		{"window at its safe minimum", []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStoppingWindowSeconds, minW)},
+			defBound, secs(minW)},
+		{"bound at its safe minimum", []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStartingSessionSeconds, minB)},
+			secs(minB), defWindow},
+		{"both at their safe minimums", []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStartingSessionSeconds, minB),
+			apitest.TmuxInt(config.TmuxStoppingWindowSeconds, minW)}, secs(minB), secs(minW)},
+	}
+	for _, tc := range cases {
+		for _, p := range kocProbes(tc.bound, tc.window) {
+			t.Run(tc.name+"/"+p.name, func(t *testing.T) {
+				kftOurs(t, p.row, p.want, tc.bound, tc.window, func(e *killEnv, r resumeRow) (api.KillResult, error) {
+					res, logs, err := e.killOptInClient(t, r.ID, tc.settings...)
+					if logs != "" {
+						t.Errorf("Client log = %q; want none", logs)
+					}
+					return res, err
+				})
+			})
+		}
+	}
+}
+
+// TestKillIncludeFinishedPassedDurations: killFinished applies the bound and
+// window it is given, not the configured defaults: the defaults themselves,
+// and below and above them.
+func TestKillIncludeFinishedPassedDurations(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		bound, window time.Duration
+	}{
+		{"the defaults", defBound, defWindow},
+		{"safe minimums", secs(config.MinStartingSessionSeconds), secs(config.MinStoppingWindowSeconds)},
+		{"above the defaults", defWindow + defBound, defBound},
+	}
+	for _, tc := range cases {
+		for _, p := range kocProbes(tc.bound, tc.window) {
+			t.Run(tc.name+"/"+p.name, func(t *testing.T) {
+				kftOurs(t, p.row, p.want, tc.bound, tc.window, func(e *killEnv, r resumeRow) (api.KillResult, error) {
+					return e.killOptInWith(r.ID, tc.bound, tc.window)
+				})
 			})
 		}
 	}

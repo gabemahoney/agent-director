@@ -12,8 +12,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -113,19 +111,10 @@ var securityPauseCases = []securityCase{
 		check: psSecChecks(false, "nothing_sent", ""),
 	},
 	{
-		name: "conflicting labels",
-		arrange: func(t *testing.T, s *securityScene) {
-			s.extraSess = s.e.seedOther(t, s.target.Socket,
-				tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
-		},
-		wantErr: api.ErrTmuxSessionConflict,
-		desc: func(s *securityScene) apitest.DescCase {
-			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
-				Sessions: []apitest.DescSession{
-					{Name: s.target.Session.Name, ID: s.target.Session.ID},
-					{Name: s.extraSess.Name, ID: s.extraSess.ID},
-				}})
-		},
+		name:     "conflicting labels",
+		arrange:  secDuplicateLabel,
+		wantErr:  api.ErrTmuxSessionConflict,
+		desc:     secConflictingLabels,
 		disagree: true,
 		check:    psSecChecks(false, "nothing_sent", tmux.ReasonDuplicateLabel),
 	},

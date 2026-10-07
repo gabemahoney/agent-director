@@ -2,10 +2,8 @@ package api_test
 
 // pane_input_fixture_test.go models the agent's input box as send-keys' and
 // pause's keys calls leave it, as Claude Code's prompt input behaves (b.fji,
-// b.9o4): a text call types its text; C-u, sent as a key, deletes from the
-// cursor (the end of the box) to the start of its line; Enter submits the
-// box, and on an empty box submits nothing. The pane's capture shows the
-// box, so read-pane shows what is typed. It holds no tests.
+// b.9o4). The pane's capture shows the box, so read-pane shows what is typed.
+// It holds no tests.
 
 import (
 	"errors"
@@ -18,10 +16,13 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// paneInput is the agent pane's input box: what is typed and not submitted
-// (box) and the submissions in order. A failed call reached the pane only
-// when it timed out and timeoutsReach is set (the descriptions' "may have
-// been delivered"); onSubmit, when set, runs on each submission.
+// paneInput is the agent pane's input box as send-keys' and pause's keys
+// calls leave it, as Claude Code's prompt input behaves (b.fji, b.9o4): a
+// text call types its text, C-u deletes to the start of the line, Enter
+// submits the box (an empty box submits nothing). box is what is typed and
+// not submitted, submitted the submissions in order. A failed call reached
+// the pane only when it timed out and timeoutsReach is set; onSubmit, when
+// set, runs on each submission.
 type paneInput struct {
 	timeoutsReach bool
 	box           string

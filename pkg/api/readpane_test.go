@@ -1,20 +1,18 @@
 package api_test
 
-// readpane_test.go: read-pane's parameters, its freedom from a state guard,
-// its refusal of an unusable recorded name in any state (SR-3.2), and which
-// pane it reads (SR-7.1, SR-7.2, SR-7.3, SR-3.3, SR-3.7, SR-20.5):
-// always the agent's pane by its pane id on the row's recorded socket, never
-// a session name, a neighbour's session or a session holding the name. On
-// the pane-verb fixture (pane_verb_fixture_test.go) and tmuxfix.Recorder.
+// readpane_test.go: read-pane's parameters, its freedom from a state guard, a
+// session replaced mid-call (SR-7.1, SR-7.2, SR-7.3, SR-20.5), and that it
+// changes nothing (SR-7.5, SR-3.6, SR-20.6; AC-PANE-10's read-pane half): no
+// tmux or store write (no adoption write either), no trail event, the same
+// answer and calls when re-issued. Which pane it reads, with send-keys and
+// pause, is readpane_pane_test.go's, whose check asserts the same on every read.
 
 import (
 	"errors"
-	"fmt"
-	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
+	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -22,38 +20,14 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// rpAssertRead fails unless read-pane returned paneID's text from exactly
-// paneReadCalls, capturing paneID by its id with the default parameters.
-func rpAssertRead(t *testing.T, e *killEnv, r killRow, paneID string, res api.ReadPaneResult, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("ReadPane: %v", err)
-	}
-	if want := paneText(r.Socket, paneID); res.Pane != want {
-		t.Errorf("Pane = %q; want %q", res.Pane, want)
-	}
-	e.assertPaneCalls(t, paneReadCalls...)
-	e.assertCaptured(t, paneID, api.DefaultReadPaneLines, false)
-}
-
-// rpAssertRefused fails unless err wraps want with a description matching
-// c (forbidding forbid), the result is empty and nothing was captured.
-func rpAssertRefused(t *testing.T, e *killEnv, res api.ReadPaneResult, err, want error, c apitest.DescCase, forbid ...string) {
-	t.Helper()
-	if !errors.Is(err, want) {
-		t.Fatalf("err = %v; want %v", err, want)
-	}
-	apitest.AssertDescription(t, err.Error(), c, forbid...)
-	if res.Pane != "" {
-		t.Errorf("Pane = %q; want none", res.Pane)
-	}
-	e.assertNoCalls(t, tmux.CallCapture)
-}
-
-// TestReadPaneParameters: n_lines (0 is the default, no cap) and ansi (stripped
-// with glyphs kept, or raw) reach the one capture of the agent's pane by id.
+// TestReadPaneParameters: n_lines (0 is SRD §12's default of 25, no cap) and
+// ansi (stripped with glyphs kept, or raw) reach the one capture of the
+// agent's pane by id.
 func TestReadPaneParameters(t *testing.T) {
 	t.Parallel()
+	if api.DefaultReadPaneLines != 25 {
+		t.Fatalf("DefaultReadPaneLines = %d; want 25", api.DefaultReadPaneLines)
+	}
 	const raw = "\x1b[31m❯\x1b[0m what is 2+2?\n\x1b[1m4\x1b[0m\n🐝 Brewed for 1s\n"
 	const stripped = "❯ what is 2+2?\n4\n🐝 Brewed for 1s\n"
 	cases := []struct {
@@ -63,10 +37,10 @@ func TestReadPaneParameters(t *testing.T) {
 		wantLines int
 		want      string
 	}{
-		{"defaults", 0, false, api.DefaultReadPaneLines, stripped},
+		{"defaults", 0, false, 25, stripped},
 		{"one line", 1, false, 1, stripped},
 		{"no upper cap", 1000, false, 1000, stripped},
-		{"ansi on", 0, true, api.DefaultReadPaneLines, raw},
+		{"ansi on", 0, true, 25, raw},
 		{"ansi on with n_lines", 7, true, 7, raw},
 	}
 	for _, tc := range cases {
@@ -87,187 +61,22 @@ func TestReadPaneParameters(t *testing.T) {
 	}
 }
 
-// TestReadPaneDefaultLinesIs25 pins the SRD §12 default.
-func TestReadPaneDefaultLinesIs25(t *testing.T) {
-	t.Parallel()
-	if api.DefaultReadPaneLines != 25 {
-		t.Fatalf("DefaultReadPaneLines = %d; want 25", api.DefaultReadPaneLines)
-	}
-}
-
-// TestReadPaneSpawnNotFound: an unknown id is ErrSpawnNotFound with no tmux call.
-func TestReadPaneSpawnNotFound(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	e.seedRow(t, killRowSpec{})
-	_, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
-	}
-	e.assertPaneCalls(t)
-}
-
 // TestReadPaneNoStateGuard: a pending, live or finished row's agent pane is
-// read by pane id, whatever allow_pending says (SR-7.1).
+// read by pane id, allow_pending or not (SR-7.1; read-pane never reads it).
 func TestReadPaneNoStateGuard(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{store.StatePending, store.StateWaiting, store.StateEnded, store.StateMissing} {
-		for _, allow := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s allow_pending=%v", state, allow), func(t *testing.T) {
-				e := newKillEnv(t)
-				r := e.seedRow(t, killRowSpec{State: state})
-				e.setPaneTexts(r.Socket)
-				res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID, AllowPending: allow})
-				rpAssertRead(t, e, r, r.Spawn.Identity.PaneID, res, err)
-			})
-		}
-	}
-}
-
-// TestReadPaneUnusableName (SR-3.2, AC-LKP-10): in every state, a recorded
-// name that cannot be used is ErrInternal quoting it, with no tmux call and the row unchanged.
-func TestReadPaneUnusableName(t *testing.T) {
-	t.Parallel()
-	cases := []struct{ state, fixture string }{
-		{store.StatePending, "pre-b.gqe default name"},
-		{store.StateWaiting, "empty"},
-		{store.StateWorking, "newline"},
-		{store.StateEnded, "colon"},
-		{store.StateMissing, "invalid UTF-8"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.state+"/"+tc.fixture, func(t *testing.T) {
+	for i, state := range []string{store.StatePending, store.StateWaiting, store.StateEnded, store.StateMissing} {
+		t.Run(state, func(t *testing.T) {
 			e := newKillEnv(t)
-			f := unusableFixture(t, tc.fixture)
-			r := e.seedUnusableRow(t, killRowSpec{State: tc.state}, f)
-			before := e.columns(t, r.ID)
-
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
-
-			assertOneName(t, err, "ErrInternal")
-			apitest.AssertDescription(t, err.Error(), f.desc, r.Token)
-			if res.Pane != "" {
-				t.Errorf("Pane = %q; want none", res.Pane)
-			}
-			e.assertNoTmuxCall(t)
-			e.assertRowUnchanged(t, r.ID, before)
-		})
-	}
-}
-
-// TestReadPaneUnusableNameUnknownID: an unknown id stays ErrSpawnNotFound
-// beside a row whose recorded name cannot be used, with no tmux call.
-func TestReadPaneUnusableNameUnknownID(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	e.seedUnusableRow(t, killRowSpec{}, unusableFixture(t, "pre-b.gqe default name"))
-	_, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
-	assertOneName(t, err, "ErrSpawnNotFound")
-	e.assertNoTmuxCall(t)
-}
-
-// TestReadPaneRenamedSession: the renamed session's agent pane is read by id;
-// a session now holding the recorded name is never captured.
-func TestReadPaneRenamedSession(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		holder func(r killRow) *tmuxfix.SeedSession
-	}{
-		{"renamed", func(killRow) *tmuxfix.SeedSession { return nil }},
-		{"renamed, unlabelled session holds the name", func(r killRow) *tmuxfix.SeedSession {
-			return &tmuxfix.SeedSession{Name: r.Name}
-		}},
-		{"renamed, another store's session holds the name", func(r killRow) *tmuxfix.SeedSession {
-			return &tmuxfix.SeedSession{Name: r.Name, Label: r.otherStore(newToken()),
-				Panes: []tmuxfix.SeedPane{{AdPane: newToken()}}}
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{NoSession: true})
-			e.seedSession(t, &r, tmuxfix.WithRowSessionName("renamed-"+r.ID))
-			if h := tc.holder(r); h != nil {
-				e.seedOther(t, r.Socket, *h)
-			}
+			r := e.seedRow(t, killRowSpec{State: state})
 			e.setPaneTexts(r.Socket)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
-			rpAssertRead(t, e, r, r.Spawn.Identity.PaneID, res, err)
-		})
-	}
-}
-
-// TestReadPaneNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
-// error and never reads a prefix-, name- or 8-character-id-sharing neighbour.
-func TestReadPaneNeighbours(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name         string
-		xID, yID     string
-		xName, yName string
-	}{
-		{"name prefix", "", "", "proj-abc", "proj-abc123"},
-		{"same name", "", "", "proj-same", "proj-same"},
-		{"ids share first 8 characters, same-named folders", "abcd1234-x-row", "abcd1234-y-row", "work", "work"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			x := e.seedRow(t, killRowSpec{ID: tc.xID, NoSession: true,
-				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.xName)}})
-			y := e.seedRow(t, killRowSpec{ID: tc.yID, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.yName)}})
-			e.setPaneTexts(y.Socket)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: x.ID})
-			rpAssertRefused(t, e, res, err, tmux.ErrTmuxCaptureFailed, apitest.DescPaneGone(apitest.PaneGone{
-				Verb: apitest.PaneReadPane, InstanceID: x.ID, Name: x.Name}), y.ID, y.Token)
-			e.assertPaneCalls(t, tmux.CallLookup)
-		})
-	}
-}
-
-// TestReadPaneStoredNames (AC-LKP-09): a row whose recorded name holds $ or
-// \ is found by its label under tmux's stored form and read by pane id.
-func TestReadPaneStoredNames(t *testing.T) {
-	t.Parallel()
-	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
-			continue
-		}
-		t.Run(n.Raw, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
-			if r.Session.Name != n.Stored {
-				t.Fatalf("seeded session name %q; want the stored form %q", r.Session.Name, n.Stored)
+			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID, AllowPending: i%2 == 0})
+			if want := paneText(r.Socket, r.Spawn.Identity.PaneID); err != nil || res.Pane != want {
+				t.Errorf("ReadPane = %q, %v; want %q", res.Pane, err, want)
 			}
-			e.setPaneTexts(r.Socket)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
-			rpAssertRead(t, e, r, r.Spawn.Identity.PaneID, res, err)
+			e.assertPaneCalls(t, paneReadCalls...)
+			e.assertCaptured(t, r.Spawn.Identity.PaneID, api.DefaultReadPaneLines, false)
 		})
-	}
-}
-
-// TestReadPaneRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
-// another server, every call names the row's recorded socket.
-func TestReadPaneRecordedSocket(t *testing.T) {
-	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv.
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{})
-	// No commas: TMUX's socket field ends at one.
-	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
-	t.Setenv("TMUX", elsewhere+",4242,0")
-	t.Setenv("TMUX_TMPDIR", t.TempDir())
-	e.seedOther(t, elsewhere, tmuxfix.SeedSession{Name: r.Name, Label: r.current(),
-		Panes: []tmuxfix.SeedPane{{AdPane: r.Token}}})
-	e.setPaneTexts(r.Socket)
-	e.setPaneTexts(elsewhere)
-	res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
-	rpAssertRead(t, e, r, r.Spawn.Identity.PaneID, res, err)
-	for _, c := range e.rec.SocketCalls() {
-		if c.Socket != r.Socket {
-			t.Errorf("%v on socket %q; want the recorded %q", c.Call, c.Socket, r.Socket)
-		}
 	}
 }
 
@@ -285,7 +94,7 @@ func TestReadPaneSessionReplaced(t *testing.T) {
 		captured bool // the agent's old pane id was captured (and failed)
 	}{
 		{name: "after the lookup", after: tmux.CallLookup, current: true,
-			calls: []tmux.Call{tmux.CallLookup, tmux.CallListPanes}, want: tmux.ErrTmuxSessionConflict,
+			calls: paneListedCalls, want: tmux.ErrTmuxSessionConflict,
 			desc: func(r killRow) apitest.DescCase {
 				return apitest.DescPaneNotFound(apitest.PaneNotFound{Verb: apitest.PaneReadPane, InstanceID: r.ID,
 					Name: r.Name})
@@ -325,37 +134,109 @@ func TestReadPaneSessionReplaced(t *testing.T) {
 	}
 }
 
-// TestReadPaneListingFails (AC-PANE-03): a failed pane listing gives
-// ErrTmuxUnresponsive or ErrTmuxNotAvailable, and nothing is captured.
-func TestReadPaneListingFails(t *testing.T) {
+// rpnSeedPane seeds r's current-labelled session holding only a pane that is
+// not the agent's (no row pane id or pid, no pane label).
+func rpnSeedPane(t *testing.T, e *killEnv, r *killRow) {
+	t.Helper()
+	e.seedOurs(t, r, e.otherPane())
+}
+
+// TestReadPaneNoTrailAndRepeatable: where a writing verb would log a disagree
+// reason or write a lost reply's server identity, on AC-PANE-10's finished
+// rows (its own session past the bound: the agent's pane read; its name held
+// by an unlabelled session or another row's session, and still gone once that
+// session is removed), and on the lookup's and the capture's refusals,
+// read-pane (n_lines 1) changes no row, session or tmux state and writes no
+// trail record; re-issued, it gives the same answer and the same calls.
+func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 	t.Parallel()
-	const firstLine = "list-panes: unexpected reply"
+	finished := killRowSpec{State: store.StateEnded, NoSession: true, Opts: []apitest.SpawnOption{
+		apitest.WithEndedAt(killClockStart.Add(-(defWindow + time.Second)))}}
 	cases := []struct {
-		name   string
-		script tmuxfix.Script
-		want   error
-		desc   func(r killRow) apitest.DescCase
+		name    string
+		spec    killRowSpec
+		setup   func(*testing.T, *killEnv, *killRow)
+		want    error
+		calls   []tmux.Call
+		release bool // then remove the name's holder (setup's r.Session): still ErrTmuxCaptureFailed
 	}{
-		{"timeout", tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.ErrTmuxUnresponsive,
-			func(killRow) apitest.DescCase {
-				return apitest.DescCallTimeout(tmux.CallListPanes, config.Default().Tmux.EffectiveQueryTimeout())
-			}},
-		{"unrecognised reply", tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: firstLine, ExitStatus: 1,
-			HadStdout: true}, tmux.ErrTmuxUnresponsive,
-			func(killRow) apitest.DescCase { return apitest.DescUnrecognisedReply(tmux.CallListPanes, firstLine) }},
-		{"tmux not run", tmuxfix.Script{Failure: tmux.FailUnavailable}, tmux.ErrTmuxNotAvailable,
-			func(killRow) apitest.DescCase { return apitest.DescTmuxNotRun() }},
-		{"socket permission", tmuxfix.Script{Failure: tmux.FailSocketDenied}, tmux.ErrTmuxNotAvailable,
-			func(r killRow) apitest.DescCase { return apitest.DescSocketPermission(r.Socket) }},
+		{name: "restarted server", setup: ktrRestart, calls: paneReadCalls},
+		{name: "re-bound server", setup: ktrRebind, want: api.ErrTmuxNotAvailable, calls: paneLookupCalls},
+		{name: "two sessions with the current label", setup: sktDuplicate, want: api.ErrTmuxSessionConflict, calls: paneLookupCalls},
+		{name: "scope value",
+			setup: func(_ *testing.T, e *killEnv, r *killRow) {
+				e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{SessionID: r.Session.ID, Label: r.current()})
+			},
+			want: api.ErrTmuxSessionConflict, calls: paneLookupCalls},
+		{name: "lost reply, no pane carries the token",
+			spec: killRowSpec{NoPane: true, NoServerIdentity: true, NoSession: true}, setup: rpnSeedPane,
+			want: api.ErrTmuxSessionConflict, calls: paneListedCalls},
+		{name: "finished row, its own session the bound old (AC-PANE-10)", spec: finished,
+			setup: func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedSession(t, r, tmuxfix.WithRowSessionCreated(e.clock.Now().Add(-defBound).Unix()))
+			}, calls: paneReadCalls},
+		{name: "finished row, an unlabelled session holds its name", spec: finished,
+			setup: func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedSession(t, r, tmuxfix.WithRowSessionLabel(tmux.Label{}, false))
+			}, want: api.ErrTmuxCaptureFailed, calls: paneLookupCalls},
+		{name: "finished row, another row's session holds its name (AC-PANE-10)", spec: finished,
+			setup: func(t *testing.T, e *killEnv, r *killRow) { r.Session = e.seedHolder(t, *r, holderForeign) },
+			want:  api.ErrTmuxCaptureFailed, calls: paneLookupCalls, release: true},
+		{name: "unreadable lookup", setup: ktrScript(tmux.FailTimeout, tmux.CallLookup), want: api.ErrTmuxUnresponsive,
+			calls: paneLookupCalls},
+		{name: "tmux unavailable", setup: ktrScript(tmux.FailUnavailable, tmux.CallLookup), want: api.ErrTmuxNotAvailable,
+			calls: paneLookupCalls},
+		{name: "socket permission", setup: ktrScript(tmux.FailSocketDenied, tmux.CallLookup), want: api.ErrTmuxNotAvailable,
+			calls: paneLookupCalls},
+		{name: "capture times out", setup: ktrScript(tmux.FailTimeout, tmux.CallCapture), want: api.ErrTmuxUnresponsive,
+			calls: paneReadCalls},
+		{name: "capture fails, follow-up finds Ours", setup: ktrScript(tmux.FailUnrecognized, tmux.CallCapture),
+			want: api.ErrTmuxUnresponsive, calls: withFollowUp(paneReadCalls)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{})
-			e.rec.Script(r.Socket, tc.script, tmux.CallListPanes)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
-			rpAssertRefused(t, e, res, err, tc.want, tc.desc(r))
-			e.assertPaneCalls(t, tmux.CallLookup, tmux.CallListPanes)
+			r := e.seedRow(t, tc.spec)
+			tc.setup(t, e, &r)
+			e.setPaneTexts(r.Socket)
+			before, sessions, mark := e.columns(t, r.ID), e.rec.Sessions(r.Socket), trailMark(t)
+			read := func() verbRun[api.ReadPaneResult] {
+				return runVerb(e, func() (api.ReadPaneResult, error) {
+					return e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: 1})
+				})
+			}
+
+			first := read()
+
+			if (tc.want == nil) != (first.err == nil) || !errors.Is(first.err, tc.want) {
+				t.Errorf("ReadPane err = %v; want %v", first.err, tc.want)
+			}
+			e.assertPaneCalls(t, tc.calls...)
+			if tc.want == nil {
+				pane := r.Spawn.Identity.PaneID
+				e.assertCaptured(t, pane, 1, false)
+				if first.res.Pane != paneText(r.Socket, pane) {
+					t.Errorf("Pane = %q; want the agent's pane %q", first.res.Pane, paneText(r.Socket, pane))
+				}
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+			if got := e.rec.Sessions(r.Socket); !reflect.DeepEqual(got, sessions) {
+				t.Errorf("sessions after read-pane = %+v; want %+v", got, sessions)
+			}
+			assertNoTrailSince(t, mark, r.ID)
+			assertSameRun(t, read(), first)
+			if tc.release {
+				e.seedBystander(t, r.Socket) // tmux exits with its last session; keep the server up
+				adviceEndSession(t, e.rec, r.Socket, r.Session.ID)
+				again := read()
+				if !errors.Is(again.err, api.ErrTmuxCaptureFailed) || !reflect.DeepEqual(again.calls, first.calls) {
+					t.Errorf("holder removed: ReadPane = %v, calls %+v; want ErrTmuxCaptureFailed, %+v",
+						again.err, again.calls, first.calls)
+				}
+				e.assertRowUnchanged(t, r.ID, before)
+				assertNoTrailSince(t, mark, r.ID)
+			}
 		})
 	}
 }
