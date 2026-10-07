@@ -4,10 +4,10 @@ package api_test
 // (SR-22.2, SR-16.1, SR-5.5): present, as an RFC3339 UTC instant at
 // millisecond precision, only on a pending row with a readable launch start;
 // absent (never null) on every other row, and no verb fails on an unreadable
-// value, including an integer outside the years 0 to 9999. It also covers Status's optional narrow read and a real spawn.
+// value, including an integer outside the years 0 to 9999. It also covers
+// Status's optional narrow read. The column a spawn writes is spawn_launch_test.go's.
 
 import (
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strconv"
@@ -153,32 +153,28 @@ func assertLaunchTime(t *testing.T, got *time.Time, wantMillis int64) {
 // want (ending in Z), or absent when want is "" (never null).
 func assertLaunchJSON(t *testing.T, v any, want string) {
 	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
-	}
-	raw, ok := m["launch_started_at"]
+	raw, ok := jsonField(t, v, "launch_started_at")
 	switch {
 	case want == "" && ok:
 		t.Errorf("launch_started_at = %s; want the key absent", raw)
 	case want == "":
-	case !ok:
-		t.Errorf("launch_started_at absent; want %q in %s", want, b)
-	case string(raw) != strconv.Quote(want) || !strings.HasSuffix(want, "Z"):
-		t.Errorf("launch_started_at = %s; want %q", raw, want)
+	case !ok || string(raw) != strconv.Quote(want) || !strings.HasSuffix(want, "Z"):
+		t.Errorf("launch_started_at = %s (present %t); want %q", raw, ok, want)
 	}
 }
 
 // TestLaunchStartedAtByVerbAndRow: each verb shows the launch start only on a
-// readable pending row, exactly to the millisecond in UTC, and never errors.
+// readable pending row, exactly to the millisecond in UTC, and never errors;
+// List returns every row and its whole result encodes, out-of-range rows included.
 func TestLaunchStartedAtByVerbAndRow(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	shapes := launchShapes()
 	c := newLaunchClient(t, shapes)
+	res, err := c.List(api.ListParams{})
+	if err != nil || len(res.Spawns) != len(shapes) {
+		t.Fatalf("List = %d rows, %v; want %d", len(res.Spawns), err, len(shapes))
+	}
+	jsonOf(t, res) // fails the test unless the whole result encodes
 	for _, v := range launchVerbs {
 		for _, s := range shapes {
 			t.Run(v.name+"/"+s.name, func(t *testing.T) {
@@ -188,50 +184,6 @@ func TestLaunchStartedAtByVerbAndRow(t *testing.T) {
 			})
 		}
 	}
-}
-
-// TestLaunchStartedAtListMixedRows: List returns every row and the whole
-// result encodes as JSON, even with out-of-range rows among them, and only the
-// readable pending rows carry the field, each with its own value.
-func TestLaunchStartedAtListMixedRows(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	shapes := launchShapes()
-	c := newLaunchClient(t, shapes)
-	res, err := c.List(api.ListParams{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if _, err := json.Marshal(res); err != nil {
-		t.Fatalf("json.Marshal(List result): %v", err)
-	}
-	rows := map[string]api.ListRow{}
-	for _, r := range res.Spawns {
-		rows[r.ClaudeInstanceID] = r
-	}
-	if len(res.Spawns) != len(shapes) {
-		t.Errorf("List rows = %d; want %d", len(res.Spawns), len(shapes))
-	}
-	for _, s := range shapes {
-		r, ok := rows[s.id()]
-		if !ok {
-			t.Errorf("List has no row %s", s.id())
-			continue
-		}
-		assertLaunchTime(t, r.LaunchStartedAt, s.wantMillis)
-		assertLaunchJSON(t, r, s.wantJSON)
-	}
-}
-
-// TestLaunchStartedAtStatusMalformedLabels: Status decodes no structured
-// column, so a pending row with unparsable labels still shows its launch start.
-func TestLaunchStartedAtStatusMalformedLabels(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	shape := launchShape{"pending bad labels", store.StatePending, []apitest.SpawnOption{
-		apitest.WithRawLabels("{not json"), apitest.WithLaunchStartedAt(launchFracMillis)}, launchFracMillis, launchFracJSON}
-	c := newLaunchClient(t, []launchShape{shape})
-	got, res := launchVerbs[0].read(t, c, shape.id())
-	assertLaunchTime(t, got, shape.wantMillis)
-	assertLaunchJSON(t, res, shape.wantJSON)
 }
 
 // stateOnlyStore is a StatusStore with GetSpawnState only (no narrow read).
@@ -246,72 +198,41 @@ var (
 )
 
 // TestLaunchStartedAtStatusNarrowRead: api.Status shows the launch start with
-// the real store, none with a GetSpawnState-only store, and keeps not-found.
+// the real store, even on a row whose labels do not parse (Status decodes no
+// structured column), none with a GetSpawnState-only store, and keeps not-found.
 func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	id, err := apitest.SeedSpawn(dbPath, "narrow-pending", store.StatePending, "", "", "", true,
-		apitest.WithLaunchStartedAt(launchFracMillis))
-	if err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
-	}
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	t.Run("real store", func(t *testing.T) {
-		res, err := api.Status(s, id)
-		if err != nil || res.State != store.StatePending {
-			t.Fatalf("Status = %+v, %v; want pending, nil", res, err)
+	for id, opts := range map[string][]apitest.SpawnOption{
+		"narrow-pending":    {apitest.WithLaunchStartedAt(launchFracMillis)},
+		"narrow-bad-labels": {apitest.WithRawLabels("{not json"), apitest.WithLaunchStartedAt(launchFracMillis)},
+	} {
+		if _, err := apitest.SeedSpawn(dbPath, id, store.StatePending, "", "", "", true, opts...); err != nil {
+			t.Fatalf("SeedSpawn(%s): %v", id, err)
 		}
-		assertLaunchTime(t, res.LaunchStartedAt, launchFracMillis)
-		assertLaunchJSON(t, res, launchFracJSON)
-	})
-	t.Run("real store unknown id", func(t *testing.T) {
-		if _, err := api.Status(s, "narrow-absent"); !errors.Is(err, store.ErrSpawnNotFound) {
-			t.Errorf("Status err = %v; want ErrSpawnNotFound", err)
-		}
-	})
-	t.Run("GetSpawnState only", func(t *testing.T) {
-		res, err := api.Status(stateOnlyStore{state: store.StatePending}, id)
-		if err != nil || res.State != store.StatePending {
-			t.Fatalf("Status = %+v, %v; want pending, nil", res, err)
-		}
-		assertLaunchTime(t, res.LaunchStartedAt, 0)
-		assertLaunchJSON(t, res, "")
-	})
-}
-
-// TestLaunchStartedAtAfterSpawn: a spawn at a fixed clock with a millisecond
-// fraction shows that instant through Status, Get and List --state pending.
-func TestLaunchStartedAtAfterSpawn(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	env := newSpawnEnv(t)
-	want := env.clock.Now()
-	const wantJSON = "2026-09-29T12:00:00.123Z"
-	res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir()})
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
 	}
-	id := res.ClaudeInstanceID
-	for _, v := range launchVerbs[:2] {
-		t.Run(v.name, func(t *testing.T) {
-			got, out := v.read(t, env.c, id)
-			assertLaunchTime(t, got, want.UnixMilli())
-			assertLaunchJSON(t, out, wantJSON)
+	s := openDB(t, dbPath)
+	for _, tc := range []struct {
+		name       string
+		st         api.StatusStore
+		id         string
+		wantMillis int64
+		wantJSON   string
+	}{
+		{"real store", s, "narrow-pending", launchFracMillis, launchFracJSON},
+		{"real store, labels unparsable", s, "narrow-bad-labels", launchFracMillis, launchFracJSON},
+		{"GetSpawnState only", stateOnlyStore{state: store.StatePending}, "narrow-pending", 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := api.Status(tc.st, tc.id)
+			if err != nil || res.State != store.StatePending {
+				t.Fatalf("Status = %+v, %v; want pending, nil", res, err)
+			}
+			assertLaunchTime(t, res.LaunchStartedAt, tc.wantMillis)
+			assertLaunchJSON(t, res, tc.wantJSON)
 		})
 	}
-	t.Run("list state pending", func(t *testing.T) {
-		lr, err := env.c.List(api.ListParams{State: []string{store.StatePending}})
-		if err != nil {
-			t.Fatalf("List: %v", err)
-		}
-		if len(lr.Spawns) != 1 || lr.Spawns[0].ClaudeInstanceID != id {
-			t.Fatalf("List --state pending = %+v; want the one spawned row %s", lr.Spawns, id)
-		}
-		assertLaunchTime(t, lr.Spawns[0].LaunchStartedAt, want.UnixMilli())
-		assertLaunchJSON(t, lr.Spawns[0], wantJSON)
-	})
+	if _, err := api.Status(s, "narrow-absent"); !errors.Is(err, store.ErrSpawnNotFound) {
+		t.Errorf("Status of an unknown id: %v; want ErrSpawnNotFound", err)
+	}
 }

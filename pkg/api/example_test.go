@@ -1,6 +1,6 @@
 // Package api_test exercises the pkg/api public surface from the outside.
-// This file contains shared construction helpers and the five runnable
-// ExampleClient_* functions that mirror the README's Verb examples section.
+// This file holds the five runnable ExampleClient_* functions that mirror the
+// README's Verb examples section, and their construction helpers.
 package api_test
 
 import (
@@ -17,74 +17,30 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-// buildClient is the construction core shared by exampleClient and mustClient.
-// It calls store.OpenOrInit at storePath (creating schema on first call),
-// then opens an api.Client against the same path, wiring a tmuxfix.Recorder
-// as the TmuxClient injection. Both the store and client hold independent
-// connections to the same SQLite file; callers must close both.
-func buildClient(storePath string) (*api.Client, *store.Store, *tmuxfix.Recorder, error) {
-	s, err := store.OpenOrInit(storePath)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	rec := tmuxfix.NewRecorder()
-	c, err := api.New(api.Options{
-		StorePath:  storePath,
-		TmuxClient: rec,
-	})
-	if err != nil {
-		_ = s.Close()
-		return nil, nil, nil, err
-	}
-	return c, s, rec, nil
-}
-
-// exampleClient opens a fresh isolated store, wires a tmuxfix.Recorder, and
-// constructs an api.Client — all without a *testing.T. Used exclusively by
-// ExampleClient_* functions whose signature is func ExampleX() and cannot
-// receive testing.TB.
-//
-// Uses os.MkdirTemp rather than t.TempDir. Panics on any construction failure;
-// a panic during go test surfaces as a clear example-failed result with a stack.
-//
-// Returns (client, store, store path, recorder, cleanup). Callers must defer
-// cleanup. The store and its path are the seeding handles for example bodies'
-// seedRow calls.
+// exampleClient opens a fresh store in a temp dir (an Example has no
+// *testing.T) and an api.Client on it with a tmuxfix.Recorder as its tmux
+// client. It panics on any failure; callers defer cleanup. The store and its
+// path are the seeding handles.
 func exampleClient() (*api.Client, *store.Store, string, *tmuxfix.Recorder, func()) {
 	tmpDir, err := os.MkdirTemp("", "pkg-api-example-*")
 	if err != nil {
 		panic("exampleClient: MkdirTemp: " + err.Error())
 	}
 	path := filepath.Join(tmpDir, "state.db")
-	c, s, rec, err := buildClient(path)
+	s, err := store.OpenOrInit(path)
 	if err != nil {
-		_ = os.RemoveAll(tmpDir)
-		panic("exampleClient: buildClient: " + err.Error())
+		panic("exampleClient: OpenOrInit: " + err.Error())
+	}
+	rec := tmuxfix.NewRecorder()
+	c, err := api.New(api.Options{StorePath: path, TmuxClient: rec})
+	if err != nil {
+		panic("exampleClient: api.New: " + err.Error())
 	}
 	return c, s, path, rec, func() {
 		_ = c.Close()
 		_ = s.Close()
 		_ = os.RemoveAll(tmpDir)
 	}
-}
-
-// mustClient opens a fresh isolated store and constructs an api.Client for
-// TestX-style functions that DO receive a *testing.T. Cleanup is registered
-// via t.Cleanup; callers do not need to close either resource explicitly.
-func mustClient(t *testing.T) (*api.Client, *tmuxfix.Recorder) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "state.db")
-	c, s, rec, err := buildClient(path)
-	if err != nil {
-		t.Fatalf("mustClient: buildClient: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = c.Close()
-		_ = s.Close()
-	})
-	return c, rec
 }
 
 // seedRow inserts a Spawn row at the given state into s (open on path) without

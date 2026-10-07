@@ -327,10 +327,12 @@ func xtrRunCases(t *testing.T, cases []xtrCase) {
 
 // TestExpireTrailKept: each kept row writes exactly one ad.expire.kept with
 // its reason and four fields; a deleted row and one another caller removed
-// write none.
+// write none. An unusable-name row (SR-3.2, SR-18.17 step 1) writes its
+// fixture's reason and the recorded name as the trail's JSON writes it, and no
+// disagree record.
 func TestExpireTrailKept(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	xtrRunCases(t, xtrKeptCases())
+	xtrRunCases(t, slices.Concat(xtrKeptCases(), xtrUnusableCases()))
 }
 
 // TestExpireTrailProvenanceDisagree: each reason writes one record per row,
@@ -340,14 +342,17 @@ func TestExpireTrailProvenanceDisagree(t *testing.T) {
 	xtrRunCases(t, xtrDisagreeCases())
 }
 
-// TestExpireTrailEveryRun: a row still kept gets its records again on each
-// run, through api.Expire and through Client.Expire alike.
+// TestExpireTrailEveryRun: a row still kept, an unusable-name row's included,
+// gets its records again on each run, through api.Expire and Client.Expire alike.
 func TestExpireTrailEveryRun(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	x := newXtrWorld(t, "xtr-"+uuid.NewString()[:8])
 	ktrRenamed(t, x.e, x.row(t, "a", agentGone, "ours", disagreeWant{reason: "name_changed", server: "match",
 		verdict: "ours", action: "ours", current: "renamed-kill", ours: true}))
 	x.row(t, "b", agentAlive, "process_alive")
+	for i, f := range unusableNameFixtures() {
+		x.xtuRow(t, fmt.Sprintf("u%d", i), f)
+	}
 	x.expire(t)
 	x.expire(t)
 	x.run(t, func() (api.ExpireResult, error) {
@@ -356,14 +361,49 @@ func TestExpireTrailEveryRun(t *testing.T) {
 	})
 }
 
+// xtuRow seeds row id in x, its agent gone, recording f's raw name plus opts,
+// to be kept with f's reason; r.Name is the name as the trail writes it.
+func (x *xtrWorld) xtuRow(t *testing.T, id string, f unusableNameFixture, opts ...apitest.SpawnOption) *killRow {
+	t.Helper()
+	r := x.rowWith(t, id, agentGone, func(s *killRowSpec) {
+		s.Opts = append(append(s.Opts, apitest.WithTmuxSessionName(f.raw)), opts...)
+	}, f.kept)
+	var name strings.Builder
+	for _, c := range f.raw {
+		name.WriteRune(c) // ranging yields U+FFFD per invalid byte, as the trail's JSON encoder writes it
+	}
+	r.Name = name.String()
+	return r
+}
+
+// xtrUnusableCases is one world per unusable-name fixture, and one where a
+// lookup would write a disagree record (the SessionStart and pane identities
+// disagree and the server restarted): the usable row beside them gets
+// server_restarted while theirs get none.
+func xtrUnusableCases() []xtrCase {
+	var cases []xtrCase
+	for _, f := range unusableNameFixtures() {
+		cases = append(cases, xtrCase{name: f.kept + ", " + f.label, seed: func(t *testing.T, x *xtrWorld) { x.xtuRow(t, "r", f) }})
+	}
+	return append(cases, xtrCase{name: "no ad.provenance.disagree though the identities disagree and the server restarted",
+		seed: func(t *testing.T, x *xtrWorld) {
+			for i, f := range unusableNameFixtures() {
+				x.xtuRow(t, fmt.Sprintf("u%d", i), f, apitest.WithPID(x.e.newPID()))
+			}
+			usable := x.row(t, "usable", agentGone, xtrDeleted, disagreeWant{reason: "server_restarted",
+				server: "restarted", verdict: "gone", action: "deleted"})
+			x.restart(usable)
+		}})
+}
+
 // xtrChildEnv gates TestExpireTrailFailOpenChild and carries the id prefix.
 const xtrChildEnv = "AD_EXPIRE_TRAIL_FAIL_CHILD"
 
 // xtrLinePrefix marks the child's result lines in its output.
 const xtrLinePrefix = "XTR|"
 
-// xtrFailOpenRuns runs every case's world once (the unusable-name ones of
-// expire_trail_unusable_test.go included), ids prefix-<n>-<name>, with no
+// xtrFailOpenRuns runs every case's world once (the unusable-name ones
+// included), ids prefix-<n>-<name>, with no
 // trail check, and returns one line per case (result lists, log lines, tmux
 // calls and each row's columns) and the records a working trail must get.
 func xtrFailOpenRuns(t *testing.T, prefix string) (lines []string, kept, disagree int) {

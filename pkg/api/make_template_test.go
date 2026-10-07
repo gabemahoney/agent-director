@@ -1,25 +1,21 @@
 package api_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/BurntSushi/toml"
-
-	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// withTempHome points $HOME at a per-test temp dir so the templates
-// dir lives under a sandboxed root. Restores HOME on cleanup via
-// t.Setenv's own teardown.
+// withTempHome points $HOME at a per-test temp dir (t.Setenv), so the
+// templates dir lives under a sandboxed root.
 func withTempHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -27,478 +23,146 @@ func withTempHome(t *testing.T) string {
 	return home
 }
 
-func TestMakeTemplateWritesReadableTOML(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	home := withTempHome(t)
+// seedTemplateBody is a valid template no test call writes, so a no-op write shows.
+const seedTemplateBody = "cwd = \"/seed/dir\"\nrelay_mode = \"on\"\n\n[labels]\n  origin = \"seed\"\n"
 
-	res, err := api.MakeTemplate(api.MakeTemplateParams{
-		Name:                 "dev",
-		CWD:                  "/tmp",
-		RelayMode:            "off",
-		ClaudeArgs:           []string{"--model", "opus"},
-		AgentDirectorLabels: map[string]string{"project": "agent-director"},
-		Permissions: &api.MakeTemplatePermissions{
-			Allow: []string{"Bash(npm test)"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("MakeTemplate: %v", err)
-	}
-	wantPath := filepath.Join(home, ".agent-director", "templates", "dev.toml")
-	if res.Path != wantPath {
-		t.Errorf("Path = %q; want %q", res.Path, wantPath)
-	}
-
-	// File exists with mode 0600 inside dir 0700.
-	dirInfo, err := os.Stat(filepath.Join(home, ".agent-director", "templates"))
-	if err != nil {
-		t.Fatalf("stat dir: %v", err)
-	}
-	if dirInfo.Mode().Perm() != 0o700 {
-		t.Errorf("dir mode = %o; want 0700", dirInfo.Mode().Perm())
-	}
-	fileInfo, err := os.Stat(wantPath)
-	if err != nil {
-		t.Fatalf("stat file: %v", err)
-	}
-	if fileInfo.Mode().Perm() != 0o600 {
-		t.Errorf("file mode = %o; want 0600", fileInfo.Mode().Perm())
-	}
-
-	// Round-trip: contents decode back to an equivalent TemplateFile.
-	body, err := os.ReadFile(wantPath)
-	if err != nil {
-		t.Fatalf("read template: %v", err)
-	}
-	var got config.TemplateFile
-	if _, err := toml.Decode(string(body), &got); err != nil {
-		t.Fatalf("toml.Decode: %v", err)
-	}
-	if got.CWD != "/tmp" {
-		t.Errorf("CWD = %q; want /tmp", got.CWD)
-	}
-	if got.RelayMode != "off" {
-		t.Errorf("RelayMode = %q; want off", got.RelayMode)
-	}
-	if got.ClaudeArgs[0] != "--model" || got.ClaudeArgs[1] != "opus" {
-		t.Errorf("ClaudeArgs = %v; want [--model opus]", got.ClaudeArgs)
-	}
-	if got.AgentDirectorLabels["project"] != "agent-director" {
-		t.Errorf("Labels = %v", got.AgentDirectorLabels)
-	}
-	if got.Permissions == nil || got.Permissions.Allow[0] != "Bash(npm test)" {
-		t.Errorf("Permissions.Allow lost: %+v", got.Permissions)
-	}
-
-	// And the file is plain text — hand-readability is part of the
-	// contract per SRD §10.1. A binary blob would fail this byte test.
-	bodyStr := string(body)
-	for _, want := range []string{`cwd = "/tmp"`, `relay_mode = "off"`} {
-		if !strings.Contains(bodyStr, want) {
-			t.Errorf("TOML body missing %q (got:\n%s)", want, bodyStr)
-		}
-	}
-}
-
-func TestMakeTemplateRejectsUnsafeNames(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	withTempHome(t)
-	for _, name := range []string{"", ".", "..", ".hidden", "foo/bar", `foo\bar`, "foo..bar", "../escape"} {
-		t.Run(name, func(t *testing.T) {
-			_, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/tmp"})
-			if !errors.Is(err, config.ErrTemplateNameUnsafe) {
-				t.Fatalf("name=%q: err = %v; want ErrTemplateNameUnsafe", name, err)
-			}
-		})
-	}
-}
-
-func TestMakeTemplateRejectsOverwrite(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	withTempHome(t)
-	first := api.MakeTemplateParams{Name: "dev", CWD: "/tmp"}
-	if _, err := api.MakeTemplate(first); err != nil {
-		t.Fatalf("first MakeTemplate: %v", err)
-	}
-	_, err := api.MakeTemplate(first)
-	if !errors.Is(err, config.ErrTemplateExists) {
-		t.Fatalf("second MakeTemplate err = %v; want ErrTemplateExists", err)
-	}
-}
-
-func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	// MakeTemplate + LoadTemplate are the two halves of the disk
-	// contract. A round-trip pin guarantees a write+read pair stays
-	// equivalent — any future encoder change that loses information
-	// (e.g. omits empty arrays) will break this.
-	withTempHome(t)
-
-	want := api.MakeTemplateParams{
-		Name:                 "rt",
-		CWD:                  "/var/data",
-		RelayMode:            "on",
-		ClaudeArgs:           []string{"--print"},
-		ExtraEnv:             map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
-		AgentDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
-		Permissions: &api.MakeTemplatePermissions{
-			Allow: []string{"Bash(jq)", "Read(/etc)"},
-			Deny:  []string{"Bash(rm)"},
-		},
-	}
-	if _, err := api.MakeTemplate(want); err != nil {
-		t.Fatalf("MakeTemplate: %v", err)
-	}
-	got, err := config.LoadTemplate("rt")
-	if err != nil {
-		t.Fatalf("LoadTemplate: %v", err)
-	}
-	if got.CWD != want.CWD {
-		t.Errorf("CWD: got %q want %q", got.CWD, want.CWD)
-	}
-	if got.RelayMode != want.RelayMode {
-		t.Errorf("RelayMode: got %q want %q", got.RelayMode, want.RelayMode)
-	}
-	if len(got.ClaudeArgs) != 1 || got.ClaudeArgs[0] != "--print" {
-		t.Errorf("ClaudeArgs: got %v want %v", got.ClaudeArgs, want.ClaudeArgs)
-	}
-	if got.ExtraEnv["ANTHROPIC_API_KEY"] != "sk-test" {
-		t.Errorf("ExtraEnv lost")
-	}
-	if got.AgentDirectorLabels["env"] != "dev" || got.AgentDirectorLabels["owner"] != "alice" {
-		t.Errorf("Labels lost: %v", got.AgentDirectorLabels)
-	}
-	if got.Permissions == nil ||
-		len(got.Permissions.Allow) != 2 || got.Permissions.Allow[0] != "Bash(jq)" ||
-		len(got.Permissions.Deny) != 1 || got.Permissions.Deny[0] != "Bash(rm)" {
-		t.Errorf("Permissions lost: %+v", got.Permissions)
-	}
-}
-
-func TestMakeTemplateLeavesNoHalfWrittenFileOnEncoderFailure(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	// Atomicity is hard to test in isolation because os.Rename is
-	// effectively single-syscall on local filesystems. The closest
-	// approximation: prove no temp-file orphan or partial file remains
-	// when the encoder fails. We provoke a failure by pre-occupying
-	// the target path with a directory entry — the existence check
-	// will catch it before any temp file is created.
-	home := withTempHome(t)
-	dir := filepath.Join(home, ".agent-director", "templates")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	target := filepath.Join(dir, "blocked.toml")
-	if err := os.WriteFile(target, []byte("# pre-existing"), 0o600); err != nil {
-		t.Fatalf("seed pre-existing: %v", err)
-	}
-
-	_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "blocked", CWD: "/tmp"})
-	if !errors.Is(err, config.ErrTemplateExists) {
-		t.Fatalf("err = %v; want ErrTemplateExists", err)
-	}
-	// Original content untouched.
-	body, _ := os.ReadFile(target)
-	if string(body) != "# pre-existing" {
-		t.Errorf("target file was clobbered: %q", string(body))
-	}
-	// No stray tempfiles littering the dir.
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") && strings.Contains(e.Name(), "blocked") {
-			t.Errorf("tempfile leaked: %s", e.Name())
-		}
-	}
-}
-
-// seedTemplateFile writes a valid TOML body for name to the templates
-// dir and returns the absolute path. The body is intentionally distinct
-// from anything the AC-1 / AC-3 test calls produce so a no-op write
-// would be detectable. EnsureTemplatesDir handles dir creation.
+// seedTemplateFile writes seedTemplateBody as name's template and returns its path.
 func seedTemplateFile(t *testing.T, name string) string {
 	t.Helper()
 	if _, err := config.EnsureTemplatesDir(); err != nil {
-		t.Fatalf("seedTemplateFile: EnsureTemplatesDir: %v", err)
+		t.Fatalf("EnsureTemplatesDir: %v", err)
 	}
 	path, err := config.TemplatePath(name)
 	if err != nil {
-		t.Fatalf("seedTemplateFile: TemplatePath: %v", err)
+		t.Fatalf("TemplatePath: %v", err)
 	}
-	body := "cwd = \"/seed/dir\"\nrelay_mode = \"on\"\n\n[agent_director_labels]\n  origin = \"seed\"\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("seedTemplateFile: WriteFile: %v", err)
+	if err := os.WriteFile(path, []byte(seedTemplateBody), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 	return path
 }
 
-// assertNoOrphanTempfile fails the test if a sibling of name in the
-// templates dir matches the ".<name>.toml.tmp.*" pattern that the
-// atomic-rename write step uses for its in-flight tempfile.
+// assertNoOrphanTempfile fails if the templates dir holds an atomic-rename
+// temp file ".<name>.toml.tmp.*".
 func assertNoOrphanTempfile(t *testing.T, name string) {
 	t.Helper()
 	target, err := config.TemplatePath(name)
 	if err != nil {
-		t.Fatalf("assertNoOrphanTempfile: TemplatePath: %v", err)
-	}
-	dir := filepath.Dir(target)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("assertNoOrphanTempfile: ReadDir: %v", err)
-	}
-	prefix := "." + name + ".toml.tmp."
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), prefix) {
-			t.Errorf("orphan tempfile remains in templates dir: %s", e.Name())
-		}
-	}
-}
-
-// envelopeJSONStrippingPath marshals res to JSON with the Path field
-// zeroed so two envelopes can be byte-compared without their
-// nondeterministic absolute paths fighting.
-func envelopeJSONStrippingPath(t *testing.T, res api.MakeTemplateResult) []byte {
-	t.Helper()
-	res.Path = ""
-	b, err := json.Marshal(res)
-	if err != nil {
-		t.Fatalf("envelopeJSONStrippingPath: Marshal: %v", err)
-	}
-	return b
-}
-
-func TestMakeTemplate_OverwriteTrue_ReplacesExisting(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	withTempHome(t)
-	const name = "overw1"
-	seedTemplateFile(t, name)
-
-	params := api.MakeTemplateParams{
-		Name:                "overw1",
-		CWD:                 "/var/replaced",
-		RelayMode:           "off",
-		AgentDirectorLabels: map[string]string{"origin": "call"},
-		Overwrite:           true,
-	}
-	if _, err := api.MakeTemplate(params); err != nil {
-		t.Fatalf("MakeTemplate Overwrite=true: %v", err)
-	}
-
-	target, err := config.TemplatePath(name)
-	if err != nil {
 		t.Fatalf("TemplatePath: %v", err)
 	}
-	body, err := os.ReadFile(target)
+	orphans, err := filepath.Glob(filepath.Join(filepath.Dir(target), "."+name+".toml.tmp.*"))
+	if err != nil || len(orphans) != 0 {
+		t.Errorf("temp files %v (%v); want none left", orphans, err)
+	}
+}
+
+// TestMakeTemplateWritesReadableTOML pins SRD §10.1: the template lands at
+// ~/.agent-director/templates/<name>.toml, mode 0600 in a 0700 dir, as plain
+// TOML that config.LoadTemplate reads back field for field.
+func TestMakeTemplateWritesReadableTOML(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
+	home := withTempHome(t)
+	p := api.MakeTemplateParams{Name: "dev", CWD: "/var/data", RelayMode: "on", ClaudeArgs: []string{"--model", "opus"},
+		ExtraEnv: map[string]string{"ANTHROPIC_API_KEY": "sk-test"}, AgentDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
+		Permissions: &api.MakeTemplatePermissions{Allow: []string{"Bash(jq)", "Read(/etc)"}, Deny: []string{"Bash(rm)"}}}
+	res, err := api.MakeTemplate(p)
 	if err != nil {
-		t.Fatalf("read replaced template: %v", err)
+		t.Fatalf("MakeTemplate: %v", err)
 	}
-	var got config.TemplateFile
-	if _, err := toml.Decode(string(body), &got); err != nil {
-		t.Fatalf("toml.Decode: %v", err)
+	dir := filepath.Join(home, ".agent-director", "templates")
+	if res.Path != filepath.Join(dir, "dev.toml") {
+		t.Errorf("Path = %q; want %q", res.Path, filepath.Join(dir, "dev.toml"))
 	}
-	if got.CWD != "/var/replaced" {
-		t.Errorf("CWD = %q; want /var/replaced (seed value leaked through)", got.CWD)
+	for path, mode := range map[string]os.FileMode{dir: 0o700, res.Path: 0o600} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != mode {
+			t.Errorf("%s: %v; want mode %o", path, err, mode)
+		}
 	}
-	if got.RelayMode != "off" {
-		t.Errorf("RelayMode = %q; want off (seed value leaked through)", got.RelayMode)
+	body, _ := os.ReadFile(res.Path)
+	for _, want := range []string{`cwd = "/var/data"`, `relay_mode = "on"`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("TOML body missing %q:\n%s", want, body)
+		}
 	}
-	if got.AgentDirectorLabels["origin"] != "call" {
-		t.Errorf("Labels[origin] = %q; want call (seed value leaked through)", got.AgentDirectorLabels["origin"])
+	want := config.TemplateFile{CWD: p.CWD, RelayMode: p.RelayMode, ClaudeArgs: p.ClaudeArgs, ExtraEnv: p.ExtraEnv,
+		AgentDirectorLabels: p.AgentDirectorLabels, Permissions: &config.TemplatePermissions{Allow: p.Permissions.Allow, Deny: p.Permissions.Deny}}
+	if got, err := config.LoadTemplate("dev"); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("LoadTemplate = %+v, %v; want %+v", got, err, want)
 	}
-
-	assertNoOrphanTempfile(t, name)
 }
 
-func TestMakeTemplate_OverwriteFalse_StillErrorsOnCollision(t *testing.T) {
+// TestMakeTemplateRefusals: an unsafe name is ErrTemplateNameUnsafe; without
+// Overwrite an existing name is ErrTemplateExists naming the target path
+// (SRD §10), its file untouched and no temp file left.
+func TestMakeTemplateRefusals(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
-	cases := []struct {
-		label  string
-		params api.MakeTemplateParams
-	}{
-		{
-			label: "explicit false",
-			params: api.MakeTemplateParams{
-				Name:      "overw2",
-				CWD:       "/var/call",
-				RelayMode: "off",
-				Overwrite: false,
-			},
-		},
-		{
-			label: "unset zero value",
-			params: api.MakeTemplateParams{
-				Name:      "overw2",
-				CWD:       "/var/call",
-				RelayMode: "off",
-			},
-		},
+	withTempHome(t)
+	for _, name := range []string{"", ".", "..", ".hidden", "foo/bar", `foo\bar`, "foo..bar", "../escape"} {
+		if _, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/tmp"}); !errors.Is(err, config.ErrTemplateNameUnsafe) {
+			t.Errorf("name %q: err = %v; want ErrTemplateNameUnsafe", name, err)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.label, func(t *testing.T) {
-			withTempHome(t)
-			seedPath := seedTemplateFile(t, tc.params.Name)
-			seedBody, err := os.ReadFile(seedPath)
-			if err != nil {
-				t.Fatalf("read seed: %v", err)
-			}
-
-			_, err = api.MakeTemplate(tc.params)
-			if !errors.Is(err, config.ErrTemplateExists) {
-				t.Fatalf("err = %v; want ErrTemplateExists", err)
-			}
-			// SRD §10: the absolute target path is embedded in the
-			// error description so callers can surface it.
-			target, perr := config.TemplatePath(tc.params.Name)
-			if perr != nil {
-				t.Fatalf("TemplatePath: %v", perr)
-			}
-			if !strings.Contains(err.Error(), target) {
-				t.Errorf("err description %q missing target path %q", err.Error(), target)
-			}
-
-			postBody, err := os.ReadFile(seedPath)
-			if err != nil {
-				t.Fatalf("read post-call: %v", err)
-			}
-			if !bytes.Equal(seedBody, postBody) {
-				t.Errorf("seed file was modified on collision\nseed:\n%s\npost:\n%s",
-					string(seedBody), string(postBody))
-			}
-		})
+	target := seedTemplateFile(t, "taken")
+	_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "taken", CWD: "/var/call", RelayMode: "off"})
+	if !errors.Is(err, config.ErrTemplateExists) || !strings.Contains(err.Error(), target) {
+		t.Errorf("err = %v; want ErrTemplateExists naming %s", err, target)
 	}
+	if body, err := os.ReadFile(target); err != nil || string(body) != seedTemplateBody {
+		t.Errorf("existing template = %q, %v; want it untouched", body, err)
+	}
+	assertNoOrphanTempfile(t, "taken")
 }
 
-func TestMakeTemplate_OverwriteTrue_CreatesWhenAbsent(t *testing.T) {
+// TestMakeTemplateOverwrite: Overwrite replaces an existing template with the
+// call's body, or creates an absent one, leaving no temp file.
+func TestMakeTemplateOverwrite(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
-	var absentEnv, replaceEnv []byte
-
-	t.Run("create when absent", func(t *testing.T) {
-		withTempHome(t)
-		params := api.MakeTemplateParams{
-			Name:                "overw3",
-			CWD:                 "/var/fresh",
-			RelayMode:           "off",
-			AgentDirectorLabels: map[string]string{"origin": "call"},
-			Overwrite:           true,
-		}
-		res, err := api.MakeTemplate(params)
+	withTempHome(t)
+	seedTemplateFile(t, "existing")
+	for _, name := range []string{"existing", "absent"} {
+		res, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/var/replaced", RelayMode: "off",
+			AgentDirectorLabels: map[string]string{"origin": "call"}, Overwrite: true})
 		if err != nil {
-			t.Fatalf("MakeTemplate Overwrite=true (absent): %v", err)
+			t.Fatalf("MakeTemplate(%s, Overwrite): %v", name, err)
 		}
-		if _, err := os.Stat(res.Path); err != nil {
-			t.Fatalf("expected file at %q: %v", res.Path, err)
+		got, err := config.LoadTemplate(name)
+		if err != nil || got.CWD != "/var/replaced" || got.RelayMode != "off" || got.AgentDirectorLabels["origin"] != "call" {
+			t.Errorf("%s at %s = %+v, %v; want the call's cwd, relay_mode and labels", name, res.Path, got, err)
 		}
-		absentEnv = envelopeJSONStrippingPath(t, res)
-	})
-
-	t.Run("replace existing", func(t *testing.T) {
-		withTempHome(t)
-		const name = "overw3"
-		seedTemplateFile(t, name)
-		params := api.MakeTemplateParams{
-			Name:                "overw3",
-			CWD:                 "/var/fresh",
-			RelayMode:           "off",
-			AgentDirectorLabels: map[string]string{"origin": "call"},
-			Overwrite:           true,
-		}
-		res, err := api.MakeTemplate(params)
-		if err != nil {
-			t.Fatalf("MakeTemplate Overwrite=true (replace): %v", err)
-		}
-		replaceEnv = envelopeJSONStrippingPath(t, res)
-	})
-
-	if !bytes.Equal(absentEnv, replaceEnv) {
-		t.Errorf("envelopes differ after stripping .path\nabsent: %s\nreplace: %s",
-			string(absentEnv), string(replaceEnv))
+		assertNoOrphanTempfile(t, name)
 	}
 }
 
-// TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity pins the SR-1.7
-// linearisation invariant: under N concurrent Overwrite=true writers
-// against the same Name, the on-disk file body must equal exactly one
-// of the N writer's encoded bodies — never zero-byte, never partial
-// TOML, never a Frankenstein splice of two writers' outputs. The
-// underlying mechanism is os.Rename atomicity on the same filesystem,
-// but this test is mechanism-agnostic: it observes the post-condition.
-//
-// Constants mirror the Epic 2 Docker testplan case
-// `overwrite-4-concurrent-atomicity` (N=4 writers, iterations=3).
+// TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity pins SR-1.7: after N
+// concurrent Overwrite writers of one name the file is exactly one writer's
+// body, never empty, partial or spliced. N=4, 3 iterations, as the Docker
+// testplan case overwrite-4.
 func TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
-	const (
-		name       = "concur"
-		N          = 4
-		iterations = 3
-	)
-
-	for iter := 0; iter < iterations; iter++ {
-		// Pre-clean: drop any leftover target file and any orphan
-		// tempfiles from prior iterations. Don't assert on errors —
-		// the file may legitimately not exist on the first pass.
-		target, err := config.TemplatePath(name)
-		if err != nil {
-			t.Fatalf("iter=%d: TemplatePath: %v", iter, err)
-		}
-		_ = os.Remove(target)
-		dir := filepath.Dir(target)
-		if entries, err := os.ReadDir(dir); err == nil {
-			prefix := "." + name + ".toml.tmp."
-			for _, e := range entries {
-				if strings.HasPrefix(e.Name(), prefix) {
-					_ = os.Remove(filepath.Join(dir, e.Name()))
-				}
-			}
-		}
-
-		// Build N distinguishable parameter sets. Vary the label so
-		// each encoded body is byte-different and we can read back
-		// which writer's bytes landed on disk.
-		writers := make([]api.MakeTemplateParams, N)
-		wantLabels := make(map[string]bool, N)
-		for i := 0; i < N; i++ {
-			label := fmt.Sprintf("writer-%d", i)
-			wantLabels[label] = true
-			writers[i] = api.MakeTemplateParams{
-				Name:                name,
-				CWD:                 "/tmp",
-				RelayMode:           "off",
-				AgentDirectorLabels: map[string]string{"writer": label},
-				Overwrite:           true,
-			}
-		}
-
+	const name = "concur"
+	writers := []string{"writer-0", "writer-1", "writer-2", "writer-3"}
+	target := seedTemplateFile(t, name)
+	for iter := 0; iter < 3; iter++ {
+		_ = os.Remove(target) // each iteration races to create it
 		release := make(chan struct{})
 		var wg sync.WaitGroup
-		for i := 0; i < N; i++ {
+		for _, w := range writers {
 			wg.Add(1)
-			go func(p api.MakeTemplateParams) {
+			go func() {
 				defer wg.Done()
 				<-release
-				if _, err := api.MakeTemplate(p); err != nil {
-					t.Errorf("iter=%d MakeTemplate(%s): %v", iter, p.AgentDirectorLabels["writer"], err)
+				if _, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/tmp", RelayMode: "off",
+					AgentDirectorLabels: map[string]string{"writer": w}, Overwrite: true}); err != nil {
+					t.Errorf("iter %d %s: %v", iter, w, err)
 				}
-			}(writers[i])
+			}()
 		}
 		close(release)
 		wg.Wait()
-
-		body, err := os.ReadFile(target)
-		if err != nil {
-			t.Fatalf("iter=%d: read on-disk template: %v", iter, err)
-		}
-		if len(body) == 0 {
-			t.Fatalf("iter=%d: on-disk template is zero-byte (atomicity violated)", iter)
-		}
-		var got config.TemplateFile
-		if _, err := toml.Decode(string(body), &got); err != nil {
-			t.Fatalf("iter=%d: toml.Decode (partial/torn write?): %v\nbody:\n%s", iter, err, string(body))
-		}
-		observed := got.AgentDirectorLabels["writer"]
-		if !wantLabels[observed] {
-			t.Fatalf("iter=%d: observed writer label %q matches no input; wanted one of %v\nbody:\n%s",
-				iter, observed, wantLabels, string(body))
+		got, err := config.LoadTemplate(name) // a torn or partial body fails the TOML decode
+		if body, _ := os.ReadFile(target); err != nil || !slices.Contains(writers, got.AgentDirectorLabels["writer"]) {
+			t.Fatalf("iter %d: template %q (%v); want exactly one writer's body", iter, body, err)
 		}
 	}
 }

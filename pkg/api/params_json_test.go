@@ -2,79 +2,35 @@ package api_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// TestParamsStructsDecodeSnakeCaseJSON pins the MCP-side wire contract:
-// the verb params structs the MCP dispatcher unmarshals into must accept
-// snake_case JSON keys. Without explicit json tags, Go's encoding/json
-// uses case-insensitive struct-field-name matching, which means
-// `{"claude_instance_id":"x"}` silently FAILS to populate the
-// `ClaudeInstanceID` field — the field stays empty and the verb sees
-// "missing id" instead of "unknown id". This test catches that
-// regression for every params struct the dispatcher decodes directly via
-// its decodeParams helper.
+// TestParamsStructsDecodeSnakeCaseJSON pins the MCP wire contract: each params
+// struct the dispatcher decodes takes snake_case keys (an untagged
+// ClaudeInstanceID would leave {"claude_instance_id":"x"} unset and turn
+// "unknown id" into "missing id").
 func TestParamsStructsDecodeSnakeCaseJSON(t *testing.T) {
 	t.Parallel()
-	t.Run("SendKeysParams", func(t *testing.T) {
-		var p api.SendKeysParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-1","text":"hello","allow_pending":true}`), &p); err != nil {
-			t.Fatalf("unmarshal: %v", err)
+	for _, tc := range []struct {
+		in   string
+		into any // a pointer to the zero params struct
+		want any
+	}{
+		{`{"claude_instance_id":"id-1","text":"hello","allow_pending":true}`, &api.SendKeysParams{},
+			&api.SendKeysParams{ClaudeInstanceID: "id-1", Text: "hello", AllowPending: true}},
+		{`{"claude_instance_id":"id-2","n_lines":42,"ansi":true,"allow_pending":true}`, &api.ReadPaneParams{},
+			&api.ReadPaneParams{ClaudeInstanceID: "id-2", NLines: 42, ANSI: true, AllowPending: true}},
+		{`{"claude_instance_id":"id-3"}`, &api.KillParams{}, &api.KillParams{ClaudeInstanceID: "id-3"}},
+		{`{"claude_instance_id":"id-4"}`, &api.PauseParams{}, &api.PauseParams{ClaudeInstanceID: "id-4"}},
+		{`{"claude_instance_id":"id-5"}`, &api.ResumeParams{}, &api.ResumeParams{ClaudeInstanceID: "id-5"}},
+		{`{"claude_instance_id":"id-6","decision":"allow","reason":"ok"}`, &api.DecideParams{},
+			&api.DecideParams{ClaudeInstanceID: "id-6", Decision: "allow", Reason: "ok"}},
+	} {
+		if err := json.Unmarshal([]byte(tc.in), tc.into); err != nil || !reflect.DeepEqual(tc.into, tc.want) {
+			t.Errorf("%T from %s = %+v, %v; want %+v", tc.into, tc.in, tc.into, err, tc.want)
 		}
-		if p.ClaudeInstanceID != "id-1" || p.Text != "hello" || !p.AllowPending {
-			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-1, Text:hello, AllowPending:true}", p)
-		}
-	})
-
-	t.Run("ReadPaneParams", func(t *testing.T) {
-		var p api.ReadPaneParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-2","n_lines":42,"ansi":true,"allow_pending":true}`), &p); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if p.ClaudeInstanceID != "id-2" || p.NLines != 42 || !p.ANSI || !p.AllowPending {
-			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-2, NLines:42, ANSI:true, AllowPending:true}", p)
-		}
-	})
-
-	t.Run("KillParams", func(t *testing.T) {
-		var p api.KillParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-3"}`), &p); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if p.ClaudeInstanceID != "id-3" {
-			t.Errorf("decoded = %+v; want id-3", p)
-		}
-	})
-
-	t.Run("PauseParams", func(t *testing.T) {
-		var p api.PauseParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-4"}`), &p); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if p.ClaudeInstanceID != "id-4" {
-			t.Errorf("decoded = %+v; want id-4", p)
-		}
-	})
-
-	t.Run("ResumeParams", func(t *testing.T) {
-		var p api.ResumeParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-5"}`), &p); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if p.ClaudeInstanceID != "id-5" {
-			t.Errorf("decoded = %+v; want id-5", p)
-		}
-	})
-
-	t.Run("DecideParams", func(t *testing.T) {
-		var p api.DecideParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-6","decision":"allow","reason":"ok"}`), &p); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if p.ClaudeInstanceID != "id-6" || p.Decision != "allow" || p.Reason != "ok" {
-			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-6, Decision:allow, Reason:ok}", p)
-		}
-	})
+	}
 }

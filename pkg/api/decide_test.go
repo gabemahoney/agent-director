@@ -7,9 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -21,148 +19,131 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-func TestDecideEmptyRequestToken(t *testing.T) {
-	t.Parallel()
-	// api.Decide must reject an empty RequestToken at the API layer,
-	// independent of CLI gating. One open row exists so the store's
-	// ErrAmbiguousRequest guard would not fire — the rejection must come
-	// from Decide itself.
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     "", // empty — should be rejected before the store is called
-		Decision:         "allow",
-	})
-	if !errors.Is(err, api.ErrMissingRequestToken) {
-		t.Fatalf("err = %v; want ErrMissingRequestToken", err)
-	}
+// decideA decides request A of id-d-1 with decision and reason at now under window.
+func decideA(s *store.Store, window time.Duration, now time.Time, decision, reason string) error {
+	_, err := api.Decide(s, window, now, api.DecideParams{ClaudeInstanceID: "id-d-1",
+		RequestToken: storefix.TestRequestTokenA, Decision: decision, Reason: reason})
+	return err
 }
 
-func TestDecideRelayOffRejected(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "off")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "allow",
-	})
-	if !errors.Is(err, api.ErrRelayModeOff) {
-		t.Fatalf("err = %v; want ErrRelayModeOff", err)
-	}
-}
-
-func TestDecideUnknownSpawn(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "absent",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "allow",
-	})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
-	}
-}
-
-func TestDecideInvalidDecision(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "perhaps",
-	})
-	if !errors.Is(err, api.ErrInvalidDecision) {
-		t.Fatalf("err = %v; want ErrInvalidDecision", err)
-	}
-}
-
-func TestDecideFirstCallWins(t *testing.T) {
-	t.Parallel()
-	// Two consecutive decides on the same open row. The first writes
-	// allow; the second sees the populated decision column and the
-	// `decision IS NULL` guard short-circuits the UPDATE.
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-
-	if _, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "allow",
-		Reason:           "ok",
-	}); err != nil {
-		t.Fatalf("first Decide: %v", err)
-	}
-
-	// Read directly to verify the write landed.
-	// For allow, api.Decide writes dbReason="" regardless of params.Reason.
+// rowA returns id-d-1's request A.
+func rowA(t *testing.T, s *store.Store) store.PermissionRow {
+	t.Helper()
 	row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
 	if err != nil {
 		t.Fatalf("GetPermissionRequest: %v", err)
 	}
-	if row.Decision != "allow" || row.DecisionReason != "" {
-		t.Errorf("row after first decide: decision=%q reason=%q; want (allow, \"\")", row.Decision, row.DecisionReason)
-	}
+	return row
+}
 
-	// Second call → ErrAlreadyDecided.
-	_, err = api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "deny",
-		Reason:           "no",
-	})
-	if !errors.Is(err, store.ErrAlreadyDecided) {
-		t.Fatalf("second Decide err = %v; want ErrAlreadyDecided", err)
+// TestDecideRefusals: each refusal returns its error and records nothing. An
+// empty token is refused by Decide itself, even with two open rows, before the
+// store's ErrAmbiguousRequest guard is reached.
+func TestDecideRefusals(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		relay     string
+		rows      int // open requests: 0, 1 (A) or 2 (A and B)
+		id, token string
+		decision  string
+		want      error
+	}{
+		{"empty token", "on", 1, "id-d-1", "", "allow", api.ErrMissingRequestToken},
+		{"empty token, two open rows", "on", 2, "id-d-1", "", "allow", api.ErrMissingRequestToken},
+		{"relay off", "off", 1, "id-d-1", storefix.TestRequestTokenA, "allow", api.ErrRelayModeOff},
+		{"unknown spawn", "on", 1, "absent", storefix.TestRequestTokenA, "allow", store.ErrSpawnNotFound},
+		{"invalid decision", "on", 1, "id-d-1", storefix.TestRequestTokenA, "perhaps", api.ErrInvalidDecision},
+		{"no open request", "on", 0, "id-d-1", storefix.TestRequestTokenA, "allow", store.ErrNoOpenPermissionRequest},
 	}
-
-	// The first decide's values must not have been clobbered.
-	row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-	if row.Decision != "allow" || row.DecisionReason != "" {
-		t.Errorf("row after second decide: decision=%q reason=%q; want unchanged (allow, \"\")", row.Decision, row.DecisionReason)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := apitest.SeedDecideFixture(t, tc.relay)
+			if tc.rows > 0 {
+				apitest.SeedPermissionRow(t, s, "id-d-1")
+			}
+			if tc.rows > 1 {
+				openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0)
+			}
+			_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{ClaudeInstanceID: tc.id,
+				RequestToken: tc.token, Decision: tc.decision})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v; want %v", err, tc.want)
+			}
+			if tc.rows > 0 && rowA(t, s).Decision != "" {
+				t.Errorf("request A decided %q after a refusal; want it open", rowA(t, s).Decision)
+			}
+		})
 	}
 }
 
-// TestDecideConcurrentFirstCallWins drives N parallel Decide calls
-// against the same open row. The SQL `decision IS NULL` guard makes the
-// update first-call-wins; exactly one goroutine must succeed and the
-// rest must observe ErrAlreadyDecided. Contention surface is the SQL
-// boundary, not the Go-level test.
+// TestDecideRecordsVerdict: an in-window allow records no reason and a deny
+// always DecisionReasonOperator, never the caller's reason (Task E).
+func TestDecideRecordsVerdict(t *testing.T) {
+	t.Parallel()
+	for decision, wantReason := range map[string]string{"allow": "", "deny": store.DecisionReasonOperator} {
+		t.Run(decision, func(t *testing.T) {
+			s, _ := apitest.SeedDecideFixture(t, "on")
+			apitest.SeedPermissionRow(t, s, "id-d-1")
+			if err := decideA(s, 24*time.Hour, time.Now(), decision, "caller reason"); err != nil {
+				t.Fatalf("Decide: %v", err)
+			}
+			if row := rowA(t, s); row.Decision != decision || row.DecisionReason != wantReason {
+				t.Errorf("row = (%q, %q); want (%q, %q)", row.Decision, row.DecisionReason, decision, wantReason)
+			}
+		})
+	}
+}
+
+// TestDecideFirstCallWins: a second decide on a decided row is ErrAlreadyDecided
+// and leaves the first verdict; it beats ErrRelayFallenBack even once the row
+// is aged out of the window, since fallen-back applies only to open rows.
+func TestDecideFirstCallWins(t *testing.T) {
+	t.Parallel()
+	const window = 10 * time.Second
+	for name, age := range map[string]time.Duration{"in window": 0, "aged out": window - api.RelayKillSafetyMargin + time.Second} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := apitest.SeedDecideFixture(t, "on")
+			apitest.SeedPermissionRow(t, s, "id-d-1")
+			created := rowA(t, s).CreatedAt
+			if err := decideA(s, window, created, "allow", "ok"); err != nil {
+				t.Fatalf("first Decide: %v", err)
+			}
+			err := decideA(s, window, created.Add(age), "deny", "no")
+			if !errors.Is(err, store.ErrAlreadyDecided) || errors.Is(err, api.ErrRelayFallenBack) {
+				t.Fatalf("second Decide err = %v; want ErrAlreadyDecided only", err)
+			}
+			if row := rowA(t, s); row.Decision != "allow" || row.DecisionReason != "" {
+				t.Errorf("row = (%q, %q); want the first verdict (allow, \"\")", row.Decision, row.DecisionReason)
+			}
+		})
+	}
+}
+
+// TestDecideConcurrentFirstCallWins: of N parallel decides on one open row,
+// the SQL `decision IS NULL` guard lets exactly one win; the rest get
+// ErrAlreadyDecided.
 func TestDecideConcurrentFirstCallWins(t *testing.T) {
 	t.Parallel()
 	const workers = 8
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
-
 	start := make(chan struct{})
 	results := make(chan error, workers)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		decision := "allow"
-		if i%2 == 1 {
-			decision = "deny"
-		}
-		reason := fmt.Sprintf("w%d", i)
+		decision := []string{"allow", "deny"}[i%2]
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-				ClaudeInstanceID: "id-d-1",
-				RequestToken:     storefix.TestRequestTokenA,
-				Decision:         decision,
-				Reason:           reason,
-			})
-			results <- err
+			results <- decideA(s, 24*time.Hour, time.Now(), decision, fmt.Sprintf("w%d", i))
 		}()
 	}
 	close(start)
 	wg.Wait()
 	close(results)
-
-	var winners, losers, other int
+	winners, losers := 0, 0
 	for err := range results {
 		switch {
 		case err == nil:
@@ -170,322 +151,36 @@ func TestDecideConcurrentFirstCallWins(t *testing.T) {
 		case errors.Is(err, store.ErrAlreadyDecided):
 			losers++
 		default:
-			other++
 			t.Errorf("unexpected err from concurrent Decide: %v", err)
 		}
 	}
-	if winners != 1 {
-		t.Errorf("winners = %d; want exactly 1", winners)
-	}
-	if losers != workers-1 {
-		t.Errorf("losers = %d; want %d", losers, workers-1)
-	}
-	if other != 0 {
-		t.Errorf("unexpected non-ErrAlreadyDecided errors: %d", other)
+	if winners != 1 || losers != workers-1 {
+		t.Errorf("winners %d, losers %d; want 1 and %d", winners, losers, workers-1)
 	}
 }
 
-func TestDecideNoOpenPermissionRequest(t *testing.T) {
-	t.Parallel()
-	// Spawn exists, relay_mode=on, but no row in permission_requests.
-	// The verb surfaces ErrNoOpenPermissionRequest after the UPDATE
-	// no-ops and the follow-up SELECT returns sql.ErrNoRows.
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "allow",
-	})
-	if !errors.Is(err, store.ErrNoOpenPermissionRequest) {
-		t.Fatalf("err = %v; want ErrNoOpenPermissionRequest", err)
-	}
-}
-
-func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
-	t.Parallel()
-	// Task E: for a deny, the store always records DecisionReasonOperator;
-	// params.Reason is NOT written to the DB row. The canonical "operator"
-	// reason string is what the polling loop (and hook.EncodeDecision) will
-	// read back, not a copy of params.Reason. This test pins the write-site
-	// invariant: deny → decision_reason=store.DecisionReasonOperator always.
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	if _, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "deny",
-		Reason:           "",
-	}); err != nil {
-		t.Fatalf("Decide: %v", err)
-	}
-	row, _ := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-	if row.Decision != "deny" {
-		t.Errorf("Decision = %q; want deny", row.Decision)
-	}
-	// decision_reason must be the canonical "operator" constant, not the
-	// raw params.Reason value (""). The store always records one of the
-	// DecisionReason* constants for operator-originated decisions.
-	if row.DecisionReason != store.DecisionReasonOperator {
-		t.Errorf("DecisionReason = %q; want %q (DecisionReasonOperator always written for deny)",
-			row.DecisionReason, store.DecisionReasonOperator)
-	}
-}
-
-// TestAmbiguousDecide verifies that when empty RequestToken is passed to
-// api.Decide, ErrMissingRequestToken is returned at the API layer before the
-// store's ErrAmbiguousRequest defense-in-depth guard is reached. The store's
-// guard remains as defense-in-depth for direct DecidePermissionRequest callers;
-// api.Decide's early check supersedes it.
-func TestAmbiguousDecide(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	// Seed a second open row with a distinct token.
-	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0)
-	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     "", // empty — rejected at API layer before store
-		Decision:         "allow",
-	})
-	if !errors.Is(err, api.ErrMissingRequestToken) {
-		t.Fatalf("err = %v; want ErrMissingRequestToken", err)
-	}
-}
-
-// TestDecisionReasonOnlyCanonicalValues has two sub-cases:
-//
-//   - source_walk: walk all non-test production .go files and assert that
-//     no DecidePermissionRequest call has a raw non-empty string literal
-//     as its reason argument. All reason arguments must reference a
-//     store.DecisionReason* constant or the empty string.
-//
-//   - operator_runtime: call api.Decide with Decision="deny" and verify
-//     the raw decision_reason column carries store.DecisionReasonOperator
-//     ("operator"), confirming the canonical constant is used at runtime.
-func TestDecisionReasonOnlyCanonicalValues(t *testing.T) {
-	t.Parallel()
-	t.Run("source_walk", func(t *testing.T) {
-		root := findModuleRoot(t)
-
-		// Canonical reason string literals — any BasicLit STRING value that is not
-		// in this set as the 4th argument to DecidePermissionRequest is a violation.
-		// AST BasicLit.Value includes surrounding quotes, so the entries are quoted.
-		// Identifier/constant references (e.g. store.DecisionReasonOperator) are
-		// never BasicLit and are always presumed canonical.
-		canonicalReasons := map[string]bool{
-			`""`:             true,
-			`"operator"`:     true,
-			`"timeout"`:      true,
-			`"find_missing"`: true,
-		}
-
-		skipDirs := map[string]bool{
-			"apitest": true, "testsupport": true, "testdata": true,
-			"test": true, "vendor": true,
-		}
-
-		scanDirs := []string{
-			filepath.Join(root, "internal"),
-			filepath.Join(root, "pkg"),
-			filepath.Join(root, "cmd"),
-		}
-
-		var violations []string
-		for _, dir := range scanDirs {
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				continue
-			}
-			err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if d.IsDir() {
-					base := filepath.Base(path)
-					if skipDirs[base] || strings.HasPrefix(base, ".") {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-					return nil
-				}
-
-				fset := token.NewFileSet()
-				f, parseErr := parser.ParseFile(fset, path, nil, 0)
-				if parseErr != nil {
-					return fmt.Errorf("parse %s: %w", path, parseErr)
-				}
-
-				ast.Inspect(f, func(n ast.Node) bool {
-					call, ok := n.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					if sel.Sel.Name != "DecidePermissionRequest" {
-						return true
-					}
-					if len(call.Args) < 4 {
-						return true
-					}
-					lit, ok := call.Args[3].(*ast.BasicLit)
-					if !ok {
-						// Identifier or expression — presumed canonical constant.
-						return true
-					}
-					if lit.Kind != token.STRING {
-						return true
-					}
-					if !canonicalReasons[lit.Value] {
-						pos := fset.Position(call.Pos())
-						relPath, _ := filepath.Rel(root, path)
-						violations = append(violations, fmt.Sprintf("%s:%d: reason literal %s",
-							relPath, pos.Line, lit.Value))
-					}
-					return true
-				})
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("source walk: %v", err)
-			}
-		}
-		if len(violations) > 0 {
-			t.Errorf("DecidePermissionRequest calls with raw string literal reason (use a DecisionReason* constant instead):\n%s",
-				strings.Join(violations, "\n"))
-		}
-	})
-
-	t.Run("operator_runtime", func(t *testing.T) {
-		// api.Decide with Decision="deny" must write DecisionReasonOperator
-		// to the decision_reason column, not params.Reason.
-		s, _ := apitest.SeedDecideFixture(t, "on")
-		apitest.SeedPermissionRow(t, s, "id-d-1")
-		if _, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-			ClaudeInstanceID: "id-d-1",
-			RequestToken:     storefix.TestRequestTokenA,
-			Decision:         "deny",
-		}); err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if err != nil {
-			t.Fatalf("GetPermissionRequest: %v", err)
-		}
-		if row.DecisionReason != store.DecisionReasonOperator {
-			t.Errorf("DecisionReason = %q; want %q (DecisionReasonOperator)",
-				row.DecisionReason, store.DecisionReasonOperator)
-		}
-	})
-}
-
-func TestDecideRelayFallenBack(t *testing.T) {
-	t.Parallel()
-	// A backdated (undeliverable) open request: Decide must refuse with
-	// ErrRelayFallenBack and MUST NOT record a decision — the row's decision
-	// column stays NULL so the refusal is never mistaken for a success.
-	s, dbPath := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	// Backdate created_at well past a 1h window so the row is undeliverable.
-	storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, "id-d-1", storefix.TestRequestTokenA, 2*time.Hour)
-
-	_, err := api.Decide(s, time.Hour, time.Now(), api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "allow",
-		Reason:           "too late",
-	})
-	if !errors.Is(err, api.ErrRelayFallenBack) {
-		t.Fatalf("err = %v; want ErrRelayFallenBack", err)
-	}
-
-	// The refusal must not have written a decision.
-	row, gErr := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-	if gErr != nil {
-		t.Fatalf("GetPermissionRequest: %v", gErr)
-	}
-	if row.Decision != "" {
-		t.Errorf("decision = %q after fallen-back refusal; want NULL/empty", row.Decision)
-	}
-}
-
-func TestDecideInWindowRecordsDecision(t *testing.T) {
-	t.Parallel()
-	// An in-window request records allow and deny exactly as before. Two
-	// sub-cases exercise both verdicts against a comfortably-deliverable row
-	// (created just now, wide window).
-	for _, tc := range []struct {
-		name       string
-		decision   string
-		wantReason string
-	}{
-		{"allow", "allow", ""},
-		{"deny", "deny", store.DecisionReasonOperator},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, _ := apitest.SeedDecideFixture(t, "on")
-			apitest.SeedPermissionRow(t, s, "id-d-1")
-
-			if _, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
-				ClaudeInstanceID: "id-d-1",
-				RequestToken:     storefix.TestRequestTokenA,
-				Decision:         tc.decision,
-			}); err != nil {
-				t.Fatalf("Decide: %v", err)
-			}
-			row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-			if err != nil {
-				t.Fatalf("GetPermissionRequest: %v", err)
-			}
-			if row.Decision != tc.decision || row.DecisionReason != tc.wantReason {
-				t.Errorf("row: decision=%q reason=%q; want (%q, %q)",
-					row.Decision, row.DecisionReason, tc.decision, tc.wantReason)
-			}
-		})
-	}
-}
-
+// TestDecideDeliverabilityBoundary pins the deliverability boundary on the
+// injected clock: the row is deliverable iff now < created_at + window - margin
+// (b.2b8's "at most 2 s"); a refusal is ErrRelayFallenBack and records nothing.
 func TestDecideDeliverabilityBoundary(t *testing.T) {
 	t.Parallel()
-	// Boundary/safety-margin exercised via the injected clock and window — no
-	// sleeps, no backdating. The row's created_at is real-now (T0). Cutoff =
-	// now - (window - margin); the row is deliverable iff created_at > cutoff,
-	// i.e. iff now < T0 + window - margin. We pin both sides of the boundary by
-	// choosing `now` relative to T0.
-	//
-	//   - refused: now = T0 + window, so cutoff = T0 + margin > T0 (undeliverable).
-	//   - accepted: now = T0, cutoff = T0 - (window - margin) << T0 (deliverable).
-	//
-	// T0 is read back from the second-truncated column, so the equality case is
-	// exact. just_before_boundary_accepted makes window - margin decide's
-	// earliest refusal, which bounds ErrRelayFallenBack's "at most 2 s" (b.2b8).
 	const window = 10 * time.Second
+	edge := window - api.RelayKillSafetyMargin
 	cases := []struct {
 		name    string
-		age     time.Duration // now - T0
+		age     time.Duration // now - created_at
 		refused bool
 	}{
-		{"aged_at_boundary_refused", window - api.RelayKillSafetyMargin + time.Second, true},
-		{"exact_equality_refused", window - api.RelayKillSafetyMargin, true}, // cutoff == T0: not strictly after
-		{"just_before_boundary_accepted", window - api.RelayKillSafetyMargin - time.Nanosecond, false},
+		{"aged_at_boundary_refused", edge + time.Second, true},
+		{"exact_equality_refused", edge, true}, // cutoff == created_at: not strictly after
+		{"just_before_boundary_accepted", edge - time.Nanosecond, false},
 		{"comfortably_in_window_accepted", 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := apitest.SeedDecideFixture(t, "on")
 			apitest.SeedPermissionRow(t, s, "id-d-1")
-			row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-			if err != nil {
-				t.Fatalf("GetPermissionRequest: %v", err)
-			}
-			_, err = api.Decide(s, window, row.CreatedAt.Add(tc.age), api.DecideParams{
-				ClaudeInstanceID: "id-d-1",
-				RequestToken:     storefix.TestRequestTokenA,
-				Decision:         "allow",
-			})
+			err := decideA(s, window, rowA(t, s).CreatedAt.Add(tc.age), "allow", "")
 			want := "allow"
 			if tc.refused {
 				want = ""
@@ -495,68 +190,52 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("Decide: %v; want the verdict recorded", err)
 			}
-			row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-			if row.Decision != want {
-				t.Errorf("decision = %q; want %q", row.Decision, want)
+			if got := rowA(t, s).Decision; got != want {
+				t.Errorf("decision = %q; want %q", got, want)
 			}
 		})
 	}
 }
 
-func TestDecideAlreadyDecidedBeatsFallenBack(t *testing.T) {
+// TestDecisionReasonOnlyCanonicalValues: no production DecidePermissionRequest
+// call passes a reason literal other than "" or a DecisionReason* value.
+func TestDecisionReasonOnlyCanonicalValues(t *testing.T) {
 	t.Parallel()
-	// Precedence: a decided row that is ALSO aged out of the window must return
-	// ErrAlreadyDecided, not ErrRelayFallenBack — fallen-back applies only to
-	// open rows. First decide in-window (records allow), then re-decide with an
-	// advanced clock that makes the row undeliverable; the guarded UPDATE
-	// no-ops and the follow-up SELECT sees a decided row.
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-
-	row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-	if err != nil {
-		t.Fatalf("GetPermissionRequest: %v", err)
-	}
-	const window = 10 * time.Second
-	if _, err := api.Decide(s, window, row.CreatedAt, api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "allow",
-	}); err != nil {
-		t.Fatalf("first Decide: %v", err)
-	}
-
-	// Advance the clock past the deliverability boundary and re-decide.
-	aged := row.CreatedAt.Add(window - api.RelayKillSafetyMargin + time.Second)
-	_, err = api.Decide(s, window, aged, api.DecideParams{
-		ClaudeInstanceID: "id-d-1",
-		RequestToken:     storefix.TestRequestTokenA,
-		Decision:         "deny",
-	})
-	if !errors.Is(err, store.ErrAlreadyDecided) {
-		t.Fatalf("err = %v; want ErrAlreadyDecided (must beat ErrRelayFallenBack)", err)
-	}
-	if errors.Is(err, api.ErrRelayFallenBack) {
-		t.Fatalf("err = %v; ErrRelayFallenBack must not fire for a decided row", err)
-	}
-}
-
-// findModuleRoot walks up from this test file's location to find go.mod.
-func findModuleRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed")
-	}
-	dir := filepath.Dir(file)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
+	canonical := map[string]bool{`""`: true, `"operator"`: true, `"timeout"`: true, `"find_missing"`: true}
+	skip := map[string]bool{"apitest": true, "testsupport": true, "testdata": true, "test": true, "vendor": true}
+	root := filepath.Join("..", "..")
+	for _, dir := range []string{"internal", "pkg", "cmd"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
+			switch {
+			case err != nil:
+				return err
+			case d.IsDir() && (skip[d.Name()] || strings.HasPrefix(d.Name(), ".")):
+				return filepath.SkipDir
+			case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
+				return nil
+			}
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				return err
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) < 4 {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "DecidePermissionRequest" {
+					return true
+				}
+				if lit, ok := call.Args[3].(*ast.BasicLit); ok && lit.Kind == token.STRING && !canonical[lit.Value] {
+					t.Errorf("%s: DecidePermissionRequest reason literal %s; use a DecisionReason* constant", fset.Position(call.Pos()), lit.Value)
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("could not find go.mod from %s", file)
-		}
-		dir = parent
 	}
 }

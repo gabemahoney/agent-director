@@ -1,17 +1,13 @@
 package api_test
 
-// methods_test.go covers the 15 Client verb methods added in Task 2.
-//
-// Organisation:
-//   A. TestAllVerbsReturnErrClientClosedAfterClose — table-driven; every verb on
-//      a closed client must return ErrClientClosed.
-//   B. Per-verb happy-path / delegation tests (one per verb).
-//   C. TestListFacadePreservesErrListInvalidLabel — verifies that errors.Is
-//      matching across the pkg/api → internal/api boundary is not broken.
+// methods_test.go covers the Client verb methods: every verb refuses on a
+// closed Client, the admin hooks refuse anything but a Client, and each verb
+// delegates to its implementation with errors.Is intact across the facade.
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,39 +18,15 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-// newTestClient creates a Client backed by a fresh temp store. StorePath and
-// ConfigPath are explicit absolute paths so tilde expansion via user.Current()
-// is bypassed. HOME is still overridden via t.Setenv so operations that use
-// os.UserHomeDir() (e.g. MakeTemplate) land in the temp dir.
+// newTestClient creates a Client over a fresh store, HOME set to a temp dir.
 func newTestClient(t *testing.T) (*api.Client, string) {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dbPath := filepath.Join(home, "state.db")
-	cfgPath := filepath.Join(home, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
-		t.Fatalf("newTestClient write config: %v", err)
-	}
-	c, err := api.New(api.Options{
-		StorePath:       dbPath,
-		ConfigPath:      cfgPath,
-		CreateIfMissing: true,
-	})
-	if err != nil {
-		t.Fatalf("newTestClient api.New: %v", err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-	return c, home
+	return newTestClientWithRows(t, nil)
 }
 
-// newTestClientWithRows creates a Client whose backing store has been
-// pre-seeded by seedFn before the Client is opened. seedFn receives the
-// absolute DB path and is responsible for opening, inserting, and closing the
-// store.
+// newTestClientWithRows creates a Client over a store seedFn (when non-nil)
+// seeds by its path before the Client opens it; HOME is set to a temp dir so
+// MakeTemplate and other HOME users land there.
 func newTestClientWithRows(t *testing.T, seedFn func(dbPath string)) (*api.Client, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -62,96 +34,71 @@ func newTestClientWithRows(t *testing.T, seedFn func(dbPath string)) (*api.Clien
 	dbPath := filepath.Join(home, "state.db")
 	cfgPath := filepath.Join(home, "config.toml")
 	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
-		t.Fatalf("newTestClientWithRows write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
-	// Seed BEFORE opening the Client so the Client sees the rows on startup.
-	seedFn(dbPath)
-	c, err := api.New(api.Options{
-		StorePath:  dbPath,
-		ConfigPath: cfgPath,
-	})
+	if seedFn != nil {
+		seedFn(dbPath)
+	}
+	c, err := api.New(api.Options{StorePath: dbPath, ConfigPath: cfgPath, CreateIfMissing: true})
 	if err != nil {
-		t.Fatalf("newTestClientWithRows api.New: %v", err)
+		t.Fatalf("api.New: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c, home
 }
 
-// insertRow opens the store at dbPath, inserts one Spawn row with the given id,
-// sessionName, and state, then closes the store. relay_mode is always "off".
+// insertRow inserts a relay_mode off row id at state into the store at dbPath.
 func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 	t.Helper()
 	s, err := store.OpenOrInit(dbPath)
 	if err != nil {
-		t.Fatalf("insertRow OpenOrInit(%q): %v", dbPath, err)
+		t.Fatalf("OpenOrInit(%q): %v", dbPath, err)
 	}
-	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: id,
-		CWD:              "/tmp",
-		TmuxSessionName:  sessionName,
-		RelayMode:        "off",
-	}); err != nil {
-		_ = s.Close()
-		t.Fatalf("insertRow InsertPending(%s): %v", id, err)
+	defer s.Close() //nolint:errcheck
+	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: sessionName, RelayMode: "off"}); err != nil {
+		t.Fatalf("InsertPending(%s): %v", id, err)
 	}
 	if err := seedAgentState(s, dbPath, id, state); err != nil {
-		_ = s.Close()
-		t.Fatalf("insertRow seed %s→%s: %v", id, state, err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("insertRow Close: %v", err)
+		t.Fatalf("seed %s→%s: %v", id, state, err)
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Part A — ErrClientClosed table test
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestAllVerbsReturnErrClientClosedAfterClose is the primary contract test for
-// the closed-flag guard: every verb method, called on a Client that has already
-// been closed, must return ErrClientClosed and nothing else. Zero-value params
-// are intentional — the guard fires before any param inspection.
+// TestAllVerbsReturnErrClientClosedAfterClose: every verb on a closed Client
+// returns ErrClientClosed; the guard fires before any param is read.
 func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
+	if api.ErrClientClosed == nil {
+		t.Fatal("api.ErrClientClosed is nil; every check below would pass vacuously")
+	}
 	c, _ := newTestClient(t)
-	// Close explicitly now; the t.Cleanup-registered Close becomes a no-op
-	// because Close is idempotent.
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-
 	ctx := context.Background()
-
-	cases := []struct {
-		name string
-		call func() error
-	}{
-		{"Version", func() error { _, err := c.Version(); return err }},
-		{"Spawn", func() error { _, err := c.Spawn(api.SpawnParams{}); return err }},
-		{"Status", func() error { _, err := c.Status(""); return err }},
-		{"Get", func() error { _, err := c.Get(""); return err }},
-		{"List", func() error { _, err := c.List(api.ListParams{}); return err }},
-		{"SendKeys", func() error { _, err := c.SendKeys(api.SendKeysParams{}); return err }},
-		{"ReadPane", func() error { _, err := c.ReadPane(api.ReadPaneParams{}); return err }},
-		{"Kill", func() error { _, err := c.Kill(api.KillParams{}); return err }},
-		{"Pause", func() error { _, err := c.Pause(ctx, api.PauseParams{}); return err }},
-		{"Decide", func() error { _, err := c.Decide(api.DecideParams{}); return err }},
-		{"Resume", func() error { _, err := c.Resume(api.ResumeParams{}); return err }},
-		{"FindMissing", func() error { _, err := c.FindMissing(ctx); return err }},
-		{"Expire", func() error { _, err := c.Expire(nil); return err }},
-		{"Delete", func() error { _, err := adminapi.Delete(c, nil); return err }},
-		{"KillFinished", func() error { _, err := adminapi.KillFinished(c, ""); return err }},
-		{"MakeTemplate", func() error { _, err := c.MakeTemplate(api.MakeTemplateParams{}); return err }},
+	for name, call := range map[string]func() error{
+		"Version":      func() error { _, err := c.Version(); return err },
+		"Spawn":        func() error { _, err := c.Spawn(api.SpawnParams{}); return err },
+		"Status":       func() error { _, err := c.Status(""); return err },
+		"Get":          func() error { _, err := c.Get(""); return err },
+		"List":         func() error { _, err := c.List(api.ListParams{}); return err },
+		"SendKeys":     func() error { _, err := c.SendKeys(api.SendKeysParams{}); return err },
+		"ReadPane":     func() error { _, err := c.ReadPane(api.ReadPaneParams{}); return err },
+		"Kill":         func() error { _, err := c.Kill(api.KillParams{}); return err },
+		"Pause":        func() error { _, err := c.Pause(ctx, api.PauseParams{}); return err },
+		"Decide":       func() error { _, err := c.Decide(api.DecideParams{}); return err },
+		"Resume":       func() error { _, err := c.Resume(api.ResumeParams{}); return err },
+		"FindMissing":  func() error { _, err := c.FindMissing(ctx); return err },
+		"Expire":       func() error { _, err := c.Expire(nil); return err },
+		"Delete":       func() error { _, err := adminapi.Delete(c, nil); return err },
+		"KillFinished": func() error { _, err := adminapi.KillFinished(c, ""); return err },
+		"MakeTemplate": func() error { _, err := c.MakeTemplate(api.MakeTemplateParams{}); return err },
+	} {
+		if err := call(); !errors.Is(err, api.ErrClientClosed) {
+			t.Errorf("%s on a closed client: %v; want ErrClientClosed", name, err)
+		}
 	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.call()
-			if !errors.Is(err, api.ErrClientClosed) {
-				t.Errorf("%s on closed client: got %v; want ErrClientClosed", tc.name, err)
-			}
-		})
+	if err := c.Close(); err != nil {
+		t.Errorf("second Close: %v; want nil", err)
 	}
 }
 
@@ -174,104 +121,89 @@ func TestAdminHooksRefuseNonClient(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Part B — per-verb happy-path / delegation tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestVersionHappy verifies Version delegates and returns a populated result.
-// Version and Commit may be empty strings in test builds (no ldflags); the test
-// asserts only that no error is returned.
-func TestVersionHappy(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	_, err := c.Version()
-	if err != nil {
-		t.Fatalf("Version: %v", err)
-	}
-}
-
-// TestSpawnDelegation proves Spawn delegates to internal/api. An empty CWD
-// is a known-bad input that exercises pkg/api.Client.Spawn →
-// internal/api.Spawn → spawn.Validate before any tmux interaction, returning
-// spawn.ErrCwdMissing.
-func TestSpawnDelegation(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	_, err := c.Spawn(api.SpawnParams{}) // empty CWD → ErrCwdMissing
-	if !errors.Is(err, spawn.ErrCwdMissing) {
-		t.Fatalf("Spawn(empty CWD): got %v; want spawn.ErrCwdMissing", err)
-	}
-}
-
 // TestStatusHappy verifies Status returns the row's state for a known id.
 func TestStatusHappy(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		insertRow(t, dbPath, "id-st-1", "cd-st-1", store.StatePending)
 	})
-	res, err := c.Status("id-st-1")
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if res.State != store.StatePending {
-		t.Errorf("State = %q; want %q", res.State, store.StatePending)
+	if res, err := c.Status("id-st-1"); err != nil || res.State != store.StatePending {
+		t.Errorf("Status = %+v, %v; want %s", res, err, store.StatePending)
 	}
 }
 
-// TestGetHappy verifies Get returns the full spawn row for a known id.
-func TestGetHappy(t *testing.T) {
+// TestClientVerbsDelegate: each Client verb reaches its implementation, shown
+// by one outcome that needs no tmux call, and errors.Is still matches the
+// sentinel the implementation returns.
+func TestClientVerbsDelegate(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClientWithRows(t, func(dbPath string) {
-		insertRow(t, dbPath, "id-get-1", "cd-get-1", store.StatePending)
+	empty, _ := newTestClient(t)
+	rows, _ := newTestClientWithRows(t, func(dbPath string) {
+		insertRow(t, dbPath, "id-waiting", "cd-waiting", store.StateWaiting)
+		insertRow(t, dbPath, "id-ended", "cd-ended", store.StateEnded)
+		insertRow(t, dbPath, "id-perm", "cd-perm", store.StateCheckPermission)
 	})
-	row, err := c.Get("id-get-1")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	ctx := context.Background()
+	// unless returns err, or a description of the result when ok is false.
+	unless := func(ok bool, err error, format string, args ...any) error {
+		if err == nil && !ok {
+			return fmt.Errorf(format, args...)
+		}
+		return err
 	}
-	if row.ClaudeInstanceID != "id-get-1" {
-		t.Errorf("ClaudeInstanceID = %q; want id-get-1", row.ClaudeInstanceID)
+	cases := []struct {
+		name string
+		call func() error
+		want error
+	}{
+		{"Version", func() error { _, err := empty.Version(); return err }, nil},
+		{"Spawn with no cwd", func() error { _, err := empty.Spawn(api.SpawnParams{}); return err }, spawn.ErrCwdMissing},
+		{"Get", func() error {
+			r, err := rows.Get("id-waiting")
+			return unless(r.ClaudeInstanceID == "id-waiting", err, "Get = %+v", r)
+		}, nil},
+		{"List on an empty store", func() error {
+			r, err := empty.List(api.ListParams{})
+			return unless(r.Spawns != nil && len(r.Spawns) == 0, err, "Spawns = %#v; want a non-nil []", r.Spawns)
+		}, nil},
+		{"List with an invalid label", func() error { _, err := empty.List(api.ListParams{Labels: []string{"noequalssign"}}); return err },
+			api.ErrListInvalidLabel},
+		{"SendKeys to an unknown id", func() error { _, err := empty.SendKeys(api.SendKeysParams{ClaudeInstanceID: "absent"}); return err },
+			store.ErrSpawnNotFound},
+		{"ReadPane of an unknown id", func() error { _, err := empty.ReadPane(api.ReadPaneParams{ClaudeInstanceID: "absent"}); return err },
+			store.ErrSpawnNotFound},
+		{"Pause of an ended row", func() error { _, err := rows.Pause(ctx, api.PauseParams{ClaudeInstanceID: "id-ended"}); return err }, nil},
+		{"Decide on a relay-off row", func() error {
+			_, err := rows.Decide(api.DecideParams{ClaudeInstanceID: "id-perm", RequestToken: "00000000-0000-0000-0000-000000000001", Decision: "allow"})
+			return err
+		}, api.ErrRelayModeOff},
+		{"Resume of a live row", func() error { _, err := rows.Resume(api.ResumeParams{ClaudeInstanceID: "id-waiting"}); return err },
+			api.ErrSpawnNotResumable},
+		{"FindMissing on an empty store", func() error {
+			r, err := empty.FindMissing(ctx)
+			return unless(r.Count == 0, err, "Count = %d", r.Count)
+		}, nil},
+		{"Expire with the default window on an empty store", func() error {
+			r, err := empty.Expire(nil)
+			ok := r.Count == 0 && r.Kept == 0 && r.IDs != nil && len(r.IDs) == 0 && r.KeptIDs != nil && len(r.KeptIDs) == 0
+			return unless(ok, err, "Expire = %#v; want nothing removed or kept, both lists non-nil []", r)
+		}, nil},
+		{"Delete of no ids", func() error {
+			r, err := adminapi.Delete(empty, []string{})
+			return unless(r.Results != nil && len(r.Results) == 0, err, "Results = %#v; want a non-nil empty map", r.Results)
+		}, nil},
+		{"MakeTemplate", func() error {
+			r, err := empty.MakeTemplate(api.MakeTemplateParams{Name: "meth-test-tmpl", CWD: "/tmp"})
+			if err == nil {
+				_, err = os.Stat(r.Path)
+			}
+			return err
+		}, nil},
 	}
-}
-
-// TestListEmptyStoreJSONStability verifies the JSON-stability invariant:
-// List against an empty store returns a non-nil Spawns slice (encodes as []
-// not null). Library callers and jq pipelines depend on this.
-func TestListEmptyStoreJSONStability(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	res, err := c.List(api.ListParams{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if res.Spawns == nil {
-		t.Fatal("Spawns is nil; want non-nil empty slice (JSON-stability invariant)")
-	}
-	if len(res.Spawns) != 0 {
-		t.Errorf("len(Spawns) = %d; want 0", len(res.Spawns))
-	}
-}
-
-// TestSendKeysDelegation proves SendKeys delegates to internal/api. An unknown
-// id causes internal/api.SendKeys to return store.ErrSpawnNotFound from the
-// store lookup — no tmux call is needed to exercise the delegation path.
-func TestSendKeysDelegation(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	_, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: "absent"})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("SendKeys(absent id): got %v; want store.ErrSpawnNotFound", err)
-	}
-}
-
-// TestReadPaneDelegation proves ReadPane delegates to internal/api. An unknown
-// id causes internal/api.ReadPane to return store.ErrSpawnNotFound before any
-// tmux capture is attempted.
-func TestReadPaneDelegation(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	_, err := c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("ReadPane(absent id): got %v; want store.ErrSpawnNotFound", err)
+	for _, tc := range cases {
+		if err := tc.call(); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v; want %v", tc.name, err, tc.want)
+		}
 	}
 }
 
@@ -284,149 +216,10 @@ func TestKillEndedRowHappy(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{State: state})
 			c, _ := e.client(t)
-			res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
-			if err != nil {
-				t.Fatalf("Kill(%s): %v", state, err)
-			}
-			if res.KillSent {
-				t.Errorf("Kill(%s).KillSent = true; want false", state)
+			if res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID}); err != nil || res.KillSent {
+				t.Fatalf("Kill(%s) = %+v, %v; want kill_sent false", state, res, err)
 			}
 			e.assertKillCalls(t)
 		})
-	}
-}
-
-// TestPauseEndedRowHappy verifies Pause on an already-ended row is a no-op
-// success. The desired post-condition is met before the /exit send-keys path
-// is reached, so no tmux call is made.
-func TestPauseEndedRowHappy(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClientWithRows(t, func(dbPath string) {
-		insertRow(t, dbPath, "id-p-ended", "cd-p-ended", store.StateEnded)
-	})
-	_, err := c.Pause(context.Background(), api.PauseParams{ClaudeInstanceID: "id-p-ended"})
-	if err != nil {
-		t.Fatalf("Pause(ended): %v", err)
-	}
-}
-
-// TestDecideDelegation proves Decide delegates to internal/api. A spawn with
-// relay_mode="off" causes internal/api.Decide to return ErrRelayModeOff after
-// the store lookup, exercising the delegation chain without needing a live
-// permission-request row.
-func TestDecideDelegation(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClientWithRows(t, func(dbPath string) {
-		// insertRow uses relay_mode="off" by default.
-		insertRow(t, dbPath, "id-dec-1", "cd-dec-1", store.StateCheckPermission)
-	})
-	_, err := c.Decide(api.DecideParams{
-		ClaudeInstanceID: "id-dec-1",
-		RequestToken:     "00000000-0000-0000-0000-000000000001",
-		Decision:         "allow",
-	})
-	if !errors.Is(err, api.ErrRelayModeOff) {
-		t.Fatalf("Decide(relay_mode=off): got %v; want api.ErrRelayModeOff", err)
-	}
-}
-
-// TestResumeDelegation proves Resume delegates to internal/api. A spawn in a
-// live state (waiting) causes internal/api.Resume to return ErrSpawnNotResumable
-// before any JSONL or tmux check, exercising the delegation chain cleanly.
-func TestResumeDelegation(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClientWithRows(t, func(dbPath string) {
-		insertRow(t, dbPath, "id-res-1", "cd-res-1", store.StateWaiting)
-	})
-	_, err := c.Resume(api.ResumeParams{ClaudeInstanceID: "id-res-1"})
-	if !errors.Is(err, api.ErrSpawnNotResumable) {
-		t.Fatalf("Resume(waiting): got %v; want api.ErrSpawnNotResumable", err)
-	}
-}
-
-// TestFindMissingEmptyStoreHappy verifies FindMissing against an empty store
-// returns no error and Count=0 (fast no-op path: no live IDs to reconcile).
-func TestFindMissingEmptyStoreHappy(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	res, err := c.FindMissing(context.Background())
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	if res.Count != 0 {
-		t.Errorf("Count = %d; want 0 (empty store)", res.Count)
-	}
-}
-
-// TestExpireNilOlderThanHappy verifies Expire with a nil olderThan (use the
-// config-default retention window) against an empty store returns no error,
-// removes and keeps nothing, and returns both id lists non-nil and empty.
-func TestExpireNilOlderThanHappy(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	res, err := c.Expire(nil)
-	if err != nil {
-		t.Fatalf("Expire(nil): %v", err)
-	}
-	if res.Count != 0 || res.Kept != 0 {
-		t.Errorf("Count = %d, Kept = %d; want 0 and 0 (empty store)", res.Count, res.Kept)
-	}
-	if res.IDs == nil || len(res.IDs) != 0 {
-		t.Errorf("IDs = %#v; want a non-nil empty slice", res.IDs)
-	}
-	if res.KeptIDs == nil || len(res.KeptIDs) != 0 {
-		t.Errorf("KeptIDs = %#v; want a non-nil empty slice", res.KeptIDs)
-	}
-}
-
-// TestDeleteEmptySliceHappy verifies Delete with an empty id slice returns no
-// error and a non-nil empty map. This is the degenerate-input defence.
-func TestDeleteEmptySliceHappy(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	res, err := adminapi.Delete(c, []string{})
-	if err != nil {
-		t.Fatalf("Delete([]): %v", err)
-	}
-	if res.Results == nil {
-		t.Fatalf("Results is nil; want empty non-nil map")
-	}
-	if len(res.Results) != 0 {
-		t.Errorf("len(Results) = %d; want 0", len(res.Results))
-	}
-}
-
-// TestMakeTemplateHappy verifies MakeTemplate writes a valid template file and
-// returns the absolute path. HOME is set to the test's temp dir so the
-// templates directory is isolated.
-func TestMakeTemplateHappy(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	res, err := c.MakeTemplate(api.MakeTemplateParams{Name: "meth-test-tmpl", CWD: "/tmp"})
-	if err != nil {
-		t.Fatalf("MakeTemplate: %v", err)
-	}
-	if res.Path == "" {
-		t.Fatal("MakeTemplate returned empty Path")
-	}
-	if _, statErr := os.Stat(res.Path); statErr != nil {
-		t.Errorf("template file %q not found after MakeTemplate: %v", res.Path, statErr)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Part C — errors.Is chain preserved across the facade
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestListFacadePreservesErrListInvalidLabel proves the pkg/api delegation
-// layer does not break the errors.Is chain: a label string without an "="
-// separator triggers api.ErrListInvalidLabel inside internal/api.List, and
-// that sentinel is still matchable via errors.Is on the returned error.
-func TestListFacadePreservesErrListInvalidLabel(t *testing.T) {
-	// Serial: it sets HOME with t.Setenv.
-	c, _ := newTestClient(t)
-	_, err := c.List(api.ListParams{Labels: []string{"noequalssign"}})
-	if !errors.Is(err, api.ErrListInvalidLabel) {
-		t.Fatalf("List(invalid label): got %v; want errors.Is match for api.ErrListInvalidLabel", err)
 	}
 }

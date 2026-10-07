@@ -1,9 +1,8 @@
 package api_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,260 +13,84 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// TestGetPermissionOpenRow pins SR-9.2 case 1: an open (undecided)
-// permission_requests row surfaces all eight result fields, with the three
-// nullable fields (Decision, DecisionReason, DecidedAt) carrying nil
-// pointers that marshal to literal JSON null. tool_input passes through
-// byte-identical to the raw JSON seed.
-func TestGetPermissionOpenRow(t *testing.T) {
+// TestGetPermission pins SR-9.2 on a row by token: an open row with tool_input
+// byte for byte (SR-7.4) and decision, decision_reason and decided_at null; an
+// allow row with no reason (SR-1.3); a deny row per canonical reason; decided_at
+// an RFC3339 string.
+func TestGetPermission(t *testing.T) {
 	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
-	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0)
-
-	got, err := api.GetPermission(s, api.GetPermissionParams{
-		RequestToken: storefix.TestRequestTokenA,
-	})
-	if err != nil {
-		t.Fatalf("GetPermission: %v", err)
-	}
-	if got.RequestToken != storefix.TestRequestTokenA {
-		t.Errorf("RequestToken = %q; want %q", got.RequestToken, storefix.TestRequestTokenA)
-	}
-	if got.RequestID == 0 {
-		t.Errorf("RequestID = 0; want non-zero autoincrement id")
-	}
-	if got.ToolName != "Read" {
-		t.Errorf("ToolName = %q; want Read", got.ToolName)
-	}
-	if got.ToolInput != rawInput {
-		t.Errorf("ToolInput = %q; want %q (raw JSON, no re-encode)", got.ToolInput, rawInput)
-	}
-	if got.RequestedAt.IsZero() {
-		t.Errorf("RequestedAt is zero; want populated created_at")
-	}
-	if got.Decision != nil {
-		t.Errorf("Decision = %v; want nil pointer for open row", *got.Decision)
-	}
-	if got.DecisionReason != nil {
-		t.Errorf("DecisionReason = %v; want nil pointer for open row", *got.DecisionReason)
-	}
-	if got.DecidedAt != nil {
-		t.Errorf("DecidedAt = %v; want nil pointer for open row", *got.DecidedAt)
-	}
-
-	// JSON shape: nullable fields must marshal to literal `null`, not be absent.
-	out, err := json.Marshal(got)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	for _, want := range [][]byte{
-		[]byte(`"decision":null`),
-		[]byte(`"decision_reason":null`),
-		[]byte(`"decided_at":null`),
-	} {
-		if !bytes.Contains(out, want) {
-			t.Errorf("JSON missing %q; got %s", want, out)
-		}
-	}
-}
-
-// TestGetPermissionClosedAllow pins SR-9.2 case 2: an allow row carries
-// a non-nil Decision pointer ("allow"), a nil DecisionReason pointer
-// (SR-1.3 allow rows carry no reason annotation), and a non-nil
-// DecidedAt pointer parseable as RFC3339.
-func TestGetPermissionClosedAllow(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "", "")
-	if err != nil {
-		t.Fatalf("DecidePermissionRequest: %v", err)
-	}
-	if !updated {
-		t.Fatalf("DecidePermissionRequest reported updated=false; want true")
-	}
-
-	got, err := api.GetPermission(s, api.GetPermissionParams{
-		RequestToken: storefix.TestRequestTokenA,
-	})
-	if err != nil {
-		t.Fatalf("GetPermission: %v", err)
-	}
-	if got.Decision == nil || *got.Decision != "allow" {
-		t.Errorf("Decision = %v; want pointer to \"allow\"", got.Decision)
-	}
-	if got.DecisionReason != nil {
-		t.Errorf("DecisionReason = %v; want nil for allow row (SR-1.3)", *got.DecisionReason)
-	}
-	if got.DecidedAt == nil {
-		t.Fatal("DecidedAt is nil; want non-nil for decided row")
-	}
-	// The DecidedAt time round-trips through RFC3339 — the API layer
-	// stores it as a *time.Time, so json.Marshal emits RFC3339.
-	raw, err := json.Marshal(got.DecidedAt)
-	if err != nil {
-		t.Fatalf("json.Marshal(DecidedAt): %v", err)
-	}
-	var ts string
-	if err := json.Unmarshal(raw, &ts); err != nil {
-		t.Fatalf("DecidedAt JSON not a string: %v (raw=%s)", err, raw)
-	}
-	if _, err := time.Parse(time.RFC3339, ts); err != nil {
-		t.Errorf("DecidedAt %q not RFC3339-parseable: %v", ts, err)
-	}
-
-	// JSON shape: decision_reason MUST still appear (as null), never omitted.
-	out, _ := json.Marshal(got)
-	if !bytes.Contains(out, []byte(`"decision_reason":null`)) {
-		t.Errorf("allow row JSON missing decision_reason:null; got %s", out)
-	}
-}
-
-// TestGetPermissionClosedDeny is table-driven across the three canonical
-// decision_reason values per SR-1.3. Each variant pins decision="deny" and
-// the exact reason string surfacing through the *string pointer.
-func TestGetPermissionClosedDeny(t *testing.T) {
-	t.Parallel()
+	const input = `{ "command" : "ls" , "extra":"x" }` // non-canonical: any re-encode changes it
 	cases := []struct {
-		name   string
-		reason string
+		name, decision, reason string
+		wantJSON               []string
 	}{
-		{"operator", store.DecisionReasonOperator},
-		{"timeout", store.DecisionReasonTimeout},
-		{"find_missing", store.DecisionReasonFindMissing},
+		{name: "open", wantJSON: []string{`"decision":null`, `"decision_reason":null`, `"decided_at":null`}},
+		{name: "allow", decision: "allow", wantJSON: []string{`"decision":"allow"`, `"decision_reason":null`, `"decided_at":"`}},
+		{name: "deny operator", decision: "deny", reason: store.DecisionReasonOperator},
+		{name: "deny timeout", decision: "deny", reason: store.DecisionReasonTimeout},
+		{name: "deny find_missing", decision: "deny", reason: store.DecisionReasonFindMissing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := apitest.SeedDecideFixture(t, "on")
-			apitest.SeedPermissionRow(t, s, "id-d-1")
-			updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "deny", tc.reason, "")
-			if err != nil {
-				t.Fatalf("DecidePermissionRequest: %v", err)
+			openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenA, "Bash", input, 0)
+			if tc.decision != "" {
+				if ok, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, tc.decision, tc.reason, ""); err != nil || !ok {
+					t.Fatalf("DecidePermissionRequest = %v, %v", ok, err)
+				}
 			}
-			if !updated {
-				t.Fatalf("DecidePermissionRequest updated=false; want true")
-			}
-
-			got, err := api.GetPermission(s, api.GetPermissionParams{
-				RequestToken: storefix.TestRequestTokenA,
-			})
+			got, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: storefix.TestRequestTokenA})
 			if err != nil {
 				t.Fatalf("GetPermission: %v", err)
 			}
-			if got.Decision == nil || *got.Decision != "deny" {
-				t.Errorf("Decision = %v; want pointer to \"deny\"", got.Decision)
+			if got.RequestToken != storefix.TestRequestTokenA || got.RequestID == 0 || got.ToolName != "Bash" ||
+				got.ToolInput != input || got.RequestedAt.IsZero() {
+				t.Errorf("row = %+v; want token A, a request id, Bash, tool_input %q byte for byte, a requested_at", got, input)
 			}
-			if got.DecisionReason == nil || *got.DecisionReason != tc.reason {
-				t.Errorf("DecisionReason = %v; want pointer to %q", got.DecisionReason, tc.reason)
+			if deref(got.Decision) != tc.decision || deref(got.DecisionReason) != tc.reason ||
+				(got.DecidedAt == nil) != (tc.decision == "") {
+				t.Errorf("decision %v, reason %v, decided_at %v; want %q, %q, set %t",
+					got.Decision, got.DecisionReason, got.DecidedAt, tc.decision, tc.reason, tc.decision != "")
 			}
-			if got.DecidedAt == nil {
-				t.Errorf("DecidedAt is nil; want non-nil for decided row")
+			if got.DecidedAt != nil {
+				if _, err := time.Parse(time.RFC3339, strings.Trim(jsonOf(t, got.DecidedAt), `"`)); err != nil {
+					t.Errorf("decided_at %s: %v; want RFC3339", jsonOf(t, got.DecidedAt), err)
+				}
+			}
+			for _, w := range tc.wantJSON {
+				if out := jsonOf(t, got); !strings.Contains(out, w) {
+					t.Errorf("JSON %s; want %s", out, w)
+				}
 			}
 		})
 	}
 }
 
-// TestGetPermissionMissingRow pins SR-9.2 case 6: an unknown request_token
-// surfaces ErrPermissionRequestNotFound (via the store sentinel re-exported
-// through pkg/api). errors.Is must match against the api.* name. An unrelated
-// open row in the same store must be unaffected — the lookup is token-scoped,
-// no other rows should be touched.
-func TestGetPermissionMissingRow(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	// Unrelated open row — separate token, must survive untouched.
-	apitest.SeedPermissionRow(t, s, "id-d-1") // uses TestRequestTokenA
-
-	// A valid UUIDv4 shape but never written.
-	const missingToken = "deadbeef-dead-4dea-adea-deadbeefdead"
-	_, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: missingToken})
-	if !errors.Is(err, api.ErrPermissionRequestNotFound) {
-		t.Fatalf("err = %v; want ErrPermissionRequestNotFound (via api.* alias)", err)
+// deref is *p, or "" for nil.
+func deref(p *string) string {
+	if p == nil {
+		return ""
 	}
-
-	// Cross-check: the unrelated open row is still readable and undecided.
-	survivor, err := api.GetPermission(s, api.GetPermissionParams{
-		RequestToken: storefix.TestRequestTokenA,
-	})
-	if err != nil {
-		t.Fatalf("unrelated open row should still be readable: %v", err)
-	}
-	if survivor.Decision != nil {
-		t.Errorf("unrelated row Decision = %v; want nil (a miss on another token must not mutate state)", *survivor.Decision)
-	}
+	return *p
 }
 
-// TestGetPermissionToolInputBytePassthrough pins the byte-identical
-// ToolInput contract (SR-7.4): the verb stores the seeded JSON string
-// verbatim and never re-encodes, re-orders keys, or normalizes whitespace.
-// Seeded with deliberately non-canonical key ordering and embedded
-// whitespace to flush any rewrite that round-trips through json.Marshal.
-func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
-	t.Parallel()
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	// Non-canonical whitespace + key order. Any JSON round-trip would
-	// produce {"command":"ls","extra":"x"} with no spaces.
-	const noncanonical = `{ "command" : "ls" , "extra":"x" }`
-	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical, 0)
-
-	got, err := api.GetPermission(s, api.GetPermissionParams{
-		RequestToken: storefix.TestRequestTokenA,
-	})
-	if err != nil {
-		t.Fatalf("GetPermission: %v", err)
-	}
-	if got.ToolInput != noncanonical {
-		t.Errorf("ToolInput = %q; want byte-identical %q (no re-encode, no whitespace normalization)",
-			got.ToolInput, noncanonical)
-	}
-}
-
-// TestGetPermissionEvictedRow pins SR-11.6 and Epic AC #11: after cap-driven
-// eviction removes a closed row, calling GetPermission for the evicted token
-// must surface ErrPermissionRequestNotFound — the same sentinel returned for
-// a token that never existed. There is no separate "evicted" signal.
-//
-// Setup: 5 closed rows are seeded with deterministic decided_at values;
-// tokens[0] is the oldest (baseTime+0*step) and is the eviction target.
-// A single UpsertOpenPermissionRequest call with cap=5 pushes the total to 6
-// and triggers eviction of that oldest closed row. The newly inserted open
-// row (TestRequestTokenB) must remain readable after eviction.
-func TestGetPermissionEvictedRow(t *testing.T) {
+// TestGetPermissionNotFound pins SR-9.2 case 6 and SR-11.6: a token never
+// written and one evicted by the cap both return ErrPermissionRequestNotFound,
+// and the open row beside them is still readable and undecided.
+func TestGetPermissionNotFound(t *testing.T) {
 	t.Parallel()
 	s, dbPath := apitest.SeedDecideFixture(t, "on")
-
-	// Cap sourced from a config.Relay fixture — not a literal (per ticket AC).
-	relayConf := config.Relay{PermissionRequestCap: 5}
-	const instanceID = "id-d-1"
-
-	// Seed 5 closed rows. tokens[0] has the oldest decided_at
-	// (baseTime + 0*step) and will be the first evicted when cap is exceeded.
-	baseTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	tokens := storefix.SeedClosedPermissionRequests(t, s, dbPath, instanceID, 5, baseTime, time.Minute)
-	evictedToken := tokens[0]
-
-	// Insert one open row with cap=5. This is the 6th row in the store,
-	// triggering in-transaction eviction of the oldest closed row (evictedToken).
-	// TestRequestTokenB is the survivor we cross-check below.
-	openAgentRequest(t, s, instanceID, storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`, relayConf.PermissionRequestCap)
-
-	// The evicted token must surface ErrPermissionRequestNotFound — wire-
-	// indistinguishable from a token that was never written.
-	_, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: evictedToken})
-	if !errors.Is(err, api.ErrPermissionRequestNotFound) {
-		t.Fatalf("evicted token: err = %v; want ErrPermissionRequestNotFound", err)
+	tokens := storefix.SeedClosedPermissionRequests(t, s, dbPath, "id-d-1", 5,
+		time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Minute)
+	// The sixth row, under a cap of 5, evicts the oldest closed one, tokens[0].
+	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`,
+		config.Relay{PermissionRequestCap: 5}.PermissionRequestCap)
+	for _, tok := range []string{"deadbeef-dead-4dea-adea-deadbeefdead", tokens[0]} {
+		if _, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: tok}); !errors.Is(err, api.ErrPermissionRequestNotFound) {
+			t.Errorf("GetPermission(%s) err = %v; want ErrPermissionRequestNotFound", tok, err)
+		}
 	}
-
-	// Cross-check: the open row inserted by the evicting Upsert call is still
-	// readable and carries no decision (no collateral mutation).
-	survivor, err := api.GetPermission(s, api.GetPermissionParams{
-		RequestToken: storefix.TestRequestTokenB,
-	})
-	if err != nil {
-		t.Fatalf("survivor open row should still be readable after eviction: %v", err)
-	}
-	if survivor.Decision != nil {
-		t.Errorf("survivor row Decision = %v; want nil (eviction must not mutate non-evicted rows)", *survivor.Decision)
+	if got, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: storefix.TestRequestTokenB}); err != nil || got.Decision != nil {
+		t.Errorf("open row = %+v, %v; want readable and undecided", got, err)
 	}
 }

@@ -2,10 +2,10 @@ package api_test
 
 // get_tmux_socket_test.go covers tmux_socket (SR-3.3, SR-16.1, AC-LKP-22):
 // get shows the row's recorded socket in any state and omits the key (never
-// null or "") on a row from before this release; status and list never carry it.
+// null or "") on a row from before this release; status and list never carry
+// it. The socket a spawn records is spawn_launch_test.go's.
 
 import (
-	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,21 +55,6 @@ func newSocketClient(t *testing.T, shapes []socketShape) *api.Client {
 	return c
 }
 
-// socketJSON returns v's JSON tmux_socket value and whether the key is present.
-func socketJSON(t *testing.T, v any) (json.RawMessage, bool) {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
-	}
-	raw, ok := m["tmux_socket"]
-	return raw, ok
-}
-
 // assertGetSocket checks Get's typed field and JSON key against want ("" =
 // the key absent).
 func assertGetSocket(t *testing.T, c *api.Client, id, want string) {
@@ -81,7 +66,7 @@ func assertGetSocket(t *testing.T, c *api.Client, id, want string) {
 	if r.TmuxSocket != want {
 		t.Errorf("TmuxSocket = %q; want %q", r.TmuxSocket, want)
 	}
-	raw, ok := socketJSON(t, r)
+	raw, ok := jsonField(t, r, "tmux_socket")
 	switch {
 	case want == "" && ok:
 		t.Errorf("tmux_socket = %s; want the key absent", raw)
@@ -118,7 +103,7 @@ func TestTmuxSocketStatusAndListOmit(t *testing.T) {
 		t.Errorf("List rows = %d; want %d", len(lr.Spawns), len(shapes))
 	}
 	for _, r := range lr.Spawns {
-		if raw, ok := socketJSON(t, r); ok {
+		if raw, ok := jsonField(t, r, "tmux_socket"); ok {
 			t.Errorf("list row %s tmux_socket = %s; want the key absent", r.ClaudeInstanceID, raw)
 		}
 	}
@@ -128,21 +113,9 @@ func TestTmuxSocketStatusAndListOmit(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Status(%s): %v", s.id(), err)
 			}
-			if raw, ok := socketJSON(t, r); ok {
+			if raw, ok := jsonField(t, r, "tmux_socket"); ok {
 				t.Errorf("status tmux_socket = %s; want the key absent", raw)
 			}
 		})
 	}
-}
-
-// TestTmuxSocketAfterSpawn: after a spawn, get shows the socket the launch
-// resolved (TMUX unset, so the default socket under TMUX_TMPDIR).
-func TestTmuxSocketAfterSpawn(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	env := newSpawnEnv(t)
-	res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir()})
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
-	assertGetSocket(t, env.c, res.ClaudeInstanceID, env.socket)
 }

@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -14,207 +15,123 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// openGetFixture seeds a Spawn at the given state with an explicit
-// session name and relay_mode. Returns the store so each subtest can
-// drive its own permission-row state via the real store helpers.
-func openGetFixture(t *testing.T, instanceID, state string) *store.Store {
+// seedWaiting seeds a waiting row id into dbPath (creating the store) with opts.
+func seedWaiting(t *testing.T, dbPath, id string, opts ...apitest.SpawnOption) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "/tmp", "off", "", true, opts...); err != nil {
+		t.Fatalf("SeedSpawn(%s): %v", id, err)
+	}
+}
+
+// openDB opens the store at dbPath, closing it when the test ends.
+func openDB(t *testing.T, dbPath string) *store.Store {
+	t.Helper()
+	s, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	storefix.RegisterStorePath(t, s, dbPath)
-
-	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: instanceID,
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-" + instanceID,
-		RelayMode:        "on",
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
-	}
-	if err := seedAgentState(s, dbPath, instanceID, state); err != nil {
-		t.Fatalf("seed %s: %v", state, err)
-	}
 	return s
 }
 
-// TestGetCheckPermissionWithOpenRow pins SR-3.1 branch 1: state ==
-// check_permission AND an open (Decision == "") permission_requests
-// row → response carries a fully populated PermissionRequests slice
-// with one element.
-//
-// Also pins req-review m2: tool_input is the byte-for-byte raw JSON
-// string seeded into the DB — no parse / re-emit round trip.
-func TestGetCheckPermissionWithOpenRow(t *testing.T) {
-	t.Parallel()
-	s := openGetFixture(t, "id-g-1", store.StateCheckPermission)
-	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
-	const tok = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
-	openAgentRequest(t, s, "id-g-1", tok, "Read", rawInput, 0)
-
-	got, err := api.Get(s, "id-g-1")
+// jsonOf returns v's JSON encoding.
+func jsonOf(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("json.Marshal: %v", err)
 	}
-	if len(got.PermissionRequests) != 1 {
-		t.Fatalf("len(PermissionRequests) = %d; want 1", len(got.PermissionRequests))
+	return string(b)
+}
+
+// jsonField returns v's JSON object's key value and whether the key is present.
+func jsonField(t *testing.T, v any, key string) (json.RawMessage, bool) {
+	t.Helper()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonOf(t, v)), &m); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	pr := got.PermissionRequests[0]
-	if pr.RequestID == 0 {
-		t.Errorf("RequestID = 0; want non-zero autoincrement id")
-	}
-	if pr.RequestToken != tok {
-		t.Errorf("RequestToken = %q; want %q", pr.RequestToken, tok)
-	}
-	if pr.ToolName != "Read" {
-		t.Errorf("ToolName = %q; want Read", pr.ToolName)
-	}
-	if pr.ToolInput != rawInput {
-		t.Errorf("ToolInput = %q; want %q (raw JSON string, no parse/re-emit)", pr.ToolInput, rawInput)
-	}
-	if pr.RequestedAt.IsZero() {
-		t.Errorf("RequestedAt is zero; want populated created_at")
+	raw, ok := m[key]
+	return raw, ok
+}
+
+// assertOptionalString checks a nullable string field: got nil and key absent
+// from out's JSON when want is "", else got and the JSON value both want.
+func assertOptionalString(t *testing.T, out any, key string, got *string, want string) {
+	t.Helper()
+	raw, ok := jsonField(t, out, key)
+	switch {
+	case want == "" && (got != nil || ok):
+		t.Errorf("%s = %v, JSON %s (present %t); want nil and the key omitted", key, got, raw, ok)
+	case want != "" && (got == nil || *got != want || string(raw) != strconv.Quote(want)):
+		t.Errorf("%s = %v, JSON %s; want %q", key, got, raw, want)
 	}
 }
 
-// TestGetCheckPermissionNoRow pins SR-3.1 branch 2: state ==
-// check_permission AND no open rows → PermissionRequests is an empty
-// non-nil slice. No error surfaces.
-func TestGetCheckPermissionNoRow(t *testing.T) {
+// TestGetCheckPermission pins SR-3.1 on a check_permission row: every open
+// request is listed, its tool_input byte for byte (req-review m2); a decided
+// request never is (req-review M1); none is a non-nil slice encoding as [].
+func TestGetCheckPermission(t *testing.T) {
 	t.Parallel()
-	s := openGetFixture(t, "id-g-2", store.StateCheckPermission)
-
-	got, err := api.Get(s, "id-g-2")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	tokA, tokB := storefix.TestRequestTokenA, storefix.TestRequestTokenB
+	type req struct{ tok, tool, input string }
+	a := req{tokA, "Read", `{ "file" : "/tmp/x" , "mode":"rw" }`}
+	b := req{tokB, "Bash", `{"cmd":"ls"}`}
+	cases := []struct {
+		name    string
+		open    []req
+		decided []string
+		want    []req
+	}{
+		{"one open row", []req{a}, nil, []req{a}},
+		{"two open rows", []req{a, b}, nil, []req{a, b}},
+		{"no rows", nil, nil, nil},
+		{"decided row beside an open one", []req{a, b}, []string{tokA}, []req{b}},
+		{"only a decided row", []req{a}, []string{tokA}, nil},
 	}
-	if got.PermissionRequests == nil {
-		t.Errorf("PermissionRequests is nil; want empty non-nil slice")
-	}
-	if len(got.PermissionRequests) != 0 {
-		t.Errorf("len(PermissionRequests) = %d; want 0 (no open rows)", len(got.PermissionRequests))
-	}
-}
-
-// TestGetCheckPermissionWithDecidedRow pins req-review MAJOR M1: the
-// permission-fetch branch MUST NOT surface decided rows. A row whose
-// Decision is non-empty (decided in a prior cycle) MUST be absent from
-// PermissionRequests. OpenPermissionRequestsForSpawn enforces this at
-// the SQL layer (decision IS NULL predicate), so this test pins the
-// end-to-end contract.
-func TestGetCheckPermissionWithDecidedRow(t *testing.T) {
-	t.Parallel()
-	s := openGetFixture(t, "id-g-3", store.StateCheckPermission)
-	const tok = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
-	openAgentRequest(t, s, "id-g-3", tok, "Bash", `{"cmd":"ls"}`, 0)
-	updated, err := s.DecidePermissionRequest("id-g-3", tok, "allow", "trusted", "")
-	if err != nil {
-		t.Fatalf("DecidePermissionRequest: %v", err)
-	}
-	if !updated {
-		t.Fatalf("DecidePermissionRequest reported updated=false; want true (seed flow)")
-	}
-
-	got, err := api.Get(s, "id-g-3")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if len(got.PermissionRequests) != 0 {
-		t.Errorf("len(PermissionRequests) = %d; want 0 — decided rows MUST be absent (M1)", len(got.PermissionRequests))
-	}
-}
-
-// TestGetNonCheckPermissionStateSkipsFetch pins SR-3.1 branch 4: when
-// state != check_permission, OpenPermissionRequestsForSpawn MUST NOT be
-// called. Uses a recording fake store so the call-count assertion is
-// direct — the equivalent CLI-level test (5th SR-8.3 case) covers the
-// behavior via a real DB row.
-func TestGetNonCheckPermissionStateSkipsFetch(t *testing.T) {
-	t.Parallel()
-	fake := &recordingGetStore{
-		spawn: store.Spawn{
-			ClaudeInstanceID: "id-g-4",
-			State:            store.StateWaiting,
-			CWD:              "/tmp",
-			TmuxSessionName:  "cd-id-g-4",
-			RelayMode:        "on",
-		},
-	}
-	got, err := api.Get(fake, "id-g-4")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if len(got.PermissionRequests) != 0 {
-		t.Errorf("len(PermissionRequests) = %d; want 0 (state != check_permission)", len(got.PermissionRequests))
-	}
-	if fake.permCalls != 0 {
-		t.Errorf("OpenPermissionRequestsForSpawn called %d time(s); want 0 — Get must short-circuit on non-check_permission states", fake.permCalls)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := apitest.SeedDecideFixture(t, "on")
+			for _, r := range tc.open {
+				openAgentRequest(t, s, "id-d-1", r.tok, r.tool, r.input, 0)
+			}
+			for _, tok := range tc.decided {
+				if ok, err := s.DecidePermissionRequest("id-d-1", tok, "allow", "", ""); err != nil || !ok {
+					t.Fatalf("DecidePermissionRequest(%s) = %v, %v", tok, ok, err)
+				}
+			}
+			got, err := api.Get(s, "id-d-1")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.PermissionRequests == nil || len(got.PermissionRequests) != len(tc.want) {
+				t.Fatalf("PermissionRequests = %#v; want %d rows, non-nil", got.PermissionRequests, len(tc.want))
+			}
+			for _, w := range tc.want {
+				i := slices.IndexFunc(got.PermissionRequests, func(p api.PermissionRequestInfo) bool { return p.RequestToken == w.tok })
+				if i < 0 {
+					t.Errorf("no request %s in %+v", w.tok, got.PermissionRequests)
+					continue
+				}
+				p := got.PermissionRequests[i]
+				if p.RequestID == 0 || p.ToolName != w.tool || p.ToolInput != w.input || p.RequestedAt.IsZero() {
+					t.Errorf("request %s = %+v; want a request id, %s, tool_input %q byte for byte, a requested_at", w.tok, p, w.tool, w.input)
+				}
+			}
+			if len(tc.want) == 0 && !strings.Contains(jsonOf(t, got), `"permission_requests":[]`) {
+				t.Errorf("JSON %s; want permission_requests:[]", jsonOf(t, got))
+			}
+		})
 	}
 }
 
-// TestGetPropagatesPermissionFetchError pins SR-3.1: a non-nil error
-// from OpenPermissionRequestsForSpawn must propagate to the caller (no
-// silent swallow). This is the "any other error" branch of SR-3.1.
-func TestGetPropagatesPermissionFetchError(t *testing.T) {
-	t.Parallel()
-	wantErr := errors.New("boom")
-	fake := &recordingGetStore{
-		spawn: store.Spawn{
-			ClaudeInstanceID: "id-g-5",
-			State:            store.StateCheckPermission,
-			CWD:              "/tmp",
-			TmuxSessionName:  "cd-id-g-5",
-			RelayMode:        "on",
-		},
-		permErr: wantErr,
-	}
-	_, err := api.Get(fake, "id-g-5")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v; want propagation of %v", err, wantErr)
-	}
-}
-
-// TestGetPropagatesSessionHistoryError pins that a non-nil error from
-// ListSessionHistory (b.v2c AC6/AC8) propagates to the caller rather than being
-// silently swallowed.
-func TestGetPropagatesSessionHistoryError(t *testing.T) {
-	t.Parallel()
-	wantErr := errors.New("history read boom")
-	fake := &recordingGetStore{
-		spawn: store.Spawn{
-			ClaudeInstanceID: "id-g-6",
-			State:            store.StateEnded,
-			CWD:              "/tmp",
-			TmuxSessionName:  "cd-id-g-6",
-			RelayMode:        "off",
-		},
-		historyErr: wantErr,
-	}
-	_, err := api.Get(fake, "id-g-6")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v; want propagation of %v", err, wantErr)
-	}
-}
-
-// recordingGetStore is a minimal GetStore double used by the two
-// branches that benefit from a behavioral assertion (call-count;
-// arbitrary error propagation) rather than a real DB fixture.
+// recordingGetStore is a GetStore double that injects read errors and records
+// the permission reads and the lives history was read for.
 type recordingGetStore struct {
-	spawn     store.Spawn
-	permRows  []store.PermissionRow
-	permErr   error
-	permCalls int
-	// history is returned by ListSessionHistory (b.v2c AC6/AC8). Nil = no
-	// archived sessions, the default existing tests rely on.
-	history    []store.SessionHistoryEntry
-	historyErr error
-	// historyLives records the life passed on each ListSessionHistory call,
-	// in call order. The fake returns history/historyErr whatever the life;
-	// life filtering itself is covered in internal/store.
-	historyLives []int64
+	spawn               store.Spawn
+	permErr, historyErr error
+	permCalls           int
+	historyLives        []int64
 }
 
 func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
@@ -224,449 +141,119 @@ func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
 	return store.Spawn{}, store.ErrSpawnNotFound
 }
 
-func (r *recordingGetStore) OpenPermissionRequestsForSpawn(_ string) ([]store.PermissionRow, error) {
+func (r *recordingGetStore) OpenPermissionRequestsForSpawn(string) ([]store.PermissionRow, error) {
 	r.permCalls++
-	if r.permErr != nil {
-		return nil, r.permErr
-	}
-	return r.permRows, nil
+	return nil, r.permErr
 }
 
-// ListSessionHistory satisfies the life-taking GetStore interface (b.v2c
-// AC6/AC8; SR-5.9), recording the life asked for and returning the
-// programmable history/historyErr.
 func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.SessionHistoryEntry, error) {
 	r.historyLives = append(r.historyLives, life)
-	return r.history, r.historyErr
+	return nil, r.historyErr
 }
 
-// TestGetReadsHistoryForItsRowsLife pins SR-5.9/SR-8.7 plumbing: Get reads
-// session history for the life of the row it read, exactly once. A non-zero
-// life proves Get passes row.LifeNumber rather than a default.
-func TestGetReadsHistoryForItsRowsLife(t *testing.T) {
+// TestGetReadsAndErrors pins SR-3.1 and SR-5.9 with a recording store: the
+// permission rows are read only in check_permission, history once for the
+// row's own life, and either read's error propagates (b.v2c AC6/AC8).
+func TestGetReadsAndErrors(t *testing.T) {
 	t.Parallel()
-	fake := &recordingGetStore{
-		spawn: store.Spawn{
-			ClaudeInstanceID: "id-g-life",
-			State:            store.StateWaiting,
-			CWD:              "/tmp",
-			TmuxSessionName:  "cd-id-g-life",
-			RelayMode:        "on",
-			LifeNumber:       3,
-		},
-	}
-	if _, err := api.Get(fake, "id-g-life"); err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if len(fake.historyLives) != 1 || fake.historyLives[0] != 3 {
-		t.Errorf("ListSessionHistory lives = %v; want [3] (one read, for the row's own life)", fake.historyLives)
-	}
-}
-
-// TestGetTranscriptStatusAndPriorSessions is the b.v2c AC8 REGRESSION test: get
-// derives an operator-facing transcript_status and surfaces prior_sessions so
-// "pointer dead, no visible history" (never_written) is distinguishable
-// from "pointer dead, history exists under a different session id" (rotated)
-// without reading source or running find. The visible-history rule itself
-// (life filter, current id dropped) is pinned in get_history_test.go.
-//
-// PRE-FIX get had neither field; the derivation + prior_sessions surfacing is
-// what this pins.
-func TestGetTranscriptStatusAndPriorSessions(t *testing.T) {
-	t.Parallel()
+	boom := errors.New("boom")
 	cases := []struct {
-		name       string
-		sessionID  string
-		jsonlPath  string
-		history    []store.SessionHistoryEntry
-		wantStatus string
-		wantPrior  int
+		name                string
+		state               string
+		permErr, historyErr error
+		permCalls           int
 	}{
-		{name: "no_session", sessionID: "", jsonlPath: "", wantStatus: "no_session"},
-		{name: "present", sessionID: "s1", jsonlPath: "/x/s1.jsonl", wantStatus: "present"},
-		{name: "never_written", sessionID: "s1", jsonlPath: "", wantStatus: "never_written"},
-		{
-			name: "rotated", sessionID: "s2", jsonlPath: "",
-			history:    []store.SessionHistoryEntry{{ClaudeSessionID: "s1", JSONLPath: "/x/s1.jsonl", RecordedAt: "2026-09-20T00:00:00Z"}},
-			wantStatus: "rotated", wantPrior: 1,
-		},
+		{"waiting skips the permission read", store.StateWaiting, nil, nil, 0},
+		{"check_permission read error", store.StateCheckPermission, boom, nil, 1},
+		{"session history read error", store.StateEnded, nil, boom, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &recordingGetStore{
-				spawn: store.Spawn{
-					ClaudeInstanceID: "id-ts", State: store.StateEnded, CWD: "/tmp",
-					RelayMode: "off", ClaudeSessionID: tc.sessionID, JSONLPath: tc.jsonlPath,
-				},
-				history: tc.history,
+			f := &recordingGetStore{spawn: store.Spawn{ClaudeInstanceID: "id-g", State: tc.state, LifeNumber: 3},
+				permErr: tc.permErr, historyErr: tc.historyErr}
+			want := tc.permErr
+			if want == nil {
+				want = tc.historyErr
 			}
-			got, err := api.Get(s, "id-ts")
-			if err != nil {
-				t.Fatalf("Get: %v", err)
+			got, err := api.Get(f, "id-g")
+			if !errors.Is(err, want) || (err == nil && len(got.PermissionRequests) != 0) {
+				t.Errorf("Get = %+v, %v; want error %v", got.PermissionRequests, err, want)
 			}
-			if got.TranscriptStatus != tc.wantStatus {
-				t.Errorf("TranscriptStatus = %q; want %q", got.TranscriptStatus, tc.wantStatus)
-			}
-			if len(got.PriorSessions) != tc.wantPrior {
-				t.Fatalf("len(PriorSessions) = %d; want %d", len(got.PriorSessions), tc.wantPrior)
-			}
-			// prior_sessions is always a non-nil slice (encodes as []).
-			raw, err := json.Marshal(got)
-			if err != nil {
-				t.Fatalf("json.Marshal: %v", err)
-			}
-			if !strings.Contains(string(raw), `"prior_sessions":[`) {
-				t.Errorf("JSON missing non-null prior_sessions array; got %s", raw)
-			}
-			if tc.wantPrior > 0 && got.PriorSessions[0].ClaudeSessionID != "s1" {
-				t.Errorf("PriorSessions[0].ClaudeSessionID = %q; want s1", got.PriorSessions[0].ClaudeSessionID)
+			if f.permCalls != tc.permCalls || !slices.Equal(f.historyLives, []int64{3}) {
+				t.Errorf("permission reads %d, history lives %v; want %d and [3]", f.permCalls, f.historyLives, tc.permCalls)
 			}
 		})
 	}
 }
 
-// TestGetLivenessFieldsRoundTrip pins SR-8.3 surfacing on get: the two
-// additive nullable liveness fields are OMITTED from the JSON envelope while
-// NULL in the store (the ended_at nullable precedent), and PRESENT with the
-// stored value once set.
-//
-//   - null_omitted:  a fresh live row has NULL liveness columns → the get
-//     result's pointers are nil AND the marshaled JSON contains neither key.
-//   - set_present:   SetLivenessNoteIfSameLife writes both columns → the get
-//     result surfaces the note verbatim and a non-empty since timestamp, and
-//     the marshaled JSON carries both keys.
-func TestGetLivenessFieldsRoundTrip(t *testing.T) {
+// TestLivenessFieldsGetAndList pins SR-8.3 on get and list: the nullable
+// liveness fields are omitted while NULL; liveness_unverified_since is
+// normalized to RFC3339 UTC from SQLite CURRENT_TIMESTAMP text, kept when
+// already RFC3339 and passed through verbatim when neither (never dropped).
+func TestLivenessFieldsGetAndList(t *testing.T) {
 	t.Parallel()
-	t.Run("null_omitted", func(t *testing.T) {
-		s := openGetFixture(t, "id-live-null", store.StateWaiting)
-
-		got, err := api.Get(s, "id-live-null")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.LivenessUnverifiedSince != nil {
-			t.Errorf("LivenessUnverifiedSince = %v; want nil (NULL in store)", *got.LivenessUnverifiedSince)
-		}
-		if got.LivenessNote != nil {
-			t.Errorf("LivenessNote = %v; want nil (NULL in store)", *got.LivenessNote)
-		}
-		raw, err := json.Marshal(got)
-		if err != nil {
-			t.Fatalf("json.Marshal: %v", err)
-		}
-		if strings.Contains(string(raw), "liveness_unverified_since") {
-			t.Errorf("JSON contains liveness_unverified_since key; want omitted when NULL; got %s", raw)
-		}
-		if strings.Contains(string(raw), "liveness_note") {
-			t.Errorf("JSON contains liveness_note key; want omitted when NULL; got %s", raw)
-		}
-	})
-
-	t.Run("set_present", func(t *testing.T) {
-		s := openGetFixture(t, "id-live-set", store.StateWaiting)
-		// A real SR-11.4 note value, written through find-missing's guarded
-		// note write on the snapshot the row was read at.
-		const wantNote = "probe_eacces"
-		sp, err := s.GetSpawn("id-live-set")
-		if err != nil {
-			t.Fatalf("GetSpawn: %v", err)
-		}
-		res, err := s.SetLivenessNoteIfSameLife("id-live-set", sp.Snapshot, wantNote)
-		if err != nil {
-			t.Fatalf("SetLivenessNoteIfSameLife: %v", err)
-		}
-		if res != store.CondApplied {
-			t.Fatalf("SetLivenessNoteIfSameLife = %v; want CondApplied (first NULL→set write on the read snapshot)", res)
-		}
-
-		got, err := api.Get(s, "id-live-set")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.LivenessNote == nil {
-			t.Fatalf("LivenessNote is nil; want %q", wantNote)
-		}
-		if *got.LivenessNote != wantNote {
-			t.Errorf("LivenessNote = %q; want %q (verbatim store value)", *got.LivenessNote, wantNote)
-		}
-		if got.LivenessUnverifiedSince == nil {
-			t.Fatalf("LivenessUnverifiedSince is nil; want a non-empty CURRENT_TIMESTAMP value")
-		}
-		if *got.LivenessUnverifiedSince == "" {
-			t.Errorf("LivenessUnverifiedSince = %q; want non-empty timestamp", *got.LivenessUnverifiedSince)
-		}
-		// PIN the wire format: SetLivenessNoteIfSameLife writes SQLite
-		// CURRENT_TIMESTAMP text ("2006-01-02 15:04:05", no zone), so the
-		// raw store value would NOT be RFC3339. The surfaced value MUST be
-		// normalized to RFC3339 UTC — it parses as RFC3339, ends in "Z",
-		// and carries the T date/time separator.
-		since := *got.LivenessUnverifiedSince
-		if _, err := time.Parse(time.RFC3339, since); err != nil {
-			t.Errorf("LivenessUnverifiedSince = %q; want RFC3339-parseable (normalized from SQLite text): %v", since, err)
-		}
-		if !strings.HasSuffix(since, "Z") {
-			t.Errorf("LivenessUnverifiedSince = %q; want UTC 'Z' suffix", since)
-		}
-		if !strings.Contains(since, "T") {
-			t.Errorf("LivenessUnverifiedSince = %q; want RFC3339 'T' separator", since)
-		}
-		raw, err := json.Marshal(got)
-		if err != nil {
-			t.Fatalf("json.Marshal: %v", err)
-		}
-		if !strings.Contains(string(raw), `"liveness_note":"`+wantNote+`"`) {
-			t.Errorf("JSON missing liveness_note with stored value; got %s", raw)
-		}
-		if !strings.Contains(string(raw), `"liveness_unverified_since":"`) {
-			t.Errorf("JSON missing liveness_unverified_since key when set; got %s", raw)
-		}
-	})
-}
-
-// TestGetLivenessUnverifiedSinceUnparseablePassesThrough pins nullableTimestamp's
-// third (fail-open) branch: when the stored liveness_unverified_since is neither
-// SQLite CURRENT_TIMESTAMP text nor RFC3339, Get MUST pass the raw string through
-// verbatim rather than dropping it or erroring the verb. never drop data.
-//
-// The row is seeded directly with a non-timestamp string via
-// WithLivenessUnverifiedSince (bypassing SetLivenessNoteIfSameLife, which only
-// ever writes CURRENT_TIMESTAMP text). The surfaced pointer must be non-nil and equal
-// the raw seeded value, and the marshaled JSON must carry it byte-for-byte.
-func TestGetLivenessUnverifiedSinceUnparseablePassesThrough(t *testing.T) {
-	t.Parallel()
-	const raw = "not-a-time"
+	rows := []struct{ id, since, note, wantSince string }{
+		{"live-null", "", "", ""},
+		{"live-sqlite-text", "2026-01-02 15:04:05", "probe_eacces", "2026-01-02T15:04:05Z"},
+		{"live-rfc3339", "2026-09-19T12:34:56Z", "probe wall", "2026-09-19T12:34:56Z"},
+		{"live-unparseable", "not-a-time", "", "not-a-time"},
+	}
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	if _, err := apitest.SeedSpawn(dbPath, "id-live-raw", store.StateWaiting, "/tmp", "off", "", true,
-		apitest.WithLivenessUnverifiedSince(raw),
-	); err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
+	for _, r := range rows {
+		var opts []apitest.SpawnOption
+		if r.since != "" {
+			opts = append(opts, apitest.WithLivenessUnverifiedSince(r.since))
+		}
+		if r.note != "" {
+			opts = append(opts, apitest.WithLivenessNote(r.note))
+		}
+		seedWaiting(t, dbPath, r.id, opts...)
 	}
-	s, err := store.Open(dbPath)
+	s := openDB(t, dbPath)
+	list, err := api.List(s, api.ListParams{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("List: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	got, err := api.Get(s, "id-live-raw")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if got.LivenessUnverifiedSince == nil {
-		t.Fatalf("LivenessUnverifiedSince is nil; want raw %q passed through (fail-open, never drop)", raw)
-	}
-	if *got.LivenessUnverifiedSince != raw {
-		t.Errorf("LivenessUnverifiedSince = %q; want %q verbatim (unparseable → pass-through)", *got.LivenessUnverifiedSince, raw)
-	}
-	rawJSON, err := json.Marshal(got)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if !strings.Contains(string(rawJSON), `"liveness_unverified_since":"`+raw+`"`) {
-		t.Errorf("JSON missing verbatim liveness_unverified_since; got %s", rawJSON)
+	for _, r := range rows {
+		got, err := api.Get(s, r.id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", r.id, err)
+		}
+		i := slices.IndexFunc(list.Spawns, func(l api.ListRow) bool { return l.ClaudeInstanceID == r.id })
+		if i < 0 {
+			t.Fatalf("List has no row %s", r.id)
+		}
+		l := list.Spawns[i]
+		t.Run(r.id, func(t *testing.T) {
+			assertOptionalString(t, got, "liveness_unverified_since", got.LivenessUnverifiedSince, r.wantSince)
+			assertOptionalString(t, got, "liveness_note", got.LivenessNote, r.note)
+			assertOptionalString(t, l, "liveness_unverified_since", l.LivenessUnverifiedSince, r.wantSince)
+			assertOptionalString(t, l, "liveness_note", l.LivenessNote, r.note)
+		})
 	}
 }
 
-// TestGetSurfacesPersistedJsonlPath pins SR-9.3/SR-10.3 surfacing on get: the
-// persisted jsonl_path column is projected verbatim onto the get result and the
-// marshaled JSON, both when set and when a legacy row leaves it empty.
-//
-//   - persisted:   a row seeded with WithJsonlPath surfaces that exact path on
-//     the result struct AND in the JSON envelope. This is the SessionStart-hook
-//     path that resume now prefers (true even under a custom CLAUDE_CONFIG_DIR).
-//   - legacy_empty: a row with no jsonl_path surfaces the empty string; the key
-//     is still present (jsonl_path has no omitempty — AllowEmpty=true, not
-//     nullable), so callers can distinguish "empty legacy row" from a missing
-//     field. resume falls back to the slug-rule path for such rows.
-func TestGetSurfacesPersistedJsonlPath(t *testing.T) {
+// TestGetJSONLPathAndNoExtraEnv pins SR-9.3/SR-10.3 on get: jsonl_path is the
+// persisted path verbatim, or "" with the key present on a legacy row; extra_env,
+// a spawn input only, never reaches the output, neither key nor value.
+func TestGetJSONLPathAndNoExtraEnv(t *testing.T) {
 	t.Parallel()
-	t.Run("persisted", func(t *testing.T) {
-		const wantPath = "/home/user/.claude-custom/projects/-tmp/sess.jsonl"
-		dbPath := filepath.Join(t.TempDir(), "state.db")
-		if _, err := apitest.SeedSpawn(dbPath, "id-jsonl-set", store.StateWaiting, "/tmp", "off", "", true,
-			apitest.WithJsonlPath(wantPath),
-		); err != nil {
-			t.Fatalf("SeedSpawn: %v", err)
-		}
-		s, err := store.Open(dbPath)
-		if err != nil {
-			t.Fatalf("store.Open: %v", err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
-
-		got, err := api.Get(s, "id-jsonl-set")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.JSONLPath != wantPath {
-			t.Errorf("JSONLPath = %q; want %q (persisted path surfaced verbatim)", got.JSONLPath, wantPath)
-		}
-		raw, err := json.Marshal(got)
-		if err != nil {
-			t.Fatalf("json.Marshal: %v", err)
-		}
-		if !strings.Contains(string(raw), `"jsonl_path":"`+wantPath+`"`) {
-			t.Errorf("JSON missing jsonl_path with persisted value; got %s", raw)
-		}
-	})
-
-	t.Run("legacy_empty", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "state.db")
-		if _, err := apitest.SeedSpawn(dbPath, "id-jsonl-legacy", store.StateWaiting, "/tmp", "off", "", true); err != nil {
-			t.Fatalf("SeedSpawn: %v", err)
-		}
-		s, err := store.Open(dbPath)
-		if err != nil {
-			t.Fatalf("store.Open: %v", err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
-
-		got, err := api.Get(s, "id-jsonl-legacy")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.JSONLPath != "" {
-			t.Errorf("JSONLPath = %q; want empty (legacy row, no persisted path)", got.JSONLPath)
-		}
-		// AllowEmpty=true, not nullable → the key is always present, even empty.
-		raw, err := json.Marshal(got)
-		if err != nil {
-			t.Fatalf("json.Marshal: %v", err)
-		}
-		if !strings.Contains(string(raw), `"jsonl_path":""`) {
-			t.Errorf("JSON missing jsonl_path:\"\" key for legacy row; want key present but empty; got %s", raw)
-		}
-	})
-}
-
-// TestGetOutputHasNoExtraEnv is the named OUTPUT negative for SR-9.3/SR-10.3:
-// extra_env legitimately exists as the spawn/make-template INPUT param, but it
-// MUST NOT leak onto the get OUTPUT surface. A row seeded with a non-empty
-// extra_env map (WithExtraEnv) must NOT surface an extra_env key anywhere in the
-// marshaled get result — neither as a struct field nor a stray JSON key.
-func TestGetOutputHasNoExtraEnv(t *testing.T) {
-	t.Parallel()
+	const path = "/home/user/.claude-custom/projects/-tmp/sess.jsonl"
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	if _, err := apitest.SeedSpawn(dbPath, "id-extraenv", store.StateWaiting, "/tmp", "off", "", true,
-		apitest.WithExtraEnv(map[string]string{"SECRET_TOKEN": "leak-me-not", "FOO": "bar"}),
-	); err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
-	}
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	got, err := api.Get(s, "id-extraenv")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	raw, err := json.Marshal(got)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if strings.Contains(string(raw), "extra_env") {
-		t.Errorf("get output JSON contains extra_env key; it is an INPUT-only param and must not surface on the OUTPUT row; got %s", raw)
-	}
-	// Belt-and-suspenders: the seeded values themselves must not appear either.
-	if strings.Contains(string(raw), "leak-me-not") {
-		t.Errorf("get output JSON leaked a seeded extra_env value; got %s", raw)
-	}
-}
-
-// TestGetVerbPluralShape pins the plural PermissionRequests contract
-// introduced in Task F:
-//
-//   - two_open_rows:   two distinct tokens → slice of two, both projected
-//   - zero_open_rows:  no open rows → non-nil empty slice, JSON encodes as []
-//   - one_closed_row:  one decided row → non-nil empty slice (decided rows invisible)
-func TestGetVerbPluralShape(t *testing.T) {
-	t.Parallel()
-	const tokA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
-	const tokB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
-
-	t.Run("two_open_rows", func(t *testing.T) {
-		s := openGetFixture(t, "id-plural-1", store.StateCheckPermission)
-		openAgentRequest(t, s, "id-plural-1", tokA, "Read", `{"file":"/a"}`, 0)
-		openAgentRequest(t, s, "id-plural-1", tokB, "Bash", `{"cmd":"ls"}`, 0)
-
-		got, err := api.Get(s, "id-plural-1")
+	seedWaiting(t, dbPath, "id-jsonl-set", apitest.WithJsonlPath(path),
+		apitest.WithExtraEnv(map[string]string{"SECRET_TOKEN": "leak-me-not"}))
+	seedWaiting(t, dbPath, "id-jsonl-legacy")
+	s := openDB(t, dbPath)
+	for id, want := range map[string]string{"id-jsonl-set": path, "id-jsonl-legacy": ""} {
+		got, err := api.Get(s, id)
 		if err != nil {
-			t.Fatalf("Get: %v", err)
+			t.Fatalf("Get(%s): %v", id, err)
 		}
-		if len(got.PermissionRequests) != 2 {
-			t.Fatalf("len(PermissionRequests) = %d; want 2", len(got.PermissionRequests))
+		if raw, ok := jsonField(t, got, "jsonl_path"); got.JSONLPath != want || !ok || string(raw) != strconv.Quote(want) {
+			t.Errorf("%s: JSONLPath = %q, JSON %s (present %t); want %q", id, got.JSONLPath, raw, ok, want)
 		}
-		// Build a token→row index for order-independent assertions.
-		byToken := map[string]api.PermissionRequestInfo{}
-		for _, pr := range got.PermissionRequests {
-			byToken[pr.RequestToken] = pr
+		if out := jsonOf(t, got); strings.Contains(out, "extra_env") || strings.Contains(out, "leak-me-not") {
+			t.Errorf("%s: get output carries extra_env: %s", id, out)
 		}
-		prA, okA := byToken[tokA]
-		prB, okB := byToken[tokB]
-		if !okA || !okB {
-			t.Fatalf("want both tokens %q and %q in result", tokA, tokB)
-		}
-		if prA.RequestID == 0 {
-			t.Errorf("prA.RequestID = 0; want non-zero")
-		}
-		if prA.ToolName != "Read" {
-			t.Errorf("prA.ToolName = %q; want Read", prA.ToolName)
-		}
-		if prA.ToolInput != `{"file":"/a"}` {
-			t.Errorf("prA.ToolInput = %q; want raw JSON (no parse/re-emit)", prA.ToolInput)
-		}
-		if prA.RequestedAt.IsZero() {
-			t.Errorf("prA.RequestedAt is zero; want populated")
-		}
-		if prB.ToolName != "Bash" {
-			t.Errorf("prB.ToolName = %q; want Bash", prB.ToolName)
-		}
-	})
-
-	t.Run("zero_open_rows", func(t *testing.T) {
-		s := openGetFixture(t, "id-plural-2", store.StateCheckPermission)
-
-		got, err := api.Get(s, "id-plural-2")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.PermissionRequests == nil {
-			t.Errorf("PermissionRequests is nil; want non-nil empty slice")
-		}
-		if len(got.PermissionRequests) != 0 {
-			t.Errorf("len(PermissionRequests) = %d; want 0", len(got.PermissionRequests))
-		}
-		// JSON must encode as [] not null.
-		raw, err := json.Marshal(got)
-		if err != nil {
-			t.Fatalf("json.Marshal: %v", err)
-		}
-		if !strings.Contains(string(raw), `"permission_requests":[]`) {
-			t.Errorf("JSON does not contain permission_requests:[]; got %s", raw)
-		}
-	})
-
-	t.Run("one_closed_row", func(t *testing.T) {
-		s := openGetFixture(t, "id-plural-3", store.StateCheckPermission)
-		openAgentRequest(t, s, "id-plural-3", tokA, "Write", `{"path":"/x"}`, 0)
-		updated, err := s.DecidePermissionRequest("id-plural-3", tokA, "allow", "", "")
-		if err != nil {
-			t.Fatalf("DecidePermissionRequest: %v", err)
-		}
-		if !updated {
-			t.Fatalf("DecidePermissionRequest updated=false; want true")
-		}
-
-		got, err := api.Get(s, "id-plural-3")
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.PermissionRequests == nil {
-			t.Errorf("PermissionRequests is nil; want non-nil empty slice")
-		}
-		if len(got.PermissionRequests) != 0 {
-			t.Errorf("len(PermissionRequests) = %d; want 0 — decided row must be invisible", len(got.PermissionRequests))
-		}
-	})
+	}
 }

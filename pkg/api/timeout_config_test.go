@@ -1,9 +1,9 @@
 package api_test
 
-// timeout_config_test.go pins b.8q2 at the Client: api.New refuses a [relay]
-// or [pause] timeout_seconds outside its range, the send-keys relay guard uses
-// the configured relay window, and a [pause] timeout_seconds of 0 or the
-// largest accepted value waits for the row to end instead of timing out at once.
+// timeout_config_test.go pins b.8q2 at the Client: the send-keys relay guard
+// uses the configured relay window, and a [pause] timeout_seconds of 0 or the
+// largest accepted value waits for the row to end instead of timing out at
+// once. api.New's refusal of an out-of-range value is TestNewRefusesConfig's.
 
 import (
 	"context"
@@ -19,44 +19,6 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// TestNewRefusesTimeoutConfig: api.New returns no Client and the
-// *config.ConfigError naming the out-of-range value. 9223372036 is the relay
-// value whose guard cutoff wrapped and released the send-keys guard at once;
-// 9223372037 wrapped the relay and pause windows themselves.
-func TestNewRefusesTimeoutConfig(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		keys    apitest.ConfigKeys
-		refusal apitest.ConfigRefusal
-	}{
-		{apitest.ConfigKeys{RelayTimeoutSeconds: -1}, apitest.ConfigRefusal{RelayTimeout: true, Value: -1}},
-		{apitest.ConfigKeys{RelayTimeoutSeconds: 2147484}, apitest.ConfigRefusal{RelayTimeout: true, Value: 2147484}},
-		{apitest.ConfigKeys{RelayTimeoutSeconds: 9223372036}, apitest.ConfigRefusal{RelayTimeout: true, Value: 9223372036}},
-		{apitest.ConfigKeys{RelayTimeoutSeconds: 9223372037}, apitest.ConfigRefusal{RelayTimeout: true, Value: 9223372037}},
-		{apitest.ConfigKeys{PauseTimeoutSeconds: -1}, apitest.ConfigRefusal{PauseTimeout: true, Value: -1}},
-		{apitest.ConfigKeys{PauseTimeoutSeconds: 9223372037}, apitest.ConfigRefusal{PauseTimeout: true, Value: 9223372037}},
-	}
-	for _, tc := range cases {
-		t.Run(fmt.Sprintf("relay_%d_pause_%d", tc.keys.RelayTimeoutSeconds, tc.keys.PauseTimeoutSeconds), func(t *testing.T) {
-			e := newKillEnv(t)
-			cfgPath := filepath.Join(t.TempDir(), "config.toml")
-			apitest.WriteKeysConfig(t, cfgPath, tc.keys)
-
-			c, err := api.New(api.Options{StorePath: e.dbPath, ConfigPath: cfgPath, TmuxClient: e.rec})
-
-			if c != nil {
-				_ = c.Close()
-				t.Error("api.New returned a Client for a refused timeout_seconds")
-			}
-			var ce *config.ConfigError
-			if !errors.As(err, &ce) {
-				t.Fatalf("api.New err = %v; want a *config.ConfigError", err)
-			}
-			apitest.AssertDescription(t, ce.Error(), apitest.DescConfigRefused(cfgPath, tc.refusal))
-		})
-	}
-}
 
 // TestClientSendKeysRelayGuardUsesConfiguredWindow: R3 (b.8q2) — Client.SendKeys
 // on a relay-on row whose request is two default windows old delivers under the

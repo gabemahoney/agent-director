@@ -208,25 +208,4 @@
 //     storefix.InjectWriteFailure or its white-box counterpart in
 //     internal/store. Writes behind a store interface fail through a failing
 //     wrapper of that interface.
-//
-// # Migrated helpers and their prior locations
-//
-//   - SeedListFixture   ← pkg/api/list_test.go     :: seedListFixture
-//   - SeedDeleteFixture ← pkg/api/delete_test.go   :: seedDeleteFixture
-//   - SeedDecideFixture ← pkg/api/decide_test.go   :: seedDecideFixture
-//   - SeedPermissionRow ← pkg/api/decide_test.go   :: seedPermissionRow
-//   - SeedExpireFixture ← pkg/api/expire_test.go   :: seedExpireFixture
-//   - SeedJsonl         ← pkg/api/resume_test.go   :: seedJsonl
-//   - SeedJsonlUnder    ← pkg/api/resume_test.go   :: seedJsonlUnder (b.1ba)
-//   - SeedStore         ← pkg/api/client_test.go   :: seedStore
-//   - OpenStoreWithRow  ← pkg/api/sendkeys_test.go :: openStoreWithRow
-//
-// # Migrated from pkg/api/export_for_helper.go (helper-tag retirement, b.wvr E1)
-//
-//   - SeedSpawn              ← HelperSeedSpawn
-//   - SeedParentChild        ← HelperSeedParentChild
-//   - SeedPermissionRequest  ← HelperSeedPermissionRequest
-//   - PermissionRequestSeed  ← PermissionRequestSeed (result type for SeedPermissionRequest)
-//   - SeedTemplate           ← HelperSeedTemplate
-//   - InitStore              ← HelperInitStore
 package apitest

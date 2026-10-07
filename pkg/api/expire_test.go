@@ -1,9 +1,10 @@
 package api_test
 
 // expire_test.go covers expire's selection by the retention window on the
-// fixture clock (SR-12.1), its two store-error paths (SR-20.6), the result
-// shape (SR-12.4) and Client.Expire. Per-row reasons, the conditional delete,
-// the sweep, odd rows, the trail and the call table have their own files.
+// fixture clock (SR-12.1), never a live or NULL-ended_at row, its two
+// store-error paths (SR-20.6), the result shape (SR-12.4) and Client.Expire.
+// Per-row reasons, the conditional delete, the sweep, odd rows, the trail and
+// the call table have their own files.
 
 import (
 	"encoding/json"
@@ -27,10 +28,14 @@ var expireRetention = time.Duration(config.Default().Defaults.ExpireRetentionDay
 // both with dead agents and no session; expire must never select either.
 func (e *killEnv) seedUnselectable(t *testing.T) []killRow {
 	t.Helper()
-	return []killRow{
+	rows := []killRow{
 		e.seedRow(t, killRowSpec{ID: "live", Agent: agentGone, NoSession: true}),
 		e.seedRow(t, killRowSpec{ID: "null-ended-at", State: store.StateMissing, Agent: agentGone, NoSession: true}),
 	}
+	if got := e.columns(t, "null-ended-at").EndedAt; got != nil {
+		t.Fatalf("null-ended-at row ended_at = %#v; want NULL", got)
+	}
+	return rows
 }
 
 // assertStillStored fails unless every one of rows is still in the store.
@@ -44,7 +49,8 @@ func (e *killEnv) assertStillStored(t *testing.T, rows ...killRow) {
 }
 
 // TestExpireSelection checks the window (override, else config's retention)
-// selects finished rows by ended_at on the fixture clock; zero or less selects all.
+// selects finished rows by ended_at on the fixture clock; zero or less selects
+// all; a live row and a NULL-ended_at row are never selected.
 func TestExpireSelection(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	ages := map[string]time.Duration{
@@ -106,136 +112,71 @@ func TestExpireSelection(t *testing.T) {
 	}
 }
 
-// TestExpireNeverSelectsLiveOrNullEndedAt checks a live row and a NULL-ended_at
-// row survive a zero override with no tmux call.
-func TestExpireNeverSelectsLiveOrNullEndedAt(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	e := newKillEnv(t)
-	rows := e.seedUnselectable(t)
-	if got := e.columns(t, "null-ended-at").EndedAt; got != nil {
-		t.Fatalf("null-ended-at row ended_at = %#v; want NULL", got)
-	}
-	mark := trailMark(t)
-	res, _, err := e.expire(olderThan(0))
-	if err != nil {
-		t.Fatalf("Expire: %v", err)
-	}
-	assertExpired(t, res, mark, map[string]string{})
-	e.assertLookupsOn(t)
-	e.assertStillStored(t, rows...)
-}
-
-// TestExpireCutoffFollowsClock checks the cutoff is read from the injected
-// clock: a row too young is selected once the clock moves past the window.
-func TestExpireCutoffFollowsClock(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	e := newKillEnv(t)
-	r := e.seedFinished(t, 30*time.Minute, agentGone)
-	mark := trailMark(t)
-	res, _, err := e.expire(olderThan(time.Hour))
-	if err != nil {
-		t.Fatalf("Expire: %v", err)
-	}
-	assertExpired(t, res, mark, map[string]string{})
-	e.assertLookupsOn(t)
-
-	e.clock.Advance(31 * time.Minute)
-	mark = trailMark(t)
-	if res, _, err = e.expire(olderThan(time.Hour)); err != nil {
-		t.Fatalf("Expire after Advance: %v", err)
-	}
-	assertExpired(t, res, mark, map[string]string{r.ID: ""})
-}
-
-// TestExpireCandidateReadFailure checks a failed candidate read fails the
-// verb, is logged, and makes no tmux call and no trail record (SR-20.6).
-func TestExpireCandidateReadFailure(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	r := e.seedFinished(t, 2*time.Hour, agentGone)
-	w := e.expireStore()
-	w.failList(nil)
-	mark := trailMark(t)
-	_, lg, err := e.expireWith(w, olderThan(0))
-	if !errors.Is(err, errInjectedStore) {
-		t.Fatalf("Expire err = %v; want %v", err, errInjectedStore)
-	}
-	if len(lg.lines) != 1 || !strings.Contains(lg.lines[0], errInjectedStore.Error()) {
-		t.Errorf("log = %q; want one line naming %q", lg.lines, errInjectedStore)
-	}
-	e.assertLookupsOn(t)
-	assertNoTrailSince(t, mark, r.ID)
-	e.assertStillStored(t, r)
-}
-
-// TestExpireDeleteFailureKeepsRow checks a failed per-row delete keeps that
-// row store_error, logs only its id and the error, and the run goes on (SR-20.6).
-func TestExpireDeleteFailureKeepsRow(t *testing.T) {
+// TestExpireStoreErrors (SR-20.6): a failed candidate read fails the verb with
+// no tmux call and no record; a failed per-row delete keeps that row
+// store_error and the run goes on. Either is logged once, naming the error and
+// the row, never its session environment; a nil logger changes no outcome.
+func TestExpireStoreErrors(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	const secret = "expire-secret-env-value"
-	e := newKillEnv(t)
-	seed := func(id string, opts ...apitest.SpawnOption) killRow {
-		spec := e.finishedSpec(2*time.Hour, agentGone, opts...)
-		spec.ID = id
-		return e.seedRow(t, spec)
-	}
-	a := seed("del-a")
-	b := seed("del-b", apitest.WithExtraEnv(map[string]string{"EXPIRE_SECRET": secret}))
-	c := seed("del-c")
-	w := e.expireStore()
-	w.failDelete(b.ID, nil)
-	mark := trailMark(t)
-	res, lg, err := e.expireWith(w, olderThan(0))
-	if err != nil {
-		t.Fatalf("Expire: %v; want the run to succeed", err)
-	}
-	assertExpired(t, res, mark, map[string]string{a.ID: "", b.ID: "store_error", c.ID: ""})
-	e.assertLookupsOn(t, apitest.TestSocket)
-	e.assertStillStored(t, b)
-	if len(lg.lines) != 1 {
-		t.Fatalf("log = %q; want one line", lg.lines)
-	}
-	line := lg.lines[0]
-	if !strings.Contains(line, b.ID) || !strings.Contains(line, errInjectedStore.Error()) {
-		t.Errorf("log %q; want it to name %s and %q", line, b.ID, errInjectedStore)
-	}
-	if strings.Contains(line, secret) || strings.Contains(line, "EXPIRE_SECRET") {
-		t.Errorf("log %q carries the row's session environment", line)
-	}
-}
-
-// TestExpireStoreErrorsWithNilLogger checks exported Expire with a nil logger
-// does not panic on either store error and keeps its outcome.
-func TestExpireStoreErrorsWithNilLogger(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	cases := []struct {
-		name   string
-		inject func(w *expireStore, id string)
-		failed bool   // the run returns the error
-		kept   string // the row's kept reason when the run succeeds
+	for _, tc := range []struct {
+		name               string
+		failList, noLogger bool
 	}{
-		{"candidate read", func(w *expireStore, _ string) { w.failList(nil) }, true, ""},
-		{"per-row delete", func(w *expireStore, id string) { w.failDelete(id, nil) }, false, "store_error"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+		{"candidate read", true, false},
+		{"candidate read, nil logger", true, true},
+		{"per-row delete", false, false},
+		{"per-row delete, nil logger", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
-			r := e.seedFinished(t, 2*time.Hour, agentGone)
+			seed := func(id string, opts ...apitest.SpawnOption) killRow {
+				spec := e.finishedSpec(2*time.Hour, agentGone, opts...)
+				spec.ID = id
+				return e.seedRow(t, spec)
+			}
+			a, b, c := seed("del-a"), seed("del-b", apitest.WithExtraEnv(map[string]string{"EXPIRE_SECRET": secret})), seed("del-c")
 			w := e.expireStore()
-			c.inject(w, r.ID)
+			if tc.failList {
+				w.failList(nil)
+			} else {
+				w.failDelete(b.ID, nil)
+			}
+			lg := &recordingLogger{}
+			var logger api.ExpireLogger = lg
+			if tc.noLogger {
+				logger = nil
+			}
 			mark := trailMark(t)
 			res, err := api.Expire(w, e.rec, e.pc, config.Default().Defaults.ExpireRetentionDays, olderThan(0),
-				e.cfg.EffectiveSweepBudget(), e.clock.Now, nil)
-			if c.failed {
+				e.cfg.EffectiveSweepBudget(), e.clock.Now, logger)
+			if tc.failList {
 				if !errors.Is(err, errInjectedStore) {
-					t.Errorf("Expire err = %v; want %v", err, errInjectedStore)
+					t.Fatalf("Expire err = %v; want %v", err, errInjectedStore)
 				}
+				e.assertLookupsOn(t)
+				for _, r := range []killRow{a, b, c} {
+					assertNoTrailSince(t, mark, r.ID)
+				}
+				e.assertStillStored(t, a, b, c)
+			} else {
+				if err != nil {
+					t.Fatalf("Expire: %v; want the run to succeed", err)
+				}
+				assertExpired(t, res, mark, map[string]string{a.ID: "", b.ID: "store_error", c.ID: ""})
+				e.assertLookupsOn(t, apitest.TestSocket)
+				e.assertStillStored(t, b)
+			}
+			if tc.noLogger {
 				return
 			}
-			if err != nil {
-				t.Fatalf("Expire: %v", err)
+			if len(lg.lines) != 1 || !strings.Contains(lg.lines[0], errInjectedStore.Error()) ||
+				(!tc.failList && !strings.Contains(lg.lines[0], b.ID)) {
+				t.Errorf("log = %q; want one line naming %q (and the failed row %s)", lg.lines, errInjectedStore, b.ID)
 			}
-			assertExpired(t, res, mark, map[string]string{r.ID: c.kept})
+			if all := strings.Join(lg.lines, "\n"); strings.Contains(all, secret) || strings.Contains(all, "EXPIRE_SECRET") {
+				t.Errorf("log %q carries the row's session environment", all)
+			}
 		})
 	}
 }
@@ -286,33 +227,17 @@ func assertExpireJSON(t *testing.T, res api.ExpireResult, want string) {
 	}
 }
 
-// TestExpireLeavesTranscripts checks a deleted row's transcript file is
-// still on disk afterwards.
-func TestExpireLeavesTranscripts(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	e := newKillEnv(t)
-	const sid = "expire-transcript-session"
-	path := apitest.SeedJsonl(t, "/tmp", sid)
-	spec := e.finishedSpec(2*time.Hour, agentGone, apitest.WithJsonlPath(path))
-	spec.SessionID = sid
-	r := e.seedRow(t, spec)
-	mark := trailMark(t)
-	res, _, err := e.expire(olderThan(time.Hour))
-	if err != nil {
-		t.Fatalf("Expire: %v", err)
-	}
-	assertExpired(t, res, mark, map[string]string{r.ID: ""})
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("transcript %s: %v; want it left in place", path, err)
-	}
-}
-
 // TestClientExpireDefaultRetention checks Client.Expire with no override
-// applies the configured retention and returns kept and kept_ids.
+// applies the configured retention and returns kept and kept_ids; a deleted
+// row's transcript file stays on disk.
 func TestClientExpireDefaultRetention(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
-	gone := e.seedFinished(t, expireRetention+time.Hour, agentGone)
+	const sid = "expire-transcript-session"
+	transcript := apitest.SeedJsonl(t, "/tmp", sid)
+	goneSpec := e.finishedSpec(expireRetention+time.Hour, agentGone, apitest.WithJsonlPath(transcript))
+	goneSpec.SessionID = sid
+	gone := e.seedRow(t, goneSpec)
 	ours := e.finishedSpec(expireRetention+time.Hour, agentGone)
 	ours.NoSession = false
 	kept := e.seedRow(t, ours)
@@ -326,5 +251,8 @@ func TestClientExpireDefaultRetention(t *testing.T) {
 	e.assertStillStored(t, kept, young)
 	if logs != "" {
 		t.Errorf("Client log = %q; want none", logs)
+	}
+	if _, err := os.Stat(transcript); err != nil {
+		t.Errorf("transcript %s: %v; want it left in place", transcript, err)
 	}
 }
