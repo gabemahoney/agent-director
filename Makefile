@@ -104,6 +104,13 @@ test: envelope-diff-ts test-install-sh
 #     install.sh cannot read stops the install in pre-flight (exit 5), on a
 #     fresh HOME and over an installed store, before anything on disk changes
 #     (b.2io)
+#   - config.toml merge: a hooks-on install, run twice, sets
+#     inject_help_hook = true inside the [defaults] table whether its header
+#     has blanks inside or before the brackets, a trailing comment, a CRLF or
+#     a UTF-8 BOM, rewriting an existing line, ending the table at an
+#     indented next header and appending no second [defaults];
+#     agent-director list then loads the config, and uninstall.sh takes the
+#     key out again (b.onv)
 # It builds and runs agent-director and agent-director-admin binaries, so it
 # runs in the sandbox only (retry.sh refuses anywhere else, b.8dr); no
 # network. test-sandbox runs it too, through test/install-sh/retry_test.go.

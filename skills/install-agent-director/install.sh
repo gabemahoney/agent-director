@@ -1776,15 +1776,23 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
         # [defaults] to =true; if [defaults] exists but lacks the key,
         # append it inside the section; if no [defaults] section exists
         # at all, add one at end of file. Preserves every other key
-        # and section verbatim.
-        merged=$(awk '
+        # and section verbatim. Headers are matched as TOML writes them
+        # and as ad_store_db_path accepted them above (b.onv): blanks
+        # before, inside and after the brackets, a trailing # comment,
+        # a CRLF's CR, and a UTF-8 byte-order mark on line 1. A header
+        # missed here gets a second [defaults] appended, a file
+        # agent-director refuses. ad_store_db_path has refused every
+        # other line starting with [, so any such line is a header.
+        merged=$(LC_ALL=C awk '
             BEGIN { written = 0; in_defaults = 0 }
-            /^\[/ {
+            { line = $0 }
+            NR == 1 { sub(/^\357\273\277/, "", line) }
+            line ~ /^[[:blank:]]*\[/ {
                 if (in_defaults && !written) {
                     print "inject_help_hook = true"
                     written = 1
                 }
-                in_defaults = ($0 ~ /^\[defaults\][[:space:]]*$/) ? 1 : 0
+                in_defaults = (line ~ /^[[:blank:]]*\[[[:blank:]]*defaults[[:blank:]]*\][[:space:]]*(#.*)?$/) ? 1 : 0
                 print
                 next
             }

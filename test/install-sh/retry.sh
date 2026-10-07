@@ -54,6 +54,13 @@
 # before. A db_path install.sh cannot read stops the install (exit 5) before
 # anything on disk changes, on a fresh HOME and over an installed store.
 #
+# config.toml merge (b.onv): a hooks-on install, run twice, sets
+# inject_help_hook = true inside the [defaults] table however its header is
+# spelled (blanks inside or before the brackets, a trailing comment, a CRLF, a
+# UTF-8 BOM), before an indented next header, rewriting an existing line and
+# appending no second [defaults]; agent-director list then loads the config,
+# and uninstall.sh takes the key out again.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -583,6 +590,55 @@ new_home db-path-refused-installed
 local_install
 report db-path-refused-installed-first-install-exit-code "$RC" "0"
 db_path_refused db-path-refused-installed '[defaults]\nrelay_mode = "off"\n[Store]\ndb_path = "/elsewhere/agents.db"' '3  : [Store]'
+
+# shown <file>: <file>'s bytes on one line, as cat -A shows them (^M a CR,
+# M-oM-;M-? a UTF-8 BOM, $ a line end), its lines joined by |.
+shown() { cat -A "$1" | paste -sd'|'; }
+
+# ad_list: H's installed agent-director list; prints 0, or its exit code and
+# output.
+ad_list() {
+    local out rc
+    out="$(env -i HOME="$H" PATH="$FAKES:$PATH" TMPDIR="$ROOT/tmp" "$H/.agent-director/bin/agent-director" list 2>&1)"
+    rc=$?
+    if [[ "$rc" -eq 0 ]]; then echo 0; else echo "$rc $out"; fi
+}
+
+# A hooks-on install merges inject_help_hook = true into the [defaults] table
+# however its header is spelled, and uninstall.sh takes it out again (b.onv).
+# Per case <name>|<config>|<merged>|<uninstalled> (printf %b, a newline added):
+# two installs both leave <merged>, agent-director list loads it, and
+# uninstall.sh leaves <uninstalled> (<config> when empty).
+UNINSTALL_SH="${REPO_ROOT}/skills/install-agent-director/uninstall.sh"
+HOOKS=1
+while IFS='|' read -r -u 3 name config merged uninstalled; do
+    name="merge-$name"
+    new_home "$name"
+    with_config "$config"
+    cfg="$H/.agent-director/config.toml"
+    local_install
+    rc="$RC" first="$(shown "$cfg")"
+    local_install
+    want="$(shown <(printf '%b\n' "$merged"))"
+    report "$name-exit-codes" "$rc $RC" "0 0"
+    report "$name-config" "$first" "$want"
+    report "$name-config-reinstalled" "$(shown "$cfg")" "$want"
+    report "$name-list" "$(ad_list)" "0"
+    env -i HOME="$H" PATH="$FAKES:$PATH" bash "$UNINSTALL_SH" >"$OUT" 2>"$ERR"
+    report "$name-uninstall-exit-code" "$?" "0"
+    report "$name-config-uninstalled" "$(shown "$cfg")" "$(shown <(printf '%b\n' "${uninstalled:-$config}"))"
+done 3<<'EOF'
+spaced|[ defaults ]\nrelay_mode = "off"|[ defaults ]\nrelay_mode = "off"\ninject_help_hook = true|
+comment|[defaults] # mine\nrelay_mode = "off"|[defaults] # mine\nrelay_mode = "off"\ninject_help_hook = true|
+indented-key-false|\t [defaults]\t# mine\ninject_help_hook = false\nrelay_mode = "off"|\t [defaults]\t# mine\ninject_help_hook = true\nrelay_mode = "off"|\t [defaults]\t# mine\nrelay_mode = "off"
+then-table|[ defaults ] # c\n[relay]\npoll_base_ms = 100|[ defaults ] # c\ninject_help_hook = true\n[relay]\npoll_base_ms = 100|[relay]\npoll_base_ms = 100
+then-indented-table|[defaults]\nrelay_mode = "off"\n  [relay]\n  poll_base_ms = 100|[defaults]\nrelay_mode = "off"\ninject_help_hook = true\n  [relay]\n  poll_base_ms = 100|
+bom|\xef\xbb\xbf[defaults]\nrelay_mode = "off"|\xef\xbb\xbf[defaults]\nrelay_mode = "off"\ninject_help_hook = true|
+crlf|[ defaults ]\r\nrelay_mode = "off"\r|[ defaults ]\r\nrelay_mode = "off"\r\ninject_help_hook = true|
+exact|[defaults]\nrelay_mode = "off"|[defaults]\nrelay_mode = "off"\ninject_help_hook = true|
+no-defaults|[defaultsx]\nrelay_mode = "off"|[defaultsx]\nrelay_mode = "off"\n\n[defaults]\ninject_help_hook = true|
+EOF
+HOOKS=""
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 

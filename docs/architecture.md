@@ -4462,6 +4462,9 @@ claude /install-agent-director (or `bash install.sh`)
     under a one-shot migrate-authorized sentinel (full six-step flow in
     install-agent-director/SKILL.md)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
+  → set inject_help_hook = true in config.toml's [defaults] table (see
+    "The config.toml merge" below); --no-hooks skips this and the
+    settings.json merge
   → optional MCP registration (--register-mcp)
   → print the admin path once, for the human
 ```
@@ -4525,6 +4528,30 @@ guarantees only the owner's access; the exact modes install.sh gives
 (the two binaries, `~/.agent-director/`, `admin/`, `state.db`, the
 sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
 `chmod`s.
+
+**The config.toml merge (b.onv).** With hooks on, install.sh sets
+`inject_help_hook = true` in `~/.agent-director/config.toml`'s
+`[defaults]` table (see
+[Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)):
+it rewrites an existing `inject_help_hook` line there, adds the key at
+the end of the table when it is missing, and appends a `[defaults]`
+table at the end of the file only when the file has none. Every other
+line is kept as written, a timestamped `.bak` is taken first, and a
+missing file is created holding just that table (0600). The `awk` merge
+runs under `LC_ALL=C` and takes a `[defaults]` header in every spacing
+`ad_store_db_path` accepts: blanks before, inside and after the
+brackets, a trailing `# comment`, a CRLF's CR, and a UTF-8 byte-order
+mark on line 1 (matched past, kept in the output). Any line starting
+with optional blanks and `[` ends the table, so an indented next header
+does too; `ad_store_db_path` has already refused every other such line.
+A header the merge missed would get a second `[defaults]` appended, a
+file `config.Load` refuses (`ErrConfigMalformed`) after an exit-0
+install. `uninstall.sh` reverses the merge: it drops `inject_help_hook`
+from `[defaults]`, and the header too when the table is then left with
+only blank lines and comments. **Must use:** the merge and its reversal
+match the `[defaults]` header with the same pattern; a change to one
+changes the other, and adds its cases to `test/install-sh/retry.sh`'s
+config-merge table.
 
 #### Schema migration at install-time
 
@@ -4811,7 +4838,9 @@ legacy versioned-binary siblings left over from pre-b.43y installs),
 `agent-director-admin` with its `.prior` and the `admin/` directory (left
 in place, with a note, when it holds other files),
 the optional PATH symlink, and the two hook entries it injected
-(matched by the install root prefix in their command string). Other
+(matched by the install root prefix in their command string), and the
+`inject_help_hook` key the config merge set in `config.toml`'s
+`[defaults]` (see "The config.toml merge" above). Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim.
 `~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.

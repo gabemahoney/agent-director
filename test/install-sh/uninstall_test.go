@@ -11,6 +11,22 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
+// runUninstall runs uninstall.sh under home and returns its output.
+func runUninstall(t *testing.T, home string) []byte {
+	t.Helper()
+	script, err := filepath.Abs(filepath.Join("..", "..", "skills", "install-agent-director", "uninstall.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", script)
+	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("uninstall.sh: %v\n%s", err, out)
+	}
+	return out
+}
+
 // TestUninstallRemovesAdminBinary (b.vqr): uninstall.sh removes
 // agent-director-admin, its .prior and install tempfiles, and the admin/
 // directory, which it leaves, with a note, only when it holds other files.
@@ -19,10 +35,6 @@ func TestUninstallRemovesAdminBinary(t *testing.T) {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
 	}
 	cli2TrackInputs(t)
-	script, err := filepath.Abs(filepath.Join("..", "..", "skills", "install-agent-director", "uninstall.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	cases := []struct {
 		name     string
 		other    bool // a file of someone else's in admin/
@@ -51,12 +63,7 @@ func TestUninstallRemovesAdminBinary(t *testing.T) {
 				}
 			}
 
-			cmd := exec.Command("bash", script)
-			cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("uninstall.sh: %v\n%s", err, out)
-			}
+			out := runUninstall(t, home)
 
 			want := strings.ReplaceAll(tc.wantLine, "{admin}", admin)
 			if !slices.Contains(strings.Split(string(out), "\n"), want) {
@@ -81,5 +88,35 @@ func TestUninstallRemovesAdminBinary(t *testing.T) {
 				t.Errorf("%s exists = %v; want %v", admin, !os.IsNotExist(err), tc.other)
 			}
 		})
+	}
+}
+
+// TestUninstallClearsInjectHelpHookOnlyUnderDefaults (b.onv): uninstall.sh
+// drops inject_help_hook under a [defaults] header spelled with blanks and a
+// comment, and keeps it under [defaults.x] and [defaultsx].
+func TestUninstallClearsInjectHelpHookOnlyUnderDefaults(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".agent-director", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	near := "[defaults.x]\ninject_help_hook = true\n[defaultsx]\ninject_help_hook = true\n"
+	config := near + "\t[ defaults ]  # mine\nrelay_mode = \"off\"\ninject_help_hook = true\n"
+	if err := os.WriteFile(cfg, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runUninstall(t, home)
+
+	got, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := near + "\t[ defaults ]  # mine\nrelay_mode = \"off\"\n"; string(got) != want {
+		t.Errorf("config.toml after uninstall.sh = %q; want %q", got, want)
 	}
 }

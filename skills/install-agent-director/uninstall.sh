@@ -100,12 +100,16 @@ fi
 # Reverse install.sh's defaults.inject_help_hook merge: drop that key
 # from config.toml. If [defaults] is left empty (no other keys, only
 # blank lines or comments), drop the section header too. Symmetric
-# with install.sh's Q4=yes config merge.
+# with install.sh's Q4=yes config merge, and headers are matched as
+# that merge matches them (b.onv): blanks before, inside and after the
+# brackets, a trailing # comment, a CRLF's CR, and a UTF-8 byte-order
+# mark on line 1. A header missed here leaves the key install wrote
+# under it.
 # --------------------------------------------------------------------
 
 CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
 if [[ -f "$CONFIG_TOML" ]]; then
-    cleaned=$(awk '
+    cleaned=$(LC_ALL=C awk '
         function flush_defaults() {
             has_content = 0
             for (i = 1; i <= n; i++) {
@@ -125,12 +129,14 @@ if [[ -f "$CONFIG_TOML" ]]; then
             header = ""
         }
         BEGIN { in_defaults = 0; n = 0; header = "" }
-        /^\[/ {
+        { line = $0 }
+        NR == 1 { sub(/^\357\273\277/, "", line) }
+        line ~ /^[[:blank:]]*\[/ {
             if (in_defaults) {
                 flush_defaults()
                 in_defaults = 0
             }
-            if ($0 ~ /^\[defaults\][[:space:]]*$/) {
+            if (line ~ /^[[:blank:]]*\[[[:blank:]]*defaults[[:blank:]]*\][[:space:]]*(#.*)?$/) {
                 in_defaults = 1
                 header = $0
                 next

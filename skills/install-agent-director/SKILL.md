@@ -562,10 +562,24 @@ This skill runs `install.sh` from the same directory. The script:
    skipped. The pre-edit contents of `settings.json` are snapshotted
    to a timestamped `.bak` sibling before the merge writes.
 
+   The same step sets `inject_help_hook = true` in the `[defaults]`
+   table of `~/.agent-director/config.toml`, so every Spawn also gets
+   the help hook whatever its `CLAUDE_CONFIG_DIR`. An existing
+   `inject_help_hook` line there is rewritten, a missing one is added
+   to the table, and a `[defaults]` table is added at the end of the
+   file only when it has none; every other line is left as written, and
+   the file is snapshotted to a timestamped `.bak` first. The
+   `[defaults]` header is found however it is spaced: `[ defaults ]`,
+   `[defaults] # comment`, an indented header, CRLF line ends and a
+   UTF-8 byte-order mark are all fine (b.onv). The summary line is
+   `config  : merged inject_help_hook=true into <path> (backup <path>)`,
+   or `config  : created <path> with inject_help_hook=true` when there
+   was no config.toml.
+
    With `--no-hooks`, this step is skipped entirely: settings.json is
    not read, not backed up, not written — left byte-identical to its
-   pre-install state. The post-install summary reports
-   `hooks   : skipped (--no-hooks)`.
+   pre-install state — and config.toml is not touched. The post-install
+   summary reports `hooks   : skipped (--no-hooks)`.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
    `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`.
@@ -697,6 +711,11 @@ destructive *additions*.
 
 - Removes the two help hook entries (only the entries this skill
   added; other user hooks are preserved).
+- Removes `inject_help_hook` from `config.toml`'s `[defaults]` table
+  (its header found however it is spaced, as install finds it), and
+  the `[defaults]` header too when only blank lines and comments are
+  left under it. When that changes the file, it is snapshotted to a
+  timestamped `.bak` first.
 - Removes the binary at `~/.agent-director/bin/agent-director` and
   the `.prior` snapshot if one is present.
 - Removes `~/.agent-director/admin/agent-director-admin`, its `.prior`
