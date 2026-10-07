@@ -1425,7 +1425,8 @@ param gives its manifest name, either bare (make-template's "Per-call cwd
 overrides.", expire's "older_than overrides") or with the CLI flag as an
 aside, `<param> (--<flag> on the CLI)` (make-template's per-call
 `claude_args`); never the CLI flag alone. `TestManifestTextsNameParamsNotFlags` checks
-every verb and param text, on the manifest and in `surface.json`. Another
+every verb and param text on the manifest, and `TestSurfaceJSONMirrorsManifest`
+holds `surface.json` to the same texts. Another
 program's flag, such as claude's `--settings`, is not a param and is not
 checked.
 
@@ -1627,16 +1628,17 @@ hidden or CLI-only flag, and none of them can run either action.
   checks of whole agent-facing outputs share one pattern,
   `apitest.OperatorActionNames`: `pkg/api/manifest`'s
   `manifest_optin_absent_test.go` (the manifest and `surface.json`: no
-  `delete` verb and no such name), `cmd/agent-director`'s `help_test.go`
-  (`TestHelpOmitsKillOptIn`: `help` and `--help` list no `delete` and name
+  `delete` verb and no such name), `cmd/agent-director`'s
+  `TestHelpVerbAndAliases` (`help` and `--help` list no `delete` and name
   none) and `tools/gen-docs`' `TestGenerate_OperatorActionsAbsent`. The
   surfaces are pinned by `pkg/api`'s `operator_surface_absent_test.go`
   (`KillParams` has only `ClaudeInstanceID`; no exported `Delete`),
-  `cmd/agent-director`'s `operator_actions_absent_cli_test.go` (`delete` is
-  `ErrUnknownVerb`) and `kill_optin_flag_cli_test.go` (every spelling of
-  the opt-in is `ErrInvalidFlags`, with no tmux call), `internal/mcp`'s
-  `operator_actions_absent_test.go` (no `delete` tool; a `delete` call is
-  an unknown tool) and the TS client's `operator-actions-absent.test.ts`.
+  `cmd/agent-director`'s `TestUnknownVerbWritesErrorEnvelope` (`delete` is
+  `ErrUnknownVerb`) and `stop_cli_test.go` (every spelling of the opt-in
+  is `ErrInvalidFlags`, with no tmux call),
+  `internal/mcp`'s `TestToolsListMatchesManifest` (no `delete` tool) and
+  `TestDeleteToolCallIsUnknownTool` (a `delete` call is an unknown tool)
+  and the TS client's `operator-actions-absent.test.ts`.
 - **The structural parity guard.** `cmd/agent-director`'s
   `cli_manifest_parity_test.go` keeps the main CLI at parity with the
   manifest, so a hidden or CLI-only flag cannot come back.
@@ -6554,7 +6556,8 @@ rune (single-byte or multi-byte UTF-8) collapses to **one** dash.
 `slug(cwd)` differs from `SanitizeSessionName` (Epic 3): `_` is
 replaced with `-` here, preserved there. The JSONL layout is owned
 by Claude Code, so the two slug rules are not symmetric. Pinned by
-`TestSlugDivergenceFromTmuxSanitizer`.
+`TestJsonlPathSlugParity` (`_` becomes `-`) and
+`TestSanitizeSessionNameCases` (`_` kept).
 
 ### What's not carried over
 
@@ -9819,17 +9822,15 @@ How it works:
 
 Single trigger source: the trigger SQL lives only in the leaf package
 `internal/testsupport/writefailfix` (`Kind`, `Kinds()`, `Install`,
-`Handle.Remove`; imports only `database/sql` and `fmt`). Its white-box
-counterpart for tests inside `internal/store`, which cannot import
-`storefix`, is `injectWriteFailure(t, s, kind, instanceID)` in
-`internal/store/migration_fixtures_test.go`. It calls the same
-`writefailfix.Install` on the store's own connection.
+`Handle.Remove`; imports only `database/sql` and `fmt`). `internal/store`'s
+own write-failure tests are in its external test package (`store_test`),
+which can import `storefix`, for example
+`internal/store/store_errors_test.go`.
 
 **Must use:** tests make a concrete-store write fail only through
-`storefix.InjectWriteFailure` or, inside `internal/store`, its white-box
-counterpart. Never write trigger SQL or any other failure SQL in a test.
-Writes behind a store interface fail through a failing wrapper of that
-interface.
+`storefix.InjectWriteFailure`. Never write trigger SQL or any other
+failure SQL in a test. Writes behind a store interface fail through a
+failing wrapper of that interface.
 
 ### cwdfix: the working-directory fixture (reusable test fixture)
 
@@ -9859,9 +9860,8 @@ agent-director), so any test package can use it.
 
 **Must use:** a test that needs the process in a fresh working
 directory calls `cwdfix.Temp`; do not hand-roll `os.Chdir` with a
-restore. Two earlier tests still do: `chdirFor` in
-`test/realtmux/socket_resolution_test.go` and the "relative
-TMUX_TMPDIR" case in `pkg/api/spawn_launch_test.go`.
+restore. One test still does: `chdirFor` in
+`test/realtmux/socket_resolution_test.go`.
 
 ### dbpathfix: the install.sh store-path matrix (reusable test fixture)
 
@@ -9912,14 +9912,14 @@ second extraction of the block.
 **Must use (server isolation, SR-20.3):** no two tests share a tmux
 server, real or fake. A test that reaches a real tmux or `test/fake-tmux`
 uses a per-test `TMUX_TMPDIR` with `TMUX` unset, or puts the fake first on
-`PATH`. Existing per-package fixtures that do this: `newSpawnEnv` /
-`buildSpawnEnv` in `pkg/api/spawn_test.go` (temp `HOME`, per-test
-`TMUX_TMPDIR`, `TMUX` unset); `spawnTmuxTmpdir` in
-`cmd/agent-director/spawn_cli_test.go` (`<home>/tmux-tmpdir`, which
-`runSpawnCLIEnv` passes to the child); `ownSocketDir` on the `pkg/api` kill
-and resume fixtures (`useOwnTmuxTmpdir`); and `usePrivateFakeTmux` in
-`test/envelope-diff/error_cases_spawn_tmux.go` (fresh `TMUX_TMPDIR` and
-`FAKE_TMUX_TABLES`, `TMUX` empty), which the spawn tmux error rows call and
+`PATH`. Existing per-package fixtures that do this: `newSpawnEnv` in
+`pkg/api/spawn_test.go` (temp `HOME`, per-test `TMUX_TMPDIR`, `TMUX`
+unset); `spawnTmuxTmpdir` in `cmd/agent-director/testhelpers_test.go`
+(`<home>/tmux-tmpdir`, which `runSpawnCLIEnv` passes to the child);
+`ownSocketDir` on the `pkg/api` kill fixture (`useOwnTmuxTmpdir`); and
+`usePrivateFakeTmux` in `test/envelope-diff/error_cases_spawn_tmux.go`
+(fresh `TMUX_TMPDIR` and `FAKE_TMUX_TABLES`, `TMUX` empty), which the
+spawn tmux error rows call and
 `TestEnvelopeDiff_Success` calls before the CLI run and again before the
 Client run, so the two runs never share a server or fake-tmux tables. An
 in-process `tmuxfix.Recorder` belongs to one test and holds its servers in
@@ -10330,7 +10330,7 @@ written.
 binary and returns the path of a file named `tmux`; `faketmuxfix.Dir(t)`
 returns its directory for a `PATH` prepend. **Must use:** new Go tests get
 the fake only through `faketmuxfix.Binary` / `Dir`.
-`cmd/agent-director/spawn_cli_test.go`'s `buildFakeTmux` is a one-line
+`cmd/agent-director/testhelpers_test.go`'s `buildFakeTmux` is a one-line
 wrapper over `faketmuxfix.Dir`; the older builder `buildFakeTmux` in
 `test/envelope-diff/harness.go` stays as it is.
 
@@ -10944,8 +10944,7 @@ The seed-pane writes, the option/default UPDATEs and the apitest and
 storefix backdating fixtures add nothing. So a `pending` row seeded with no
 session id is at 0, like a fresh insert, and every other seed starts above
 0 (the totals are the same as before the gate: 0, 1 or 2). The other
-seeders: `storefix.SeedSpawn` and its siblings leave 0 for `pending`, else
-1, with no pane and NULL `pid`; `SeedCheckPermission` 1 (its gated request
+seeders: `SeedCheckPermission` 1 (its gated request
 INSERT adds nothing); `SeedResumable` 2; `SeedErrJsonlMissing` 3 (session
 id, a rotating SessionStart that archives it, `ended`);
 `SeedErrJsonlNeverWritten` 2; the permission-request seeders
@@ -11054,7 +11053,6 @@ values, except for a row the test inserted itself.
   `tmuxfix.Recorder.SeedRowSession`. It never reads a row's launch token or
   spells one by hand (SR-20.2).
 - Concrete-store write failures come only from `storefix.InjectWriteFailure`
-  or its white-box counterpart in `internal/store/migration_fixtures_test.go`
   (see "storefix seeders" above). Writes behind a store interface fail
   through a failing wrapper of that interface.
 
@@ -11551,13 +11549,13 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       "daily", "hourly", "nightly", "weekly", "runs every"): no text says
       or implies a schedule is installed.
     - `pkg/api/manifest/manifest_expire_description_test.go` applies them
-      to the manifest and `surface.json` alike (`verbDescriptionsBoth`
-      fails when either source lacks the verb):
-      `TestExpireDescription`, `TestExpireResultFieldTexts` (one subtest per
-      field), `TestExpireParamAndResultTextsAgentText` (`AssertAgentText`
-      over every `expire` parameter and result field) and
+      to the manifest: `TestExpireDescription`,
+      `TestExpireResultFieldTexts` (one subtest per field) and
       `TestCleanupGuidanceInDescriptions` (full form at `expire`, pointer
-      at `kill` and `find-missing`).
+      at `kill` and `find-missing`). `TestSurfaceJSONMirrorsManifest`
+      carries them to `surface.json`, and
+      `TestManifestTextsNameNoSessionEndingCommand` runs `AssertAgentText`
+      over every verb, parameter and result field, `expire`'s included.
   - Held name (`descriptions_held.go`, SR-1.4, SR-9.4): `HeldName{Name,
     SessionID, Row, InstanceID}` gives the requested name, the holder's
     `$N` (empty when no single holder was identified) and the end write's
@@ -11760,10 +11758,6 @@ detail.
   those variables, so its test may run in parallel. `e.resume(id)` calls
   `api.Resume` with all of them; `e.columns(t, id)` reads the row through
   `apitest.ReadSpawnColumns`.
-- `e.ownSocketDir(t)` moves `e.tmpdir` and `e.socket` into the test's own
-  `TMUX_TMPDIR` (`useOwnTmuxTmpdir`), for a test that keeps state beside the
-  socket (`test/fake-tmux`'s table). Call it before seeding. It uses
-  `t.Setenv`, so the test is serial.
 - `e.seedResumable(t, state, opts...)` / `e.seedRow(t, resumableSpec)` seed
   a resumable row (default `ended`) through `apitest.SeedSpawn` options:
   a full launch identity on `e.socket`, a transcript, and one archived
@@ -11779,11 +11773,10 @@ detail.
   start the move records (the clock plus `resumeLookupQ`). A test that
   checks `launch_started_at` or the launch's timing uses them. With no
   server started, a normal resume's lookup reads Gone and proceeds.
-- `vanishedUserSocket(t)` (`pkg/api/resume_pending_launch_test.go`) is a
-  socket path under a per-user directory that does not exist, in a parent
-  that does. `TestResumeLaunchSocket` and the unusable-name resume tests
-  (`resume_unusable_name_test.go`) use it. **Must use:** a test that
-  records a socket whose per-user directory vanished takes it from
+- `vanishedUserSocket(t)` is a socket path under a per-user directory that
+  does not exist, in a parent that does. `TestResumeLaunch` and
+  `TestResumeRefusedBeforeLookup` (`resume_test.go`) use it. **Must
+  use:** a test that records a socket whose per-user directory vanished takes it from
   `vanishedUserSocket`, never its own path arithmetic.
 
 **Lookup and held-name scenes on the kill fixture.** Tests of resume's
@@ -11844,11 +11837,18 @@ disagree records with `verbDisagrees`.
 (`pkg/api/example_main_test.go`) sets HOME to a temp dir (`apiTrailDir`)
 and calls `trail.Default()` before `m.Run()`, so the trail singleton is
 fixed at `apiTrailDir/.agent-director/ad-trail.jsonl` before any test runs.
-A test that moves HOME and emits first no longer moves the trail. The one
-exception is the `TestScanNameHeldFailOpen` child process
-(`scanTrailChildEnv` set), which needs the singleton unfixed. `TestMain`
-also unsets `AGENT_DIRECTOR_INSTANCE_ID` and `TMUX` and points
-`TMUX_TMPDIR` at one fresh temp dir for the whole test binary
+A test that moves HOME and emits first does not move the trail. The
+fail-open child processes make that pinned trail unwritable instead, each
+gated by its own environment variable. Four make `.agent-director` mode
+0500: `TestTrailFailOpenChild` (kill, send-keys and pause;
+`kill_trail_test.go`), `TestSpawnTrailFailOpenChild`
+(`spawn_reuse_trail_test.go`), `TestResumeTrailFailOpenChild`
+(`resume_provenance_test.go`) and `TestExpireTrailFailOpenChild`
+(`expire_trail_test.go`). The fifth, `TestFindMissingDisagreeFailOpenChild`
+(`find_missing_disagree_test.go`), writes a read-only trail file instead of
+a 0500 directory. `TestMain` also unsets
+`AGENT_DIRECTOR_INSTANCE_ID` and `TMUX` and points `TMUX_TMPDIR` at one
+fresh temp dir for the whole test binary
 (`apiTmuxTmpdir`, with its per-user socket directory made at mode 0700), so
 a default socket resolves there, never under the caller's tmux or
 `/tmp/tmux-<uid>`.
@@ -11877,7 +11877,7 @@ They are:
   `t.Setenv` only when the current value differs, so a fixture that needs
   `TestMain`'s value leaves a parallel test parallel.
 - `useSharedTmuxTmpdir(t)`, `TestMain`'s `TMUX_TMPDIR` with `TMUX` unset.
-- `useOwnTmuxTmpdir(t)` and the fixtures' `ownSocketDir`, a test's own
+- `useOwnTmuxTmpdir(t)` and the kill fixture's `ownSocketDir`, a test's own
   `TMUX_TMPDIR` for a test that changes the socket directory on disk or
   uses `test/fake-tmux`. Never chmod or remove `apiTmuxTmpdir`.
 
@@ -12048,18 +12048,30 @@ each file's doc comments carry the detail.
   (`e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)`);
   otherwise the call ends in `ErrTmuxKillFailed`.
 - **Pane-verb fixture** (`pane_verb_fixture_test.go`, no tests; SR-20.2),
-  the kill fixture's extension for `read-pane` and `send-keys`:
-  - invocations: `e.readPane` / `e.readPaneClient` / `e.readPaneRun`,
-    `e.sendKeys` / `e.sendKeysAt(window, now, p)` / `e.sendKeysClient` /
-    `e.sendKeysRun`; the generic `verbRun[R]`, `runVerb`, `assertSameRun`
-    (a repeat makes the same calls and error) and `errText`;
+  the kill fixture's extension for `read-pane`, `send-keys` and `pause`:
+  - invocations: `e.readPane` / `e.readPaneClient`, `e.sendKeys` /
+    `e.sendKeysAt(window, now, p)` / `e.sendKeysClient`; the generic
+    `verbRun[R]`, `runVerb`, `assertSameRun` (a repeat makes the same
+    calls and error) and `errText`;
+  - the cross-verb adapter: `paneVerb` (`readPaneVerb`, `sendKeysVerb`,
+    `pauseVerb`, which runs `pause` up to its wait through `e.pauseToWait`),
+    listed by `paneVerbs()` and, for the verbs that type, `keysVerbs()`;
+    `v.check(t, e, r, paneWant)` runs one verb and checks its answer. The
+    cross-verb tables run every verb through it: `TestPaneVerbs*`
+    (`readpane_pane_test.go`) and `TestKeysVerbs*`
+    (`sendkeys_action_test.go`, `sendkeys_trail_test.go`). The one
+    `TestPaneVerbs*` elsewhere, `TestPaneVerbsCeilingVirtualTime`
+    (`kill_ceiling_test.go`), runs all three verbs through their client
+    invocations (`e.readPaneClient`, `e.sendKeysClient`, `e.pauseClient`)
+    instead;
   - seeds: `e.seedOurs` (hand-laid panes), `e.seedLeftover(t, r, token)`,
     `r.pane()`, `newToken()`, `labelledPane` (the one pane carrying a
     token), and per-pane capture text (`e.setPaneTexts(socket)`,
     `paneText(socket, paneID)`) to tell which pane was read;
-  - launch-kind seeds: `pendingKind` (`pendingFresh`, `pendingResumed`;
-    `pendingKinds()`) × `pendingShape` (`pendingOurs`, `pendingLostReply`,
-    `pendingLeftover`) through `e.pendingSpec` / `e.seedPending`;
+  - launch-kind seeds: `pendingKind` (`pendingFresh`, `pendingReused`, made
+    by a real reuse through `e.seedReusedPending`) × `pendingShape`
+    (`pendingOurs`, `pendingLostReply`, `pendingLeftover`) through
+    `e.pendingSpec` / `e.seedPending`;
   - between the row read and the send: `e.sessionStartAfter(t, call, r,
     sessionID)` applies the agent's SessionStart through
     `apitest.ApplyAgentHook` once, after the first call of a kind;
@@ -12081,29 +12093,28 @@ each file's doc comments carry the detail.
     `trailMark` / `assertNoTrailSince` (no trail record for the id), and
     `e.adoption(t, id)` (`adoptionColumns`: unchanged, written once, or
     not applied).
-- **Pause fixture** (`pause_fixture_test.go`, no tests): `e.pause` /
-  `e.pauseWithin(ctx, timeoutSeconds, p)` / `e.pauseRun` / `e.pauseClient`,
-  `pauseParams`, `exitText`; pause's call lists with the line clear before
-  `/exit`, `pauseSendCalls`, `pauseTextCalls` and `pauseClearCalls`, and
-  `pauseActions` (the line clear, `/exit` and Enter calls a failure can
-  hit, with the calls made up to it); `e.endAsAgent(t, r)` (ends the row
-  as its own agent, a SessionEnd through `apitest.ApplyAgentHook` with the
-  row's `claude_session_id`, and reports whether it applied and why not);
-  `e.endAfterEnter(t, r)` (a row-ending after-call hook: `endAsAgent` when
-  the first Enter returns); `e.endAtFirstWait(t, r)` (`endAsAgent` at the
-  wait's first sleep, through `api.SetPauseTestKnobs` with a 1 ms poll, so
-  only a wait that sleeps sees the row end; cleanup restores the knobs, and
-  it is not for parallel tests); each fails the test unless it ran and
-  applied; `e.assertExitDelivered` /
-  `e.assertExitTyped` (both check `e.assertLineCleared`: exactly one
-  `C-u` to the agent's pane, before every text call);
-  `pauseDisagrees(t, id)`. The wait is driven through
-  the test knob seam: `fastPausePolls(t)` (`api.SetPauseTestKnobs` with a
-  1 ms poll, restored at cleanup through `api.PauseTestKnobs`; the knobs
-  are process-wide, so a test that calls it is serial) and
-  `pauseTimeoutSeconds` (1 s): a row nothing ends times out after about
-  1 s. `e.store` is the failing `PauseStore` wrapper (`failStateReads`,
-  `failAdopt`, `refuseAdopt`).
+  - `pause`'s own pieces: `e.pause` /
+    `e.pauseWithin(ctx, timeoutSeconds, p)` / `e.pauseClient`,
+    `pauseParams`, `exitText`; pause's call lists with the line clear
+    before `/exit`, `pauseSendCalls`, `pauseTextCalls` and
+    `pauseClearCalls`; `e.endAsAgent(t, r)` (ends the row
+    as its own agent, a SessionEnd through `apitest.ApplyAgentHook` with the
+    row's `claude_session_id`, and reports whether it applied and why not);
+    `e.endAfterEnter(t, r)` (a row-ending after-call hook: `endAsAgent` when
+    the first Enter returns); `e.endAtFirstWait(t, r)` (`endAsAgent` at the
+    wait's first sleep, through `api.SetPauseTestKnobs` with a 1 ms poll, so
+    only a wait that sleeps sees the row end; cleanup restores the knobs, and
+    it is not for parallel tests); each fails the test unless it ran and
+    applied; `e.assertExitDelivered` /
+    `e.assertExitTyped` (both check `e.assertLineCleared`: exactly one
+    `C-u` to the agent's pane, before every text call);
+    `pauseDisagrees(t, id)`. The wait is driven through
+    the test knob seam: `fastPausePolls(t)` (`api.SetPauseTestKnobs` with a
+    1 ms poll, restored at cleanup through `api.PauseTestKnobs`; the knobs
+    are process-wide, so a test that calls it is serial) and
+    `pauseTimeoutSeconds` (1 s): a row nothing ends times out after about
+    1 s. `e.store` is the failing `PauseStore` wrapper (`failStateReads`,
+    `failAdopt`, `refuseAdopt`).
 - **Pane-input model** (`pane_input_fixture_test.go`, no tests; b.fji,
   b.9o4): `watchPaneInput(e, pane, timeoutsReach)` models the agent's
   input box from every keys call to `pane`, in call order, through one
@@ -12126,15 +12137,15 @@ each file's doc comments carry the detail.
   `e.seedKeysDisagreeCase`, `assertKeysDisagrees`).
 - **One name per error** (`one_name_per_error_test.go`): `assertOneName(t,
   err, want)` checks SR-1.5 on a returned error (exactly one catalogued
-  sentinel, or none for `ErrInternal`), and `oneNameRows()` is the table of
-  every tmux-caused error (and reachable `ErrInternal` case) the verbs
-  return, one `oneName<Verb>Rows()` list per verb (`oneNameKillRows()` for
-  `kill`; the pane verbs' in `one_name_pane_verbs_test.go`; `kill`'s
-  finished-row opt-in's `oneNameKillOptInRows()` in
-  `one_name_kill_optin_test.go`, run by its own test). A row's
-  "unusable recorded name" case seeds `unusableNameSpec()`
-  (`one_name_pane_verbs_test.go`: a waiting row with no session,
-  recording the pre-b.gqe default name).
+  sentinel, or none for `ErrInternal`). Each tmux-caused error (and
+  reachable `ErrInternal` case) a verb returns is checked with
+  `assertOneName` (or `assertOneSentinel`, `spawn_test.go`) in the test
+  that triggers it: the call-site table for every lookup outcome, the
+  first action failing and each unusable name, and the verb's own tests
+  for the rest. `oneNameRows()` (`oneNameSpawnRows()`,
+  `oneNameResumeRows()`, run by `TestOneNameReturnedErrors`) holds only
+  the errors no other test triggers; the file's doc comment lists where
+  each other error is checked.
 - **Call-site table** (`lookup_calltable_test.go`, SR-20.5): every lookup
   outcome (the verdicts and their variants, the server cases, and the
   action-failure column) against every single-row verb, built on the kill
@@ -12236,10 +12247,12 @@ each file's doc comments carry the detail.
     a heading that exists exactly once, and that a list of required sites
     all carry a pointer.
   - The anchor check: `TestREADMEAnchorLinksResolve` checks that every
-    anchored `.md` link in `README.md` and `pkg/api/README.md` resolves to
-    exactly one heading. `TestREADMESectionHeadings` checks that each
-    pointed-to heading exists exactly once, the "Caller contract: tmux
-    refusal classes" heading of this document included.
+    relative link in `README.md` and `pkg/api/README.md` names an existing
+    path and every anchored `.md` link resolves to exactly one heading.
+    `TestREADMESectionHeadings` checks that each pointed-to heading exists
+    exactly once, the "Caller contract: tmux refusal classes" heading of
+    this document included, and that the first sentence of "Operator
+    actions" says automated callers must not perform its actions.
 
   Each of its test names contains `README`, so `-run README` runs them.
   Five sibling files check sections on the same parser:
@@ -12347,9 +12360,10 @@ each file's doc comments carry the detail.
 sweeps, the finished-row opt-in) extends these rather than writing its own
 row seeding, Recorder tables or call assertions: its tests build on the
 kill fixture's pattern and world helpers and the pane-verb fixture's
-invocation, seed and assertion helpers, every error it returns gets a row
-through `assertOneName`, it appends its adapter to `callTableVerbs()`, its
-SR-15 case to the security table, and its "Errors:" check goes through
+invocation, seed and assertion helpers, every error it returns is checked
+with `assertOneName` in the test that triggers it (a `oneNameRows()` row
+only for an error no other test triggers), it appends its adapter to
+`callTableVerbs()`, its SR-15 case to the security table, and its "Errors:" check goes through
 `assertGoDocErrorsMatchManifest`.
 
 **Must use:** a test of a row whose recorded name cannot be used takes
@@ -12382,7 +12396,8 @@ made with `sessionStartAfter` / `rowWriteAfter` (or `endAfterEnter` /
 seam (`fastPausePolls`, the 1 s `pauseTimeoutSeconds`). Store-write and
 read failures use the failing-store wrapper (`failAdopt`, `refuseAdopt`,
 `failStateReads`, `failPermissionRequests`), and trail-write failures the
-re-exec pattern of `kill_trail_failopen_test.go`; no source seam is added
+re-exec pattern of `TestTrailFailOpen` / `TestTrailFailOpenChild`
+(`kill_trail_test.go`); no source seam is added
 for either. Tests seed the row's own labelled session through the fixture
 or the Recorder constructors, never hand-built label strings.
 
@@ -12471,8 +12486,8 @@ comments carry the detail.
   other id. `e.assertLookupsOn(t, sockets...)` checks the run made exactly
   one lookup per listed socket and no name-based call.
 
-The tests built on it, one concern per file: `expire_test.go` (selection,
-the clock-driven cutoff, the candidate read's failure, store errors, the
+The tests built on it, one concern per file: `expire_test.go` (selection
+on the fixture clock, the candidate read's failure, store errors, the
 result shape, transcripts untouched, `Client.Expire`'s default retention),
 `expire_reasons_test.go` (each kept reason), `expire_conditional_test.go`
 (another caller's write between a row's examination and its delete,
@@ -12504,9 +12519,10 @@ every run, fail-open through the re-exec child). Beside them:
   `row_version_expire_test.go`): the candidate read and the conditional
   delete, seeded through `apitest`; the delete's version cases join the
   SR-5.2 versioning test's tables.
-- **Surfaces**: `cmd/agent-director/expire_cli_test.go` (the built CLI
-  through fake-tmux: deleted, kept `ours`, and a hung lookup kept
-  `cant_tell`), `internal/mcp/expire_test.go`, the envelope-diff cases in
+- **Surfaces**: `cmd/agent-director`'s
+  `TestAdviceFollow_H6_OlderThanDurationForm` (the built CLI through
+  fake-tmux: a refused `--older-than`, then a deleted row),
+  `internal/mcp/expire_test.go`, the envelope-diff cases in
   `test/envelope-diff/success_expire.go`, and `test/realtmux/expire_test.go`.
 
 **Must use:** a new `expire` test in `pkg/api` seeds through
@@ -12711,7 +12727,8 @@ test/
     version.test.ts
   internal/
     tempHome.ts              # withTempHome() helper
-    helper.ts                # runHelper() wrapper for ts-helper subprocess; privateTmuxSocket(); fakeTmuxCalls(), withProcessEnv(), CLAUDE_JSON, trustEntry(), seedOuterParent()
+    helper.ts                # runHelper() wrapper for ts-helper subprocess; openClient(), homeStore(), FAKE_TMUX_BIN, PKG_VERSION; privateTmuxSocket(); fakeTmuxCalls(), withProcessEnv(), withCwd(), withDeletedCwd(), rejection(), thrownBy(), CLAUDE_JSON, trustEntry(), seedOuterParent()
+    stagedScript.ts          # stageScript(), runScript(), removeStaged(): a package script run in a staged copy
 ```
 
 **`withTempHome` helper.**
@@ -12731,21 +12748,22 @@ relative to `HOME` (Go's `os.UserHomeDir()`) read the same value the
 parent's `HOME` env var points at. Smoke tests use the explicit
 `Client` options where possible:
 
-1. **tmux binary** — verbs that invoke tmux (`spawn`, `send-keys`, `read-pane`,
-   `resume`) pass `tmuxCommand: <path-to-fake-tmux>` explicitly to the
-   `Client` constructor so the CLI subprocess uses the fake-tmux stub
-   rather than the real binary on PATH.
+1. **tmux binary** — smoke tests open their `Client` through
+   `openClient(storePath)`, which passes `tmuxCommand: FAKE_TMUX_BIN` so
+   the CLI subprocess uses the fake-tmux stub rather than the real binary
+   on PATH.
 
 2. **HOME-relative paths** — `make-template` writes to
    `~/.agent-director/templates/` using Go's `os.UserHomeDir()` inside
-   the CLI subprocess. Tests that check `result.path` assert the
-   filename suffix only and delete the file in a `finally` block.
+   the CLI subprocess. The file lands under the temp HOME and is removed
+   with it; the test checks that `result.path` has the name's suffix and
+   lies under the temp HOME.
 
 3. **JSONL paths** — `resume`'s pre-flight `os.Stat` for the JSONL
    transcript resolves under the subprocess's inherited HOME. Resume
    tests create the JSONL placeholder at
-   `${HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl` and
-   delete it in a `finally` block.
+   `${HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl`, under the
+   temp HOME, which removes it.
 
 **`AGENT_DIRECTOR_INSTANCE_ID` and the FK constraint.**
 
@@ -12799,12 +12817,27 @@ logic in TypeScript.
 It also exports `privateTmuxSocket(dir)`, which makes `<dir>/tmux` (mode
 0700) and returns `<dir>/tmux/default`. Pass it as `seed-spawn --socket` for
 a row a resume launches on: resume uses the row's recorded socket and refuses
-one whose directory is missing. The resume happy paths in
-`smoke/resume.test.ts` and `subprocess-smoke.test.ts` pass the temp HOME, so
-the socket and the fake-tmux tables beside it are removed with it.
+one whose directory is missing. The resume happy path in
+`smoke/resume.test.ts` passes the temp HOME, so the socket and the
+fake-tmux tables beside it are removed with it.
 
 Its other shared helpers, each with its must-use rule:
 
+- `openClient(storePath, extra)` creates a `Client` over the in-repo CLI
+  (`CLI_PATH`) on `storePath` (created if missing) with `tmuxCommand:
+  FAKE_TMUX_BIN`; `extra` overrides any option. `homeStore(home)` is the
+  store path under a temp HOME. **Must use:** a smoke test opens its
+  `Client` through `openClient`.
+- `withCwd(dir, fn)` / `withDeletedCwd(fn)` run `fn` with the cwd at
+  `dir`, or at a deleted directory, and restore it; `rejection(promise)` /
+  `thrownBy(fn)` return what a call rejects with or throws, failing when it
+  does not. **Must use:** a new test uses these, never its own
+  `process.chdir` and restore or `try`/`catch` to capture an error.
+- `stageScript(script, files)` (`test/internal/stagedScript.ts`) runs a
+  copy of a `scripts/` file in a staged `pkg/ts-bun-client/` tree under
+  the OS temp dir (`runScript`, `removeStaged`). **Must use:** a test of a
+  package script stages it through `stageScript`, never under the repo
+  tree, where a versioned `package.json` trips a sibling run's scan.
 - `fakeTmuxCalls(logPath)` returns the argv (`argv[0]` included) of each
   fake-tmux invocation in a `FAKE_TMUX_LOG` file, `[]` when nothing was
   logged. **Must use:** every TS test that reads the fake's log goes

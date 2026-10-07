@@ -205,7 +205,7 @@
 //     store's StoreID() or an id pinned with SeedStoreID; another store's
 //     labels use OtherStoreID. No test writes store_meta any other way.
 //   - Concrete-store write failures come only from
-//     storefix.InjectWriteFailure or its white-box counterpart in
-//     internal/store. Writes behind a store interface fail through a failing
-//     wrapper of that interface.
+//     storefix.InjectWriteFailure (internal/store's own write-failure tests
+//     use it from the external test package). Writes behind a store
+//     interface fail through a failing wrapper of that interface.
 package apitest

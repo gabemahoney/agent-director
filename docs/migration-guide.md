@@ -320,49 +320,74 @@ double-run test in §3 pass. The SQLite-specific idioms:
 ## 3. Test by running the upgrade twice
 
 A migration is not done until a test proves the upgrade is correct **and
-idempotent**. The recipe (see `schema_test.go` for the working v1→v2 version):
+idempotent**. The version-independent tests in `internal/store/schema_test.go`
+loop over every released version (`for from := 1; from < schemaVersion;
+from++`), so registering your step and bumping `schemaVersion` adds your
+version to them. Each older version is built by `makeVersionedDB`
+(`migration_fixtures_test.go`): `testdata/schema_v1.sql`, then the real
+registered steps up to that version, in WAL mode so a refused open touches no
+bytes. What they cover, step by step:
 
-**Current template: `internal/store/schema_v5_migration_test.go`.** For a new
-hop, start from the v4→v5 test rather than the v1→v2 one. What it covers, step
-by step against the recipe below:
+1. **A fixture DB at each older version.** `makeVersionedDB(t, dir, v)`. Do
+   not commit a `testdata/schema_v<N>.sql`; `schema_v1.sql` is the only one.
+2. **Authorize the upgrade, then open once.**
+   `TestAuthorizedMigrationFromEveryVersion` seeds a row in each older
+   version, writes an exact-match sentinel (`writeSentinel(t, dir, from,
+   schemaVersion)`) and opens with `Open`. It asserts `user_version ==
+   schemaVersion`, the pre-existing row read with v3's and v5's columns at
+   their defaults (the `GetSpawn` field check and `assertV5Defaults`; a new
+   version's columns are added by hand, below), one store id, the sentinel
+   consumed (`assertSentinel`) and one `ad.schema.migrated` line.
+   `TestMigrationRefusedWithoutSentinel` opens each older version with no
+   sentinel and asserts `ErrSchemaMigrationRequired` with the SR-1.4 text, the
+   DB byte-identical (`snapshotDBBytes`/`assertDBBytesUnchanged`) and still at
+   its version. The malformed and mismatched sentinels
+   (`TestGateRefusesBadSentinel`) and the newer-than-binary arm
+   (`TestNewerThanBinaryIsSchemaMismatch`) do not depend on the version.
+3. **Open again.** `TestAuthorizedMigrationFromEveryVersion` reopens the
+   migrated store, with no sentinel and then with a stale one: no error, the
+   same store id, no trail line, and the stale sentinel left in place.
+   `TestMigrationStepReentry` re-applies one step directly, twice in a row
+   and over a DB the step already changed in part, and asserts the schema one
+   run gives.
+4. **Assert the fresh path and the migrated path converge.**
+   `TestAuthorizedMigrationFromEveryVersion` compares the migrated store's
+   `schemaShape` (every table's `PRAGMA table_info` and every index's
+   columns) with a fresh `OpenOrInit` store's. This is the automated
+   enforcement of the two-places rule (§1): if `schemaDDL` and your hop
+   drifted, the shapes differ and the test fails.
 
-- **Step 1:** `makeV4HistoryFixture` (see below) builds the v4 fixture.
-- **Step 2:** `TestV5Migration_AuthorizedFromV4` opens the fixture with a
-  `{4→5}` sentinel (`migrateV4Fixture`) and asserts the version, the thirteen
-  new columns (`assertV5Columns`) and the consumed sentinel.
-  `TestV5Migration_RefusedWithoutSentinel` covers the **missing**-sentinel
-  refusal only (`ErrSchemaMigrationRequired`, DB byte-identical via
-  `snapshotDBBytes`/`assertDBBytesUnchanged`, still at v4). Your hop's test
-  should add the malformed and mismatched cases (`writeSentinelMalformed`,
-  `writeSentinelWrongFrom`, `writeSentinelWrongTo`) with `assertSentinelPresent`.
-- **Step 3:** `TestV5Migration_IdempotentReentry` calls `migrateV4toV5`
-  directly on an empty v4 DB — twice in a row, and over DBs where some or all
-  of the new columns were already added (`preAddV5Columns`). It does **not**
-  re-open a migrated store through `OpenOrInit`; add that double-open for your
-  hop.
-- **Step 4:** `TestV5FreshCreate_And_MigratedConverge` compares a fresh
-  `OpenOrInit` store against a v1 store taken through the whole chain
-  (`makeV1DB` plus a `{1→5}` sentinel). It compares `PRAGMA table_info`
-  (`readTableShape`) for the tables in `v5ShapeTables` (`spawns`,
-  `session_history` and `store_meta`, in `migration_fixtures_test.go`) — not
-  indexes and not other tables. Your hop's test should add any table it
-  creates to that list, and should also compare `sqlite_master` for the tables
-  and indexes your hop touches.
-- **Rollback:** `TestV5Migration_RollbackOnInjectedFailure` breaks the hop
-  after the `spawns` columns land (`breakV5SessionHistoryHop`) and asserts v4,
-  no new columns, unchanged rows and a kept sentinel.
-- **Data:** `TestV5Migration_HistoryFixtureAtLifeZero` and
-  `TestV5Migration_PendingRowHasNoLaunchStart` assert the migrated values
-  (`readV5Columns`, `readRawSpawn`, `readRawHistory`, `assertV5Defaults`).
-- **Store id:** `internal/store/schema_v5_store_id_test.go` covers the
-  `store_meta` part of v5: one well-formed id for a fresh and a migrated
-  store, a kept id on reopen, on hop re-entry, on a fresh-create re-run and on
-  a restored copy, the hop's rollback when its `store_meta` step fails, the
-  open failure for a missing or malformed id, and the v5 → v4 recipe followed
-  by a re-migration that creates a new id.
+**What a new version adds by hand:**
 
-The v4 fixture is `makeV4HistoryFixture` in
-`internal/store/migration_fixtures_test.go`. It builds a genuine v4 store on
+- **Re-entry rows** in `TestMigrationStepReentry`: `"vN→vN+1 run twice"`,
+  and one row per partial state the step can be re-run over, with a helper in
+  `migration_fixtures_test.go` that makes that part of the change first (as
+  `preAddV5Columns` and `preAddStoreMeta` do for v4→v5).
+- **A rollback row** in `TestMigrationRollback`: an arrangement that makes
+  the hop fail part-way (as `breakV5SessionHistoryHop` and
+  `breakV5StoreMetaStep` do), and the text the open's error must name. The
+  test asserts a migration failure, not a refusal, and the version, schema,
+  rows (`dbDump`) and sentinel kept. Only `from == 4` starts with rows
+  (`makeV4HistoryFixture`); every other version's `makeVersionedDB` store is
+  empty. Seed rows for your hop's from-version (extend the fixture choice at
+  the top of the subtest, as `tc.from == 4` does with
+  `makeV4HistoryFixture`) so the `dbDump` comparison covers data, not only
+  the schema.
+- **Defaults and fresh shape**: a `v<N>ColumnSpecs` list of the columns your
+  hop adds, and its `assertV<N>Defaults`, in `migration_fixtures_test.go`
+  (as `v5ColumnSpecs` and `assertV5Defaults` are for v5). Call
+  `assertV<N>Defaults` from `TestAuthorizedMigrationFromEveryVersion`'s
+  pre-existing-row check, beside `assertV5Defaults`. In
+  `TestFreshStoreSchema`, add the specs to its `assertColumnSpecs` call
+  (today `v3ColumnSpecs` and `v5ColumnSpecs`) and any new table or index to
+  its list of names. Neither test picks up a new version's columns on its
+  own.
+- **Data cases** in `schema_v<N>_test.go`, as `schema_v5_test.go` does for
+  v5: the values a seeded older store's rows come out with after the hop, and
+  anything else the version adds (v5's store id and its downgrade recipe).
+
+v5's data test, `TestV5MigrationKeepsV4Rows`, migrates `makeV4HistoryFixture`
+(`internal/store/migration_fixtures_test.go`). It builds a genuine v4 store on
 the real migration chain (`makeVersionedDB`) and seeds it with session history
 — a rotation entry, an `ended` row whose current session was never written, a
 row whose history already holds its current session id, and two ids whose
@@ -372,42 +397,6 @@ history values. With that data in place, "every row and entry comes out at
 life 0" and "the `pending` row has no launch start" are real assertions, not
 vacuous ones. Seed your own fixture the same way: the inline SQL that builds
 it lives in `migration_fixtures_test.go`, never in the test file itself.
-
-1. **Build a fixture DB at version N.** Commit a small `testdata/schema_v<N>.sql`
-   (v1's lives at `internal/store/testdata/schema_v1.sql`; it ends with
-   `PRAGMA user_version = 1`) and load it into a temp file, as `openV1DB` does.
-   Seed a couple of representative rows so post-migration data assertions are
-   non-vacuous.
-2. **Authorize the upgrade, then run `Open`/`OpenOrInit` once.** The store no
-   longer auto-migrates (§1a), so an older-DB open now *refuses* with
-   `ErrSchemaMigrationRequired` unless a valid sentinel is present. Write a
-   `migrate-authorized` file next to the fixture DB with an exact-match payload
-   (`{"from": N, "to": N+1}`) before opening. Then assert `PRAGMA user_version
-   == N+1`, that the schema and data match expectations (new columns/indexes
-   present, backfilled values correct, dropped data actually gone), **and that
-   the sentinel was consumed** (deleted) by the successful open.
-   `TestSchemaV2Migration` uses `Open` and checks the `request_token` column,
-   the composite `UNIQUE`, both indexes, and a zero row count. Cover the refusal
-   path too: open the same fixture with a missing/malformed/mismatched sentinel
-   and assert `errors.Is(err, ErrSchemaMigrationRequired)`, the DB stays
-   byte-identical at `user_version == N`, and a preserved sentinel is left in
-   place on the malformed/mismatched cases.
-3. **Run `OpenOrInit` again.** Assert nothing changed: no error, `user_version`
-   still `N+1`, no data mutation. This is the idempotency proof — it fails if
-   your hop is not safe to re-enter or if the `== schemaVersion` no-op arm is
-   wrong. (`TestOpenIsIdempotent` covers the double-open for the fresh path.)
-4. **Assert the fresh path and the migrated path converge.** Create one DB via
-   `createSchema` (fresh `OpenOrInit` on an empty file) and one via the
-   migration, then compare their normalized `sqlite_master` SQL. This is the
-   automated enforcement of the two-places rule (§1) — if `schemaDDL` and your
-   hop drifted, the schemas differ and the test fails. Normalize whitespace/case
-   before comparing, and query `sqlite_master` for both `table` and `index`
-   objects (`objectExists` in `schema_test.go` shows the lookup shape).
-
-Also keep a rollback test: `TestMigrationFailurePreservesV1State`
-(`schema_mismatch_test.go`) injects a mid-transaction failure and asserts the
-DB stays at `user_version=1` with the old table shape intact. Add the
-equivalent for your hop.
 
 **Where these tests run:** `internal/store` carries the sandbox guard
 (`sandboxguard.Require()` in its `TestMain`). Run them only in the sandbox —
@@ -419,7 +408,7 @@ Restating the two-places rule because it is the most common way a migration
 goes wrong: **fresh databases never replay hops.** When you add v6, update
 `schemaDDL` and `schemaVersion` so a brand-new DB is created directly at v6 by
 `createSchema`, *and* write `migrateV5toV6` so an existing v5 DB is upgraded to
-the identical shape (as v5 did with `schemaDDL` and `migrateV4toV5`). The §3.4 normalized-`sqlite_master` comparison is the
+the identical shape (as v5 did with `schemaDDL` and `migrateV4toV5`). The §3 step 4 `schemaShape` comparison is the
 guard that both paths land in the same place. If you only touch the hop, fresh
 installs are stuck on the old schema; if you only touch `schemaDDL`, upgrades
 never happen.
@@ -610,33 +599,36 @@ installing.
   `readStoreID` (the open-time read), `insertStoreIDOnce` /
   `insertStoreIDOnceSQL` (the guarded insert used by `createSchema` and
   `migrateV4toV5`), `newStoreID`, `validStoreID`.
-- `internal/store/schema_v5_store_id_test.go` — the store-id tests (§3).
 - `pkg/api/aliases.go` — `ErrSchemaMigrationRequired` alias (mirrors the
   `ErrSchemaMismatch` precedent).
-- `internal/store/schema_test.go` — the fresh-path, idempotency, and v1→v2
-  migration tests; `openV1DB` fixture loader.
-- `internal/store/schema_mismatch_test.go` — `ErrSchemaMismatch` coverage and
-  the rollback-preserves-old-state test.
-- `internal/store/schema_v5_migration_test.go` — the v4→v5 migration tests,
-  the current template for a new hop's tests (§3).
-- `internal/store/migration_fixtures_test.go` — the migration-gate fixtures
-  (`makeVersionedDB`, `makeV1DB`, `writeSentinel` and its malformed/wrong
-  variants, `assertSentinelPresent`/`assertSentinelAbsent`, `snapshotDBBytes`,
-  `assertDBBytesUnchanged`) and the v5 helpers: `makeV4HistoryFixture` (the v4
-  store seeded with session history and a `pending` row), `v5ColumnSpecs`,
-  `readTableShape`, `readRawSpawn`, `readRawHistory`, `readV5Columns`,
-  `preAddV5Columns`, `breakV5SessionHistoryHop`; and the store-id helpers:
-  `readStoreMetaRaw`, `deleteStoreIDRow`, `setStoreIDRaw`, `preAddStoreMeta`,
-  `breakV5StoreMetaStep`, and `applyV5ToV4Recipe` (with
-  `v5ToV4RecipeStatements`, which must match the v5 → v4 recipe statement for
-  statement), and `seedV5DowngradeRows` (a v5 store with a row reused twice
-  and a row with pre-trust turned off, for the downgrade test).
-- `internal/store/schema_v5_downgrade_test.go` — the v5 → v4 downgrade tests:
+- `internal/store/schema_test.go` — the fresh store and the
+  version-independent migration tests (§3):
+  `TestAuthorizedMigrationFromEveryVersion`,
+  `TestMigrationRefusedWithoutSentinel`, `TestGateRefusesBadSentinel`,
+  `TestNewerThanBinaryIsSchemaMismatch`, `TestMigrationStepReentry`,
+  `TestMigrationRollback` and the sentinel consume.
+- `internal/store/schema_v5_test.go` — v5's own cases, the template for a
+  new version's `schema_v<N>_test.go` (§3): `TestV5MigrationKeepsV4Rows`,
+  the store-id tests (`TestStoreIDKept`,
+  `TestStoreID_MissingOrMalformedFailsOpen`) and the v5 → v4 downgrade tests:
   `TestDowngradeRecipe_MatchesGuide` parses the "v5 → v4" SQL block of §5
   and fails when it differs from `v5ToV4RecipeStatements`, so the recipe here
   and the test copy cannot drift; `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults`
   applies the recipe to `seedV5DowngradeRows`, checks every v4 column and
   history entry survives, then re-migrates and checks the v5 columns take
   their defaults (pre-trust opt-out and life numbers are lost).
-- `internal/store/testdata/schema_v1.sql` — the version-N fixture pattern.
+- `internal/store/migration_fixtures_test.go` — the migration-gate fixtures
+  (`makeVersionedDB`, `writeSentinel` / `writeSentinelRaw`,
+  `assertSentinel`, `stampUserVersion`, `snapshotDBBytes`,
+  `assertDBBytesUnchanged`, `schemaShape`, `dbDump`) and the v5 helpers:
+  `makeV4HistoryFixture` (the v4 store seeded with session history and a
+  `pending` row), `v5ColumnSpecs`, `readTableShape`, `readRawSpawn`,
+  `readRawHistory`, `assertV5Defaults`, `preAddV5Columns`,
+  `breakV5SessionHistoryHop`; and the store-id helpers: `readStoreMeta`,
+  `preAddStoreMeta`, `breakV5StoreMetaStep`, and `applyV5ToV4Recipe` (with
+  `v5ToV4RecipeStatements`, which must match the v5 → v4 recipe statement for
+  statement), and `seedV5DowngradeRows` (a v5 store with a row reused twice
+  and a row with pre-trust turned off, for the downgrade test).
+- `internal/store/testdata/schema_v1.sql` — the v1 fixture `makeVersionedDB`
+  builds every older version from.
 - docs/engineering-guide.md §10 — sandboxed execution, the b.8dr incident.

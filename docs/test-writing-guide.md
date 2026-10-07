@@ -178,13 +178,12 @@ Exported factories (in pkg/api/apitest/seeds.go):
 
 Default behavior on empty arguments (e.g. empty id → generated UUID, empty
 state → "waiting", empty cwd → "/tmp") is documented in seeds.go and
-exercised by pkg/api/apitest/seeds_test.go. Refer to those tests for
-canonical usage patterns.
+pinned by `TestSeedSpawn_Defaults` (pkg/api/apitest/seeds_test.go).
 
 Why this matters (SR-19.2): re-implementing seeding inline tends to drift
 from the store schema and fixture conventions, masking regressions. The
-shared factories are exercised by their own tests AND by every consumer,
-so any schema break is caught early.
+shared factories are exercised by every consumer, so any schema break is
+caught early.
 
 ## pkg/api tests: parallel or serial
 
@@ -210,13 +209,13 @@ environment `TestMain` sets and changes none of it.
   scan for a forbidden value. Records that a parallel test writes in the
   meantime would show up in the check.
 - checks the trail by fixed row ids that other tests also use, such as the
-  find-missing trail tests' `dg-1`.
+  find-missing tests' literal row ids.
 - changes other process-wide state: `api.SetPauseTestKnobs` (through
   `fastPausePolls` or `endAtFirstWait`), `log.SetOutput`, or the working
   directory (`cwdfix.Temp`).
 - removes the default socket's directory, changes its mode, or uses
   `test/fake-tmux`, which keeps its table beside the socket. Such a test takes
-  its own `TMUX_TMPDIR` before seeding, with `e.ownSocketDir(t)` on either
+  its own `TMUX_TMPDIR` before seeding, with `e.ownSocketDir(t)` on the kill
   fixture or `useOwnTmuxTmpdir(t)`. Both call `t.Setenv`, so the test is
   serial. Never change `TestMain`'s shared directory.
 
