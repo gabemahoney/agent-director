@@ -318,8 +318,9 @@ the slowest package seen, so only a real hang trips it. On a slower machine,
 raise it: `make test-sandbox GO_TEST_TIMEOUT=60m`. A one-off `make sandbox
 CMD="go test …"` does not get it; pass `-timeout` yourself.
 
-The literal-follow tests for error advice skip the ones whose advice is known
-not to work as written; `AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` runs them
+`install.sh`'s literal-follow tests (`test/install-sh/advice_follow.sh`) skip
+the ones whose advice is known not to work as written;
+`AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` runs them
 (docs/test-writing-guide.md "Literal-follow tests for error advice").
 
 The suite exit code propagates to the caller; output streams live. The
