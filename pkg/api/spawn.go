@@ -306,7 +306,9 @@ func hasControlChar(id string) bool {
 //     row's or another agent-director store's session is another agent and
 //     must not be ended.
 //   - ErrTemplateNotFound: the named template file does not exist.
-//   - ErrTemplateMalformed: the template TOML could not be parsed.
+//   - ErrTemplateMalformed: the template TOML could not be parsed, or it
+//     sets an unknown key, one key under names differing only in letter
+//     case, or a relay_mode other than on/off.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.
 //
 // Nondeterminism: .claude_instance_id — a UUID4 is minted when

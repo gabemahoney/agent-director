@@ -237,10 +237,17 @@ const caseVariantAdvice = "Set each key once, removing all but one of the names 
 
 // caseVariantText is Load's refusal of a file setting keys under names that
 // differ only in letter case (b.p8n), each of groups listing one key's names.
-func caseVariantText(groups ...string) string {
+func caseVariantText(groups ...string) string { return caseVariantTextExcept("", groups...) }
+
+// caseVariantTextExcept is caseVariantText whose except, unless "", lists the
+// map tables whose key names keep their letter case ("[extra_env] and [labels]").
+func caseVariantTextExcept(except string, groups ...string) string {
+	if except != "" {
+		except = ", except the names of keys in " + except
+	}
 	return "refused keys set more than once, under names that differ only in letter case: " +
-		strings.Join(groups, "; ") + ". agent-director matches table and key names regardless of letter case," +
-		" so for each key it would read one of its values at random on each load. " + caseVariantAdvice
+		strings.Join(groups, "; ") + ". agent-director matches table and key names regardless of letter case" +
+		except + ", so for each key it would read one of its values at random on each load. " + caseVariantAdvice
 }
 
 // TestLoadRefusesCaseVariantKeys is the b.p8n regression: a key set under names

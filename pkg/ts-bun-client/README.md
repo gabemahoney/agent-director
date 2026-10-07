@@ -425,7 +425,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrTemplateNameUnsafe` | A template name fails the safety check (path traversal, absolute path, hidden name, or trivial garbage). |
 | `ErrTemplateNotFound` | The named template `.toml` does not exist on disk. |
-| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, wrong types, bad enums). |
+| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, wrong types, bad enums, or one key set under names that differ only in letter case, such as `RELAY_MODE` and `relay_mode`). |
 | `ErrTemplateExists` | `make-template` target already exists; the verb never overwrites. |
 
 **misc**:

@@ -23,6 +23,13 @@ type TemplateFile struct {
 	Permissions         *TemplatePermissions `toml:"permissions,omitempty"`
 }
 
+// templateMapTables names TemplateFile's tables that decode into a Go map:
+// the decoder keeps the names of their keys as written, so LoadTemplate's
+// caseVariantRefusal leaves those names' letter case alone (FOO and foo under
+// [extra_env] are two environment variables). Keep it in step with the map
+// fields above.
+var templateMapTables = []string{"extra_env", "labels"}
+
 // TemplatePermissions mirrors the SRD §6.1 three-arrays surface. Each
 // slice survives the TOML round-trip and feeds Merge's leaf-array
 // concat path.

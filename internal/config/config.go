@@ -24,7 +24,8 @@
 //
 // Load also refuses a file that sets one key under names differing only in
 // letter case ([Store] and [store] both setting db_path), whose value the
-// decoder would otherwise pick at random (b.p8n).
+// decoder would otherwise pick at random (b.p8n); LoadTemplate refuses a
+// spawn template of that shape the same way (b.2u1).
 package config
 
 import (
@@ -33,6 +34,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -434,31 +436,39 @@ func Load(path string) (Config, error) {
 }
 
 // caseVariantRefusal refuses a file, whose metadata is meta, that sets one key
-// under two or more names differing only in letter case (b.p8n): db_path under
-// both [Store] and [store], say, or DB_PATH and db_path under [store]. TOML
-// reads them as different keys, but the decoder matches each name to a field
-// regardless of letter case (strings.EqualFold), so all of them land on one
-// field, in Go's random map order. Only keys holding a value that the decoder
-// read count: tables do not, so [Store] and [store] setting different keys
-// load, and neither do keys agent-director does not read. It returns nil when
-// no key is set twice, otherwise an error listing each such key's names
-// (keyName, in file order, by nameList), keys in the order of their first
-// name, then the change that loads. MetaData records no line numbers, so the
-// names stand in for them.
-func caseVariantRefusal(meta toml.MetaData) error {
+// under two or more names differing only in letter case: db_path under both
+// [Store] and [store] in config.toml (Load, b.p8n), say, DB_PATH and db_path
+// under [store], or RELAY_MODE and relay_mode in a template (LoadTemplate,
+// b.2u1). TOML reads them as different keys, but the decoder matches each name
+// to a field regardless of letter case (strings.EqualFold), so all of them land
+// on one field, in Go's random map order. Only keys holding a value that the
+// decoder read count: tables do not, so [Store] and [store] setting different
+// keys load, and neither do keys agent-director does not read.
+//
+// maps names the top-level tables, if any, that decode into a Go map, such as
+// a template's [extra_env] and [labels]. The decoder matches such a table's
+// own name regardless of letter case but keeps the names of its keys as
+// written, so FOO and foo under [extra_env] are two keys, both loaded, and are
+// not refused; FOO under both [extra_env] and [EXTRA_ENV] is (decoderKey).
+//
+// It returns nil when no key is set twice, otherwise an error listing each
+// such key's names (keyName, in file order, by nameList), keys in the order of
+// their first name, then the change that loads. MetaData records no line
+// numbers, so the names stand in for them.
+func caseVariantRefusal(meta toml.MetaData, maps ...string) error {
 	undecoded := make(map[string]bool)
 	for _, k := range meta.Undecoded() {
 		undecoded[k.String()] = true
 	}
-	var order []string                 // each key, folded, in the order of its first name
-	names := make(map[string][]string) // each folded key's names, in file order
+	var order []string                 // each key, by decoderKey, in the order of its first name
+	names := make(map[string][]string) // each such key's names, in file order
 	for _, k := range meta.Keys() {
 		// MetaData.Type names a table, inline or not, "Hash", and an array
 		// of tables "ArrayHash".
 		if t := meta.Type(k...); undecoded[k.String()] || t == "Hash" || t == "ArrayHash" {
 			continue
 		}
-		f := foldKey(k)
+		f := decoderKey(k, maps)
 		if names[f] == nil {
 			order = append(order, f)
 		}
@@ -473,8 +483,16 @@ func caseVariantRefusal(meta toml.MetaData) error {
 	if len(refused) == 0 {
 		return nil
 	}
+	matched := "table and key names regardless of letter case"
+	if len(maps) > 0 {
+		tables := make([]string, len(maps))
+		for i, m := range maps {
+			tables[i] = "[" + m + "]"
+		}
+		matched += ", except the names of keys in " + nameList(tables)
+	}
 	return errors.New("refused keys set more than once, under names that differ only in letter case: " +
-		strings.Join(refused, "; ") + ". agent-director matches table and key names regardless of letter case," +
+		strings.Join(refused, "; ") + ". agent-director matches " + matched + "," +
 		" so for each key it would read one of its values at random on each load." +
 		" Set each key once, removing all but one of the names listed for it.")
 }
@@ -502,6 +520,17 @@ func foldKey(k toml.Key) string {
 		folded[i] = foldCase(part)
 	}
 	return folded.String()
+}
+
+// decoderKey returns key k as caseVariantRefusal compares it: foldKey's form,
+// except that the names below a top-level table named in maps, the keys of a
+// Go map, stay as written, as the decoder keeps them. Two keys give the same
+// string exactly when the decoder reads them into one field or map entry.
+func decoderKey(k toml.Key, maps []string) string {
+	if len(k) > 1 && slices.ContainsFunc(maps, func(m string) bool { return strings.EqualFold(m, k[0]) }) {
+		return append(toml.Key{foldCase(k[0])}, k[1:]...).String()
+	}
+	return foldKey(k)
 }
 
 // isDefined reports whether the file whose metadata is meta sets key, given as

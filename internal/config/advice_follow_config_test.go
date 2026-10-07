@@ -9,9 +9,11 @@ package config_test
 // states its own change that loads instead, and the closing sentence leaves
 // it out (b.n4q). G3 (b.p8n): a key set under names that differ only in
 // letter case is refused, ending with caseVariantAdvice; removing all but one
-// of its names must make the file load that name's value.
+// of its names must make the file load that name's value, and a spawn
+// template's likewise (b.2u1).
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -328,30 +330,43 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 	}
 }
 
-// advCaseEntry is one key a G3 file sets: its table and its own name as
-// written, and its TOML value.
+// advCaseEntry is one key a G3 file sets: its table ("" for a top-level key)
+// and its own name as written, and its TOML value.
 type advCaseEntry struct{ table, key, value string }
 
 // name is e's name as the letter-case refusal lists it.
-func (e advCaseEntry) name() string { return "[" + e.table + "] " + e.key }
+func (e advCaseEntry) name() string {
+	if e.table == "" {
+		return e.key
+	}
+	return "[" + e.table + "] " + e.key
+}
 
-// advCaseFile writes entries, each table's keys under one header, tables in
-// the order of their first entry, and returns the file's path.
-func advCaseFile(t *testing.T, entries []advCaseEntry) string {
-	t.Helper()
-	var tables []string
+// advCaseBody is the TOML of entries: top-level keys first, then each table's
+// keys under one header, tables in the order of their first entry.
+func advCaseBody(entries []advCaseEntry) string {
+	tables := []string{""}
 	lines := make(map[string]string)
 	for _, e := range entries {
-		if _, ok := lines[e.table]; !ok {
+		if _, ok := lines[e.table]; !ok && e.table != "" {
 			tables = append(tables, e.table)
 		}
 		lines[e.table] += e.key + " = " + e.value + "\n"
 	}
 	var b strings.Builder
 	for _, tb := range tables {
-		b.WriteString("[" + tb + "]\n" + lines[tb] + "\n")
+		if tb != "" {
+			b.WriteString("[" + tb + "]\n")
+		}
+		b.WriteString(lines[tb] + "\n")
 	}
-	return makeConfigFile(t, b.String())
+	return b.String()
+}
+
+// advCaseFile writes entries as advCaseBody and returns the file's path.
+func advCaseFile(t *testing.T, entries []advCaseEntry) string {
+	t.Helper()
+	return makeConfigFile(t, advCaseBody(entries))
 }
 
 // advCaseListed returns the names desc lists for each refused key, as a
@@ -368,6 +383,27 @@ func advCaseListed(t *testing.T, desc string) [][]string {
 		groups = append(groups, strings.Split(strings.Replace(g, " and ", ", ", 1), ", "))
 	}
 	return groups
+}
+
+// advCaseKeeps are two literal follows of G3's advice: the name of each listed
+// key that pick keeps.
+var advCaseKeeps = []struct {
+	name string
+	pick func(names []string) string
+}{
+	{"keep the first name", func(names []string) string { return names[0] }},
+	{"keep the last name", func(names []string) string { return names[len(names)-1] }},
+}
+
+// advCaseFollow returns file without the listed names that pick does not keep.
+func advCaseFollow(file []advCaseEntry, listed [][]string, pick func(names []string) string) []advCaseEntry {
+	removed := make(map[string]bool)
+	for _, names := range listed {
+		for _, n := range names {
+			removed[n] = n != pick(names)
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(file), func(e advCaseEntry) bool { return removed[e.name()] })
 }
 
 // TestAdviceFollow_G3_CaseVariantKeysSetEachOnce: G3 (b.p8n) "refused keys set
@@ -389,21 +425,9 @@ func TestAdviceFollow_G3_CaseVariantKeysSetEachOnce(t *testing.T) {
 	}
 	listed := advCaseListed(t, desc)
 
-	for _, keep := range []struct {
-		name string
-		pick func(names []string) string
-	}{
-		{"keep the first name", func(names []string) string { return names[0] }},
-		{"keep the last name", func(names []string) string { return names[len(names)-1] }},
-	} {
+	for _, keep := range advCaseKeeps {
 		t.Run(keep.name, func(t *testing.T) {
-			removed := make(map[string]bool)
-			for _, names := range listed {
-				for _, n := range names {
-					removed[n] = n != keep.pick(names)
-				}
-			}
-			kept := slices.DeleteFunc(slices.Clone(file), func(e advCaseEntry) bool { return removed[e.name()] })
+			kept := advCaseFollow(file, listed, keep.pick)
 
 			cfg, err := config.Load(advCaseFile(t, kept))
 
@@ -414,6 +438,48 @@ func TestAdviceFollow_G3_CaseVariantKeysSetEachOnce(t *testing.T) {
 				"timeout_seconds": fmt.Sprint(cfg.Relay.TimeoutSeconds), "relay_mode": quoted(cfg.Defaults.RelayMode)}
 			for _, e := range kept {
 				if got := read[strings.ToLower(e.key)]; got != e.value {
+					t.Errorf("%s = %s after the follow; want the kept %s", e.name(), got, e.value)
+				}
+			}
+		})
+	}
+}
+
+// TestAdviceFollow_G3_TemplateCaseVariantKeysSetEachOnce: G3 (b.2u1), the same
+// advice from LoadTemplate. Keeping the first or the last name of each, the
+// template loads the kept values.
+func TestAdviceFollow_G3_TemplateCaseVariantKeysSetEachOnce(t *testing.T) {
+	file := []advCaseEntry{
+		{"", "RELAY_MODE", `"on"`},
+		{"extra_env", "FOO", `"a"`},
+		{"", "relay_mode", `"off"`},
+		{"extra_env", "foo", `"b"`}, // another variable, so never listed
+		{"EXTRA_ENV", "FOO", `"c"`},
+	}
+	dir := templatesDir(t)
+	writeTemplate(t, dir, "dup", advCaseBody(file))
+	_, err := config.LoadTemplate("dup")
+	if !errors.Is(err, config.ErrTemplateMalformed) || !strings.HasSuffix(err.Error(), caseVariantAdvice) {
+		t.Fatalf("LoadTemplate = %v; want ErrTemplateMalformed ending with the advice %q", err, caseVariantAdvice)
+	}
+	listed := advCaseListed(t, err.Error())
+
+	for _, keep := range advCaseKeeps {
+		t.Run(keep.name, func(t *testing.T) {
+			kept := advCaseFollow(file, listed, keep.pick)
+			writeTemplate(t, dir, "dup", advCaseBody(kept))
+
+			tf, err := config.LoadTemplate("dup")
+
+			if err != nil {
+				t.Fatalf("after following %q (%s of %q), LoadTemplate: %v", caseVariantAdvice, keep.name, listed, err)
+			}
+			for _, e := range kept {
+				got := quoted(tf.RelayMode)
+				if e.table != "" {
+					got = quoted(tf.ExtraEnv[e.key])
+				}
+				if got != e.value {
 					t.Errorf("%s = %s after the follow; want the kept %s", e.name(), got, e.value)
 				}
 			}

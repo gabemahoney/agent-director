@@ -15,6 +15,17 @@ import (
 //   - Name safety is enforced via ValidateTemplateName + TemplatePath.
 //   - Missing file → ErrTemplateNotFound.
 //   - Decode failure → ErrTemplateMalformed.
+//   - One key set under two or more names differing only in letter case
+//     (RELAY_MODE and relay_mode, or allow under both [permissions] and
+//     [Permissions]) → ErrTemplateMalformed naming them all
+//     (caseVariantRefusal, b.2u1, as Load refuses it in config.toml): the
+//     decoder reads each into the one field, keeping one of the values at
+//     random on each load. The names of keys in [extra_env] and [labels]
+//     are kept as written, so FOO and foo there are two keys and load
+//     (templateMapTables). A single spelling (RELAY_MODE alone) loads as
+//     relay_mode. This check comes first after the decode, so neither
+//     its text nor whether a later check refuses depends on which value
+//     the decoder kept.
 //   - Unknown top-level keys → ErrTemplateMalformed (the BurntSushi
 //     decoder accepts unknown keys by default; we walk the
 //     MetaData.Undecoded() result and reject if any survive).
@@ -41,6 +52,12 @@ func LoadTemplate(name string) (TemplateFile, error) {
 	var tf TemplateFile
 	meta, err := toml.Decode(string(data), &tf)
 	if err != nil {
+		return TemplateFile{}, fmt.Errorf("%w: %s: %v", ErrTemplateMalformed, name, err)
+	}
+
+	// Before the relay_mode check, which would check whichever value of a
+	// key set twice the decoder happened to keep (b.2u1).
+	if err := caseVariantRefusal(meta, templateMapTables...); err != nil {
 		return TemplateFile{}, fmt.Errorf("%w: %s: %v", ErrTemplateMalformed, name, err)
 	}
 

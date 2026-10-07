@@ -183,6 +183,16 @@ A template MUST NOT bake any of:
 undefined flags, over MCP as unknown parameters. A hand-edited template
 carrying any of them surfaces `ErrTemplateMalformed` on load.
 
+### One spelling per key
+
+agent-director matches table and key names regardless of letter case, so
+a hand-edited template that sets one key under names differing only in
+letter case (`RELAY_MODE` and `relay_mode`, or `allow` under both
+`[permissions]` and `[Permissions]`) surfaces `ErrTemplateMalformed` on
+load, naming each spelling. Keep one and remove the others. A single
+spelling (`RELAY_MODE` alone) loads. Keys under `[extra_env]` and
+`[labels]` keep their letter case: `FOO` and `foo` there are two entries.
+
 ### Example
 
 ```toml
