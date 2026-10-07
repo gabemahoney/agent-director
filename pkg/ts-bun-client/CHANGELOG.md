@@ -35,13 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full bun:test suite (163 tests) covering FFI binding, envelope-diff
   invariants, error catalog drift, platform resolution, and smoke tests.
 
-### Removed
-
-- **BREAKING:** `Client.delete` and its `DeleteParams` / `DeleteResult`
-  types (b.vqr). No client library removes rows: a human removes one with
-  the operator tool `agent-director-admin delete`, which no client library
-  exposes. Finished rows are removed by a scheduled `expire`.
-
 ### Changed
 
 - **H3 resolved (2026-05-24).** The placeholder scope `@CHANGEME-H3/` has been
