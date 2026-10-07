@@ -1,13 +1,12 @@
 package mcp_test
 
 // pretrust_result_test.go pins pre_trust on the MCP spawn and resume results
-// (SR-22.6 "The field" and "Surfaces"; AC-SPN-08): the JSON an MCP caller
-// receives from tools/call carries pre_trust ok when the folder-trust entry
-// was written, failed when the .claude.json is missing (the launch still
-// succeeds) and, for resume, skipped when the row records the opt-out. Every
-// case points CLAUDE_CONFIG_DIR at a per-test directory, so the real
-// ~/.claude.json is never read or written. MCP spawn's no_pre_trust is in
-// param_test.go (b.7or).
+// (SR-22.6 "The field" and "Surfaces"; AC-SPN-08; b.7or's no_pre_trust): the
+// result carries ok when the folder-trust entry was written, failed when the
+// .claude.json is missing (the launch still runs) and skipped for the opt-out.
+// Every case points CLAUDE_CONFIG_DIR at a per-test directory, so the real
+// ~/.claude.json is never read or written. The verbs' full pre-trust matrix is
+// pkg/api's.
 
 import (
 	"encoding/json"
@@ -17,11 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
-	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -79,47 +74,6 @@ func (c ptConfig) check(t *testing.T, cwd string, trusted bool) {
 	}
 }
 
-// ptEnv is a live dispatcher over a Client on a temp store with a
-// non-existent config file and a tmuxfix.Recorder; socket is the default
-// socket under the per-test TMUX_TMPDIR, whose per-user directory exists.
-type ptEnv struct {
-	d         mcp.Dispatcher
-	rec       *tmuxfix.Recorder
-	storePath string
-	socket    string
-}
-
-// newPreTrustEnv builds a ptEnv with TMUX unset and no caller instance id.
-func newPreTrustEnv(t *testing.T) *ptEnv {
-	t.Helper()
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
-	t.Setenv("TMUX", "")
-	tmpdir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	t.Setenv("TMUX_TMPDIR", tmpdir)
-	sockDir := filepath.Join(tmpdir, fmt.Sprintf("tmux-%d", os.Getuid()))
-	if err := os.MkdirAll(sockDir, 0o700); err != nil {
-		t.Fatalf("mkdir socket dir: %v", err)
-	}
-	dir := t.TempDir()
-	e := &ptEnv{rec: tmuxfix.NewRecorder(), storePath: filepath.Join(dir, "state.db"),
-		socket: filepath.Join(sockDir, "default")}
-	client, err := api.New(api.Options{
-		StorePath:       e.storePath,
-		ConfigPath:      filepath.Join(dir, "absent", "config.toml"),
-		CreateIfMissing: true,
-		TmuxClient:      e.rec,
-	})
-	if err != nil {
-		t.Fatalf("api.New: %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	e.d = mcp.NewLiveDispatcher(client)
-	return e
-}
-
 // assertPreTrust checks the tool's JSON result carries pre_trust want.
 func assertPreTrust(t *testing.T, obj map[string]json.RawMessage, want string) {
 	t.Helper()
@@ -128,93 +82,85 @@ func assertPreTrust(t *testing.T, obj map[string]json.RawMessage, want string) {
 	}
 }
 
-// assertCreates checks the Recorder saw exactly one create, so the launch ran.
-func assertCreates(t *testing.T, rec *tmuxfix.Recorder) {
-	t.Helper()
-	if n := len(rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
-		t.Errorf("creates = %d; want 1 (the launch proceeds whatever pre-trust did)", n)
-	}
-}
-
-// TestPreTrustMCPSpawnResult: an MCP spawn with only cwd and extra_env reports
-// ok and writes the entry when the .claude.json lacks it, and reports failed
-// and still spawns when the file is missing.
+// TestPreTrustMCPSpawnResult: an MCP spawn reports ok and writes the entry when
+// the .claude.json lacks it, failed (and still spawns) when the file is
+// missing, and with no_pre_trust skipped, the file byte-identical and the
+// opt-out recorded on the row.
 func TestPreTrustMCPSpawnResult(t *testing.T) {
 	cases := []struct {
-		name     string
-		withFile bool
-		want     string
-		trusted  bool
+		name          string
+		withFile      bool
+		noPreTrust    bool
+		want          string
+		trusted       bool
+		wantNoPreTrst string // the row's no_pre_trust
 	}{
-		{"ok when the entry is lacking", true, "ok", true},
-		{"failed when .claude.json is missing", false, "failed", false},
+		{"ok when the entry is lacking", true, false, "ok", true, "0"},
+		{"failed when .claude.json is missing", false, false, "failed", false, "0"},
+		{"skipped with no_pre_trust", true, true, "skipped", false, "1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newPreTrustEnv(t)
+			e := newEnv(t)
 			c := ptSeedConfig(t, tc.withFile)
 			cwd, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatalf("EvalSymlinks: %v", err)
 			}
-			args, err := json.Marshal(map[string]any{"cwd": cwd, "extra_env": c.env()})
-			if err != nil {
-				t.Fatalf("marshal args: %v", err)
+			extra := map[string]any{}
+			if tc.noPreTrust {
+				extra["no_pre_trust"] = true
 			}
 
-			obj := callToolText(t, e.d, "spawn", string(args))
+			obj := callToolText(t, e.d, "spawn", spawnArgs(t, cwd, c, extra))
+
 			assertPreTrust(t, obj, tc.want)
-			if id := obj["claude_instance_id"]; len(id) <= 2 {
-				t.Errorf("claude_instance_id = %s; want the new row's id", id)
-			}
 			c.check(t, cwd, tc.trusted)
 			assertCreates(t, e.rec)
+			var id string
+			if err := json.Unmarshal(obj["claude_instance_id"], &id); err != nil || id == "" {
+				t.Fatalf("claude_instance_id = %s; want the new row's id", obj["claude_instance_id"])
+			}
+			if npt := fmt.Sprint(readColumns(t, e.storePath, id).NoPreTrust); npt != tc.wantNoPreTrst {
+				t.Errorf("row no_pre_trust = %v; want %s", npt, tc.wantNoPreTrst)
+			}
 		})
 	}
 }
 
 // TestPreTrustMCPResumeResult: an MCP resume of a finished row reports skipped
 // and leaves the .claude.json byte-identical when the row records the opt-out,
-// ok and writes the entry when pre-trust is allowed, and failed but still
-// relaunches when the file is missing.
+// and ok and writes the entry when pre-trust is allowed; it relaunches either way.
 func TestPreTrustMCPResumeResult(t *testing.T) {
 	cases := []struct {
-		name     string
-		opts     []apitest.SpawnOption
-		withFile bool
-		want     string
-		trusted  bool
+		name    string
+		opts    []apitest.SpawnOption
+		want    string
+		trusted bool
 	}{
-		{"skipped for an opted-out row", []apitest.SpawnOption{apitest.WithNoPreTrust()}, true, "skipped", false},
-		{"ok for an allowed row", nil, true, "ok", true},
-		{"failed when .claude.json is missing", nil, false, "failed", false},
+		{"skipped for an opted-out row", []apitest.SpawnOption{apitest.WithNoPreTrust()}, "skipped", false},
+		{"ok for an allowed row", nil, "ok", true},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newPreTrustEnv(t)
-			c := ptSeedConfig(t, tc.withFile)
+			e := newEnv(t)
+			c := ptSeedConfig(t, true)
 			id := fmt.Sprintf("mcp-pretrust-resume-%d", i)
 			session := "sess-" + id
 			cwd := t.TempDir()
-			opts := append([]apitest.SpawnOption{
-				apitest.WithTmuxSocket(e.socket),
-				apitest.WithJsonlPath(apitest.SeedJsonlUnder(t, c.dir, cwd, session)),
-				apitest.WithExtraEnv(c.env()),
-			}, tc.opts...)
+			opts := append([]apitest.SpawnOption{apitest.WithTmuxSocket(e.socket),
+				apitest.WithJsonlPath(apitest.SeedJsonlUnder(t, c.dir, cwd, session)), apitest.WithExtraEnv(c.env())}, tc.opts...)
 			if _, err := apitest.SeedSpawn(e.storePath, id, store.StateEnded, cwd, "off", session, false, opts...); err != nil {
 				t.Fatalf("SeedSpawn(%s): %v", id, err)
 			}
 
 			obj := callToolText(t, e.d, "resume", `{"claude_instance_id":"`+id+`"}`)
+
 			assertPreTrust(t, obj, tc.want)
 			c.check(t, cwd, tc.trusted)
 			assertCreates(t, e.rec)
-			cols, err := apitest.ReadSpawnColumns(e.storePath, id)
-			if err != nil {
-				t.Fatalf("ReadSpawnColumns(%s): %v", id, err)
-			}
-			if cols.State != store.StatePending {
-				t.Errorf("state after resume = %v; want pending", cols.State)
+			if st := readColumns(t, e.storePath, id).State; st != store.StatePending {
+				t.Errorf("state after resume = %v; want pending", st)
 			}
 		})
 	}

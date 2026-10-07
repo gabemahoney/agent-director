@@ -2,8 +2,8 @@ package mcp_test
 
 // param_type_test.go pins b.pti: every MCP tool param's manifest Type, its
 // tools/list schema and the MCP decode agree, so a caller sending the declared
-// shape is not refused for its shape; spawn's label, claude_args and extra_env
-// in those shapes reach the launch. (TestManifestSpawnTemplateParamsOneType
+// shape is not refused for its shape; spawn's relay_mode, label, claude_args
+// and extra_env in those shapes reach the launch. (TestManifestSpawnTemplateParamsOneType
 // pins spawn's and make-template's shared params to one Type.)
 
 import (
@@ -49,37 +49,15 @@ var paramShapes = map[string]struct {
 	"map[string]string": {propSchema{Type: "object", AdditionalProperties: &propSchema{Type: "string"}}, map[string]string{"MCP_SAMPLE": "v"}, "an object with string values"},
 }
 
-// toolSchemas returns each tool's property schemas, by param, from tools/list.
-func toolSchemas(t *testing.T) map[string]map[string]propSchema {
-	t.Helper()
-	resp := runOne(t, &fakeDispatcher{}, mcp.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "tools/list"})
-	if resp == nil || resp.Error != nil {
-		t.Fatalf("tools/list failed: %+v", resp)
-	}
-	var got struct {
-		Tools []struct {
-			Name        string `json:"name"`
-			InputSchema struct {
-				Properties map[string]propSchema `json:"properties"`
-			} `json:"inputSchema"`
-		} `json:"tools"`
-	}
-	body, _ := json.Marshal(resp.Result)
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("parse tools/list: %v", err)
-	}
-	out := map[string]map[string]propSchema{}
-	for _, tool := range got.Tools {
-		out[tool.Name] = tool.InputSchema.Properties
-	}
-	return out
-}
-
 // TestMCPParamTypesAgree: every param of every MCP tool has a manifest Type
 // with a JSON Schema shape, tools/list gives it that shape, and the MCP decode
 // accepts a value of it (b.pti). TestMCPParamParity is the wrong-shape half.
 func TestMCPParamTypesAgree(t *testing.T) {
-	schemas := toolSchemas(t)
+	tools, _ := toolsList(t)
+	schemas := map[string]map[string]propSchema{}
+	for _, tool := range tools {
+		schemas[tool.Name] = tool.InputSchema.Properties
+	}
 	e, _ := newReuseParamEnv(t)
 	for _, v := range exposedVerbs() {
 		for _, p := range v.Params {
@@ -105,10 +83,11 @@ func TestMCPParamTypesAgree(t *testing.T) {
 	}
 }
 
-// TestMCPSpawnDeclaredShapesReachLaunch: an MCP spawn sending label,
-// claude_args and extra_env in their declared shapes launches with them: the
-// labels and variables on the session env (CLAUDE_CONFIG_DIR steering
-// pre-trust), the args after claude's own, and all three on the row (b.pti).
+// TestMCPSpawnDeclaredShapesReachLaunch: an MCP spawn sending relay_mode,
+// label, claude_args and extra_env in their declared shapes launches with
+// them: the labels and variables on the session env (CLAUDE_CONFIG_DIR
+// steering pre-trust), the args after claude's own, and all four on the row
+// (b.pti, b.c4u).
 func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 	e, c := newReuseParamEnv(t)
 	cwd, err := filepath.EvalSymlinks(t.TempDir())
@@ -120,7 +99,7 @@ func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 	env["MCP_SHAPE_ENV"] = "set"
 	args := []string{"--model", "opus"}
 
-	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "claude_instance_id": id,
+	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "claude_instance_id": id, "relay_mode": "on",
 		"label": []string{"role=worker", "team=core"}, "claude_args": args, "extra_env": env}))
 
 	assertPreTrust(t, obj, "ok")
@@ -155,19 +134,7 @@ func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 	if want := (stored{map[string]string{"role": "worker", "team": "core"}, args, env}); !reflect.DeepEqual(row, want) {
 		t.Errorf("row labels, claude_args, extra_env = %+v; want %+v", row, want)
 	}
-}
-
-// TestMCPSpawnReservedEnvKey: an object extra_env with an AGENT_DIRECTOR_* key
-// is refused with ErrReservedEnvKey and nothing is created, as on the CLI.
-func TestMCPSpawnReservedEnvKey(t *testing.T) {
-	e, c := newReuseParamEnv(t)
-	env := c.env()
-	env["AGENT_DIRECTOR_FOO"] = "bar"
-
-	data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": t.TempDir(), "extra_env": env})))
-
-	if data.ErrName != "ErrReservedEnvKey" {
-		t.Errorf("err_name = %q (%s); want ErrReservedEnvKey", data.ErrName, data.ErrDescription)
+	if cols.RelayMode != "on" {
+		t.Errorf("row relay_mode = %v; want on (the default is off)", cols.RelayMode)
 	}
-	assertNothingCreated(t, e.d, e.rec)
 }

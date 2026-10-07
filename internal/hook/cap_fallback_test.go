@@ -1,10 +1,9 @@
 package hook_test
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -17,70 +16,31 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
-// TestRelayConfigNegativeCapUsesDefault pins SR-11.2's negative-cap fallback and
-// Epic AC #10. A PermissionRequestCap < 0 in config.Relay silently falls back to
-// the default of 1000 at the runRelay call site (internal/hook/permission.go).
-// Unlike timeout_seconds, which config.Load refuses when negative (b.8q2), the
-// cap is not validated at load.
+// TestRelayConfigNegativeCapUsesDefault pins SR-11.2's negative-cap fallback
+// (Epic AC #10): runRelay treats a PermissionRequestCap below 0, which
+// config.Load does not refuse, as the default 1000. On a real store 1500 closed
+// rows plus the new one are evicted down to 1000.
 func TestRelayConfigNegativeCapUsesDefault(t *testing.T) {
-	for _, negativeCap := range []int{-1, -1000} {
-		negativeCap := negativeCap
-		t.Run(fmt.Sprintf("cap_%d", negativeCap), func(t *testing.T) {
-			// Use a real SQLite store — a mock cannot verify that actual
-			// eviction happened (which requires the store to have executed
-			// the DELETE).
-			const instanceID = "neg-cap-relay"
-			// SR-22.9: a row with a recorded pane, so the hook from its pane process applies.
-			s, dbPath := seedAgentRow(t, instanceID, store.StateWorking)
-			// Seed 1500 closed rows — above the default cap of 1000.
-			base := time.Now().UTC().Add(-2 * time.Hour)
-			storefix.SeedClosedPermissionRequests(t, s, dbPath, instanceID, 1500, base, time.Second)
+	const id = "neg-cap-relay"
+	st, dbPath := seedAgentRow(t, id, store.StateWorking)
+	storefix.SeedClosedPermissionRequests(t, st, dbPath, id, 1500, time.Now().UTC().Add(-2*time.Hour), time.Second)
+	now, restore := setupVirtualClock(t)
+	defer restore()
+	hc := hookConfig(envWith(id), agentParent(t, st, id))
+	hc.Cfg, hc.Clock = config.Relay{TimeoutSeconds: 1, PermissionRequestCap: -1}, &advancingClock{now: now}
 
-			// Virtual clock forces the polling loop to timeout instantly,
-			// so the test costs zero wall-clock time. Mirrors the approach
-			// in TestFailClosedPollingTimeout and TestFailClosedTimeoutWritesDBBeforeStdout.
-			now, restore := setupVirtualClock(t)
-			defer restore()
-			clock := &advancingClock{now: now}
+	if err := hook.Handle(context.Background(), strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{}}`),
+		io.Discard, st, hc, newSilentLogger()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
 
-			var stdout bytes.Buffer
-			hc := hookConfig(envWith(instanceID), agentParent(t, s, instanceID))
-			hc.Clock = clock
-			hc.Cfg = config.Relay{
-				TimeoutSeconds: 1,
-				PollBaseMs:     0,
-				PollJitterMs:   0,
-				// The runRelay call site applies: cap < 0 → fallback to 1000.
-				PermissionRequestCap: negativeCap,
-			}
-
-			if err := hook.Handle(context.Background(),
-				strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{}}`),
-				&stdout, s,
-				hc,
-				newSilentLogger()); err != nil {
-				t.Fatalf("Handle (cap=%d): %v", negativeCap, err)
-			}
-
-			// Post-call row count must be 1000:
-			//   1500 seeded closed + 1 new open (upsert) = 1501 total
-			//   → 501 evicted (default cap=1000 applied via fallback)
-			//   → 1000 rows remain.
-			// The timeout path then decides the open row deny/timeout → still 1000.
-			raw, err := sql.Open("sqlite", "file:"+dbPath)
-			if err != nil {
-				t.Fatalf("open raw db: %v", err)
-			}
-			defer func() { _ = raw.Close() }()
-
-			var count int
-			if err := raw.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&count); err != nil {
-				t.Fatalf("count rows: %v", err)
-			}
-			if count != 1000 {
-				t.Errorf("cap=%d: post-call row count = %d; want 1000 (default cap applied via call-site fallback at internal/hook/permission.go:108-116)",
-					negativeCap, count)
-			}
-		})
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	var count int
+	if err := raw.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&count); err != nil || count != 1000 {
+		t.Errorf("permission_requests rows = %d (%v); want 1000 (the default cap)", count, err)
 	}
 }

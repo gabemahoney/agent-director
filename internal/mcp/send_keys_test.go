@@ -1,10 +1,8 @@
 package mcp_test
 
 import (
-	"encoding/json"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -16,24 +14,19 @@ import (
 func TestSendKeysMCPEmptyText(t *testing.T) {
 	for _, tc := range []struct{ name, state, args string }{
 		{"live row", store.StateWaiting, `{"claude_instance_id":"` + killMCPID + `","text":""}`},
-		{"pending row with allow_pending", store.StatePending,
-			`{"claude_instance_id":"` + killMCPID + `","text":"","allow_pending":true}`},
+		{"pending row with allow_pending", store.StatePending, `{"claude_instance_id":"` + killMCPID + `","text":"","allow_pending":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, rec := newKillMCPServer(t, killMCPCase{state: tc.state, seed: seedOurs})
+			e := newKillEnv(t, tc.state, seedOurs)
 
-			resp := runOne(t, d, mcp.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "tools/call",
-				Params: json.RawMessage(`{"name":"` + mcp.ToolName("send-keys") + `","arguments":` + tc.args + `}`)})
+			toolResult(t, callTool(t, e.d, "send_keys", tc.args))
 
-			if resp == nil || resp.Error != nil {
-				t.Fatalf("tools/call send_keys with text \"\" = %+v; want a result", resp)
-			}
-			for _, c := range rec.SocketCallsOf(tmux.CallSendText) {
+			for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
 				if c.Text != "" {
 					t.Errorf("text call typed %q; want nothing typed", c.Text)
 				}
 			}
-			if enters := rec.SocketCallsOf(tmux.CallSendEnter); len(enters) != 1 || enters[0].Target != apitest.TestPaneID {
+			if enters := e.rec.SocketCallsOf(tmux.CallSendEnter); len(enters) != 1 || enters[0].Target != apitest.TestPaneID {
 				t.Errorf("Enter calls = %+v; want one to the agent's pane %s", enters, apitest.TestPaneID)
 			}
 		})

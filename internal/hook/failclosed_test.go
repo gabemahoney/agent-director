@@ -1,5 +1,12 @@
 package hook_test
 
+// failclosed_test.go — Handle's error paths against a HookStore double: SRD
+// §3.2 (state tracking is fail-open: log, exit 0, print nothing), SRD §6.4 (with
+// relay_mode on, every failure of a PermissionRequest hook ends in a deny
+// envelope) and b.45p (a hook that is not, or may not be, a PermissionRequest
+// prints nothing). Poll's own fail-closed exits are pinned in polling_test.go;
+// the timeout's DB-before-stdout order in timeout_writes_test.go.
+
 import (
 	"bytes"
 	"context"
@@ -17,40 +24,26 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// SRD §6.4 says every code path between "permission hook starts" and
-// "envelope written" must end in a written envelope when relay_mode=on.
-// This file pins one test per failure mode.
-
-// flakyRelayStore is a HookStore double with programmable behavior for
-// the relay-side methods. The state-tracking calls succeed by default
-// so we can isolate the failure under test. Its gated writes report applied
-// unless they error (the hook is the row's own agent, SR-22.9); the gate
-// itself is the store's and is tested against a real store.
+// flakyRelayStore is a HookStore double with programmable errors and recorded
+// calls. Its gated writes report applied unless they error (the hook is the
+// row's own agent, SR-22.9); the gate itself is the store's and is tested
+// against a real store. GetPermissionRequest returns getRows/getErrs in turn,
+// the last entry sticky.
 type flakyRelayStore struct {
-	transitionErr error
-	identityErr   error
-	upsertErr     error
-	decideErr     error
-	getRows       []store.PermissionRow
-	getErrs       []error
-	idx           atomic.Int32
-
-	// Recorded calls — inspected by tests that assert call ordering.
-	decideArgs     []decideCall
-	transitionArgs []transitionCall
+	transitionErr, identityErr, upsertErr error
+	getRows                               []store.PermissionRow
+	getErrs                               []error
+	idx                                   atomic.Int32
+	identityN                             int
+	decideArgs                            []decideCall
+	transitionArgs                        []transitionCall
 }
 
-type decideCall struct {
-	InstanceID   string
-	RequestToken string
-	Decision     string
-	Reason       string
-}
+type decideCall struct{ InstanceID, RequestToken, Decision, Reason string }
 
 type transitionCall struct {
-	InstanceID  string
-	NewState    string
-	SoftRefresh bool
+	InstanceID, NewState string
+	SoftRefresh          bool
 }
 
 func (f *flakyRelayStore) GetSpawn(string) (store.Spawn, error) { return store.Spawn{}, nil }
@@ -59,6 +52,7 @@ func (f *flakyRelayStore) ApplyHookTransition(instanceID string, _ store.HookGat
 	return store.HookApplied{Applied: f.transitionErr == nil}, f.transitionErr
 }
 func (f *flakyRelayStore) RecordSessionStartIdentity(string, store.HookGate, string, bool) (store.HookApplied, bool, error) {
+	f.identityN++
 	return store.HookApplied{Applied: f.identityErr == nil}, false, f.identityErr
 }
 func (f *flakyRelayStore) UpsertOpenPermissionRequest(string, store.HookGate, string, string, string, int, string) (store.HookApplied, error) {
@@ -66,379 +60,153 @@ func (f *flakyRelayStore) UpsertOpenPermissionRequest(string, store.HookGate, st
 }
 func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string, _ string) (bool, error) {
 	f.decideArgs = append(f.decideArgs, decideCall{instanceID, requestToken, decision, reason})
-	if f.decideErr != nil {
-		return false, f.decideErr
-	}
 	return true, nil
 }
 func (f *flakyRelayStore) GetPermissionRequest(_, _ string) (store.PermissionRow, error) {
-	n := f.idx.Add(1) - 1
-	if int(n) >= len(f.getRows) {
-		// Sticky last entry.
-		i := len(f.getRows) - 1
-		if i < 0 {
-			return store.PermissionRow{}, sql.ErrNoRows
-		}
-		return f.getRows[i], f.getErrs[i]
+	if len(f.getRows) == 0 {
+		return store.PermissionRow{}, sql.ErrNoRows
 	}
-	return f.getRows[n], f.getErrs[n]
+	i := min(int(f.idx.Add(1)-1), len(f.getRows)-1)
+	return f.getRows[i], f.getErrs[i]
 }
 
-// envWith returns a func(string)string that sets RELAY_MODE=on and
-// AGENT_DIRECTOR_INSTANCE_ID=id; everything else empty.
-func envWith(id string) func(string) string {
-	return func(k string) string {
-		switch k {
-		case hook.EnvRelayMode:
-			return hook.RelayModeOn
-		case "AGENT_DIRECTOR_INSTANCE_ID":
-			return id
-		}
-		return ""
-	}
-}
+// envWith is a relay-on hook environment for instance id.
+func envWith(id string) func(string) string { return envHook(id, hook.RelayModeOn) }
 
-// assertDenyEnvelope parses stdout and confirms a single deny envelope
-// in the SRD §6.3 nested shape.
+// assertDenyEnvelope confirms stdout is one SRD §6.3 deny envelope.
 func assertDenyEnvelope(t *testing.T, stdout *bytes.Buffer) {
 	t.Helper()
-	if stdout.Len() == 0 {
-		t.Fatalf("stdout empty — relay-on path must always emit an envelope (SRD §6.4)")
-	}
 	var env struct {
 		HookSpecificOutput struct {
 			Decision struct {
 				Behavior string `json:"behavior"`
-				Message  string `json:"message"`
 			} `json:"decision"`
 		} `json:"hookSpecificOutput"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
-		t.Fatalf("stdout is not JSON: %v\nraw=%s", err, stdout.String())
-	}
-	if env.HookSpecificOutput.Decision.Behavior != "deny" {
-		t.Fatalf("behavior = %q; want deny\nraw=%s",
-			env.HookSpecificOutput.Decision.Behavior, stdout.String())
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil || env.HookSpecificOutput.Decision.Behavior != "deny" {
+		t.Fatalf("stdout = %q (%v); want a deny envelope (SRD §6.4)", stdout.String(), err)
 	}
 }
 
-func newSilentLogger() *log.Logger {
-	return log.New(io.Discard, "", 0)
-}
+func newSilentLogger() *log.Logger { return log.New(io.Discard, "", 0) }
 
-// 1. Invalid AGENT_DIRECTOR_INSTANCE_ID (missing) → deny envelope.
-func TestFailClosedMissingInstanceID(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	env := func(k string) string {
-		if k == hook.EnvRelayMode {
-			return hook.RelayModeOn
-		}
-		return "" // AGENT_DIRECTOR_INSTANCE_ID empty
-	}
-	st := &flakyRelayStore{}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest"}`),
-		stdout, st,
-		hook.HandleConfig{Env: env, Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 2. Invalid AGENT_DIRECTOR_INSTANCE_ID (contains slash) → deny.
-func TestFailClosedInvalidInstanceID(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	env := func(k string) string {
-		switch k {
-		case hook.EnvRelayMode:
-			return hook.RelayModeOn
-		case "AGENT_DIRECTOR_INSTANCE_ID":
-			return "id/with/slash"
-		}
-		return ""
-	}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest"}`),
-		stdout, &flakyRelayStore{},
-		hook.HandleConfig{Env: env, Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 3. Malformed payload → silent exit. We cannot determine the event
-// name from an unparseable payload, so the b.45p gate forces fail-open
-// (silent) rather than risk emitting a permission-shaped deny envelope
-// from a non-PermissionRequest process. The legitimate PermissionRequest
-// sibling process gets a parseable payload and exercises its own
-// fail-closed branch separately.
-func TestFailClosedMalformedPayload(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader("not json at all"),
-		stdout, &flakyRelayStore{},
-		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if stdout.Len() != 0 {
-		t.Errorf("stdout non-empty on malformed payload (unknown event): %q", stdout.String())
-	}
-}
-
-// 4. UPSERT failure (DB unreachable) → deny.
-func TestFailClosedUpsertFailure(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{upsertErr: errors.New("disk full")}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 5. ApplyHookTransition failure → deny envelope.
-func TestFailClosedApplyHookTransitionFailure(t *testing.T) {
-	before := len(readTrailLines(t, trailFile()))
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{transitionErr: errors.New("db gone")}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-	// Trail: one ad.hook.fired line emitted before the fail-closed return.
-	// upsert_outcome="error" (flakyRelayStore lacks outcomeTransitioner; transition
-	// error path sets UpsertError). runRelay is never reached so request_token=null.
-	row := hookFiredAt(t, before)
-	assertStr(t, row, "upsert_outcome", "error")
-	assertNoToolInput(t, row)
-}
-
-// 6. Polling timeout → deny envelope (relay's own failure mode).
-func TestFailClosedPollingTimeout(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{
-		// All reads return an undecided row.
-		getRows: []store.PermissionRow{{Decision: ""}},
-		getErrs: []error{nil},
-	}
-	// Virtual clock drives the 1s timeout without burning wall-clock.
-	now, restore := setupVirtualClock(t)
-	defer restore()
-	clock := &advancingClock{now: now}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{
-			Env:   envWith("id-1"),
-			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
-			Clock: clock,
-		},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 7. ctx-cancel mid-poll → deny envelope.
-func TestFailClosedContextCancelDuringPoll(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{
-		getRows: []store.PermissionRow{{Decision: ""}},
-		getErrs: []error{nil},
-	}
-	now, restore := setupVirtualClock(t)
-	defer restore()
-	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel synchronously after the 2nd virtual sleep — no goroutine,
-	// no wall-clock wait.
-	clock := &advancingClock{now: now, cancel: cancel, cancelAfter: 2}
-	if err := hook.Handle(ctx,
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{
-			Env:   envWith("id-1"),
-			Cfg:   config.Relay{TimeoutSeconds: 60, PollBaseMs: 50, PollJitterMs: 0},
-			Clock: clock,
-		},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 8. Row preempted during poll (sql.ErrNoRows) → deny envelope.
-func TestFailClosedRowPreemptedDuringPoll(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	// First read returns the open row; second read returns sql.ErrNoRows
-	// as if a later DELETE-INSERT replaced our row out from under us.
-	st := &flakyRelayStore{
-		getRows: []store.PermissionRow{
-			{Decision: ""}, // first poll: still undecided
-			{},             // second: sticky entry — but err in getErrs[1]
-		},
-		getErrs: []error{nil, sql.ErrNoRows},
-	}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{
-			Env:   envWith("id-1"),
-			Cfg:   config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
-			Clock: fastClock{},
-		},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 9. Polling exhausts read-retry budget → deny envelope.
-func TestFailClosedReadRetryBudgetExhausted(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	rows := make([]store.PermissionRow, 10)
-	errs := make([]error, 10)
-	for i := range errs {
-		errs[i] = errors.New("flaky db")
-	}
-	st := &flakyRelayStore{getRows: rows, getErrs: errs}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{
-			Env:   envWith("id-1"),
-			Cfg:   config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
-			Clock: fastClock{},
-		},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	assertDenyEnvelope(t, stdout)
-}
-
-// 10. Non-relay event with RELAY_MODE=on emits NOTHING (no envelope) —
-// the fail-closed boundary is scoped to PermissionRequest events.
-// State-tracking events stay fail-open per SRD §3.2.
-func TestRelayActiveNonPermissionRequestDoesNotEmitEnvelope(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"SessionStart"}`),
-		stdout, st,
-		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if stdout.Len() != 0 {
-		t.Errorf("stdout non-empty on non-relay event: %q", stdout.String())
-	}
-}
-
-// b.45p regression: a PreToolUse process with RELAY_MODE=on that hits
-// an ApplyHookTransition failure MUST NOT emit a deny envelope. Claude
-// Code routes hook stdout by fd → tool_use_id, so an envelope leaked
-// from PreToolUse would be applied to the in-flight tool and race the
-// legitimate PermissionRequest sibling process.
-func TestPreToolUseWithRelayOn_OnApplyHookTransitionFailure_EmitsNothing(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{transitionErr: errors.New("BUSY")}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if stdout.Len() != 0 {
-		t.Errorf("PreToolUse process leaked envelope on transition failure: %q", stdout.String())
-	}
-}
-
-// errReader is a stdin double whose Read always errors, simulating a
-// pipe closing or kernel I/O failure on the hook's stdin.
+// errReader is a stdin whose Read always fails.
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, errors.New("simulated stdin failure") }
 
-// b.45p regression: a stdin-read failure happens BEFORE we can peek the
-// event name. With the read-payload-first restructure, we genuinely
-// don't know the event type, so the b.45p-safe default is silent exit.
-func TestPreToolUseWithRelayOn_OnPayloadReadFailure_EmitsNothing(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{}
-	if err := hook.Handle(context.Background(),
-		errReader{},
-		stdout, st,
-		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
+// TestHandleErrorPaths: Handle returns nil on every path, makes only the store
+// calls before a failure, logs the failure and prints the envelope the event
+// and relay mode call for: nothing (SRD §3.2, b.45p), deny (SRD §6.4) or, for
+// the relayed request that is decided, the decision.
+func TestHandleErrorPaths(t *testing.T) {
+	const (
+		id   = "id-1"
+		pr   = `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`
+		ptu  = `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`
+		ss   = `{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`
+		stop = `{"hook_event_name":"Stop"}`
+	)
+	relayOff, relayOn := envHook(id, ""), envWith(id)
+	relayOnNoID := envWith("")
+	deny := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", "") + "\n"
+	dbErr := errors.New("db unreachable")
+	cases := []struct {
+		name                    string
+		env                     func(string) string
+		payload                 string // stdin; "" = a read error
+		st                      *flakyRelayStore
+		want                    string // stdout
+		log                     string // a phrase the log carries
+		transitions, identities int    // store calls made
+		outcome                 string // ad.hook.fired's upsert_outcome; "" = unchecked
+		noRelayLines            bool   // no ad.relay_attempt.completed or ad.resume.observed
+	}{
+		// SRD §3.2: state tracking is fail-open.
+		{name: "no instance id", env: envHook("", ""), payload: ss, log: "resolve instance id"},
+		{name: "malformed payload", env: relayOff, payload: "not json", log: "classify"},
+		{name: "payload over the cap", env: relayOff, payload: strings.Repeat("a", int(hook.MaxPayloadBytes)+1), log: "read payload"},
+		{name: "transition error", env: relayOff, payload: stop, st: &flakyRelayStore{transitionErr: dbErr},
+			transitions: 1, log: "apply transition", outcome: "error"},
+		{name: "SessionStart identity error", env: relayOff, payload: ss, st: &flakyRelayStore{identityErr: dbErr},
+			identities: 1, log: "record session start identity"},
+		// SR-22.9: SessionStart's state and identity are one gated write, no separate transition.
+		{name: "SessionStart is one write", env: relayOff, payload: ss, identities: 1},
+		{name: "PermissionRequest, relay unset", env: relayOff, payload: pr, transitions: 1, noRelayLines: true},
+		{name: "PermissionRequest, relay off", env: envHook(id, hook.RelayModeOff), payload: pr, transitions: 1, noRelayLines: true},
+		// SRD §6.4: relay on, a PermissionRequest's failures are a deny envelope.
+		{name: "PermissionRequest, no instance id", env: relayOnNoID, payload: pr, want: deny},
+		{name: "PermissionRequest, invalid instance id", env: envWith("id/with/slash"), payload: pr, want: deny},
+		{name: "PermissionRequest, transition error", env: relayOn, payload: pr, st: &flakyRelayStore{transitionErr: dbErr},
+			transitions: 1, want: deny, outcome: "error"},
+		{name: "PermissionRequest, upsert error", env: relayOn, payload: pr, st: &flakyRelayStore{upsertErr: dbErr},
+			transitions: 1, want: deny, log: "relay: upsert", outcome: "error", noRelayLines: true},
+		{name: "PermissionRequest, allowed", env: relayOn, payload: pr,
+			st:          &flakyRelayStore{getRows: []store.PermissionRow{{Decision: "allow", DecisionReason: "trusted"}}, getErrs: []error{nil}},
+			transitions: 1, want: hook.EncodeDecision(hook.EventNamePermissionRequest, "allow", "trusted") + "\n"},
+		// b.45p: relay on, a hook that is not (or may not be) a PermissionRequest prints nothing.
+		{name: "relay on, malformed payload", env: relayOn, payload: "not json"},
+		{name: "relay on, stdin read error", env: relayOn, log: "read payload"},
+		{name: "PreToolUse, relay on, no instance id", env: relayOnNoID, payload: ptu},
+		{name: "PreToolUse, relay on, transition error", env: relayOn, payload: ptu, st: &flakyRelayStore{transitionErr: errors.New("BUSY")}, transitions: 1},
+		{name: "SessionStart, relay on", env: relayOn, payload: ss, identities: 1, noRelayLines: true},
 	}
-	if stdout.Len() != 0 {
-		t.Errorf("payload-read failure leaked envelope: %q", stdout.String())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.st
+			if st == nil {
+				st = &flakyRelayStore{}
+			}
+			var stdin io.Reader = errReader{}
+			if tc.payload != "" {
+				stdin = strings.NewReader(tc.payload)
+			}
+			var stdout, logBuf bytes.Buffer
+			before := len(readTrailLines(t, trailFile()))
+
+			err := hook.Handle(context.Background(), stdin, &stdout, st,
+				hook.HandleConfig{Env: tc.env, Cfg: config.Relay{TimeoutSeconds: 1}}, log.New(&logBuf, "", 0))
+
+			if err != nil || stdout.String() != tc.want {
+				t.Errorf("Handle = %v, stdout %q; want nil, %q", err, stdout.String(), tc.want)
+			}
+			if !strings.Contains(logBuf.String(), tc.log) {
+				t.Errorf("log = %q; want it to carry %q", logBuf.String(), tc.log)
+			}
+			if len(st.transitionArgs) != tc.transitions || st.identityN != tc.identities {
+				t.Errorf("transitions/identity writes = %d/%d; want %d/%d", len(st.transitionArgs), st.identityN, tc.transitions, tc.identities)
+			}
+			if tc.outcome != "" {
+				row := hookFiredAt(t, before)
+				assertStr(t, row, "upsert_outcome", tc.outcome)
+				assertNoToolInput(t, row)
+			}
+			for _, ev := range []string{"ad.relay_attempt.completed", "ad.resume.observed"} {
+				if n := len(linesAfter(t, before, ev, id)); tc.noRelayLines && n != 0 {
+					t.Errorf("%s lines = %d; want none (the relay did not poll)", ev, n)
+				}
+			}
+		})
 	}
 }
 
-// b.45p regression: a PreToolUse process whose AGENT_DIRECTOR_INSTANCE_ID
-// is missing must not emit a deny envelope. The pre-fix code would have
-// emitted one based solely on RELAY_MODE=on, leaking into the
-// PermissionRequest sibling's fd.
-func TestPreToolUseWithRelayOn_OnResolveInstanceIDFailure_EmitsNothing(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	// Env returns RELAY_MODE=on but no instance id.
-	env := func(k string) string {
-		if k == hook.EnvRelayMode {
-			return hook.RelayModeOn
+// TestReadPayloadAndInstanceID pins io.go's limits: a payload up to
+// MaxPayloadBytes reads (empty included) and one byte more is
+// ErrPayloadTooLarge; an instance id must be set, with no path separator, NUL
+// or control byte.
+func TestReadPayloadAndInstanceID(t *testing.T) {
+	for _, n := range []int64{0, hook.MaxPayloadBytes} {
+		if p, err := hook.ReadPayload(bytes.NewReader(make([]byte, n))); err != nil || int64(len(p)) != n {
+			t.Errorf("ReadPayload(%d bytes) = %d bytes, %v; want all, nil", n, len(p), err)
 		}
-		return ""
 	}
-	st := &flakyRelayStore{}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{Env: env, Cfg: config.Relay{TimeoutSeconds: 1}},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
+	if _, err := hook.ReadPayload(bytes.NewReader(make([]byte, hook.MaxPayloadBytes+1))); !errors.Is(err, hook.ErrPayloadTooLarge) {
+		t.Errorf("ReadPayload(over the cap) err = %v; want ErrPayloadTooLarge", err)
 	}
-	if stdout.Len() != 0 {
-		t.Errorf("missing instance id on PreToolUse leaked envelope: %q", stdout.String())
-	}
-}
-
-// 11. Happy-path: relay-on + PermissionRequest + decided row → allow
-// envelope. Pinned here so the fail-closed scaffolding above doesn't
-// accidentally mask a real allow-path regression.
-func TestRelayHappyPathAllow(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	st := &flakyRelayStore{
-		getRows: []store.PermissionRow{
-			{Decision: "allow", DecisionReason: "trusted"},
-		},
-		getErrs: []error{nil},
-	}
-	if err := hook.Handle(context.Background(),
-		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
-		stdout, st,
-		hook.HandleConfig{
-			Env: envWith("id-1"),
-			Cfg: config.Relay{TimeoutSeconds: 5, PollBaseMs: 0, PollJitterMs: 0},
-		},
-		newSilentLogger()); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	out := stdout.String()
-	if !strings.Contains(out, `"behavior":"allow"`) {
-		t.Errorf("expected allow envelope; got %s", out)
-	}
-	if !strings.Contains(out, `"message":"trusted"`) {
-		t.Errorf("reason lost: %s", out)
+	for v, want := range map[string]error{"": hook.ErrInstanceIDMissing, "abc/def": hook.ErrInstanceIDInvalid,
+		"abc\x00def": hook.ErrInstanceIDInvalid, "abc\tdef": hook.ErrInstanceIDInvalid} {
+		if _, err := hook.ResolveInstanceID(func(string) string { return v }); !errors.Is(err, want) {
+			t.Errorf("ResolveInstanceID(%q) err = %v; want %v", v, err, want)
+		}
 	}
 }

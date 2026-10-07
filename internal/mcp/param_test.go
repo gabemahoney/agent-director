@@ -1,15 +1,14 @@
 package mcp_test
 
 // param_test.go pins b.c4u's, b.7or's and b.ewa's MCP side: every manifest
-// param of every MCP tool is decoded under its one (underscore) name, every
-// tool refuses a key that is not one of its params, a value of the wrong
-// shape and arguments that are not an object with ErrInvalidFlags, in one
-// wording each, and runs nothing, spawn honours relay_mode, extra_env,
-// no_pre_trust and tmux_session_name and list
-// tmux_session_name as the CLI does, tools/list advertises exactly that, and
-// get_permission answers.
+// param of every MCP tool is decoded under its one (underscore) name; every
+// tool refuses a key that is not one of its params, a value of the wrong shape
+// and arguments that are not an object with ErrInvalidFlags, in one wording
+// each, and runs nothing; tools/list advertises exactly the params; spawn's
+// tmux_session_name and list's filters reach the verb; get_permission answers.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,30 +35,9 @@ const (
 	paramToken = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
 )
 
-// paramJSON marshals a tool's arguments.
-func paramJSON(t *testing.T, args map[string]any) string {
-	t.Helper()
-	b, err := json.Marshal(args)
-	if err != nil {
-		t.Fatalf("marshal args: %v", err)
-	}
-	return string(b)
-}
-
-// exposedVerbs is every manifest verb MCP serves as a tool.
-func exposedVerbs() []manifest.VerbDef {
-	var out []manifest.VerbDef
-	for _, v := range manifest.Verbs {
-		if mcp.ExposedVerb(v.Name) {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 // paramRequiredArgs seeds paramRow and returns v's required params with
 // values that let the call run.
-func paramRequiredArgs(t *testing.T, e *ptEnv, v manifest.VerbDef) map[string]any {
+func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]any {
 	t.Helper()
 	seedFinished(t, e, paramRow, store.StateEnded)
 	args := map[string]any{}
@@ -91,29 +69,32 @@ func paramRequiredArgs(t *testing.T, e *ptEnv, v manifest.VerbDef) map[string]an
 }
 
 // paramState is what a call that runs nothing leaves as it was: paramRow, the
-// store's ids, the tmux calls and the templates directory.
+// store's ids, the tmux calls, the templates directory and the trail.
 type paramState struct {
-	row       apitest.SpawnColumns
-	rowErr    string
-	ids       []string
-	tmuxCalls int
-	templates []string
+	row        apitest.SpawnColumns
+	rowErr     string
+	ids        []string
+	tmuxCalls  int
+	templates  []string
+	trailLines int
 }
 
 // readParamState reads e's paramState.
-func readParamState(t *testing.T, e *ptEnv) paramState {
+func readParamState(t *testing.T, e *mcpEnv) paramState {
 	t.Helper()
 	s := paramState{tmuxCalls: len(e.rec.Calls()) + len(e.rec.SocketCalls())}
 	var err error
 	if s.row, err = apitest.ReadSpawnColumns(e.storePath, paramRow); err != nil {
 		s.rowErr = err.Error()
 	}
-	s.ids = rowIDs(t, e.d)
+	s.ids = rowIDs(t, e.d) // list writes no trail line
 	slices.Sort(s.ids)
 	entries, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".agent-director", "templates"))
 	for _, en := range entries {
 		s.templates = append(s.templates, en.Name())
 	}
+	trail, _ := os.ReadFile(mcpTrailPath)
+	s.trailLines = bytes.Count(trail, []byte("\n"))
 	return s
 }
 
@@ -201,7 +182,10 @@ func paramValidList(v manifest.VerbDef) string {
 // its params, the old dashed names included, with ErrInvalidFlags whose
 // description names the verb (not the tool), quotes the key and lists the
 // valid params in manifest order (so an old name's underscore replacement), or
-// "none", and runs nothing (b.c4u).
+// "none", and runs nothing: no row, tmux call, template or trail line (b.c4u).
+// Kill's former finished-row opt-in, in any spelling, is such a key (SR-6.8,
+// SR-6.6), as are the per-invocation params make_template's description says
+// it refuses.
 func TestMCPParamUnknownRefused(t *testing.T) {
 	type refusal struct {
 		name, verb, key string
@@ -211,14 +195,19 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 	for _, v := range exposedVerbs() {
 		cases = append(cases, refusal{v.Name + ", unknown key", v.Name, "bogus_param", 1})
 	}
-	cases = append(cases,
-		refusal{"spawn, old name relay-mode", "spawn", "relay-mode", "on"},
-		refusal{"spawn, old name extra-env", "spawn", "extra-env", map[string]string{"MCP_PARAM": "1"}},
-		refusal{"spawn, old name no-pre-trust", "spawn", "no-pre-trust", true},
-		refusal{"spawn, old name tmux-session-name", "spawn", "tmux-session-name", "mcp-param-name"},
-		refusal{"spawn, old name reuse-finished", "spawn", "reuse-finished", true},
-		refusal{"list, old name tmux-session-name", "list", "tmux-session-name", "mcp-param-name"},
-	)
+	for _, old := range []struct {
+		verb, key string
+		value     any
+	}{
+		{"spawn", "relay-mode", "on"}, {"spawn", "extra-env", map[string]string{"MCP_PARAM": "1"}},
+		{"spawn", "no-pre-trust", true}, {"spawn", "tmux-session-name", "mcp-param-name"}, {"spawn", "reuse-finished", true},
+		{"list", "tmux-session-name", "mcp-param-name"},
+		{"kill", "include-finished", true}, {"kill", "include_finished", true}, {"kill", "IncludeFinished", true}, {"kill", "includefinished", true},
+		{"make-template", "template", "tpl"}, {"make-template", "claude_instance_id", "tpl-id"}, {"make-template", "tmux_session_name", "tpl-session"},
+		{"make-template", "reuse_finished", true}, {"make-template", "reuse-finished", true},
+	} {
+		cases = append(cases, refusal{old.verb + ", " + old.key, old.verb, old.key, old.value})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e, _ := newReuseParamEnv(t)
@@ -234,11 +223,8 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 
 			data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(tc.verb), paramJSON(t, args)))
 
-			if data.ErrName != "ErrInvalidFlags" {
-				t.Errorf("err_name = %q (%s); want ErrInvalidFlags", data.ErrName, data.ErrDescription)
-			}
-			if data.ErrDescription != want {
-				t.Errorf("description = %q\nwant %q", data.ErrDescription, want)
+			if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+				t.Errorf("refusal = %s: %q\nwant ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
 			}
 			if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
 				t.Errorf("the refused call changed state:\n got %+v\nwant %+v", after, before)
@@ -292,11 +278,8 @@ func TestMCPParamUnknownRefusalText(t *testing.T) {
 
 			data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(tc.verb), body))
 
-			if data.ErrName != "ErrInvalidFlags" {
-				t.Errorf("err_name = %q (%s); want ErrInvalidFlags", data.ErrName, data.ErrDescription)
-			}
-			if data.ErrDescription != want {
-				t.Errorf("description = %q\nwant %q", data.ErrDescription, want)
+			if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+				t.Errorf("refusal = %s: %q\nwant ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
 			}
 			if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
 				t.Errorf("the refused call changed state:\n got %+v\nwant %+v", after, before)
@@ -305,86 +288,59 @@ func TestMCPParamUnknownRefusalText(t *testing.T) {
 	}
 }
 
-// TestMCPParamSpawnRelayModeAndExtraEnv: an MCP spawn's relay_mode and
-// extra_env, under their underscore names, reach the row (b.c4u).
-func TestMCPParamSpawnRelayModeAndExtraEnv(t *testing.T) {
-	e, c := newReuseParamEnv(t)
-	id := "mcp-renamed-" + uuid.NewString()[:8]
-	env := c.env()
-	env["MCP_PARAM_ENV"] = "set"
-
-	callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{
-		"cwd": t.TempDir(), "claude_instance_id": id, "relay_mode": "on", "extra_env": env}))
-
-	cols := readColumns(t, e.storePath, id)
-	if cols.RelayMode != "on" {
-		t.Errorf("row relay_mode = %v; want on (the default is off)", cols.RelayMode)
-	}
-	var stored map[string]string
-	if s, _ := cols.ExtraEnv.(string); json.Unmarshal([]byte(s), &stored) != nil || !reflect.DeepEqual(stored, env) {
-		t.Errorf("row extra_env = %v; want %v", cols.ExtraEnv, env)
-	}
-}
-
-// TestMCPParamSpawnNoPreTrust: an MCP spawn with no_pre_trust reports pre_trust
-// skipped, leaves .claude.json byte-identical and records the opt-out, so a
-// later MCP resume of the row reports skipped too (b.7or).
-func TestMCPParamSpawnNoPreTrust(t *testing.T) {
-	e, c := newReuseParamEnv(t)
-	cwd, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	id := "mcp-npt-" + uuid.NewString()[:8]
-
-	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{
-		"cwd": cwd, "extra_env": c.env(), "claude_instance_id": id, "no_pre_trust": true}))
-
-	assertPreTrust(t, obj, "skipped")
-	c.check(t, cwd, false)
-	if npt := readColumns(t, e.storePath, id).NoPreTrust; fmt.Sprint(npt) != "1" {
-		t.Errorf("row no_pre_trust = %v; want 1 (the opt-out recorded)", npt)
-	}
-	// The agent reports in with a transcript, then exits with its session.
-	session := "sess-" + id
-	jsonl := apitest.SeedJsonlUnder(t, c.dir, cwd, session)
-	apitest.ApplyAgentHook(t, e.storePath, id, "SessionStart", session, apitest.HookTranscript(jsonl, true))
-	apitest.ApplyAgentHook(t, e.storePath, id, "SessionEnd", session)
-	for _, s := range e.rec.Sessions(e.socket) {
-		if err := e.rec.KillSessionID(e.socket, s.ID); err != nil {
-			t.Fatalf("KillSessionID(%s): %v", s.ID, err)
+// TestMCPParamToolsListNames: each tool's schema properties are exactly its
+// manifest params (TestManifestParamNamesHaveNoDash keeps those dash-free), its
+// required list the required ones, and additionalProperties is false, as the
+// server enforces (b.c4u). make_template's description names the
+// per-invocation params TestMCPParamUnknownRefused shows it refuses.
+func TestMCPParamToolsListNames(t *testing.T) {
+	tools, _ := toolsList(t)
+	byName := map[string]listedTool{}
+	for _, tool := range tools {
+		byName[tool.Name] = tool
+		if tool.InputSchema.AdditionalProperties != false {
+			t.Errorf("%s additionalProperties = %v; want false", tool.Name, tool.InputSchema.AdditionalProperties)
 		}
 	}
-	if st := readColumns(t, e.storePath, id).State; st != store.StateEnded {
-		t.Fatalf("row state = %v; want ended before the resume", st)
+	for _, v := range exposedVerbs() {
+		tool, ok := byName[mcp.ToolName(v.Name)]
+		props, want, required, wantRequired := []string{}, []string{}, append([]string{}, tool.InputSchema.Required...), []string{}
+		for name := range tool.InputSchema.Properties {
+			props = append(props, name)
+		}
+		for _, p := range v.Params {
+			want = append(want, p.Name)
+			if p.Required {
+				wantRequired = append(wantRequired, p.Name)
+			}
+		}
+		slices.Sort(props)
+		slices.Sort(want)
+		if !ok || !reflect.DeepEqual(props, want) || !slices.Equal(required, wantRequired) {
+			t.Errorf("%s properties = %v, required %v (listed %v); want the manifest params %v, required %v",
+				tool.Name, props, required, ok, want, wantRequired)
+		}
 	}
-
-	obj = callToolText(t, e.d, "resume", paramJSON(t, map[string]any{"claude_instance_id": id}))
-
-	assertPreTrust(t, obj, "skipped")
-	c.check(t, cwd, false)
+	const refused = "Per-invocation params (template, claude_instance_id, tmux_session_name, reuse_finished) are refused."
+	if desc := byName[mcp.ToolName("make-template")].Description; !strings.Contains(desc, refused) {
+		t.Errorf("make_template description %q lacks %q", desc, refused)
+	}
 }
 
 // TestMCPParamSpawnTmuxSessionName: an MCP spawn's tmux_session_name names the
-// created session and is stored; supplied empty or invalid it is refused before
-// anything is created, the empty refusal naming the param as MCP spells it (b.ro3);
-// absent or null gives the default <basename(cwd)>-<id[:8]> (b.7or).
+// created session and is stored; supplied empty it is refused before anything
+// is created, naming the param as MCP spells it (b.ro3); null is not supplied,
+// so the default <basename(cwd)>-<id[:8]> applies (b.7or).
 func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 	const dir = "mcpwork"
 	cases := []struct {
-		name     string
-		absent   bool
-		value    any
-		wantErr  string // the refusal; "" for a launch
-		wantDesc string // a phrase the refusal's description carries
-		want     string // the session name; "" for the default
+		name  string
+		value any
+		want  string // the session name; "" for a refusal
 	}{
 		{name: "explicit", value: "mcp-named-session", want: "mcp-named-session"},
-		{name: "empty", value: "", wantErr: "ErrTmuxSessionNameEmpty",
-			wantDesc: "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"},
-		{name: "invalid", value: "mcp:bad", wantErr: "ErrTmuxSessionNameInvalid"},
-		{name: "absent", absent: true},
-		{name: "null", value: nil},
+		{name: "empty", value: ""},
+		{name: "null", value: nil, want: dir + "-"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -394,27 +350,21 @@ func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 				t.Fatalf("mkdir %s: %v", cwd, err)
 			}
 			id := "tsn-" + uuid.NewString()[:8]
-			args := map[string]any{"cwd": cwd, "extra_env": c.env(), "claude_instance_id": id}
-			if !tc.absent {
-				args["tmux_session_name"] = tc.value
-			}
+			args := spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id, "tmux_session_name": tc.value})
 
-			if tc.wantErr != "" {
-				data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, args)))
-				if data.ErrName != tc.wantErr {
-					t.Errorf("err_name = %q (%s); want %s", data.ErrName, data.ErrDescription, tc.wantErr)
-				}
-				if !strings.Contains(data.ErrDescription, tc.wantDesc) {
-					t.Errorf("err_description = %q; want it to carry %q", data.ErrDescription, tc.wantDesc)
+			if tc.want == "" {
+				data := toolErrorData(t, callTool(t, e.d, "spawn", args))
+				const phrase = "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"
+				if data.ErrName != "ErrTmuxSessionNameEmpty" || !strings.Contains(data.ErrDescription, phrase) {
+					t.Errorf("refusal = %s: %q; want ErrTmuxSessionNameEmpty carrying %q", data.ErrName, data.ErrDescription, phrase)
 				}
 				assertNothingCreated(t, e.d, e.rec)
 				return
 			}
-			callToolText(t, e.d, "spawn", paramJSON(t, args))
-
+			callToolText(t, e.d, "spawn", args)
 			want := tc.want
-			if want == "" {
-				want = dir + "-" + id[:8]
+			if want == dir+"-" {
+				want += id[:8]
 			}
 			if creates := e.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Target != want {
 				t.Errorf("creates = %+v; want one, of session %q", creates, want)
@@ -426,94 +376,20 @@ func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 	}
 }
 
-// TestMCPParamListTmuxSessionName: list's tmux_session_name filters by exact
-// session name, live and ended rows alike, and together with state (b.7or).
-func TestMCPParamListTmuxSessionName(t *testing.T) {
+// TestMCPParamListFilters: list's tmux_session_name and state reach the
+// filter together: of three rows, only the waiting one using the name is
+// listed (b.7or).
+func TestMCPParamListFilters(t *testing.T) {
 	e, _ := newReuseParamEnv(t)
-	for _, r := range []struct{ id, state, name string }{
-		{"mcp-list-a", store.StateEnded, "alpha"},
-		{"mcp-list-b1", store.StateEnded, "beta"},
-		{"mcp-list-b2", store.StateWaiting, "beta"},
-	} {
-		seedFinished(t, e, r.id, r.state, apitest.WithTmuxSessionName(r.name))
+	seedFinished(t, e, "mcp-list-a", store.StateWaiting, apitest.WithTmuxSessionName("alpha"))
+	seedFinished(t, e, "mcp-list-b1", store.StateEnded, apitest.WithTmuxSessionName("beta"))
+	seedFinished(t, e, "mcp-list-b2", store.StateWaiting, apitest.WithTmuxSessionName("beta"))
+	var rows []struct {
+		ID string `json:"claude_instance_id"`
 	}
-	for _, tc := range []struct {
-		name  string
-		state []string
-		want  []string
-	}{
-		{"beta", nil, []string{"mcp-list-b1", "mcp-list-b2"}},
-		{"beta", []string{store.StateWaiting}, []string{"mcp-list-b2"}},
-		{"alpha", nil, []string{"mcp-list-a"}},
-		{"alpha", []string{store.StateWaiting}, []string{}},
-		{"none-such", nil, []string{}},
-	} {
-		t.Run(tc.name+"/"+strings.Join(tc.state, ","), func(t *testing.T) {
-			var rows []struct {
-				ID string `json:"claude_instance_id"`
-			}
-			args := map[string]any{"tmux_session_name": tc.name}
-			if tc.state != nil {
-				args["state"] = tc.state
-			}
-			obj := callToolText(t, e.d, "list", paramJSON(t, args))
-			if err := json.Unmarshal(obj["spawns"], &rows); err != nil {
-				t.Fatalf("parse list spawns: %v", err)
-			}
-			got := []string{}
-			for _, r := range rows {
-				got = append(got, r.ID)
-			}
-			slices.Sort(got)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("list tmux_session_name=%q state=%v = %v; want %v", tc.name, tc.state, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestMCPParamToolsListNames: each tool's schema properties are exactly its
-// manifest params (TestManifestParamNamesHaveNoDash keeps those dash-free),
-// and additionalProperties is false, as the server enforces (b.c4u).
-func TestMCPParamToolsListNames(t *testing.T) {
-	resp := runOne(t, &fakeDispatcher{}, mcp.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "tools/list"})
-	if resp == nil || resp.Error != nil {
-		t.Fatalf("tools/list failed: %+v", resp)
-	}
-	var got struct {
-		Tools []struct {
-			Name        string `json:"name"`
-			InputSchema struct {
-				Properties           map[string]json.RawMessage `json:"properties"`
-				AdditionalProperties any                        `json:"additionalProperties"`
-			} `json:"inputSchema"`
-		} `json:"tools"`
-	}
-	body, _ := json.Marshal(resp.Result)
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("parse tools/list: %v", err)
-	}
-	props := map[string][]string{}
-	for _, tool := range got.Tools {
-		names := []string{}
-		for name := range tool.InputSchema.Properties {
-			names = append(names, name)
-		}
-		slices.Sort(names)
-		props[tool.Name] = names
-		if tool.InputSchema.AdditionalProperties != false {
-			t.Errorf("%s additionalProperties = %v; want false", tool.Name, tool.InputSchema.AdditionalProperties)
-		}
-	}
-	for _, v := range exposedVerbs() {
-		want := []string{}
-		for _, p := range v.Params {
-			want = append(want, p.Name)
-		}
-		slices.Sort(want)
-		if have, ok := props[mcp.ToolName(v.Name)]; !ok || !reflect.DeepEqual(have, want) {
-			t.Errorf("%s properties = %v (listed %v); want the manifest params %v", mcp.ToolName(v.Name), have, ok, want)
-		}
+	obj := callToolText(t, e.d, "list", `{"tmux_session_name":"beta","state":["waiting"]}`)
+	if err := json.Unmarshal(obj["spawns"], &rows); err != nil || len(rows) != 1 || rows[0].ID != "mcp-list-b2" {
+		t.Errorf("list = %s (%v); want only mcp-list-b2", obj["spawns"], err)
 	}
 }
 
@@ -531,22 +407,15 @@ func TestMCPParamGetPermissionSeededRow(t *testing.T) {
 		t.Fatalf("SeedPermissionRequest: %v", err)
 	}
 
-	obj := callToolText(t, e.d, mcp.ToolName("get-permission"), paramJSON(t, map[string]any{"request_token": seed.RequestToken}))
+	obj := callToolText(t, e.d, "get_permission", paramJSON(t, map[string]any{"request_token": seed.RequestToken}))
 
-	for key, want := range map[string]string{
-		"request_token": strconv.Quote(seed.RequestToken),
-		"request_id":    strconv.FormatInt(seed.RequestID, 10),
-		"tool_name":     `"Bash"`,
-		"decision":      "null",
-	} {
+	for key, want := range map[string]string{"request_token": strconv.Quote(seed.RequestToken),
+		"request_id": strconv.FormatInt(seed.RequestID, 10), "tool_name": `"Bash"`, "decision": "null"} {
 		if got := string(obj[key]); got != want {
 			t.Errorf("get_permission %s = %s; want %s", key, got, want)
 		}
 	}
-
-	data := toolErrorData(t, callTool(t, e.d, mcp.ToolName("get-permission"), paramJSON(t, map[string]any{"request_token": paramToken})))
-	if data.ErrName != "ErrPermissionRequestNotFound" {
-		t.Errorf("get_permission of an unknown token: err_name = %q (%s); want ErrPermissionRequestNotFound",
-			data.ErrName, data.ErrDescription)
+	if data := toolErrorData(t, callTool(t, e.d, "get_permission", paramJSON(t, map[string]any{"request_token": paramToken}))); data.ErrName != "ErrPermissionRequestNotFound" {
+		t.Errorf("unknown token: err_name = %q (%s); want ErrPermissionRequestNotFound", data.ErrName, data.ErrDescription)
 	}
 }

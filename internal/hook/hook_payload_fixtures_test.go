@@ -98,6 +98,9 @@ func TestPayloadFixtureParses(t *testing.T) {
 	}
 }
 
+// TestPayloadFixtureEventsMatchRegistered: every event internal/spawn
+// registers has a fixture, every fixture's event is registered, and every
+// fixture file is in payloadFixtures.
 func TestPayloadFixtureEventsMatchRegistered(t *testing.T) {
 	registered := registeredHookEvents(t)
 	files, err := filepath.Glob(filepath.Join("testdata", "hook-payloads", "*.json"))
@@ -112,21 +115,14 @@ func TestPayloadFixtureEventsMatchRegistered(t *testing.T) {
 	for _, tc := range payloadFixtures {
 		tableFiles[tc.file] = true
 	}
-
-	cases := []struct {
-		name string
-		got  []string
-	}{
-		{"registered events without a fixture", missingFrom(registered, fixtureEvents)},
-		{"fixture events not registered", missingFrom(fixtureEvents, registered)},
-		{"fixture files missing from the parse table", missingFrom(fixtureFiles, tableFiles)},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if len(tc.got) != 0 {
-				t.Errorf("%s: %v", tc.name, tc.got)
-			}
-		})
+	for what, got := range map[string][]string{
+		"registered events without a fixture":        missingFrom(registered, fixtureEvents),
+		"fixture events not registered":              missingFrom(fixtureEvents, registered),
+		"fixture files missing from payloadFixtures": missingFrom(fixtureFiles, tableFiles),
+	} {
+		if len(got) != 0 {
+			t.Errorf("%s: %v", what, got)
+		}
 	}
 }
 

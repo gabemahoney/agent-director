@@ -145,17 +145,12 @@ func foreignParent(t *testing.T, st *store.Store, id string) hookParent {
 	return p
 }
 
-// seedAgentRow opens a temp store and seeds id in state through
-// apitest.SeedSpawn. A live state records the pane apitest.TestPanePID with no
-// start time (the first applied hook records it); a terminal state records no
-// pane unless opts say so (apitest.WithLaunchIdentity).
+// seedAgentRow is ssgSeed with no session id: a temp store with id in state. A
+// live state records the pane apitest.TestPanePID with no start time (the first
+// applied hook records it); a terminal state records no pane unless opts say so.
 func seedAgentRow(t *testing.T, id, state string, opts ...apitest.SpawnOption) (*store.Store, string) {
 	t.Helper()
-	st, dbPath := storefix.OpenTempStore(t)
-	if _, err := apitest.SeedSpawn(dbPath, id, state, "", "", "", false, opts...); err != nil {
-		t.Fatalf("seedAgentRow(%q, %q): %v", id, state, err)
-	}
-	return st, dbPath
+	return ssgSeed(t, id, state, "", opts...)
 }
 
 // hookIgnoredAfter returns the ad.hook.ignored trail lines for id written

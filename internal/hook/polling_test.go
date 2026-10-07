@@ -14,47 +14,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// scriptedPollStore is the seam the Poll loop reads from. The
-// sequence drives the per-iteration outcome: each call returns the
-// next entry, with the LAST entry sticky (so a long-running test
-// settles on a final state).
-type scriptedPollStore struct {
-	mu    sync.Mutex
-	rows  []scriptedRow
-	idx   int
-	calls int
-}
-
-type scriptedRow struct {
-	row store.PermissionRow
-	err error
-}
-
-func (s *scriptedPollStore) GetPermissionRequest(_, _ string) (store.PermissionRow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.calls++
-	if s.idx >= len(s.rows) {
-		// Sticky last entry.
-		last := s.rows[len(s.rows)-1]
-		return last.row, last.err
-	}
-	r := s.rows[s.idx]
-	s.idx++
-	return r.row, r.err
-}
-
-// fastClock is a test sleeper that returns immediately. ctx cancel
-// is still honored so the cancel-test case can observe it.
-type fastClock struct{}
-
-func (fastClock) Sleep(ctx context.Context, _ time.Duration) {
-	select {
-	case <-ctx.Done():
-	default:
-	}
-}
-
 // advancingClock is a concurrency-safe virtual-time sleeper: each Sleep records d and
 // advances *now; cancelAfter/runAt fire cancel/run once at the Nth Sleep.
 type advancingClock struct {
@@ -102,9 +61,8 @@ func (c *advancingClock) Sleeps() []time.Duration {
 	return append([]time.Duration(nil), c.sleeps...)
 }
 
-// setupVirtualClock installs a fresh virtual time origin and the
-// SetNowFunc restorer. Returns the virtual now pointer (callers pass
-// to advancingClock) plus a cleanup that the test must defer.
+// setupVirtualClock installs a fresh virtual time origin as Poll's wall clock
+// and returns it (for an advancingClock) and the restorer the test must defer.
 func setupVirtualClock(t *testing.T) (*time.Time, func()) {
 	t.Helper()
 	now := time.Unix(0, 0)
@@ -112,156 +70,82 @@ func setupVirtualClock(t *testing.T) (*time.Time, func()) {
 	return &now, restore
 }
 
-// testRequestToken is a canonical UUIDv4 constant for Poll call sites in this
-// file. Using a named constant satisfies SR-9.4: no inline magic UUID strings.
-const testRequestToken = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
-
-func newRNG() *rand.Rand { return rand.New(rand.NewSource(1)) }
-
-func TestPollReturnsDecisionWhenAvailable(t *testing.T) {
-	st := &scriptedPollStore{
-		rows: []scriptedRow{
-			{row: store.PermissionRow{Decision: "allow", DecisionReason: "ok"}},
-		},
+// TestPoll pins Poll's exits (SRD §6.2, §6.4) on virtual time: a decided row
+// returns its decision; an undecided one is re-read, sleeping at least the
+// 50 ms floor even with no base or jitter; an absent row, a sixth consecutive
+// read error, the timeout and a cancelled context fail closed (no decision,
+// a Why).
+func TestPoll(t *testing.T) {
+	undecided := store.PermissionRow{}
+	cases := []struct {
+		name        string
+		rows        []store.PermissionRow
+		errs        []error // per row; nil = none
+		cfg         config.Relay
+		cancelAfter int
+		decision    string
+		reason      string
+		why         string        // "" = any, when there is no decision
+		sleeps      int           // -1 = unchecked
+		waited      time.Duration // total virtual sleep; 0 = unchecked
+	}{
+		{name: "decided", rows: []store.PermissionRow{{Decision: "allow", DecisionReason: "ok"}},
+			cfg: config.Relay{TimeoutSeconds: 5}, decision: "allow", reason: "ok"},
+		{name: "decided on the fourth read, floor sleeps", rows: []store.PermissionRow{undecided, undecided, undecided, {Decision: "deny", DecisionReason: "no"}},
+			cfg: config.Relay{TimeoutSeconds: 30}, decision: "deny", reason: "no", sleeps: 3},
+		{name: "row absent", rows: []store.PermissionRow{undecided}, errs: []error{sql.ErrNoRows},
+			cfg: config.Relay{TimeoutSeconds: 5}, sleeps: -1},
+		{name: "read-retry budget", rows: make([]store.PermissionRow, 7), errs: repeatErr(7, errors.New("flaky db")),
+			cfg: config.Relay{TimeoutSeconds: 30}, sleeps: -1},
+		{name: "timeout", rows: []store.PermissionRow{undecided}, cfg: config.Relay{TimeoutSeconds: 1},
+			why: "polling timeout exceeded", sleeps: -1, waited: time.Second},
+		{name: "context cancelled", rows: []store.PermissionRow{undecided}, cfg: config.Relay{TimeoutSeconds: 60, PollBaseMs: 5, PollJitterMs: 5},
+			cancelAfter: 3, sleeps: 3},
 	}
-	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 5}, "id-1", testRequestToken, newRNG())
-	if res.Decision != "allow" || res.Reason != "ok" {
-		t.Errorf("res = %+v; want allow/ok", res)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := tc.errs
+			if errs == nil {
+				errs = make([]error, len(tc.rows))
+			}
+			st := &flakyRelayStore{getRows: tc.rows, getErrs: errs}
+			now, restore := setupVirtualClock(t)
+			defer restore()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			clock := &advancingClock{now: now, cancel: cancel, cancelAfter: tc.cancelAfter}
+
+			res := hook.Poll(ctx, st, clock, tc.cfg, "id-1", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", rand.New(rand.NewSource(1)))
+
+			if res.Decision != tc.decision || res.Reason != tc.reason {
+				t.Errorf("res = %+v; want decision %q reason %q", res, tc.decision, tc.reason)
+			}
+			if tc.decision == "" && (res.Why == "" || tc.why != "" && res.Why != tc.why) {
+				t.Errorf("Why = %q; want %q (non-empty)", res.Why, tc.why)
+			}
+			sleeps := clock.Sleeps()
+			if tc.sleeps >= 0 && len(sleeps) != tc.sleeps {
+				t.Errorf("sleeps = %v; want %d", sleeps, tc.sleeps)
+			}
+			var waited time.Duration
+			for i, d := range sleeps {
+				waited += d
+				if d < 50*time.Millisecond && tc.waited == 0 {
+					t.Errorf("sleep[%d] = %v; want >= the 50ms floor", i, d)
+				}
+			}
+			if tc.waited != 0 && waited != tc.waited {
+				t.Errorf("total virtual sleep = %v; want %v (never past the deadline)", waited, tc.waited)
+			}
+		})
 	}
 }
 
-func TestPollWaitsForDecision(t *testing.T) {
-	// First two reads return an undecided row; third has the decision.
-	st := &scriptedPollStore{
-		rows: []scriptedRow{
-			{row: store.PermissionRow{Decision: ""}},
-			{row: store.PermissionRow{Decision: ""}},
-			{row: store.PermissionRow{Decision: "deny", DecisionReason: "no"}},
-		},
+// repeatErr is n copies of err.
+func repeatErr(n int, err error) []error {
+	out := make([]error, n)
+	for i := range out {
+		out[i] = err
 	}
-	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 5}, "id-1", testRequestToken, newRNG())
-	if res.Decision != "deny" || res.Reason != "no" {
-		t.Errorf("res = %+v; want deny/no", res)
-	}
-	if st.calls < 3 {
-		t.Errorf("calls = %d; want >= 3 (one per row)", st.calls)
-	}
-}
-
-func TestPollRowAbsentFailsClosed(t *testing.T) {
-	st := &scriptedPollStore{
-		rows: []scriptedRow{{err: sql.ErrNoRows}},
-	}
-	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 5}, "id-1", testRequestToken, newRNG())
-	if res.Decision != "" {
-		t.Errorf("expected fail-closed (empty Decision); got %+v", res)
-	}
-	if res.Why == "" {
-		t.Errorf("Why diagnostic empty")
-	}
-}
-
-func TestPollReadRetryBudget(t *testing.T) {
-	// 6 consecutive errors → exceeds the 5-retry budget → fail-closed.
-	rows := make([]scriptedRow, 7)
-	for i := range rows {
-		rows[i] = scriptedRow{err: errors.New("flaky db")}
-	}
-	st := &scriptedPollStore{rows: rows}
-	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 30}, "id-1", testRequestToken, newRNG())
-	if res.Decision != "" {
-		t.Errorf("expected fail-closed after exhausting retries; got %+v", res)
-	}
-}
-
-func TestPollTimeoutFailsClosed(t *testing.T) {
-	// Row stays undecided forever; timeout=1s drives the loop to
-	// give up. Drives the deadline math on virtual time so the test
-	// pays zero real wall-clock for the 1s timeout.
-	st := &scriptedPollStore{
-		rows: []scriptedRow{{row: store.PermissionRow{Decision: ""}}},
-	}
-	now, restore := setupVirtualClock(t)
-	defer restore()
-	clock := &advancingClock{now: now}
-
-	res := hook.Poll(context.Background(), st, clock,
-		config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
-		"id-1", testRequestToken, newRNG())
-
-	if res.Decision != "" {
-		t.Errorf("expected timeout fail-closed; got %+v", res)
-	}
-	if res.Why != "polling timeout exceeded" {
-		t.Errorf("Why = %q; want 'polling timeout exceeded'", res.Why)
-	}
-	// Sleeps should sum to ≈ 1s (the timeout); the loop never sleeps
-	// past the deadline so the last sleep is clamped.
-	var total time.Duration
-	for _, d := range clock.sleeps {
-		total += d
-	}
-	if total < 900*time.Millisecond || total > 1100*time.Millisecond {
-		t.Errorf("total virtual sleep = %v; want ≈ 1s (within the deadline)", total)
-	}
-}
-
-func TestPollCtxCancelFailsClosed(t *testing.T) {
-	st := &scriptedPollStore{
-		rows: []scriptedRow{{row: store.PermissionRow{Decision: ""}}},
-	}
-	now, restore := setupVirtualClock(t)
-	defer restore()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	// The clock cancels ctx synchronously after the 3rd virtual
-	// sleep — no goroutine, no wall-clock wait.
-	clock := &advancingClock{now: now, cancel: cancel, cancelAfter: 3}
-
-	res := hook.Poll(ctx, st, clock,
-		config.Relay{TimeoutSeconds: 60, PollBaseMs: 5, PollJitterMs: 5},
-		"id-1", testRequestToken, newRNG())
-	if res.Decision != "" {
-		t.Errorf("expected ctx-cancel fail-closed; got %+v", res)
-	}
-	if res.Why == "" {
-		t.Errorf("Why diagnostic empty for ctx-cancel exit")
-	}
-}
-
-func TestPollFloorEnforced(t *testing.T) {
-	// SRD §6.2 invariant: PollBaseMs=0 + PollJitterMs=0 must NOT pin
-	// CPU. The 50ms floor is the safety net. Asserted by inspecting
-	// each recorded virtual sleep — no real wall-clock time burned.
-	st := &scriptedPollStore{
-		rows: []scriptedRow{
-			{row: store.PermissionRow{Decision: ""}},
-			{row: store.PermissionRow{Decision: ""}},
-			{row: store.PermissionRow{Decision: ""}},
-			{row: store.PermissionRow{Decision: "allow", DecisionReason: ""}},
-		},
-	}
-	now, restore := setupVirtualClock(t)
-	defer restore()
-	clock := &advancingClock{now: now}
-
-	res := hook.Poll(context.Background(), st, clock,
-		config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
-		"id-1", testRequestToken, newRNG())
-	if res.Decision != "allow" {
-		t.Fatalf("expected allow after 4 polls; got %+v", res)
-	}
-	// 3 sleeps between 4 polls; every one must be ≥ pollFloor (50ms).
-	if len(clock.sleeps) != 3 {
-		t.Fatalf("recorded sleeps = %v; want exactly 3 between 4 polls", clock.sleeps)
-	}
-	for i, d := range clock.sleeps {
-		if d < 50*time.Millisecond {
-			t.Errorf("sleep[%d] = %v; want >= 50ms floor", i, d)
-		}
-	}
+	return out
 }

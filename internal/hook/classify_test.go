@@ -7,379 +7,120 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
+// TestClassifyEventSRDTable pins the SRD §5.2 event → state table, b.svb (the
+// main agent's idle prompt), b.pmn (only a known terminal SessionEnd cause, in
+// reason, matcher or endReason, ends the row; none or an unknown one is a soft
+// refresh) and the SRD test rig's legacy event_name field.
 func TestClassifyEventSRDTable(t *testing.T) {
 	cases := []struct {
-		name        string
-		payload     map[string]any
+		name, raw   string
 		wantState   string
 		wantSoft    bool
 		wantUnknown bool
 		wantIdle    bool // WaitingIfWorking (b.svb)
 	}{
-		{
-			name:      "SessionStart",
-			payload:   map[string]any{"hook_event_name": "SessionStart"},
-			wantState: store.StateWaiting,
-		},
-		{
-			name:      "UserPromptSubmit",
-			payload:   map[string]any{"hook_event_name": "UserPromptSubmit"},
-			wantState: store.StateWorking,
-		},
-		{
-			name:      "PreToolUse_AskUserQuestion",
-			payload:   map[string]any{"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion"},
-			wantState: store.StateAskUser,
-		},
-		{
-			name:      "PreToolUse_Bash",
-			payload:   map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash"},
-			wantState: store.StateWorking,
-		},
-		{
-			name:      "PreToolUse_Read",
-			payload:   map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Read"},
-			wantState: store.StateWorking,
-		},
-		{
-			name:      "PostToolUse",
-			payload:   map[string]any{"hook_event_name": "PostToolUse"},
-			wantState: store.StateWorking,
-		},
-		{
-			name:      "Stop",
-			payload:   map[string]any{"hook_event_name": "Stop"},
-			wantState: store.StateWaiting,
-		},
-		{
-			name:     "Notification",
-			payload:  map[string]any{"hook_event_name": "Notification"},
-			wantSoft: true,
-		},
-		{
-			// b.svb: the main agent's idle prompt returns a working row to waiting.
-			name:     "Notification_idle_prompt",
-			payload:  map[string]any{"hook_event_name": "Notification", "notification_type": "idle_prompt"},
-			wantSoft: true,
-			wantIdle: true,
-		},
-		{
-			name:     "Notification_idle_prompt_subagent",
-			payload:  map[string]any{"hook_event_name": "Notification", "notification_type": "idle_prompt", "agent_id": "a1"},
-			wantSoft: true,
-		},
-		{
-			name:     "Notification_permission_prompt",
-			payload:  map[string]any{"hook_event_name": "Notification", "notification_type": "permission_prompt"},
-			wantSoft: true,
-		},
-		{
-			name:      "PermissionRequest",
-			payload:   map[string]any{"hook_event_name": "PermissionRequest"},
-			wantState: store.StateCheckPermission,
-		},
-		{
-			name:     "SessionEnd_clear_soft",
-			payload:  map[string]any{"hook_event_name": "SessionEnd", "reason": "clear"},
-			wantSoft: true,
-		},
-		{
-			name:     "SessionEnd_compact_soft",
-			payload:  map[string]any{"hook_event_name": "SessionEnd", "reason": "compact"},
-			wantSoft: true,
-		},
-		{
-			name:      "SessionEnd_logout_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "logout"},
-			wantState: store.StateEnded,
-		},
-		{
-			name:      "SessionEnd_prompt_input_exit_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "prompt_input_exit"},
-			wantState: store.StateEnded,
-		},
-		{
-			name:      "SessionEnd_exit_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "exit"},
-			wantState: store.StateEnded,
-		},
-		{
-			// b.pmn: unknown / unfamiliar SessionEnd causes — including
-			// Claude Code's auto-compaction payload shape — soft-refresh
-			// rather than falsely transition to `ended`. find-missing
-			// reaps any row whose tmux session truly disappeared.
-			name:     "SessionEnd_unknown_reason_soft",
-			payload:  map[string]any{"hook_event_name": "SessionEnd", "reason": "future_value"},
-			wantSoft: true,
-		},
-		{
-			// b.pmn: Claude Code's exit cause may arrive under `matcher`
-			// instead of `reason`. Recognized terminal values via either
-			// field still mark `ended`.
-			name:      "SessionEnd_matcher_logout_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "matcher": "logout"},
-			wantState: store.StateEnded,
-		},
-		{
-			// b.pmn: same shape under the `endReason` field name.
-			name:      "SessionEnd_endReason_logout_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "endReason": "logout"},
-			wantState: store.StateEnded,
-		},
-		{
-			name:     "SessionEnd_matcher_compact_soft",
-			payload:  map[string]any{"hook_event_name": "SessionEnd", "matcher": "compact"},
-			wantSoft: true,
-		},
-		{
-			name:        "unknown_event_soft_and_flagged",
-			payload:     map[string]any{"hook_event_name": "BrandNewEvent"},
-			wantSoft:    true,
-			wantUnknown: true,
-		},
+		{name: "SessionStart", raw: `{"hook_event_name":"SessionStart"}`, wantState: store.StateWaiting},
+		{name: "legacy event_name field", raw: `{"event_name":"SessionStart"}`, wantState: store.StateWaiting},
+		{name: "UserPromptSubmit", raw: `{"hook_event_name":"UserPromptSubmit"}`, wantState: store.StateWorking},
+		{name: "PreToolUse AskUserQuestion", raw: `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`, wantState: store.StateAskUser},
+		{name: "PreToolUse Bash", raw: `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, wantState: store.StateWorking},
+		{name: "PostToolUse", raw: `{"hook_event_name":"PostToolUse"}`, wantState: store.StateWorking},
+		{name: "Stop", raw: `{"hook_event_name":"Stop"}`, wantState: store.StateWaiting},
+		{name: "Notification", raw: `{"hook_event_name":"Notification"}`, wantSoft: true},
+		{name: "Notification idle_prompt", raw: `{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, wantSoft: true, wantIdle: true},
+		{name: "Notification idle_prompt from a subagent", raw: `{"hook_event_name":"Notification","notification_type":"idle_prompt","agent_id":"a1"}`, wantSoft: true},
+		{name: "Notification permission_prompt", raw: `{"hook_event_name":"Notification","notification_type":"permission_prompt"}`, wantSoft: true},
+		{name: "PermissionRequest", raw: `{"hook_event_name":"PermissionRequest"}`, wantState: store.StateCheckPermission},
+		{name: "SessionEnd clear", raw: `{"hook_event_name":"SessionEnd","reason":"clear"}`, wantSoft: true},
+		{name: "SessionEnd compact", raw: `{"hook_event_name":"SessionEnd","reason":"compact"}`, wantSoft: true},
+		{name: "SessionEnd logout", raw: `{"hook_event_name":"SessionEnd","reason":"logout"}`, wantState: store.StateEnded},
+		{name: "SessionEnd prompt_input_exit", raw: `{"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}`, wantState: store.StateEnded},
+		{name: "SessionEnd exit", raw: `{"hook_event_name":"SessionEnd","reason":"exit"}`, wantState: store.StateEnded},
+		{name: "SessionEnd unknown reason", raw: `{"hook_event_name":"SessionEnd","reason":"future_value"}`, wantSoft: true},
+		{name: "SessionEnd no cause", raw: `{"hook_event_name":"SessionEnd"}`, wantSoft: true},
+		{name: "SessionEnd matcher logout", raw: `{"hook_event_name":"SessionEnd","matcher":"logout"}`, wantState: store.StateEnded},
+		{name: "SessionEnd endReason logout", raw: `{"hook_event_name":"SessionEnd","endReason":"logout"}`, wantState: store.StateEnded},
+		{name: "SessionEnd matcher compact", raw: `{"hook_event_name":"SessionEnd","matcher":"compact"}`, wantSoft: true},
+		{name: "unknown event", raw: `{"hook_event_name":"BrandNewEvent"}`, wantSoft: true, wantUnknown: true},
+		{name: "empty payload", raw: ``, wantSoft: true},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := json.Marshal(tc.payload)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			res, err := ClassifyEvent(raw)
+			res, err := ClassifyEvent(json.RawMessage(tc.raw))
 			if err != nil {
 				t.Fatalf("ClassifyEvent: %v", err)
 			}
-			if res.SoftRefresh != tc.wantSoft {
-				t.Errorf("SoftRefresh = %v; want %v", res.SoftRefresh, tc.wantSoft)
-			}
-			if res.NewState != tc.wantState {
-				t.Errorf("NewState = %q; want %q", res.NewState, tc.wantState)
-			}
-			if res.UnknownEvent != tc.wantUnknown {
-				t.Errorf("UnknownEvent = %v; want %v", res.UnknownEvent, tc.wantUnknown)
-			}
-			if res.WaitingIfWorking != tc.wantIdle {
-				t.Errorf("WaitingIfWorking = %v; want %v", res.WaitingIfWorking, tc.wantIdle)
+			if res.NewState != tc.wantState || res.SoftRefresh != tc.wantSoft || res.UnknownEvent != tc.wantUnknown || res.WaitingIfWorking != tc.wantIdle {
+				t.Errorf("state/soft/unknown/idle = %q/%v/%v/%v; want %q/%v/%v/%v", res.NewState, res.SoftRefresh,
+					res.UnknownEvent, res.WaitingIfWorking, tc.wantState, tc.wantSoft, tc.wantUnknown, tc.wantIdle)
 			}
 		})
 	}
-}
-
-// TestClassifyEventAcceptsLegacyEventNameField pins the SRD-test-example
-// compatibility: Claude Code emits `hook_event_name`, but the SRD test
-// rig in subtask 4.4 uses `event_name`. The classifier accepts either.
-func TestClassifyEventAcceptsLegacyEventNameField(t *testing.T) {
-	raw := json.RawMessage(`{"event_name":"SessionStart","transcript_path":"~/x/y/abc.jsonl"}`)
-	res, err := ClassifyEvent(raw)
-	if err != nil {
-		t.Fatalf("ClassifyEvent: %v", err)
-	}
-	if res.NewState != store.StateWaiting {
-		t.Errorf("NewState = %q; want waiting", res.NewState)
-	}
-	if res.SessionID != "abc" {
-		t.Errorf("SessionID = %q; want abc", res.SessionID)
+	if _, err := ClassifyEvent(json.RawMessage("not json")); err == nil {
+		t.Error("ClassifyEvent(malformed JSON) = nil error; want the parse error")
 	}
 }
 
-// TestClassifyEventTranscriptPath pins the SR-9.1 plumbing: on every event
-// (SR-22.9) the full hook-reported transcript_path is carried verbatim on
-// ClassifyResult.TranscriptPath, independent of whether the basename
-// SessionID extraction succeeds.
+// TestClassifyEventTranscriptPath pins SR-9.1/SR-22.9: every event carries the
+// hook-reported transcript_path verbatim and its basename without extension as
+// the session id; a garbage path ("...", "/") yields no session id but is
+// still carried verbatim.
 func TestClassifyEventTranscriptPath(t *testing.T) {
+	const uuid = "12345678-1234-1234-1234-123456789012"
 	cases := []struct {
-		name       string
-		payload    map[string]any
-		wantPath   string
-		wantSessID string
+		name, raw, wantPath, wantSessID string
 	}{
-		{
-			// Full path present: TranscriptPath carries the verbatim value
-			// and SessionID is the basename-without-extension.
-			name:       "SessionStart_with_path",
-			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": "~/.claude/projects/-tmp/abc.jsonl"},
-			wantPath:   "~/.claude/projects/-tmp/abc.jsonl",
-			wantSessID: "abc",
-		},
-		{
-			// Missing transcript_path: both empty (existing extractSessionID
-			// contract for empty input, and "empty means don't write" for
-			// TranscriptPath).
-			name:       "SessionStart_missing_path",
-			payload:    map[string]any{"hook_event_name": "SessionStart"},
-			wantPath:   "",
-			wantSessID: "",
-		},
-		{
-			// Explicit empty transcript_path: same as missing.
-			name:       "SessionStart_empty_path",
-			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": ""},
-			wantPath:   "",
-			wantSessID: "",
-		},
-		{
-			// Garbage path "...": extractSessionID rejects it (base[:2] ==
-			// ".." is obviously-bogus) so SessionID is "", but TranscriptPath
-			// still carries the raw payload value verbatim — the write site
-			// gates jsonl_path on non-empty path, not on SessionID success.
-			name:       "SessionStart_garbage_path_dots",
-			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": "..."},
-			wantPath:   "...",
-			wantSessID: "",
-		},
-		{
-			// Garbage path that is a bare directory sep: SessionID collapses
-			// to "" (filepath.Base("/") == "/") but TranscriptPath is verbatim.
-			name:       "SessionStart_garbage_path_slash",
-			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": "/"},
-			wantPath:   "/",
-			wantSessID: "",
-		},
-		{
-			// SR-22.9: every event carries both (recorded, never a gate), not just SessionStart.
-			name:       "UserPromptSubmit_transcript_fields",
-			payload:    map[string]any{"hook_event_name": "UserPromptSubmit", "transcript_path": "~/x/abc.jsonl"},
-			wantPath:   "~/x/abc.jsonl",
-			wantSessID: "abc",
-		},
-		{
-			name:       "Stop_transcript_fields",
-			payload:    map[string]any{"hook_event_name": "Stop", "transcript_path": "~/x/abc.jsonl"},
-			wantPath:   "~/x/abc.jsonl",
-			wantSessID: "abc",
-		},
-		{
-			name:       "SessionEnd_transcript_fields",
-			payload:    map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "transcript_path": "~/x/abc.jsonl"},
-			wantPath:   "~/x/abc.jsonl",
-			wantSessID: "abc",
-		},
-		{
-			name:       "Stop_no_transcript_path",
-			payload:    map[string]any{"hook_event_name": "Stop"},
-			wantPath:   "",
-			wantSessID: "",
-		},
+		{"SessionStart", `{"hook_event_name":"SessionStart","transcript_path":"~/p/` + uuid + `.jsonl"}`, "~/p/" + uuid + ".jsonl", uuid},
+		{"SessionStart, legacy event_name", `{"event_name":"SessionStart","transcript_path":"~/x/y/abc.jsonl"}`, "~/x/y/abc.jsonl", "abc"},
+		{"SessionStart, no path", `{"hook_event_name":"SessionStart"}`, "", ""},
+		{"SessionStart, empty path", `{"hook_event_name":"SessionStart","transcript_path":""}`, "", ""},
+		{"SessionStart, path dots", `{"hook_event_name":"SessionStart","transcript_path":"..."}`, "...", ""},
+		{"SessionStart, path slash", `{"hook_event_name":"SessionStart","transcript_path":"/"}`, "/", ""},
+		{"SessionStart, other extension", `{"hook_event_name":"SessionStart","transcript_path":"sessionid.txt"}`, "sessionid.txt", "sessionid"},
+		{"UserPromptSubmit", `{"hook_event_name":"UserPromptSubmit","transcript_path":"/abs/abc.jsonl"}`, "/abs/abc.jsonl", "abc"},
+		{"Stop", `{"hook_event_name":"Stop","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
+		{"Stop, no path", `{"hook_event_name":"Stop"}`, "", ""},
+		{"SessionEnd", `{"hook_event_name":"SessionEnd","reason":"logout","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := json.Marshal(tc.payload)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			res, err := ClassifyEvent(raw)
+			res, err := ClassifyEvent(json.RawMessage(tc.raw))
 			if err != nil {
 				t.Fatalf("ClassifyEvent: %v", err)
 			}
-			if res.TranscriptPath != tc.wantPath {
-				t.Errorf("TranscriptPath = %q; want %q", res.TranscriptPath, tc.wantPath)
-			}
-			if res.SessionID != tc.wantSessID {
-				t.Errorf("SessionID = %q; want %q", res.SessionID, tc.wantSessID)
+			if res.TranscriptPath != tc.wantPath || res.SessionID != tc.wantSessID {
+				t.Errorf("TranscriptPath/SessionID = %q/%q; want %q/%q", res.TranscriptPath, res.SessionID, tc.wantPath, tc.wantSessID)
 			}
 		})
-	}
-}
-
-func TestClassifyEventSessionIDExtraction(t *testing.T) {
-	cases := []struct {
-		path string
-		want string
-	}{
-		{"~/.claude/projects/-tmp/12345678-1234-1234-1234-123456789012.jsonl",
-			"12345678-1234-1234-1234-123456789012"},
-		{"/abs/path/uuid.jsonl", "uuid"},
-		{"sessionid.txt", "sessionid"},
-		{"", ""},
-		// "..." has its last '.' at index 2; base[:2] = ".." which the
-		// classifier rejects as obviously-bogus -> "" (don't clobber the
-		// known good session id with garbage).
-		{"...", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.path, func(t *testing.T) {
-			got := extractSessionID(tc.path)
-			if got != tc.want {
-				t.Errorf("extractSessionID(%q) = %q; want %q", tc.path, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestClassifyEventEmptyPayloadIsSoftRefresh(t *testing.T) {
-	res, err := ClassifyEvent(nil)
-	if err != nil {
-		t.Fatalf("ClassifyEvent(nil): %v", err)
-	}
-	if !res.SoftRefresh {
-		t.Errorf("empty payload should soft-refresh; res = %+v", res)
-	}
-}
-
-func TestClassifyEventMalformedJSONReturnsError(t *testing.T) {
-	_, err := ClassifyEvent(json.RawMessage("not json"))
-	if err == nil {
-		t.Fatalf("expected JSON parse error")
-	}
-}
-
-// TestClassifyEventSessionEndMissingReasonIsSoft pins the b.pmn behavior:
-// a SessionEnd with no exit-cause field at all soft-refreshes instead of
-// transitioning to `ended`. Auto-compaction in Claude Code fires
-// SessionEnd without a `reason`/`matcher`/`endReason` field, and the
-// previous "default to ended" policy caused mid-flight workers to flip to
-// `ended` for the brief window before the next hook re-stamped state.
-// find-missing reaps a row whose tmux session is actually dead.
-func TestClassifyEventSessionEndMissingReasonIsSoft(t *testing.T) {
-	raw := json.RawMessage(`{"hook_event_name":"SessionEnd"}`)
-	res, err := ClassifyEvent(raw)
-	if err != nil {
-		t.Fatalf("ClassifyEvent: %v", err)
-	}
-	if !res.SoftRefresh {
-		t.Errorf("SoftRefresh = %v; want true (missing cause should soft-refresh per b.pmn)", res.SoftRefresh)
-	}
-	if res.NewState != "" {
-		t.Errorf("NewState = %q; want empty (soft-refresh leaves state alone)", res.NewState)
 	}
 }
 
 // TestClassifyEventAgentID pins SR-22.9: only a non-empty agent_id marks a subagent
 // SessionStart/SessionEnd; agent_id and agent_type never change the classification itself.
 func TestClassifyEventAgentID(t *testing.T) {
-	const tp = "~/x/abc.jsonl"
 	cases := []struct {
 		name          string
 		payload       map[string]any
 		wantAgentID   string
 		wantLifecycle bool
 	}{
-		{"SessionStart_agent_id", map[string]any{"hook_event_name": "SessionStart", "agent_id": "a1"}, "a1", true},
-		{"SessionStart_legacy_event_name_agent_id", map[string]any{"event_name": "SessionStart", "agent_id": "a1"}, "a1", true},
-		{"SessionEnd_terminal_agent_id", map[string]any{"hook_event_name": "SessionEnd", "reason": "prompt_input_exit", "agent_id": "a1"}, "a1", true},
-		{"SessionEnd_soft_agent_id", map[string]any{"hook_event_name": "SessionEnd", "reason": "clear", "agent_id": "a1"}, "a1", true},
-		{"PreToolUse_agent_id", map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "a1"}, "a1", false},
-		{"Stop_agent_id", map[string]any{"hook_event_name": "Stop", "agent_id": "a1"}, "a1", false},
-		{"SessionStart_agent_id_empty", map[string]any{"hook_event_name": "SessionStart", "agent_id": ""}, "", false},
-		{"SessionEnd_agent_id_empty", map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "agent_id": ""}, "", false},
-		{"SessionStart_agent_id_absent", map[string]any{"hook_event_name": "SessionStart"}, "", false},
-		{"SessionStart_agent_type_only", map[string]any{"hook_event_name": "SessionStart", "agent_type": "reviewer"}, "", false},
-		{"SessionEnd_agent_type_only", map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "agent_type": "reviewer"}, "", false},
-		{"PreToolUse_agent_type_only", map[string]any{"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "agent_type": "reviewer"}, "", false},
+		{"SessionStart agent_id", map[string]any{"hook_event_name": "SessionStart", "agent_id": "a1"}, "a1", true},
+		{"SessionStart legacy event_name agent_id", map[string]any{"event_name": "SessionStart", "agent_id": "a1"}, "a1", true},
+		{"SessionEnd terminal agent_id", map[string]any{"hook_event_name": "SessionEnd", "reason": "prompt_input_exit", "agent_id": "a1"}, "a1", true},
+		{"SessionEnd soft agent_id", map[string]any{"hook_event_name": "SessionEnd", "reason": "clear", "agent_id": "a1"}, "a1", true},
+		{"PreToolUse agent_id", map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "a1"}, "a1", false},
+		{"SessionStart agent_id empty", map[string]any{"hook_event_name": "SessionStart", "agent_id": ""}, "", false},
+		{"SessionStart agent_id absent", map[string]any{"hook_event_name": "SessionStart"}, "", false},
+		{"SessionStart agent_type only", map[string]any{"hook_event_name": "SessionStart", "agent_type": "reviewer"}, "", false},
+		{"PreToolUse agent_type only", map[string]any{"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "agent_type": "reviewer"}, "", false},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.payload["transcript_path"] = tp
+			tc.payload["transcript_path"] = "~/x/abc.jsonl"
 			res := classifyMap(t, tc.payload)
-			if res.AgentID != tc.wantAgentID {
-				t.Errorf("AgentID = %q; want %q", res.AgentID, tc.wantAgentID)
+			if res.AgentID != tc.wantAgentID || res.SubagentLifecycle() != tc.wantLifecycle {
+				t.Errorf("AgentID/SubagentLifecycle = %q/%v; want %q/%v", res.AgentID, res.SubagentLifecycle(), tc.wantAgentID, tc.wantLifecycle)
 			}
-			if got := res.SubagentLifecycle(); got != tc.wantLifecycle {
-				t.Errorf("SubagentLifecycle() = %v; want %v", got, tc.wantLifecycle)
-			}
-
 			// Apart from AgentID, the result equals the same payload without agent fields.
 			plain := map[string]any{}
 			for k, v := range tc.payload {
