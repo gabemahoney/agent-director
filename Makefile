@@ -110,7 +110,10 @@ test: envelope-diff-ts test-install-sh
 #     a UTF-8 BOM, rewriting an existing line, ending the table at an
 #     indented next header and appending no second [defaults];
 #     agent-director list then loads the config, and uninstall.sh takes the
-#     key out again (b.onv)
+#     key out again (b.onv); the header and the key match in any letter case
+#     ([Defaults], INJECT_HELP_HOOK), leaving the key set once, in the table
+#     that set it, else in the first defaults table; INJECT_HELP_HOOKS is not
+#     the key (b.hhk)
 #   - config.toml merge pre-check: a hooks-on install over a config that sets
 #     defaults as a key before any header (an inline table, in any letter
 #     case, also after a BOM with CRLF line ends) stops in pre-flight (exit 5),

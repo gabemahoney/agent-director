@@ -588,7 +588,15 @@ This skill runs `install.sh` from the same directory. The script:
    `.bak` first. The
    `[defaults]` header is found however it is spaced: `[ defaults ]`,
    `[defaults] # comment`, an indented header, CRLF line ends and a
-   UTF-8 byte-order mark are all fine (b.onv). The summary line is
+   UTF-8 byte-order mark are all fine (b.onv). The header and the key
+   are also found in any letter case, as agent-director reads them, so
+   the file never ends with the key set under two spellings, which
+   agent-director refuses (b.hhk): the line that sets the key
+   (`INJECT_HELP_HOOK`, say, under `[Defaults]`) becomes
+   `inject_help_hook = true`; when no such line exists, the key is added
+   at the end of the first such table, and a `[defaults]` header is
+   added only when the file has none in any letter case. The summary
+   line is
    `config  : merged inject_help_hook=true into <path> (backup <path>)`,
    or `config  : created <path> with inject_help_hook=true` when there
    was no config.toml (created at mode 0600).
@@ -758,10 +766,10 @@ destructive *additions*.
   added; other user hooks are preserved), snapshotting
   `settings.json` to a timestamped `.bak` first.
 - Removes `inject_help_hook` from `config.toml`'s `[defaults]` table
-  (its header found however it is spaced, as install finds it), and
-  the `[defaults]` header too when only blank lines and comments are
-  left under it. When that changes the file, it is snapshotted to a
-  timestamped `.bak` first.
+  (the header and the key found however they are spaced and in any
+  letter case, as install finds them), and the `[defaults]` header too
+  when only blank lines and comments are left under it. When that
+  changes the file, it is snapshotted to a timestamped `.bak` first.
 - Both rewrites keep the file's mode, and each `.bak` has the same
   mode as the file it copies (b.ojn).
 - Removes the binary at `~/.agent-director/bin/agent-director` and

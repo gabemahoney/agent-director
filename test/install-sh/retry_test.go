@@ -14,8 +14,8 @@ import (
 var retrySkipLine = regexp.MustCompile(`(?m)^retry\.sh: SKIP: (.+)$`)
 
 // TestInstallShRetry runs retry.sh (b.kym, b.vqr, b.ady, b.hk7, b.7j2, b.2io,
-// b.onv, b.whe, b.ojn): install.sh's --from-release download retries for both
-// release assets end in a full install, a wrong --sha256 or --admin-sha256
+// b.onv, b.hhk, b.whe, b.ojn): install.sh's --from-release download retries
+// for both release assets end in a full install, a wrong --sha256 or --admin-sha256
 // installs nothing, the PATH symlink is agent-director's only, an upgrade's
 // user_version reads wait out a brief store lock and ignore ~/.sqliterc, a
 // failed sentinel mv leaves no temp file, an install or upgrade under umask
@@ -23,8 +23,8 @@ var retrySkipLine = regexp.MustCompile(`(?m)^retry\.sh: SKIP: (.+)$`)
 // get the owner's access and the umask's group/other bits, and an install or
 // upgrade reads, migrates and verifies the store [store] db_path names, or
 // stops before changing anything on a db_path it cannot read, and a hooks-on
-// install merges inject_help_hook into [defaults] however its header is
-// spelled, which uninstall.sh reverses, or stops before changing anything on a
+// install merges inject_help_hook into [defaults] however its header or the key
+// is spelled, which uninstall.sh reverses, or stops before changing anything on a
 // config that sets defaults as a key before any header, and a hooks-on
 // re-install keeps the modes of the settings.json and config.toml it merges
 // into and of their .bak copies. On a host install.sh refuses, it skips with

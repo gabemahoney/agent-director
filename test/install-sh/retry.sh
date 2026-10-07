@@ -64,7 +64,11 @@
 # spelled (blanks inside or before the brackets, a trailing comment, a CRLF, a
 # UTF-8 BOM), before an indented next header, rewriting an existing line and
 # appending no second [defaults]; agent-director list then loads the config,
-# and uninstall.sh takes the key out again.
+# and uninstall.sh takes the key out again. The header and the key match in any
+# letter case (b.hhk): [Defaults] or INJECT_HELP_HOOK ends with one
+# inject_help_hook = true, in the table that set the key, else in the first
+# defaults table, and never a second spelling; INJECT_HELP_HOOKS is not the key,
+# and the key under another table ([defaultsx]) is left as it is.
 #
 # Merge pre-check (b.whe): a hooks-on install over a config that sets defaults
 # as a key before any header (an inline table, in any letter case, right after
@@ -651,10 +655,11 @@ ad_list() {
 }
 
 # A hooks-on install merges inject_help_hook = true into the [defaults] table
-# however its header is spelled, and uninstall.sh takes it out again (b.onv).
-# Per case <name>|<config>|<merged>|<uninstalled> (printf %b, a newline added):
-# two installs both leave <merged>, agent-director list loads it, and
-# uninstall.sh leaves <uninstalled> (<config> when empty).
+# however its header is spelled, in any letter case, and uninstall.sh takes it
+# out again (b.onv, b.hhk). Per case <name>|<config>|<merged>|<uninstalled>
+# (printf %b, a newline added): two installs both leave <merged>,
+# agent-director list loads it, and uninstall.sh leaves <uninstalled> (<config>
+# when empty, an empty line when -).
 UNINSTALL_SH="${REPO_ROOT}/skills/install-agent-director/uninstall.sh"
 HOOKS=1
 while IFS='|' read -r -u 3 name config merged uninstalled; do
@@ -672,7 +677,9 @@ while IFS='|' read -r -u 3 name config merged uninstalled; do
     report "$name-list" "$(ad_list)" "0"
     env -i HOME="$H" PATH="$FAKES:$PATH" bash "$UNINSTALL_SH" >"$OUT" 2>"$ERR"
     report "$name-uninstall-exit-code" "$?" "0"
-    report "$name-config-uninstalled" "$(shown "$cfg")" "$(shown <(printf '%b\n' "${uninstalled:-$config}"))"
+    left="${uninstalled:-$config}"
+    [[ "$uninstalled" == - ]] && left=""
+    report "$name-config-uninstalled" "$(shown "$cfg")" "$(shown <(printf '%b\n' "$left"))"
 done 3<<'EOF'
 spaced|[ defaults ]\nrelay_mode = "off"|[ defaults ]\nrelay_mode = "off"\ninject_help_hook = true|
 comment|[defaults] # mine\nrelay_mode = "off"|[defaults] # mine\nrelay_mode = "off"\ninject_help_hook = true|
@@ -683,7 +690,14 @@ bom|\xef\xbb\xbf[defaults]\nrelay_mode = "off"|\xef\xbb\xbf[defaults]\nrelay_mod
 crlf|[ defaults ]\r\nrelay_mode = "off"\r|[ defaults ]\r\nrelay_mode = "off"\r\ninject_help_hook = true|
 exact|[defaults]\nrelay_mode = "off"|[defaults]\nrelay_mode = "off"\ninject_help_hook = true|
 no-defaults|[defaultsx]\nrelay_mode = "off"|[defaultsx]\nrelay_mode = "off"\n\n[defaults]\ninject_help_hook = true|
+key-in-other-table|[defaultsx]\nINJECT_HELP_HOOK = false\nrelay_mode = "off"|[defaultsx]\nINJECT_HELP_HOOK = false\nrelay_mode = "off"\n\n[defaults]\ninject_help_hook = true|
 defaults-key-elsewhere|# defaults = { relay_mode = "on" }\ndefaults_x = 1\n[relay]\ndefaults = 1|# defaults = { relay_mode = "on" }\ndefaults_x = 1\n[relay]\ndefaults = 1\n\n[defaults]\ninject_help_hook = true|
+case-header|[Defaults]\ninject_help_hook = false|[Defaults]\ninject_help_hook = true|-
+case-key|[defaults]\nINJECT_HELP_HOOK = false|[defaults]\ninject_help_hook = true|-
+case-header-no-key|[Defaults]\nrelay_mode = "off"\n[relay]\npoll_base_ms = 100|[Defaults]\nrelay_mode = "off"\ninject_help_hook = true\n[relay]\npoll_base_ms = 100|
+case-first-table|[ DEFAULTS ] # mine\nrelay_mode = "off"\n[defaults]\nexpire_retention_days = 7|[ DEFAULTS ] # mine\nrelay_mode = "off"\ninject_help_hook = true\n[defaults]\nexpire_retention_days = 7|
+case-key-in-later-table|[Defaults]\nrelay_mode = "off"\n[relay]\npoll_base_ms = 100\n[defaults]\nInject_Help_Hook = false|[Defaults]\nrelay_mode = "off"\n[relay]\npoll_base_ms = 100\n[defaults]\ninject_help_hook = true|[Defaults]\nrelay_mode = "off"\n[relay]\npoll_base_ms = 100
+case-longer-key|[Defaults]\nINJECT_HELP_HOOKS = 1|[Defaults]\nINJECT_HELP_HOOKS = 1\ninject_help_hook = true|
 EOF
 HOOKS=""
 

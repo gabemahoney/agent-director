@@ -132,7 +132,11 @@ fi
 # that merge matches them (b.onv): blanks before, inside and after the
 # brackets, a trailing # comment, a CRLF's CR, and a UTF-8 byte-order
 # mark on line 1. A header missed here leaves the key install wrote
-# under it.
+# under it. The header name and the key are matched regardless of
+# ASCII letter case too, as that merge matches them ([Defaults],
+# INJECT_HELP_HOOK; b.hhk): the merge rewrites a key in any case to
+# inject_help_hook, under whichever such header set it, and adds it
+# under the first such header when none did.
 # --------------------------------------------------------------------
 
 CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
@@ -164,7 +168,7 @@ if [[ -f "$CONFIG_TOML" ]]; then
                 flush_defaults()
                 in_defaults = 0
             }
-            if (line ~ /^[[:blank:]]*\[[[:blank:]]*defaults[[:blank:]]*\][[:space:]]*(#.*)?$/) {
+            if (line ~ /^[[:blank:]]*\[[[:blank:]]*[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss][[:blank:]]*\][[:space:]]*(#.*)?$/) {
                 in_defaults = 1
                 header = $0
                 next
@@ -173,7 +177,7 @@ if [[ -f "$CONFIG_TOML" ]]; then
             next
         }
         in_defaults {
-            if ($0 ~ /^[[:space:]]*inject_help_hook[[:space:]]*=/) {
+            if ($0 ~ /^[[:space:]]*[Ii][Nn][Jj][Ee][Cc][Tt]_[Hh][Ee][Ll][Pp]_[Hh][Oo][Oo][Kk][[:space:]]*=/) {
                 next
             }
             lines[++n] = $0

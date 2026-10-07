@@ -93,9 +93,10 @@ func TestUninstallRemovesAdminBinary(t *testing.T) {
 	}
 }
 
-// TestUninstallClearsInjectHelpHookOnlyUnderDefaults (b.onv): uninstall.sh
-// drops inject_help_hook under a [defaults] header spelled with blanks and a
-// comment, and keeps it under [defaults.x] and [defaultsx].
+// TestUninstallClearsInjectHelpHookOnlyUnderDefaults (b.onv, b.hhk):
+// uninstall.sh drops inject_help_hook in any letter case under a [defaults]
+// header spelled with blanks, a comment or in any letter case, and keeps it
+// under [defaults.x], [defaultsx] and [DEFAULTS.x], and keeps INJECT_HELP_HOOKS.
 func TestUninstallClearsInjectHelpHookOnlyUnderDefaults(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -106,8 +107,9 @@ func TestUninstallClearsInjectHelpHookOnlyUnderDefaults(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	near := "[defaults.x]\ninject_help_hook = true\n[defaultsx]\ninject_help_hook = true\n"
-	config := near + "\t[ defaults ]  # mine\nrelay_mode = \"off\"\ninject_help_hook = true\n"
+	near := "[defaults.x]\ninject_help_hook = true\n[defaultsx]\ninject_help_hook = true\n[DEFAULTS.x]\nINJECT_HELP_HOOK = true\n"
+	config := near + "\t[ defaults ]  # mine\nrelay_mode = \"off\"\ninject_help_hook = true\n" +
+		"[Defaults]\nINJECT_HELP_HOOKS = true\nInject_Help_Hook = true\n"
 	if err := os.WriteFile(cfg, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +120,7 @@ func TestUninstallClearsInjectHelpHookOnlyUnderDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := near + "\t[ defaults ]  # mine\nrelay_mode = \"off\"\n"; string(got) != want {
+	if want := near + "\t[ defaults ]  # mine\nrelay_mode = \"off\"\n[Defaults]\nINJECT_HELP_HOOKS = true\n"; string(got) != want {
 		t.Errorf("config.toml after uninstall.sh = %q; want %q", got, want)
 	}
 }

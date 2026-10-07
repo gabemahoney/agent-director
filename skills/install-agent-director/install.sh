@@ -1948,25 +1948,43 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
         # missed here gets a second [defaults] appended, a file
         # agent-director refuses. ad_store_db_path has refused every
         # other line starting with [, so any such line is a header.
+        #
+        # The header name and the key are matched regardless of letter
+        # case ([Defaults], INJECT_HELP_HOOK), as agent-director's TOML
+        # decoder matches them; a spelling missed here gets a second
+        # spelling of the key added, a file agent-director refuses
+        # (b.hhk). ASCII case is all there is to match: ad_store_db_path
+        # has refused every header and key name that is not letters,
+        # digits, _ and -, so no ſ (U+017F) or Kelvin sign (U+212A),
+        # which the decoder also matches to s and k, reaches here. TOML
+        # takes [Defaults] and [defaults] as two tables, which
+        # agent-director both reads as [defaults], so the awk reads the
+        # file twice: the first pass only notes whether any of them
+        # sets the key, and the second rewrites that line or, when none
+        # does, adds the key at the end of the first of them. Adding it
+        # there in one pass would set the key twice when a later one of
+        # them sets it. The store open (step 4) has already stopped the
+        # install on a file that sets the key twice.
         merged=$(LC_ALL=C awk '
-            BEGIN { written = 0; in_defaults = 0 }
+            BEGIN { pass = 0; has_key = 0 }
+            FNR == 1 { pass++; in_defaults = 0; written = has_key }
             { line = $0 }
-            NR == 1 { sub(/^\357\273\277/, "", line) }
+            FNR == 1 { sub(/^\357\273\277/, "", line) }
             line ~ /^[[:blank:]]*\[/ {
-                if (in_defaults && !written) {
+                if (pass == 2 && in_defaults && !written) {
                     print "inject_help_hook = true"
                     written = 1
                 }
-                in_defaults = (line ~ /^[[:blank:]]*\[[[:blank:]]*defaults[[:blank:]]*\][[:space:]]*(#.*)?$/) ? 1 : 0
-                print
+                in_defaults = (line ~ /^[[:blank:]]*\[[[:blank:]]*[Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss][[:blank:]]*\][[:space:]]*(#.*)?$/) ? 1 : 0
+                if (pass == 2) print
                 next
             }
-            in_defaults && /^[[:space:]]*inject_help_hook[[:space:]]*=/ {
-                print "inject_help_hook = true"
-                written = 1
+            in_defaults && /^[[:space:]]*[Ii][Nn][Jj][Ee][Cc][Tt]_[Hh][Ee][Ll][Pp]_[Hh][Oo][Oo][Kk][[:space:]]*=/ {
+                has_key = 1
+                if (pass == 2) print "inject_help_hook = true"
                 next
             }
-            { print }
+            pass == 2 { print }
             END {
                 if (in_defaults && !written) {
                     print "inject_help_hook = true"
@@ -1978,7 +1996,7 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
                     print "inject_help_hook = true"
                 }
             }
-        ' "$CONFIG_TOML")
+        ' "$CONFIG_TOML" "$CONFIG_TOML")
         ad_replace_keeping_mode "$CONFIG_TOML" "$merged"
         echo "  config  : merged inject_help_hook=true into $CONFIG_TOML (backup $backup_cfg)"
     else

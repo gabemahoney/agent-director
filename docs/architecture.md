@@ -4552,7 +4552,7 @@ guarantees only the owner's access; the exact modes install.sh gives
 sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
 `chmod`s.
 
-**The config.toml merge (b.onv, b.whe).** With hooks on, install.sh sets
+**The config.toml merge (b.onv, b.whe, b.hhk).** With hooks on, install.sh sets
 `inject_help_hook = true` in `~/.agent-director/config.toml`'s
 `[defaults]` table (see
 [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)):
@@ -4571,11 +4571,32 @@ with optional blanks and `[` ends the table, so an indented next header
 does too; `ad_store_db_path` has already refused every other such line.
 A header the merge missed would get a second `[defaults]` appended, a
 file `config.Load` refuses (`ErrConfigMalformed`) after an exit-0
-install. `uninstall.sh` reverses the merge: it drops `inject_help_hook`
-from `[defaults]`, and the header too when the table is then left with
-only blank lines and comments. **Must use:** the merge and its reversal
-match the `[defaults]` header with the same pattern; a change to one
-changes the other, and adds its cases to `test/install-sh/retry.sh`'s
+install.
+
+The header name and the key also match in any ASCII letter case
+(`[Defaults]`, `INJECT_HELP_HOOK`), as agent-director's decoder matches
+them; a spelling the merge missed would get a second spelling of the key
+added, which `config.Load` refuses too (see "One spelling per key" under
+[`[tmux]` timing settings](#tmux-timing-settings)). ASCII case is all
+there is to match: `ad_store_db_path` has refused every header and key
+name that is not ASCII letters, digits, `_` and `-`, so no `ſ` or Kelvin
+sign, which the decoder matches to `s` and `k`, reaches the merge. TOML
+reads `[Defaults]` and `[defaults]` as two tables that agent-director
+both reads as `[defaults]`, so the `awk` reads the file twice: the first
+pass notes whether any of those tables sets the key, and the second
+rewrites that line to `inject_help_hook = true` or, when none sets it,
+adds the key at the end of the first of them. A `[defaults]` header is
+appended only when the file has none in any letter case. A file that already sets the key
+under two spellings never reaches the merge: step 3's probe or step 4's
+open has stopped the install with `ErrConfigMalformed` (exit 5; see "The
+probe, and a refused config" below).
+
+`uninstall.sh` reverses the merge: it drops `inject_help_hook`, in any
+letter case, from each `[defaults]` table, in any letter case, and that
+table's header too when the table is then left with only blank lines and
+comments. **Must use:** the merge and its reversal match the `[defaults]`
+header and the `inject_help_hook` key with the same patterns; a change to
+one changes the other, and adds its cases to `test/install-sh/retry.sh`'s
 config-merge table.
 
 **A `defaults` key before any header (b.whe).** A file that sets
