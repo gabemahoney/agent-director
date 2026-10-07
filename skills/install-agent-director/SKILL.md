@@ -139,14 +139,13 @@ Without `--keep-prior`, re-install the previous tag via
        yourself, point at both. Flags: `--binary <path>
        --admin-binary <path>`.
      - **(c) Use whatever `agent-director` is on `PATH` today.** Only
-       makes sense if you're re-installing an existing install, and
-       only together with a matching admin binary
-       (`--admin-binary ~/.agent-director/admin/agent-director-admin`
-       for a re-install): `agent-director-admin` is never looked up on
-       PATH, so it must come from `--admin-binary` (or the checkout's
-       `bin/`). With no admin binary given and neither binary beside
-       the script, install.sh refuses once (exit 3), naming both
-       `--binary` and `--admin-binary`.
+       makes sense if you're re-installing an existing install (to
+       re-inject the hooks or register MCP, say). No binary flag: run
+       from the installed skill, outside any checkout, install.sh pairs
+       the `agent-director` on PATH with the installed
+       `~/.agent-director/admin/agent-director-admin`. For the full
+       lookup order, see "Where install.sh looks for each binary" in
+       step 6 of "What this skill does".
      - **(d) Build from source now, then install.** Run `make build` in
        this checkout to produce fresh `./bin/agent-director` and
        `./bin/agent-director-admin`, then point install.sh at them. No
@@ -176,8 +175,12 @@ Without `--keep-prior`, re-install the previous tag via
        → propose **(a)** *download from release* and SAY SO. Don't try
        to use a possibly-stale `./bin/agent-director`.
      - **Not in a checked-out tree** (install.sh was curled to a tmp
-       path, or invoked from an arbitrary directory) → propose **(a)**
-       *download from release*.
+       path, or invoked from an arbitrary directory), `agent-director`
+       on PATH, `~/.agent-director/admin/agent-director-admin` present,
+       and the operator wants to re-inject the hooks or register MCP →
+       propose **(c)** *use what is on PATH* (no binary flag).
+     - **Not in a checked-out tree** otherwise, or the operator wants
+       to upgrade → propose **(a)** *download from release*.
 
    **Why the version-check matters:** absent a check, a binary at
    `./bin/agent-director` may have been built off a stale branch or a
@@ -389,13 +392,45 @@ This skill runs `install.sh` from the same directory. The script:
       0.11.0 has no `agent-director-admin` asset and is refused at once
       (exit 3), with no CDN retry: install 0.11.0 or later.
    6. **`--binary` / `--admin-binary` path/executability resolution** —
-      settles `BINARY_SRC` from `--binary <path>`, the in-repo build, or
-      `command -v agent-director`, and `ADMIN_SRC` from
-      `--admin-binary <path>`, the downloaded release asset, or the
-      in-repo `bin/agent-director-admin` (never from PATH); verifies
-      each is an executable regular file. A missing binary is refused
-      with exit 3; with neither binary beside the script, one combined
-      refusal names both `--binary` and `--admin-binary`.
+      settles `BINARY_SRC` and `ADMIN_SRC`, one source per binary, as
+      "Where install.sh looks for each binary" below describes, and
+      verifies each is an executable regular file. Pre-flight prints
+      the two it settled as `  source  : <path>` and
+      `  admin source: <path>`. A source not found is refused with
+      exit 3, naming every path tried and the flags to pass:
+      - agent-director not found: "install.sh: no source binary
+        found.", `Tried:` the checkout's `bin/agent-director` and
+        `command -v agent-director`, and "Pass --binary <path> to
+        override."
+      - agent-director-admin not found, with agent-director given as
+        `--binary` or found in the checkout: "install.sh: no
+        agent-director-admin source binary found.", `Tried:` the
+        checkout's `bin/agent-director-admin` and
+        `~/.agent-director/admin/agent-director-admin`, and "Pass
+        --admin-binary <path> to override."
+      - neither found: one combined refusal, "install.sh: no source
+        binaries found: ...", that names all four places it looked and
+        ends "Pass --binary <path> --admin-binary <path> (both from the
+        same build) to override." An `agent-director` found only on
+        PATH counts as not found here, since nothing is there to pair
+        with it; the refusal says "Found on PATH, not used: <path> (no
+        agent-director-admin to pair with it)".
+
+      **Where install.sh looks for each binary.** With
+      `--from-release`, both come from the downloaded release assets.
+      Otherwise each comes from the first of these it finds:
+
+      | Binary | 1st | 2nd | 3rd |
+      |---|---|---|---|
+      | `agent-director` | `--binary <path>` | `bin/agent-director` of the checkout the script sits in | `command -v agent-director` |
+      | `agent-director-admin` | `--admin-binary <path>` | `bin/agent-director-admin` of that checkout | the installed `~/.agent-director/admin/agent-director-admin` |
+
+      `agent-director-admin` is never looked up on PATH, where it is
+      never installed. So a re-run of the installed skill, outside any
+      checkout, with no flags, reinstalls the `agent-director` on PATH
+      with the installed `agent-director-admin`, and `--binary <path>`
+      alone pairs that binary with the installed one. Like any pair,
+      step 9 refuses them (exit 3) when their stamps differ.
    7. **Architecture probe (SR-2.2)**, for `--binary` and
       `--admin-binary` alike. Runs `file(1)` against `BINARY_SRC` and
       `ADMIN_SRC` and pattern-matches against the host pair captured by

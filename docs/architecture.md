@@ -4481,7 +4481,9 @@ claude /install-agent-director (or `bash install.sh`)
     "The config.toml merge" below)
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
-  → find both source binaries; --binary and --admin-binary arch probes
+  → find both source binaries (agent-director-admin last from its
+    installed path, never PATH; see "The two binaries" below); --binary
+    and --admin-binary arch probes
   → source-tree version check (a local agent-director in a git checkout
     must be built from HEAD)
   → version-stamp pairing: agent-director and agent-director-admin must
@@ -4550,12 +4552,26 @@ caller of `ad_user_version` captures the read's status beside its output.
 **The two binaries (b.vqr).** Every install installs both
 `agent-director` and the operator tool `agent-director-admin` (see
 [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin))
-from one build, because both open the same store. The admin source is
-`--admin-binary <path>`, else the in-repo `bin/agent-director-admin` beside
-the script's checkout (`make build` builds both), or, with
-`--from-release`, the release's `agent-director-admin-<os>-<arch>` asset.
-It is never looked up on PATH, so an `agent-director` found only on PATH
-cannot be paired with it.
+from one build, because both open the same store. With `--from-release`
+both come from the release's assets. Otherwise each source is the first
+of these found (b.azo):
+
+| Binary | 1st | 2nd | 3rd |
+|---|---|---|---|
+| `agent-director` | `--binary <path>` | `bin/agent-director` of the checkout the script sits in | `command -v agent-director` |
+| `agent-director-admin` | `--admin-binary <path>` | `bin/agent-director-admin` of that checkout (`make build` builds both) | the installed `~/.agent-director/admin/agent-director-admin` (`DEFAULT_ADMIN_PATH`) |
+
+`agent-director-admin` is never looked up on PATH, where it is never
+installed. The version-stamp check below guards a PATH/installed pair.
+`DEFAULT_ADMIN_PATH` is install.sh's one name for that path, both this
+fallback and the install target (`ADMIN_CANONICAL`); never spell it out
+again. An `agent-director`
+found only on PATH, with no `agent-director-admin` given, beside the script
+or installed, counts as not found ("Found on PATH, not used: <path> (no
+agent-director-admin to pair with it)"). `advice_follow.sh`'s J3 (the
+re-run of the installed skill, and the refusals naming the installed path)
+and J9 (an installed admin from another build, refused, then
+`--from-release`) pin this.
 
 - **Hashes go together.** `--sha256 <hex>` verifies the main asset and
   `--admin-sha256 <hex>` the admin asset; both apply only with
@@ -4584,9 +4600,11 @@ cannot be paired with it.
   directory) leaves both old binaries in place, never a new
   `agent-director` beside an old `agent-director-admin`; the EXIT trap
   removes a staged copy that was never moved.
-- **Other refusals, all exit 3:** the admin binary is missing (with neither
-  binary beside the script, one combined refusal naming both `--binary` and
-  `--admin-binary`); a `--from-release` tag before 0.11.0, refused at once
+- **Other refusals, all exit 3:** a source not found, naming every place
+  tried (the installed admin path included) and the flags to pass; with
+  neither found, one combined refusal ("no source binaries found") naming
+  both `--binary` and `--admin-binary`, never one per binary; a
+  `--from-release` tag before 0.11.0, refused at once
   without the CDN retry, because such a release has no admin asset
   ("release <tag> has no agent-director-admin binary"; the advice is a
   release of 0.11.0 or later).

@@ -454,6 +454,14 @@ expect_installed() {
     [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
 }
 
+# hooks_injected <home>: home's settings.json holds both `agent-director help`
+# hooks, SessionStart and SessionEnd reason=compact.
+hooks_injected() {
+    jq -e --arg c "$1/.agent-director/bin/agent-director help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
+        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' \
+        "$1/.claude/settings.json" >/dev/null 2>&1
+}
+
 # expect_nothing_installed <home>: neither binary was installed.
 expect_nothing_installed() {
     [[ ! -e "$1/.agent-director/bin/agent-director" ]] || bad "agent-director installed after the refusal"
@@ -576,25 +584,44 @@ test_J2_DownloadFailedRunWithBinaries() {
 # ---- J3: no source binary ------------------------------------------------------
 
 # J3: "Pass --binary <path> to override." when only agent-director is missing
-# (--admin-binary given; none beside the script or on PATH).
+# (none beside the script or on PATH): --admin-binary given, or a re-run of the
+# installed skill with no flags, which finds the installed agent-director-admin
+# (b.azo; no installed-agent-director fallback, b.rdy). This refusal, not the
+# one for both, comes with nothing changed; --binary alone then installs, with
+# the installed agent-director-admin on the re-run of the installed skill.
 test_J3_NoSourceBinaryPassBinary() {
-    local h argv=(bash "$LOOSE" --admin-binary "$ADMIN" --no-hooks --no-symlink)
-    h="$(new_home)"
-    run "$h" "${argv[@]}"
-    expect_rc 3 "no agent-director source binary" || return
-    expect_advice "install.sh: no source binary found."
-    expect_advice "Pass --binary <path> to override."
-    expect_nothing_installed "$h"
-    run "$h" "${argv[@]}" --binary "$BIN"
-    expect_rc 0 "re-run with --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    local how h admin before
+    local -a argv
+    for how in --admin-binary installed; do
+        if [[ "$how" == installed ]]; then
+            j3_installed_skill "$BIN_NUL" "$ADMIN_NUL" || continue
+            h="$J3H" admin="$ADMIN_NUL" argv=(bash "$J3SK") PATH_EXTRA=""
+        else
+            h="$(new_home)" admin="$ADMIN" argv=(bash "$LOOSE" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+        fi
+        before="$(j14_snap "$h")"
+        run "$h" "${argv[@]}"
+        expect_rc 3 "$how: no agent-director source binary" || continue
+        expect_advice "install.sh: no source binary found."
+        expect_advice "Pass --binary <path> to override."
+        grep -qF "no source binaries found" "$ERR" && bad "$how: the refusal for both binaries came: $(flat "$ERR")"
+        [[ "$(j14_snap "$h")" == "$before" ]] || bad "$how: the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+        run "$h" "${argv[@]}" --binary "$BIN"
+        expect_rc 0 "$how: re-run with --binary" || continue
+        expect_installed "$h" "$BIN" "$admin"
+        [[ "$how" != installed ]] || grep -qxF "  admin source: $J11A" "$OUT" \
+            || bad "$how: no \"admin source: $J11A\" line: $(flat "$OUT")"
+    done
 }
 
 # j3_pass_both <home> <cmd...>: check the one refusal for both missing
-# binaries advises "Pass --binary <path> --admin-binary <path> (both from the
-# same build) to override.", re-run cmd with those flags, the paths one build's,
+# binaries names the installed agent-director-admin it tried (b.azo) and
+# advises "Pass --binary <path> --admin-binary <path> (both from the same
+# build) to override.", re-run cmd with those flags, the paths one build's,
 # and check both are installed (b.vqr).
 j3_pass_both() {
     local h="$1" flags extra; shift
+    expect_advice "Tried: $h/.agent-director/admin/agent-director-admin"
     expect_advice "Pass --binary <path> --admin-binary <path> (both from the same build) to override."
     expect_nothing_installed "$h"
     flags="$(advice_after "Pass ")" || { bad "no advised flags"; return; }
@@ -605,42 +632,95 @@ j3_pass_both() {
     expect_rc 0 "re-run with ${extra[*]}" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
-# J3: neither binary beside the script and none on PATH: one refusal names
-# both (b.vqr).
+# J3: neither binary beside the script, no agent-director on PATH and no
+# agent-director-admin installed: one refusal names both (b.vqr, b.azo).
 test_J3_NoSourceBinariesPassBoth() {
     local h argv=(bash "$LOOSE" --no-hooks --no-symlink)
     h="$(new_home)"
     run "$h" "${argv[@]}"
     expect_rc 3 "no source binaries" || return
-    expect_advice "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script."
+    expect_advice "install.sh: no source binaries found: no agent-director-admin beside the script or installed, and no agent-director beside the script or on PATH."
     expect_advice "Tried: command -v agent-director"
     j3_pass_both "$h" "${argv[@]}"
 }
 
-# J3: the same refusal when agent-director is found only on PATH, which is
-# not used: agent-director-admin is never on PATH to pair with it (b.vqr).
+# J3: the same refusal when agent-director is found only on PATH and no
+# agent-director-admin is installed: it is not used, with nothing to pair with
+# it (b.vqr, b.azo).
 test_J3_PathOnlyPassBoth() {
     local h argv=(bash "$LOOSE" --no-hooks --no-symlink)
     h="$(new_home)"
     PATH_EXTRA="$ON_PATH"
     run "$h" "${argv[@]}"
     expect_rc 3 "agent-director on PATH only" || return
-    expect_advice "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script."
-    expect_advice "Found on PATH, not used: $ON_PATH/agent-director (agent-director-admin is never on PATH to pair with it)"
+    expect_advice "install.sh: no source binaries found: no agent-director-admin beside the script or installed, and no agent-director beside the script."
+    expect_advice "Found on PATH, not used: $ON_PATH/agent-director (no agent-director-admin to pair with it)"
     j3_pass_both "$h" "${argv[@]}"
 }
 
-# J3: "Pass --admin-binary <path> to override." (b.vqr)
+# J3: "Pass --admin-binary <path> to override." with --binary alone and no
+# agent-director-admin installed, naming the installed path it tried (b.vqr,
+# b.azo).
 test_J3_NoAdminBinaryPassAdminBinary() {
     local h argv=(bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink)
     h="$(new_home)"
     run "$h" "${argv[@]}"
     expect_rc 3 "no agent-director-admin source binary" || return
     expect_advice "install.sh: no agent-director-admin source binary found."
+    expect_advice "Tried: $h/.agent-director/admin/agent-director-admin"
     expect_advice "Pass --admin-binary <path> to override."
     expect_nothing_installed "$h"
     run "$h" "${argv[@]}" --admin-binary "$ADMIN"
     expect_rc 0 "re-run with --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# j3_installed_skill [<bin> <admin>]: a new HOME in J3H with bin and admin
+# (default BIN and ADMIN) installed, hooks off, by J3SK, the installed skill's
+# copy of install.sh (outside any checkout); ~/.local/bin, PATH_EXTRA, holds
+# the symlink that install made.
+j3_installed_skill() {
+    J3H="$(new_home)" J3SK="$J3H/.claude/skills/install-agent-director/install.sh"
+    install_copy "$J3SK"
+    mkdir -p "$J3H/.local/bin" && PATH_EXTRA="$J3H/.local/bin"
+    run "$J3H" bash "$J3SK" --binary "${1:-$BIN}" --admin-binary "${2:-$ADMIN}" --no-hooks
+    expect_rc 0 "first install" || return 1
+    j11_paths "$J3H"
+    [[ "$(readlink "$J3H/.local/bin/agent-director")" == "$J11C" ]] || { bad "no ~/.local/bin/agent-director symlink to $J11C"; return 1; }
+}
+
+# J3 does not come on a re-run of the installed skill, outside any checkout,
+# with agent-director found on PATH or given as --binary alone (b.azo): it is
+# paired with the installed agent-director-admin (same build), both installed
+# and the hooks injected. With --binary of another agent-director and
+# --keep-prior, the installed agent-director-admin is both the source and the
+# snapshot target: both binaries are snapshotted, it and its .prior are both
+# the one installed before, and rolling both back restores that pair.
+test_J3_InstalledSkillRerunPairsInstalledAdmin() {
+    local spec how src want
+    local -a argv
+    for spec in "PATH||$BIN" "--binary|$BIN_NUL|$BIN_NUL"; do
+        IFS='|' read -r how src want <<<"$spec"
+        j3_installed_skill || continue
+        argv=(bash "$J3SK")
+        if [[ -n "$src" ]]; then argv+=(--binary "$src" --keep-prior); else src="$J3H/.local/bin/agent-director"; fi
+        run "$J3H" "${argv[@]}"
+        expect_rc 0 "$how: re-run with no --admin-binary" || continue
+        grep -qxF "  source  : $src" "$OUT" || bad "$how: no \"source  : $src\" line: $(flat "$OUT")"
+        grep -qxF "  admin source: $J11A" "$OUT" || bad "$how: no \"admin source: $J11A\" line: $(flat "$OUT")"
+        expect_installed "$J3H" "$want" "$ADMIN"
+        [[ "$(stat -c %a "$J11C")" == 755 ]] || bad "$how: $J11C has mode $(stat -c %a "$J11C"); want 755"
+        hooks_injected "$J3H" || bad "$how: hooks not injected: $(cat "$J3H/.claude/settings.json" 2>&1)"
+        [[ "$how" == --binary ]] || continue
+        grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" \
+            || bad "$how: no agent-director prior line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+        grep -qxF "  admin prior: snapshotted to $J11A.prior" "$OUT" \
+            || bad "$how: no agent-director-admin prior line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+        cmp -s "$J11C.prior" "$BIN" || bad "$how: $J11C.prior is missing or not the agent-director installed before"
+        cmp -s "$J11A.prior" "$ADMIN" || bad "$how: $J11A.prior is missing or not the agent-director-admin installed before"
+        j11_roll_back_both "$J3H" 0.0.2-advice "$how" || continue
+        cmp -s "$J11C" "$BIN" || bad "$how: rolled-back agent-director is not the one installed before"
+        cmp -s "$J11A" "$ADMIN" || bad "$how: rolled-back agent-director-admin is not the one installed before"
+    done
 }
 
 # ---- J4: wrong-architecture --binary ---------------------------------------------
@@ -679,15 +759,22 @@ j5_stale() {
     expect_advice "or download release: rerun with --from-release (omit --binary)"
 }
 
-# J5: "rebuild it first: make build"
+# J5: "rebuild it first: make build", over an installed pair of another build:
+# the checkout's agent-director-admin is used, not the installed one (b.azo).
 test_J5_StaleBinaryMakeBuild() {
-    local h; h="$(new_home)"
+    local h got; h="$(new_home)"; j11_paths "$h"
+    run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
+    expect_rc 0 "install the old pair" || return
     j5_stale "$h" || return
     local cmd; cmd="$(advice_after "rebuild it first:")" || { bad "no advised command"; return; }
     run_advised "$h" "$TREE" "$cmd"
     expect_rc 0 "advised: $cmd" || return
     run_in "$h" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
-    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+    expect_rc 0 "re-run after make build" || return
+    got="$(grep -m1 '^  admin source: ' "$OUT")" got="${got#  admin source: }"
+    [[ -n "$got" && "$got" -ef "$TREE/bin/agent-director-admin" ]] \
+        || bad "admin source \"$got\"; want $TREE/bin/agent-director-admin, not the installed $J11A"
+    expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
 # J5: "or download release: rerun with --from-release (omit --binary)"
@@ -1263,6 +1350,58 @@ test_J9_StampMismatchFromRelease() {
         FAKE_CURL_API_TAG="$REL_TAG"
         run "$h" bash "$LOOSE" --no-hooks --no-symlink --from-release
         expect_rc 0 "(${stamps[$i]}) rerun with --from-release, no --binary or --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    done
+}
+
+# j9_installed_mismatch <how>: j3_installed_skill with BIN_NUL and ADMIN_NUL
+# (BIN and ADMIN's stamps, other bytes), then a re-run of J3SK, J9ARGV, that
+# pairs the installed agent-director-admin with BIN_OLD, from another build,
+# found on PATH (<how> PATH) or given as --binary (<how> --binary) (b.azo):
+# check it is refused, naming both stamps, with nothing changed on disk.
+j9_installed_mismatch() {
+    local src="$ON_PATH/agent-director" before
+    j3_installed_skill "$BIN_NUL" "$ADMIN_NUL" || return 1
+    J9ARGV=(bash "$J3SK")
+    if [[ "$1" == PATH ]]; then PATH_EXTRA="$ON_PATH:$PATH_EXTRA"; else J9ARGV+=(--binary "$BIN_OLD") src="$BIN_OLD"; fi
+    before="$(j14_snap "$J3H")"
+    run "$J3H" "${J9ARGV[@]}"
+    expect_rc 3 "$1: agent-director from another build" || return 1
+    expect_advice "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install."
+    expect_advice "agent-director : $src (0.0.1-advice-old $OLD_COMMIT)"
+    expect_advice "agent-director-admin: $J11A (0.0.2-advice $CUR_COMMIT)"
+    [[ "$(j14_snap "$J3H")" == "$before" ]] || bad "$1: the refusal changed $J3H: $(diff <(echo "$before") <(j14_snap "$J3H"))"
+}
+
+# J9: "or download release: rerun with --from-release (omit --binary and
+# --admin-binary)" in j9_installed_mismatch's refusal: the advised re-run
+# installs the release's pair over the installed one.
+test_J9_InstalledAdminStampMismatchFromRelease() {
+    local how
+    for how in PATH --binary; do
+        j9_installed_mismatch "$how" || continue
+        expect_advice "or download release: rerun with --from-release (omit --binary and --admin-binary)"
+        FAKE_CURL_API_TAG="$REL_TAG"
+        run "$J3H" bash "$J3SK" --from-release
+        FAKE_CURL_API_TAG=""
+        expect_rc 0 "$how: rerun with --from-release, no --binary" && expect_installed "$J3H" "$BIN" "$ADMIN"
+    done
+}
+
+# J9: "rebuild both first:  make build" in j9_installed_mismatch's refusal,
+# run where install.sh ran, outside any checkout; the same command then
+# installs (a pair: install.sh refuses any other). Known broken: there is no
+# checkout to build in, and the re-run would pair the same two binaries (b.oo9).
+test_J9_InstalledAdminStampMismatchMakeBuild() {
+    local how cmd
+    for how in PATH --binary; do
+        j9_installed_mismatch "$how" || continue
+        expect_advice "rebuild both first: make build"
+        cmd="$(advice_after "rebuild both first:")" || { bad "$how: no advised command"; continue; }
+        known_broken J9 "filed as b.oo9: no checkout to run \"make build\" in, re-run of the installed skill" || return
+        run_advised "$J3H" "$ROOT" "$cmd"
+        expect_rc 0 "$how: advised: $cmd" || continue
+        run "$J3H" "${J9ARGV[@]}"
+        expect_rc 0 "$how: re-run after make build"
     done
 }
 
@@ -2055,10 +2194,10 @@ EOF
 # case <settings.json>|<fixed>.
 test_J18_SettingsShapeFixAndRerun() {
     local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
-    local h sj settings fixed help above
+    local h sj settings fixed above
     local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
     while IFS='|' read -r settings fixed <&3; do
-        h="$(new_home)" sj="$h/.claude/settings.json" help="$h/.agent-director/bin/agent-director help"
+        h="$(new_home)" sj="$h/.claude/settings.json"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 4 "settings.json $settings" || continue
@@ -2075,9 +2214,7 @@ test_J18_SettingsShapeFixAndRerun() {
         printf '%s\n' "$fixed" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 0 "$settings fixed to $fixed: re-run" || continue
-        jq -e --arg c "$help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
-            and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' "$sj" >/dev/null \
-            || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
+        hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
     done 3<<'EOF'
 []|{}
 {"hooks":"x"}|{"hooks":{}}

@@ -13,16 +13,33 @@
 # (version and commit) differ, or carry no commit stamp (a plain
 # `go build` reports commit "unknown"), since both open the same store.
 #
+# Without --from-release, each binary comes from the first of these it
+# finds (b.azo):
+#   agent-director        --binary; bin/agent-director of the checkout
+#                         the script sits in; `command -v agent-director`.
+#   agent-director-admin  --admin-binary; bin/agent-director-admin of
+#                         that checkout; the installed
+#                         ~/.agent-director/admin/agent-director-admin.
+#                         Never PATH.
+# So a re-run from the installed skill, outside any checkout and with
+# no flags, reinstalls the agent-director on PATH with the installed
+# agent-director-admin; like any other pair, they are refused (exit 3)
+# when their version stamps differ. When a source is not found, the
+# install is refused (exit 3), naming every path tried and the flags to
+# pass.
+#
 # Flags:
-#   --binary <path>      Source binary to install. Defaults to looking
-#                        next to the script first, then to whatever
-#                        `command -v agent-director` resolves to.
+#   --binary <path>      Source binary to install. Defaults to
+#                        bin/agent-director of the checkout the script
+#                        sits in, then to whatever `command -v
+#                        agent-director` resolves to.
 #   --admin-binary <path>
 #                        Source agent-director-admin binary to install.
 #                        Defaults to bin/agent-director-admin of the
 #                        checkout the script sits in (`make build`
-#                        builds both binaries). Mutually exclusive with
-#                        --from-release.
+#                        builds both binaries), then to the installed
+#                        ~/.agent-director/admin/agent-director-admin.
+#                        Mutually exclusive with --from-release.
 #   --from-release [tag] Download pre-built agent-director and
 #                        agent-director-admin binaries for this host's
 #                        OS/arch from GitHub Releases and install them.
@@ -126,6 +143,7 @@ readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 # The operator tool's own directory, never on PATH (b.vqr).
 readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
+readonly DEFAULT_ADMIN_PATH="${DEFAULT_ADMIN_DIR}/agent-director-admin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
 BINARY_SRC=""
@@ -1080,18 +1098,27 @@ if [[ -n "$BINARY_SRC" && ! -x "$BINARY_SRC" ]]; then
 fi
 
 # The operator tool agent-director-admin (b.vqr): --admin-binary, the
-# downloaded release asset, or the in-repo build beside
-# bin/agent-director. It is never looked up on PATH, where it is never
-# installed.
-if [[ -z "$ADMIN_SRC" && -x "$admin_candidate" ]]; then
-    ADMIN_SRC="$admin_candidate"
+# downloaded release asset, the in-repo build beside bin/agent-director,
+# or else the one an earlier install put in place (b.azo), so a re-run
+# from the installed skill, outside any checkout, pairs it with the
+# agent-director on PATH. The version-stamp check below refuses it when
+# it is from another build than agent-director. It is never looked up
+# on PATH, where it is never installed. Installing it over itself is
+# safe: it is copied to a temp file beside it, which is moved into
+# place, and the --keep-prior snapshot to its .prior only reads it.
+if [[ -z "$ADMIN_SRC" ]]; then
+    if [[ -x "$admin_candidate" ]]; then
+        ADMIN_SRC="$admin_candidate"
+    elif [[ -x "$DEFAULT_ADMIN_PATH" ]]; then
+        ADMIN_SRC="$DEFAULT_ADMIN_PATH"
+    fi
 fi
 
 # A missing source is refused once, naming every option the re-run
-# needs (b.vqr): with neither binary beside the script, both --binary
-# and --admin-binary, never one refusal per binary. An agent-director
-# found only on PATH counts as missing then, since agent-director-admin
-# is never on PATH to pair with it.
+# needs (b.vqr): with neither binary found, both --binary and
+# --admin-binary, never one refusal per binary. An agent-director found
+# only on PATH counts as missing then, since no agent-director-admin was
+# found, beside the script or installed, to pair with it.
 if [[ -z "$BINARY_SRC" || -z "$ADMIN_SRC" ]]; then
     if [[ -n "$ADMIN_SRC" ]]; then
         echo "install.sh: no source binary found." >&2
@@ -1101,16 +1128,24 @@ if [[ -z "$BINARY_SRC" || -z "$ADMIN_SRC" ]]; then
     elif [[ -n "$BINARY_SRC" && "$VERSION_CHECK_REQUIRED" -eq 1 ]]; then
         echo "install.sh: no agent-director-admin source binary found." >&2
         echo "  Tried: $admin_candidate" >&2
+        echo "  Tried: $DEFAULT_ADMIN_PATH" >&2
         echo "  Pass --admin-binary <path> to override." >&2
     else
-        echo "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script." >&2
+        # Here no agent-director-admin was found, and agent-director was
+        # either not found at all or found only on PATH. The headline says
+        # "or on PATH" only when none was there; the found-on-PATH case is
+        # named by its own line below.
+        bin_looked="beside the script"
+        [[ -n "$BINARY_SRC" ]] || bin_looked="beside the script or on PATH"
+        echo "install.sh: no source binaries found: no agent-director-admin beside the script or installed, and no agent-director ${bin_looked}." >&2
         echo "  Tried: $candidate" >&2
         if [[ -n "$BINARY_SRC" ]]; then
-            echo "  Found on PATH, not used: $BINARY_SRC (agent-director-admin is never on PATH to pair with it)" >&2
+            echo "  Found on PATH, not used: $BINARY_SRC (no agent-director-admin to pair with it)" >&2
         else
             echo "  Tried: command -v agent-director" >&2
         fi
         echo "  Tried: $admin_candidate" >&2
+        echo "  Tried: $DEFAULT_ADMIN_PATH" >&2
         echo "  Pass --binary <path> --admin-binary <path> (both from the same build) to override." >&2
     fi
     exit 3
@@ -1320,7 +1355,7 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
-ADMIN_CANONICAL="${DEFAULT_ADMIN_DIR}/agent-director-admin"
+ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
 ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
 ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
