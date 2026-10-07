@@ -134,18 +134,7 @@ func TestFindMissingGraceConfigured(t *testing.T) {
 			configured, _ := e.client(t, apitest.TmuxInt(config.TmuxPendingGraceSeconds, fgcMinGraceSeconds))
 			dflt, _ := e.client(t)
 			launch := e.clock.Now()
-			agent := apitest.WithNoPane()
-			if ev.pane {
-				pid := e.newPID()
-				e.pc.Set(pid, ev.proc)
-				agent = apitest.WithLaunchIdentity(store.LaunchIdentity{Token: strings.ReplaceAll(uuid.NewString(), "-", "")[:16],
-					Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime})
-			}
-			id, err := apitest.SeedSpawn(e.dbPath, "fgc-"+uuid.NewString()[:8], store.StatePending, "", "off", "", false,
-				agent, apitest.WithStartedAt(launch.Add(-9*time.Hour)), apitest.WithLaunchStartedAt(launch.UnixMilli()))
-			if err != nil {
-				t.Fatalf("SeedSpawn: %v", err)
-			}
+			id := fgcSeedPending(t, e, ev.pane, ev.proc, launch)
 
 			fgcSetClock(e.clock, launch.Add(grace-time.Second))
 			fgcAssertInside(t, e.dbPath, id, fgcSweep(t, configured, e.rec, e.pc))
@@ -155,6 +144,48 @@ func TestFindMissingGraceConfigured(t *testing.T) {
 			fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, configured, e.rec, e.pc), ev.want)
 		})
 	}
+}
+
+// fgcSeedPending seeds a pending row launched at launch with a 9-hour-old started_at, its recorded pane process
+// answering proc when pane is set, and returns its id.
+func fgcSeedPending(t *testing.T, e *killEnv, pane bool, proc procfix.Process, launch time.Time) string {
+	t.Helper()
+	agent := apitest.WithNoPane()
+	if pane {
+		pid := e.newPID()
+		e.pc.Set(pid, proc)
+		agent = apitest.WithLaunchIdentity(store.LaunchIdentity{Token: strings.ReplaceAll(uuid.NewString(), "-", "")[:16],
+			Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime})
+	}
+	id, err := apitest.SeedSpawn(e.dbPath, "fgc-"+uuid.NewString()[:8], store.StatePending, "", "off", "", false,
+		agent, apitest.WithStartedAt(launch.Add(-9*time.Hour)), apitest.WithLaunchStartedAt(launch.UnixMilli()))
+	if err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	return id
+}
+
+// TestFindMissingGraceRaisedByCreateTimeout is the b.9e1 regression at the Client: create_timeout_ms 40000 with
+// pending_grace_seconds missing loads, and find-missing holds a row for the derived minimum (61 s), past the 60 s
+// default, then marks it.
+func TestFindMissingGraceRaisedByCreateTimeout(t *testing.T) {
+	t.Parallel()
+	const createMs = 40000
+	grace := time.Duration(config.PendingGraceMinimumSeconds(createMs, 0)) * time.Second
+	if grace <= fmGrace+time.Second/2 {
+		t.Fatalf("precondition: derived minimum %v is not above the default %v + 0.5 s", grace, fmGrace)
+	}
+	ev := fgcEvidences[0]
+	e := newKillEnv(t)
+	c, _ := e.client(t, apitest.TmuxInt(config.TmuxCreateTimeoutMs, createMs))
+	launch := e.clock.Now()
+	id := fgcSeedPending(t, e, ev.pane, ev.proc, launch)
+
+	fgcSetClock(e.clock, launch.Add(fmGrace+time.Second/2))
+	fgcAssertInside(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc))
+
+	fgcSetClock(e.clock, launch.Add(grace+time.Second))
+	fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc), ev.want)
 }
 
 // fgcSpawnParams is a spawn of id (reuse: with the opt-in) pre-trusting in its own new CLAUDE_CONFIG_DIR.

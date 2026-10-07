@@ -73,7 +73,7 @@ in `init`. The verb registry
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`) and returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. It also declares the sentinels `ErrConfigMalformed` and `ErrStoreOpen`, which `pkg/api/errnames.Catalog` pairs with those names; `(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of either name (b.vma). `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` have no sentinel here and are not catalogued. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup or flag parser. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for the two sentinels: a cycle); direct `database/sql`. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s wait for a fallen-back request's relay hook) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; and `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause) and [Workspace-trust pre-write](#workspace-trust-pre-write)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; and `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause) and [Workspace-trust pre-write](#workspace-trust-pre-write)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds the two CLI-setup names `ErrConfigMalformed` and `ErrStoreOpen`, which `internal/clisetup.Open` gives before any verb runs (b.vma; see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (the sentinels `ErrConfigMalformed` and `ErrStoreOpen` only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags`; every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
@@ -104,8 +104,9 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   `EffectiveCreateTimeout`, `EffectivePipeCloseWait`, `EffectiveSweepBudget`,
   `EffectiveKillExitWait`, or the generic `Effective(k)` with a
   `config.TmuxKey`). Each returns a `time.Duration`: the configured value when
-  positive, else the key's `Default*` constant, saturating at the largest
-  duration.
+  positive, else the value an unset key takes (below; the key's
+  `Default*` constant for every key but the pending grace period),
+  saturating at the largest duration.
 - **No other package defines one of these defaults or minimums or applies
   the fallback.** Defaults are the `Default*` constants, minimums
   `MinStartingSessionSeconds`, `MinStoppingWindowSeconds` and the grace rule
@@ -130,29 +131,48 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   with " and " before the last (`nameList`, which also lists a key's
   names in the letter-case refusal below), so a file refused only for
   `[tmux]` values keeps its SR-4.1 text. No verb, server or hook runs with a
-  minimum or default in place of a refused value. The description's advice is supplementary to
-  `ErrConfigMalformed`: it closes with "A missing key, or 0, gives the
-  default.", which holds for every refused key but one whose default is
-  itself below its safe minimum. Only `pending_grace_seconds` can be one,
-  when its derived minimum is above its default. Its own phrase then ends
-  with a change that loads (`defaultRefusedFix`): "so set it to at least"
-  the minimum, then "or lower the effective create_timeout_ms and
-  pipe_close_wait_ms to a total of" the largest total whose minimum is at
-  most the key's value (its default when missing or 0), keeping the key as
-  it is (`pendingGraceTotalLimitMs`, the inverse of
-  `PendingGraceMinimumSeconds`), then "ms or less (a missing or 0 key
-  counts as its default)", so a caller who adds up only the keys in the
-  file is not refused again. That second change is left out for a
-  negative value, a value below `PendingGraceFloorSeconds`, or a total
-  that does not fit an `int64`. The
-  closing sentence (`missingKeyAdvice`) then becomes "For every refused key
-  other than [tmux] pending_grace_seconds, a missing key, or 0, gives the
-  default." when other keys are refused too, and is left out when that key
-  is the only one refused (b.n4q). A `[tmux]` key counts as set under any
-  letter case of its table and name, as the decoder reads it (b.g7h),
-  including toward `pending_grace_seconds`' derived minimum; the
-  description names the key in lowercase. The check goes through
-  `isDefined` (see the `internal/config` row of the package table).
+  minimum or default in place of a refused value. The description's advice
+  is supplementary to `ErrConfigMalformed`. A refused `[tmux]` value reads
+  "[tmux] <key> = <value>, below its safe minimum <minimum> <unit>" (or,
+  for a negative value of a key with no minimum, "[tmux] <key> = <value>,
+  which must be positive"); for `pending_grace_seconds` it goes on
+  " (computed from the effective create_timeout_ms <c> and
+  pipe_close_wait_ms <w>)", naming the keys that set the minimum
+  (`Tmux.refusal`). No refused key's description contains "; ", the
+  separator between them. The description closes with what a missing key,
+  or 0, gives (`missingKeyAdvice`), which holds for every refused key,
+  since a missing key or 0 always loads (below): "A missing key, or 0,
+  gives the default.", or, when a refused key's minimum is above its
+  default, "A missing key, or 0, gives the default, or for [tmux]
+  pending_grace_seconds its safe minimum when that is larger."
+  (`tmuxRefusals` returns the refused descriptions and those keys). A
+  `[tmux]` key counts as set under any letter case of its table and name,
+  as the decoder reads it (b.g7h), including toward
+  `pending_grace_seconds`' derived minimum; the description names the key
+  in lowercase. The check goes through `isDefined` (see the
+  `internal/config` row of the package table).
+- **An unset key takes its default or its safe minimum, whichever is
+  larger (b.9e1).** A missing key, or 0, is never refused. This is not
+  clamping: nothing was configured, so no value the operator chose is
+  replaced, and raising one key never refuses another key the operator
+  did not set. Only `pending_grace_seconds` can end up above its default,
+  since every fixed minimum is below its key's default: its derived
+  minimum passes the default 60 s once the effective `create_timeout_ms`
+  plus `pipe_close_wait_ms` is above 40000 ms (`create_timeout_ms =
+  40000` with the default pipe-close wait gives 61 s). A positive value
+  below the minimum is still refused (above). The rule lives in
+  `Tmux.unsetValue`, and `Tmux.effectiveValue` (behind every accessor)
+  uses it for a 0. After validation, `config.Load` writes it into each
+  `[tmux]` field the file does not set (`resolveUnsetTmux`), so a loaded
+  config never holds a seeded default below the derived minimum, and every
+  reader of the grace period (`find-missing`, the SessionStart hook's
+  wait) gets the same value. Why the grace period is kept apart from
+  `create_timeout_ms`: the create timeout bounds one tmux "create
+  session" call, while the grace period bounds the whole launch, tmux
+  plus Claude starting and checking in, before `find-missing` may mark
+  the row `missing`. The grace period must outlast the create timeout
+  plus a margin (the rule `PendingGraceMinimumSeconds`), or the sweep
+  could mark `missing` a launch that is still legitimately starting.
 - **One spelling per key (b.p8n).** Before validating any value,
   `config.Load` refuses a file that sets one key under two or more names
   differing only in letter case, as `strings.EqualFold` compares them
@@ -3504,7 +3524,8 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
   an opted-in retry is decided by its lookup at once; after any other
   failed launch the row stays `pending`, and an opted-in retry collides
   until `find-missing` marks it `missing`, which happens only after the
-  pending grace period (60 s by default).
+  pending grace period (60 s by default; unset, its derived minimum when
+  that is larger; see [`[tmux]` timing settings](#tmux-timing-settings)).
 - Feature detection: a caller reads the version of the binary that serves
   it. On the CLI, the `version` verb; over MCP, the `version` tool, which
   reports the running `serve` process's own version until that process
@@ -7370,9 +7391,10 @@ step). The evidence model, notes, guard and marking order are in
    counts as past the grace period and is judged at once. A row past the
    grace period, and every row in another live state, goes on to the steps
    below. The setting is `pending_grace_seconds` in the `[tmux]` table
-   (60 s by default), read through `config.Tmux.EffectivePendingGrace` and
+   (60 s by default; unset, its derived minimum when that is larger),
+   read through `config.Tmux.EffectivePendingGrace` and
    handed to the sweep by `Client.FindMissing` together with the client's
-   clock; its minimum rule is in
+   clock; its minimum rule and the unset rule are in
    [`[tmux]` timing settings](#tmux-timing-settings). The hook's
    SessionStart wait for its launch's identity write uses the same
    predicate and the same grace period (SR-13.4; see [Hooks move a row
@@ -8077,7 +8099,11 @@ adds it here.
   row.
 - The pending grace period is 60 s by default and configurable
   (`pending_grace_seconds`), measured from the launch start that `status`,
-  `get` and `list` show. `find-missing` never judges a `pending` row inside
+  `get` and `list` show. With the key unset, a raised `create_timeout_ms`
+  or `pipe_close_wait_ms` can lengthen it past 60 s, to its derived
+  minimum (see [`[tmux]` timing settings](#tmux-timing-settings)), so a
+  caller waiting out the grace period takes it from the operator, never
+  from the default alone. `find-missing` never judges a `pending` row inside
   it: the row is left as it is and is in neither result list, so a caller
   waiting on a launch reads a `pending` row inside its grace period as
   "wait and check again later", never as a reason to escalate. A `pending`
@@ -8297,9 +8323,12 @@ back unnoticed.
 
 1. `kill`, and check the result; on any error follow its class.
 2. If the row is `pending`, wait until its launch start (shown by
-   `status`) plus the pending grace period (60 s unless the operator
-   configured another value) has passed. A `pending` row inside its grace
-   period means wait and check again later, never escalate.
+   `status`) plus the pending grace period (60 s by default; the
+   operator's `[tmux]` settings can make it longer or shorter, so the
+   caller takes the value in force from the operator; see
+   [`[tmux]` timing settings](#tmux-timing-settings)) has passed. A
+   `pending` row inside its grace period means wait and check again
+   later, never escalate.
 3. Run `find-missing`, then confirm with `status` or `get` that the row is
    `ended` or `missing`; if not, wait about 5 s and repeat, up to three
    `find-missing` runs in all.
@@ -8670,6 +8699,16 @@ meaning and links to the section that describes it in detail.
   derived minimum. Before, the check skipped such a key while the decoder
   still loaded its value, so verbs ran below the minimum (see "Refuse,
   never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)).
+- **An unset grace period follows a raised create timeout.** A config
+  that raises `create_timeout_ms` or `pipe_close_wait_ms` far enough to
+  lift `pending_grace_seconds`' derived minimum above 60 s, and leaves
+  `pending_grace_seconds` missing or 0, now loads, and its grace period
+  is that minimum (`create_timeout_ms = 40000` gives 61 s): `find-missing`
+  leaves a `pending` row alone, and a SessionStart hook waits, that much
+  longer. Before, store-backed verbs returned `ErrConfigMalformed` naming
+  `pending_grace_seconds`. A positive value below the minimum is still
+  refused (see "An unset key takes its default or its safe minimum" under
+  [`[tmux]` timing settings](#tmux-timing-settings)).
 - **An `older_than` day count above 106751** (`--older-than` on the CLI)
   is now `ErrInvalidFlags` on the CLI and over MCP, and nothing runs;
   before, the count wrapped to another window, which could select every
@@ -11544,28 +11583,26 @@ file refused for its `[tmux]` values, its `[defaults]
 expire_retention_days`, its `[relay]` or `[pause]` `timeout_seconds`
 (b.8q2) or its `[pre_trust] lock_wait_seconds` (b.kr4),
 `DescConfigRefused(path, refusals...)` with one
-`ConfigRefusal{Key, Value, Minimum, Derived, Create, Pipe, Total, Retention,
+`ConfigRefusal{Key, Value, Minimum, Derived, Create, Pipe, Retention,
 RelayTimeout, PauseTimeout, PreTrustLockWait}` per refused value. With refusals it requires,
 beside the path, the header "refused <tables> values: " listing the
 refused values' tables in `config.Load`'s order and form (see
 [`[tmux]` timing settings](#tmux-timing-settings)). It builds each `[tmux]`
 refused-value phrase from the
-key's name, unit, default and safe minimum (a derived minimum from the
-given create timeout and pipe-close wait), and, with `Retention`,
+key's name, unit, `Value` and safe minimum (`Minimum` 0 for a negative
+value of a key without one; with `Derived`, followed by the given create
+timeout and pipe-close wait it was computed from), and, with `Retention`,
 `RelayTimeout`, `PauseTimeout` or `PreTrustLockWait` set (`Key` unused),
 that key's phrase from `Value` and its range: 1 to
 `config.MaxExpireRetentionDays`, `config.MaxRelayTimeoutSeconds`,
-`config.MaxPauseTimeoutSeconds` or `config.MaxPreTrustLockWaitSeconds`. For a `[tmux]` key whose default is below
-`Minimum`, the phrase ends with "so set it to at least" the minimum and,
-when `Total` is not 0, "or lower the effective create_timeout_ms and
-pipe_close_wait_ms to a total of" `Total` "ms or less (a missing or 0 key
-counts as its default)"; with `Total` 0 that lowering must be absent. The
+`config.MaxPauseTimeoutSeconds` or `config.MaxPreTrustLockWaitSeconds`. The
 closing sentence follows `config.Load`'s rule (see
-[`[tmux]` timing settings](#tmux-timing-settings)): "A missing key, or 0,
-gives the default." is required, and "so set it to at least" forbidden,
-when no refused key's default is below its minimum, the "For every
-refused key other than …" form naming those keys when only some are, and
-no "gives the default" when all are. With no refusals (a value of the
+[`[tmux]` timing settings](#tmux-timing-settings)): when a `Derived`
+refusal's `Minimum` is above its key's default, "A missing key, or 0,
+gives the default, or for" those keys "its safe minimum when that is
+larger." is required (b.9e1); otherwise "A missing key, or 0, gives the
+default." is required and "its safe minimum when that is larger"
+forbidden. With no refusals (a value of the
 wrong type) only the path is required. Beside it,
 `DescConfigCaseVariant(path, names...)` is the case for a file setting one
 key under names that differ only in letter case (b.p8n; see "One spelling

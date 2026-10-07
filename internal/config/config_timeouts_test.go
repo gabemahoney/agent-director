@@ -17,23 +17,22 @@ import (
 
 // The exact texts the refusal description tests share: the closing sentence
 // (refusalTail), kill_exit_wait_ms -1 (killNegative, the file's [tmux] table
-// killNegativeTmux), and pending_grace_seconds refused at its default beside
-// create_timeout_ms 60000 (graceAtDefault, the [tmux] table graceRaisedTmux)
-// with the closing sentence that leaves it out (graceLeftOut; b.n4q).
+// killNegativeTmux), and pending_grace_seconds below a derived minimum that a
+// create_timeout_ms raises above the default (graceBelowRaised,
+// graceBelowRaisedTmux; b.9e1), after which the closing sentence is
+// raisedTail. graceRaisedTmux raises the minimum with pending_grace_seconds
+// missing, which loads (b.9e1).
 const (
-	refusalTail    = ". A missing key, or 0, gives the default."
-	killNegative   = "[tmux] kill_exit_wait_ms = -1, which must be positive"
-	graceAtDefault = "[tmux] pending_grace_seconds is missing or 0, and its default, 60, is below its safe " +
-		"minimum 81 s (computed from the effective create_timeout_ms 60000 and pipe_close_wait_ms 100), so set it " +
-		"to at least 81, or lower the effective create_timeout_ms and pipe_close_wait_ms to a total of 40000 ms " +
-		"or less (a missing or 0 key counts as its default)"
-	graceLeftOut = ". For every refused key other than [tmux] pending_grace_seconds, a missing key, or 0, " +
-		"gives the default."
+	refusalTail      = ". A missing key, or 0, gives the default."
+	killNegative     = "[tmux] kill_exit_wait_ms = -1, which must be positive"
+	graceBelowRaised = "[tmux] pending_grace_seconds = 60, below its safe minimum 81 s (computed from the effective " +
+		"create_timeout_ms 60000 and pipe_close_wait_ms 100)"
 )
 
 var (
-	killNegativeTmux = []tmuxSetting{{config.TmuxKillExitWaitMs, -1}}
-	graceRaisedTmux  = []tmuxSetting{{config.TmuxCreateTimeoutMs, 60000}}
+	killNegativeTmux     = []tmuxSetting{{config.TmuxKillExitWaitMs, -1}}
+	graceRaisedTmux      = []tmuxSetting{{config.TmuxCreateTimeoutMs, 60000}}
+	graceBelowRaisedTmux = []tmuxSetting{{config.TmuxCreateTimeoutMs, 60000}, {config.TmuxPendingGraceSeconds, 60}}
 )
 
 // retentionRefusal, relayRefusal, pauseRefusal and preTrustRefusal are a
@@ -118,9 +117,10 @@ func TestRangeKeysLoad(t *testing.T) {
 // refusal: just above the largest, where the relay guard window plus its
 // margin wraps (9223372036) and where a window itself wraps (9223372037),
 // alone and beside refused keys of other tables, whose names the header lists
-// in table order. A [tmux]-only refusal is unchanged, and beside a [tmux] key
-// whose default is below its minimum the closing sentence leaves that key out
-// (b.n4q).
+// in table order. A [tmux]-only refusal is unchanged. A create_timeout_ms that
+// raises the grace minimum above its default refuses no missing grace, and
+// beside a set grace below it the closing sentence says a missing key, or 0,
+// gives that minimum (raisedTail; b.9e1).
 func TestRangeKeysRefusalDescription(t *testing.T) {
 	cases := []struct {
 		name string
@@ -137,8 +137,10 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 		{"days_and_tmux", rangeKeys{days: "-1"}, killNegativeTmux,
 			"refused [defaults] and [tmux] values: " + retentionRefusal("-1") + "; " + killNegative + refusalTail},
 		{"tmux_only_unchanged", rangeKeys{days: "31"}, killNegativeTmux, "refused [tmux] values: " + killNegative + refusalTail},
-		{"days_and_tmux_default_below_minimum", rangeKeys{days: "-1"}, graceRaisedTmux,
-			"refused [defaults] and [tmux] values: " + retentionRefusal("-1") + "; " + graceAtDefault + graceLeftOut},
+		{"days_beside_raised_create_timeout_grace_missing", rangeKeys{days: "-1"}, graceRaisedTmux,
+			"refused [defaults] values: " + retentionRefusal("-1") + refusalTail},
+		{"days_and_tmux_grace_below_raised_minimum", rangeKeys{days: "-1"}, graceBelowRaisedTmux,
+			"refused [defaults] and [tmux] values: " + retentionRefusal("-1") + "; " + graceBelowRaised + raisedTail},
 		{"relay_negative", rangeKeys{relay: "-1"}, nil, "refused [relay] values: " + relayRefusal("-1") + refusalTail},
 		{"relay_above_largest", rangeKeys{relay: "2147484"}, nil,
 			"refused [relay] values: " + relayRefusal("2147484") + refusalTail},
@@ -176,9 +178,6 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 			"refused [defaults], [relay], [pause], [pre_trust] and [tmux] values: " + retentionRefusal("106752") + "; " +
 				relayRefusal("2147484") + "; " + pauseRefusal("-1") + "; " + preTrustRefusal("-1") + "; " +
 				killNegative + refusalTail},
-		{"three_tables_with_tmux_default_below_minimum", rangeKeys{relay: "-1", pause: "-1"}, graceRaisedTmux,
-			"refused [relay], [pause] and [tmux] values: " + relayRefusal("-1") + "; " + pauseRefusal("-1") + "; " +
-				graceAtDefault + graceLeftOut},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

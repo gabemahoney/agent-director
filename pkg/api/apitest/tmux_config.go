@@ -23,8 +23,10 @@ type TmuxSetting struct {
 }
 
 // TmuxInt sets key k to the TOML integer v, the normal case. v is written as
-// given: 0 and negative values are written too, for the default (0 falls back
-// to the key's default) and refusal cases.
+// given: 0 and negative values are written too, for the default and refusal
+// cases. 0 falls back to the key's default; for pending_grace_seconds, to the
+// larger of its default and its derived minimum
+// (config.PendingGraceMinimumSeconds; b.9e1).
 func TmuxInt(k config.TmuxKey, v int64) TmuxSetting {
 	return TmuxSetting{key: k, value: v}
 }

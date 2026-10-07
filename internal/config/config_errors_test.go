@@ -73,70 +73,59 @@ func refusalDescription(t *testing.T, path string) string {
 // statedMinimum matches the safe minimum a refused key's clause states.
 var statedMinimum = regexp.MustCompile(`safe minimum (\d+) `)
 
-// checkAdvice checks desc's advice (b.n4q): a refused [tmux] key whose default
-// is below the safe minimum its clause states has its own "so set it to at
-// least" change, no other key has one, and the closing sentence gives the
-// default for exactly the other refused keys: all of them, all but those
-// named, or, when none is left, there is no closing sentence. The refused
-// keys outside [tmux] (b.sgw, b.8q2, b.kr4) all have a default that loads.
+// raisedTail is the closing sentence when a refused pending_grace_seconds'
+// safe minimum is above its default, so a missing key, or 0, gives that
+// minimum (b.9e1).
+const raisedTail = ". A missing key, or 0, gives the default, or for [tmux] pending_grace_seconds its safe " +
+	"minimum when that is larger."
+
+// checkAdvice checks desc's advice (b.9e1): no refused key's description
+// contains "; ", the separator between them, so the list after "values: "
+// splits on it into one part per refused key, and desc ends with raisedTail
+// exactly when a refused [tmux] key states a safe minimum above its default,
+// otherwise with refusalTail, that a missing key, or 0, gives the default.
+// The refused keys outside [tmux] are b.sgw's, b.8q2's and b.kr4's.
 func checkAdvice(t *testing.T, desc string) {
 	t.Helper()
+	_, list, ok := strings.Cut(desc, " values: ")
+	if !ok {
+		t.Fatalf("description lists no refused values: %q", desc)
+	}
+	// raisedTail names [tmux] pending_grace_seconds; count only the list's keys.
+	list = strings.TrimSuffix(strings.TrimSuffix(list, raisedTail), refusalTail)
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
 		"[pre_trust] lock_wait_seconds "} {
-		refused += strings.Count(desc, k)
+		refused += strings.Count(list, k)
 	}
-	var own []string
+	above := false
 	for _, k := range config.TmuxKeys() {
-		if !strings.Contains(desc, "[tmux] "+k.Name()+" ") {
+		if !strings.Contains(list, "[tmux] "+k.Name()+" ") {
 			continue
 		}
 		refused++
 		clause := refusedClause(t, desc, k)
-		belowDefault := false
 		if m := statedMinimum.FindStringSubmatch(clause); m != nil {
 			minimum, err := strconv.ParseInt(m[1], 10, 64)
 			if err != nil {
 				t.Fatalf("clause states an unreadable safe minimum %q: %q", m[1], clause)
 			}
-			belowDefault = k.DefaultValue() < minimum
+			above = above || minimum > k.DefaultValue()
 		}
-		if hasFix := strings.Contains(clause, ", so set it to at least "); hasFix != belowDefault {
-			t.Errorf("clause states its own change that loads = %v; want %v, as the default %d is below its stated minimum = %v: %q",
-				hasFix, belowDefault, k.DefaultValue(), belowDefault, clause)
-		}
-		if belowDefault {
-			own = append(own, "[tmux] "+k.Name())
+		if strings.Contains(clause, "default") {
+			t.Errorf("clause speaks of the default: %q", clause)
 		}
 	}
-	switch len(own) {
-	case 0:
-		if !strings.HasSuffix(desc, ". A missing key, or 0, gives the default.") {
-			t.Errorf("description does not end saying that a missing key, or 0, gives the default: %q", desc)
-		}
-	case refused:
-		if srClosing(desc) {
-			t.Errorf("description says a missing key, or 0, gives the default, which loads for no refused key: %q", desc)
-		}
-	default:
-		if want := ". For every refused key other than " + strings.Join(own, " and ") +
-			", a missing key, or 0, gives the default."; !strings.HasSuffix(desc, want) {
-			t.Errorf("description does not end with %q: %q", want, desc)
-		}
+	if parts := strings.Split(list, "; "); len(parts) != refused {
+		t.Errorf("the refused values split on \"; \" into %d parts; want one per refused key, %d: %q", len(parts), refused, desc)
 	}
-}
-
-// graceFix is pending_grace_seconds' own change that loads when its default is
-// below its minimum (b.n4q): set it to at least minimum or, when total is
-// non-zero, lower the effective create_timeout_ms and pipe_close_wait_ms to
-// that total.
-func graceFix(minimum, total int64) string {
-	fix := fmt.Sprintf(", so set it to at least %d", minimum)
-	if total != 0 {
-		fix += fmt.Sprintf(", or lower the effective create_timeout_ms and pipe_close_wait_ms to a total of %d ms or less"+
-			" (a missing or 0 key counts as its default)", total)
+	tail := refusalTail
+	if above {
+		tail = raisedTail
 	}
-	return fix
+	if !strings.HasSuffix(desc, tail) {
+		t.Errorf("description does not end with %q: %q", tail, desc)
+	}
 }
 
 // refusedClause returns the part of desc about key k: from "[tmux] <key>" to
@@ -156,24 +145,26 @@ func refusedClause(t *testing.T, desc string, k config.TmuxKey) string {
 
 // refusal is what the description must say about one refused key.
 type refusal struct {
-	key       config.TmuxKey
-	value     int64    // the configured value, or the default for a grace period refused at it
-	atDefault bool     // value is the grace period's default and must be said to be
-	minimum   string   // safe minimum with its unit, e.g. "60 s"; "" when the value must be positive
-	from      [2]int64 // grace period only: the effective create_timeout_ms and pipe_close_wait_ms
-	fix       string   // the change that loads the clause ends with (graceFix; b.n4q); "" when the default loads
+	key     config.TmuxKey
+	value   int64    // the configured value
+	minimum string   // safe minimum with its unit, e.g. "60 s"; "" when the value must be positive
+	from    [2]int64 // grace period only: the effective create_timeout_ms and pipe_close_wait_ms
+	raised  bool     // grace period only: the minimum is above the default, so desc ends with raisedTail
 }
 
-// checkRefusal asserts that desc describes r in r.key's own clause.
+// checkRefusal asserts that desc describes r in r.key's own clause, and ends
+// with raisedTail exactly when r.raised.
 func checkRefusal(t *testing.T, desc string, r refusal) {
 	t.Helper()
 	clause := refusedClause(t, desc, r.key)
 	if v := fmt.Sprint(r.value); !strings.Contains(clause, v) {
 		t.Errorf("clause does not name the value %s: %q", v, clause)
 	}
-	// The fix's "(a missing or 0 key counts as its default)" is not about the value.
-	if said := strings.Contains(strings.ToLower(strings.TrimSuffix(clause, r.fix)), "default"); said != r.atDefault {
-		t.Errorf("clause says the value is the default = %v, want %v: %q", said, r.atDefault, clause)
+	if strings.Contains(strings.ToLower(clause), "default") {
+		t.Errorf("clause speaks of the default: %q", clause)
+	}
+	if got := strings.HasSuffix(desc, raisedTail); got != r.raised {
+		t.Errorf("description ends with %q = %v, want %v: %q", raisedTail, got, r.raised, desc)
 	}
 	if r.minimum == "" {
 		if !strings.Contains(clause, "must be positive") || strings.Contains(clause, "minimum") {
@@ -188,9 +179,6 @@ func checkRefusal(t *testing.T, desc string, r refusal) {
 				t.Errorf("clause does not name the effective %s %d: %q", k.Name(), r.from[i], clause)
 			}
 		}
-	}
-	if r.fix != "" && !strings.HasSuffix(clause, r.fix) {
-		t.Errorf("clause does not end with the change that loads %q: %q", r.fix, clause)
 	}
 }
 
@@ -338,10 +326,10 @@ func TestTmuxRefusesValue(t *testing.T) {
 }
 
 // TestTmuxGraceRuleRefusals checks the grace period's derived-minimum
-// refusals; 36, 15000, 100, 60 and 61 are the SR-4.1 worked-example literals.
-// A minimum above the 60 s default gets the key's own change that loads
-// (b.n4q), with no total to lower to for a negative grace or one whose total
-// overflows an int64.
+// refusals of a set value; 36, 15000, 100, 60 and 61 are the SR-4.1
+// worked-example literals. A minimum above the 60 s default is what a missing
+// key, or 0, gives, as the closing sentence says (raisedTail; b.9e1);
+// TestTmuxGraceRuleAccepts loads those.
 func TestTmuxGraceRuleRefusals(t *testing.T) {
 	grace, create, pipe := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs
 	const huge = math.MaxInt64
@@ -354,24 +342,26 @@ func TestTmuxGraceRuleRefusals(t *testing.T) {
 		{"grace_30_create_15000",
 			[]tmuxSetting{{create, 15000}, {grace, 30}},
 			refusal{key: grace, value: 30, minimum: "36 s", from: [2]int64{15000, 100}}, create},
-		{"create_40000_grace_missing",
-			[]tmuxSetting{{create, 40000}},
-			refusal{key: grace, value: 60, atDefault: true, minimum: "61 s", from: [2]int64{40000, 100},
-				fix: graceFix(61, 40000)}, create},
-		{"create_40000_grace_zero",
-			[]tmuxSetting{{create, 40000}, {grace, 0}},
-			refusal{key: grace, value: 60, atDefault: true, minimum: "61 s", from: [2]int64{40000, 100},
-				fix: graceFix(61, 40000)}, create},
+		{"create_39900_grace_59_minimum_equals_default",
+			[]tmuxSetting{{create, 39900}, {grace, 59}},
+			refusal{key: grace, value: 59, minimum: "60 s", from: [2]int64{39900, 100}}, create},
 		{"create_40000_grace_explicit_60",
 			[]tmuxSetting{{create, 40000}, {grace, 60}},
-			refusal{key: grace, value: 60, minimum: "61 s", from: [2]int64{40000, 100}, fix: graceFix(61, 40000)}, create},
+			refusal{key: grace, value: 60, minimum: "61 s", from: [2]int64{40000, 100}, raised: true}, create},
+		{"create_40000_grace_below_floor",
+			[]tmuxSetting{{create, 40000}, {grace, config.PendingGraceFloorSeconds - 1}},
+			refusal{key: grace, value: config.PendingGraceFloorSeconds - 1, minimum: "61 s", from: [2]int64{40000, 100},
+				raised: true}, create},
 		{"create_40000_grace_negative",
 			[]tmuxSetting{{create, 40000}, {grace, -1}},
-			refusal{key: grace, value: -1, minimum: "61 s", from: [2]int64{40000, 100}, fix: graceFix(61, 0)}, create},
-		{"total_for_grace_overflows",
+			refusal{key: grace, value: -1, minimum: "61 s", from: [2]int64{40000, 100}, raised: true}, create},
+		{"create_40000_pipe_2000_grace_61",
+			[]tmuxSetting{{create, 40000}, {pipe, 2000}, {grace, 61}},
+			refusal{key: grace, value: 61, minimum: "62 s", from: [2]int64{40000, 2000}, raised: true}, create},
+		// create + pipe overflows an int64 of ms; the clause still states the exact minimum.
+		{"create_and_pipe_max_int64_states_huge_minimum",
 			[]tmuxSetting{{create, huge}, {pipe, huge}, {grace, 1e16}},
-			refusal{key: grace, value: 1e16, minimum: "18446744073709572 s", from: [2]int64{huge, huge},
-				fix: graceFix(18446744073709572, 0)}, create},
+			refusal{key: grace, value: 1e16, minimum: "18446744073709572 s", from: [2]int64{huge, huge}, raised: true}, create},
 		// A refused negative create timeout or pipe-close wait counts as its
 		// default in the grace rule, so grace 30 still loads.
 		{"negative_create_counts_as_default",

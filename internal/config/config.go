@@ -10,8 +10,9 @@
 // The [tmux] table (type Tmux, tmux.go) holds the nine timing settings of
 // agent-director's use of tmux, with their defaults, safe minimums and the
 // pending grace period's minimum rule (SR-4.1). A missing key or 0 gives the
-// default; Load refuses a negative value and a positive value below a key's
-// safe minimum exactly as it refuses a malformed file.
+// default, or for pending_grace_seconds the larger of its default and its
+// derived minimum (b.9e1); Load refuses a negative value and a positive value
+// below a key's safe minimum exactly as it refuses a malformed file.
 //
 // [defaults] expire_retention_days, expire's default window in whole days,
 // follows the same rule (b.sgw): a missing key or 0 gives
@@ -309,7 +310,12 @@ type Log struct {
 	ErrorLogPath string `toml:"error_log_path"`
 }
 
-// Default returns the canonical SRD §11 defaults.
+// Default returns the canonical SRD §11 defaults. Its Tmux.PendingGraceSeconds
+// is pre-filled with DefaultPendingGraceSeconds (60), and nothing but Load
+// checks it against the derived minimum, so a Go caller that raises
+// Tmux.CreateTimeoutMs or Tmux.PipeCloseWaitMs on Default() should set
+// PendingGraceSeconds to 0 to get the larger of 60 and the derived minimum
+// (b.9e1).
 func Default() Config {
 	return Config{
 		Defaults: Defaults{
@@ -381,12 +387,14 @@ func (e *ConfigError) Unwrap() error {
 // first, alone, so its text never depends on which value the decoder kept.
 //
 // Load then validates the [tmux] table (SR-4.1): a negative value of any key,
-// and a positive value below its key's safe minimum (for the pending grace
-// period, the default too when its key is missing or 0 and the default is
-// below the derived minimum), are refused, never raised to the minimum or
-// replaced by the default. A key is checked whatever the letter case of its
-// name and its table's ([Tmux] STOPPING_WINDOW_SECONDS, b.g7h), as the decoder
-// reads it in any. It validates
+// and a positive value below its key's safe minimum, are refused, never
+// raised to the minimum or replaced by the default. A missing key, or 0, is
+// never refused: it takes its default or its safe minimum, whichever is
+// larger, which only pending_grace_seconds' derived minimum can be (b.9e1);
+// Load writes that value into the field of each key the file does not set
+// (resolveUnsetTmux), and the accessors give it for 0. A key is checked
+// whatever the letter case of its name and its table's ([Tmux]
+// STOPPING_WINDOW_SECONDS, b.g7h), as the decoder reads it in any. It validates
 // [defaults] expire_retention_days the same way (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds too (b.8q2), and [pre_trust]
 // lock_wait_seconds (b.kr4): a negative value and one above the key's maximum
@@ -425,6 +433,7 @@ func Load(path string) (Config, error) {
 		if err := validate(cfg, meta); err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
+		cfg.Tmux = resolveUnsetTmux(cfg.Tmux, meta)
 	case errors.Is(err, os.ErrNotExist):
 		// fall through with cfg = Default(); path resolution still applies so
 		// callers always get fully-resolved paths regardless of file presence.
@@ -570,8 +579,15 @@ func keyName(k toml.Key) string {
 // [pause], [pre_trust], [tmux] and each table in its own order, then
 // missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
 // description unchanged. Values are never changed.
+//
+// A missing key, or 0, is never refused (b.9e1): for [tmux]
+// pending_grace_seconds it takes the larger of its default and its derived
+// minimum (Tmux.unsetValue), so a raised create_timeout_ms alone never
+// refuses a key the operator did not set. No refused key's description
+// contains "; ", the separator between them.
 func validate(cfg Config, meta toml.MetaData) error {
-	var tables, refused, defaultRefused []string
+	tmuxRefused, raised := tmuxRefusals(cfg.Tmux, meta)
+	var tables, refused []string
 	for _, t := range []struct {
 		name     string
 		refusals []string
@@ -580,25 +596,32 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[relay]", cfg.Relay.refusals()},
 		{"[pause]", cfg.Pause.refusals()},
 		{"[pre_trust]", cfg.PreTrust.refusals()},
+		{"[tmux]", tmuxRefused},
 	} {
 		if len(t.refusals) > 0 {
 			tables, refused = append(tables, t.name), append(refused, t.refusals...)
-		}
-	}
-	if r := tmuxRefusals(cfg.Tmux, meta); len(r) > 0 {
-		tables = append(tables, "[tmux]")
-		for _, x := range r {
-			refused = append(refused, x.text)
-			if x.defaultRefused {
-				defaultRefused = append(defaultRefused, "[tmux] "+x.key.Name())
-			}
 		}
 	}
 	if len(refused) == 0 {
 		return nil
 	}
 	return errors.New("refused " + nameList(tables) + " values: " + strings.Join(refused, "; ") + "." +
-		missingKeyAdvice(len(refused), defaultRefused))
+		missingKeyAdvice(raised))
+}
+
+// missingKeyAdvice is the refusal's closing sentence, with its leading space,
+// true for every refused key: a missing key, or 0, always loads (b.9e1).
+// raised names the refused keys for which it gives their safe minimum, as it
+// is above their default (tmuxRefusals); only [tmux] pending_grace_seconds'
+// derived minimum can be. With none, the sentence is the plain "A missing
+// key, or 0, gives the default."; otherwise it adds that those keys take
+// their safe minimum when that is larger.
+func missingKeyAdvice(raised []string) string {
+	if len(raised) == 0 {
+		return " A missing key, or 0, gives the default."
+	}
+	return " A missing key, or 0, gives the default, or for " + nameList(raised) +
+		" its safe minimum when that is larger."
 }
 
 // nameList joins names as a refusal lists them, the refused tables in
@@ -610,26 +633,6 @@ func nameList(names []string) string {
 		return strings.Join(names, " and ")
 	}
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
-
-// missingKeyAdvice is the refusal's closing sentence, with its leading space.
-// refused counts the refused keys; defaultRefused names those among them
-// whose default is below their safe minimum (b.n4q). A missing key, or 0,
-// gives the default, which loads for every refused key but those, whose own
-// descriptions state a change that loads. So the sentence is the plain "A
-// missing key, or 0, gives the default." when defaultRefused is empty, names
-// the keys it leaves out when only some refused keys are in it, and is empty
-// when every refused key is.
-func missingKeyAdvice(refused int, defaultRefused []string) string {
-	switch len(defaultRefused) {
-	case 0:
-		return " A missing key, or 0, gives the default."
-	case refused:
-		return ""
-	default:
-		return " For every refused key other than " + strings.Join(defaultRefused, " and ") +
-			", a missing key, or 0, gives the default."
-	}
 }
 
 // resolvePaths applies the SRD §11 path rules to every filesystem-bearing

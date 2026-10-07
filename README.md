@@ -349,7 +349,7 @@ db_path = "~/.agent-director/state.db"
 [log]
 error_log_path = "~/.agent-director/errors.log"
 
-[tmux]   # timing settings: omit a key (or set it to 0) to use its default
+[tmux]   # timing settings: omit a key (or set it to 0) to use its default (pending_grace_seconds: the default or its minimum, whichever is larger; see Timing settings)
 # starting_session_seconds = 300
 # stopping_window_seconds = 90
 # pending_grace_seconds = 60
@@ -414,7 +414,7 @@ can be changed, but never below its safe minimum.
 |---|---|---|---|---|
 | `starting_session_seconds` | s | 300 | **60** | Starting-session bound: until a finished row's own tmux session, or a session of an earlier launch of its id that the row does not track ("this id's own abandoned launch"), is this old, it counts as "still starting, retry later" rather than a conflict needing a human. Claude Code reports SessionStart within seconds. |
 | `stopping_window_seconds` | s | 90 | **30** | Stopping window: how long after an agent ends it counts as "still stopping, retry later". Covers Claude Code's SessionEnd hook budget plus teardown. |
-| `pending_grace_seconds` | s | 60 | **30**, or more (see below) | Grace period: how long `find-missing` leaves a launch alone after it starts, and how long the launch's SessionStart hook waits for agent-director to record the launch (never more than 540 s). The setting has no maximum. |
+| `pending_grace_seconds` | s | 60, or more (see below) | **30**, or more (see below) | Grace period: how long `find-missing` leaves a launch alone after it starts, and how long the launch's SessionStart hook waits for agent-director to record the launch (never more than 540 s). If you don't set this, agent-director uses 60 s or the minimum your other [tmux] timeouts require, whichever is larger. If you set it below that minimum, the config is refused. Example: with `create_timeout_ms = 40000` and this key unset, the grace period is 61 s. The setting has no maximum. |
 | `query_timeout_ms` | ms | 1500 | none | Each tmux lookup and pane listing. |
 | `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send and pane capture. |
 | `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session (`spawn`, `resume`). |
@@ -422,26 +422,35 @@ can be changed, but never below its safe minimum.
 | `sweep_budget_seconds` | s | 15 | none | Total tmux time per run of `find-missing` and `expire`. |
 | `kill_exit_wait_ms` | ms | 5000 | none | How long `kill` waits for the agent process to exit after killing its pane. Set from measured exit times under Claude Code's default SessionEnd hook budget. |
 
-- **Validation.** A missing key, or 0, gives the default. A negative
-  value, a positive value below the key's safe minimum, or a value that
-  is not an integer is refused — never raised to the minimum or replaced
-  by the default. Until the file is fixed, every store-backed verb fails
+- **Validation.** A missing key, or 0, gives the default (for
+  `pending_grace_seconds`, the default or its minimum, whichever is
+  larger). A negative value, a positive value below the key's safe
+  minimum, or a value that is not an integer is refused — never raised
+  to the minimum or replaced by the default. Until the file is fixed, every store-backed verb fails
   with `ErrConfigMalformed` naming each refused key, its value and the
   values it allows; `serve` does not start; hooks record nothing and relayed
   permission requests are denied. `help` and `version` still run. A
   misspelt key is ignored, so its default stays in force.
-- **Grace period.** Separate from the bound and the stopping window. It
-  must outlast the time from a launch's start until its tmux session
-  exists, which agent-director enforces through its minimum: 30 s, or
-  `create_timeout_ms` + `pipe_close_wait_ms` + 20 s (rounded up to whole
-  seconds) when that is larger. Raising either can refuse a grace period,
-  the default included: `create_timeout_ms = 40000` raises the minimum to
-  61, so the default 60 is refused until `pending_grace_seconds` is set
-  to 61 or more. The same grace period also bounds how long a launch's
-  SessionStart hook waits for agent-director to record the launch, but
-  that hook waits at most 540 s, however large the grace period. The
-  setting itself has no maximum: `find-missing` still leaves a launch
-  alone for the full grace period.
+- **Grace period.** Separate from the bound and the stopping window. Two
+  settings time a launch, and you need both. `create_timeout_ms` limits
+  one tmux call, the one that creates the session.
+  `pending_grace_seconds` limits the whole launch: tmux creating the
+  session, then Claude starting and checking in with agent-director.
+  Until it runs out, `find-missing` leaves the launch alone; after it,
+  `find-missing` may mark the launch `missing`. So the grace period must
+  outlast the create timeout plus a margin, or `find-missing` could give
+  up on a launch that is still starting normally. agent-director
+  enforces this through its minimum: 30 s, or `create_timeout_ms` +
+  `pipe_close_wait_ms` + 20 s (rounded up to whole seconds) when that is
+  larger. For example, `create_timeout_ms = 40000` (with
+  `pipe_close_wait_ms` at its default) raises the minimum to 61 s, above
+  the default 60, so leaving `pending_grace_seconds` unset gives a grace
+  period of 61 s, while setting it to 60 is refused: set 61 or more, or
+  leave it unset or at 0. The same grace period also bounds how long a
+  launch's SessionStart hook waits for agent-director to record the
+  launch, but that hook waits at most 540 s, however large the grace
+  period. The setting itself has no maximum: `find-missing` still leaves
+  a launch alone for the full grace period.
 - **When a change takes effect.** The CLI and the TypeScript client: on
   their next call. The MCP server: only after a restart. A Go `Client`:
   when it is built.
@@ -469,8 +478,9 @@ can be changed, but never below its safe minimum.
   `kill_exit_wait_ms` to at least twice the budget, and keep
   `stopping_window_seconds` at least twice the budget too.
 - Callers whose own waits use these values (waiting out the grace
-  period, a retry cadence for "still stopping") need the configured
-  values: tell them when you change one.
+  period, a retry cadence for "still stopping") need the values in
+  force: tell them when you change one, including a `create_timeout_ms`
+  or `pipe_close_wait_ms` change that moves an unset grace period.
 
 ## Maintenance
 
@@ -645,9 +655,11 @@ follows this bounded, paced sequence:
 2. If the row is `pending`, wait until its launch start
    (`launch_started_at`, shown by
    `agent-director status --claude-instance-id <id>`) plus the pending
-   grace period (60 s unless the operator configured another value) has
-   passed; a pending row inside its grace period means wait and check
-   again later, never escalate.
+   grace period (60 s by default; the operator's
+   [timing settings](#timing-settings-tmux) can make it longer or
+   shorter, so ask the operator for the value in force) has passed; a
+   pending row inside its grace period means wait and check again later,
+   never escalate.
 3. Run `agent-director find-missing`, then confirm with
    `agent-director status --claude-instance-id <id>` (or `get`) that the
    row is `ended` or `missing`; if not, wait about 5 s and repeat, up to

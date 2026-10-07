@@ -1119,11 +1119,14 @@ refusal says nothing about it.
 
 1. Fix the value(s) the envelope names in the `config  :` file: set
    each to a value in its range, or remove it or set it to 0 to get its
-   default, unless the envelope says that default is itself refused
-   (`is missing or 0, and its default, <n>, is below its safe minimum
-   <m>`); then set it to at least `<m>`. Or fix the syntax error. For
-   a key set under names that differ only in letter case, keep one of
-   the names the envelope lists for it and remove the others.
+   default. A removed or 0 key always loads; for `[tmux]
+   pending_grace_seconds` it gives the default or the key's safe
+   minimum, whichever is larger (the envelope's `below its safe minimum
+   <m> s (computed from the effective create_timeout_ms ... and
+   pipe_close_wait_ms ...)` names that minimum). Or fix the syntax
+   error. For a key set under names that differ only in letter case,
+   keep one of the names the envelope lists for it and remove the
+   others.
 2. Re-run the install with the same flags. It probes the store again
    and authorizes any pending migration.
 
