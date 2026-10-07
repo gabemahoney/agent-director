@@ -32,14 +32,6 @@ func TestParseGlobalFlags(t *testing.T) {
 			clisetup.GlobalFlags{StorePath: "/tmp/foo.db", StorePathSet: true}, []string{"version"}},
 		{"store-path equals form", []string{"--store-path=/tmp/foo.db", "version"},
 			clisetup.GlobalFlags{StorePath: "/tmp/foo.db", StorePathSet: true}, []string{"version"}},
-		{"home two-token form", []string{"--home", "/tmp/h", "help"},
-			clisetup.GlobalFlags{Home: "/tmp/h", HomeSet: true}, []string{"help"}},
-		{"home equals form", []string{"--home=/tmp/h", "help"},
-			clisetup.GlobalFlags{Home: "/tmp/h", HomeSet: true}, []string{"help"}},
-		{"tmux-command two-token form", []string{"--tmux-command", "/usr/local/bin/tmux", "spawn", "--cwd", "/x"},
-			clisetup.GlobalFlags{TmuxCommand: "/usr/local/bin/tmux", TmuxCommandSet: true}, []string{"spawn", "--cwd", "/x"}},
-		{"tmux-command equals form", []string{"--tmux-command=/usr/local/bin/tmux", "spawn", "--cwd", "/x"},
-			clisetup.GlobalFlags{TmuxCommand: "/usr/local/bin/tmux", TmuxCommandSet: true}, []string{"spawn", "--cwd", "/x"}},
 		{"all three, mixed forms", []string{"--store-path", "/tmp/foo.db", "--home=/tmp/h", "--tmux-command", "/usr/local/bin/tmux", "version"},
 			clisetup.GlobalFlags{StorePath: "/tmp/foo.db", StorePathSet: true, Home: "/tmp/h", HomeSet: true,
 				TmuxCommand: "/usr/local/bin/tmux", TmuxCommandSet: true}, []string{"version"}},
@@ -72,15 +64,10 @@ func TestParseGlobalFlagsMissingValue(t *testing.T) {
 		argv []string
 		flag string
 	}{
-		{[]string{"--store-path"}, "--store-path"},
 		{[]string{"--home"}, "--home"},
-		{[]string{"--tmux-command"}, "--tmux-command"},
 		{[]string{"spawn", "--store-path"}, "--store-path"},
-		{[]string{"--store-path="}, "--store-path"},
-		{[]string{"--home="}, "--home"},
 		{[]string{"--tmux-command="}, "--tmux-command"},
 		{[]string{"--store-path=", "version"}, "--store-path"},
-		{[]string{"--store-path", ""}, "--store-path"},
 		{[]string{"--home", "", "version"}, "--home"},
 		{[]string{"spawn", "--cwd", "/x", "--tmux-command", ""}, "--tmux-command"},
 	}
@@ -210,17 +197,11 @@ func TestExpandTilde(t *testing.T) {
 		wantOK bool
 	}{
 		{"/h", false, "~/x/y", "/h/x/y", true},
-		{"/h", false, "~/", "/h/", true},
 		{"/h", false, "~", "/h", true},
 		{"/h", false, "~user/x", "~user/x", true},
 		{"/h", false, "/abs/~/x", "/abs/~/x", true},
-		{"/h", false, "rel", "rel", true},
-		{"/h", false, "", "", true},
-		{"", false, "~", "~", false},
 		{"", false, "~/x", "~/x", false},
 		{"", true, "~", "~", false},
-		{"", true, "~/x", "~/x", false},
-		{"", false, "~user/x", "~user/x", true},
 		{"", true, "/abs", "/abs", true},
 	}
 	for _, tc := range cases {

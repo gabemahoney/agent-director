@@ -82,17 +82,26 @@ func (f *fakeExec) exec(_ context.Context, argv, _ []string) ([]byte, []byte, in
 // count is how many recorded calls contain every one of words.
 func (f *fakeExec) count(words ...string) int {
 	n := 0
-	for _, c := range f.calls {
-		joined := " " + strings.Join(c, " ") + " "
+	for i := callIndex(f.calls, 0, words...); i >= 0; i = callIndex(f.calls, i+1, words...) {
+		n++
+	}
+	return n
+}
+
+// callIndex is the index of the first call at or after from containing every
+// one of words as whole argv tokens, or -1.
+func callIndex(calls [][]string, from int, words ...string) int {
+	for i := from; i < len(calls); i++ {
+		joined := " " + strings.Join(calls[i], " ") + " "
 		all := true
 		for _, w := range words {
 			all = all && strings.Contains(joined, " "+w+" ")
 		}
 		if all {
-			n++
+			return i
 		}
 	}
-	return n
+	return -1
 }
 
 // rig is a harness on a temp tree with a fake exec, a virtual clock, an

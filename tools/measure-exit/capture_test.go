@@ -291,21 +291,6 @@ func (w *teamWorld) reply(argv []string) (string, string, int) {
 	return w.world.reply(argv)
 }
 
-// callIndex is the index of the first call after from containing every word.
-func callIndex(calls [][]string, from int, words ...string) int {
-	for i := from; i < len(calls); i++ {
-		joined := " " + strings.Join(calls[i], " ") + " "
-		all := true
-		for _, w := range words {
-			all = all && strings.Contains(joined, " "+w+" ")
-		}
-		if all {
-			return i
-		}
-	}
-	return -1
-}
-
 // TestRunTeamCutShort drives rn9.team-splitpane against teamWorld: a lead
 // whose input never shows or who ignores the team prompt gets no further
 // key, and its panes are captured before pause and again after a failed one.

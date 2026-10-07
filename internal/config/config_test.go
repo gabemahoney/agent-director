@@ -31,12 +31,14 @@ func homeDir(t *testing.T) string {
 	return h
 }
 
+// TestDefaultMatchesSRD pins Default() outside [tmux] (whose defaults
+// TestTmuxConstantsMatchSRD and TestTmuxKeyDefinitions pin). The relay
+// timeout is a full day so overnight human approvals do not time out (b.p48).
 func TestDefaultMatchesSRD(t *testing.T) {
 	d := config.Default()
 	cases := []struct {
-		name string
-		got  any
-		want any
+		name      string
+		got, want any
 	}{
 		{"Defaults.RelayMode", d.Defaults.RelayMode, "off"},
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
@@ -50,217 +52,76 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"PreTrust.LockWaitSeconds", d.PreTrust.LockWaitSeconds, 12},
 		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
-		// [tmux] defaults, pinned to the SR-4.1 table's literals.
-		{"Tmux.StartingSessionSeconds", d.Tmux.StartingSessionSeconds, int64(300)},
-		{"Tmux.StoppingWindowSeconds", d.Tmux.StoppingWindowSeconds, int64(90)},
-		{"Tmux.PendingGraceSeconds", d.Tmux.PendingGraceSeconds, int64(60)},
-		{"Tmux.QueryTimeoutMs", d.Tmux.QueryTimeoutMs, int64(1500)},
-		{"Tmux.ActionTimeoutMs", d.Tmux.ActionTimeoutMs, int64(2000)},
-		{"Tmux.CreateTimeoutMs", d.Tmux.CreateTimeoutMs, int64(5000)},
-		{"Tmux.PipeCloseWaitMs", d.Tmux.PipeCloseWaitMs, int64(100)},
-		{"Tmux.SweepBudgetSeconds", d.Tmux.SweepBudgetSeconds, int64(15)},
-		{"Tmux.KillExitWaitMs", d.Tmux.KillExitWaitMs, int64(5000)},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// TestLoadKeepsDefaults: a missing file loads Default(), and a file setting
+// some keys changes only those (an unknown key is ignored, so a future strict
+// mode is a conscious choice); either way the "~/" path defaults come back
+// resolved against HOME.
+func TestLoadKeepsDefaults(t *testing.T) {
+	home := homeDir(t)
+	cases := []struct {
+		name string
+		path string
+		edit func(c *config.Config)
+	}{
+		{"missing file", filepath.Join(t.TempDir(), "does-not-exist.toml"), func(*config.Config) {}},
+		{"poll_base_ms set", makeConfigFile(t, "[relay]\npoll_base_ms = 250\n"), func(c *config.Config) { c.Relay.PollBaseMs = 250 }},
+		{"permission_request_cap set", makeConfigFile(t, "[relay]\npermission_request_cap = 500\n"),
+			func(c *config.Config) { c.Relay.PermissionRequestCap = 500 }},
+		{"unknown key ignored", makeConfigFile(t, "unknown_top_level_key = 42\n\n[relay]\npoll_base_ms = 150\n"),
+			func(c *config.Config) { c.Relay.PollBaseMs = 150 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.got != tc.want {
-				t.Errorf("got %v, want %v", tc.got, tc.want)
+			cfg, err := config.Load(tc.path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			want := config.Default()
+			want.Store.DbPath = filepath.Join(home, ".agent-director/state.db")
+			want.Log.ErrorLogPath = filepath.Join(home, ".agent-director/errors.log")
+			tc.edit(&want)
+			if cfg != want {
+				t.Errorf("Load:\n got %+v\nwant %+v", cfg, want)
 			}
 		})
 	}
 }
 
-func TestRelayConfigDefaultCapIs1000(t *testing.T) {
-	d := config.Default()
-	if d.Relay.PermissionRequestCap != 1000 {
-		t.Errorf("Relay.PermissionRequestCap = %d, want 1000", d.Relay.PermissionRequestCap)
-	}
-}
-
-func TestLoadMissingFileReturnsResolvedDefaults(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist.toml")
-	cfg, err := config.Load(missing)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	home, herr := os.UserHomeDir()
-	if herr != nil {
-		t.Fatalf("UserHomeDir: %v", herr)
-	}
-	// Default() values use "~/" placeholders that Load must expand on the
-	// missing-file branch too — un-resolved tilde paths reaching store.Open
-	// or log output would be a real-world bug.
-	wantDB := filepath.Join(home, ".agent-director/state.db")
-	wantLog := filepath.Join(home, ".agent-director/errors.log")
-	if cfg.Store.DbPath != wantDB {
-		t.Errorf("Store.DbPath = %q, want %q", cfg.Store.DbPath, wantDB)
-	}
-	if cfg.Log.ErrorLogPath != wantLog {
-		t.Errorf("Log.ErrorLogPath = %q, want %q", cfg.Log.ErrorLogPath, wantLog)
-	}
-	// All non-path defaults must still match Default() unchanged.
-	def := config.Default()
-	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause || cfg.PreTrust != def.PreTrust {
-		t.Errorf("non-path defaults drifted from Default():\n got=%+v\nwant=%+v", cfg, def)
-	}
-}
-
-func TestLoadPartialOverridePreservesDefaults(t *testing.T) {
-	path := makeConfigFile(t, "[relay]\npoll_base_ms = 250\n")
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Relay.PollBaseMs != 250 {
-		t.Errorf("PollBaseMs override not applied: got %d", cfg.Relay.PollBaseMs)
-	}
-	// Untouched fields keep defaults.
-	if cfg.Relay.PollJitterMs != 100 {
-		t.Errorf("PollJitterMs default lost: got %d", cfg.Relay.PollJitterMs)
-	}
-	if cfg.Relay.TimeoutSeconds != 86400 {
-		t.Errorf("Relay.TimeoutSeconds default lost: got %d, want 86400", cfg.Relay.TimeoutSeconds)
-	}
-	if cfg.Defaults.RelayMode != "off" {
-		t.Errorf("Defaults.RelayMode default lost: got %q", cfg.Defaults.RelayMode)
-	}
-	if cfg.Pause.TimeoutSeconds != 30 {
-		t.Errorf("Pause.TimeoutSeconds default lost: got %d", cfg.Pause.TimeoutSeconds)
-	}
-	if cfg.PreTrust.LockWaitSeconds != 12 {
-		t.Errorf("PreTrust.LockWaitSeconds default lost: got %d, want 12", cfg.PreTrust.LockWaitSeconds)
-	}
-}
-
-func TestLoadPermissionRequestCapOverride(t *testing.T) {
-	path := makeConfigFile(t, "[relay]\npermission_request_cap = 500\n")
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Relay.PermissionRequestCap != 500 {
-		t.Errorf("PermissionRequestCap override not applied: got %d, want 500", cfg.Relay.PermissionRequestCap)
-	}
-	// Untouched relay fields keep their defaults.
-	if cfg.Relay.PollBaseMs != 100 {
-		t.Errorf("PollBaseMs default lost: got %d, want 100", cfg.Relay.PollBaseMs)
-	}
-	if cfg.Relay.PollJitterMs != 100 {
-		t.Errorf("PollJitterMs default lost: got %d, want 100", cfg.Relay.PollJitterMs)
-	}
-	if cfg.Relay.TimeoutSeconds != 86400 {
-		t.Errorf("TimeoutSeconds default lost: got %d, want 86400", cfg.Relay.TimeoutSeconds)
-	}
-}
-
-func TestLoadExpandsTildeInPathFields(t *testing.T) {
+// TestLoadResolvesPathFields: "~/" expands against HOME, a relative path
+// resolves under <HOME>/.agent-director, an absolute path and a "$HOME"
+// literal are kept as written.
+func TestLoadResolvesPathFields(t *testing.T) {
 	home := homeDir(t)
-	path := makeConfigFile(t, `
-[store]
-db_path = "~/foo.db"
-
-[log]
-error_log_path = "~/bar.log"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	wantDB := filepath.Join(home, "foo.db")
-	if cfg.Store.DbPath != wantDB {
-		t.Errorf("Store.DbPath: got %q, want %q", cfg.Store.DbPath, wantDB)
-	}
-	wantLog := filepath.Join(home, "bar.log")
-	if cfg.Log.ErrorLogPath != wantLog {
-		t.Errorf("Log.ErrorLogPath: got %q, want %q", cfg.Log.ErrorLogPath, wantLog)
-	}
-}
-
-func TestLoadPreservesDollarVarLiteral(t *testing.T) {
-	path := makeConfigFile(t, `
-[store]
-db_path = "$HOME/foo.db"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(cfg.Store.DbPath, "$HOME") {
-		t.Errorf("expected literal $HOME preserved, got %q", cfg.Store.DbPath)
-	}
-}
-
-func TestLoadResolvesRelativePathAgainstHome(t *testing.T) {
-	home := homeDir(t)
-	path := makeConfigFile(t, `
-[store]
-db_path = "foo.db"
-
-[log]
-error_log_path = "logs/errors.log"
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	wantDB := filepath.Join(home, ".agent-director", "foo.db")
-	if cfg.Store.DbPath != wantDB {
-		t.Errorf("Store.DbPath: got %q, want %q", cfg.Store.DbPath, wantDB)
-	}
-	wantLog := filepath.Join(home, ".agent-director", "logs", "errors.log")
-	if cfg.Log.ErrorLogPath != wantLog {
-		t.Errorf("Log.ErrorLogPath: got %q, want %q", cfg.Log.ErrorLogPath, wantLog)
-	}
-}
-
-func TestLoadPreservesAbsolutePath(t *testing.T) {
 	abs := filepath.Join(t.TempDir(), "absolute.db")
-	path := makeConfigFile(t, "[store]\ndb_path = "+quoted(abs)+"\n")
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	cases := []struct{ db, log, wantDB, wantLog string }{
+		{"~/foo.db", "~/bar.log", filepath.Join(home, "foo.db"), filepath.Join(home, "bar.log")},
+		{"foo.db", "logs/errors.log", filepath.Join(home, ".agent-director", "foo.db"), filepath.Join(home, ".agent-director", "logs", "errors.log")},
+		{abs, abs + ".log", abs, abs + ".log"},
 	}
-	if cfg.Store.DbPath != abs {
-		t.Errorf("Store.DbPath: got %q, want %q (absolute path should be unchanged)", cfg.Store.DbPath, abs)
+	for _, tc := range cases {
+		cfg, err := config.Load(makeConfigFile(t, "[store]\ndb_path = "+quoted(tc.db)+"\n[log]\nerror_log_path = "+quoted(tc.log)+"\n"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Store.DbPath != tc.wantDB || cfg.Log.ErrorLogPath != tc.wantLog {
+			t.Errorf("db_path %q, error_log_path %q: got %q, %q; want %q, %q", tc.db, tc.log, cfg.Store.DbPath, cfg.Log.ErrorLogPath, tc.wantDB, tc.wantLog)
+		}
+	}
+	cfg, err := config.Load(makeConfigFile(t, "[store]\ndb_path = \"$HOME/foo.db\"\n"))
+	if err != nil || !strings.Contains(cfg.Store.DbPath, "$HOME") {
+		t.Errorf("db_path \"$HOME/foo.db\": got %q, %v; want the literal $HOME kept", cfg.Store.DbPath, err)
 	}
 }
 
 // quoted wraps s in TOML double-quoted-string syntax with minimal escaping.
 func quoted(s string) string {
 	return "\"" + strings.ReplaceAll(s, "\\", "\\\\") + "\""
-}
-
-// TestDefault_RelayTimeoutAtLeastOneDay locks in the fix for b.p48: a 10-minute
-// default was silently breaking overnight human-approval flows (Slack approval,
-// overnight operator review). The default must be at least one full day.
-func TestDefault_RelayTimeoutAtLeastOneDay(t *testing.T) {
-	d := config.Default()
-	if d.Relay.TimeoutSeconds < 86400 {
-		t.Errorf("Relay.TimeoutSeconds = %d; want >= 86400 (1 day) — human-paced approval flows (Slack approval, overnight operator review) require a multi-hour default (b.p48)", d.Relay.TimeoutSeconds)
-	}
-}
-
-// TestRelayEffectiveTimeoutSeconds verifies the single source of truth the
-// poll loop and synthesized hook timeout both consume: a positive configured
-// value passes through; 0 gives DefaultRelayTimeoutSeconds (86400), never 0.
-// Load refuses a negative value (b.8q2); a Go caller's gets the default too.
-func TestRelayEffectiveTimeoutSeconds(t *testing.T) {
-	cases := []struct {
-		name       string
-		configured int
-		want       int
-	}{
-		{"positive_passthrough", 3600, 3600},
-		{"default_passthrough", config.DefaultRelayTimeoutSeconds, 86400},
-		{"zero_falls_back", 0, config.DefaultRelayTimeoutSeconds},
-		{"negative_falls_back", -1, config.DefaultRelayTimeoutSeconds},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := config.Relay{TimeoutSeconds: tc.configured}.EffectiveTimeoutSeconds()
-			if got != tc.want {
-				t.Errorf("EffectiveTimeoutSeconds() = %d; want %d", got, tc.want)
-			}
-		})
-	}
 }

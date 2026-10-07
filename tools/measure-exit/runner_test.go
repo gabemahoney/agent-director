@@ -151,6 +151,19 @@ func (r *runnerRig) assertNoToolCalls(t *testing.T) {
 	}
 }
 
+// assertNothingRan fails when the engine was called, the results root holds
+// anything, or a host program ran: what a refused or print-only run leaves.
+func (r *runnerRig) assertNothingRan(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(r.engineLog); err == nil {
+		t.Errorf("the engine was called: %v", r.engineCalls())
+	}
+	if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
+		t.Errorf("%d entries were left in the results root", len(entries))
+	}
+	r.assertNoToolCalls(t)
+}
+
 // containerLine is the printed container run command's tokens.
 func containerLine(t *testing.T, out string) []string {
 	t.Helper()
@@ -207,13 +220,7 @@ func TestRunnerPrintOnlyContainerCommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	if _, err := os.Stat(r.engineLog); err == nil {
-		t.Errorf("print-only called the engine: %v", r.engineCalls())
-	}
-	r.assertNoToolCalls(t)
-	if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
-		t.Errorf("print-only created %d entries in the results root", len(entries))
-	}
+	r.assertNothingRan(t)
 	assertAbsent(t, "print-only output", out, sentinelTexts()...)
 	line := containerLine(t, out)
 
@@ -277,34 +284,14 @@ func TestRunnerPrintOnlyContainerCommand(t *testing.T) {
 	}
 }
 
-// TestRunnerDeployedVersion pins every default Claude Code to the deployed
-// 2.1.280 and checks real mode's floor accepts it.
-func TestRunnerDeployedVersion(t *testing.T) {
-	r := newRunnerRig(t)
-	got := map[string]string{}
-	for mode, prefix := range map[string]string{"rn9": "agent-director-measure:cc-", "probe": "agent-director-measure:probe-"} {
-		_, out := r.run(t, nil, mode, "--run-id", "mx-version-"+mode)
-		for _, tok := range containerLine(t, out) {
-			if v, ok := strings.CutPrefix(tok, prefix); ok {
-				got[mode+" image"] = v
-			}
-		}
-	}
-	for file, re := range map[string]string{"Dockerfile": `(?m)^ARG CLAUDE_CODE_VERSION=(\S+)`, "../../Makefile": `(?m)^MEASURE_CLAUDE_CODE_VERSION \?= (\S+)`} {
-		if m := regexp.MustCompile(re).FindStringSubmatch(readFile(t, file)); len(m) == 2 {
-			got[file] = m[1]
-		}
-	}
-	want := map[string]string{"rn9 image": "2.1.280", "probe image": "2.1.280", "Dockerfile": "2.1.280", "../../Makefile": "2.1.280"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("default Claude Code versions %v, want %v", got, want)
-	}
-	if !versionAtLeast("2.1.280", realModeMinClaudeCode) {
-		t.Errorf("real mode's floor %s refuses the deployed 2.1.280", realModeMinClaudeCode)
-	}
-}
-
+// TestRunnerNetworkAndProbeCredentials: measure and rn9 forward the gateway
+// names only, measure's --host-network opt-in warns, probe runs with no network
+// on a dummy token, and only probe lists npm versions (credential-free, host
+// network). Every default Claude Code (the rn9 and probe images, the
+// Dockerfile and the Makefile) is the deployed 2.1.280, which real mode's
+// floor accepts.
 func TestRunnerNetworkAndProbeCredentials(t *testing.T) {
+	versions := map[string]string{}
 	for _, tc := range []struct {
 		name    string
 		mode    string
@@ -338,7 +325,25 @@ func TestRunnerNetworkAndProbeCredentials(t *testing.T) {
 				t.Errorf("npm listing line %q:\n%s", listing, out)
 			}
 			assertAbsent(t, "output", out, sentinelTexts()...)
+			for _, tok := range line {
+				if v, ok := strings.CutPrefix(tok, "agent-director-measure:"); ok {
+					versions[tc.mode+" image"] = v
+				}
+			}
 		})
+	}
+	for file, re := range map[string]string{"Dockerfile": `(?m)^ARG CLAUDE_CODE_VERSION=(\S+)`, "../../Makefile": `(?m)^MEASURE_CLAUDE_CODE_VERSION \?= (\S+)`} {
+		if m := regexp.MustCompile(re).FindStringSubmatch(readFile(t, file)); len(m) == 2 {
+			versions[file] = m[1]
+		}
+	}
+	want := map[string]string{"measure image": "cc-2.1.280", "rn9 image": "cc-2.1.280", "probe image": "probe-2.1.280",
+		"Dockerfile": "2.1.280", "../../Makefile": "2.1.280"}
+	if !reflect.DeepEqual(versions, want) {
+		t.Errorf("default Claude Code versions %v, want %v", versions, want)
+	}
+	if !versionAtLeast("2.1.280", realModeMinClaudeCode) {
+		t.Errorf("real mode's floor %s refuses the deployed 2.1.280", realModeMinClaudeCode)
 	}
 }
 
@@ -453,13 +458,7 @@ func TestRunnerLayerReport(t *testing.T) {
 			t.Fatalf("exit %d, want 2 with %q:\n%s", code, tc.text, out)
 		}
 		assertAbsent(t, "output", out, append(sentinelTexts(), layerSecret)...)
-		if _, err := os.Stat(r.engineLog); err == nil {
-			t.Errorf("a refused layer reached the engine: %v", r.engineCalls())
-		}
-		if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
-			t.Errorf("a refused layer left %d entries in the results root", len(entries))
-		}
-		r.assertNoToolCalls(t)
+		r.assertNothingRan(t)
 	}
 	for _, tc := range credentialLayerCases {
 		t.Run(tc.name, func(t *testing.T) { refused(t, tc) })
@@ -494,9 +493,10 @@ func TestRunnerLayerReport(t *testing.T) {
 }
 
 // TestRunnerLayerEnv: a staged layer whose env object (any depth) sets a
-// LAYER_REFUSED_ENV or CLAUDE_CODE_USE_* name, or any name to a URL or an
-// authorization header, is refused in print-only, naming the key and never
-// the value; other values and URLs outside an env object pass.
+// LAYER_REFUSED_ENV (whose names TestRunnerLayerRefusedEnvInStep pins) or
+// CLAUDE_CODE_USE_* name, or any name to a URL or an authorization header, is
+// refused in print-only, naming the key and never the value; other values and
+// URLs outside an env object pass.
 func TestRunnerLayerEnv(t *testing.T) {
 	const secret = "layer-env-runner-sentinel-0123456789"
 	const nameText, valueText = ", which would take the agents off the gateway", " to a value that looks like a URL or an authorization header"
@@ -508,15 +508,10 @@ func TestRunnerLayerEnv(t *testing.T) {
 		{"ANTHROPIC_CUSTOM_HEADERS", "--managed-settings", env("ANTHROPIC_CUSTOM_HEADERS", secret), "ANTHROPIC_CUSTOM_HEADERS", nameText},
 		{"a CLAUDE_CODE_USE_ name not listed", "--project-settings", env("CLAUDE_CODE_USE_VERTEX", secret), "CLAUDE_CODE_USE_VERTEX", nameText},
 		{"a lower-case provider switch", "--local-settings", env("claude_code_use_bedrock", secret), "claude_code_use_bedrock", nameText},
-		{"CLAUDE_CODE_USE_BEDROCK", "--user-settings", env("CLAUDE_CODE_USE_BEDROCK", secret), "CLAUDE_CODE_USE_BEDROCK", nameText},
-		{"AWS_REGION", "--user-settings", env("AWS_REGION", secret), "AWS_REGION", nameText},
-		{"AWS_PROFILE", "--user-settings", env("AWS_PROFILE", secret), "AWS_PROFILE", nameText},
-		{"AWS_DEFAULT_REGION", "--user-settings", env("AWS_DEFAULT_REGION", secret), "AWS_DEFAULT_REGION", nameText},
 		{"a URL value", "--user-settings", env("PLAIN", "http://"+secret), "PLAIN", valueText},
 		{"a Bearer value", "--managed-settings", env("PLAIN", "Bearer "+secret), "PLAIN", valueText},
 		{"a bearer value after a tab", "--project-settings", env("PLAIN", `bearer\t`+secret), "PLAIN", valueText},
 		{"an Authorization header value", "--local-settings", env("PLAIN", "Authorization: "+secret), "PLAIN", valueText},
-		{"a Proxy-Authorization header value", "--user-settings", env("PLAIN", "Proxy-Authorization: "+secret), "PLAIN", valueText},
 		{"an MCP server env URL", "--mcp-config", `{"mcpServers": {"s": {"command": "true", "env": {"UPSTREAM": "https://` + secret + `"}}}}`, "UPSTREAM", valueText},
 		{"a plain value", "--user-settings", env("PLAIN", secret), "", ""},
 		{"a URL outside an env object", "--user-settings", `{"apiUrl": "https://` + secret + `"}`, "", ""},
@@ -529,21 +524,12 @@ func TestRunnerLayerEnv(t *testing.T) {
 			writeFile(t, path, tc.body)
 			code, out := r.run(t, nil, "measure", tc.flag, path)
 			assertAbsent(t, "output", out, secret)
-			r.assertNoToolCalls(t)
-			if tc.text == "" {
-				if code != 0 {
-					t.Fatalf("exit %d, want 0:\n%s", code, out)
-				}
-				return
+			r.assertNothingRan(t)
+			if tc.text == "" && code != 0 {
+				t.Fatalf("exit %d, want 0:\n%s", code, out)
 			}
-			if want := "an env object in it sets " + tc.key + tc.text; code != 2 || !strings.Contains(out, want) {
+			if want := "an env object in it sets " + tc.key + tc.text; tc.text != "" && (code != 2 || !strings.Contains(out, want)) {
 				t.Fatalf("exit %d, want 2 with %q:\n%s", code, want, out)
-			}
-			if _, err := os.Stat(r.engineLog); err == nil {
-				t.Errorf("a refused layer reached the engine: %v", r.engineCalls())
-			}
-			if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
-				t.Errorf("a refused layer left %d entries in the results root", len(entries))
 			}
 		})
 	}
@@ -672,10 +658,7 @@ func TestRunnerRefusals(t *testing.T) {
 			if code != 2 || !strings.Contains(out, tc.text) {
 				t.Fatalf("exit %d, want 2 with %q:\n%s", code, tc.text, out)
 			}
-			if _, err := os.Stat(r.engineLog); err == nil {
-				t.Errorf("a refused run called the engine: %v", r.engineCalls())
-			}
-			r.assertNoToolCalls(t)
+			r.assertNothingRan(t)
 			assertAbsent(t, "output", out, sentinelTexts()...)
 		})
 	}

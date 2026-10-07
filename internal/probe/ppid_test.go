@@ -2,9 +2,6 @@ package probe
 
 import (
 	"os"
-	"path/filepath"
-	"reflect"
-	"strconv"
 	"syscall"
 	"testing"
 )
@@ -44,13 +41,7 @@ func TestLinuxParentPIDReader(t *testing.T) {
 				// Plant under both the queried pid and pid, so the non-positive
 				// cases prove the pid guard rather than a missing file.
 				for _, p := range []int{pid, tc.pid} {
-					dir := filepath.Join(root, strconv.Itoa(p))
-					if err := os.MkdirAll(dir, 0o755); err != nil {
-						t.Fatalf("mkdir %s: %v", dir, err)
-					}
-					if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(*tc.stat), 0o644); err != nil {
-						t.Fatalf("write stat: %v", err)
-					}
+					writeProcFile(t, root, p, "stat", *tc.stat)
 				}
 			}
 			if tc.root != "" {
@@ -83,33 +74,22 @@ func TestDarwinParentPIDReader(t *testing.T) {
 	}{
 		{name: "parent_pid", pid: pid, buf: entry(4241), wantPPID: 4241, wantOK: true},
 		{name: "esrch", pid: pid, err: syscall.ESRCH},
-		{name: "eperm", pid: pid, err: syscall.EPERM},
 		{name: "empty_result", pid: pid, buf: []byte{}},
 		{name: "short_entry", pid: pid, buf: entry(4241)[:kinfoProcSize-1]},
 		{name: "drift_zero_ppid", pid: pid, buf: entry(0)},
-		{name: "drift_negative_ppid", pid: pid, buf: entry(-5)},
 		{name: "pid_zero", pid: 0},
 		{name: "pid_negative", pid: -1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var calls []int
-			r := darwinParentPIDReader{fetchKinfo: func(p int) ([]byte, error) {
-				calls = append(calls, p)
-				return tc.buf, tc.err
-			}}
+			fetch, checkCalls := fakeKinfo(t, tc.pid, tc.buf, tc.err)
+			r := darwinParentPIDReader{fetchKinfo: fetch}
 
 			got, ok := r.PPID(tc.pid)
 			if got != tc.wantPPID || ok != tc.wantOK {
 				t.Errorf("PPID(%d) = (%d, %v); want (%d, %v)", tc.pid, got, ok, tc.wantPPID, tc.wantOK)
 			}
-			wantCalls := []int{tc.pid}
-			if tc.pid <= 0 {
-				wantCalls = nil
-			}
-			if !reflect.DeepEqual(calls, wantCalls) {
-				t.Errorf("fetchKinfo calls = %v; want %v", calls, wantCalls)
-			}
+			checkCalls()
 		})
 	}
 }

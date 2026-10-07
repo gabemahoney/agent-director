@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // pendingSite is one manifest text that must define pending as a launch in
@@ -67,39 +66,12 @@ var pendingSites = []pendingSite{
 	}},
 }
 
-// manifestText returns the site's description from the manifest source of
-// truth, failing the test when the verb, param or result field is missing.
-func manifestText(t *testing.T, s pendingSite) string {
-	t.Helper()
-	v, ok := manifest.Lookup(s.verb)
-	if !ok {
-		t.Fatalf("%s: verb %q not in manifest", s.name, s.verb)
-	}
-	switch {
-	case s.param != "":
-		for _, p := range v.Params {
-			if p.Name == s.param {
-				return p.Description
-			}
-		}
-		t.Fatalf("%s: %s has no param %q", s.name, s.verb, s.param)
-	case s.result != "":
-		for _, f := range v.ResultFields {
-			if f.Name == s.result {
-				return f.Description
-			}
-		}
-		t.Fatalf("%s: %s has no result field %q", s.name, s.verb, s.result)
-	}
-	return v.Description
-}
-
 // TestManifestDefinesPendingAsLaunchInProgress pins SR-22.1's meaning of
 // pending at every site in pendingSites (AC-DOC-17, AC-DOC-12).
 func TestManifestDefinesPendingAsLaunchInProgress(t *testing.T) {
 	for _, s := range pendingSites {
 		t.Run(s.name, func(t *testing.T) {
-			text := strings.ToLower(manifestText(t, s))
+			text := strings.ToLower(siteText(t, s.verb, s.param, s.result))
 			for _, p := range s.require {
 				if !strings.Contains(text, p) {
 					t.Errorf("%s: missing %q in %q", s.name, p, text)
@@ -125,7 +97,7 @@ type allowPendingSite struct {
 // allowPendingSites lists every SR-18.14 site outside the Markdown docs.
 var allowPendingSites = []allowPendingSite{
 	{"manifest send-keys param allow_pending", apitest.AllowPendingFlag, func(t *testing.T) string {
-		return manifestText(t, pendingSite{name: "send-keys allow_pending", verb: "send-keys", param: "allow_pending"})
+		return siteText(t, "send-keys", "allow_pending", "")
 	}},
 	{"CLI send-keys --allow-pending usage", apitest.AllowPendingFlag, func(t *testing.T) string {
 		return cliFlagUsage(t, "parseSendKeysFlags", "allow-pending")
@@ -326,60 +298,18 @@ var retiredPendingConcepts = regexp.MustCompile(`(?i)resume[-\s]?starting|young[
 // or terminal until SessionStart (the pre-SR-22.1 resume model).
 var resumedStaysFinished = regexp.MustCompile(`(?i)\b(stays?|staying|remains?|remaining|keeps?|kept|left)\b[^.]*\b(ended|missing|terminal)\b[^.]*\buntil\b[^.]*sessionstart`)
 
-// agentTexts returns every verb, param and result-field description from the
-// manifest and from the committed surface.json, keyed by source, verb and field.
-func agentTexts(t *testing.T) map[string]string {
-	t.Helper()
-	texts := map[string]string{}
-	for _, v := range manifest.Verbs {
-		texts["manifest "+v.Name+" description"] = v.Description
-		for _, p := range v.Params {
-			texts["manifest "+v.Name+" param "+p.Name] = p.Description
-		}
-		for _, f := range v.ResultFields {
-			texts["manifest "+v.Name+" result field "+f.Name] = f.Description
-		}
-	}
-	_, doc := readSurfaceJSON(t)
-	for _, v := range doc.Verbs {
-		texts["surface.json "+v.Name+" description"] = v.Description
-		for _, p := range v.Params {
-			texts["surface.json "+v.Name+" param "+p.Name] = p.Description
-		}
-		for _, f := range v.ResultFields {
-			texts["surface.json "+v.Name+" result field "+f.Name] = f.Description
-		}
-	}
-	return texts
-}
-
-// TestManifestNamesNoRetiredPendingConcept checks every manifest and
-// surface.json text for a retired concept or a resumed row left finished.
+// TestManifestNamesNoRetiredPendingConcept checks every string the manifest
+// carries (names, types, allowed values and texts; surface.json mirrors them)
+// for a retired concept or a resumed row left finished.
 func TestManifestNamesNoRetiredPendingConcept(t *testing.T) {
-	cases := []struct {
-		name string
-		re   *regexp.Regexp
-	}{
-		{"retired concept", retiredPendingConcepts},
-		{"resumed row stays finished until SessionStart", resumedStaysFinished},
-	}
-	texts := agentTexts(t)
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			for site, text := range texts {
-				if m := c.re.FindString(text); m != "" {
-					t.Errorf("%s: %s %q", site, c.name, m)
-				}
+	strs := manifestStrings()
+	for name, re := range map[string]*regexp.Regexp{
+		"retired concept": retiredPendingConcepts, "resumed row stays finished until SessionStart": resumedStaysFinished,
+	} {
+		for site, text := range strs {
+			if m := re.FindString(text); m != "" {
+				t.Errorf("%s: %s %q", site, name, m)
 			}
-		})
-	}
-}
-
-// TestSurfaceJSONNamesNoRetiredPendingConcept scans the committed surface.json
-// bytes, so a retired concept outside a description is caught too.
-func TestSurfaceJSONNamesNoRetiredPendingConcept(t *testing.T) {
-	raw, _ := readSurfaceJSON(t)
-	if m := retiredPendingConcepts.Find(raw); m != nil {
-		t.Errorf("surface.json names retired concept %q", m)
+		}
 	}
 }

@@ -80,7 +80,8 @@ type credentialLayerCase struct {
 }
 
 // credentialLayerCases are refused alike by run.sh (TestRunnerLayerReport)
-// and the driver (TestCheckLayerFiles, TestPreflightRules), b.vyb.
+// and the driver (TestCheckLayerFiles; TestPreflightRules runs the first
+// through the preflight), b.vyb.
 var credentialLayerCases = []credentialLayerCase{
 	{"an env key", "user", "user.json", "", `{"env": {"MY_API_TOKEN": "` + layerSecret + `", "PLAIN": "x"}}`, "credential-like key MY_API_TOKEN"},
 	{"apiKeyHelper", "managed", "managed.json", "", `{"apiKeyHelper": "/bin/echo ` + layerSecret + `"}`, "credential-like key apiKeyHelper"},

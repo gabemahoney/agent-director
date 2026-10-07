@@ -29,12 +29,7 @@ func scripted(answers ...string) (goneProbe, *int) {
 	}, &n
 }
 
-func TestPollIntervalIs100ms(t *testing.T) {
-	if pollInterval != 100*time.Millisecond {
-		t.Fatalf("pollInterval = %s", pollInterval)
-	}
-}
-
+// TestPollUntilGone polls every 100 ms (three present polls take 300 ms).
 func TestPollUntilGone(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

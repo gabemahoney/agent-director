@@ -2,12 +2,12 @@ package manifest_test
 
 // manifest_unusable_name_test.go pins SR-1.7's unusable recorded-name
 // ErrInternal trigger (SR-3.2; Epic 19) on the verbs that gained the refusal:
-// the pointer in each manifest and surface.json Description, and the full
+// the pointer in each manifest Description, and the full
 // sentence in each Client method's Go doc prose. It also pins the sweeps'
 // statement (SR-11.3, SR-12.2, SR-18.11), which gains no ErrInternal and no
 // Description text: find-missing's unverified_ids and expire's kept and
 // kept_ids result fields, and the Client.FindMissing and Client.Expire Go doc
-// prose. Kill's are manifest_kill_description_test.go's; ErrorNames is
+// prose. Kill's are TestGoDocStatements'; ErrorNames is
 // TestNoVerbListsErrInternal's.
 
 import (
@@ -25,15 +25,11 @@ var unusableNameVerbs = []struct{ verb, method string }{
 	{"spawn", "Spawn"},
 }
 
-// TestUnusableNamePointerInDescriptions: each verb's manifest and surface.json Description
-// carries the pointer, under agent-text rules (no opt-in, no session-ending command).
+// TestUnusableNamePointerInDescriptions: each verb's Description carries the
+// pointer, under agent-text rules (no opt-in, no session-ending command).
 func TestUnusableNamePointerInDescriptions(t *testing.T) {
 	for _, v := range unusableNameVerbs {
-		t.Run(v.verb, func(t *testing.T) {
-			for source, desc := range verbDescriptionsBoth(t, v.verb) {
-				apitest.AssertAgentTextCase(t, source+": "+v.verb+" description", desc, apitest.DescUnusableNamePointer())
-			}
-		})
+		apitest.AssertAgentTextCase(t, v.verb+" description", siteText(t, v.verb, "", ""), apitest.DescUnusableNamePointer())
 	}
 }
 
@@ -48,10 +44,9 @@ func TestUnusableNameTriggerInGoDoc(t *testing.T) {
 }
 
 // TestUnusableNameSweepResultFields: find-missing's unverified_ids and
-// expire's kept and kept_ids, in the manifest and surface.json, state how
-// such a row is reported, under agent-text rules.
+// expire's kept and kept_ids state how such a row is reported, under
+// agent-text rules.
 func TestUnusableNameSweepResultFields(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
 	for _, c := range []struct {
 		verb, field string
 		want        apitest.DescCase
@@ -60,17 +55,7 @@ func TestUnusableNameSweepResultFields(t *testing.T) {
 		{"expire", string(apitest.ExpireKept), apitest.DescUnusableNameExpireField(apitest.ExpireKept)},
 		{"expire", string(apitest.ExpireKeptIDs), apitest.DescUnusableNameExpireField(apitest.ExpireKeptIDs)},
 	} {
-		t.Run(c.verb+"/"+c.field, func(t *testing.T) {
-			sources := resultFieldSources(t, surface, c.verb, c.field)
-			for _, source := range []string{"manifest", "surface.json"} {
-				f, ok := sources[source]
-				if !ok {
-					t.Errorf("%s: %s has no %q result field", source, c.verb, c.field)
-					continue
-				}
-				apitest.AssertAgentTextCase(t, source+": "+c.verb+" result field "+c.field, f.desc, c.want)
-			}
-		})
+		apitest.AssertAgentTextCase(t, c.verb+" result field "+c.field, siteText(t, c.verb, "", c.field), c.want)
 	}
 }
 

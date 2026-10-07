@@ -27,6 +27,26 @@ func darwinStartEntry(stat byte, sec int64, usec int32) []byte {
 	return buf
 }
 
+// fakeKinfo returns a fetchKinfo answering buf and err, and a check that it
+// was called once, for pid, or never for a non-positive pid.
+func fakeKinfo(t *testing.T, pid int, buf []byte, err error) (func(int) ([]byte, error), func()) {
+	var calls []int
+	fetch := func(p int) ([]byte, error) {
+		calls = append(calls, p)
+		return buf, err
+	}
+	return fetch, func() {
+		t.Helper()
+		want := []int{pid}
+		if pid <= 0 {
+			want = nil
+		}
+		if !reflect.DeepEqual(calls, want) {
+			t.Errorf("fetchKinfo calls = %v; want %v", calls, want)
+		}
+	}
+}
+
 // TestDarwinStartTimeReader pins the full (start, alive, known) triple for
 // every darwin outcome, and that the kinfo fetch is the reader's only I/O.
 func TestDarwinStartTimeReader(t *testing.T) {
@@ -56,17 +76,14 @@ func TestDarwinStartTimeReader(t *testing.T) {
 		{name: "gone_empty_result", pid: pid, buf: []byte{}, wantKnown: true},
 		{name: "gone_zombie", pid: pid, buf: aliveEntry(kinfoStatSZOMB), wantKnown: true},
 
-		// unreadable: fetch errors other than ESRCH.
+		// unreadable: fetch errors other than ESRCH (TestClassifyErrno covers each errno).
 		{name: "unreadable_eacces", pid: pid, err: syscall.EACCES},
-		{name: "unreadable_eperm", pid: pid, err: syscall.EPERM},
 		{name: "unreadable_unpinned_errno", pid: pid, err: syscall.EINVAL},
 
-		// unreadable: layout drift in the state byte or the start time, never gone.
-		{name: "unreadable_state_zero", pid: pid, buf: aliveEntry(0)},
+		// unreadable: layout drift in the state byte or the start time, never gone
+		// (TestParseKinfoIdentityDrift covers each drift value).
 		{name: "unreadable_state_above_zombie", pid: pid, buf: aliveEntry(kinfoStatSZOMB + 1)},
-		{name: "unreadable_state_max_byte", pid: pid, buf: aliveEntry(0xff)},
 		{name: "unreadable_start_sec_drift", pid: pid, buf: darwinStartEntry(kinfoStatSRUN, 0, darwinStartUsec)},
-		{name: "unreadable_start_usec_drift", pid: pid, buf: darwinStartEntry(kinfoStatSRUN, darwinStartSec, int32(maxPlausibleStartUsec))},
 		{name: "unreadable_zombie_with_start_drift", pid: pid, buf: darwinStartEntry(kinfoStatSZOMB, 0, darwinStartUsec)},
 		{name: "unreadable_short_entry", pid: pid, buf: shortEntry},
 
@@ -77,38 +94,15 @@ func TestDarwinStartTimeReader(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var calls []int
-			r := darwinStartTimeReader{fetchKinfo: func(p int) ([]byte, error) {
-				calls = append(calls, p)
-				return tc.buf, tc.err
-			}}
+			fetch, checkCalls := fakeKinfo(t, tc.pid, tc.buf, tc.err)
+			r := darwinStartTimeReader{fetchKinfo: fetch}
 
 			start, alive, known := r.StartTime(tc.pid)
 			if start != tc.wantStart || alive != tc.wantAlive || known != tc.wantKnown {
 				t.Errorf("StartTime(%d) = (%q, %v, %v); want (%q, %v, %v)",
 					tc.pid, start, alive, known, tc.wantStart, tc.wantAlive, tc.wantKnown)
 			}
-
-			wantCalls := []int{tc.pid}
-			if tc.pid <= 0 {
-				wantCalls = nil
-			}
-			if !reflect.DeepEqual(calls, wantCalls) {
-				t.Errorf("fetchKinfo calls = %v; want %v", calls, wantCalls)
-			}
+			checkCalls()
 		})
-	}
-}
-
-// TestDarwinStartTimeReaderHasNoEnvSeam: the kinfo fetch is the reader's only
-// seam, so it has no way to read a process environment (KERN_PROCARGS2).
-func TestDarwinStartTimeReaderHasNoEnvSeam(t *testing.T) {
-	typ := reflect.TypeOf(darwinStartTimeReader{})
-	var fields []string
-	for i := 0; i < typ.NumField(); i++ {
-		fields = append(fields, typ.Field(i).Name)
-	}
-	if !reflect.DeepEqual(fields, []string{"fetchKinfo"}) {
-		t.Errorf("darwinStartTimeReader fields = %v; want only [fetchKinfo]", fields)
 	}
 }

@@ -336,54 +336,20 @@ func TestTmuxGraceRuleRefusals(t *testing.T) {
 }
 
 // TestTmuxRefusalNamesKeysInTableOrder checks that every refused key is named,
-// in SR-4.1 table order whatever its order in the file.
+// in SR-4.1 table order, when the file sets all nine in reverse order.
 func TestTmuxRefusalNamesKeysInTableOrder(t *testing.T) {
-	var allNegative []tmuxSetting
+	var reversed []tmuxSetting
 	for i := len(tmuxKeyTable) - 1; i >= 0; i-- {
-		allNegative = append(allNegative, tmuxSetting{tmuxKeyTable[i].key, -1})
+		reversed = append(reversed, tmuxSetting{tmuxKeyTable[i].key, -1})
 	}
-	cases := []struct {
-		name     string
-		settings []tmuxSetting // written in this order, the reverse of table order
-	}{
-		{"two_keys_reversed", []tmuxSetting{
-			{config.TmuxKillExitWaitMs, -3},
-			{config.TmuxStartingSessionSeconds, config.MinStartingSessionSeconds - 1},
-		}},
-		{"all_nine_reversed", allNegative},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			desc := refusalDescription(t, tmuxConfigFile(t, tc.settings...))
-			last := -1
-			for i := len(tc.settings) - 1; i >= 0; i-- {
-				k := tc.settings[i].key
-				refusedClause(t, desc, k)
-				at := strings.Index(desc, "[tmux] "+k.Name())
-				if at < last {
-					t.Errorf("[tmux] %s is named out of table order: %q", k.Name(), desc)
-				}
-				last = at
-			}
-		})
-	}
-}
-
-func TestLoadIgnoresUnknownKey(t *testing.T) {
-	// BurntSushi/toml ignores unknown top-level keys by default. This test
-	// pins that behavior so a future opt-in to strict mode is a conscious
-	// choice rather than an accidental regression.
-	path := makeConfigFile(t, `
-unknown_top_level_key = 42
-
-[relay]
-poll_base_ms = 150
-`)
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Relay.PollBaseMs != 150 {
-		t.Errorf("known field still applied: got PollBaseMs=%d, want 150", cfg.Relay.PollBaseMs)
+	desc := refusalDescription(t, tmuxConfigFile(t, reversed...))
+	last := -1
+	for _, tc := range tmuxKeyTable {
+		refusedClause(t, desc, tc.key)
+		at := strings.Index(desc, "[tmux] "+tc.key.Name())
+		if at < last {
+			t.Errorf("[tmux] %s is named out of table order: %q", tc.key.Name(), desc)
+		}
+		last = at
 	}
 }

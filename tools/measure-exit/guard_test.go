@@ -116,25 +116,6 @@ func (g *guardFixture) appendTrail(t *testing.T, text string) {
 	}
 }
 
-func TestGuardQuietUnchangedPasses(t *testing.T) {
-	g := newGuardFixture(t)
-	g.snapshot(t, false)
-	r := g.verify(t)
-	if r.code != 0 || !strings.Contains(r.stdout, "guard passed: both files identical") ||
-		!strings.Contains(r.stdout, "home checked: "+g.home+" (override") {
-		t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
-	}
-	for _, name := range []string{"state.db", "ad-trail.jsonl"} {
-		s := sum(t, g.path(name))
-		for _, when := range []string{"before", "after "} {
-			if !strings.Contains(r.stdout, when+" "+s) || !strings.Contains(r.stdout, name) {
-				t.Errorf("verify does not print %s %s %s:\n%s", name, when, s, r.stdout)
-			}
-		}
-	}
-	g.assertShimsUnused(t)
-}
-
 func TestGuardQuietDetectsChanges(t *testing.T) {
 	for _, name := range []string{"state.db", "ad-trail.jsonl"} {
 		other := map[string]string{"state.db": "ad-trail.jsonl", "ad-trail.jsonl": "state.db"}[name]
@@ -229,6 +210,12 @@ func TestGuardRefusals(t *testing.T) {
 		{"ids at snapshot", func(t *testing.T, g *guardFixture) []string {
 			return []string{"snapshot", "--state", g.state, "--home", g.home, "--id", "mx-run-identifier-1"}
 		}, "belong to verify"},
+		// Busy-host verify needs identifiers, at least 8 characters each, from a
+		// readable file, and busy mode is chosen at snapshot time.
+		{"busy verify without identifiers", busyVerify(), "needs identifiers"},
+		{"busy verify with a short identifier", busyVerify("--id", "short"), "shorter than 8"},
+		{"busy verify with an unreadable ids file", busyVerify("--ids-file", "/nonexistent/harness-ids.txt"), "not readable"},
+		{"busy mode chosen at verify", busyVerify("--busy-host", "--id", "mx-run-identifier-1"), "chosen at snapshot time"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newGuardFixture(t)
@@ -240,6 +227,15 @@ func TestGuardRefusals(t *testing.T) {
 				t.Error("a state file was written under the store")
 			}
 		})
+	}
+}
+
+// busyVerify returns refusal-case args: a busy-host snapshot is taken, then
+// verify runs with extra.
+func busyVerify(extra ...string) func(t *testing.T, g *guardFixture) []string {
+	return func(t *testing.T, g *guardFixture) []string {
+		g.snapshot(t, true)
+		return append([]string{"verify", "--state", g.state, "--home", g.home}, extra...)
 	}
 }
 
@@ -264,6 +260,10 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 	return out
 }
 
+// TestGuardIsReadOnly: an unchanged store passes quiet-host verify (which
+// prints the home it checked and each file's checksum before and after) and
+// busy-host verify, and neither mode changes the fixture home or runs
+// sqlite3, agent-director or tmux.
 func TestGuardIsReadOnly(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "quiet", true: "busy"}[busy], func(t *testing.T) {
@@ -271,8 +271,20 @@ func TestGuardIsReadOnly(t *testing.T) {
 			before := snapshotTree(t, g.home)
 			contents := readFile(t, g.path("state.db")) + readFile(t, g.path("ad-trail.jsonl"))
 			g.snapshot(t, busy)
-			if r := g.verify(t, map[bool][]string{false: nil, true: {"--id", "mx-run-identifier-1"}}[busy]...); r.code != 0 {
+			r := g.verify(t, map[bool][]string{false: nil, true: {"--id", "mx-run-identifier-1"}}[busy]...)
+			if r.code != 0 {
 				t.Fatalf("verify exit %d:\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			if !busy && (!strings.Contains(r.stdout, "guard passed: both files identical") ||
+				!strings.Contains(r.stdout, "home checked: "+g.home+" (override")) {
+				t.Errorf("quiet verify output:\n%s", r.stdout)
+			}
+			for _, name := range map[bool][]string{false: {"state.db", "ad-trail.jsonl"}}[busy] {
+				for _, when := range []string{"before", "after "} {
+					if s := sum(t, g.path(name)); !strings.Contains(r.stdout, when+" "+s) || !strings.Contains(r.stdout, name) {
+						t.Errorf("verify does not print %s %s %s:\n%s", name, when, s, r.stdout)
+					}
+				}
 			}
 			after := snapshotTree(t, g.home)
 			if len(after) != len(before) {
@@ -325,6 +337,14 @@ func TestGuardBusyHost(t *testing.T) {
 		text   string
 	}{
 		{name: "nothing appended", code: 0, text: "scanning 0 appended bytes"},
+		{name: "a database that cannot be read as a file is never read", before: func(t *testing.T, g *guardFixture) {
+			if err := os.Remove(g.path("state.db")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(g.path("state.db"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, code: 0, text: "scanning 0 appended bytes"},
 		{name: "unrelated lines appended", during: func(t *testing.T, g *guardFixture) {
 			g.appendTrail(t, `{"event":"host.own","claude_instance_id":"host-row-2"}`+"\n")
 		}, code: 0, text: "none of the run's identifiers"},
@@ -386,44 +406,6 @@ func TestGuardBusyHost(t *testing.T) {
 			}
 			assertAbsent(t, "guard output", out, "TRAIL-CONTENT-SENTINEL", "host-row-")
 			g.assertShimsUnused(t)
-		})
-	}
-}
-
-func TestGuardBusyHostNeverReadsTheDatabase(t *testing.T) {
-	g := newGuardFixture(t)
-	// A database that cannot be read as a file: any read attempt fails.
-	if err := os.Remove(g.path("state.db")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(g.path("state.db"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	g.snapshot(t, true)
-	if r := g.verify(t, "--id", "mx-run-identifier-1"); r.code != 0 {
-		t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
-	}
-	g.assertShimsUnused(t)
-}
-
-func TestGuardBusyHostIdentifierRules(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		args []string
-		text string
-	}{
-		{"no identifiers", nil, "needs identifiers"},
-		{"a short identifier", []string{"--id", "short"}, "shorter than 8"},
-		{"an unreadable ids file", []string{"--ids-file", "/nonexistent/harness-ids.txt"}, "not readable"},
-		{"busy mode chosen at verify", []string{"--busy-host", "--id", "mx-run-identifier-1"}, "chosen at snapshot time"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			g := newGuardFixture(t)
-			g.snapshot(t, true)
-			r := g.verify(t, tc.args...)
-			if r.code != 2 || !strings.Contains(r.stderr, tc.text) {
-				t.Fatalf("exit %d:\n%s%s", r.code, r.stdout, r.stderr)
-			}
 		})
 	}
 }

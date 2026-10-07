@@ -96,13 +96,10 @@ func TestCaptureBudgets(t *testing.T) {
 		warningAbouts []string
 	}{
 		{name: "no layers", hooks: []string{}, effective: "unset"},
-		{name: "a SessionEnd hook without timeout", setup: func(t *testing.T, s *layerSet) {
-			s.put(t, "user", layerJSON(nil, hookSpec{"SessionEnd", "notify", nil}))
-		}, hooks: []string{"user:notify:default"}, effective: "unset"},
 		{name: "a per-hook timeout", setup: func(t *testing.T, s *layerSet) {
 			s.put(t, "project", layerJSON(nil, hookSpec{"SessionEnd", "cleanup --fast", 10}))
 		}, hooks: []string{"project:cleanup:10 s"}, effective: "unset"},
-		{name: "several layers, in precedence order", setup: func(t *testing.T, s *layerSet) {
+		{name: "several layers, in precedence order, a hook without timeout at the default", setup: func(t *testing.T, s *layerSet) {
 			s.put(t, "user", layerJSON(nil, hookSpec{"SessionEnd", "u", 2}))
 			s.put(t, "local", layerJSON(nil, hookSpec{"SessionEnd", "l", nil}))
 			s.put(t, "managed", layerJSON(nil, hookSpec{"SessionEnd", "m", 5}))

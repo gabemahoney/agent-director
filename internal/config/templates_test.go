@@ -10,159 +10,70 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 )
 
-func TestValidateTemplateNameAccepts(t *testing.T) {
+// TestValidateTemplateName accepts plain names and refuses empty, dot,
+// separator and traversal names with ErrTemplateNameUnsafe.
+func TestValidateTemplateName(t *testing.T) {
 	for _, name := range []string{"dev", "prod-2", "a", "long_name_42"} {
-		t.Run(name, func(t *testing.T) {
-			if err := config.ValidateTemplateName(name); err != nil {
-				t.Errorf("ValidateTemplateName(%q) = %v; want nil", name, err)
-			}
-		})
+		if err := config.ValidateTemplateName(name); err != nil {
+			t.Errorf("ValidateTemplateName(%q) = %v; want nil", name, err)
+		}
 	}
-}
-
-func TestValidateTemplateNameRejects(t *testing.T) {
-	cases := map[string]string{
-		"empty":         "",
-		"dot":           ".",
-		"dotdot":        "..",
-		"leading-dot":   ".hidden",
-		"slash":         "foo/bar",
-		"backslash":     `foo\bar`,
-		"dotdot-substr": "foo..bar",
-		"traversal":     "../escape",
-	}
-	for label, name := range cases {
-		t.Run(label, func(t *testing.T) {
-			err := config.ValidateTemplateName(name)
-			if !errors.Is(err, config.ErrTemplateNameUnsafe) {
-				t.Errorf("ValidateTemplateName(%q) = %v; want ErrTemplateNameUnsafe", name, err)
-			}
-		})
+	for _, name := range []string{"", ".", "..", ".hidden", "foo/bar", `foo\bar`, "foo..bar", "../escape"} {
+		if err := config.ValidateTemplateName(name); !errors.Is(err, config.ErrTemplateNameUnsafe) {
+			t.Errorf("ValidateTemplateName(%q) = %v; want ErrTemplateNameUnsafe", name, err)
+		}
 	}
 }
 
 func TestEnsureTemplatesDirIsIdempotent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-
 	first, err := config.EnsureTemplatesDir()
 	if err != nil {
 		t.Fatalf("first EnsureTemplatesDir: %v", err)
 	}
-	info, err := os.Stat(first)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
+	if info, err := os.Stat(first); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("stat %s: %v, %v; want mode 0700", first, info, err)
 	}
-	if info.Mode().Perm() != 0o700 {
-		t.Errorf("mode = %o; want 0700", info.Mode().Perm())
-	}
-
 	second, err := config.EnsureTemplatesDir()
-	if err != nil {
-		t.Fatalf("second EnsureTemplatesDir: %v", err)
-	}
-	if first != second {
-		t.Errorf("path differs across calls: %q vs %q", first, second)
+	if err != nil || first != second {
+		t.Errorf("second EnsureTemplatesDir = %q, %v; want %q", second, err, first)
 	}
 }
 
-func TestLoadTemplateMissingFileIsNotFound(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if _, err := config.EnsureTemplatesDir(); err != nil {
-		t.Fatalf("EnsureTemplatesDir: %v", err)
-	}
-	_, err := config.LoadTemplate("absent")
-	if !errors.Is(err, config.ErrTemplateNotFound) {
-		t.Fatalf("err = %v; want ErrTemplateNotFound", err)
-	}
-}
-
-func TestLoadTemplateRejectsUnknownKey(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if _, err := config.EnsureTemplatesDir(); err != nil {
-		t.Fatalf("EnsureTemplatesDir: %v", err)
-	}
-	// Hand-write a file with a stray top-level key.
-	body := `cwd = "/tmp"
-mystery_field = "wat"
-`
-	if err := os.WriteFile(
-		filepath.Join(home, ".agent-director", "templates", "rogue.toml"),
-		[]byte(body), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	_, err := config.LoadTemplate("rogue")
-	if !errors.Is(err, config.ErrTemplateMalformed) {
-		t.Fatalf("err = %v; want ErrTemplateMalformed", err)
-	}
-}
-
-// TestLoadTemplateRejectsReservedPerCallKeys pins SR-5.1 and SR-10.1:
-// per-invocation keys are named here so a future TemplateFile field
-// can't silently re-enable them in a hand-edited template.
-func TestLoadTemplateRejectsReservedPerCallKeys(t *testing.T) {
-	cases := []struct{ key, line string }{
-		{"tmux_session_name", `tmux_session_name = "rogue-name"`},
-		{"reuse_finished", `reuse_finished = true`},
-		{"reuse-finished", `reuse-finished = true`},
+// TestLoadTemplate: a missing file is ErrTemplateNotFound and an unsafe name
+// ErrTemplateNameUnsafe; an unknown key, a bad relay_mode, or a per-call key
+// (SR-5.1, SR-10.1: named, so a future TemplateFile field cannot silently
+// re-enable it) is ErrTemplateMalformed.
+func TestLoadTemplate(t *testing.T) {
+	cases := []struct {
+		name, body string // body "" writes no file
+		want       error
+		inErr      string
+	}{
+		{"absent", "", config.ErrTemplateNotFound, ""},
+		{"../escape", "", config.ErrTemplateNameUnsafe, ""},
+		{"rogue", "cwd = \"/tmp\"\nmystery_field = \"wat\"\n", config.ErrTemplateMalformed, ""},
+		{"bad", `relay_mode = "bogus"`, config.ErrTemplateMalformed, ""},
+		{"session", "cwd = \"/tmp\"\ntmux_session_name = \"rogue-name\"\n", config.ErrTemplateMalformed, "tmux_session_name"},
+		{"reuse", "cwd = \"/tmp\"\nreuse_finished = true\n", config.ErrTemplateMalformed, "reuse_finished"},
+		{"reuse-dashed", "cwd = \"/tmp\"\nreuse-finished = true\n", config.ErrTemplateMalformed, "reuse-finished"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.key, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			if _, err := config.EnsureTemplatesDir(); err != nil {
-				t.Fatalf("EnsureTemplatesDir: %v", err)
+		t.Run(tc.name, func(t *testing.T) {
+			dir := templatesDir(t)
+			if tc.body != "" {
+				writeTemplate(t, dir, tc.name, tc.body)
 			}
-			body := "cwd = \"/tmp\"\n" + tc.line + "\n"
-			if err := os.WriteFile(
-				filepath.Join(home, ".agent-director", "templates", "reserved.toml"),
-				[]byte(body), 0o600); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
-			_, err := config.LoadTemplate("reserved")
-			if !errors.Is(err, config.ErrTemplateMalformed) {
-				t.Fatalf("err = %v; want ErrTemplateMalformed (%s is reserved)", err, tc.key)
-			}
-			if !strings.Contains(err.Error(), tc.key) {
-				t.Errorf("err message must name the reserved key %q, got: %v", tc.key, err)
+			_, err := config.LoadTemplate(tc.name)
+			if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.inErr) {
+				t.Fatalf("err = %v; want %v naming %q", err, tc.want, tc.inErr)
 			}
 		})
 	}
 }
 
-func TestLoadTemplateRejectsBadRelayMode(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if _, err := config.EnsureTemplatesDir(); err != nil {
-		t.Fatalf("EnsureTemplatesDir: %v", err)
-	}
-	body := `relay_mode = "bogus"`
-	if err := os.WriteFile(
-		filepath.Join(home, ".agent-director", "templates", "bad.toml"),
-		[]byte(body), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	_, err := config.LoadTemplate("bad")
-	if !errors.Is(err, config.ErrTemplateMalformed) {
-		t.Fatalf("err = %v; want ErrTemplateMalformed", err)
-	}
-}
-
-func TestLoadTemplateRejectsUnsafeName(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	_, err := config.LoadTemplate("../escape")
-	if !errors.Is(err, config.ErrTemplateNameUnsafe) {
-		t.Fatalf("err = %v; want ErrTemplateNameUnsafe", err)
-	}
-}
-
 func TestLoadTemplateValidFileDecodes(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if _, err := config.EnsureTemplatesDir(); err != nil {
-		t.Fatalf("EnsureTemplatesDir: %v", err)
-	}
-	body := `cwd = "/tmp"
+	writeTemplate(t, templatesDir(t), "valid", `cwd = "/tmp"
 relay_mode = "off"
 claude_args = ["--model", "opus"]
 
@@ -171,12 +82,7 @@ project = "foo"
 
 [permissions]
 allow = ["Bash(jq)"]
-`
-	if err := os.WriteFile(
-		filepath.Join(home, ".agent-director", "templates", "valid.toml"),
-		[]byte(body), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+`)
 	tf, err := config.LoadTemplate("valid")
 	if err != nil {
 		t.Fatalf("LoadTemplate: %v", err)
@@ -192,5 +98,24 @@ allow = ["Bash(jq)"]
 	}
 	if tf.Permissions == nil || tf.Permissions.Allow[0] != "Bash(jq)" {
 		t.Errorf("Permissions: %+v", tf.Permissions)
+	}
+}
+
+// templatesDir points HOME at a temp dir and returns its templates dir.
+func templatesDir(t *testing.T) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	dir, err := config.EnsureTemplatesDir()
+	if err != nil {
+		t.Fatalf("EnsureTemplatesDir: %v", err)
+	}
+	return dir
+}
+
+// writeTemplate writes body as <dir>/<name>.toml.
+func writeTemplate(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 }

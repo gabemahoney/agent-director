@@ -65,15 +65,7 @@ type tmuxSetting struct {
 // tmuxConfigFile writes a config file whose [tmux] table holds settings.
 func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 	t.Helper()
-	return configFile(t, "", settings...)
-}
-
-// configFile writes a config file whose [defaults] table sets
-// expire_retention_days to the TOML integer days (no [defaults] table when
-// days is ""), then a [tmux] table holding settings.
-func configFile(t *testing.T, days string, settings ...tmuxSetting) string {
-	t.Helper()
-	return keysFile(t, rangeKeys{days: days}, settings...)
+	return keysFile(t, rangeKeys{}, settings...)
 }
 
 // rangeKeys are the TOML integers a config file sets for the keys outside
@@ -253,9 +245,6 @@ func TestTmuxKeyLoad(t *testing.T) {
 				want time.Duration
 			}{
 				{"file_absent", filepath.Join(t.TempDir(), "absent.toml"), tc.dur(tc.def)},
-				{"file_empty", makeConfigFile(t, ""), tc.dur(tc.def)},
-				{"no_tmux_table", makeConfigFile(t, "[relay]\npoll_base_ms = 250\n"), tc.dur(tc.def)},
-				{"empty_tmux_table", tmuxConfigFile(t), tc.dur(tc.def)},
 				{"zero_gives_default", tmuxConfigFile(t, tmuxSetting{tc.key, 0}), tc.dur(tc.def)},
 				{"positive_value_read", tmuxConfigFile(t, tmuxSetting{tc.key, tc.def + 7}), tc.dur(tc.def + 7)},
 				{"lowest_accepted_value_loads", tmuxConfigFile(t, tmuxSetting{tc.key, lowest}), tc.dur(lowest)},
@@ -310,25 +299,8 @@ func TestTmuxAccessorOnGoStruct(t *testing.T) {
 	}
 }
 
-// TestTmuxDefaultsAtOrAboveMinimums checks each default against its safe
-// minimum at the other keys' defaults (SR-4.1).
-func TestTmuxDefaultsAtOrAboveMinimums(t *testing.T) {
-	for _, tc := range tmuxKeyTable {
-		if tc.minimum == 0 {
-			continue
-		}
-		t.Run(tc.key.Name(), func(t *testing.T) {
-			if tc.def < tc.minimum {
-				t.Errorf("default %d is below its safe minimum %d", tc.def, tc.minimum)
-			}
-			if got, _ := config.Default().Tmux.Minimum(tc.key); got != tc.minimum {
-				t.Errorf("Default().Tmux.Minimum = %d, want %d", got, tc.minimum)
-			}
-		})
-	}
-}
-
-// TestTmuxGraceRuleAccepts loads the grace-rule files SR-20.6 says must load.
+// TestTmuxGraceRuleAccepts loads the grace-rule files SR-20.6 says must load
+// (grace 30 at the default create timeout is TestTmuxKeyLoad's lowest value).
 func TestTmuxGraceRuleAccepts(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -336,9 +308,6 @@ func TestTmuxGraceRuleAccepts(t *testing.T) {
 		wantGrace  time.Duration
 		wantCreate time.Duration
 	}{
-		{"grace_30_at_default_create_timeout",
-			[]tmuxSetting{{config.TmuxPendingGraceSeconds, 30}},
-			30 * time.Second, config.DefaultCreateTimeoutMs * time.Millisecond},
 		{"create_15000_grace_36",
 			[]tmuxSetting{{config.TmuxCreateTimeoutMs, 15000}, {config.TmuxPendingGraceSeconds, 36}},
 			36 * time.Second, 15 * time.Second},

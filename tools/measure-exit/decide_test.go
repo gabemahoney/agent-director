@@ -12,7 +12,9 @@ import (
 	adconfig "github.com/gabemahoney/agent-director/internal/config"
 )
 
-// curDefaults are the values in force that decide compares against.
+// curDefaults are the values in force that decide compares against
+// (TestDecide pins configDefaults to them): the stated Claude Code minimum is
+// the deployed 2.1.280.
 var curDefaults = currentDefaults{KillExitWaitMs: 5000, StoppingWindowSec: 90, MinStoppingWindowSec: 30, MinClaudeCode: "2.1.280"}
 
 // repeat is n samples with outcome o, each ms long (ms < 0: no time).
@@ -124,6 +126,9 @@ func scenario(ins []decideInput, id string, edit func(s *rn9Scenario)) []decideI
 }
 
 func TestDecide(t *testing.T) {
+	if got := configDefaults(); got != curDefaults {
+		t.Fatalf("configDefaults() = %+v; want %+v", got, curDefaults)
+	}
 	withL1 := func(rn6, rn2 int64) []decideInput {
 		ins := standard()
 		ins[1] = l1(rn6, rn2)
@@ -250,7 +255,7 @@ func TestDecide(t *testing.T) {
 		{"the minimum not bracketed", withL0("2.1.280:args_received"), exitInvalid, "the minimum is not bracketed"},
 		{"inconsistent versions", withL0("2.1.120:args_received", "2.1.280:args_not_received"), exitInvalid, "probe: inconsistent: 2.1.280 ignores args but the older 2.1.120 runs them"},
 		{"a minimum below the stated one", withL0("2.1.150:args_not_received", "2.1.200:args_received", "2.1.280:args_received"), exitStop,
-			"STOP: probe: the measured minimum 2.1.200 is below the stated 2.1.280"},
+			"STOP: probe: the measured minimum 2.1.200 is below the stated 2.1.280; it is not applied without the user"},
 		{"a minimum above the stated one", withL0("2.1.280:args_not_received", "2.1.290:args_received"), exitDecided, "raise the stated minimum from 2.1.280 to 2.1.290"},
 		{"versions merged across L0 directories", func() []decideInput {
 			ins := standard()
@@ -277,31 +282,16 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// TestKillCeilingAt checks kill's ceiling reads Q, A and W from internal/config.
+// TestKillCeilingAt: kill's ceiling reads Q, A and W from internal/config
+// (TestDecide pins its two paths at E = 1, 7 and 8 s).
 func TestKillCeilingAt(t *testing.T) {
 	q, a, w := int64(adconfig.DefaultQueryTimeoutMs), int64(adconfig.DefaultActionTimeoutMs), int64(adconfig.DefaultPipeCloseWaitMs)
-	for _, e := range []int64{0, 1000, 7000, 8000} {
-		k := killCeilingAt(e)
-		pathI, pathII := 2*q+2*a+e+4*w, 3*q+2*a+5*w
-		if k.Q != q || k.A != a || k.W != w || k.PathI != pathI || k.PathII != pathII || k.Max() != max(pathI, pathII) {
-			t.Errorf("E %d ms: %+v, want path (i) %d ms, path (ii) %d ms", e, k, pathI, pathII)
-		}
+	if k := killCeilingAt(7000); k.Q != q || k.A != a || k.W != w || k.Max() != max(2*q+2*a+7000+4*w, 3*q+2*a+5*w) {
+		t.Errorf("E 7000 ms: %+v, want Q %d, A %d, W %d ms", k, q, a, w)
 	}
 	want := fmt.Sprintf("Q %d ms, A %d ms, W %d ms from internal/config", q, a, w)
 	if rec := decide(standard(), curDefaults).Record; !strings.Contains(rec, want) {
 		t.Errorf("record lacks %q:\n%s", want, rec)
-	}
-}
-
-// TestDecideStatedMinimum pins the stated Claude Code minimum (2.1.280, the
-// deployed version); L0's measured 2.1.139 below it stays a STOP.
-func TestDecideStatedMinimum(t *testing.T) {
-	ins := standard()
-	ins[0] = l0("2.1.138:args_not_received", "2.1.139:args_received", "2.1.280:args_received")
-	d := decide(ins, configDefaults())
-	want := "probe: the measured minimum 2.1.139 is below the stated 2.1.280; it is not applied without the user"
-	if d.exitCode() != exitStop || !strings.Contains(d.Record, want) {
-		t.Errorf("exit %d, want %d with %q:\n%s", d.exitCode(), exitStop, want, d.Record)
 	}
 }
 
@@ -416,6 +406,8 @@ func TestDecideCommand(t *testing.T) {
 	dry.Dir, dry.Res.DryRun, dry.Res.Banner = "dry", true, dryRunBanner
 	unguarded := standard()[2]
 	unguarded.Dir = "unguarded"
+	notJSON := filepath.Join(root, "garbage")
+	writeFile(t, filepath.Join(notJSON, resultsFile), "{")
 	superseded := []string{"-supersede", rn9TeamSplitPaneID}
 	for _, in := range append(splitPaneIn(verdictInconclusive), l2b("l2b", time.Hour, verdictPass)) {
 		superseded = append(superseded, "-in", writeInput(t, filepath.Join(root, "supersede"), in, true))
@@ -429,6 +421,7 @@ func TestDecideCommand(t *testing.T) {
 		{"no -in", nil, exitUsage, "want one or more -in DIR"},
 		{"a stray argument", []string{"-in", root, "extra"}, exitUsage, ""},
 		{"no results file", []string{"-in", filepath.Join(root, "nowhere")}, exitInvalid, "no such file"},
+		{"a malformed results file", []string{"-in", notJSON}, exitInvalid, ""},
 		{"a dry run", []string{"-in", writeInput(t, root, dry, true)}, exitInvalid, "dry: a dry run (stub claude) is not a measurement"},
 		{"no guard status", []string{"-in", writeInput(t, root, unguarded, false)}, exitInvalid, "the host guard did not pass (missing)"},
 		{"-supersede a later run", superseded, exitDecided, "is superseded by the result of " + filepath.Join(root, "supersede", "l2b")},
@@ -438,11 +431,6 @@ func TestDecideCommand(t *testing.T) {
 		if code != tc.exit || !strings.Contains(out, tc.text) {
 			t.Errorf("%s: exit %d, want %d:\n%s", tc.name, code, tc.exit, out)
 		}
-	}
-	notJSON := filepath.Join(root, "garbage")
-	writeFile(t, filepath.Join(notJSON, resultsFile), "{")
-	if code, _ := run("-in", notJSON); code != exitInvalid {
-		t.Errorf("a malformed results file: exit %d", code)
 	}
 }
 

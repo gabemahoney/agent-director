@@ -1,12 +1,13 @@
 package config_test
 
-// config_timeouts_test.go pins [relay] timeout_seconds and [pause]
-// timeout_seconds (b.8q2), and [pre_trust] lock_wait_seconds (b.kr4): a
-// missing key or 0 gives the default (86400, 30, 12), 1 to the key's largest
-// value (2147483, the largest per-hook timeout Claude Code honours;
-// 9223372036, the largest a Duration holds) load as written, and Load refuses
-// a negative value and one above the largest, so no value wraps into a
-// different window.
+// config_timeouts_test.go pins the keys outside [tmux] with a range:
+// [defaults] expire_retention_days (b.sgw), [relay] and [pause]
+// timeout_seconds (b.8q2) and [pre_trust] lock_wait_seconds (b.kr4). A
+// missing key or 0 gives the default (31, 86400, 30, 12); 1 to the key's
+// largest value (106751 days; 2147483, the largest per-hook timeout Claude
+// Code honours; 9223372036, the largest a Duration holds) loads as written;
+// Load refuses a negative value and one above the largest, the way it
+// refuses a [tmux] value, so no value wraps into a different window.
 
 import (
 	"testing"
@@ -14,7 +15,33 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 )
 
-// relayRefusal, pauseRefusal and preTrustRefusal are a refused v's clause.
+// The exact texts the refusal description tests share: the closing sentence
+// (refusalTail), kill_exit_wait_ms -1 (killNegative, the file's [tmux] table
+// killNegativeTmux), and pending_grace_seconds refused at its default beside
+// create_timeout_ms 60000 (graceAtDefault, the [tmux] table graceRaisedTmux)
+// with the closing sentence that leaves it out (graceLeftOut; b.n4q).
+const (
+	refusalTail    = ". A missing key, or 0, gives the default."
+	killNegative   = "[tmux] kill_exit_wait_ms = -1, which must be positive"
+	graceAtDefault = "[tmux] pending_grace_seconds is missing or 0, and its default, 60, is below its safe " +
+		"minimum 81 s (computed from the effective create_timeout_ms 60000 and pipe_close_wait_ms 100), so set it " +
+		"to at least 81, or lower the effective create_timeout_ms and pipe_close_wait_ms to a total of 40000 ms " +
+		"or less (a missing or 0 key counts as its default)"
+	graceLeftOut = ". For every refused key other than [tmux] pending_grace_seconds, a missing key, or 0, " +
+		"gives the default."
+)
+
+var (
+	killNegativeTmux = []tmuxSetting{{config.TmuxKillExitWaitMs, -1}}
+	graceRaisedTmux  = []tmuxSetting{{config.TmuxCreateTimeoutMs, 60000}}
+)
+
+// retentionRefusal, relayRefusal, pauseRefusal and preTrustRefusal are a
+// refused v's clause.
+func retentionRefusal(v string) string {
+	return "[defaults] expire_retention_days = " + v + ", outside its range 1 to 106751 days"
+}
+
 func relayRefusal(v string) string {
 	return "[relay] timeout_seconds = " + v + ", outside its range 1 to 2147483 seconds"
 }
@@ -27,24 +54,24 @@ func preTrustRefusal(v string) string {
 	return "[pre_trust] lock_wait_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
 }
 
-// TestTimeoutSecondsLoads checks the values Load accepts: the file's value is
-// kept as written and the effective window is never 0. The pause and
-// pre_trust values are int64 so the file builds where int is 32 bits
-// (GOARCH=386).
-func TestTimeoutSecondsLoads(t *testing.T) {
+// TestRangeKeysLoad checks the values Load accepts: the file's value is kept
+// as written and the effective value is never 0. The pause and pre_trust
+// values are int64 so the file builds where int is 32 bits (GOARCH=386).
+func TestRangeKeysLoad(t *testing.T) {
 	cases := []struct {
 		name                        string
 		keys                        rangeKeys
+		days, daysEffective         int
 		relay, relayEffective       int
 		pause, pauseEffective       int64
 		preTrust, preTrustEffective int64
 	}{
-		{"missing", rangeKeys{}, 86400, 86400, 30, 30, 12, 12},
-		{"zero", rangeKeys{relay: "0", pause: "0", preTrust: "0"}, 0, 86400, 0, 30, 0, 12},
-		{"one", rangeKeys{relay: "1", pause: "1", preTrust: "1"}, 1, 1, 1, 1, 1, 1},
-		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12"}, 86400, 86400, 30, 30, 12, 12},
-		{"largest", rangeKeys{relay: "2147483", pause: "9223372036", preTrust: "9223372036"}, 2147483, 2147483,
-			9223372036, 9223372036, 9223372036, 9223372036},
+		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12},
+		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12},
+		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1"}, 1, 1, 1, 1, 1, 1, 1, 1},
+		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12"}, 31, 31, 86400, 86400, 30, 30, 12, 12},
+		{"largest", rangeKeys{days: "106751", relay: "2147483", pause: "9223372036", preTrust: "9223372036"}, 106751, 106751,
+			2147483, 2147483, 9223372036, 9223372036, 9223372036, 9223372036},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,27 +79,33 @@ func TestTimeoutSecondsLoads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if got := cfg.Relay.TimeoutSeconds; got != tc.relay {
-				t.Errorf("Relay.TimeoutSeconds = %d; want %d as written", got, tc.relay)
-			}
-			if got := cfg.Relay.EffectiveTimeoutSeconds(); got != tc.relayEffective {
-				t.Errorf("Relay.EffectiveTimeoutSeconds() = %d; want %d", got, tc.relayEffective)
-			}
-			if got := int64(cfg.Pause.TimeoutSeconds); got != tc.pause {
-				t.Errorf("Pause.TimeoutSeconds = %d; want %d as written", got, tc.pause)
-			}
-			if got := int64(cfg.Pause.EffectiveTimeoutSeconds()); got != tc.pauseEffective {
-				t.Errorf("Pause.EffectiveTimeoutSeconds() = %d; want %d", got, tc.pauseEffective)
-			}
-			if got := int64(cfg.PreTrust.LockWaitSeconds); got != tc.preTrust {
-				t.Errorf("PreTrust.LockWaitSeconds = %d; want %d as written", got, tc.preTrust)
-			}
-			if got := int64(cfg.PreTrust.EffectiveLockWaitSeconds()); got != tc.preTrustEffective {
-				t.Errorf("PreTrust.EffectiveLockWaitSeconds() = %d; want %d", got, tc.preTrustEffective)
+			for _, c := range []struct {
+				name            string
+				stored, written int64
+				eff, wantEff    int64
+			}{
+				{"ExpireRetentionDays", int64(cfg.Defaults.ExpireRetentionDays), int64(tc.days),
+					int64(cfg.Defaults.EffectiveExpireRetentionDays()), int64(tc.daysEffective)},
+				{"Relay.TimeoutSeconds", int64(cfg.Relay.TimeoutSeconds), int64(tc.relay),
+					int64(cfg.Relay.EffectiveTimeoutSeconds()), int64(tc.relayEffective)},
+				{"Pause.TimeoutSeconds", int64(cfg.Pause.TimeoutSeconds), tc.pause,
+					int64(cfg.Pause.EffectiveTimeoutSeconds()), tc.pauseEffective},
+				{"PreTrust.LockWaitSeconds", int64(cfg.PreTrust.LockWaitSeconds), tc.preTrust,
+					int64(cfg.PreTrust.EffectiveLockWaitSeconds()), tc.preTrustEffective},
+			} {
+				if c.stored != c.written || c.eff != c.wantEff {
+					t.Errorf("%s = %d (effective %d); want %d as written (effective %d)", c.name, c.stored, c.eff, c.written, c.wantEff)
+				}
 			}
 		})
 	}
 	// Load refuses a negative value; a Go caller's gets the default too.
+	if got := (config.Defaults{ExpireRetentionDays: -1}).EffectiveExpireRetentionDays(); got != 31 {
+		t.Errorf("EffectiveExpireRetentionDays() of -1 = %d; want 31", got)
+	}
+	if got := (config.Relay{TimeoutSeconds: -1}).EffectiveTimeoutSeconds(); got != config.DefaultRelayTimeoutSeconds {
+		t.Errorf("Relay.EffectiveTimeoutSeconds() of -1 = %d; want %d", got, config.DefaultRelayTimeoutSeconds)
+	}
 	if got := (config.Pause{TimeoutSeconds: -1}).EffectiveTimeoutSeconds(); got != 30 {
 		t.Errorf("Pause.EffectiveTimeoutSeconds() of -1 = %d; want 30", got)
 	}
@@ -81,18 +114,31 @@ func TestTimeoutSecondsLoads(t *testing.T) {
 	}
 }
 
-// TestTimeoutSecondsRefusalDescription pins each out-of-range timeout's exact
-// refusal: just above the largest, where the guard window plus its margin
-// wraps (relay 9223372036) and where the window itself wraps (9223372037),
+// TestRangeKeysRefusalDescription pins each out-of-range value's exact
+// refusal: just above the largest, where the relay guard window plus its
+// margin wraps (9223372036) and where a window itself wraps (9223372037),
 // alone and beside refused keys of other tables, whose names the header lists
-// in table order ([pre_trust] after [pause], before [tmux]).
-func TestTimeoutSecondsRefusalDescription(t *testing.T) {
+// in table order. A [tmux]-only refusal is unchanged, and beside a [tmux] key
+// whose default is below its minimum the closing sentence leaves that key out
+// (b.n4q).
+func TestRangeKeysRefusalDescription(t *testing.T) {
 	cases := []struct {
 		name string
 		keys rangeKeys
 		tmux []tmuxSetting
 		want string
 	}{
+		{"days_negative", rangeKeys{days: "-1"}, nil, "refused [defaults] values: " + retentionRefusal("-1") + refusalTail},
+		{"days_above_largest", rangeKeys{days: "106752"}, nil, "refused [defaults] values: " + retentionRefusal("106752") + refusalTail},
+		{"days_int64_min", rangeKeys{days: "-9223372036854775808"}, nil,
+			"refused [defaults] values: " + retentionRefusal("-9223372036854775808") + refusalTail},
+		{"days_int64_max", rangeKeys{days: "9223372036854775807"}, nil,
+			"refused [defaults] values: " + retentionRefusal("9223372036854775807") + refusalTail},
+		{"days_and_tmux", rangeKeys{days: "-1"}, killNegativeTmux,
+			"refused [defaults] and [tmux] values: " + retentionRefusal("-1") + "; " + killNegative + refusalTail},
+		{"tmux_only_unchanged", rangeKeys{days: "31"}, killNegativeTmux, "refused [tmux] values: " + killNegative + refusalTail},
+		{"days_and_tmux_default_below_minimum", rangeKeys{days: "-1"}, graceRaisedTmux,
+			"refused [defaults] and [tmux] values: " + retentionRefusal("-1") + "; " + graceAtDefault + graceLeftOut},
 		{"relay_negative", rangeKeys{relay: "-1"}, nil, "refused [relay] values: " + relayRefusal("-1") + refusalTail},
 		{"relay_above_largest", rangeKeys{relay: "2147484"}, nil,
 			"refused [relay] values: " + relayRefusal("2147484") + refusalTail},

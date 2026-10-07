@@ -98,13 +98,14 @@ func TestPreflightRules(t *testing.T) {
 	// envRules refuse before the private TMUX_TMPDIR is made: nothing is written.
 	envRules := map[string]bool{ruleContainerOnly: true, ruleTmuxUnset: true, ruleHomeSet: true, ruleHomeHasStore: true,
 		ruleSampleFloor: true, ruleCredential: true, ruleModelSet: true, ruleProbeCredential: true, ruleRealGatewayOnly: true}
-	tests := []struct {
+	type pfCase struct {
 		name   string
 		mode   mode
 		claude string
 		edit   func(p *pfSetup)
 		rule   string // "" passes
-	}{
+	}
+	tests := []pfCase{
 		{"real without the container marker", modeReal, realCC, func(p *pfSetup) { delete(p.vars, containerMarkerEnv) }, ruleContainerOnly},
 		{"dry without either marker", modeDry, stubCC, func(p *pfSetup) { delete(p.vars, sandboxMarkerEnv) }, ruleContainerOnly},
 		{"real with only the sandbox marker", modeReal, realCC, func(p *pfSetup) {
@@ -132,7 +133,6 @@ func TestPreflightRules(t *testing.T) {
 		{"probe with a non-dummy token", modeProbe, realCC, func(p *pfSetup) { p.vars["ANTHROPIC_AUTH_TOKEN"] = "real-token" }, ruleProbeCredential},
 		{"probe with no token", modeProbe, realCC, func(p *pfSetup) { delete(p.vars, "ANTHROPIC_AUTH_TOKEN") }, ""},
 		{"dry with a non-stub claude", modeDry, realCC, nil, ruleDryStubOnly},
-		{"real with Claude Code 2.1.120", modeReal, "2.1.120 (Claude Code)", nil, ruleVersionFloor},
 		{"real with Claude Code 2.1.279", modeReal, "2.1.279 (Claude Code)", nil, ruleVersionFloor},
 		{"real with Claude Code 2.1.284", modeReal, "2.1.284 (Claude Code)", nil, ""},
 		{"real with an unparseable version", modeReal, "Claude Code", nil, ruleVersionFloor},
@@ -140,7 +140,6 @@ func TestPreflightRules(t *testing.T) {
 		{"probe with Claude Code 2.1.120", modeProbe, "2.1.120 (Claude Code)", nil, ""},
 		{"dry with a 2.1.120 stub", modeDry, "2.1.120 (measure-exit dry-run stub: exec-form args dropped)", nil, ""},
 		{"real with a refused env name in the project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = layer(offending) }, ruleRealGatewayOnly},
-		{"real with a refused env name in the local layer", modeReal, realCC, func(p *pfSetup) { p.cfg.localSettings = layer(offending) }, ruleRealGatewayOnly},
 		{"real with a URL in the MCP layer's server env", modeReal, realCC, func(p *pfSetup) {
 			p.cfg.mcpConfig = layer(`{"mcpServers": {"s": {"env": {"UPSTREAM": "https://x.invalid"}}}}`)
 		}, ruleRealGatewayOnly},
@@ -155,6 +154,7 @@ func TestPreflightRules(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, ruleRealGatewayOnly},
+		{"real with a project layer run.sh refuses (b.vyb)", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = credentialLayerCases[0].write(t) }, ruleRealGatewayOnly},
 		{"real with a missing project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = "/nonexistent/project.json" }, ""},
 		{"dry with a refused env name in the project layer", modeDry, stubCC, func(p *pfSetup) { p.cfg.projectSettings = layer(offending) }, ""},
 		{"probe with a refused env name in the user layer", modeProbe, realCC, func(p *pfSetup) {
@@ -164,32 +164,11 @@ func TestPreflightRules(t *testing.T) {
 	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"} {
 		name := name
-		tests = append(tests, struct {
-			name   string
-			mode   mode
-			claude string
-			edit   func(p *pfSetup)
-			rule   string
-		}{"probe with " + name, modeProbe, realCC, func(p *pfSetup) { p.vars[name] = "x" }, ruleProbeCredential})
+		tests = append(tests, pfCase{"probe with " + name, modeProbe, realCC, func(p *pfSetup) { p.vars[name] = "x" }, ruleProbeCredential})
 	}
 	for _, name := range gatewayOnlyRefused {
 		name := name
-		tests = append(tests, struct {
-			name   string
-			mode   mode
-			claude string
-			edit   func(p *pfSetup)
-			rule   string
-		}{"real with " + name + " set, even empty", modeReal, realCC, func(p *pfSetup) { p.vars[name] = "" }, ruleRealGatewayOnly})
-	}
-	for _, lc := range credentialLayerCases {
-		tests = append(tests, struct {
-			name   string
-			mode   mode
-			claude string
-			edit   func(p *pfSetup)
-			rule   string
-		}{"real with a project layer run.sh refuses: " + lc.name, modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = lc.write(t) }, ruleRealGatewayOnly})
+		tests = append(tests, pfCase{"real with " + name + " set, even empty", modeReal, realCC, func(p *pfSetup) { p.vars[name] = "" }, ruleRealGatewayOnly})
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

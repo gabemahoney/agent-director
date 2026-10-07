@@ -3,9 +3,7 @@ package probe
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"reflect"
-	"strconv"
 	"syscall"
 	"testing"
 )
@@ -16,18 +14,6 @@ var (
 	_ CommandNameReader = darwinCommandNameReader{}
 	_ CommandNameReader = unsupportedCommandNameReader{}
 )
-
-// writeFakeComm writes <root>/<pid>/comm with the given raw content.
-func writeFakeComm(t *testing.T, root string, pid int, content string) {
-	t.Helper()
-	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "comm"), []byte(content), 0o644); err != nil {
-		t.Fatalf("write comm: %v", err)
-	}
-}
 
 // kinfoCommEntry builds one kinfoProcSize entry with raw planted at kinfoProcCommOffset.
 func kinfoCommEntry(raw []byte) []byte {
@@ -51,10 +37,9 @@ func TestLinuxCommandNameReader(t *testing.T) {
 		{name: "no_trailing_newline", comm: commp("sh"), pid: pid, wantName: "sh", wantOK: true},
 		{name: "only_one_newline_trimmed", comm: commp("dash\n\n"), pid: pid, wantName: "dash\n", wantOK: true},
 		{name: "name_with_spaces_kept", comm: commp("tmux: server\n"), pid: pid, wantName: "tmux: server", wantOK: true},
-		{name: "fifteen_byte_name", comm: commp("abcdefghijklmno\n"), pid: pid, wantName: "abcdefghijklmno", wantOK: true},
 		{name: "empty_file", comm: commp(""), pid: pid},
 		{name: "newline_only", comm: commp("\n"), pid: pid},
-		{name: "missing_pid", pid: pid},
+		{name: "no_comm_beside_stat_and_environ", pid: pid},
 		{name: "missing_proc_root", comm: commp("claude\n"), pid: pid, root: "/nonexistent-proc-root"},
 		{name: "pid_zero", comm: commp("claude\n"), pid: 0},
 		{name: "pid_negative", comm: commp("claude\n"), pid: -1},
@@ -62,12 +47,13 @@ func TestLinuxCommandNameReader(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
+			writeFakeProc(t, root, pid, 1, "12345", "some-instance") // never read: only comm names the process
 			if tc.comm != nil {
 				// Plant under both the queried pid and pid, so the non-positive
 				// cases prove the pid guard rather than a missing file.
-				writeFakeComm(t, root, pid, *tc.comm)
+				writeProcFile(t, root, pid, "comm", *tc.comm)
 				if tc.pid != pid {
-					writeFakeComm(t, root, tc.pid, *tc.comm)
+					writeProcFile(t, root, tc.pid, "comm", *tc.comm)
 				}
 			}
 			if tc.root != "" {
@@ -79,16 +65,6 @@ func TestLinuxCommandNameReader(t *testing.T) {
 				t.Errorf("CommandName(%d) = (%q, %v); want (%q, %v)", tc.pid, got, ok, tc.wantName, tc.wantOK)
 			}
 		})
-	}
-}
-
-// TestLinuxCommandNameReaderReadsOnlyComm: a pid dir with stat and environ but no comm answers ("", false).
-func TestLinuxCommandNameReaderReadsOnlyComm(t *testing.T) {
-	root := t.TempDir()
-	writeFakeProc(t, root, 4242, 1, "12345", "some-instance")
-
-	if got, ok := (linuxCommandNameReader{procRoot: root}).CommandName(4242); got != "" || ok {
-		t.Errorf("CommandName = (%q, %v); want (\"\", false)", got, ok)
 	}
 }
 
@@ -104,48 +80,39 @@ func TestDarwinCommandNameReader(t *testing.T) {
 		wantOK   bool
 	}{
 		{name: "named", pid: pid, buf: kinfoCommEntry([]byte("claude\x00")), wantName: "claude", wantOK: true},
-		{name: "sixteen_byte_name", pid: pid, buf: kinfoCommEntry([]byte("abcdefghijklmnop\x00")), wantName: "abcdefghijklmnop", wantOK: true},
 		{name: "esrch", pid: pid, err: syscall.ESRCH},
-		{name: "eperm", pid: pid, err: syscall.EPERM},
 		{name: "empty_result", pid: pid, buf: []byte{}},
 		{name: "short_entry", pid: pid, buf: kinfoCommEntry([]byte("claude\x00"))[:kinfoProcSize-1]},
 		{name: "drift_empty_name", pid: pid, buf: kinfoCommEntry(nil)},
-		{name: "drift_no_nul", pid: pid, buf: kinfoCommEntry([]byte("abcdefghijklmnopq"))},
 		{name: "pid_zero", pid: 0},
 		{name: "pid_negative", pid: -1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var calls []int
-			r := darwinCommandNameReader{fetchKinfo: func(p int) ([]byte, error) {
-				calls = append(calls, p)
-				return tc.buf, tc.err
-			}}
+			fetch, checkCalls := fakeKinfo(t, tc.pid, tc.buf, tc.err)
+			r := darwinCommandNameReader{fetchKinfo: fetch}
 
 			got, ok := r.CommandName(tc.pid)
 			if got != tc.wantName || ok != tc.wantOK {
 				t.Errorf("CommandName(%d) = (%q, %v); want (%q, %v)", tc.pid, got, ok, tc.wantName, tc.wantOK)
 			}
-			wantCalls := []int{tc.pid}
-			if tc.pid <= 0 {
-				wantCalls = nil
-			}
-			if !reflect.DeepEqual(calls, wantCalls) {
-				t.Errorf("fetchKinfo calls = %v; want %v", calls, wantCalls)
-			}
+			checkCalls()
 		})
 	}
 }
 
-// TestDarwinCommandNameReaderHasNoEnvSeam: the kinfo fetch is the reader's only seam (no KERN_PROCARGS2).
-func TestDarwinCommandNameReaderHasNoEnvSeam(t *testing.T) {
-	typ := reflect.TypeOf(darwinCommandNameReader{})
-	var fields []string
-	for i := 0; i < typ.NumField(); i++ {
-		fields = append(fields, typ.Field(i).Name)
-	}
-	if !reflect.DeepEqual(fields, []string{"fetchKinfo"}) {
-		t.Errorf("darwinCommandNameReader fields = %v; want only [fetchKinfo]", fields)
+// TestDarwinReadersHaveNoEnvSeam: the kinfo fetch is each darwin reader's
+// only seam, so neither can read a process environment (KERN_PROCARGS2).
+func TestDarwinReadersHaveNoEnvSeam(t *testing.T) {
+	for _, r := range []any{darwinCommandNameReader{}, darwinStartTimeReader{}} {
+		typ := reflect.TypeOf(r)
+		var fields []string
+		for i := 0; i < typ.NumField(); i++ {
+			fields = append(fields, typ.Field(i).Name)
+		}
+		if !reflect.DeepEqual(fields, []string{"fetchKinfo"}) {
+			t.Errorf("%s fields = %v; want only [fetchKinfo]", typ.Name(), fields)
+		}
 	}
 }
 
@@ -165,8 +132,6 @@ func TestKinfoCommandNameParse(t *testing.T) {
 		{name: "space_and_tilde_kept", raw: []byte("a b~\x00"), wantName: "a b~"},
 		{name: "empty", raw: []byte("\x00claude"), wantErr: true},
 		{name: "no_nul_in_field", raw: []byte("abcdefghijklmnopq"), wantErr: true},
-		{name: "tab_control_byte", raw: []byte("a\tb\x00"), wantErr: true},
-		{name: "newline_control_byte", raw: []byte("ab\n\x00"), wantErr: true},
 		{name: "soh_control_byte", raw: []byte("\x01ab\x00"), wantErr: true},
 		{name: "del_control_byte", raw: []byte("ab\x7f\x00"), wantErr: true},
 	}

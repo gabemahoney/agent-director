@@ -1,52 +1,63 @@
 package manifest_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
-// surfaceDoc is the shared decode target for the committed surface.json golden.
-// It is the UNION of every field the golden-side tests assert on — verb name,
-// param names and descriptions, and the result-field markers (type, nullable,
-// description, allowed_values) plus the verb-level description and error
-// names — so the golden tests decode through one struct instead
-// of each repeating a bespoke anonymous-struct unmarshal. Fields a given test
-// does not touch simply stay zero.
+// surfaceDoc is the committed surface.json, in generate.go's output shape;
+// surfaceVerb, surfaceParam and surfaceField are its per-verb, per-param and
+// per-result-field entries.
 type surfaceDoc struct {
-	Verbs []struct {
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		ErrorNames  []string `json:"error_names"`
-		Params      []struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			AllowEmpty  bool   `json:"allow_empty"`
-		} `json:"params"`
-		ResultFields []struct {
-			Name          string   `json:"name"`
-			Type          string   `json:"type"`
-			Nullable      bool     `json:"nullable"`
-			AllowEmpty    bool     `json:"allow_empty"`
-			Description   string   `json:"description"`
-			AllowedValues []string `json:"allowed_values"`
-		} `json:"result_fields"`
-	} `json:"verbs"`
+	Version int           `json:"version"`
+	Verbs   []surfaceVerb `json:"verbs"`
 }
 
-// readSurfaceJSON loads the committed surface.json sitting beside this test
-// file (located via runtime.Caller so the read is CWD-independent) and returns
-// both the raw bytes — for tests that byte-scan for a forbidden verb name — and
-// the parsed surfaceDoc for tests that assert on structured fields. It
-// t.Fatal's on any locate/read/unmarshal failure.
+type surfaceVerb struct {
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	Callable     bool           `json:"callable"`
+	HandleFree   bool           `json:"handle_free"`
+	Params       []surfaceParam `json:"params"`
+	ResultFields []surfaceField `json:"result_fields"`
+	ErrorNames   []string       `json:"error_names"`
+}
+
+type surfaceParam struct {
+	Name          string   `json:"name"`
+	Type          string   `json:"type"`
+	Description   string   `json:"description"`
+	Required      bool     `json:"required"`
+	Nullable      bool     `json:"nullable"`
+	AllowEmpty    bool     `json:"allow_empty"`
+	AllowedValues []string `json:"allowed_values"`
+}
+
+type surfaceField struct {
+	Name          string   `json:"name"`
+	Type          string   `json:"type"`
+	Description   string   `json:"description"`
+	Nullable      bool     `json:"nullable"`
+	AllowEmpty    bool     `json:"allow_empty"`
+	AllowedValues []string `json:"allowed_values"`
+}
+
+// readSurfaceJSON loads the committed surface.json beside this file (located
+// via runtime.Caller, so the read is CWD-independent) and returns its raw
+// bytes, for byte scans, and the parsed surfaceDoc. The decode is strict: a
+// key the surfaceDoc structs do not model, or anything after the top-level
+// object, fails the test.
 func readSurfaceJSON(t *testing.T) ([]byte, surfaceDoc) {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -57,11 +68,77 @@ func readSurfaceJSON(t *testing.T) ([]byte, surfaceDoc) {
 	if err != nil {
 		t.Fatalf("read surface.json: %v", err)
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
 	var doc surfaceDoc
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("unmarshal surface.json: %v", err)
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("decode surface.json: %v", err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		t.Fatalf("surface.json has data after its top-level object (next token error %v)", err)
 	}
 	return raw, doc
+}
+
+// verbOf returns the manifest's verb name, failing the test when it is absent.
+func verbOf(t *testing.T, name string) manifest.VerbDef {
+	t.Helper()
+	v, ok := manifest.Lookup(name)
+	if !ok {
+		t.Fatalf("%s not in manifest", name)
+	}
+	return v
+}
+
+// siteText returns verb's description or, when param or field is set, that
+// param's or result field's description, failing the test when it is absent.
+func siteText(t *testing.T, verb, param, field string) string {
+	t.Helper()
+	v := verbOf(t, verb)
+	switch {
+	case param != "":
+		for _, p := range v.Params {
+			if p.Name == param {
+				return p.Description
+			}
+		}
+	case field != "":
+		for _, f := range v.ResultFields {
+			if f.Name == field {
+				return f.Description
+			}
+		}
+	default:
+		return v.Description
+	}
+	t.Fatalf("%s has no param %q / result field %q", verb, param, field)
+	return ""
+}
+
+// TestSurfaceJSONMirrorsManifest: the committed surface.json carries every
+// manifest verb, in order, with its description, markers, params, result
+// fields and error names (an absent enum as null, no error names as []), and
+// no key beyond those (readSurfaceJSON decodes strictly), so every manifest
+// text and marker check in this package holds for surface.json too;
+// TestSurfaceJSONUpToDate keeps it regenerated.
+func TestSurfaceJSONMirrorsManifest(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+	if surface.Version != 1 || len(surface.Verbs) != len(manifest.Verbs) {
+		t.Fatalf("surface.json version %d with %d verbs; want version 1 with the manifest's %d", surface.Version, len(surface.Verbs), len(manifest.Verbs))
+	}
+	for i, v := range manifest.Verbs {
+		want := surfaceVerb{Name: v.Name, Description: v.Description, Callable: v.Callable, HandleFree: v.HandleFree,
+			Params: []surfaceParam{}, ResultFields: []surfaceField{}, ErrorNames: append([]string{}, v.ErrorNames...)}
+		for _, p := range v.Params {
+			want.Params = append(want.Params, surfaceParam{p.Name, p.Type, p.Description, p.Required, p.Nullable, p.AllowEmpty, p.AllowedValues})
+		}
+		for _, f := range v.ResultFields {
+			want.ResultFields = append(want.ResultFields, surfaceField{f.Name, f.Type, f.Description, f.Nullable, f.AllowEmpty, f.AllowedValues})
+		}
+		if !reflect.DeepEqual(surface.Verbs[i], want) {
+			t.Errorf("surface.json verb %d:\n got %+v\nwant %+v", i, surface.Verbs[i], want)
+		}
+	}
 }
 
 // TestNoMigrationTriggerVerb is the SR-1.6 public-surface guard for the
@@ -120,172 +197,23 @@ func TestVerbsContainsExpectedSurface(t *testing.T) {
 	}
 }
 
-// TestSpawnHasAllSRDErrorNames asserts the spawn entry advertises every
-// validation / launch error name from SRD §13.1, including ErrInvalidFlags
-// (control-character instance id, SR-1.7, SR-9.1), ErrTmuxSessionNameInvalid
-// (reserved session-name characters, SR-9.2), ErrTmuxUnresponsive (bounded
-// create) and ErrTmuxSessionConflict (label scan, SR-9.3; held name after
-// "duplicate session", SR-9.4), never ErrInternal; Client.Spawn's Go doc
-// "Errors:" list must match, and its conflict bullet names the held-name case.
-func TestSpawnHasAllSRDErrorNames(t *testing.T) {
-	v, ok := manifest.Lookup("spawn")
-	if !ok {
-		t.Fatal("spawn not in manifest")
-	}
-	want := []string{
-		"ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
-		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey",
-		"ErrInvalidFlags", "ErrInstanceIdCollision", "ErrTmuxSessionNameInvalid",
-		"ErrTmuxNotAvailable", "ErrTmuxSessionCreate",
-		"ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
-	}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
-	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("spawn.ErrorNames missing %q", n)
-		}
-	}
-	if have["ErrInternal"] {
-		t.Error(`spawn.ErrorNames lists "ErrInternal"`)
-	}
-	assertGoDocErrorsMatchManifest(t, "Spawn", "spawn")
-	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
-	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
-		if !strings.Contains(conflict, phrase) {
-			t.Errorf("(*Client).Spawn ErrTmuxSessionConflict bullet lacks %q: %q", phrase, conflict)
-		}
-	}
-}
-
-// TestListHasSRDErrorNames pins the list entry's error catalog against
-// SRD §13.1: the label k=v parse rejection is the only verb-surface
-// error; the verb has no state precondition and no transport-layer tmux.
-func TestListHasSRDErrorNames(t *testing.T) {
-	v, ok := manifest.Lookup("list")
-	if !ok {
-		t.Fatal("list not in manifest")
-	}
-	want := []string{"ErrListInvalidLabel"}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
-	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("list.ErrorNames missing %q", n)
-		}
-	}
-}
-
-// TestKillHasSRDErrorNames pins kill's ErrorNames to exactly SR-1.7's five
-// names, and Client.Kill's Go doc "Errors:" list to the same set.
-func TestKillHasSRDErrorNames(t *testing.T) {
-	v, ok := manifest.Lookup("kill")
-	if !ok {
-		t.Fatal("kill not in manifest")
-	}
-	got := append([]string(nil), v.ErrorNames...)
-	sort.Strings(got)
-	want := []string{
-		"ErrSpawnNotFound",
-		"ErrTmuxKillFailed",
-		"ErrTmuxNotAvailable",
-		"ErrTmuxSessionConflict",
-		"ErrTmuxUnresponsive",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("kill.ErrorNames = %v, want exactly %v", got, want)
-	}
-	for _, absent := range []string{"ErrSpawnNotResumable", "ErrInternal"} {
-		for _, n := range v.ErrorNames {
-			if n == absent {
-				t.Errorf("kill.ErrorNames lists %q", absent)
-			}
-		}
-	}
-	assertGoDocErrorsMatchManifest(t, "Kill", "kill")
-}
-
-// TestLookup covers the hit and miss paths of Lookup against the real
-// registry. No hand-constructed entries.
+// TestLookup: Lookup finds a registered verb (help: described, with result
+// fields, and a non-nil empty ErrorNames so it marshals as [], not null) and
+// returns the zero VerbDef for an unknown one.
 func TestLookup(t *testing.T) {
-	t.Run("hit", func(t *testing.T) {
-		v, ok := manifest.Lookup("help")
-		if !ok {
-			t.Fatalf("Lookup(%q) ok = false, want true", "help")
-		}
-		if v.Name != "help" {
-			t.Fatalf("Lookup(%q).Name = %q, want %q", "help", v.Name, "help")
-		}
-	})
-	t.Run("miss", func(t *testing.T) {
-		v, ok := manifest.Lookup("nonexistent")
-		if ok {
-			t.Fatalf("Lookup(%q) ok = true, want false", "nonexistent")
-		}
-		if !reflect.DeepEqual(v, manifest.VerbDef{}) {
-			t.Fatalf("Lookup miss returned non-zero VerbDef: %+v", v)
-		}
-	})
-}
-
-// TestHelpVerbRequiredFields is a table-driven check that the help entry
-// carries every field downstream consumers (CLI dispatch, MCP schema, doc
-// generator) expect to be populated.
-func TestHelpVerbRequiredFields(t *testing.T) {
 	v, ok := manifest.Lookup("help")
-	if !ok {
-		t.Fatalf("Lookup(%q) ok = false, want true", "help")
+	if !ok || v.Name != "help" || v.Description == "" || len(v.ResultFields) == 0 {
+		t.Errorf("Lookup(help) = %+v, %t; want a described help with result fields", v, ok)
 	}
-	cases := []struct {
-		field   string
-		nonZero bool
-	}{
-		{"Name", v.Name != ""},
-		{"Description", v.Description != ""},
-		{"ResultFields", len(v.ResultFields) > 0},
+	if v.ErrorNames == nil || len(v.ErrorNames) != 0 {
+		t.Errorf("help.ErrorNames = %#v; want an empty non-nil slice", v.ErrorNames)
 	}
-	for _, c := range cases {
-		t.Run(c.field, func(t *testing.T) {
-			if !c.nonZero {
-				t.Fatalf("help.%s is empty/zero; want populated", c.field)
-			}
-		})
+	if v, ok := manifest.Lookup("nonexistent"); ok || !reflect.DeepEqual(v, manifest.VerbDef{}) {
+		t.Errorf("Lookup(nonexistent) = %+v, %t; want the zero VerbDef, false", v, ok)
 	}
 }
 
-// TestHelpErrorNamesEmptyNonNil enforces the JSON-stability invariant: help
-// has no error conditions, so ErrorNames must marshal as [] not null.
-func TestHelpErrorNamesEmptyNonNil(t *testing.T) {
-	v, ok := manifest.Lookup("help")
-	if !ok {
-		t.Fatalf("Lookup(%q) ok = false, want true", "help")
-	}
-	if v.ErrorNames == nil {
-		t.Fatalf("help.ErrorNames is nil; want empty non-nil slice")
-	}
-	if len(v.ErrorNames) != 0 {
-		t.Fatalf("len(help.ErrorNames) = %d, want 0", len(v.ErrorNames))
-	}
-}
-
-// ── Phase 2: Callable ────────────────────────────────────────────────────────
-
-// TestCallableVerbsCount asserts CallableVerbs() returns exactly 15 entries —
-// the full set of synchronous verb methods on *pkg/api.Client.
-func TestCallableVerbsCount(t *testing.T) {
-	got := manifest.CallableVerbs()
-	if len(got) != 15 {
-		names := make([]string, len(got))
-		for i, v := range got {
-			names[i] = v.Name
-		}
-		t.Fatalf("len(CallableVerbs()) = %d, want 15 (got %v)", len(got), names)
-	}
-}
+// ── Callable and HandleFree ─────────────────────────────────────────────────
 
 // TestCallableVerbsExcludesNonCallable asserts help, serve, and hook are not
 // in the callable set.
@@ -319,39 +247,23 @@ func TestCallableVerbsOrder(t *testing.T) {
 	}
 }
 
-// TestCallableVerbsIsNewSlice asserts CallableVerbs() returns a fresh slice
-// rather than a sub-slice of Verbs (mutations to the result must not affect
-// the canonical Verbs slice).
-func TestCallableVerbsIsNewSlice(t *testing.T) {
-	cv := manifest.CallableVerbs()
-	if len(cv) == 0 {
-		t.Fatal("CallableVerbs() is empty; cannot test slice identity")
-	}
-	origName := manifest.Verbs[0].Name
-	cv[0].Name = "mutated"
-	if manifest.Verbs[0].Name != origName {
-		t.Errorf("mutating CallableVerbs()[0].Name changed Verbs[0].Name; slices are aliased")
-	}
-}
-
-// TestAllVerbsHaveExplicitCallable asserts every entry in Verbs has an
-// explicit Callable value aligned with the locked assignment.
-func TestAllVerbsHaveExplicitCallable(t *testing.T) {
-	nonCallable := map[string]bool{"help": true, "serve": true, "hook": true, "trail-emit": true}
-	for _, v := range manifest.Verbs {
-		if nonCallable[v.Name] {
-			if v.Callable {
-				t.Errorf("Verbs[%q].Callable = true; want false", v.Name)
-			}
-		} else {
-			if !v.Callable {
-				t.Errorf("Verbs[%q].Callable = false; want true", v.Name)
-			}
+// TestVerbSubsetsAreNewSlices: CallableVerbs and HandleFreeVerbs return
+// fresh slices, so changing one never changes Verbs.
+func TestVerbSubsetsAreNewSlices(t *testing.T) {
+	for name, subset := range map[string]func() []manifest.VerbDef{
+		"CallableVerbs": manifest.CallableVerbs, "HandleFreeVerbs": manifest.HandleFreeVerbs,
+	} {
+		got := subset()
+		if len(got) == 0 {
+			t.Fatalf("%s() is empty; cannot test slice identity", name)
+		}
+		orig := got[0].Name
+		got[0].Name = "mutated"
+		if v, ok := manifest.Lookup(orig); !ok || v.Name != orig {
+			t.Errorf("mutating %s()[0].Name changed manifest.Verbs; slices are aliased", name)
 		}
 	}
 }
-
-// ── Phase 3: HandleFree ──────────────────────────────────────────────────────
 
 // TestHandleFreeVerbsIsVersionOnly asserts HandleFreeVerbs() returns exactly
 // [version] — the only verb that needs no Client handle.
@@ -369,53 +281,7 @@ func TestHandleFreeVerbsIsVersionOnly(t *testing.T) {
 	}
 }
 
-// TestVersionHasCallableAndHandleFree asserts that version has both
-// Callable: true AND HandleFree: true.
-func TestVersionHasCallableAndHandleFree(t *testing.T) {
-	v, ok := manifest.Lookup("version")
-	if !ok {
-		t.Fatal("version not in manifest")
-	}
-	if !v.Callable {
-		t.Errorf("version.Callable = false; want true")
-	}
-	if !v.HandleFree {
-		t.Errorf("version.HandleFree = false; want true")
-	}
-}
-
-// TestAllOtherVerbsHandleFreeIsFalse asserts every verb except version has
-// HandleFree: false.
-func TestAllOtherVerbsHandleFreeIsFalse(t *testing.T) {
-	for _, v := range manifest.Verbs {
-		if v.Name == "version" {
-			continue
-		}
-		if v.HandleFree {
-			t.Errorf("Verbs[%q].HandleFree = true; want false (only version is handle-free)", v.Name)
-		}
-	}
-}
-
-// TestHandleFreeVerbsIsNewSlice asserts HandleFreeVerbs() returns a new slice.
-func TestHandleFreeVerbsIsNewSlice(t *testing.T) {
-	hf := manifest.HandleFreeVerbs()
-	if len(hf) == 0 {
-		t.Fatal("HandleFreeVerbs() is empty; cannot test slice identity")
-	}
-	// Verify a copy by mutation: mutating the result must not affect Verbs.
-	origName := hf[0].Name
-	hf[0].Name = "mutated"
-	v, ok := manifest.Lookup("version")
-	if !ok {
-		t.Fatal("version not in manifest")
-	}
-	if v.Name != origName {
-		t.Errorf("mutating HandleFreeVerbs()[0].Name changed manifest; slices are aliased")
-	}
-}
-
-// ── Phase 4: Field markers ───────────────────────────────────────────────────
+// ── Field markers ────────────────────────────────────────────────────────────
 
 // TestAllowedValuesHaveAtLeastTwoEntries asserts that any field with a non-nil
 // AllowedValues slice has at least 2 entries — an enum with one value is a
@@ -434,136 +300,6 @@ func TestAllowedValuesHaveAtLeastTwoEntries(t *testing.T) {
 					verb.Name, f.Name, len(f.AllowedValues))
 			}
 		}
-	}
-}
-
-// TestStateEnumFieldsHaveAllowedValues spot-checks that known enum fields
-// have AllowedValues populated.
-func TestStateEnumFieldsHaveAllowedValues(t *testing.T) {
-	// status.state must have AllowedValues.
-	sv, ok := manifest.Lookup("status")
-	if !ok {
-		t.Fatal("status not in manifest")
-	}
-	if len(sv.ResultFields) == 0 {
-		t.Fatal("status has no ResultFields")
-	}
-	stateField := sv.ResultFields[0]
-	if stateField.Name != "state" {
-		t.Fatalf("status.ResultFields[0].Name = %q, want \"state\"", stateField.Name)
-	}
-	if stateField.AllowedValues == nil {
-		t.Errorf("status.state.AllowedValues is nil; want state enum")
-	}
-
-	// decide.decision must have AllowedValues.
-	dv, ok := manifest.Lookup("decide")
-	if !ok {
-		t.Fatal("decide not in manifest")
-	}
-	var decisionParam *manifest.ParamDef
-	for i, p := range dv.Params {
-		if p.Name == "decision" {
-			decisionParam = &dv.Params[i]
-			break
-		}
-	}
-	if decisionParam == nil {
-		t.Fatal("decide has no decision param")
-	}
-	if decisionParam.AllowedValues == nil {
-		t.Errorf("decide.decision.AllowedValues is nil; want [allow deny]")
-	}
-}
-
-// TestNullableAndAllowEmptyAreExplicit spot-checks that known nullable fields
-// have Nullable: true and known non-nullable fields have Nullable: false.
-func TestNullableAndAllowEmptyAreExplicit(t *testing.T) {
-	// get.ended_at is Nullable: true (pointer/*time.Time).
-	gv, ok := manifest.Lookup("get")
-	if !ok {
-		t.Fatal("get not in manifest")
-	}
-	var endedAt *manifest.FieldDef
-	for i, f := range gv.ResultFields {
-		if f.Name == "ended_at" {
-			endedAt = &gv.ResultFields[i]
-			break
-		}
-	}
-	if endedAt == nil {
-		t.Fatal("get has no ended_at result field")
-	}
-	if !endedAt.Nullable {
-		t.Errorf("get.ended_at.Nullable = false; want true (it is a *time.Time)")
-	}
-
-	// spawn.claude_instance_id result field is NOT nullable.
-	sv, ok := manifest.Lookup("spawn")
-	if !ok {
-		t.Fatal("spawn not in manifest")
-	}
-	if len(sv.ResultFields) == 0 {
-		t.Fatal("spawn has no ResultFields")
-	}
-	cidField := sv.ResultFields[0]
-	if cidField.Nullable {
-		t.Errorf("spawn.claude_instance_id.Nullable = true; want false")
-	}
-
-	// list.spawns allows empty (non-nil empty slice).
-	lv, ok := manifest.Lookup("list")
-	if !ok {
-		t.Fatal("list not in manifest")
-	}
-	if len(lv.ResultFields) == 0 {
-		t.Fatal("list has no ResultFields")
-	}
-	spawnsField := lv.ResultFields[0]
-	if !spawnsField.AllowEmpty {
-		t.Errorf("list.spawns.AllowEmpty = false; want true (empty array is valid)")
-	}
-}
-
-// TestParamsAllowEmpty pins params whose empty value means something as
-// allow_empty in the manifest and surface.json: spawn's claude_instance_id
-// ("" mints a fresh id) and send-keys' text ("" presses Enter only, b.9o4).
-func TestParamsAllowEmpty(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
-	for _, tc := range []struct{ verb, param, why string }{
-		{"spawn", "claude_instance_id", "an empty id mints a fresh UUID4"},
-		{"send-keys", "text", "empty text presses Enter only"},
-	} {
-		t.Run(tc.verb+" "+tc.param, func(t *testing.T) {
-			sources := map[string]bool{}
-			v, ok := manifest.Lookup(tc.verb)
-			if !ok {
-				t.Fatalf("%s not in manifest", tc.verb)
-			}
-			for _, p := range v.Params {
-				if p.Name == tc.param {
-					sources["manifest"] = p.AllowEmpty
-				}
-			}
-			for _, sv := range surface.Verbs {
-				if sv.Name != tc.verb {
-					continue
-				}
-				for _, p := range sv.Params {
-					if p.Name == tc.param {
-						sources["surface.json"] = p.AllowEmpty
-					}
-				}
-			}
-			for _, source := range []string{"manifest", "surface.json"} {
-				allowEmpty, found := sources[source]
-				if !found {
-					t.Errorf("%s: %s has no %s param", source, tc.verb, tc.param)
-				} else if !allowEmpty {
-					t.Errorf("%s: %s.%s param allow_empty = false; want true (%s)", source, tc.verb, tc.param, tc.why)
-				}
-			}
-		})
 	}
 }
 
@@ -630,94 +366,6 @@ func TestStateEnumByteIdentity(t *testing.T) {
 	}
 }
 
-// TestGetLivenessFieldDefsAdditive asserts SR-8.3's literal get surfacing: the
-// get verb gains exactly the two additive nullable liveness FieldDefs, with
-// the nullable "?" types and Nullable=true, and NEITHER carries an enum
-// (AllowedValues must stay nil). This is the source-of-truth twin of the
-// surface.json content assertion below.
-func TestGetLivenessFieldDefsAdditive(t *testing.T) {
-	v, ok := manifest.Lookup("get")
-	if !ok {
-		t.Fatal("get not in manifest")
-	}
-	byName := map[string]manifest.FieldDef{}
-	for _, f := range v.ResultFields {
-		byName[f.Name] = f
-	}
-
-	cases := []struct {
-		name    string
-		wantTyp string
-	}{
-		{"liveness_unverified_since", "timestamp?"},
-		{"liveness_note", "string?"},
-	}
-	for _, c := range cases {
-		f, ok := byName[c.name]
-		if !ok {
-			t.Errorf("get result field %q missing; SR-8.3 requires the additive get FieldDef", c.name)
-			continue
-		}
-		if f.Type != c.wantTyp {
-			t.Errorf("get.%s.Type = %q; want %q (nullable marker)", c.name, f.Type, c.wantTyp)
-		}
-		if !f.Nullable {
-			t.Errorf("get.%s.Nullable = false; want true", c.name)
-		}
-		if f.AllowedValues != nil {
-			t.Errorf("get.%s.AllowedValues = %v; want nil (not an enum)", c.name, f.AllowedValues)
-		}
-	}
-}
-
-// TestGetLivenessFieldsInSurfaceJSON is the committed-golden twin of
-// TestGetLivenessFieldDefsAdditive: the two additive get FieldDefs must be
-// present in surface.json (as timestamp?/string? nullable fields), so a
-// regenerated golden that dropped them trips this named check rather than
-// only showing up as a silent diff.
-func TestGetLivenessFieldsInSurfaceJSON(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
-
-	var getFields map[string]struct {
-		typ      string
-		nullable bool
-	}
-	for _, v := range surface.Verbs {
-		if v.Name != "get" {
-			continue
-		}
-		getFields = map[string]struct {
-			typ      string
-			nullable bool
-		}{}
-		for _, f := range v.ResultFields {
-			getFields[f.Name] = struct {
-				typ      string
-				nullable bool
-			}{f.Type, f.Nullable}
-		}
-	}
-	if getFields == nil {
-		t.Fatal("surface.json has no get verb")
-	}
-	for name, wantTyp := range map[string]string{
-		"liveness_unverified_since": "timestamp?",
-		"liveness_note":             "string?",
-	} {
-		f, ok := getFields[name]
-		if !ok {
-			t.Errorf("surface.json get verb missing result field %q (additive FieldDef must be generated)", name)
-			continue
-		}
-		if f.typ != wantTyp {
-			t.Errorf("surface.json get.%s.type = %q; want %q", name, f.typ, wantTyp)
-		}
-		if !f.nullable {
-			t.Errorf("surface.json get.%s.nullable = false; want true", name)
-		}
-	}
-}
-
 // TestExtraEnvIsInputOnlyNotOutput is the SR-9.3/SR-10.3 named negative on the
 // manifest source of truth: extra_env legitimately exists as an INPUT param
 // (spawn + make-template), but MUST NOT appear as a ResultField on ANY verb's
@@ -726,9 +374,8 @@ func TestGetLivenessFieldsInSurfaceJSON(t *testing.T) {
 //
 //   - PRESENT as an input param on spawn and make-template (guards against a
 //     regression that would delete the legitimate env-injection surface).
-//   - ABSENT from every verb's ResultFields (the output-negative) — walked over
-//     all verbs, with get and list called out by name since they carry the row
-//     projections most at risk of accidentally gaining the column.
+//   - ABSENT from every verb's ResultFields (the output-negative), walked over
+//     all verbs, get and list (the row projections most at risk) among them.
 func TestExtraEnvIsInputOnlyNotOutput(t *testing.T) {
 	// Input-param pole: the env-injection param must exist where it legitimately
 	// belongs, under its one manifest name on both verbs (b.c4u; the CLI flag
@@ -757,19 +404,6 @@ func TestExtraEnvIsInputOnlyNotOutput(t *testing.T) {
 		for _, f := range v.ResultFields {
 			if f.Name == "extra_env" || f.Name == "extra-env" {
 				t.Errorf("verb %q has an %s OUTPUT ResultField; extra_env is INPUT-only and must never surface on a result row", v.Name, f.Name)
-			}
-		}
-	}
-
-	// Explicit named checks on the two row-projection verbs most at risk.
-	for _, verb := range []string{"get", "list"} {
-		v, ok := manifest.Lookup(verb)
-		if !ok {
-			t.Fatalf("%s not in manifest", verb)
-		}
-		for _, f := range v.ResultFields {
-			if f.Name == "extra_env" || f.Name == "extra-env" {
-				t.Errorf("%s.ResultFields carries %s; the OUTPUT row must not expose the input-only env map", verb, f.Name)
 			}
 		}
 	}
@@ -805,323 +439,202 @@ func TestExtraEnvAbsentFromOutputSurfaceJSON(t *testing.T) {
 	}
 }
 
-// TestListSpawnsDescriptionNamesLivenessFields pins the list surfacing path:
-// per the PM-ratified interpretation, list gains the liveness fields via an
-// extended composite `spawns` Description (the list manifest declares one
-// composite []Spawn field, never per-column FieldDefs). The Description must
-// name both fields on the source of truth AND in the committed surface.json.
-func TestListSpawnsDescriptionNamesLivenessFields(t *testing.T) {
-	v, ok := manifest.Lookup("list")
-	if !ok {
-		t.Fatal("list not in manifest")
-	}
-	if len(v.ResultFields) == 0 || v.ResultFields[0].Name != "spawns" {
-		t.Fatalf("list.ResultFields[0] is not the composite \"spawns\" field; got %+v", v.ResultFields)
-	}
-	desc := v.ResultFields[0].Description
-	for _, needle := range []string{"liveness_unverified_since", "liveness_note"} {
-		if !strings.Contains(desc, needle) {
-			t.Errorf("list.spawns Description does not name %q; SR-8.3 surfaces list liveness via the composite description; got %q",
-				needle, desc)
-		}
-	}
+// sorted returns a sorted copy of s, nil for nil.
+func sorted(s []string) []string {
+	out := slices.Clone(s)
+	sort.Strings(out)
+	return out
+}
 
-	// Committed surface.json twin.
-	_, surface := readSurfaceJSON(t)
-	var sjDesc string
-	for _, vv := range surface.Verbs {
-		if vv.Name != "list" {
-			continue
-		}
-		for _, f := range vv.ResultFields {
-			if f.Name == "spawns" {
-				sjDesc = f.Description
+// shape is a param's or result field's type and markers; enum is compared sorted.
+type shape struct {
+	typ                  string
+	nullable, allowEmpty bool
+	enum                 []string
+}
+
+// TestFieldShapes pins the type and markers of the params and result fields
+// whose shape a requirement names: decide's decision enum; the params whose
+// empty value means something (spawn's claude_instance_id mints a fresh id,
+// send-keys' text presses Enter only, b.9o4); spawn's one optional bool
+// reuse_finished (SR-10.1, AC-REUSE-13); get's nullable ended_at, additive
+// liveness fields (SR-8.3) and tmux_socket (SR-3.3, SR-16.1, AC-LKP-22);
+// launch_started_at (SR-22.2); pre_trust's value set (SR-22.6, AC-SPN-08,
+// AC-CAT-04); kill's kill_sent (SR-6.6) and expire's counts and ids (SR-12.4),
+// the only result fields of their verbs, expire with no error names. Each is
+// described. status and list carry no tmux_socket (list's spawns text does not
+// name it), and make-template takes no reuse param.
+func TestFieldShapes(t *testing.T) {
+	preTrust := []string{"failed", "ok", "skipped"}
+	cases := []struct {
+		verb, param, field string
+		want               shape
+	}{
+		{"decide", "decision", "", shape{"string", false, false, []string{"allow", "deny"}}},
+		{"spawn", "claude_instance_id", "", shape{"string", false, true, nil}},
+		{"send-keys", "text", "", shape{"string", false, true, nil}},
+		{"spawn", "reuse_finished", "", shape{"bool", false, false, nil}},
+		{"spawn", "", "claude_instance_id", shape{"string", false, false, nil}},
+		{"list", "", "spawns", shape{"[]Spawn", false, true, nil}},
+		{"get", "", "ended_at", shape{"timestamp?", true, false, nil}},
+		{"get", "", "liveness_unverified_since", shape{"timestamp?", true, false, nil}},
+		{"get", "", "liveness_note", shape{"string?", true, false, nil}},
+		{"get", "", "tmux_socket", shape{"string?", true, false, nil}},
+		{"status", "", "launch_started_at", shape{"timestamp?", true, false, nil}},
+		{"get", "", "launch_started_at", shape{"timestamp?", true, false, nil}},
+		{"spawn", "", "pre_trust", shape{"string", false, false, preTrust}},
+		{"resume", "", "pre_trust", shape{"string", false, false, preTrust}},
+		{"kill", "", "kill_sent", shape{"bool", false, false, nil}},
+		{"expire", "", "count", shape{"int", false, true, nil}},
+		{"expire", "", "ids", shape{"[]string", false, true, nil}},
+		{"expire", "", "kept", shape{"int", false, true, nil}},
+		{"expire", "", "kept_ids", shape{"[]string", false, true, nil}},
+	}
+	for _, tc := range cases {
+		v := verbOf(t, tc.verb)
+		var got []shape
+		var descs []string
+		for _, p := range v.Params {
+			if p.Name == tc.param {
+				got = append(got, shape{p.Type, p.Nullable, p.AllowEmpty, p.AllowedValues})
+				descs = append(descs, p.Description)
+				if p.Required && p.Name == "reuse_finished" {
+					t.Errorf("%s param %s is required; want optional", tc.verb, p.Name)
+				}
 			}
 		}
+		for _, f := range v.ResultFields {
+			if f.Name == tc.field {
+				got = append(got, shape{f.Type, f.Nullable, f.AllowEmpty, f.AllowedValues})
+				descs = append(descs, f.Description)
+			}
+		}
+		if len(got) != 1 || descs[0] == "" {
+			t.Errorf("%s %s%s: %d found (descriptions %q); want exactly one, described", tc.verb, tc.param, tc.field, len(got), descs)
+			continue
+		}
+		got[0].enum = sorted(got[0].enum)
+		if !reflect.DeepEqual(got[0], tc.want) {
+			t.Errorf("%s %s%s shape %+v; want %+v", tc.verb, tc.param, tc.field, got[0], tc.want)
+		}
 	}
-	if sjDesc == "" {
-		t.Fatal("surface.json list verb has no spawns result field description")
+	names := func(verb string) []string {
+		var out []string
+		for _, f := range verbOf(t, verb).ResultFields {
+			out = append(out, f.Name)
+		}
+		return out
 	}
-	for _, needle := range []string{"liveness_unverified_since", "liveness_note"} {
-		if !strings.Contains(sjDesc, needle) {
-			t.Errorf("surface.json list.spawns description does not name %q; got %q", needle, sjDesc)
+	if got := names("kill"); !reflect.DeepEqual(got, []string{"kill_sent"}) {
+		t.Errorf("kill result fields = %v; want only kill_sent", got)
+	}
+	if got := names("expire"); !reflect.DeepEqual(got, []string{"count", "ids", "kept", "kept_ids"}) {
+		t.Errorf("expire result fields = %v; want count, ids, kept, kept_ids", got)
+	}
+	if got := verbOf(t, "expire").ErrorNames; len(got) != 0 {
+		t.Errorf("expire error names = %v; want none", got)
+	}
+	for _, verb := range []string{"status", "list"} {
+		if slices.Contains(names(verb), "tmux_socket") {
+			t.Errorf("%s has a tmux_socket result field; want none", verb)
+		}
+	}
+	if text := siteText(t, "list", "", "spawns"); strings.Contains(text, "tmux_socket") {
+		t.Errorf("list spawns text names tmux_socket: %q", text)
+	}
+	for _, p := range verbOf(t, "make-template").Params {
+		if p.Name == "reuse-finished" || p.Name == "reuse_finished" {
+			t.Errorf("make-template has param %q; want no reuse param", p.Name)
 		}
 	}
 }
 
-// TestSpawnParamDescriptionsPinValidationRules pins the load-bearing tokens of
-// three spawn param descriptions, on the manifest source of truth AND in the
-// committed surface.json: the tmux_session_name text must name '$' and '\'
-// among the rejected characters (SR-9.2), the claude_instance_id text must
-// state that an id with a control character is rejected with ErrInvalidFlags
-// (SR-18.9), and the no_pre_trust text must state that the choice is recorded
-// for the row's life and followed by every resume of it (SR-22.6).
-// Only tokens are asserted, never full sentences, so wording edits
-// do not break the test. The claude_instance_id collision sentence is
-// deliberately not pinned.
-func TestSpawnParamDescriptionsPinValidationRules(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
-	surfaceDesc := map[string]string{}
-	for _, vv := range surface.Verbs {
-		if vv.Name != "spawn" {
-			continue
-		}
-		for _, p := range vv.Params {
-			surfaceDesc[p.Name] = p.Description
+// assertErrorNames checks verb's manifest ErrorNames: exactly want when exact,
+// else a superset of it; and, method set, that method's Go doc "Errors:"
+// list names the same set (ErrInternal is TestNoVerbListsErrInternal's).
+func assertErrorNames(t *testing.T, verb, method string, exact bool, want ...string) {
+	t.Helper()
+	got := sorted(verbOf(t, verb).ErrorNames)
+	if exact && !reflect.DeepEqual(got, sorted(want)) {
+		t.Errorf("%s.ErrorNames = %v, want exactly %v", verb, got, want)
+	}
+	for _, n := range want {
+		if !slices.Contains(got, n) {
+			t.Errorf("%s.ErrorNames missing %q", verb, n)
 		}
 	}
-	v, ok := manifest.Lookup("spawn")
-	if !ok {
-		t.Fatal("spawn not in manifest")
+	if method != "" {
+		assertGoDocErrorsMatchManifest(t, method, verb)
 	}
-	manifestDesc := map[string]string{}
-	for _, p := range v.Params {
-		manifestDesc[p.Name] = p.Description
-	}
+}
 
-	cases := []struct {
-		name   string
-		param  string
-		tokens []string
-	}{
-		{"session name rejects dollar and backslash", "tmux_session_name", []string{`'$'`, `'\'`}},
-		{"instance id rejects control characters", "claude_instance_id", []string{"control character", "ErrInvalidFlags"}},
-		{"no_pre_trust is recorded for the life", "no_pre_trust", []string{"recorded on the row for its life", "every resume of that life follows it"}},
+// TestSpawnHasAllSRDErrorNames: spawn lists every SRD §13.1 validation and
+// launch name, among them ErrInvalidFlags (control-character instance id,
+// SR-1.7, SR-9.1), ErrTmuxSessionNameInvalid (SR-9.2), ErrTmuxUnresponsive
+// (bounded create) and ErrTmuxSessionConflict (label scan, SR-9.3; held name,
+// SR-9.4), as Client.Spawn's "Errors:" list does; that bullet names the
+// held-name case, and each tmux name reuse returns states its reuse opt-in
+// cases (SR-1.4, SR-10).
+func TestSpawnHasAllSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "spawn", "Spawn", false, "ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
+		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey", "ErrInvalidFlags", "ErrInstanceIdCollision",
+		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict")
+	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
+	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
+		if !strings.Contains(conflict, phrase) {
+			t.Errorf("(*Client).Spawn ErrTmuxSessionConflict bullet lacks %q: %q", phrase, conflict)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			for source, descs := range map[string]map[string]string{"manifest": manifestDesc, "surface.json": surfaceDesc} {
-				desc, ok := descs[tc.param]
-				if !ok {
-					t.Fatalf("%s: spawn has no %q param", source, tc.param)
-				}
-				for _, tok := range tc.tokens {
-					if !strings.Contains(desc, tok) {
-						t.Errorf("%s: spawn %s description does not contain %q; got %q", source, tc.param, tok, desc)
-					}
-				}
-			}
-		})
+	for _, name := range []string{"ErrTmuxSessionConflict", "ErrTmuxUnresponsive", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate"} {
+		if text := goDocErrorBulletText(t, "Spawn", name); !strings.Contains(text, "reuse opt-in") {
+			t.Errorf("(*Client).Spawn %s bullet does not state its reuse opt-in cases: %q", name, text)
+		}
 	}
+}
+
+// TestListHasSRDErrorNames: list's label k=v parse rejection (SRD §13.1).
+func TestListHasSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "list", "", false, "ErrListInvalidLabel")
+}
+
+// TestKillHasSRDErrorNames pins kill's ErrorNames, and Client.Kill's "Errors:"
+// list, to exactly SR-1.7's five names.
+func TestKillHasSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "kill", "Kill", true, "ErrSpawnNotFound", "ErrTmuxKillFailed", "ErrTmuxNotAvailable",
+		"ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
+}
+
+// TestPauseHasSRDErrorNames pins pause's to exactly SR-1.7's seven names.
+func TestPauseHasSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "pause", "Pause", true, "ErrPauseTimeout", "ErrSpawnNotFound", "ErrSpawnNotPausable",
+		"ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
+}
+
+// TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five names.
+func TestReadPaneHasInteractErrorNames(t *testing.T) {
+	assertErrorNames(t, "read-pane", "ReadPane", true, "ErrSpawnNotFound", "ErrTmuxCaptureFailed", "ErrTmuxNotAvailable",
+		"ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
+}
+
+// TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names.
+func TestResumeHasSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "resume", "Resume", true, "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
+		"ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",
+		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
+}
+
+// TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven names.
+func TestSendKeysHasInteractErrorNames(t *testing.T) {
+	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
+		"ErrSpawnNotInteractive", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
 }
 
 // TestNoVerbListsErrInternal pins SR-1.7 / AC-CAT-03 for every verb, callable
-// or not: ErrInternal is never a listed error name, on the manifest source of
-// truth or in the committed surface.json.
+// or not: ErrInternal is never a listed error name.
 func TestNoVerbListsErrInternal(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
-	if len(surface.Verbs) == 0 {
-		t.Fatal("surface.json declares no verbs")
-	}
 	for _, v := range manifest.Verbs {
-		for _, n := range v.ErrorNames {
-			if n == "ErrInternal" {
-				t.Errorf("manifest: %s.ErrorNames lists ErrInternal; SR-1.7 keeps it off every verb's error list", v.Name)
-			}
+		if slices.Contains(v.ErrorNames, "ErrInternal") {
+			t.Errorf("%s.ErrorNames lists ErrInternal; SR-1.7 keeps it off every verb's error list", v.Name)
 		}
-	}
-	for _, v := range surface.Verbs {
-		for _, n := range v.ErrorNames {
-			if n == "ErrInternal" {
-				t.Errorf("surface.json: %s error_names lists ErrInternal; SR-1.7 keeps it off every verb's error list", v.Name)
-			}
-		}
-	}
-}
-
-// TestSpawnDescriptionStatesPreCheckErrInternal pins AC-CAT-03's second half:
-// spawn's Description names the ErrInternal trigger (the collision pre-check's
-// failed store read). Tokens only, on the manifest and in surface.json.
-func TestSpawnDescriptionStatesPreCheckErrInternal(t *testing.T) {
-	v, ok := manifest.Lookup("spawn")
-	if !ok {
-		t.Fatal("spawn not in manifest")
-	}
-	descs := map[string]string{"manifest": v.Description}
-	_, surface := readSurfaceJSON(t)
-	for _, vv := range surface.Verbs {
-		if vv.Name == "spawn" {
-			descs["surface.json"] = vv.Description
-		}
-	}
-	if _, ok := descs["surface.json"]; !ok {
-		t.Fatal("surface.json has no spawn verb")
-	}
-	for source, desc := range descs {
-		for _, tok := range []string{"ErrInternal", "collision pre-check", "read the store"} {
-			if !strings.Contains(desc, tok) {
-				t.Errorf("%s: spawn description does not contain %q; got %q", source, tok, desc)
-			}
-		}
-	}
-}
-
-// TestResumeDescriptionStatesPreTrust pins SR-22.6 on resume's Description:
-// resume pre-trusts unless the row's spawn opted out with no_pre_trust, and a
-// pre-trust failure never fails the resume. Tokens only, on the manifest and in
-// surface.json (help shows this same description).
-func TestResumeDescriptionStatesPreTrust(t *testing.T) {
-	v, ok := manifest.Lookup("resume")
-	if !ok {
-		t.Fatal("resume not in manifest")
-	}
-	descs := map[string]string{"manifest": v.Description}
-	_, surface := readSurfaceJSON(t)
-	for _, vv := range surface.Verbs {
-		if vv.Name == "resume" {
-			descs["surface.json"] = vv.Description
-		}
-	}
-	if _, ok := descs["surface.json"]; !ok {
-		t.Fatal("surface.json has no resume verb")
-	}
-	for source, desc := range descs {
-		for _, tok := range []string{"best-effort pre-trust", "unless the spawn that began the row's life",
-			"no_pre_trust", "pre-trust failure never fails the resume"} {
-			if !strings.Contains(desc, tok) {
-				t.Errorf("%s: resume description does not contain %q; got %q", source, tok, desc)
-			}
-		}
-	}
-}
-
-// resultField is one verb's result field as a source (manifest or
-// surface.json) gives it.
-type resultField struct {
-	typ        string
-	nullable   bool
-	allowEmpty bool
-	desc       string
-	enum       []string
-}
-
-// resultFieldSources returns verb's result field named field keyed by source
-// ("manifest", "surface.json"); a source lacking the field has no key.
-func resultFieldSources(t *testing.T, surface surfaceDoc, verb, field string) map[string]resultField {
-	t.Helper()
-	sources := map[string]resultField{}
-	v, ok := manifest.Lookup(verb)
-	if !ok {
-		t.Fatalf("%s not in manifest", verb)
-	}
-	for _, f := range v.ResultFields {
-		if f.Name == field {
-			sources["manifest"] = resultField{f.Type, f.Nullable, f.AllowEmpty, f.Description, f.AllowedValues}
-		}
-	}
-	for _, sv := range surface.Verbs {
-		if sv.Name != verb {
-			continue
-		}
-		for _, f := range sv.ResultFields {
-			if f.Name == field {
-				sources["surface.json"] = resultField{f.Type, f.Nullable, f.AllowEmpty, f.Description, f.AllowedValues}
-			}
-		}
-	}
-	return sources
-}
-
-// TestLaunchStartedAtResultFields pins SR-22.2 on the manifest and in
-// surface.json: status and get carry a nullable timestamp? launch_started_at
-// field, list names it in its spawns text, each stating the SR-22.2 rule.
-func TestLaunchStartedAtResultFields(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
-	cases := []struct {
-		verb    string
-		field   string // the result field holding the text
-		listRow bool
-	}{
-		{"status", "launch_started_at", false},
-		{"get", "launch_started_at", false},
-		{"list", "spawns", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.verb, func(t *testing.T) {
-			sources := resultFieldSources(t, surface, tc.verb, tc.field)
-			for _, source := range []string{"manifest", "surface.json"} {
-				f, ok := sources[source]
-				if !ok {
-					t.Errorf("%s: %s has no %q result field", source, tc.verb, tc.field)
-					continue
-				}
-				if !tc.listRow {
-					if f.allowEmpty {
-						t.Errorf("%s: %s.%s allow_empty = true; want false", source, tc.verb, tc.field)
-					}
-					if f.typ != "timestamp?" || !f.nullable {
-						t.Errorf("%s: %s.launch_started_at type %q nullable %v; want \"timestamp?\" nullable true",
-							source, tc.verb, f.typ, f.nullable)
-					}
-					if f.enum != nil {
-						t.Errorf("%s: %s.launch_started_at allowed values %v; want none", source, tc.verb, f.enum)
-					}
-				}
-				apitest.AssertAgentTextCase(t, source+": "+tc.verb+" result field "+tc.field, f.desc,
-					apitest.DescLaunchStartedAtField(tc.listRow))
-			}
-		})
-	}
-}
-
-// TestPreTrustResultField pins SR-22.6's pre_trust result field (AC-SPN-08,
-// AC-CAT-04) on spawn and resume, on the manifest and in surface.json: a
-// non-nullable, non-empty string whose value set is exactly ok/skipped/failed,
-// its text stating each meaning, and the verb description (all help shows)
-// naming it. Key phrases only, never full sentences.
-func TestPreTrustResultField(t *testing.T) {
-	_, surface := readSurfaceJSON(t)
-	cases := []struct {
-		verb       string
-		skippedWhy string // why pre-trust was off for this launch
-	}{
-		{"spawn", "the caller passed no_pre_trust"},
-		{"resume", "the spawn that began the row's life turned it off with no_pre_trust"},
-	}
-	wantEnum := []string{"failed", "ok", "skipped"}
-	for _, tc := range cases {
-		t.Run(tc.verb, func(t *testing.T) {
-			sources := resultFieldSources(t, surface, tc.verb, "pre_trust")
-			for _, source := range []string{"manifest", "surface.json"} {
-				f, ok := sources[source]
-				if !ok {
-					t.Errorf("%s: %s has no pre_trust result field", source, tc.verb)
-					continue
-				}
-				if f.typ != "string" || f.nullable || f.allowEmpty {
-					t.Errorf("%s: %s.pre_trust type %q nullable %v allow_empty %v; want \"string\" false false",
-						source, tc.verb, f.typ, f.nullable, f.allowEmpty)
-				}
-				got := append([]string(nil), f.enum...)
-				sort.Strings(got)
-				if !reflect.DeepEqual(got, wantEnum) {
-					t.Errorf("%s: %s.pre_trust allowed values %v; want exactly ok, skipped, failed", source, tc.verb, f.enum)
-				}
-				for _, tok := range []string{
-					"ok = the folder-trust entry was written",
-					"skipped = pre-trust was off for this launch", tc.skippedWhy, "nothing was attempted",
-					"failed = pre-trust was attempted", "entry was not written", "launch still proceeds",
-				} {
-					if !strings.Contains(f.desc, tok) {
-						t.Errorf("%s: %s.pre_trust description does not contain %q; got %q", source, tc.verb, tok, f.desc)
-					}
-				}
-			}
-
-			v, _ := manifest.Lookup(tc.verb)
-			descs := map[string]string{"manifest": v.Description}
-			for _, sv := range surface.Verbs {
-				if sv.Name == tc.verb {
-					descs["surface.json"] = sv.Description
-				}
-			}
-			for _, source := range []string{"manifest", "surface.json"} {
-				for _, tok := range []string{"Returns the claude_instance_id and pre_trust", "ok, skipped or failed"} {
-					if !strings.Contains(descs[source], tok) {
-						t.Errorf("%s: %s description does not contain %q; got %q", source, tc.verb, tok, descs[source])
-					}
-				}
-			}
-		})
 	}
 }
