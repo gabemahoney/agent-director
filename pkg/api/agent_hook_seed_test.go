@@ -24,6 +24,19 @@ func seedAgentState(s *store.Store, dbPath, id, state string) error {
 	})
 }
 
+// relayHookTimeout does what id's live relay hook does at its poll deadline
+// (internal/hook's timeout path): deny request token with reason timeout,
+// then move the row to working, which closes the permission dialog.
+func relayHookTimeout(t *testing.T, e *killEnv, id, token string) {
+	t.Helper()
+	if ok, err := e.st.DecidePermissionRequest(id, token, "deny", store.DecisionReasonTimeout, store.WriterProcessHook); err != nil || !ok {
+		t.Fatalf("relay hook timeout deny of %s: updated=%v err=%v", token, ok, err)
+	}
+	if err := seedAgentState(e.st, e.dbPath, id, store.StateWorking); err != nil {
+		t.Fatalf("relay hook timeout transition of %s: %v", id, err)
+	}
+}
+
 // openAgentRequest inserts an open permission request for id in s (opened by
 // storefix.OpenTempStore, an apitest fixture, or registered) through the gated
 // INSERT of the row's own agent, with eviction cap (0: none).

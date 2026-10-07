@@ -26,20 +26,33 @@ var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 // it the call is rejected at the API layer regardless of CLI gating.
 var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 
-// ErrRelayFallenBack is returned by Decide when the target permission request
-// is still open but its relay window has elapsed per the shared deliverability
-// signal (RelayRequestUndeliverable): the hook that would deliver the decision
-// has been — or is about to be — killed at Claude Code's per-hook timeout, so
-// recording a verdict would write success into a void. The message conveys
-// "too late — answer at the pane": the operator's recourse is to answer the
-// native permission dialog directly, with send-keys. Decide refuses from
-// window - RelayKillSafetyMargin but the send-keys relay guard releases only
-// RelayKillSafetyMargin (1 s) after every request's delivery window elapses,
-// so for this request send-keys may refuse with ErrSendKeysWhileRelayed for
-// up to twice the margin (2 s) after this refusal. The pane answer is
-// accepted once the guard releases, and the message says when. The row's
-// decision stays NULL; recovery of decided-but-undelivered rows is Epic 3's
-// guard release (no information is lost). Callers detect it with errors.Is.
+// ErrRelayFallenBack is returned by Decide when the target permission
+// request's record is still open past its relay window and its relay hook can
+// no longer answer it: the hook had neither delivered a verdict nor recorded
+// its timeout deny when Decide last read the record, at created_at plus the
+// window plus RelayKillSafetyMargin plus created_at's storage resolution
+// (1 s), by which a live hook is presumed to have done one or the other.
+// Decide knows only that the record is open, not whether Claude Code's
+// permission dialog is still on screen. Recording a verdict would write
+// success into a void, so the record's decision stays NULL (no information is
+// lost). The message conveys "too late — answer at the pane": the recourse is
+// to answer at the pane directly, with send-keys, once its relay guard
+// releases, RelayKillSafetyMargin (1 s) after every request's delivery window
+// elapses, as the message says; on this request's account it already has.
+//
+// Decide refuses from window - RelayKillSafetyMargin
+// (RelayRequestUndeliverable), but a live relay hook may still reach its poll
+// deadline after that and deny the request, which closes the dialog and moves
+// the row to working, where a pane answer would be typed into Claude's prompt
+// as a user message (b.pzy). The hook's deadline runs from its own clock after
+// the record was inserted, while created_at keeps whole seconds only, so the
+// deny can land up to 1 s later than created_at + window suggests, besides
+// the slack RelayKillSafetyMargin covers. A refusal
+// before the instant above therefore waits until it (at most twice the margin
+// plus the resolution, 3 s) and reads the request again: a request decided
+// meanwhile, such as by the hook's timeout deny, is ErrAlreadyDecided, and
+// only a request whose record is still open is ErrRelayFallenBack. Callers
+// detect it with errors.Is.
 var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
 
 // DecideStore is the narrow store surface Decide needs.
@@ -96,14 +109,28 @@ type DecideResult struct{}
 //     SELECT: already-decided (ErrAlreadyDecided) wins for decided rows;
 //     open-but-undeliverable (ErrRelayFallenBack) applies ONLY to open rows; no
 //     row → ErrNoOpenPermissionRequest.
+//   - An open row refused before its relay hook has settled (now earlier
+//     than created_at + window + RelayKillSafetyMargin + created_at's 1 s
+//     storage resolution, at most 3 s away) may still be denied by its relay
+//     hook at the hook's poll deadline. Decide sleeps until that instant and
+//     repeats the follow-up SELECT as of it, so ErrRelayFallenBack is
+//     returned only for a row still open then; one decided meanwhile is
+//     ErrAlreadyDecided (b.pzy). No other path sleeps.
 //   - params.Reason is currently discarded; DecisionReasonOperator is always
 //     written for deny decisions regardless of its value.
 //
 // effectiveWindow is the resolved relay window (obtained by the caller via
 // Epic 1's accessor and consumed only through the shared deliverability
 // function); now is the injected clock so the deliverability verdict is
-// deterministic and testable.
+// deterministic and testable. The sleep above is time.Sleep.
 func Decide(s DecideStore, effectiveWindow time.Duration, now time.Time, params DecideParams) (DecideResult, error) {
+	return decide(s, effectiveWindow, now, time.Sleep, params)
+}
+
+// decide is Decide with the sleep of the wait for a fallen-back request's
+// relay hook injected: Decide passes time.Sleep and Client.Decide the
+// Client's own sleep, so a test can stand in for the hook during the wait.
+func decide(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep func(time.Duration), params DecideParams) (DecideResult, error) {
 	if params.RequestToken == "" {
 		return DecideResult{}, fmt.Errorf("%w: request_token is required", ErrMissingRequestToken)
 	}
@@ -139,37 +166,69 @@ func Decide(s DecideStore, effectiveWindow time.Duration, now time.Time, params 
 	if updated {
 		return DecideResult{}, nil
 	}
+	return DecideResult{}, decideRefusal(s, effectiveWindow, now, sleep, params)
+}
 
-	// RowsAffected==0 — the row is absent, already decided, or open but
-	// undeliverable. Disambiguate via a follow-up SELECT. Precedence (PM-pinned):
-	// ErrAlreadyDecided wins for decided rows; ErrRelayFallenBack applies ONLY to
-	// open rows. The race window is benign: a concurrent decide that landed since
-	// our UPDATE surfaces as ErrAlreadyDecided; a row that fell out of the window
-	// surfaces as ErrRelayFallenBack.
+// decideRefusal names a decide whose guarded UPDATE affected no row: the row
+// is absent, already decided, or open but undeliverable. It disambiguates via
+// a follow-up SELECT. Precedence (PM-pinned): ErrAlreadyDecided wins for
+// decided rows; ErrRelayFallenBack applies ONLY to open rows. The race window
+// is benign: a concurrent decide that landed since our UPDATE surfaces as
+// ErrAlreadyDecided; a row that fell out of the window surfaces as
+// ErrRelayFallenBack.
+//
+// An open, undeliverable row whose relay hook has not yet settled
+// (relayHookSettledAt) may still be denied by its live relay hook at the
+// hook's poll deadline, which closes the permission dialog; "answer at the
+// pane" would then type into Claude's prompt (b.pzy). So for such a row
+// decideRefusal sleeps until that instant (at most twice
+// RelayKillSafetyMargin plus createdAtResolution, 3 s) and repeats the SELECT
+// as of it: whatever decided the row meanwhile wins as ErrAlreadyDecided, and
+// a row still open is ErrRelayFallenBack, its hook presumed dead and its
+// send-keys guard already released.
+func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep func(time.Duration), params DecideParams) error {
 	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
+	if err == nil && pr.Decision == "" && RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
+		if settled := relayHookSettledAt(pr.CreatedAt, effectiveWindow); now.Before(settled) {
+			sleep(settled.Sub(now))
+			now = settled
+			pr, err = s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
+		}
+	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 	}
 	if err != nil {
-		return DecideResult{}, err
+		return err
 	}
 	if pr.Decision != "" {
-		return DecideResult{}, fmt.Errorf("%w: %s already decided as %q",
-			store.ErrAlreadyDecided, params.ClaudeInstanceID, pr.Decision)
+		return alreadyDecidedError(params.ClaudeInstanceID, pr)
 	}
 	// Open row that the guarded UPDATE refused: the only reason a
 	// token-matched, decision-NULL row is skipped is the deliverability
 	// predicate. Re-confirm via the shared single-authority signal (no second
 	// inline time comparison) and surface the typed fallen-back error.
 	if RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
-		return DecideResult{}, fmt.Errorf("%w: %s request %s fell back — too late; answer at the pane with send-keys once its relay guard releases, %s (for this request, at most %s after this refusal)",
-			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken, relayGuardReleaseAdvice, inSeconds(relayFallenBackMaxGuardWait))
+		return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys once its relay guard releases, %s (for this request it already has)",
+			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken, relayGuardReleaseAdvice)
 	}
 	// Unreachable in practice — the row exists, decision is NULL, is within the
 	// window, yet UPDATE didn't affect it. The only way to land here is a SQL
 	// driver oddity; surface as the more conservative ErrNoOpenPermissionRequest.
-	return DecideResult{}, fmt.Errorf("%w: %s (UPDATE no-op against open, deliverable row)",
+	return fmt.Errorf("%w: %s (UPDATE no-op against open, deliverable row)",
 		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+}
+
+// alreadyDecidedError is decide's ErrAlreadyDecided for the decided row pr.
+// It names the recorded decision_reason when there is one, so a request the
+// relay hook denied when its window ran out (DecisionReasonTimeout) reads
+// differently from a caller's verdict.
+func alreadyDecidedError(instanceID string, pr PermissionRow) error {
+	if pr.DecisionReason == "" {
+		return fmt.Errorf("%w: %s already decided as %q", store.ErrAlreadyDecided, instanceID, pr.Decision)
+	}
+	return fmt.Errorf("%w: %s already decided as %q (decision_reason %q)",
+		store.ErrAlreadyDecided, instanceID, pr.Decision, pr.DecisionReason)
 }
 
 // decideOutcome maps a Decide error to its canonical outcome string for
@@ -220,13 +279,20 @@ func decideOutcome(err error) string {
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
 //   - [ErrNoOpenPermissionRequest]: no undecided permission request exists.
-//   - [ErrAlreadyDecided]: a concurrent caller already wrote a verdict.
-//   - [ErrRelayFallenBack]: the request is still open but its relay window has
-//     elapsed (the delivering hook is dead); answer at the pane instead, with
-//     SendKeys once its relay guard releases, [RelayKillSafetyMargin] (1 s)
-//     after every request's delivery window elapses (for this request, at most
-//     2 s after the refusal).
+//   - [ErrAlreadyDecided]: a verdict is already recorded: a concurrent
+//     caller's, or the relay hook's fail-closed deny (decision_reason
+//     "timeout"), such as when the request's window ran out, which the hook
+//     normally returns to Claude Code as the request's answer.
+//   - [ErrRelayFallenBack]: the request's record is still open past its relay
+//     window and its relay hook can no longer answer it; answer at the pane
+//     instead, with SendKeys once its relay guard releases,
+//     [RelayKillSafetyMargin] (1 s) after every request's delivery window
+//     elapses (for this request it already has).
 //   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
+//
+// A call refused between 1 s before the request's window ends and 2 s after
+// it first waits until 2 s after it (at most 3 s), because the relay hook
+// may still deny the request in that time; see [ErrRelayFallenBack].
 //
 // Nondeterminism: none.
 func (c *Client) Decide(params DecideParams) (DecideResult, error) {
@@ -259,10 +325,11 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 
 	var result DecideResult
 	// Effective relay window is resolved here via Epic 1's accessor (the single
-	// source for the non-positive→default fallback); the clock is injected as
-	// time.Now() so the deliverability verdict is deterministic at the API
-	// boundary.
+	// source for the non-positive→default fallback); the clock is the
+	// Client's own (c.now), so the deliverability verdict is deterministic at
+	// the API boundary and tests can step it. The wait for a fallen-back
+	// request's relay hook sleeps through the Client's own sleep.
 	effectiveWindow := time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second
-	result, callErr = Decide(c.st, effectiveWindow, time.Now(), params)
+	result, callErr = decide(c.st, effectiveWindow, c.now(), c.sleep, params)
 	return result, callErr
 }

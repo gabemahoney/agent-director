@@ -48,7 +48,8 @@ var ErrNoOpenPermissionRequest = errors.New("ErrNoOpenPermissionRequest")
 // ErrAlreadyDecided is returned by decide() when a row exists but
 // its decision column is already non-NULL. SRD §6.2: first decide
 // wins; subsequent calls report this so the caller knows their write
-// was not applied.
+// was not applied. The relay hook's fail-closed deny at its timeout
+// (DecisionReasonTimeout) is a first decide too.
 var ErrAlreadyDecided = errors.New("ErrAlreadyDecided")
 
 // ErrRequestTokenCollision is returned by UpsertOpenPermissionRequest when a
@@ -383,7 +384,10 @@ func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, 
 // a follow-up GetPermissionRequest:
 //
 //   - row decided            → ErrAlreadyDecided
-//   - row open + undeliverable → ErrRelayFallenBack (per the shared signal)
+//   - row open + undeliverable → ErrRelayFallenBack (per the shared signal);
+//     pkg/api's decideRefusal first waits out the end of the relay window for
+//     a row refused near it and reads it again, so one its relay hook denied
+//     at its timeout meanwhile becomes ErrAlreadyDecided
 //   - no row                 → ErrNoOpenPermissionRequest
 //
 // Unlike DecidePermissionRequest, the empty-token ErrAmbiguousRequest guard is

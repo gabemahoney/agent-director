@@ -410,12 +410,12 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | Error | When it fires |
 |---|---|
 | `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on`. Time-bounded: refused until 1 s after every one of the spawn's permission requests' relay windows has elapsed; from then this guard lets `send-keys` through. |
-| `ErrRelayFallenBack` | `decide` was called on an open request whose relay window has run out (from 1 s before it ends); no verdict was recorded. Answer at the pane with `send-keys` once its relay guard releases, 1 s after every request's window (for this request, at most 2 s after the refusal); until then `send-keys` may throw `ErrSendKeysWhileRelayed`. |
+| `ErrRelayFallenBack` | `decide` was called on an open request whose relay window has run out (from 1 s before it ends), and the request's record is still open 2 s after its window ended: its relay hook can no longer answer it, and no verdict was recorded. A call made before then first waits for that instant (at most 3 s). Answer at the pane with `send-keys` once its relay guard releases, 1 s after every request's window; for this request it already has, but a request of the same spawn opened later can make `send-keys` throw `ErrSendKeysWhileRelayed` until its own window plus 1 s. |
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `--decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
 | `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair (or it was already decided). |
-| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. |
+| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay hook denied when its window ran out, before the call or while `decide` waited at the window's end (`getPermission` returns `decision_reason` `"timeout"`); the hook normally returned that deny to Claude Code, which closed the dialog, so there is nothing to answer at the pane. |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
 | `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
 

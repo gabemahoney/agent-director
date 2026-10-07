@@ -625,7 +625,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "decide",
-		Description: "Caller's allow/deny verdict on an open PermissionRequest. One atomic write records it only while the request is open and deliverable, so the first call wins; an open request past its relay window is refused with ErrRelayFallenBack (answer at the pane) and no verdict is recorded. Only for rows with relay_mode=on.",
+		Description: "Caller's allow/deny verdict on an open PermissionRequest. One atomic write records it only while the request is open and deliverable, so the first call wins; an open request past its relay window is refused and the caller's verdict is not recorded: ErrAlreadyDecided if its relay hook denied it at its timeout (decide waits out the end of the window to see this), otherwise ErrRelayFallenBack (answer at the pane). Only for rows with relay_mode=on.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{

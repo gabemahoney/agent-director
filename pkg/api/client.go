@@ -76,8 +76,9 @@ type Client struct {
 	cfg        config.Config
 	logger     *log.Logger
 	// now is the Client's clock, time.Now in production (Appendix F.5); the
-	// spawn's launch start, kill's process wait and find-missing's pending
-	// grace period read it. Tests replace it per Client.
+	// spawn's launch start, kill's process wait, find-missing's pending
+	// grace period and the relay verdicts of send-keys and decide read it.
+	// Tests replace it per Client.
 	now func() time.Time
 	// procChecker is the start-time reader (SR-3.8), probe.NewProcChecker in
 	// production; the spawn's identity write reads the server's and the
@@ -85,7 +86,8 @@ type Client struct {
 	// read-pane's lookup checks the server with it.
 	// Tests replace it per Client.
 	procChecker ProcChecker
-	// sleep pauses kill's process wait between two readings (SR-6.1),
+	// sleep pauses kill's process wait between two readings (SR-6.1) and
+	// decide's wait for a fallen-back request's relay hook (b.pzy),
 	// time.Sleep in production. Tests replace it per Client, so the shared
 	// test clock advances in virtual time (Appendix F.5).
 	sleep  func(time.Duration)

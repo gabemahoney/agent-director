@@ -19,11 +19,13 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// decideA decides request A of id-d-1 with decision and reason at now under window.
-func decideA(s *store.Store, window time.Duration, now time.Time, decision, reason string) error {
-	_, err := api.Decide(s, window, now, api.DecideParams{ClaudeInstanceID: "id-d-1",
-		RequestToken: storefix.TestRequestTokenA, Decision: decision, Reason: reason})
-	return err
+// decideA decides request A of id-d-1 with decision and reason at now under
+// window; it returns how long decide waited for the relay hook (b.pzy).
+func decideA(s *store.Store, window time.Duration, now time.Time, decision, reason string) (time.Duration, error) {
+	var slept time.Duration
+	_, err := api.DecideWithSleep(s, window, now, func(d time.Duration) { slept += d }, api.DecideParams{
+		ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: decision, Reason: reason})
+	return slept, err
 }
 
 // rowA returns id-d-1's request A.
@@ -85,7 +87,7 @@ func TestDecideRecordsVerdict(t *testing.T) {
 		t.Run(decision, func(t *testing.T) {
 			s, _ := apitest.SeedDecideFixture(t, "on")
 			apitest.SeedPermissionRow(t, s, "id-d-1")
-			if err := decideA(s, 24*time.Hour, time.Now(), decision, "caller reason"); err != nil {
+			if _, err := decideA(s, 24*time.Hour, time.Now(), decision, "caller reason"); err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
 			if row := rowA(t, s); row.Decision != decision || row.DecisionReason != wantReason {
@@ -96,8 +98,9 @@ func TestDecideRecordsVerdict(t *testing.T) {
 }
 
 // TestDecideFirstCallWins: a second decide on a decided row is ErrAlreadyDecided
-// and leaves the first verdict; it beats ErrRelayFallenBack even once the row
-// is aged out of the window, since fallen-back applies only to open rows.
+// at once and leaves the first verdict; it beats ErrRelayFallenBack even once
+// the row is aged out of the window, since fallen-back applies only to open
+// rows, and does not wait for the relay hook (b.pzy).
 func TestDecideFirstCallWins(t *testing.T) {
 	t.Parallel()
 	const window = 10 * time.Second
@@ -106,12 +109,12 @@ func TestDecideFirstCallWins(t *testing.T) {
 			s, _ := apitest.SeedDecideFixture(t, "on")
 			apitest.SeedPermissionRow(t, s, "id-d-1")
 			created := rowA(t, s).CreatedAt
-			if err := decideA(s, window, created, "allow", "ok"); err != nil {
+			if _, err := decideA(s, window, created, "allow", "ok"); err != nil {
 				t.Fatalf("first Decide: %v", err)
 			}
-			err := decideA(s, window, created.Add(age), "deny", "no")
-			if !errors.Is(err, store.ErrAlreadyDecided) || errors.Is(err, api.ErrRelayFallenBack) {
-				t.Fatalf("second Decide err = %v; want ErrAlreadyDecided only", err)
+			slept, err := decideA(s, window, created.Add(age), "deny", "no")
+			if !errors.Is(err, store.ErrAlreadyDecided) || errors.Is(err, api.ErrRelayFallenBack) || slept != 0 {
+				t.Fatalf("second Decide err = %v after waiting %v; want ErrAlreadyDecided only, at once", err, slept)
 			}
 			if row := rowA(t, s); row.Decision != "allow" || row.DecisionReason != "" {
 				t.Errorf("row = (%q, %q); want the first verdict (allow, \"\")", row.Decision, row.DecisionReason)
@@ -137,7 +140,8 @@ func TestDecideConcurrentFirstCallWins(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			results <- decideA(s, 24*time.Hour, time.Now(), decision, fmt.Sprintf("w%d", i))
+			_, err := decideA(s, 24*time.Hour, time.Now(), decision, fmt.Sprintf("w%d", i))
+			results <- err
 		}()
 	}
 	close(start)
@@ -159,28 +163,35 @@ func TestDecideConcurrentFirstCallWins(t *testing.T) {
 	}
 }
 
-// TestDecideDeliverabilityBoundary pins the deliverability boundary on the
-// injected clock: the row is deliverable iff now < created_at + window - margin
-// (b.2b8's "at most 2 s"); a refusal is ErrRelayFallenBack and records nothing.
+// TestDecideDeliverabilityBoundary pins, on the injected clock, that the row is
+// deliverable iff now < created_at + window - margin; a refusal records nothing
+// and is ErrRelayFallenBack only after decide waits out its relay hook, until
+// created_at + window + margin + created_at's resolution (b.pzy).
 func TestDecideDeliverabilityBoundary(t *testing.T) {
 	t.Parallel()
 	const window = 10 * time.Second
 	edge := window - api.RelayKillSafetyMargin
+	release := window + api.RelayKillSafetyMargin
+	settled := release + api.CreatedAtResolution
 	cases := []struct {
 		name    string
 		age     time.Duration // now - created_at
 		refused bool
+		wait    time.Duration // decide's wait for the relay hook
 	}{
-		{"aged_at_boundary_refused", edge + time.Second, true},
-		{"exact_equality_refused", edge, true}, // cutoff == created_at: not strictly after
-		{"just_before_boundary_accepted", edge - time.Nanosecond, false},
-		{"comfortably_in_window_accepted", 0, false},
+		{"hook_settled_refused_at_once", settled, true, 0},
+		{"just_before_hook_settled_refused_after_waiting", settled - time.Nanosecond, true, time.Nanosecond},
+		{"guard_released_refused_after_waiting", release, true, api.CreatedAtResolution},
+		{"window_end_refused_after_waiting", window, true, api.RelayKillSafetyMargin + api.CreatedAtResolution},
+		{"exact_equality_refused_after_waiting", edge, true, 2*api.RelayKillSafetyMargin + api.CreatedAtResolution}, // cutoff == created_at: not strictly after
+		{"just_before_boundary_accepted", edge - time.Nanosecond, false, 0},
+		{"comfortably_in_window_accepted", 0, false, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := apitest.SeedDecideFixture(t, "on")
 			apitest.SeedPermissionRow(t, s, "id-d-1")
-			err := decideA(s, window, rowA(t, s).CreatedAt.Add(tc.age), "allow", "")
+			slept, err := decideA(s, window, rowA(t, s).CreatedAt.Add(tc.age), "allow", "")
 			want := "allow"
 			if tc.refused {
 				want = ""
@@ -190,10 +201,56 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("Decide: %v; want the verdict recorded", err)
 			}
-			if got := rowA(t, s).Decision; got != want {
-				t.Errorf("decision = %q; want %q", got, want)
+			if got := rowA(t, s).Decision; got != want || slept != tc.wait {
+				t.Errorf("decision = %q after waiting %v; want %q after %v", got, slept, want, tc.wait)
 			}
 		})
+	}
+}
+
+// TestClientDecideWaitsForRelayHook: Client.Decide at its earliest refusal waits
+// the longest (3 s) on its own clock and sleep, and a timeout deny the live
+// relay hook writes meanwhile comes back as ErrAlreadyDecided (b.pzy).
+func TestClientDecideWaitsForRelayHook(t *testing.T) {
+	t.Parallel()
+	e := newKillEnv(t)
+	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
+	createdAt, _ := advRelayGuardReleased(t, e, r)
+	c, _ := e.client(t)
+	api.SetClockForTest(c, func() time.Time { return createdAt.Add(sendKeysWindow() - api.RelayKillSafetyMargin) })
+	var slept time.Duration
+	e.sleep = func(d time.Duration) {
+		slept += d
+		relayHookTimeout(t, e, r.ID, storefix.TestRequestTokenA)
+	}
+
+	_, err := c.Decide(api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+
+	assertOneSentinel(t, err, store.ErrAlreadyDecided)
+	adviceAssertPhrase(t, err, advDecideHookTimedOut)
+	if slept != 3*time.Second { // its Go doc: "at most 3 s"
+		t.Errorf("Client.Decide waited %v through its sleep; want 3s", slept)
+	}
+}
+
+// TestDecideRequestGoneDuringWait: a request removed (its spawn deleted) while
+// decide waits for its relay hook is ErrNoOpenPermissionRequest, without "answer at the pane" (b.pzy).
+func TestDecideRequestGoneDuringWait(t *testing.T) {
+	t.Parallel()
+	const window = 10 * time.Second
+	s, _ := apitest.SeedDecideFixture(t, "on")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
+	slept := false
+	_, err := api.DecideWithSleep(s, window, rowA(t, s).CreatedAt.Add(window), func(time.Duration) {
+		slept = true
+		if err := s.DeleteSpawn("id-d-1"); err != nil {
+			t.Errorf("DeleteSpawn: %v", err)
+		}
+	}, api.DecideParams{ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+
+	assertOneSentinel(t, err, store.ErrNoOpenPermissionRequest)
+	if !slept || strings.Contains(errText(err), "answer at the pane") {
+		t.Errorf("decide slept: %v, err: %v; want it to wait, then name no pane answer", slept, err)
 	}
 }
 

@@ -93,6 +93,16 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 // constant, so SR-4.4's "single time-based authority" holds: one file, one
 // margin, one place to change the boundary — just applied with the sign that
 // makes each caller fail safe.
+//
+// From Decide's boundary until createdAtResolution after the guard's (window -
+// margin to window + margin + createdAtResolution) Decide refuses but the relay
+// poller may still be alive: at its poll deadline it denies the request, which
+// closes Claude Code's permission dialog and moves the row to working, where
+// the send_keys guard no longer applies. Decide therefore does not answer a
+// refusal inside that span at once: it waits until relayHookSettledAt and
+// reads the request again, so ErrRelayFallenBack ("answer at the pane") is
+// returned only for a request whose row is still open once its poller is
+// presumed no longer able to answer it (b.pzy).
 
 // RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
 // whose delivery window has provably elapsed (guard may release) from rows that
@@ -107,7 +117,51 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 // caller applying this boundary MUST obtain the cutoff here rather than
 // restating the window +/- margin arithmetic elsewhere.
 func RelayGuardReleaseCutoff(now time.Time, effectiveWindow time.Duration) time.Time {
-	return now.Add(-(effectiveWindow + RelayKillSafetyMargin))
+	return now.Add(-relayGuardHold(effectiveWindow))
+}
+
+// relayGuardHold is how long after a request's created_at the send_keys relay
+// guard holds on that request's account: the effective relay window plus
+// RelayKillSafetyMargin. RelayGuardReleaseCutoff and relayGuardReleaseAt both
+// apply it, so the window + margin arithmetic is stated once.
+func relayGuardHold(effectiveWindow time.Duration) time.Duration {
+	return effectiveWindow + RelayKillSafetyMargin
+}
+
+// relayGuardReleaseAt returns the instant from which
+// RelayRequestGuardReleasable holds for a request created at createdAt: its
+// created_at plus the effective relay window plus RelayKillSafetyMargin.
+// relayHookSettledAt, the instant Decide waits for, is createdAtResolution
+// later, so the guard has released on the request's account by then.
+func relayGuardReleaseAt(createdAt time.Time, effectiveWindow time.Duration) time.Time {
+	return createdAt.Add(relayGuardHold(effectiveWindow))
+}
+
+// createdAtResolution is the storage resolution of a permission request's
+// created_at. The column defaults to SQLite's CURRENT_TIMESTAMP
+// (internal/store/schema.go), which keeps whole seconds only, so a stored
+// created_at can be up to this much earlier than the instant the row was
+// inserted. The relay poller does not start from the stored value: its poll
+// deadline is its own clock, read after the INSERT has committed, plus the
+// window (internal/hook's Poll). Its timeout deny can therefore land up to
+// this much later than created_at + window, besides the slack
+// RelayKillSafetyMargin covers, which the truncation must not consume.
+// relayHookSettledAt adds it; the deliverability and guard-release boundaries
+// above do not.
+const createdAtResolution = 1 * time.Second
+
+// relayHookSettledAt returns the instant by which a live relay poller is
+// presumed to have answered a request created at createdAt if it ever will:
+// the request's guard-release instant (relayGuardReleaseAt) plus
+// createdAtResolution. A poller's timeout deny is presumed to have landed by
+// then (its deny write landing within createdAtResolution after the guard's
+// release point), so a row still open then is presumed to have no live poller
+// left to answer it. Decide waits until this instant before it names a
+// refusal it made earlier (see the asymmetry note above); from its own
+// boundary that is at most twice RelayKillSafetyMargin plus
+// createdAtResolution (3 s).
+func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time.Time {
+	return relayGuardReleaseAt(createdAt, effectiveWindow).Add(createdAtResolution)
 }
 
 // RelayRequestGuardReleasable is the single authority (SR-4.4) answering, for a
@@ -132,11 +186,3 @@ func RelayRequestGuardReleasable(createdAt time.Time, effectiveWindow time.Durat
 // caller retrying at the stated instant is not refused again (b.2b8). The
 // margin is rendered from the constant, never restated.
 var relayGuardReleaseAdvice = inSeconds(RelayKillSafetyMargin) + " after every request's delivery window elapses"
-
-// relayFallenBackMaxGuardWait is the longest the send_keys guard can still
-// hold on a request's account once Decide has refused that request as fallen
-// back: Decide refuses from window - margin and the guard releases at
-// window + margin, so the gap is twice RelayKillSafetyMargin.
-// ErrRelayFallenBack's description states it, so the pane answer's brief
-// refusal is expected.
-const relayFallenBackMaxGuardWait = 2 * RelayKillSafetyMargin

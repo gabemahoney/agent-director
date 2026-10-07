@@ -244,8 +244,9 @@ Most-likely sentinel errors:
   **time-bounded**: it releases 1 s after every request row's window has
   elapsed, when the delivering hook is dead, letting the caller recover the
   wedged row through this sanctioned, audited surface. `Decide`'s
-  `ErrRelayFallenBack` points here; on the refused request's account the
-  guard can still hold for up to 2 s after that refusal.
+  `ErrRelayFallenBack` points here; it is returned only for a request
+  still open 2 s after its window ended, so on that request's account the
+  guard has already released.
 - `ErrTmuxSendKeys`: the row's session or pane is not there.
 - `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
   earlier launch left behind is there on a live row, or tmux holds

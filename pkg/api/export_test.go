@@ -41,8 +41,18 @@ func SetClockForTest(c *Client, now func() time.Time) { c.now = now }
 // SetProcCheckerForTest replaces c's start-time reader (SR-3.8) for this Client only.
 func SetProcCheckerForTest(c *Client, pc ProcChecker) { c.procChecker = pc }
 
-// SetSleepForTest replaces c's sleep (time.Sleep in production), the pause of Client.Kill's process wait (SR-6.1), for this Client only.
+// SetSleepForTest replaces c's sleep (time.Sleep in production), the pause of Client.Kill's process wait (SR-6.1)
+// and of Client.Decide's wait for a fallen-back request's relay hook (b.pzy), for this Client only.
 func SetSleepForTest(c *Client, sleep func(time.Duration)) { c.sleep = sleep }
+
+// DecideWithSleep is Decide with the sleep of its wait for a fallen-back
+// request's relay hook given (b.pzy), so a test stands in for the hook on its
+// own clock. External callers use Decide or (c *Client).Decide instead.
+var DecideWithSleep = decide
+
+// CreatedAtResolution is the storage resolution of a permission request's
+// created_at (createdAtResolution), which Decide's wait adds (b.pzy), so no test spells it.
+const CreatedAtResolution = createdAtResolution
 
 // KillPollInterval is kill's poll interval (killPollInterval, SR-6.1), so no test spells it.
 const KillPollInterval = killPollInterval
