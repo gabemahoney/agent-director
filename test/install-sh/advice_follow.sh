@@ -664,13 +664,15 @@ j6_failing_migration() {
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run "$J6H" "${J6ARGV[@]}"
     expect_rc 5 "migration step fails" || return 1
-    expect_advice "If a migration was authorized above it was NOT consumed; re-running this install will retry it."
+    expect_advice "If this install authorized a migration above, it was NOT consumed; re-running this install will retry it."
     [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
 }
 
-# J6: "If a migration was authorized above it was NOT consumed; re-running this
-# install will retry it." The re-run's step-3 probe fails too, and says it could
-# not tell, not that no migration is needed (b.7b4).
+# J6: "If this install authorized a migration above, it was NOT consumed;
+# re-running this install will retry it." The re-run's step-3 probe fails too, and says it could
+# not tell, not that no migration is needed (b.7b4). Once the cause is gone, the
+# re-run's probe runs the migration the left sentinel authorizes: step 3 says
+# so, and step 5 verifies it (b.dzw).
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
@@ -684,6 +686,11 @@ test_J6_MigrationFailedRerunRetries() {
     expect_rc 0 "re-run once the cause is gone" || return
     [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J6H"); want v$SCHEMA"
     [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel not consumed by the successful migration"
+    local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
+    grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
+    grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"
+    grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
+        || bad "step 5 did not verify the migration the probe ran: $(flat "$OUT")"
 }
 
 # J6 with --keep-prior: re-running as advised keeps the rollback copies of the
@@ -855,7 +862,7 @@ j7_mismatch() {
     j7_verify_fails "$a" || return 1
     db="$(printf %q "$J7H/.agent-director/state.db")"
     expect_advice "actual user_version: $a"
-    expect_advice "The store open (agent-director list) succeeded, and a successful open leaves state.db at v$t: any migration this install authorized has run, and its sentinel is consumed. Yet the read after the open gives v$a: state.db changed after the open, or the read is wrong. Check its version now: sqlite3 -batch -init /dev/null -cmd \".timeout 10000\" $db \"PRAGMA user_version;\" A re-run of this install reads the version again: below v$t it brings state.db to v$t again, above v$t it stops at the store open (ErrSchemaMismatch), and at v$t it finishes the install. If a re-run fails this same way, contact the maintainers."
+    expect_advice "The store open (agent-director list) succeeded, and a successful open leaves state.db at v$t: any authorized migration has run, and its sentinel is consumed. Yet the read after the open gives v$a: state.db changed after the open, or the read is wrong. Check its version now: sqlite3 -batch -init /dev/null -cmd \".timeout 10000\" $db \"PRAGMA user_version;\" A re-run of this install reads the version again: below v$t it brings state.db to v$t again, above v$t it stops at the store open (ErrSchemaMismatch), and at v$t it finishes the install. If a re-run fails this same way, contact the maintainers."
 }
 
 # j7_rerun_verified: re-run J7ARGV with the real sqlite3; it reads and verifies
@@ -899,8 +906,8 @@ test_J7_VersionMismatchRerun() {
     done
 }
 
-# J7: "a successful open leaves state.db at v<T>: any migration this install
-# authorized has run, and its sentinel is consumed. ... Check its version now:
+# J7: "a successful open leaves state.db at v<T>: any authorized migration has
+# run, and its sentinel is consumed. ... Check its version now:
 # <command>" (a readable user_version != target, b.wt9): run the command as
 # printed, under a plain HOME and one whose path holds shell characters.
 test_J7_VersionMismatchCheckVersion() {
@@ -1081,6 +1088,40 @@ test_J7_NotAVersionAfterOpenRerun() {
         j7_rerun_same 0 2 "$answer" || continue # step 2's read is the first
         j7_warned "    $answer"
         j7_rerun_verified "\"$answer\", re-run with the real sqlite3"
+    done
+}
+
+# J7: "Re-running this install retries the read." and "A re-run gets the same
+# output unless that sqlite3 or state.db changes." when step 3's read after a
+# probe that a sentinel left from before let migrate (the J6 re-run, cause
+# gone) gives no version: exit 5 with no step-3 verdict. The probe consumed the
+# sentinel, so the re-run finds the store current: a failed read's re-run
+# verifies it, a not-a-number read's shows that output in step 5's warning
+# until the sqlite3 changes (b.dzw).
+test_J7_UnreadableAfterProbeRerun() {
+    local -a J7ARGV
+    local answer could="tell whether the probe (agent-director list) ran a migration. A sentinel written before this install was beside state.db, and it may have authorized one."
+    for answer in "" "[{\"user_version\":$SCHEMA}]"; do
+        j6_failing_migration || continue
+        "$SQLITE" "$J6H/.agent-director/state.db" "DROP TABLE store_meta;" || { bad "repair store"; continue; }
+        J7H="$J6H"
+        J7ARGV=("${J6ARGV[@]}")
+        j7_run 2 "$answer" # step 2's read, then step 3's after the probe
+        expect_rc 5 "step 3's read after the probe answered \"$answer\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "install.sh: reading state.db's schema version FAILED" ]] \
+            || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\""
+        grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "\"$answer\": the failure does not name state.db: $(flat "$ERR")"
+        if grep -qF "  schema  : " "$OUT"; then
+            bad "\"$answer\": a step-3 verdict after its read gave no version: $(grep -F "  schema  : " "$OUT")"
+        fi
+        if [[ -z "$answer" ]]; then
+            j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read."
+            j7_rerun_verified "re-run once the read works"
+        else
+            j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not $could"
+            j7_rerun_same 0 2 "$answer" || continue # no sentinel now: step 5's read is the second
+            j7_rerun_verified "\"$answer\", re-run with the real sqlite3"
+        fi
     done
 }
 

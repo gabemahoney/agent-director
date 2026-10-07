@@ -79,8 +79,10 @@
 #   4  hook merge failure (~/.claude/settings.json malformed)
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
-#      existing state.db's user_version unreadable before the open, no
-#      temp file for the migration sentinel (mktemp failed), or post-open
+#      existing state.db's user_version unreadable before the open (or
+#      after the probe open, when a migration sentinel written before
+#      this install may have let it migrate state.db), no temp file for
+#      the migration sentinel (mktemp failed), or post-open
 #      user_version unreadable or != target when a migration was
 #      expected), or a config file
 #      whose [store] db_path install.sh cannot read (refused in
@@ -1348,7 +1350,10 @@ fi
 #            <target> comes from a probe open of the existing store,
 #            decided by the probe's err_name. A config the binary
 #            refuses (ErrConfigMalformed) stops the install here (exit 5):
-#            the probe never reached state.db.
+#            the probe never reached state.db. When a sentinel written
+#            before this install lets the probe itself run the migration,
+#            step 3 reads the version again and reports that migration
+#            instead; its new version is the target step 5 verifies.
 #   Step 4 — trigger exactly one store-opening open (`$CANONICAL list`)
 #            so the store runs the migration and consumes the sentinel.
 #            NOT `help`/`version`: SR-4 (Part D) makes those DB-free, and
@@ -1458,9 +1463,10 @@ ad_fail_unreadable_version() {
 # sentinel refuses with ErrSchemaMigrationRequired, whose description says
 # "... this binary requires v<N>.". <stderr> is that refusal's stderr; this
 # prints <N>, or nothing when it names none. If the open does NOT refuse
-# (DB already current, or fresh create), the target equals the DB's
-# post-open user_version, which step 5 reads directly — so this helper is
-# only consulted when a migration is actually pending.
+# (DB already current, fresh create, or a migration a sentinel written
+# before this install authorized), the target equals the DB's post-open
+# user_version, which the install reads directly — so this helper is only
+# consulted when a migration is actually pending.
 ad_target_version() {
     printf '%s' "$1" | grep -oE 'requires v[0-9]+' | head -n1 | grep -oE '[0-9]+' || true
 }
@@ -1517,7 +1523,9 @@ else
     # ---- Step 3: write the migration sentinel (skip when already current) ----
     # The probe: one store-opening verb against the existing store, with no
     # sentinel written yet. Its err_name decides what step 3 does (b.7b4):
-    #   - none (it opened): the DB is current; nothing to authorize.
+    #   - none (it opened): the DB is current, or a sentinel written before
+    #     this install let the probe migrate it (below); nothing to
+    #     authorize.
     #   - ErrSchemaMismatch: the DB is newer than this binary (or has no
     #     valid store id); nothing to authorize, and step 4 surfaces it.
     #   - ErrSchemaMigrationRequired: the DB is older; its message names the
@@ -1528,6 +1536,26 @@ else
     #     migration.
     #   - anything else: the probe could not tell. Step 4's open reports
     #     the failure if it persists.
+    #
+    # "No sentinel written yet" means none by this install. One written
+    # before it (by an earlier run whose open failed and advised a re-run,
+    # or by an operator) may be there, and when its from and to match, the
+    # probe's open runs the migration, consumes it and succeeds: an open
+    # alone does not mean the DB was current (b.dzw). So when a sentinel
+    # was there before the probe and the probe opened a store above v0,
+    # read the version again. A higher one means the probe ran the
+    # migration, and is the target step 5 verifies: a successful open
+    # leaves the store at the binary's version. A v0 store is created at
+    # the target without the sentinel being read, so its rise is no
+    # migration. A sentinel that does not match needs nothing here: at an
+    # older store the probe refuses (ErrSchemaMigrationRequired) and the
+    # sentinel written below replaces it, and an open at a current or
+    # newer store never reads it.
+    sentinel="$(ad_sentinel_path "$state_db")"
+    sentinel_before=0
+    if [[ -e "$sentinel" ]]; then
+        sentinel_before=1
+    fi
     probe_name=""
     if ! probe_err="$("$CANONICAL" list 2>&1 >/dev/null)"; then
         probe_name="$(ad_err_name "$probe_err")"
@@ -1538,9 +1566,27 @@ else
         ad_fail_config_refused "$probe_err"
     elif [[ "$probe_name" == ErrSchemaMigrationRequired ]]; then
         target_version="$(ad_target_version "$probe_err")"
+    elif [[ -z "$probe_name" && "$sentinel_before" -eq 1 && "$db_version_before" != 0 ]]; then
+        db_version_probed="$(ad_user_version "$state_db" "$user_version_err")"
+        if ! ad_is_version "$db_version_probed"; then
+            # The probe may have migrated the store, so neither "no
+            # migration authorization needed" nor a skipped step 5 would
+            # be true: stop here, as step 2 does.
+            echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
+            echo "  state.db: $state_db" >&2
+            ad_fail_unreadable_version "$db_version_probed" \
+                "tell whether the probe (agent-director list) ran a migration" \
+                "A sentinel written before this install was beside ${state_db_name}, and it may" \
+                "have authorized one."
+        fi
+        if ((db_version_probed > db_version_before)); then
+            target_version="$db_version_probed"
+        fi
     fi
 
-    if [[ -z "$probe_name" || "$probe_name" == ErrSchemaMismatch ]]; then
+    if [[ -z "$probe_name" && -n "$target_version" ]]; then
+        echo "  schema  : migration v${db_version_before}→v${target_version} ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $sentinel)"
+    elif [[ -z "$probe_name" || "$probe_name" == ErrSchemaMismatch ]]; then
         echo "  schema  : ${state_db_name} at v${db_version_before}; no migration authorization needed"
     elif [[ -z "$target_version" ]]; then
         echo "  schema  : ${state_db_name} at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})"
@@ -1548,7 +1594,6 @@ else
         # Defensive: probe reported a target equal to current. Nothing to do.
         echo "  schema  : ${state_db_name} already at target v${target_version}; no sentinel written"
     else
-        sentinel="$(ad_sentinel_path "$state_db")"
         # The temp file sits beside the sentinel, in the store's directory,
         # which [store] db_path may put in a directory other users can write.
         # mktemp gives it a name no one can predict and creates it itself
@@ -1591,13 +1636,16 @@ else
     if [[ "$(ad_err_name "$open_err")" == ErrConfigMalformed ]]; then
         ad_fail_config_refused "$open_err"
     fi
+    # "If this install authorized a migration above", not "if a migration
+    # was authorized": a migration that a sentinel written before this
+    # install authorized ran at step 3's probe, which consumed it (b.dzw).
     echo "install.sh: store open (agent-director list) failed after install" >&2
     if [[ -n "$open_err" ]]; then
         printf '  %s\n' "$open_err" >&2
     fi
-    echo "  The new binary could not open ${state_db_name}. If a migration was" >&2
-    echo "  authorized above it was NOT consumed; re-running this install" >&2
-    echo "  will retry it. If ${state_db_name} is NEWER than this binary" >&2
+    echo "  The new binary could not open ${state_db_name}. If this install" >&2
+    echo "  authorized a migration above, it was NOT consumed; re-running this" >&2
+    echo "  install will retry it. If ${state_db_name} is NEWER than this binary" >&2
     echo "  (ErrSchemaMismatch), install a newer agent-director instead." >&2
     exit 5
 fi
@@ -1655,11 +1703,16 @@ if [[ "$migration_expected" -eq 1 ]]; then
     # install that authorizes a migration overwrites it in step 3. No advice
     # below, the check or the re-run, depends on whether the file is there.
     #
-    # A re-run below the target reaches it by one of two paths: at v0 the
+    # A re-run below the target reaches it by one of three paths: at v0 the
     # step-3 probe's open creates the schema at the target with no sentinel;
-    # above v0 step 3 authorizes the migration and step 4 runs it. So the
-    # text says the re-run brings state.db to the target, not that it
-    # authorizes a migration.
+    # above v0 step 3 authorizes the migration and step 4 runs it, or, when
+    # a sentinel left from before already authorizes it, the probe runs it.
+    # So the text says the re-run brings state.db to the target, not that
+    # it authorizes a migration.
+    #
+    # target_version comes from the probe's refusal when step 3 authorized
+    # the migration, and from step 3's re-read when the probe ran it
+    # (b.dzw). The check below is the same for both.
     #
     # The check command is a line to copy into a shell, so the path is
     # quoted with %q: a plain path prints unchanged, and one holding shell
@@ -1669,10 +1722,10 @@ if [[ "$migration_expected" -eq 1 ]]; then
         echo "  expected user_version: $target_version" >&2
         echo "  actual   user_version: $db_version_after" >&2
         echo "  The store open (agent-director list) succeeded, and a successful" >&2
-        echo "  open leaves ${state_db_name} at v${target_version}: any migration this install" >&2
-        echo "  authorized has run, and its sentinel is consumed. Yet the read after" >&2
-        echo "  the open gives v${db_version_after}: ${state_db_name} changed after the open, or" >&2
-        echo "  the read is wrong. Check its version now:" >&2
+        echo "  open leaves ${state_db_name} at v${target_version}: any authorized migration" >&2
+        echo "  has run, and its sentinel is consumed. Yet the read after the open" >&2
+        echo "  gives v${db_version_after}: ${state_db_name} changed after the open, or the read" >&2
+        echo "  is wrong. Check its version now:" >&2
         printf '    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" %q "PRAGMA user_version;"\n' "$state_db" >&2
         echo "  A re-run of this install reads the version again: below v${target_version} it" >&2
         echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2

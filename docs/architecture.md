@@ -4599,8 +4599,10 @@ agent-director's momentary lock delays the read instead of failing it;
 output, and `-batch` keeps sqlite3 from announcing that init file on a
 terminal — hence `sqlite3` is a preflight requirement), writes a
 `{"from":<actual>,"to":<target>}` sentinel beside `state.db` (skipped
-when already current or on a fresh install), opens the store once with a
-store-opening verb (`agent-director list`, deliberately not the DB-free
+when already current, on a fresh install, or when step 3's probe open
+already ran the migration; see "A sentinel from before the install"
+below), opens the store once with a store-opening verb
+(`agent-director list`, deliberately not the DB-free
 `help`/`version`) to run the migration and consume the sentinel, then
 verifies the post-open `user_version` and aborts loudly (exit 5) on any
 mismatch. That check runs only after the open succeeded, which leaves
@@ -4613,14 +4615,18 @@ version read failed. Every version read must print a whole number
 compare. A read that fails is reported as `<unreadable>`, showing
 sqlite3's error; a failure report adds that re-running the install
 retries the read. That error is kept
-in a mktemp file; if mktemp cannot create it (a full TMPDIR, say), both
-reads still run and a failed one is reported without it. A read that prints
+in a mktemp file; if mktemp cannot create it (a full TMPDIR, say), every
+read still runs and a failed one is reported without it. A read that prints
 anything else is also reported as `<unreadable>`, showing that output; a
 failure report names the sqlite3 on PATH and says a re-run gets the same
 output unless that sqlite3 or state.db changes. Either kind at the first
 read stops the install (exit 5) before any sentinel is written or the
-store is opened; at the post-open read it stops the install (exit 5)
-only when a migration was expected. With none expected (a fresh install
+store is opened. At step 3's read after the probe, made only when a
+sentinel from before the install was there (see "A sentinel from before
+the install" below), it stops the install (exit 5) before step 3 prints
+its verdict, because the probe may have run a migration. At the
+post-open read it stops the install (exit 5) only when a migration was
+expected. With none expected (a fresh install
 or an already-current store), the open has already left `state.db`
 usable at the binary's version, so that read only reports the version:
 install.sh prints the same `<unreadable>` lines as a stderr warning
@@ -4700,13 +4706,14 @@ side (`resolvePathField`, `EffectiveDbPath`, `resolveStorePath`,
 
 **The probe, and a refused config (b.7b4).** On an existing `state.db`,
 the install learns whether a migration is pending from one probe open
-(`agent-director list`, before any sentinel is written) and decides by
-the `err_name` of the probe's stderr envelope (`ad_err_name`, via jq),
-never by its description text:
+(`agent-director list`, before this install writes any sentinel) and
+decides by the `err_name` of the probe's stderr envelope (`ad_err_name`,
+via jq), never by its description text:
 
 | Probe outcome | Install |
 |---|---|
 | opens, or `ErrSchemaMismatch` | no sentinel; `no migration authorization needed` (an `ErrSchemaMismatch` fails step 4's open again, with the store advice) |
+| opens, a sentinel was there before the probe, `state.db` was above v0, and `user_version` read again is higher | no sentinel; `migration v<N>→v<T> ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel <path>)`; `<T>` is the target step 5 verifies (below) |
 | `ErrSchemaMigrationRequired` | sentinel written, `to` read from the refusal's `requires v<N>` (`ad_target_version`) |
 | `ErrConfigMalformed` | stops, exit 5, config advice |
 | any other error, or no envelope (`<no err_name>`) | no sentinel; `could not tell whether a migration is needed (agent-director list failed: <err_name>)`; step 4's open reports the failure if it persists |
@@ -4721,6 +4728,31 @@ sentinel and, on a fresh install, created no `state.db`. A re-run after
 the fix probes again and authorizes any pending migration. **Must use:**
 an `install.sh` decision on a verb's failure branches on `ad_err_name`,
 never on the description's text.
+
+**A sentinel from before the install (b.dzw).** The probe is a full store
+open, so a `migrate-authorized` already beside `state.db` (left by an
+earlier run whose store open failed and advised a re-run, or written by an
+operator) authorizes a migration when its `from` and `to` match: the
+probe's open runs the migration, consumes the sentinel and succeeds. A
+probe that opens therefore does not show that `state.db` was current.
+Step 3 notes whether the sentinel existed before the probe
+(`sentinel_before`); when it did, the probe opened and `state.db` was
+above v0, it reads `user_version` again. A higher version means the probe
+ran the migration: it becomes `target_version`, step 3 reports that
+migration (second table row), and step 5 verifies it exactly as it
+verifies one step 3 authorized (`migration verified — state.db now at
+v<T>`). The same version reads as a plain open. A read that gives no
+version stops the install (exit 5) with no step-3 verdict: the headline is
+step 2's (`reading state.db's schema version FAILED`), the cause is that
+the install could not tell whether the probe ran a migration, and a
+further line says a sentinel written before this install may have
+authorized one. A leftover sentinel the probe does not consume changes
+nothing step 3 or step 5 prints: a v0 store is created at the target
+without the sentinel being read (no re-read), an open of a current store
+never reads it (the re-read finds the same version), a newer store fails
+the probe with `ErrSchemaMismatch`, and at an older store a mismatched one
+makes the probe refuse with `ErrSchemaMigrationRequired`, so step 3 writes
+its own sentinel over it.
 
 The full ordered six-step flow — including how `<target>` is learned
 from the binary's own refusal message and why `list` rather than

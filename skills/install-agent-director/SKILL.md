@@ -495,14 +495,26 @@ This skill runs `install.sh` from the same directory. The script:
       (`~/.agent-director/migrate-authorized` for the default store)
       containing `{"from": <actual>, "to": <target>}`, where
       `<target>` is the schema version this binary requires. **Skipped
-      when `from == target`** (the DB is already current) and on a
-      fresh install (no DB). The install decides with one probe
+      when `from == target`** (the DB is already current), on a
+      fresh install (no DB), and when the probe below has already run
+      the migration. The install decides with one probe
       `agent-director list` against the existing store, by the error
       name (`err_name`) it fails with, never by its message text:
       - it opens, or fails with `ErrSchemaMismatch`: nothing to
         authorize (`schema  : state.db at vN; no migration
         authorization needed`); an `ErrSchemaMismatch` fails step 4's
         open again, with the store advice.
+      - it opens, and a `migrate-authorized` was already beside
+        state.db before it (left by an earlier run whose store open
+        failed, or written by hand), with state.db above v0: when that
+        sentinel matches, the probe's open runs its migration and
+        consumes it, so the install reads `user_version` again. If the
+        version rose, it prints `schema  : migration vN→vT ran at the
+        probe (agent-director list), authorized by a sentinel written
+        before this install (sentinel <path>)`, and step 5 verifies vT.
+        If not, it prints the line above (`no migration authorization
+        needed`). If that read gives no version, the install stops here
+        (**exit 5**); see "An unreadable schema version" below.
       - `ErrSchemaMigrationRequired`: its message names `<target>`,
         and the sentinel authorizes that migration.
       - `ErrConfigMalformed`: the config file was refused, so the probe
@@ -532,11 +544,11 @@ This skill runs `install.sh` from the same directory. The script:
       with the config advice, not the store advice, and a fresh install
       creates no `state.db`; see "A refused config file" below.
    5. **Verify and fail loudly** — re-reads `user_version` and, when
-      step 3's probe reported a pending migration, confirms it equals
-      the target. On a mismatch (or if state.db wasn't created) the
-      install **aborts non-zero (exit 5)** with a clear message; for a
-      readable mismatch see "A version mismatch after the store open"
-      below. An unreadable version also exits 5 when a migration was
+      step 3's probe reported a pending migration or ran one, confirms
+      it equals the target. On a mismatch (or if state.db wasn't
+      created) the install **aborts non-zero (exit 5)** with a clear
+      message; for a readable mismatch see "A version mismatch after
+      the store open" below. An unreadable version also exits 5 when a migration was
       expected; with none expected (a fresh install or an
       already-current store) it is a warning and the install carries
       on. See "An unreadable schema version" below.
@@ -871,12 +883,18 @@ two letter cases) passes pre-flight and stops at step 3 or 4 instead; see
    (exit 5) before any sentinel is written or the store is opened; see
    below.
 3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
-   state.db — **skipped when `from == to`** (already current) and on a
-   fresh install. `<target>` is the schema version the new binary
+   state.db — **skipped when `from == to`** (already current), on a
+   fresh install, and when the probe below has already run the
+   migration. `<target>` is the schema version the new binary
    requires; the install learns it from the binary's own migration
    refusal message. A probe `agent-director list` against the existing
    store decides, by its `err_name`: an open or `ErrSchemaMismatch`
-   needs no authorization; `ErrSchemaMigrationRequired` names
+   needs no authorization; but when a sentinel was already beside a
+   state.db above v0 before an open, the probe's open may have run its
+   migration, so step 3 reads the version again and, if it rose,
+   reports `migration vN→vT ran at the probe (agent-director list), ...`
+   as the migration step 5 verifies (a read that gives no version stops
+   the install, exit 5); `ErrSchemaMigrationRequired` names
    `<target>` and gets the sentinel; `ErrConfigMalformed` stops the
    install (exit 5, no sentinel; see "A refused config file" below);
    any other error writes no sentinel, prints `could not tell whether a
@@ -892,7 +910,8 @@ two letter cases) passes pre-flight and stops at step 3 or 4 instead; see
    install creates state.db at the current version. `ErrConfigMalformed`
    here stops the install (exit 5) with the config advice; see "A
    refused config file" below.
-5. When a migration was expected, **verify** the post-open
+5. When a migration was expected (step 3 authorized one, or its probe
+   ran one), **verify** the post-open
    `user_version` equals the target, and **fail the install loudly**
    (exit 5) if it does not; see "A version mismatch after the store
    open" below. An unreadable version also fails (exit 5) when a
@@ -924,9 +943,11 @@ verification for you.
 
 ### An unreadable schema version
 
-The install reads state.db's `user_version` twice: at step 2, before
-the store open, and at step 5, after it. If either read fails, or
-prints anything but a whole number (0 or more), the install reports
+The install reads state.db's `user_version` at step 2, before the
+store open, and at step 5, after it. When a `migrate-authorized` was
+already beside a state.db above v0 before step 3's probe and the probe
+opened, it also reads it at step 3, after the probe. If any read fails,
+or prints anything but a whole number (0 or more), the install reports
 `actual user_version: <unreadable>` and exits 5, except at step 5
 with no migration expected, where it warns and carries on (see "Which
 read it was" below). Do NOT delete state.db. The rest of an exit 5's
@@ -954,6 +975,17 @@ Which read it was:
   state.db is as it was. The new binaries are already in place, so an
   older state.db is refused with `ErrSchemaMigrationRequired` until a
   re-run succeeds.
+- **Step 3, after the probe** (the same headline, but the install
+  could not "tell whether the probe (agent-director list) ran a
+  migration", and "A sentinel written before this install was beside
+  state.db, and it may have authorized one."): the probe's store open
+  succeeded and may have migrated state.db, so step 3 printed no
+  `schema  :` line and the install stopped before step 4. A re-run
+  reads the version again. If the probe did migrate state.db, it
+  consumed the sentinel, so the re-run finds state.db current (`no
+  migration authorization needed`) and its step-5 read only reports
+  the version: one that still gives no version is then the warning
+  below, not a failure.
 - **Step 5, a migration expected** (`schema migration verification
   FAILED`): the store open succeeded, and the install's `state.db:`
   status line shows `(schema <unreadable>)`.
@@ -1001,9 +1033,9 @@ that is not the target, the install exits 5 with `schema migration
 verification FAILED`, the `expected user_version: <T>` and `actual
 user_version: <A>` lines, and advice. The store open (`agent-director
 list`) succeeded, and a successful open leaves state.db at `v<T>`: any
-migration this install authorized has run, and its sentinel is
-consumed. Yet the read after the open gives `v<A>`, so state.db changed
-after the open, or the read is wrong. Do NOT delete state.db.
+authorized migration has run, and its sentinel is consumed. Yet the
+read after the open gives `v<A>`, so state.db changed after the open,
+or the read is wrong. Do NOT delete state.db.
 
 1. Check its version now, with the command the report prints (it names
    your store's path; this is the default store):

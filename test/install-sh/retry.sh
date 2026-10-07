@@ -40,6 +40,11 @@
 # migration. A step-3 mv that cannot move the migration sentinel into place
 # leaves no sentinel temp file behind.
 #
+# Leftover sentinel (b.dzw): a migrate-authorized from before the install that
+# the step-3 probe does not consume (a v0 store, a current one, an older one
+# it does not match) changes nothing step 3 or step 5 prints. One the probe
+# does consume is advice_follow.sh's J6 re-run.
+#
 # umask (b.7j2): under a umask that takes away the owner's own bits (0777,
 # 0222), a --from-release install and an upgrade that migrates still exit 0,
 # read and print state.db's schema version, print no "Permission denied", and
@@ -480,6 +485,31 @@ run_install 0 '*' --from-release v0.11.0-fake --no-symlink
 PATH_PREFIX=""
 report sentinel-mv-fails-stopped-at-mv "$RC $(grep -c "b.hk7 stand-in" "$ERR")" "1 1"
 report sentinel-mv-fails-nothing-left "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+
+# A sentinel left beside the store from before that the step-3 probe does not
+# consume (b.dzw): at a v0 store (created, not migrated), a current one (never
+# read) and, not matching, an older one (the probe refuses; step 3 writes its
+# own). Step 3 and step 5 read as with no sentinel.
+for name in v0 current older-mismatched; do
+    older_store "leftover-sentinel-$name"
+    sentinel="$H/.agent-director/migrate-authorized" from=$((schema - 1)) left=migrate-authorized
+    lines="  schema  : state.db at v$schema; no migration authorization needed"
+    case "$name" in
+        v0)
+            rm -f "$db"* && : >"$db"
+            lines="  schema  : state.db at v0; no migration authorization needed" ;;
+        current) sqlite3 "$db" "PRAGMA user_version = $schema;" ;;
+        older-mismatched)
+            from=$((schema - 2)) left=""
+            lines="  schema  : authorized migration v$((schema - 1))→v$schema (sentinel $sentinel)|  schema  : migration verified — state.db now at v$schema" ;;
+    esac
+    printf '{"from": %d, "to": %d}\n' "$from" "$schema" >"$sentinel"
+    run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+    report "leftover-sentinel-$name-exit-code" "$RC" "0"
+    report "leftover-sentinel-$name-schema-lines" "$(grep '^  schema  : ' "$OUT" | paste -sd'|')" "$lines"
+    report "leftover-sentinel-$name-user-version" "$(sqlite3 "$db" 'PRAGMA user_version;')" "$schema"
+    report "leftover-sentinel-$name-sentinel" "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" "$left"
+done
 
 # with_config <content>: H's ~/.agent-director/config.toml holds <content>
 # (printf %b).
