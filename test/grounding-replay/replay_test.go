@@ -153,7 +153,8 @@ type agentParentProc struct{ *procfix.Checker }
 // CommandName reports the agent's command name for every pid.
 func (agentParentProc) CommandName(int) (string, bool) { return "claude", true }
 
-// PPID answers unreadable for every pid, so no hook reports a launcher.
+// PPID answers unreadable for every pid, so no hook finds its pane process as
+// its grandparent.
 func (agentParentProc) PPID(int) (int, bool) { return 0, false }
 
 // relayEnv returns the env func Hook.Handle expects for a relay-mode spawn.

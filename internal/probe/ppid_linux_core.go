@@ -6,8 +6,8 @@ import (
 )
 
 // linuxParentPIDReader is the Linux parent-pid reader core (the hook's
-// launcher warning; see ParentPIDReader) over an INJECTABLE PROC ROOT
-// (procRoot, default "/proc" via newParentPIDReader on Linux — see
+// pane_is_grandparent check; see ParentPIDReader) over an INJECTABLE PROC
+// ROOT (procRoot, default "/proc" via newParentPIDReader on Linux — see
 // ppid_linux.go). Like linuxStartTimeReader it is build-tag-free (plain
 // os.ReadFile over the injected root), so tests drive it with a fabricated
 // proc tree on any OS.

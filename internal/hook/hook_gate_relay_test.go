@@ -181,14 +181,27 @@ func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 var errMoveNotApplied = errors.New("MoveToPending did not apply")
 
 // gateIgnoredKeys is ad.hook.ignored's key set: SR-14's fields, row_pane_pid
-// (decision A4), launcher_pid (b.9n6) and the trail envelope's event and ts.
+// (decision A4) and the trail envelope's event and ts; no launcher_pid (b.zde).
 var gateIgnoredKeys = []string{
-	"claude_instance_id", "event", "hook_event", "hook_session_id", "launcher_pid", "parent_command",
+	"claude_instance_id", "event", "hook_event", "hook_session_id", "parent_command",
 	"parent_pid", "reason", "row_pane_pid", "row_session_id", "source", "ts",
 }
 
+// assertKeySet fails when event's line does not have exactly the keys want (sorted).
+func assertKeySet(t *testing.T, event string, line map[string]any, want []string) {
+	t.Helper()
+	keys := make([]string, 0, len(line))
+	for k := range line {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Errorf("%s keys = %v; want %v", event, keys, want)
+	}
+}
+
 // TestHookGateIgnoredEventContent: ad.hook.ignored has exactly SR-14's keys (+
-// row_pane_pid, launcher_pid), no payload or env content; one ad.hook.fired, no_change (A11).
+// row_pane_pid), no payload or env content; one ad.hook.fired, no_change (A11).
 func TestHookGateIgnoredEventContent(t *testing.T) {
 	const rowSession = "sess-row-content"
 	cases := []struct {
@@ -218,18 +231,10 @@ func TestHookGateIgnoredEventContent(t *testing.T) {
 			fireGate(t, st, id, foreign, gateRelayEnv(id), payload)
 
 			line := oneIgnored(t, before, id)
-			keys := make([]string, 0, len(line))
-			for k := range line {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			// SR-14 (+ row_pane_pid, A4; launcher_pid, b.9n6): exactly these keys.
-			if strings.Join(keys, ",") != strings.Join(gateIgnoredKeys, ",") {
-				t.Errorf("keys = %v; want %v", keys, gateIgnoredKeys)
-			}
+			// SR-14 (+ row_pane_pid, A4): exactly these keys.
+			assertKeySet(t, "ad.hook.ignored", line, gateIgnoredKeys)
 			assertStr(t, line, "source", "ad_hook")
 			assertStr(t, line, "row_session_id", rowSession)
-			assertNull(t, line, "launcher_pid")
 			if line["parent_command"] != tc.wantCommand {
 				t.Errorf("parent_command = %v; want %v", line["parent_command"], tc.wantCommand)
 			}

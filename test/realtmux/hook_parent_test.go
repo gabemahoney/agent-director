@@ -25,9 +25,9 @@ import (
 // instance id (the parent is the second pane's process: ignored). b.9n6: with
 // a `claude` launcher first on PATH that runs the stand-in as a child instead
 // of exec-ing it, the pane process is the launcher and the hook's parent its
-// child (ignored, and ad.hook.launcher_detected names the launcher); a
-// launcher that execs it, as that warning advises, is the pane process again
-// (applied).
+// child (ignored, and ad.hook.pane_is_grandparent names the launcher as the
+// pane process); a launcher that execs it, as that warning advises, is the
+// pane process again (applied).
 
 // The stand-in reads its mode, control directory and the CLI's path from
 // these variables; the spawned pane has them from the tmux server's global
@@ -141,9 +141,9 @@ func hookTrailRecords(t testing.TB, home, event, id string) []map[string]any {
 // with the stand-in as the pane's command and checks that its SessionStart
 // hook moves the row only when the hook is a direct child of the recorded
 // pane process (SR-22.9); otherwise the row is untouched and the hook writes
-// one ad.hook.ignored with reason pid_mismatch (SR-14), naming the pane
-// process as launcher_pid, with one ad.hook.launcher_detected, when it is the
-// hook parent's parent (b.9n6).
+// one ad.hook.ignored with reason pid_mismatch (SR-14), plus one
+// ad.hook.pane_is_grandparent naming the pane process when it is the hook
+// parent's parent (b.9n6, b.zde).
 func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 	bin := buildHookCLI(t, t.TempDir())
 	payload, err := os.ReadFile(sessionStartFixture)
@@ -166,19 +166,19 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 		// parentCommands are the accepted parent_command values of the
 		// ignored record (sh is dash on Debian-based images).
 		parentCommands []string
-		// wantLauncher: the ignored record's launcher_pid is the pane
-		// process, and one ad.hook.launcher_detected names it (b.9n6).
-		wantLauncher bool
+		// wantGrandparent: one ad.hook.pane_is_grandparent names the pane
+		// process as the hook parent's parent (b.9n6, b.zde).
+		wantGrandparent bool
 	}{
 		{name: "simple command in the pane process", paneMode: "direct", applied: true},
 		// The pane process is also sh's parent, the same structure as a
-		// launcher (b.9n6). launcher_detected here is expected and accurate:
+		// launcher (b.9n6). pane_is_grandparent here is expected and accurate:
 		// its advice names a shell-form hook as the other cause.
-		{name: "through sh -c", paneMode: "sh", parentCommands: []string{"sh", "dash"}, wantLauncher: true},
+		{name: "through sh -c", paneMode: "sh", parentCommands: []string{"sh", "dash"}, wantGrandparent: true},
 		{name: "from a second pane", paneMode: "idle", splitPane: true, parentCommands: []string{"claude"}},
 		{name: "behind a claude launcher that does not exec", paneMode: "direct", launcher: "noexec",
-			parentCommands: []string{"claude"}, wantLauncher: true},
-		// launcher_detected's advice followed: a wrapper that execs claude.
+			parentCommands: []string{"claude"}, wantGrandparent: true},
+		// pane_is_grandparent's advice followed: a wrapper that execs claude.
 		{name: "behind a claude launcher that execs", paneMode: "direct", launcher: "exec", applied: true},
 	}
 	for _, tc := range cases {
@@ -269,7 +269,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 
 			row := readRow(t, f.DBPath, s.ID)
 			ignored := hookTrailRecords(t, home, "ad.hook.ignored", s.ID)
-			detected := hookTrailRecords(t, home, "ad.hook.launcher_detected", s.ID)
+			detected := hookTrailRecords(t, home, "ad.hook.pane_is_grandparent", s.ID)
 			if tc.applied {
 				// SR-22.9: an applied SessionStart sets waiting and records the
 				// payload's session id and pid/proc_starttime = the hook's parent.
@@ -279,7 +279,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 						row.State, row.PID, row.ProcStarttime, row.ClaudeSessionID, panePID, row.PaneStarttime, fixture.SessionID)
 				}
 				if len(ignored) != 0 || len(detected) != 0 {
-					t.Errorf("%d ad.hook.ignored and %d ad.hook.launcher_detected records for an applied hook, want none",
+					t.Errorf("%d ad.hook.ignored and %d ad.hook.pane_is_grandparent records for an applied hook, want none",
 						len(ignored), len(detected))
 				}
 				return
@@ -312,30 +312,24 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 			if cmd, _ := rec["parent_command"].(string); !slices.Contains(tc.parentCommands, cmd) {
 				t.Errorf("ad.hook.ignored parent_command = %v, want one of %v", rec["parent_command"], tc.parentCommands)
 			}
-			if !tc.wantLauncher {
-				if v, ok := rec["launcher_pid"]; !ok || v != nil {
-					t.Errorf("ad.hook.ignored launcher_pid = %v (present %v), want null", v, ok)
-				}
+			if !tc.wantGrandparent {
 				if len(detected) != 0 {
-					t.Errorf("ad.hook.launcher_detected = %v, want none", detected)
+					t.Errorf("ad.hook.pane_is_grandparent = %v, want none", detected)
 				}
 				return
 			}
-			if got := fmt.Sprint(rec["launcher_pid"]); got != strconv.Itoa(panePID) {
-				t.Errorf("ad.hook.ignored launcher_pid = %s, want the pane process %d", got, panePID)
-			}
 			if len(detected) != 1 {
-				t.Fatalf("%d ad.hook.launcher_detected records, want exactly one", len(detected))
+				t.Fatalf("%d ad.hook.pane_is_grandparent records, want exactly one", len(detected))
 			}
 			for k, w := range map[string]string{
-				"launcher_pid":     strconv.Itoa(panePID),
-				"launcher_command": "claude",
-				"parent_pid":       strconv.Itoa(parent),
-				"parent_command":   fmt.Sprint(rec["parent_command"]),
-				"source":           "ad_hook",
+				"pane_pid":       strconv.Itoa(panePID),
+				"pane_command":   "claude",
+				"parent_pid":     strconv.Itoa(parent),
+				"parent_command": fmt.Sprint(rec["parent_command"]),
+				"source":         "ad_hook",
 			} {
 				if got := fmt.Sprint(detected[0][k]); got != w {
-					t.Errorf("ad.hook.launcher_detected %s = %s, want %s", k, got, w)
+					t.Errorf("ad.hook.pane_is_grandparent %s = %s, want %s", k, got, w)
 				}
 			}
 			// The advice names both causes: a non-exec launcher and a
@@ -346,7 +340,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 				"Claude Code ran the hook through a shell instead of in exec form",
 			} {
 				if !strings.Contains(advice, cause) {
-					t.Errorf("ad.hook.launcher_detected advice = %q, want it to contain %q", advice, cause)
+					t.Errorf("ad.hook.pane_is_grandparent advice = %q, want it to contain %q", advice, cause)
 				}
 			}
 		})

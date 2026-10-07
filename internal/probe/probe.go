@@ -8,11 +8,12 @@
 //     resume's and reuse's process check. It answers alive (with the start
 //     time), gone (no such process, or a zombie) or unreadable.
 //   - The command-name reader (CommandNameReader / NewCommandNameReader,
-//     commname.go): fills `parent_command` in the `ad.hook.ignored` trail
-//     record only, never evidence.
+//     commname.go): fills `ad.hook.ignored`'s `parent_command` and
+//     `ad.hook.pane_is_grandparent`'s `pane_command` trail fields only, never
+//     evidence.
 //   - The parent-pid reader (ParentPIDReader / NewParentPIDReader, ppid.go):
-//     feeds the hook's launcher warning only (`ad.hook.launcher_detected`
-//     and `ad.hook.ignored`'s `launcher_pid`), never evidence.
+//     feeds the hook's `ad.hook.pane_is_grandparent` check only, never
+//     evidence.
 //
 // Per OS: Linux reads <procRoot>/<pid>/stat and /comm (default root /proc);
 // darwin reads the pid's single KERN_PROC_PID kinfo_proc entry; any other OS

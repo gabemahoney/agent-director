@@ -319,13 +319,14 @@ func TestSessionStartGateIgnored(t *testing.T) {
 			want := map[string]any{
 				"hook_event": "SessionStart", "reason": tc.reason, "parent_pid": float64(parent.PID),
 				"parent_command": "claude", "hook_session_id": sessionID, "row_session_id": tc.rowSession,
-				"row_pane_pid": tc.rowPanePID, "launcher_pid": nil, "source": "ad_hook",
+				"row_pane_pid": tc.rowPanePID, "source": "ad_hook",
 			}
 			for k, v := range want {
 				if got, ok := ignored[0][k]; !ok || got != v {
 					t.Errorf("ad.hook.ignored[%q] = %v (present %t); want %v", k, got, ok, v)
 				}
 			}
+			assertKeySet(t, "ad.hook.ignored", ignored[0], gateIgnoredKeys)
 		})
 	}
 }

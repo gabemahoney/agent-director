@@ -11,9 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"sort"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -117,18 +115,11 @@ func TestSubagentLifecycleHookIgnored(t *testing.T) {
 				t.Errorf("session_history = %+v; want %+v (unchanged)", got, priorHistory)
 			}
 			line := oneIgnored(t, before, id)
-			keys := make([]string, 0, len(line))
-			for k := range line {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			if strings.Join(keys, ",") != strings.Join(gateIgnoredKeys, ",") {
-				t.Errorf("ad.hook.ignored keys = %v; want %v", keys, gateIgnoredKeys)
-			}
+			assertKeySet(t, "ad.hook.ignored", line, gateIgnoredKeys)
 			want := map[string]any{
 				"claude_instance_id": id, "hook_event": tc.event, "reason": store.HookReasonSubagentEvent,
 				"parent_pid": float64(parent.PID), "parent_command": "claude", "hook_session_id": sessionID,
-				"row_session_id": tc.rowSession, "row_pane_pid": float64(ssgFreshPane.PanePID), "launcher_pid": nil,
+				"row_session_id": tc.rowSession, "row_pane_pid": float64(ssgFreshPane.PanePID),
 				"source": "ad_hook",
 			}
 			for k, v := range want {

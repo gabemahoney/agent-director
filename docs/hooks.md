@@ -41,8 +41,8 @@ verb and its payload on stdin. No hook applies, and the row stays
 The `no_exec_form` record has the fields every `ad.hook.ignored` record
 has (see "The `ad.hook.ignored` reasons" below). Because it reads no
 row, its `claude_instance_id` comes from the environment (null when
-absent or invalid), and `row_session_id`, `row_pane_pid` and
-`launcher_pid` are always null.
+absent or invalid), and `row_session_id` and `row_pane_pid` are always
+null.
 
 | Event | Tool matcher | Resulting state (SRD §5.2) |
 | --- | --- | --- |
@@ -147,30 +147,20 @@ decide whether a hook applies. The hook makes no tmux call.
 
 When the `claude` on PATH is a launcher or shim that runs Claude Code as
 a child instead of exec-ing it, the pane process is the launcher, so
-every hook's parent is the launcher's child and every hook is refused
-with `pid_mismatch`; the row stays `pending`. A hook run through a shell
-instead of in exec form looks the same (the pane process is Claude Code,
-the hook's parent that shell), and agent-director does not tell the two
-apart.
+every hook is refused with `pid_mismatch` and the row stays `pending`. A
+hook run through a shell instead of in exec form looks the same: either
+way the pane process is the hook's grandparent, and agent-director does
+not tell the two apart.
 
-After refusing a hook with `pid_mismatch`, and only then, the hook reads
-its parent's own parent pid once. When that is the row's recorded pane
-process:
-
-- the `ad.hook.ignored` record carries `launcher_pid`, that pid, for any
-  event and any row state;
-- when the hook is a SessionStart and the row is still `pending`, it also
-  writes one `ad.hook.launcher_detected` record after it, with
-  `claude_instance_id`, `launcher_pid`, `launcher_command` (null when
-  unreadable), `parent_pid`, `parent_command`, `advice` and `source` =
-  `ad_hook`. The `advice` names both causes and, for a launcher, what to
-  change. Every
-  such SessionStart writes one (startup, `/clear`, compaction, resume).
-
-Neither changes whether the hook applies: the row, stdout and exit are
-those of any ignored hook. A failed read leaves `launcher_pid` null and
-writes no `ad.hook.launcher_detected`; a failed trail write changes
-nothing.
+For a SessionStart refused with `pid_mismatch` while the row is
+`pending`, and for no other hook, the hook reads its parent's own parent
+pid once. When that is the row's pane process, it writes one
+`ad.hook.pane_is_grandparent` record after the `ad.hook.ignored` one, with
+`claude_instance_id`, `pane_pid`, `pane_command` (null when unreadable),
+`parent_pid`, `parent_command`, `advice` (naming both causes) and
+`source` = `ad_hook`. Each such SessionStart (startup, `/clear`,
+compaction, resume) writes one. The row, stdout and exit stay those of
+any ignored hook; an unreadable parent pid writes no record.
 
 ### SessionStart before the launch's identity write
 
@@ -271,9 +261,7 @@ carries it and is the agent itself.
 
 Each record carries `claude_instance_id`, `hook_event`, `reason`,
 `parent_pid`, `parent_command`, `hook_session_id`, `row_session_id`,
-`row_pane_pid`, `launcher_pid` and `source` = `ad_hook`. `launcher_pid`
-is null unless the reason is `pid_mismatch` and the parent's own parent
-is the row's pane process (see "A `claude` that does not exec"). `hook_session_id` is the
+`row_pane_pid` and `source` = `ad_hook`. `hook_session_id` is the
 basename of the payload's `transcript_path` with its extension removed
 (the text from its last `.` on), or null when the payload gives none. It
 never names another row.
@@ -302,9 +290,9 @@ it does not apply:
 - Unknown event name → exit 0, soft refresh, log entry.
 - Hook from a process other than the row's recorded pane process, or for
   a row that records no pane → exit 0, nothing written, one
-  `ad.hook.ignored` trail record (plus one `ad.hook.launcher_detected`
-  for a `pending` row's SessionStart behind a `claude` that does not
-  exec). A SessionStart for a `pending` row
+  `ad.hook.ignored` trail record (plus, at most, one
+  `ad.hook.pane_is_grandparent`; see "A `claude` that does not exec"). A
+  SessionStart for a `pending` row
   that records no pane first waits, until the grace period ends or for
   at most 540 s, whichever comes first (see "SessionStart before the
   launch's identity write").
