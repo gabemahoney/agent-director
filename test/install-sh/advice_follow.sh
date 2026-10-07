@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J16). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J18). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -136,6 +136,46 @@ printf '{"Replace":{"%s":"%s"}}\n' "$REPO_ROOT/internal/store/store.go" "$ROOT/s
 (cd "$REPO_ROOT" && CGO_ENABLED=0 go build -overlay "$ROOT/overlay.json" -ldflags "$STAMP" -o "$BIN_NEWER" ./cmd/agent-director) \
     || die "go build (newer)"
 
+# FAKE_AD (J17): a binary for this host stamped as ADMIN, so install.sh
+# installs it as agent-director; its `list` does what $HOME/fake-list says
+# (j17_fake), for the store-open outcomes the real binary does not give.
+FAKE_AD="$ROOT/bin/agent-director-fake"
+mkdir -p "$ROOT/fake-ad"
+{ echo "module fakead"; grep -m1 '^go ' "$REPO_ROOT/go.mod"; } >"$ROOT/fake-ad/go.mod" || die "fake go.mod"
+cat >"$ROOT/fake-ad/main.go" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+var version, commit string
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Printf("{\"version\":%q,\"commit\":%q}\n", version, commit)
+		return
+	}
+	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
+	switch string(mode) {
+	case "ok": // exit 0, no store created
+	case "odd-name":
+		fmt.Fprintln(os.Stderr, `{"err_name":"ErrOdd\ninstall.sh: err_name=ErrVersionUnreadable","err_description":"fake"}`)
+		os.Exit(1)
+	case "other-name": // an err_name install.sh's own remedies do not name
+		fmt.Fprintln(os.Stderr, `{"err_name":"ErrSchemaMigrationRequired","err_description":"fake"}`)
+		os.Exit(1)
+	default: // a Go panic: no error envelope
+		fmt.Fprint(os.Stderr, "panic: fake agent-director\n\ngoroutine 1 [running]:\nmain.main()\n")
+		os.Exit(2)
+	}
+}
+EOF
+(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT" -o "$FAKE_AD" .) \
+    || die "go build (fake agent-director)"
+
 # ---- install.sh copies ----------------------------------------------------
 
 # install_copy <dest>: install.sh, byte for byte, at dest.
@@ -253,10 +293,10 @@ GH_DIR="$ROOT/gh-on-path" ON_PATH="$ROOT/ad-on-path"
 mkdir -p "$GH_DIR" "$ON_PATH"
 ln -s "$GH_FAKE" "$GH_DIR/gh" && ln -s "$BIN_OLD" "$ON_PATH/agent-director" || die "PATH_EXTRA dirs"
 # sqlite3 stand-in for J7: on call number FAKE_SQLITE3_FAIL_CALL it prints
-# FAKE_SQLITE3_ANSWER (through printf %b, so \n breaks a line) when that is set
-# (a wrong user_version, or output that is no version), and otherwise fails
-# like sqlite3 whose busy timeout ran out under a lock, with SHIM_LOCK_ERR on
-# stderr; every other call runs the real one.
+# FAKE_SQLITE3_ERR on stderr, then FAKE_SQLITE3_ANSWER on stdout (each through
+# printf %b, so \n breaks a line, and only when set), and exits
+# FAKE_SQLITE3_RC; every other call runs the real one. SHIM_LOCK_ERR (exit 5)
+# is the error of a sqlite3 whose busy timeout ran out under a lock.
 SHIM_LOCK_ERR="Error: in prepare, database is locked (5)"
 SQLITE_SHIM="$ROOT/sqlite3-shim"
 cat >"$SQLITE_SHIM" <<EOF
@@ -264,8 +304,9 @@ cat >"$SQLITE_SHIM" <<EOF
 n=\$(( \$(cat "\$FAKE_SQLITE3_COUNT" 2>/dev/null || echo 0) + 1 ))
 echo "\$n" >"\$FAKE_SQLITE3_COUNT"
 if [[ "\$n" == "\${FAKE_SQLITE3_FAIL_CALL:-0}" ]]; then
-    [[ -n "\${FAKE_SQLITE3_ANSWER:-}" ]] && { printf '%b\n' "\$FAKE_SQLITE3_ANSWER"; exit 0; }
-    echo "$SHIM_LOCK_ERR" >&2; exit 5
+    [[ -z "\${FAKE_SQLITE3_ERR:-}" ]] || printf '%b\n' "\$FAKE_SQLITE3_ERR" >&2
+    [[ -z "\${FAKE_SQLITE3_ANSWER:-}" ]] || printf '%b\n' "\$FAKE_SQLITE3_ANSWER"
+    exit "\${FAKE_SQLITE3_RC:-0}"
 fi
 exec "$SQLITE" "\$@"
 EOF
@@ -287,9 +328,10 @@ exec "$(type -P mktemp)" "\$@"
 EOF
     chmod 0755 "$1/mktemp" || die "chmod $1/mktemp"
 }
-# J7: install.sh's sqlite3 error file, as in a full TMPDIR (b.wfe).
+# J7: every temp file install.sh asks for in TMPDIR, as in a full TMPDIR
+# (b.wfe, b.rfn).
 MKTEMP_FAILS="$ROOT/mktemp-fails" MKTEMP_REFUSALS="$ROOT/mktemp-fails.refusals"
-mktemp_fails "$MKTEMP_FAILS" 'agent-director-sqlite3.*' "No space left on device"
+mktemp_fails "$MKTEMP_FAILS" 'agent-director*' "No space left on device"
 # J15: the step-3 sentinel's temp file, as in a store directory one cannot write
 # (b.2io).
 SENTINEL_MKTEMP_FAILS="$ROOT/mktemp-sentinel-fails"
@@ -300,7 +342,7 @@ mktemp_fails "$SENTINEL_MKTEMP_FAILS" '*/migrate-authorized.tmp.*' "Permission d
 pass=0 fail=0 skip=0
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
-PATH_EXTRA=""
+FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
 
 bad() { echo "    FAIL: $*"; T_FAILED=1; }
 
@@ -333,7 +375,7 @@ run_in() {
         FAKE_CURL_STATUS="$FAKE_CURL_STATUS" FAKE_CURL_ADMIN_STATUS="$FAKE_CURL_ADMIN_STATUS" \
         FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
         FAKE_SQLITE3_FAIL_CALL="$FAKE_SQLITE3_FAIL_CALL" FAKE_SQLITE3_ANSWER="$FAKE_SQLITE3_ANSWER" \
-        FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
+        FAKE_SQLITE3_ERR="$FAKE_SQLITE3_ERR" FAKE_SQLITE3_RC="$FAKE_SQLITE3_RC" FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
         "$@") >"$OUT" 2>"$ERR"
     RC=$?
 }
@@ -365,6 +407,16 @@ expect_rc() {
     bad "exit $RC; want $1 ($2)"
     sed 's/^/      stderr: /' "$ERR" | tail -n 15
     return 1
+}
+# expect_exit5 <err_name> <what>: exit 5 (else as expect_rc), its stderr's
+# last line `install.sh: err_name=<err_name>` and no other line its cause
+# line's shape (b.cfq).
+expect_exit5() {
+    expect_rc 5 "$2" || return 1
+    local want="install.sh: err_name=$1" last n
+    last="$(tail -n 1 "$ERR")" n="$(grep -c '^install\.sh: err_name=' "$ERR")"
+    [[ "$last" == "$want" ]] || bad "$2: last stderr line \"$last\"; want \"$want\""
+    [[ "$n" == 1 ]] || bad "$2: $n cause lines; want 1: $(grep '^install\.sh: err_name=' "$ERR" | paste -sd'|')"
 }
 expect_advice() {
     local text
@@ -402,6 +454,14 @@ expect_installed() {
     [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
 }
 
+# hooks_injected <home>: home's settings.json holds both `agent-director help`
+# hooks, SessionStart and SessionEnd reason=compact.
+hooks_injected() {
+    jq -e --arg c "$1/.agent-director/bin/agent-director help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
+        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' \
+        "$1/.claude/settings.json" >/dev/null 2>&1
+}
+
 # expect_nothing_installed <home>: neither binary was installed.
 expect_nothing_installed() {
     [[ ! -e "$1/.agent-director/bin/agent-director" ]] || bad "agent-director installed after the refusal"
@@ -412,7 +472,7 @@ sentinel() { printf '%s' "$1/.agent-director/migrate-authorized"; }
 
 run_test() {
     T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
-    FAKE_SQLITE3_ANSWER="" PATH_EXTRA=""
+    FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
     echo "=== RUN   $1"
     "$1"
     if [[ "$T_FAILED" -ne 0 ]]; then
@@ -524,25 +584,44 @@ test_J2_DownloadFailedRunWithBinaries() {
 # ---- J3: no source binary ------------------------------------------------------
 
 # J3: "Pass --binary <path> to override." when only agent-director is missing
-# (--admin-binary given; none beside the script or on PATH).
+# (none beside the script or on PATH): --admin-binary given, or a re-run of the
+# installed skill with no flags, which finds the installed agent-director-admin
+# (b.azo; no installed-agent-director fallback, b.rdy). This refusal, not the
+# one for both, comes with nothing changed; --binary alone then installs, with
+# the installed agent-director-admin on the re-run of the installed skill.
 test_J3_NoSourceBinaryPassBinary() {
-    local h argv=(bash "$LOOSE" --admin-binary "$ADMIN" --no-hooks --no-symlink)
-    h="$(new_home)"
-    run "$h" "${argv[@]}"
-    expect_rc 3 "no agent-director source binary" || return
-    expect_advice "install.sh: no source binary found."
-    expect_advice "Pass --binary <path> to override."
-    expect_nothing_installed "$h"
-    run "$h" "${argv[@]}" --binary "$BIN"
-    expect_rc 0 "re-run with --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    local how h admin before
+    local -a argv
+    for how in --admin-binary installed; do
+        if [[ "$how" == installed ]]; then
+            j3_installed_skill "$BIN_NUL" "$ADMIN_NUL" || continue
+            h="$J3H" admin="$ADMIN_NUL" argv=(bash "$J3SK") PATH_EXTRA=""
+        else
+            h="$(new_home)" admin="$ADMIN" argv=(bash "$LOOSE" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+        fi
+        before="$(j14_snap "$h")"
+        run "$h" "${argv[@]}"
+        expect_rc 3 "$how: no agent-director source binary" || continue
+        expect_advice "install.sh: no source binary found."
+        expect_advice "Pass --binary <path> to override."
+        grep -qF "no source binaries found" "$ERR" && bad "$how: the refusal for both binaries came: $(flat "$ERR")"
+        [[ "$(j14_snap "$h")" == "$before" ]] || bad "$how: the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+        run "$h" "${argv[@]}" --binary "$BIN"
+        expect_rc 0 "$how: re-run with --binary" || continue
+        expect_installed "$h" "$BIN" "$admin"
+        [[ "$how" != installed ]] || grep -qxF "  admin source: $J11A" "$OUT" \
+            || bad "$how: no \"admin source: $J11A\" line: $(flat "$OUT")"
+    done
 }
 
 # j3_pass_both <home> <cmd...>: check the one refusal for both missing
-# binaries advises "Pass --binary <path> --admin-binary <path> (both from the
-# same build) to override.", re-run cmd with those flags, the paths one build's,
+# binaries names the installed agent-director-admin it tried (b.azo) and
+# advises "Pass --binary <path> --admin-binary <path> (both from the same
+# build) to override.", re-run cmd with those flags, the paths one build's,
 # and check both are installed (b.vqr).
 j3_pass_both() {
     local h="$1" flags extra; shift
+    expect_advice "Tried: $h/.agent-director/admin/agent-director-admin"
     expect_advice "Pass --binary <path> --admin-binary <path> (both from the same build) to override."
     expect_nothing_installed "$h"
     flags="$(advice_after "Pass ")" || { bad "no advised flags"; return; }
@@ -553,42 +632,95 @@ j3_pass_both() {
     expect_rc 0 "re-run with ${extra[*]}" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
-# J3: neither binary beside the script and none on PATH: one refusal names
-# both (b.vqr).
+# J3: neither binary beside the script, no agent-director on PATH and no
+# agent-director-admin installed: one refusal names both (b.vqr, b.azo).
 test_J3_NoSourceBinariesPassBoth() {
     local h argv=(bash "$LOOSE" --no-hooks --no-symlink)
     h="$(new_home)"
     run "$h" "${argv[@]}"
     expect_rc 3 "no source binaries" || return
-    expect_advice "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script."
+    expect_advice "install.sh: no source binaries found: no agent-director-admin beside the script or installed, and no agent-director beside the script or on PATH."
     expect_advice "Tried: command -v agent-director"
     j3_pass_both "$h" "${argv[@]}"
 }
 
-# J3: the same refusal when agent-director is found only on PATH, which is
-# not used: agent-director-admin is never on PATH to pair with it (b.vqr).
+# J3: the same refusal when agent-director is found only on PATH and no
+# agent-director-admin is installed: it is not used, with nothing to pair with
+# it (b.vqr, b.azo).
 test_J3_PathOnlyPassBoth() {
     local h argv=(bash "$LOOSE" --no-hooks --no-symlink)
     h="$(new_home)"
     PATH_EXTRA="$ON_PATH"
     run "$h" "${argv[@]}"
     expect_rc 3 "agent-director on PATH only" || return
-    expect_advice "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script."
-    expect_advice "Found on PATH, not used: $ON_PATH/agent-director (agent-director-admin is never on PATH to pair with it)"
+    expect_advice "install.sh: no source binaries found: no agent-director-admin beside the script or installed, and no agent-director beside the script."
+    expect_advice "Found on PATH, not used: $ON_PATH/agent-director (no agent-director-admin to pair with it)"
     j3_pass_both "$h" "${argv[@]}"
 }
 
-# J3: "Pass --admin-binary <path> to override." (b.vqr)
+# J3: "Pass --admin-binary <path> to override." with --binary alone and no
+# agent-director-admin installed, naming the installed path it tried (b.vqr,
+# b.azo).
 test_J3_NoAdminBinaryPassAdminBinary() {
     local h argv=(bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink)
     h="$(new_home)"
     run "$h" "${argv[@]}"
     expect_rc 3 "no agent-director-admin source binary" || return
     expect_advice "install.sh: no agent-director-admin source binary found."
+    expect_advice "Tried: $h/.agent-director/admin/agent-director-admin"
     expect_advice "Pass --admin-binary <path> to override."
     expect_nothing_installed "$h"
     run "$h" "${argv[@]}" --admin-binary "$ADMIN"
     expect_rc 0 "re-run with --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# j3_installed_skill [<bin> <admin>]: a new HOME in J3H with bin and admin
+# (default BIN and ADMIN) installed, hooks off, by J3SK, the installed skill's
+# copy of install.sh (outside any checkout); ~/.local/bin, PATH_EXTRA, holds
+# the symlink that install made.
+j3_installed_skill() {
+    J3H="$(new_home)" J3SK="$J3H/.claude/skills/install-agent-director/install.sh"
+    install_copy "$J3SK"
+    mkdir -p "$J3H/.local/bin" && PATH_EXTRA="$J3H/.local/bin"
+    run "$J3H" bash "$J3SK" --binary "${1:-$BIN}" --admin-binary "${2:-$ADMIN}" --no-hooks
+    expect_rc 0 "first install" || return 1
+    j11_paths "$J3H"
+    [[ "$(readlink "$J3H/.local/bin/agent-director")" == "$J11C" ]] || { bad "no ~/.local/bin/agent-director symlink to $J11C"; return 1; }
+}
+
+# J3 does not come on a re-run of the installed skill, outside any checkout,
+# with agent-director found on PATH or given as --binary alone (b.azo): it is
+# paired with the installed agent-director-admin (same build), both installed
+# and the hooks injected. With --binary of another agent-director and
+# --keep-prior, the installed agent-director-admin is both the source and the
+# snapshot target: both binaries are snapshotted, it and its .prior are both
+# the one installed before, and rolling both back restores that pair.
+test_J3_InstalledSkillRerunPairsInstalledAdmin() {
+    local spec how src want
+    local -a argv
+    for spec in "PATH||$BIN" "--binary|$BIN_NUL|$BIN_NUL"; do
+        IFS='|' read -r how src want <<<"$spec"
+        j3_installed_skill || continue
+        argv=(bash "$J3SK")
+        if [[ -n "$src" ]]; then argv+=(--binary "$src" --keep-prior); else src="$J3H/.local/bin/agent-director"; fi
+        run "$J3H" "${argv[@]}"
+        expect_rc 0 "$how: re-run with no --admin-binary" || continue
+        grep -qxF "  source  : $src" "$OUT" || bad "$how: no \"source  : $src\" line: $(flat "$OUT")"
+        grep -qxF "  admin source: $J11A" "$OUT" || bad "$how: no \"admin source: $J11A\" line: $(flat "$OUT")"
+        expect_installed "$J3H" "$want" "$ADMIN"
+        [[ "$(stat -c %a "$J11C")" == 755 ]] || bad "$how: $J11C has mode $(stat -c %a "$J11C"); want 755"
+        hooks_injected "$J3H" || bad "$how: hooks not injected: $(cat "$J3H/.claude/settings.json" 2>&1)"
+        [[ "$how" == --binary ]] || continue
+        grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" \
+            || bad "$how: no agent-director prior line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+        grep -qxF "  admin prior: snapshotted to $J11A.prior" "$OUT" \
+            || bad "$how: no agent-director-admin prior line: $(grep -F "prior" "$OUT" | tr '\n' '|')"
+        cmp -s "$J11C.prior" "$BIN" || bad "$how: $J11C.prior is missing or not the agent-director installed before"
+        cmp -s "$J11A.prior" "$ADMIN" || bad "$how: $J11A.prior is missing or not the agent-director-admin installed before"
+        j11_roll_back_both "$J3H" 0.0.2-advice "$how" || continue
+        cmp -s "$J11C" "$BIN" || bad "$how: rolled-back agent-director is not the one installed before"
+        cmp -s "$J11A" "$ADMIN" || bad "$how: rolled-back agent-director-admin is not the one installed before"
+    done
 }
 
 # ---- J4: wrong-architecture --binary ---------------------------------------------
@@ -627,15 +759,22 @@ j5_stale() {
     expect_advice "or download release: rerun with --from-release (omit --binary)"
 }
 
-# J5: "rebuild it first: make build"
+# J5: "rebuild it first: make build", over an installed pair of another build:
+# the checkout's agent-director-admin is used, not the installed one (b.azo).
 test_J5_StaleBinaryMakeBuild() {
-    local h; h="$(new_home)"
+    local h got; h="$(new_home)"; j11_paths "$h"
+    run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
+    expect_rc 0 "install the old pair" || return
     j5_stale "$h" || return
     local cmd; cmd="$(advice_after "rebuild it first:")" || { bad "no advised command"; return; }
     run_advised "$h" "$TREE" "$cmd"
     expect_rc 0 "advised: $cmd" || return
     run_in "$h" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
-    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+    expect_rc 0 "re-run after make build" || return
+    got="$(grep -m1 '^  admin source: ' "$OUT")" got="${got#  admin source: }"
+    [[ -n "$got" && "$got" -ef "$TREE/bin/agent-director-admin" ]] \
+        || bad "admin source \"$got\"; want $TREE/bin/agent-director-admin, not the installed $J11A"
+    expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
 # J5: "or download release: rerun with --from-release (omit --binary)"
@@ -663,7 +802,7 @@ j6_failing_migration() {
         DROP TABLE store_meta; CREATE TABLE store_meta (bogus TEXT);" || { bad "damage store"; return 1; }
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run "$J6H" "${J6ARGV[@]}"
-    expect_rc 5 "migration step fails" || return 1
+    expect_exit5 ErrStoreOpen "migration step fails" || return 1
     expect_advice "If this install authorized a migration above, it was NOT consumed; re-running this install will retry it."
     [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
 }
@@ -676,7 +815,7 @@ j6_failing_migration() {
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
-    expect_rc 5 "re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "re-run while store_meta is still bad" || return
     expect_advice "re-running this install will retry it."
     local could="  schema  : state.db at v$((SCHEMA - 1)); could not tell whether a migration is needed (agent-director list failed: ErrStoreOpen)"
     grep -qxF "$could" "$OUT" || bad "no \"$could\" line: $(grep -F "  schema  : " "$OUT")"
@@ -702,7 +841,7 @@ test_J6_RerunKeepsPriorRollbackCopy() {
     cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
     cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
     run "$J6H" "${J6ARGV[@]}"
-    expect_rc 5 "advised re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "advised re-run while store_meta is still bad" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -724,7 +863,7 @@ test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
     grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" \
         || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
     run "$J6H" "${J6ARGV[@]}"
-    expect_rc 5 "advised re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "advised re-run while store_meta is still bad" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -745,7 +884,7 @@ test_J6_NewerStoreInstallNewer() {
     expect_rc 0 "first install" || return
     "$SQLITE" "$h/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
     run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 5 "store newer than the binary" || return
+    expect_exit5 ErrSchemaMismatch "store newer than the binary" || return
     local none="  schema  : state.db at v$((SCHEMA + 1)); no migration authorization needed"
     grep -qxF "$none" "$OUT" || bad "no \"$none\" line: $(grep -F "  schema  : " "$OUT")"
     expect_advice "ErrSchemaMismatch"
@@ -778,28 +917,31 @@ j7_older_store() {
     "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
 }
 
-# j7_run <call> [<answer>]: run J7ARGV in J7H with sqlite3 call <call> (1 is
-# step 2's read of an existing store, the next step 5's; 0 none) answering
-# <answer>, or failing as when a lock outlasts its busy timeout; no sqlite3
-# error file may be left in TMPDIR.
+# j7_run <call> [<answer> [<stderr> [<status>]]]: run J7ARGV in J7H with
+# sqlite3 call <call> (1 is step 2's read of an existing store, the next step
+# 5's; 0 none) printing <stderr> on stderr, then <answer>, and exiting <status>
+# (default 0). Given no <stderr> and an empty or no <answer>, it fails as when a
+# lock outlasts its busy timeout.
 j7_run() {
     ln -sf "$SQLITE_SHIM" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL="$1" FAKE_SQLITE3_ANSWER="${2:-}"
-    rm -f "$J7H.sqlite3-calls" "$ROOT"/tmp/agent-director-sqlite3.* # count from 1; a leftover below is this run's
+    FAKE_SQLITE3_FAIL_CALL="$1" FAKE_SQLITE3_ANSWER="${2:-}" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
+    if [[ $# -ge 3 ]]; then
+        FAKE_SQLITE3_ERR="$3" FAKE_SQLITE3_RC="${4:-0}"
+    elif [[ -z "$FAKE_SQLITE3_ANSWER" ]]; then
+        FAKE_SQLITE3_ERR="$SHIM_LOCK_ERR" FAKE_SQLITE3_RC=5
+    fi
+    rm -f "$J7H.sqlite3-calls" # count from 1
     run "$J7H" "${J7ARGV[@]}"
     ln -sf "$SQLITE" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
-    if compgen -G "$ROOT/tmp/agent-director-sqlite3.*" >/dev/null; then
-        bad "the sqlite3 error file left behind: $(compgen -G "$ROOT/tmp/agent-director-sqlite3.*")"
-    fi
+    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
 }
 
-# j7_verify_fails <answer>: an older store, and an install whose verification
-# read answers <answer> (empty: the read fails): exit 5, step 5's failure.
+# j7_verify_fails <version>: an older store, and an install whose verification
+# read answers <version>: exit 5, step 5's failure, ErrSchemaVerifyFailed.
 j7_verify_fails() {
     j7_older_store || return 1
     j7_run 2 "$1"
-    expect_rc 5 "verification read answered \"$1\"" || return 1
+    expect_exit5 ErrSchemaVerifyFailed "verification read answered \"$1\"" || return 1
     expect_advice "schema migration verification FAILED"
 }
 
@@ -847,14 +989,6 @@ j7_warned() {
     expect_installed "$J7H" "$BIN" "$ADMIN"
 }
 
-# j7_unverified: j7_verify_fails with the verification read failing; checks
-# its advice.
-j7_unverified() {
-    j7_verify_fails "" || return 1
-    j7_schema_unreadable
-    j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not check the migration. Re-running this install retries the read."
-}
-
 # j7_mismatch: j7_verify_fails with the verification read answering the
 # pre-migration version; checks its advice (state.db's path shell-quoted).
 j7_mismatch() {
@@ -874,12 +1008,6 @@ j7_rerun_verified() {
     [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J7H"); want v$SCHEMA"
 }
 
-# J7: "Re-running this install retries the read."
-test_J7_VerificationFailedRerun() {
-    j7_unverified || return
-    j7_rerun_verified "re-run once the read works"
-}
-
 # J7: "A re-run of this install reads the version again: below v<T> it
 # brings state.db to v<T> again, above v<T> it stops at the store open
 # (ErrSchemaMismatch), and at v<T> it finishes the install." with state.db set
@@ -892,7 +1020,7 @@ test_J7_VersionMismatchRerun() {
         "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
         if ((version > SCHEMA)); then
             run "$J7H" "${J7ARGV[@]}"
-            expect_rc 5 "v$version: re-run" || continue
+            expect_exit5 ErrSchemaMismatch "v$version: re-run" || continue
             [[ "$(line_after "install.sh: store open (agent-director list) failed after install")" == *'"err_name":"ErrSchemaMismatch"'* ]] \
                 || bad "v$version: the re-run did not stop at the store open with ErrSchemaMismatch: $(flat "$ERR")"
             [[ "$(db_version "$J7H")" == "$version" ]] || bad "v$version: store moved to v$(db_version "$J7H")"
@@ -926,22 +1054,6 @@ test_J7_VersionMismatchCheckVersion() {
     done
 }
 
-# J7: "Re-running this install retries the read." when step 2 cannot read an
-# existing store's version: nothing authorized, the store left as it was (b.n5a).
-test_J7_UnreadableBeforeOpenRerun() {
-    j7_older_store || return
-    j7_run 1
-    expect_rc 5 "step 2's read failed" || return
-    local want="install.sh: reading state.db's schema version FAILED"
-    [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-    grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "the failure does not name state.db: $(flat "$ERR")"
-    j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not tell whether state.db needs a migration. No migration was authorized. Re-running this install retries the read."
-    grep -qF "no existing state.db" "$OUT" && bad "an existing state.db reported as a fresh create: $(flat "$OUT")"
-    [[ ! -e "$(sentinel "$J7H")" ]] || bad "a migration was authorized without the store's version"
-    [[ "$(db_version "$J7H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)): v$(db_version "$J7H")"
-    j7_rerun_verified "re-run once the read works"
-}
-
 # J7: "Check the version later with: <command>" when step 5's read of a fresh
 # or already-current store, no migration expected, gives no version: it fails
 # (a lock outlasting its busy timeout) or prints no whole number (JSON, b.hk7).
@@ -972,40 +1084,67 @@ test_J7_UnreadableAfterOpenCheckVersion() {
     done
 }
 
-# J7: "Re-running this install retries the read." when mktemp cannot create the
-# reads' sqlite3 error file: a failed read at step 2 or 5 is reported without
-# sqlite3's error, and the re-run, mktemp still failing, verifies the store
-# (b.wfe).
-test_J7_NoErrorFileUnreadableRerun() {
-    local call want could refused
-    for call in 1 2; do # step 2's read, then step 5's after the migrating open
+# J7: "Re-running this install retries the read." when step 2's or step 5's
+# read fails: it exits nonzero (under a lock, or after printing a version, which
+# then counts for nothing, alone or after an error) or exits 0 printing nothing.
+# The report shows all the read printed, in order, and no pointer to a human
+# (time may resolve a lock, b.ady). A failed step-2 read names state.db, does not
+# take it for a fresh create and authorizes nothing, the store left as it was
+# (b.n5a). TMPDIR is full throughout: the reads need no temp file, so mktemp is
+# never asked for one there, sqlite3's error is still shown, and the re-run
+# verifies the store (b.wfe, b.rfn). Per case <call>|<stdout>|<stderr>|<status>.
+test_J7_FailedReadRerun() {
+    local call out err rc what want could printed
+    while IFS='|' read -r call out err rc <&3; do
+        what="read $call (stdout \"$out\", stderr \"$err\", exit $rc)"
         PATH_EXTRA=""
         j7_older_store || continue
         PATH_EXTRA="$MKTEMP_FAILS"
         rm -f "$MKTEMP_REFUSALS"
-        j7_run "$call"
-        expect_rc 5 "no error file, read $call failed" || continue
+        j7_run "$call" "$out" "$err" "$rc"
+        expect_exit5 ErrVersionUnreadable "$what" || continue
         want="install.sh: reading state.db's schema version FAILED"
         could="tell whether state.db needs a migration. No migration was authorized."
         if [[ "$call" == 2 ]]; then
             want="install.sh: schema migration verification FAILED" could="check the migration."
             j7_schema_unreadable
+        else
+            grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "$what: the failure does not name state.db: $(flat "$ERR")"
+            if grep -qF "no existing state.db" "$OUT"; then
+                bad "$what: an existing state.db reported as a fresh create: $(flat "$OUT")"
+            fi
+            [[ ! -e "$(sentinel "$J7H")" ]] || bad "$what: a migration was authorized without the store's version"
+            [[ "$(db_version "$J7H")" == $((SCHEMA - 1)) ]] || bad "$what: store moved off v$((SCHEMA - 1)): v$(db_version "$J7H")"
         fi
-        grep -qxF "$want" "$ERR" || bad "read $call: no \"$want\" line: $(flat "$ERR")"
-        j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read." \
-            "  Reading state.db's user_version (sqlite3 PRAGMA user_version)"
-        j7_rerun_verified "read $call: re-run, mktemp still failing" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$what: first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        grep -qxF "  actual   user_version: <unreadable>" "$ERR" || bad "$what: no <unreadable> line: $(flat "$ERR")"
+        printed="$({ [[ -z "$err" ]] || echo "$err"; [[ -z "$out" ]] || echo "$out"; } | sed 's/^/    /')"
+        [[ "$(j7_shown)" == "$printed" ]] \
+            || bad "$what: the report shows \"$(j7_shown)\" under \"<unreadable>\"; want all the read printed, \"$printed\""
+        expect_advice "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read."
+        if grep -qF "contact the maintainers" "$ERR"; then
+            bad "$what: the failure tells the operator to contact the maintainers"
+        fi
+        j7_rerun_verified "$what: re-run, TMPDIR still full" || continue
         if [[ "$call" == 1 ]]; then
             grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
-                || bad "read 1: the re-run did not verify the migration: $(flat "$OUT")"
+                || bad "$what: the re-run did not verify the migration: $(flat "$OUT")"
         fi
-        refused="$(cat "$MKTEMP_REFUSALS" 2>/dev/null | wc -l)"
-        [[ "$refused" == 2 ]] || bad "read $call: mktemp refused the sqlite3 error file $refused times; want 2, once per run"
-    done
+        if [[ -s "$MKTEMP_REFUSALS" ]]; then
+            bad "$what: install.sh asked mktemp for a temp file in TMPDIR: $(paste -sd' ' "$MKTEMP_REFUSALS")"
+        fi
+    done 3<<EOF
+1||$SHIM_LOCK_ERR|5
+1|$((SCHEMA - 1))||10
+1|$((SCHEMA - 1))|Error: stepping, disk I/O error (10)|10
+2||$SHIM_LOCK_ERR|5
+2|$SCHEMA||10
+2|||0
+EOF
 }
 
 # j7_shown: the lines the report (a failure's, or step 5's warning) shows under
-# "<unreadable>": the read's output, then sqlite3's error.
+# "<unreadable>": all the read printed, stderr and stdout as they came.
 j7_shown() {
     awk '/^  (Reading state\.db|The store open)/ { f = 0 } f; $0 == "  actual   user_version: <unreadable>" { f = 1 }' "$ERR"
 }
@@ -1027,25 +1166,37 @@ j7_not_a_version() {
     fi
 }
 
-# j7_rerun_same <rc> <call> [<answer>]: re-run as the last j7_run did, with
-# that sqlite3 and state.db: exit <rc>, showing the same output.
+# j7_rerun_same <want> <call> [<answer> [<stderr> [<status>]]]: re-run j7_run
+# with the arguments after <want>, those the last j7_run had, so with that
+# sqlite3 and state.db: exit 0 when <want> is 0, else exit 5 with cause <want>,
+# showing the same output.
 j7_rerun_same() {
-    local rc="$1" shown; shown="$(j7_shown)"
+    local want="$1" shown what="re-run with that sqlite3 and state.db unchanged"
+    shown="$(j7_shown)"
     shift
     j7_run "$@"
-    expect_rc "$rc" "re-run with that sqlite3 and state.db unchanged" || return 1
+    if [[ "$want" == 0 ]]; then
+        expect_rc 0 "$what" || return 1
+    else
+        expect_exit5 "$want" "$what" || return 1
+    fi
     [[ "$(j7_shown)" == "$shown" ]] || bad "the re-run shows \"$(j7_shown)\" under \"<unreadable>\"; the first run showed \"$shown\""
 }
 
 # J7: "A re-run gets the same output unless that sqlite3 or state.db changes."
 # when step 2's read prints no whole number: a sqlite3 printing a header line
 # (as a .headers on ~/.sqliterc does) or a leading zero (08, which printf %d
-# rejects as octal; 010, which it reads as 8), or a store at user_version -1.
-# Nothing is authorized; once the one named changes, the re-run migrates (b.hk7).
+# rejects as octal; 010, which it reads as 8), one exiting 0 that prints a
+# notice on stderr before the version (as -init does without -batch; it joins
+# the output, b.rfn), or a store at user_version -1. Nothing is authorized;
+# once the one named changes, the re-run migrates (b.hk7). Per case
+# <changed>|<stdout>|<stderr>.
 test_J7_NotAVersionBeforeOpenRerun() {
-    local spec changed call answer stand_in version want="install.sh: reading state.db's schema version FAILED"
-    for spec in "sqlite3|user_version\n$((SCHEMA - 1))" "sqlite3|08" "sqlite3|010" "state.db|-1"; do
-        changed="${spec%%|*}" answer="${spec#*|}"
+    local spec changed call answer err printed stand_in version want="install.sh: reading state.db's schema version FAILED"
+    for spec in "sqlite3|user_version\n$((SCHEMA - 1))|" "sqlite3|08|" "sqlite3|010|" \
+        "sqlite3|$((SCHEMA - 1))|-- Loading resources from /dev/null" "state.db|-1|"; do
+        IFS='|' read -r changed answer err <<<"$spec"
+        printed="${err:+$err\n}$answer" # stderr first, as the stand-in prints them
         j7_older_store || continue
         if [[ "$changed" == sqlite3 ]]; then
             version=$((SCHEMA - 1)) call=1 stand_in="$answer"
@@ -1053,16 +1204,16 @@ test_J7_NotAVersionBeforeOpenRerun() {
             version="$answer" call=0 stand_in=""
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
         fi
-        j7_run "$call" "$stand_in"
-        expect_rc 5 "step 2's read printed \"$answer\"" || continue
-        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-        j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not tell whether state.db needs a migration. No migration was authorized."
-        j7_rerun_same 5 "$call" "$stand_in" || continue
-        [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$answer\": store moved off v$version: v$(db_version "$J7H")"
+        j7_run "$call" "$stand_in" "$err" 0
+        expect_exit5 ErrVersionUnreadable "step 2's read printed \"$printed\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$printed\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        j7_not_a_version "$printed" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not tell whether state.db needs a migration. No migration was authorized."
+        j7_rerun_same ErrVersionUnreadable "$call" "$stand_in" "$err" 0 || continue
+        [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$printed\": store moved off v$version: v$(db_version "$J7H")"
         if [[ "$changed" == state.db ]]; then
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
         fi
-        j7_rerun_verified "\"$answer\": re-run once $changed changed"
+        j7_rerun_verified "\"$printed\": re-run once $changed changed"
     done
 }
 
@@ -1081,7 +1232,7 @@ test_J7_NotAVersionAfterOpenRerun() {
     for answer in "[{\"user_version\":$SCHEMA}]" "0$SCHEMA"; do
         j7_older_store || continue
         j7_run 2 "$answer"
-        expect_rc 5 "older store, step 5's read printed \"$answer\"" || continue
+        expect_exit5 ErrVersionUnreadable "older store, step 5's read printed \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         j7_schema_unreadable
         j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not check the migration."
@@ -1107,7 +1258,7 @@ test_J7_UnreadableAfterProbeRerun() {
         J7H="$J6H"
         J7ARGV=("${J6ARGV[@]}")
         j7_run 2 "$answer" # step 2's read, then step 3's after the probe
-        expect_rc 5 "step 3's read after the probe answered \"$answer\"" || continue
+        expect_exit5 ErrVersionUnreadable "step 3's read after the probe answered \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: reading state.db's schema version FAILED" ]] \
             || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\""
         grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "\"$answer\": the failure does not name state.db: $(flat "$ERR")"
@@ -1199,6 +1350,58 @@ test_J9_StampMismatchFromRelease() {
         FAKE_CURL_API_TAG="$REL_TAG"
         run "$h" bash "$LOOSE" --no-hooks --no-symlink --from-release
         expect_rc 0 "(${stamps[$i]}) rerun with --from-release, no --binary or --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    done
+}
+
+# j9_installed_mismatch <how>: j3_installed_skill with BIN_NUL and ADMIN_NUL
+# (BIN and ADMIN's stamps, other bytes), then a re-run of J3SK, J9ARGV, that
+# pairs the installed agent-director-admin with BIN_OLD, from another build,
+# found on PATH (<how> PATH) or given as --binary (<how> --binary) (b.azo):
+# check it is refused, naming both stamps, with nothing changed on disk.
+j9_installed_mismatch() {
+    local src="$ON_PATH/agent-director" before
+    j3_installed_skill "$BIN_NUL" "$ADMIN_NUL" || return 1
+    J9ARGV=(bash "$J3SK")
+    if [[ "$1" == PATH ]]; then PATH_EXTRA="$ON_PATH:$PATH_EXTRA"; else J9ARGV+=(--binary "$BIN_OLD") src="$BIN_OLD"; fi
+    before="$(j14_snap "$J3H")"
+    run "$J3H" "${J9ARGV[@]}"
+    expect_rc 3 "$1: agent-director from another build" || return 1
+    expect_advice "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install."
+    expect_advice "agent-director : $src (0.0.1-advice-old $OLD_COMMIT)"
+    expect_advice "agent-director-admin: $J11A (0.0.2-advice $CUR_COMMIT)"
+    [[ "$(j14_snap "$J3H")" == "$before" ]] || bad "$1: the refusal changed $J3H: $(diff <(echo "$before") <(j14_snap "$J3H"))"
+}
+
+# J9: "or download release: rerun with --from-release (omit --binary and
+# --admin-binary)" in j9_installed_mismatch's refusal: the advised re-run
+# installs the release's pair over the installed one.
+test_J9_InstalledAdminStampMismatchFromRelease() {
+    local how
+    for how in PATH --binary; do
+        j9_installed_mismatch "$how" || continue
+        expect_advice "or download release: rerun with --from-release (omit --binary and --admin-binary)"
+        FAKE_CURL_API_TAG="$REL_TAG"
+        run "$J3H" bash "$J3SK" --from-release
+        FAKE_CURL_API_TAG=""
+        expect_rc 0 "$how: rerun with --from-release, no --binary" && expect_installed "$J3H" "$BIN" "$ADMIN"
+    done
+}
+
+# J9: "rebuild both first:  make build" in j9_installed_mismatch's refusal,
+# run where install.sh ran, outside any checkout; the same command then
+# installs (a pair: install.sh refuses any other). Known broken: there is no
+# checkout to build in, and the re-run would pair the same two binaries (b.oo9).
+test_J9_InstalledAdminStampMismatchMakeBuild() {
+    local how cmd
+    for how in PATH --binary; do
+        j9_installed_mismatch "$how" || continue
+        expect_advice "rebuild both first: make build"
+        cmd="$(advice_after "rebuild both first:")" || { bad "$how: no advised command"; continue; }
+        known_broken J9 "filed as b.oo9: no checkout to run \"make build\" in, re-run of the installed skill" || return
+        run_advised "$J3H" "$ROOT" "$cmd"
+        expect_rc 0 "$how: advised: $cmd" || continue
+        run "$J3H" "${J9ARGV[@]}"
+        expect_rc 0 "$how: re-run after make build"
     done
 }
 
@@ -1481,7 +1684,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         esac
         printf '%b\n' "$config" >"$J7H/.agent-director/config.toml"
         run "$J7H" "${J7ARGV[@]}"
-        expect_rc 5 "$store store, config \"$named\"" || continue
+        expect_exit5 ErrConfigMalformed "$store store, config \"$named\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store, \"$named\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         grep -qF '  {"err_name":"ErrConfigMalformed",' "$ERR" || bad "$store, \"$named\": no ErrConfigMalformed envelope: $(flat "$ERR")"
         expect_advice "$named"
@@ -1617,7 +1820,7 @@ test_J14_DbPathRefusedFixAndRerun() {
         fi
         before="$(j14_snap "$h")"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "config \"$broken\"" || continue
+        expect_exit5 ErrConfigMalformed "config \"$broken\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "$advice"
         expect_advice "Nothing was installed or changed. Re-run this install after the change."
@@ -1741,7 +1944,7 @@ test_J14_DottedKeysMoveInTurn() {
     while IFS='|' read -r line advice <&3; do
         before="$(j14_snap "$h")"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "config line 1 \"$line\"" || return
+        expect_exit5 ErrConfigMalformed "config line 1 \"$line\"" || return
         expect_advice "line 1 : $line"
         expect_advice "$advice"
         [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$line\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
@@ -1780,7 +1983,7 @@ test_J15_SentinelTempFailedFixAndRerun() {
         sum="$(sha256sum "$db")"
         PATH_EXTRA="$SENTINEL_MKTEMP_FAILS"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "$shown: mktemp fails beside the sentinel" || continue
+        expect_exit5 ErrSchemaVerifyFailed "$shown: mktemp fails beside the sentinel" || continue
         # Its error is above: mktemp's own, naming a template no one can predict.
         [[ "$(head -n 2 "$ERR")" == "mktemp: failed to create file via template '$sentinel.tmp.XXXXXX': Permission denied"$'\n'"install.sh: writing the migration sentinel FAILED" ]] \
             || bad "$shown: stderr does not open with mktemp's error for $sentinel.tmp.XXXXXX, then the failure: $(head -n 2 "$ERR" | tr '\n' '|')"
@@ -1840,7 +2043,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         if [[ "$config" == '"defaults"'* ]]; then
             before="$(j14_snap "$h")"
             run "$h" "${J7ARGV[@]}"
-            expect_rc 5 "config \"$config\"" || continue
+            expect_exit5 ErrConfigMalformed "config \"$config\"" || continue
             expect_advice "A quoted key is the same as the bare one. Write it as defaults, without the quotes."
             [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$config\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
             named_line "$cfg" || continue
@@ -1848,7 +2051,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         fi
         before="$(j14_snap "$h")"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "config \"$(flat "$cfg")\"" || continue
+        expect_exit5 ErrConfigMalformed "config \"$(flat "$cfg")\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$config\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "line 1 : $(head -n 1 "$cfg")"
         [[ -z "$reads_as" ]] \
@@ -1868,6 +2071,154 @@ test_J16_DefaultsKeyMoveUnderHeader() {
 defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100||[relay]\npoll_base_ms = 100\n[defaults]\nrelay_mode = "off"\ninject_help_hook = true
 Defaults = { inject_help_hook = false, relay_mode = "off" }\n[defaults]\nexpire_retention_days = 7|Defaults|[defaults]\ninject_help_hook = true\nrelay_mode = "off"\nexpire_retention_days = 7
 "defaults" = { relay_mode = "off" }||[defaults]\nrelay_mode = "off"\ninject_help_hook = true
+EOF
+}
+
+# ---- J17: exit 5's cause line (b.cfq) ----------------------------------------------
+
+# j17_remedy <err_name>: what a caller of install.sh does after an exit 5 whose
+# cause line names <err_name>, from the name alone, as SKILL.md's "Exit 5's
+# cause line" maps it: rerun, fix-config, newer-binary, stop for a human, or,
+# for any other name, rerun-once (stop if the re-run fails with that name).
+j17_remedy() {
+    case "$1" in
+        ErrVersionUnreadable) echo rerun ;;
+        ErrConfigMalformed) echo fix-config ;;
+        ErrSchemaMismatch) echo newer-binary ;;
+        ErrSchemaVerifyFailed) echo stop ;;
+        *) echo rerun-once ;;
+    esac
+}
+
+# The setups for test_J17's cases: each leaves an exit 5 of J7ARGV in J7H.
+# j17_lock: step 2's read of an older store fails as under a held lock.
+j17_lock() { j7_older_store && j7_run 1; }
+# j17_config_refused: an older store under a config agent-director refuses.
+j17_config_refused() {
+    j7_older_store || return 1
+    printf '[defaults]\nexpire_retention_days = -1\n' >"$J7H/.agent-director/config.toml"
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_newer_store: a store one version newer than BIN.
+j17_newer_store() {
+    j7_installed || return 1
+    "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_mismatch: an older store whose step-5 read gives the pre-migration version.
+j17_mismatch() { j7_older_store && j7_run 2 "$((SCHEMA - 1))"; }
+# j17_fake <mode>: a fresh install of FAKE_AD, J7ARGV with FAKE_AD as
+# --binary, whose `list` does <mode>; J17_RELAY is that list's stderr with
+# every line indented two spaces, as step 4 relays a failed open's.
+j17_fake() {
+    J7H="$(new_home)"
+    printf '%s' "$1" >"$J7H/fake-list"
+    J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    J17_RELAY="$(env -i HOME="$J7H" "$FAKE_AD" list 2>&1 >/dev/null | sed 's/^/  /')"
+    run "$J7H" "${J7ARGV[@]}"
+}
+
+# J17: "Every exit 5 ends with one line on stderr, its last, naming the cause:
+# `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it"
+# (install.sh --help). Per case <setup>|<headline>|<Name>|<config fix>: the
+# exit 5 <setup> leaves has <headline> on stderr (the site the case is for) and
+# one cause line, its last, naming <Name>. The remedy is chosen from that line
+# alone (j17_remedy) and followed: rerun runs J7ARGV again with the lock gone,
+# fix-config applies the sed <config fix> to config.toml and re-runs,
+# newer-binary installs BIN_NEWER; each then installs. rerun-once runs J7ARGV
+# again, which, the cause unchanged, fails with the same name: then, as for
+# stop, it is a human's turn. The FAKE_AD cases: no store after an open that
+# succeeded, and a failed open whose stderr (relayed below <headline>, every
+# line indented) holds no envelope (a multi-line panic), one whose err_name is
+# no Err... name (one holding a cause line, which must stay inside the
+# envelope), or one with an err_name install.sh's own remedies do not name.
+test_J17_ExitFiveCauseLineDecidesRemedy() {
+    local setup headline name fix cause remedy want_bin want_v relayed J17_RELAY
+    local -a words argv0=("${J7ARGV[@]}")
+    local -a J7ARGV # j17_fake sets its own
+    run "$(new_home)" bash "$LOOSE" --help
+    expect_rc 0 "install.sh --help" || return
+    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), or, when the store open fails another way, agent-director'"'"'s own err_name.'* ]] \
+        || bad "--help lacks the cause-line contract: $(flat "$OUT")"
+    while IFS='|' read -r setup headline name fix <&3; do
+        J7ARGV=("${argv0[@]}") J17_RELAY=""
+        read -r -a words <<<"$setup"
+        "${words[@]}" || { bad "$setup: setup failed"; continue; }
+        expect_exit5 "$name" "$setup" || continue
+        grep -qxF "$headline" "$ERR" || bad "$setup: no \"$headline\" line: $(flat "$ERR")"
+        if [[ -n "$J17_RELAY" ]]; then
+            relayed="$(grep -m1 -xF -A"$(wc -l <<<"$J17_RELAY")" "$headline" "$ERR" | tail -n +2)"
+            [[ "$relayed" == "$J17_RELAY" ]] \
+                || bad "$setup: below \"$headline\": $(paste -sd'|' <<<"$relayed"); want the open's stderr, every line indented two spaces: $(paste -sd'|' <<<"$J17_RELAY")"
+        fi
+        cause="$(tail -n 1 "$ERR")"
+        remedy="$(j17_remedy "${cause#install.sh: err_name=}")"
+        want_bin="$BIN" want_v="$SCHEMA"
+        case "$remedy" in
+            rerun) run "$J7H" "${J7ARGV[@]}" ;;
+            fix-config)
+                sed -i "$fix" "$J7H/.agent-director/config.toml"
+                run "$J7H" "${J7ARGV[@]}" ;;
+            newer-binary)
+                want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
+                run "$J7H" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink ;;
+            rerun-once)
+                expect_advice "re-running this install will retry it."
+                run "$J7H" "${J7ARGV[@]}"
+                expect_exit5 "${cause#install.sh: err_name=}" "$setup: re-run once after \"$cause\""
+                continue ;;
+            stop) continue ;;
+        esac
+        expect_rc 0 "$setup: $remedy after \"$cause\"" || continue
+        expect_installed "$J7H" "$want_bin" "$ADMIN"
+        [[ "$(db_version "$J7H")" == "$want_v" ]] || bad "$setup: store at v$(db_version "$J7H") after $remedy; want v$want_v"
+    done 3<<'EOF'
+j17_lock|install.sh: reading state.db's schema version FAILED|ErrVersionUnreadable|
+j17_config_refused|install.sh: agent-director refused its config file (ErrConfigMalformed)|ErrConfigMalformed|/^expire_retention_days = /d
+j17_newer_store|install.sh: store open (agent-director list) failed after install|ErrSchemaMismatch|
+j17_mismatch|install.sh: schema migration verification FAILED|ErrSchemaVerifyFailed|
+j17_fake ok|install.sh: state.db was not created by the store open|ErrSchemaVerifyFailed|
+j17_fake panic|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
+j17_fake odd-name|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
+j17_fake other-name|install.sh: store open (agent-director list) failed after install|ErrSchemaMigrationRequired|
+EOF
+}
+
+# ---- J18: settings.json of another shape, hooks on (b.cfq) -------------------------
+
+# J18: "It is valid JSON, but not an object whose hooks hold event lists, the
+# shape Claude Code reads. Fix it, then re-run this install." A hooks-on
+# install over such a settings.json exits 4, the hook merge failure, with jq's
+# error on the line above its headline and no exit-5 cause line, and leaves the
+# file as it was; rewritten to that shape, the re-run injects both hooks. Per
+# case <settings.json>|<fixed>.
+test_J18_SettingsShapeFixAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings fixed above
+    local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
+    while IFS='|' read -r settings fixed <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json"
+        mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 4 "settings.json $settings" || continue
+        expect_advice "$want It is valid JSON, but not an object whose hooks hold event lists, the shape Claude Code reads. Fix it, then re-run this install."
+        above="$(grep -m1 -xF -B1 "$want" "$ERR" | head -n 1)"
+        [[ "$above" == "jq: error"* ]] || bad "$settings: the line above \"$want\" is not jq's error: $(paste -sd'|' "$ERR")"
+        if grep -q '^install\.sh: err_name=' "$ERR"; then
+            bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
+        fi
+        [[ "$(<"$sj")" == "$settings" ]] || bad "$settings: settings.json changed: $(<"$sj")"
+        if compgen -G "$sj.*" >/dev/null; then
+            bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
+        fi
+        printf '%s\n' "$fixed" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "$settings fixed to $fixed: re-run" || continue
+        hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
+    done 3<<'EOF'
+[]|{}
+{"hooks":"x"}|{"hooks":{}}
+{"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}
 EOF
 }
 

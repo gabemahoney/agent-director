@@ -13,16 +13,33 @@
 # (version and commit) differ, or carry no commit stamp (a plain
 # `go build` reports commit "unknown"), since both open the same store.
 #
+# Without --from-release, each binary comes from the first of these it
+# finds (b.azo):
+#   agent-director        --binary; bin/agent-director of the checkout
+#                         the script sits in; `command -v agent-director`.
+#   agent-director-admin  --admin-binary; bin/agent-director-admin of
+#                         that checkout; the installed
+#                         ~/.agent-director/admin/agent-director-admin.
+#                         Never PATH.
+# So a re-run from the installed skill, outside any checkout and with
+# no flags, reinstalls the agent-director on PATH with the installed
+# agent-director-admin; like any other pair, they are refused (exit 3)
+# when their version stamps differ. When a source is not found, the
+# install is refused (exit 3), naming every path tried and the flags to
+# pass.
+#
 # Flags:
-#   --binary <path>      Source binary to install. Defaults to looking
-#                        next to the script first, then to whatever
-#                        `command -v agent-director` resolves to.
+#   --binary <path>      Source binary to install. Defaults to
+#                        bin/agent-director of the checkout the script
+#                        sits in, then to whatever `command -v
+#                        agent-director` resolves to.
 #   --admin-binary <path>
 #                        Source agent-director-admin binary to install.
 #                        Defaults to bin/agent-director-admin of the
 #                        checkout the script sits in (`make build`
-#                        builds both binaries). Mutually exclusive with
-#                        --from-release.
+#                        builds both binaries), then to the installed
+#                        ~/.agent-director/admin/agent-director-admin.
+#                        Mutually exclusive with --from-release.
 #   --from-release [tag] Download pre-built agent-director and
 #                        agent-director-admin binaries for this host's
 #                        OS/arch from GitHub Releases and install them.
@@ -91,6 +108,12 @@
 #      pre-flight, before anything on disk changes). state.db here is
 #      the store database agent-director opens: ~/.agent-director/state.db,
 #      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
+#      Every exit 5 ends with one line on stderr, its last, naming the
+#      cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the
+#      text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed
+#      (fix config.toml, then re-run), ErrSchemaMismatch (install a newer
+#      agent-director), ErrSchemaVerifyFailed (needs a human), or, when the
+#      store open fails another way, agent-director's own err_name.
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -99,14 +122,14 @@ set -euo pipefail
 
 # A umask that removes the owner's own bits (0777, 0222, 0200, ...) also
 # strips them from every file and directory this script creates without a
-# chmod. mktemp's sqlite3 error file comes out unwritable, so the redirect
-# to it fails before sqlite3 runs and every user_version read fails
-# (exit 5). The --from-release downloads fail too (curl cannot write its
-# mktemp file), and so does settings.json when ~/.claude is missing (the
-# new directory is not writable; exit 1). settings.json in an existing
-# ~/.claude and a merged config.toml are written, but come out missing the
-# same owner bits (mode 000, unreadable by their owner, under 0777). So
-# allow the owner rwx. The group and other bits stay
+# chmod. The step-3 migration sentinel's mktemp file comes out unwritable,
+# so an upgrade cannot authorize its migration. The --from-release
+# downloads fail too (curl cannot write its mktemp file), and so does
+# settings.json when ~/.claude is missing (the new directory is not
+# writable; exit 1). settings.json in an existing ~/.claude and a merged
+# config.toml are written, but come out missing the same owner bits (mode
+# 000, unreadable by their owner, under 0777). So allow the owner rwx. The
+# group and other bits stay
 # as the operator set them, and a umask that leaves the owner's bits alone
 # is unchanged. The agent-director runs below inherit it, so the files they
 # create in ~/.agent-director are usable by their owner too (b.7j2).
@@ -120,6 +143,7 @@ readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 # The operator tool's own directory, never on PATH (b.vqr).
 readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
+readonly DEFAULT_ADMIN_PATH="${DEFAULT_ADMIN_DIR}/agent-director-admin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
 BINARY_SRC=""
@@ -221,6 +245,37 @@ if [[ -n "$ADMIN_SHA256_EXPECTED" && -z "$SHA256_EXPECTED" ]]; then
     echo "  Pass --sha256 <hex> too (the sha256 of the agent-director release asset), or neither flag to skip verification." >&2
     exit 2
 fi
+
+# --------------------------------------------------------------------
+# Exit 5's machine-readable cause (b.cfq)
+#
+# Exit 5 has causes needing different remedies, so every exit-5 path ends
+# with one fixed line on stderr, its last, `install.sh: err_name=<Name>`,
+# for a caller to branch on instead of the English above it:
+#   ErrVersionUnreadable  a user_version read gave no version
+#                         (ad_fail_unreadable_version): re-run.
+#   ErrConfigMalformed    config.toml refused, by agent-director or by
+#                         install.sh's pre-flight reader or merge check:
+#                         fix it, then re-run.
+#   ErrSchemaMismatch     state.db newer than this binary (step 4's open):
+#                         install a newer agent-director.
+#   ErrSchemaVerifyFailed step 5 found state.db missing, or not at the
+#                         target version, after a successful open; or step 3
+#                         could not create the sentinel's temp file: needs
+#                         a human.
+#   any other name        step 4's open failed with that agent-director
+#                         err_name (ErrStoreOpen when its stderr held no
+#                         error envelope).
+# ErrVersionUnreadable and ErrSchemaVerifyFailed are install.sh's own
+# names, not agent-director error names.
+# --------------------------------------------------------------------
+
+# ad_exit_5 <err_name> — print exit 5's cause line naming <err_name> on
+# stderr, then exit 5.
+ad_exit_5() {
+    echo "install.sh: err_name=$1" >&2
+    exit 5
+}
 
 # --------------------------------------------------------------------
 # Pre-flight
@@ -684,7 +739,7 @@ ad_store_db_path() (
 # <<< ad_store_db_path (b.2io) <<<
 
 if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME")"; then
-    exit 5
+    ad_exit_5 ErrConfigMalformed
 fi
 # Messages name the store "state.db" when it is the default one, as
 # before, and by its path when [store] db_path moves it.
@@ -761,7 +816,7 @@ ad_config_merge_check() (
 )
 
 if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
-    exit 5
+    ad_exit_5 ErrConfigMalformed
 fi
 
 echo "install.sh: pre-flight OK"
@@ -1043,18 +1098,27 @@ if [[ -n "$BINARY_SRC" && ! -x "$BINARY_SRC" ]]; then
 fi
 
 # The operator tool agent-director-admin (b.vqr): --admin-binary, the
-# downloaded release asset, or the in-repo build beside
-# bin/agent-director. It is never looked up on PATH, where it is never
-# installed.
-if [[ -z "$ADMIN_SRC" && -x "$admin_candidate" ]]; then
-    ADMIN_SRC="$admin_candidate"
+# downloaded release asset, the in-repo build beside bin/agent-director,
+# or else the one an earlier install put in place (b.azo), so a re-run
+# from the installed skill, outside any checkout, pairs it with the
+# agent-director on PATH. The version-stamp check below refuses it when
+# it is from another build than agent-director. It is never looked up
+# on PATH, where it is never installed. Installing it over itself is
+# safe: it is copied to a temp file beside it, which is moved into
+# place, and the --keep-prior snapshot to its .prior only reads it.
+if [[ -z "$ADMIN_SRC" ]]; then
+    if [[ -x "$admin_candidate" ]]; then
+        ADMIN_SRC="$admin_candidate"
+    elif [[ -x "$DEFAULT_ADMIN_PATH" ]]; then
+        ADMIN_SRC="$DEFAULT_ADMIN_PATH"
+    fi
 fi
 
 # A missing source is refused once, naming every option the re-run
-# needs (b.vqr): with neither binary beside the script, both --binary
-# and --admin-binary, never one refusal per binary. An agent-director
-# found only on PATH counts as missing then, since agent-director-admin
-# is never on PATH to pair with it.
+# needs (b.vqr): with neither binary found, both --binary and
+# --admin-binary, never one refusal per binary. An agent-director found
+# only on PATH counts as missing then, since no agent-director-admin was
+# found, beside the script or installed, to pair with it.
 if [[ -z "$BINARY_SRC" || -z "$ADMIN_SRC" ]]; then
     if [[ -n "$ADMIN_SRC" ]]; then
         echo "install.sh: no source binary found." >&2
@@ -1064,16 +1128,24 @@ if [[ -z "$BINARY_SRC" || -z "$ADMIN_SRC" ]]; then
     elif [[ -n "$BINARY_SRC" && "$VERSION_CHECK_REQUIRED" -eq 1 ]]; then
         echo "install.sh: no agent-director-admin source binary found." >&2
         echo "  Tried: $admin_candidate" >&2
+        echo "  Tried: $DEFAULT_ADMIN_PATH" >&2
         echo "  Pass --admin-binary <path> to override." >&2
     else
-        echo "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script." >&2
+        # Here no agent-director-admin was found, and agent-director was
+        # either not found at all or found only on PATH. The headline says
+        # "or on PATH" only when none was there; the found-on-PATH case is
+        # named by its own line below.
+        bin_looked="beside the script"
+        [[ -n "$BINARY_SRC" ]] || bin_looked="beside the script or on PATH"
+        echo "install.sh: no source binaries found: no agent-director-admin beside the script or installed, and no agent-director ${bin_looked}." >&2
         echo "  Tried: $candidate" >&2
         if [[ -n "$BINARY_SRC" ]]; then
-            echo "  Found on PATH, not used: $BINARY_SRC (agent-director-admin is never on PATH to pair with it)" >&2
+            echo "  Found on PATH, not used: $BINARY_SRC (no agent-director-admin to pair with it)" >&2
         else
             echo "  Tried: command -v agent-director" >&2
         fi
         echo "  Tried: $admin_candidate" >&2
+        echo "  Tried: $DEFAULT_ADMIN_PATH" >&2
         echo "  Pass --binary <path> --admin-binary <path> (both from the same build) to override." >&2
     fi
     exit 3
@@ -1283,7 +1355,7 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
-ADMIN_CANONICAL="${DEFAULT_ADMIN_DIR}/agent-director-admin"
+ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
 ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
 ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
@@ -1354,8 +1426,8 @@ fi
 # replaces neither binary, rather than leaving a new agent-director
 # beside an old agent-director-admin. The EXIT trap removes a staged
 # copy that was never moved into place (and the --from-release
-# downloads, as before, the sqlite3 error file of steps 2 and 5, and a
-# migration sentinel's temp file that step 3 never moved into place).
+# downloads, as before, and a migration sentinel's temp file that step 3
+# never moved into place).
 #
 # The operator tool agent-director-admin goes into its own directory
 # (mode 0700, five digits to clear an inherited setgid bit as above),
@@ -1363,7 +1435,7 @@ fi
 # symlink for it. Its path is printed once, at the end.
 # --------------------------------------------------------------------
 
-trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"} ${user_version_err:+"$user_version_err"} ${tmp_sentinel:+"$tmp_sentinel"}' EXIT
+trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"} ${tmp_sentinel:+"$tmp_sentinel"}' EXIT
 
 mkdir -p "$DEFAULT_ADMIN_DIR"
 chmod 00700 "$DEFAULT_ADMIN_DIR"
@@ -1445,11 +1517,18 @@ fi
 #            it is documented in SKILL.md, not worked around in code.
 # --------------------------------------------------------------------
 
-# ad_user_version <db> [<err-file>] — echo the DB's user_version through
-# the WAL; empty output means the read failed. sqlite3's stderr goes to
-# <err-file> (default /dev/null), so the caller can show sqlite3's own
-# reason. Call it only on a DB that exists: an empty result never means
-# "no DB" (b.n5a). Check the result with ad_is_version before using it.
+# ad_user_version <db> — print the DB's user_version, read through the WAL,
+# and exit with sqlite3's status. sqlite3's stderr is printed with its
+# stdout, so the caller holds the whole read in one variable and its status
+# in another, with no file:
+#
+#     rc=0; out="$(ad_user_version "$db")" || rc=$?
+#
+# A nonzero status means the read failed, and the output is sqlite3's own
+# reason, for the report to show (b.n5a). Status 0 with output that is no
+# version means the read printed something else (b.hk7). Use the output as
+# a version only when ad_got_version holds. Call it only on a DB that
+# exists: a failed read never means "no DB".
 #
 # The read waits up to 10 s for a lock, the same busy_timeout every
 # agent-director connection uses (internal/store/store.go openDB). A plain
@@ -1460,11 +1539,10 @@ fi
 # -init /dev/null: the sqlite3 shell otherwise runs the operator's
 # ~/.sqliterc first, and a `.headers on` or `.mode` there changes the
 # output (b.hk7). -batch: with a terminal on stdin, -init makes sqlite3
-# print "-- Loading resources from /dev/null" to stderr, which a failed
-# read would show as sqlite3's error.
+# print "-- Loading resources from /dev/null" to stderr, which would join
+# the read's output and make it no version.
 ad_user_version() {
-    local db="$1" err="${2:-/dev/null}"
-    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" "$db" "PRAGMA user_version;" 2>"$err" || true
+    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" "$1" "PRAGMA user_version;" 2>&1
 }
 
 # ad_is_version <value> — true when <value> is a user_version as sqlite3
@@ -1476,27 +1554,32 @@ ad_is_version() {
     [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]
 }
 
+# ad_got_version <status> <output> — true when a user_version read
+# (ad_user_version) exited 0 and printed a version (ad_is_version). Only
+# then may <output> be used as one.
+ad_got_version() {
+    [[ "$1" -eq 0 ]] && ad_is_version "$2"
+}
+
 # ad_show_unreadable_version <output> — print on stderr the <unreadable>
-# line of a user_version read that gave no version, with <output> (what the
-# read printed: empty when it failed) and sqlite3's own error indented
-# under it.
+# line of a user_version read that gave no version, with <output>, all the
+# read printed (sqlite3's own error when it failed), indented under it.
 ad_show_unreadable_version() {
     echo "  actual   user_version: <unreadable>" >&2
     if [[ -n "$1" ]]; then
         printf '%s\n' "$1" | sed 's/^/    /' >&2
     fi
-    if [[ -s "$user_version_err" ]]; then
-        sed 's/^/    /' "$user_version_err" >&2
-    fi
 }
 
-# ad_fail_unreadable_version <output> <what the install could not do>
-# [<line>...] — finish a user_version read's failure report and exit 5.
-# <output> is what the read printed: empty when the read failed, otherwise
-# output that is not a version (ad_is_version). The caller has already
-# printed the headline. This prints the <unreadable> line, <output> and
-# sqlite3's own error indented under it, the cause, any further <line>s,
-# and the advice.
+# ad_fail_unreadable_version <status> <output> <what the install could not
+# do> [<line>...] — finish a user_version read's failure report and exit 5
+# (ErrVersionUnreadable).
+# <status> and <output> are the read's (ad_user_version). It failed when
+# <status> is nonzero or it printed nothing, and otherwise printed <output>,
+# which is not a version (ad_is_version). The caller has already printed
+# the headline. This prints the <unreadable> line, <output> indented under
+# it (on a failed read, sqlite3's own error), the cause, any further
+# <line>s, and the advice.
 #
 # The script cannot tell why a read failed (a lock held past the 10 s
 # busy timeout, a broken sqlite3, permissions, a corrupt file), so it shows
@@ -1507,11 +1590,14 @@ ad_show_unreadable_version() {
 # on PATH printed it for this state.db, so a re-run gets the same output
 # until one of the two changes (b.hk7).
 ad_fail_unreadable_version() {
-    local output="$1" could_not="$2" line
-    shift 2
+    local status="$1" output="$2" could_not="$3" failed=0 line
+    shift 3
+    if [[ "$status" -ne 0 || -z "$output" ]]; then
+        failed=1
+    fi
     ad_show_unreadable_version "$output"
     echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2
-    if [[ -z "$output" ]]; then
+    if [[ "$failed" -eq 1 ]]; then
         echo "  failed, so the install could not ${could_not}." >&2
     else
         echo "  printed the output above, not a whole number (0 or more), so" >&2
@@ -1520,13 +1606,13 @@ ad_fail_unreadable_version() {
     for line in "$@"; do
         echo "  $line" >&2
     done
-    if [[ -z "$output" ]]; then
+    if [[ "$failed" -eq 1 ]]; then
         echo "  Re-running this install retries the read." >&2
     else
         echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
         echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
     fi
-    exit 5
+    ad_exit_5 ErrVersionUnreadable
 }
 
 # ad_target_version <stderr> — the schema version THIS binary requires.
@@ -1567,28 +1653,24 @@ ad_fail_config_refused() {
     printf '%s\n' "$1" | sed 's/^/  /' >&2
     echo "  Fix what the error above names in the config file, then re-run this" >&2
     echo "  install." >&2
-    exit 5
+    ad_exit_5 ErrConfigMalformed
 }
 
 # ---- Step 2: read the DB's ACTUAL current schema version ----
-# Keep the reads' sqlite3 stderr (here and in step 5) so a failed read shows
-# its reason. Only a diagnostic: if mktemp fails, read without it rather
-# than fail the install.
-user_version_err="$(mktemp -t agent-director-sqlite3.XXXXXX)" || user_version_err=""
-
 if [[ ! -e "$state_db" ]]; then
     # Fresh install: no DB on disk. No sentinel is needed — the step-4
     # open fresh-creates state.db at the binary's current schemaVersion.
     db_version_before=""
     echo "  schema  : no existing ${state_db_name} — fresh create on first open"
 else
-    db_version_before="$(ad_user_version "$state_db" "$user_version_err")"
-    if ! ad_is_version "$db_version_before"; then
+    db_version_before_rc=0
+    db_version_before="$(ad_user_version "$state_db")" || db_version_before_rc=$?
+    if ! ad_got_version "$db_version_before_rc" "$db_version_before"; then
         # Without the version no migration can be authorized, and the
         # step-4 open would refuse an older store anyway: stop here.
         echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
         echo "  state.db: $state_db" >&2
-        ad_fail_unreadable_version "$db_version_before" \
+        ad_fail_unreadable_version "$db_version_before_rc" "$db_version_before" \
             "tell whether ${state_db_name} needs a migration" \
             "No migration was authorized."
     fi
@@ -1640,14 +1722,15 @@ else
     elif [[ "$probe_name" == ErrSchemaMigrationRequired ]]; then
         target_version="$(ad_target_version "$probe_err")"
     elif [[ -z "$probe_name" && "$sentinel_before" -eq 1 && "$db_version_before" != 0 ]]; then
-        db_version_probed="$(ad_user_version "$state_db" "$user_version_err")"
-        if ! ad_is_version "$db_version_probed"; then
+        db_version_probed_rc=0
+        db_version_probed="$(ad_user_version "$state_db")" || db_version_probed_rc=$?
+        if ! ad_got_version "$db_version_probed_rc" "$db_version_probed"; then
             # The probe may have migrated the store, so neither "no
             # migration authorization needed" nor a skipped step 5 would
             # be true: stop here, as step 2 does.
             echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
             echo "  state.db: $state_db" >&2
-            ad_fail_unreadable_version "$db_version_probed" \
+            ad_fail_unreadable_version "$db_version_probed_rc" "$db_version_probed" \
                 "tell whether the probe (agent-director list) ran a migration" \
                 "A sentinel written before this install was beside ${state_db_name}, and it may" \
                 "have authorized one."
@@ -1683,7 +1766,9 @@ else
             echo "  The new agent-director does not open it until it is at v${target_version}." >&2
             echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2
             echo "  full disk), then re-run this install: it authorizes the migration again." >&2
-            exit 5
+            # A re-run alone does not fix it: someone must make the
+            # directory writable or free space first.
+            ad_exit_5 ErrSchemaVerifyFailed
         fi
         printf '{"from": %d, "to": %d}\n' "$db_version_before" "$target_version" > "$tmp_sentinel"
         chmod 0600 "$tmp_sentinel" 2>/dev/null || true
@@ -1706,7 +1791,8 @@ if open_err="$("$CANONICAL" list 2>&1 >/dev/null)"; then
 else
     # A refused config stopped the open before it reached state.db, so the
     # store advice below does not apply (b.7b4).
-    if [[ "$(ad_err_name "$open_err")" == ErrConfigMalformed ]]; then
+    open_name="$(ad_err_name "$open_err")"
+    if [[ "$open_name" == ErrConfigMalformed ]]; then
         ad_fail_config_refused "$open_err"
     fi
     # "If this install authorized a migration above", not "if a migration
@@ -1714,30 +1800,41 @@ else
     # install authorized ran at step 3's probe, which consumed it (b.dzw).
     echo "install.sh: store open (agent-director list) failed after install" >&2
     if [[ -n "$open_err" ]]; then
-        printf '  %s\n' "$open_err" >&2
+        printf '%s\n' "$open_err" | sed 's/^/  /' >&2
     fi
     echo "  The new binary could not open ${state_db_name}. If this install" >&2
     echo "  authorized a migration above, it was NOT consumed; re-running this" >&2
     echo "  install will retry it. If ${state_db_name} is NEWER than this binary" >&2
     echo "  (ErrSchemaMismatch), install a newer agent-director instead." >&2
-    exit 5
+    # The cause line relays the open's own err_name (b.cfq). Stderr with no
+    # envelope, or one whose err_name is not a bare Err... name, gets
+    # ErrStoreOpen, the name agent-director gives a store open that fails
+    # for no cause it names (clisetup.Open).
+    if [[ ! "$open_name" =~ ^Err[A-Za-z0-9]+$ ]]; then
+        open_name=ErrStoreOpen
+    fi
+    ad_exit_5 "$open_name"
 fi
 
 # ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
+# The open succeeded, so a missing state.db means install.sh and
+# agent-director disagree on where the store is, or it was removed since:
+# needs a human (ErrSchemaVerifyFailed).
 if [[ ! -f "$state_db" ]]; then
     echo "install.sh: ${state_db_name} was not created by the store open" >&2
-    exit 5
+    ad_exit_5 ErrSchemaVerifyFailed
 fi
 chmod 0600 "$state_db" 2>/dev/null || true
-db_version_after="$(ad_user_version "$state_db" "$user_version_err")"
+db_version_after_rc=0
+db_version_after="$(ad_user_version "$state_db")" || db_version_after_rc=$?
 schema_shown="v${db_version_after}"
-ad_is_version "$db_version_after" || schema_shown="<unreadable>"
+ad_got_version "$db_version_after_rc" "$db_version_after" || schema_shown="<unreadable>"
 echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema ${schema_shown})"
 
 migration_expected=0
 [[ -n "$db_version_before" && -n "${target_version:-}" ]] && migration_expected=1
 
-if ! ad_is_version "$db_version_after"; then
+if ! ad_got_version "$db_version_after_rc" "$db_version_after"; then
     # The read gave no version, which says nothing about the store: the
     # step-4 open succeeded. Never silent, migration expected or not.
     # With no migration to check, the read only reports the version: warn,
@@ -1747,7 +1844,7 @@ if ! ad_is_version "$db_version_after"; then
     if [[ "$migration_expected" -eq 1 ]]; then
         echo "install.sh: schema migration verification FAILED" >&2
         echo "  expected user_version: $target_version" >&2
-        ad_fail_unreadable_version "$db_version_after" "check the migration"
+        ad_fail_unreadable_version "$db_version_after_rc" "$db_version_after" "check the migration"
     fi
     echo "install.sh: warning: ${state_db_name}'s schema version is unreadable after the store open" >&2
     ad_show_unreadable_version "$db_version_after"
@@ -1804,7 +1901,7 @@ if [[ "$migration_expected" -eq 1 ]]; then
         echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2
         echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2
         echo "  the install. If a re-run fails this same way, contact the maintainers." >&2
-        exit 5
+        ad_exit_5 ErrSchemaVerifyFailed
     fi
     echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}"
 fi
@@ -1880,7 +1977,10 @@ else
     #     already there (matched by command).
     #   - Ensure hooks.SessionEnd is an array; append our compact-matcher
     #     entry if not already there.
-    new_settings=$(printf '%s' "$existing" | jq \
+    # Valid JSON of another shape (an array, or hooks a string, say) fails
+    # the merge with jq's runtime-error status, 5, which set -e would make
+    # the install's exit status: a hook merge failure is exit 4 (b.cfq).
+    if ! new_settings=$(printf '%s' "$existing" | jq \
         --arg cmd "$help_cmd" '
             .hooks //= {}
             | .hooks.SessionStart //= []
@@ -1897,7 +1997,12 @@ else
                   else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
                 end
             )
-        ')
+        '); then
+        echo "install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)" >&2
+        echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
+        echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        exit 4
+    fi
 
     # Backup-before-edit: snapshot the prior settings.json (if any) into a
     # timestamped .bak alongside the original so a regressed jq filter is

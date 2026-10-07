@@ -139,14 +139,13 @@ Without `--keep-prior`, re-install the previous tag via
        yourself, point at both. Flags: `--binary <path>
        --admin-binary <path>`.
      - **(c) Use whatever `agent-director` is on `PATH` today.** Only
-       makes sense if you're re-installing an existing install, and
-       only together with a matching admin binary
-       (`--admin-binary ~/.agent-director/admin/agent-director-admin`
-       for a re-install): `agent-director-admin` is never looked up on
-       PATH, so it must come from `--admin-binary` (or the checkout's
-       `bin/`). With no admin binary given and neither binary beside
-       the script, install.sh refuses once (exit 3), naming both
-       `--binary` and `--admin-binary`.
+       makes sense if you're re-installing an existing install (to
+       re-inject the hooks or register MCP, say). No binary flag: run
+       from the installed skill, outside any checkout, install.sh pairs
+       the `agent-director` on PATH with the installed
+       `~/.agent-director/admin/agent-director-admin`. For the full
+       lookup order, see "Where install.sh looks for each binary" in
+       step 6 of "What this skill does".
      - **(d) Build from source now, then install.** Run `make build` in
        this checkout to produce fresh `./bin/agent-director` and
        `./bin/agent-director-admin`, then point install.sh at them. No
@@ -176,8 +175,12 @@ Without `--keep-prior`, re-install the previous tag via
        → propose **(a)** *download from release* and SAY SO. Don't try
        to use a possibly-stale `./bin/agent-director`.
      - **Not in a checked-out tree** (install.sh was curled to a tmp
-       path, or invoked from an arbitrary directory) → propose **(a)**
-       *download from release*.
+       path, or invoked from an arbitrary directory), `agent-director`
+       on PATH, `~/.agent-director/admin/agent-director-admin` present,
+       and the operator wants to re-inject the hooks or register MCP →
+       propose **(c)** *use what is on PATH* (no binary flag).
+     - **Not in a checked-out tree** otherwise, or the operator wants
+       to upgrade → propose **(a)** *download from release*.
 
    **Why the version-check matters:** absent a check, a binary at
    `./bin/agent-director` may have been built off a stale branch or a
@@ -317,6 +320,9 @@ Without `--keep-prior`, re-install the previous tag via
    - After the run, tell the operator where `agent-director-admin` was
      installed (install.sh's `admin   :` line, just before
      `install.sh: done`) and that it is not on PATH. Do not run it.
+   - If install.sh exits non-zero, see "When install.sh fails" below.
+     On exit 5, act on its last stderr line,
+     `install.sh: err_name=<Name>`, never on the text above it.
 
 Do NOT skip this dialog because flags "look obvious from context".
 The operator may want a non-default path, MCP off, or a `--keep-prior`
@@ -369,13 +375,14 @@ This skill runs `install.sh` from the same directory. The script:
       `pre-flight OK` block gains a line
       `store   : <path> ([store] db_path in <config>)`; with the default
       store the output is unchanged. A config file whose `db_path` the
-      script cannot read stops the install here (exit `5`), before
-      anything is installed or changed. See "Which database install.sh
-      checks" below for the accepted form and the refusal. With hooks on
-      (no `--no-hooks`), a config that sets `defaults` as a key before
-      any header (`defaults = { ... }`) stops the install here too (exit
-      `5`), before anything is installed or changed, because step 6's
-      config merge cannot extend it; see step 6 below.
+      script cannot read stops the install here (exit `5`,
+      `ErrConfigMalformed`), before anything is installed or changed.
+      See "Which database install.sh checks" below for the accepted form
+      and the refusal. With hooks on (no `--no-hooks`), a config that
+      sets `defaults` as a key before any header (`defaults = { ... }`)
+      stops the install here too (exit `5`, `ErrConfigMalformed`),
+      before anything is installed or changed, because step 6's config
+      merge cannot extend it; see step 6 below.
    5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
@@ -385,13 +392,45 @@ This skill runs `install.sh` from the same directory. The script:
       0.11.0 has no `agent-director-admin` asset and is refused at once
       (exit 3), with no CDN retry: install 0.11.0 or later.
    6. **`--binary` / `--admin-binary` path/executability resolution** —
-      settles `BINARY_SRC` from `--binary <path>`, the in-repo build, or
-      `command -v agent-director`, and `ADMIN_SRC` from
-      `--admin-binary <path>`, the downloaded release asset, or the
-      in-repo `bin/agent-director-admin` (never from PATH); verifies
-      each is an executable regular file. A missing binary is refused
-      with exit 3; with neither binary beside the script, one combined
-      refusal names both `--binary` and `--admin-binary`.
+      settles `BINARY_SRC` and `ADMIN_SRC`, one source per binary, as
+      "Where install.sh looks for each binary" below describes, and
+      verifies each is an executable regular file. Pre-flight prints
+      the two it settled as `  source  : <path>` and
+      `  admin source: <path>`. A source not found is refused with
+      exit 3, naming every path tried and the flags to pass:
+      - agent-director not found: "install.sh: no source binary
+        found.", `Tried:` the checkout's `bin/agent-director` and
+        `command -v agent-director`, and "Pass --binary <path> to
+        override."
+      - agent-director-admin not found, with agent-director given as
+        `--binary` or found in the checkout: "install.sh: no
+        agent-director-admin source binary found.", `Tried:` the
+        checkout's `bin/agent-director-admin` and
+        `~/.agent-director/admin/agent-director-admin`, and "Pass
+        --admin-binary <path> to override."
+      - neither found: one combined refusal, "install.sh: no source
+        binaries found: ...", that names all four places it looked and
+        ends "Pass --binary <path> --admin-binary <path> (both from the
+        same build) to override." An `agent-director` found only on
+        PATH counts as not found here, since nothing is there to pair
+        with it; the refusal says "Found on PATH, not used: <path> (no
+        agent-director-admin to pair with it)".
+
+      **Where install.sh looks for each binary.** With
+      `--from-release`, both come from the downloaded release assets.
+      Otherwise each comes from the first of these it finds:
+
+      | Binary | 1st | 2nd | 3rd |
+      |---|---|---|---|
+      | `agent-director` | `--binary <path>` | `bin/agent-director` of the checkout the script sits in | `command -v agent-director` |
+      | `agent-director-admin` | `--admin-binary <path>` | `bin/agent-director-admin` of that checkout | the installed `~/.agent-director/admin/agent-director-admin` |
+
+      `agent-director-admin` is never looked up on PATH, where it is
+      never installed. So a re-run of the installed skill, outside any
+      checkout, with no flags, reinstalls the `agent-director` on PATH
+      with the installed `agent-director-admin`, and `--binary <path>`
+      alone pairs that binary with the installed one. Like any pair,
+      step 9 refuses them (exit 3) when their stamps differ.
    7. **Architecture probe (SR-2.2)**, for `--binary` and
       `--admin-binary` alike. Runs `file(1)` against `BINARY_SRC` and
       `ADMIN_SRC` and pattern-matches against the host pair captured by
@@ -578,6 +617,22 @@ This skill runs `install.sh` from the same directory. The script:
    skipped. The pre-edit contents of `settings.json` are snapshotted
    to a timestamped `.bak` sibling before the merge writes.
 
+   A `settings.json` the merge cannot use stops the install with
+   **exit 4** and is left as it was, with no `.bak`:
+   - not valid JSON: `install.sh: ~/.claude/settings.json is not valid JSON`;
+   - valid JSON of another shape: not an object (an array, say), a
+     `hooks` that is not an object, or a `SessionStart` or `SessionEnd`
+     under it that is not a list. jq's error comes first, then:
+
+         install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)
+           It is valid JSON, but not an object whose hooks hold event lists, the
+           shape Claude Code reads. Fix it, then re-run this install.
+
+   By then the binaries (and the PATH symlink, if any) are in place
+   and state.db is at the binary's version; config.toml was not merged
+   and MCP was not registered. Fix the file, then re-run the install
+   with the same flags.
+
    The same step sets `inject_help_hook = true` in the `[defaults]`
    table of `~/.agent-director/config.toml`, so every Spawn also gets
    the help hook whatever its `CLAUDE_CONFIG_DIR`. An existing
@@ -606,8 +661,8 @@ This skill runs `install.sh` from the same directory. The script:
    `defaults = { relay_mode = "off" }`, in any letter case) already
    defines that table, and the header the merge would add would leave a
    file agent-director refuses. With hooks on, the install refuses such
-   a file in pre-flight (exit 5), before anything is installed or
-   changed (b.whe):
+   a file in pre-flight (exit 5, `ErrConfigMalformed`), before anything
+   is installed or changed (b.whe):
 
        install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install.
          config  : /home/<you>/.agent-director/config.toml
@@ -621,6 +676,7 @@ This skill runs `install.sh` from the same directory. The script:
          Add no header in this line's place: the lines below it, up to the next
          header, would fall under that header too.
          Nothing was installed or changed. Re-run this install after the change.
+       install.sh: err_name=ErrConfigMalformed
 
    Make that change, then re-run the install with the same flags. With
    `--no-hooks` the file is not merged, so it is not refused.
@@ -667,6 +723,46 @@ umask.
 - It does NOT touch existing user hooks in any event.
 - It does NOT install `claude` or `tmux` themselves. Those are
   pre-flight requirements.
+
+## When install.sh fails
+
+install.sh exits 0 on success. Its own failures exit 2 to 5:
+
+| Exit | Cause |
+|---|---|
+| 2 | Pre-flight: a bad flag or flag pair, whitespace in `$HOME`, an unsupported OS/CPU, a missing tool, or a binary built for another architecture. |
+| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, or two version stamps that differ or carry no commit. |
+| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"). |
+| 5 | The config file, or the store open and schema migration. The cause line below names which. |
+| any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
+
+Each message on stderr says what went wrong and what to do; show it to
+the operator. When this skill ran the install, re-run it only on the
+operator's explicit "yes", as for the first run.
+
+### Exit 5's cause line
+
+Exit 5 has causes needing different remedies, so every exit 5 ends with
+one line on stderr, its last, naming the cause:
+
+    install.sh: err_name=<Name>
+
+Branch on `<Name>`, never on the text above it: that text is advice for
+a human and its wording can change. Take the last line of stderr; no
+other line has that form. The exit status stays 5 for every cause, and
+no other exit status has a cause line.
+
+| `<Name>` | Cause | Remedy |
+|---|---|---|
+| `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past the 10 s wait, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
+| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight reader of `[store] db_path`, or, with hooks on, by its check that the `[defaults]` merge can extend the file (both before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml, then re-run the install with the same flags. See "Which database install.sh checks", step 6 of "What this skill does", and "A refused config file". |
+| `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
+| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open" and "No temp file for the sentinel". |
+| any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
+
+`ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
+names: no agent-director verb returns them. Whatever the name, do NOT
+delete state.db.
 
 ## Uninstall
 
@@ -863,8 +959,9 @@ optionally followed by a `#` comment:
 db_path = "~/custom/state.db"   # optional comment
 ```
 
-Anything else stops the install with **exit 5** before anything is
-installed or changed, even a line that would not move the store: the
+Anything else stops the install with **exit 5** (`ErrConfigMalformed`)
+before anything is installed or changed, even a line that would not
+move the store: the
 reader never guesses. For example: a dotted key
 (`store.db_path = "..."`), a quoted key or table name
 (`"db_path" = ...`, `["store"]`), `[[name]]`, a table within a table (`[store.x]`),
@@ -889,6 +986,7 @@ the line (none for a file it cannot read) and what to change:
       the database agent-director opens, and reads only this form of the
       file: ...
       Nothing was installed or changed. Re-run this install after the change.
+    install.sh: err_name=ErrConfigMalformed
 
 Make the change it names, then re-run the install with the same flags.
 Followed as written, the change keeps the store where agent-director
@@ -988,24 +1086,27 @@ store open, and at step 5, after it. When a `migrate-authorized` was
 already beside a state.db above v0 before step 3's probe and the probe
 opened, it also reads it at step 3, after the probe. If any read fails,
 or prints anything but a whole number (0 or more), the install reports
-`actual user_version: <unreadable>` and exits 5, except at step 5
+`actual user_version: <unreadable>` and exits 5, its last line
+`install.sh: err_name=ErrVersionUnreadable`, except at step 5
 with no migration expected, where it warns and carries on (see "Which
 read it was" below). Do NOT delete state.db. The rest of an exit 5's
-report depends on which happened:
+report depends on which happened. Either way, everything sqlite3
+printed for the read (its errors and its output together) is indented
+under that line.
 
-- **The read failed** (it printed nothing): sqlite3's own error,
-  indented under that line, shows why (for example a lock held longer
-  than the 10 s wait). If the install could not create a temp file for
-  that error (a full TMPDIR, say), the report has none. Re-running the
-  install retries the read.
-- **The read printed something else** ("printed the output above,
-  not a whole number (0 or more)"): that output, then any sqlite3
-  error, is indented under that line, and the report names the
-  `sqlite3 on PATH: <path>`. The read ignores `~/.sqliterc`, so the
-  sqlite3 at that path printed it for this state.db: for example a
-  wrapper that changes sqlite3's output, or a `user_version` below 0.
-  A re-run gets the same output unless that sqlite3 or state.db
-  changes.
+- **The read failed** (sqlite3 exited nonzero, or printed nothing):
+  what sqlite3 printed shows why (for example a lock held longer than
+  the 10 s wait). A version printed before the failure is not used.
+  Re-running the install retries the read.
+- **The read printed something else** (sqlite3 exited 0; "printed the
+  output above, not a whole number (0 or more)"): the report names the
+  `sqlite3 on PATH: <path>`. Anything sqlite3 printed counts, including
+  a message on stderr beside the version. The read ignores
+  `~/.sqliterc`, so the sqlite3 at that path printed it for this
+  state.db: for example a wrapper that changes sqlite3's output, or a
+  `user_version` below 0. A re-run gets the same output unless that
+  sqlite3 or state.db changes, so a caller that re-runs on
+  `ErrVersionUnreadable` caps its re-runs.
 
 Which read it was:
 
@@ -1033,7 +1134,7 @@ Which read it was:
   already-current store; `warning: state.db's schema version is
   unreadable after the store open`): not a failure. The store open
   succeeded, so the read only reports the version. The warning shows
-  sqlite3's error, or the read's output, under the `<unreadable>`
+  what sqlite3 printed for the read under the `<unreadable>`
   line, then `Check the version later with:` and the `sqlite3 ...
   "PRAGMA user_version;"` command for this state.db. The install
   carries on (hooks, the config.toml merge, MCP registration) and
@@ -1054,8 +1155,11 @@ with:
       The new agent-director does not open it until it is at v<T>.
       Fix what mktemp's error names (a directory you cannot write, say, or a
       full disk), then re-run this install: it authorizes the migration again.
+    install.sh: err_name=ErrSchemaVerifyFailed
 
-Nothing was done to state.db, and no sentinel or temp file is left
+The cause line names `ErrSchemaVerifyFailed`, which needs a human: a
+re-run alone fails the same way until someone fixes what mktemp's
+error names. Nothing was done to state.db, and no sentinel or temp file is left
 beside it. The new binaries are already in place (and the PATH symlink,
 if any), but the hooks were not merged and MCP was not registered.
 
@@ -1071,7 +1175,9 @@ Until the re-run, an older state.db is refused with
 When a migration was expected and step 5's read gives a whole number
 that is not the target, the install exits 5 with `schema migration
 verification FAILED`, the `expected user_version: <T>` and `actual
-user_version: <A>` lines, and advice. The store open (`agent-director
+user_version: <A>` lines, advice, and last the cause line
+`install.sh: err_name=ErrSchemaVerifyFailed`: a human decides what
+follows. The store open (`agent-director
 list`) succeeded, and a successful open leaves state.db at `v<T>`: any
 authorized migration has run, and its sentinel is consumed. Yet the
 read after the open gives `v<A>`, so state.db changed after the open,
@@ -1110,6 +1216,7 @@ above.) It reports:
       {"err_name":"ErrConfigMalformed","err_description":"config <path>: refused [defaults] values: ..."}
       Fix what the error above names in the config file, then re-run this
       install.
+    install.sh: err_name=ErrConfigMalformed
 
 Nothing was done to state.db: no sentinel was written, no migration
 ran, and a fresh install created no state.db. The new binaries are
@@ -1174,7 +1281,10 @@ restore an older state.db from your own backup.
 `ErrSchemaMismatch` is not the migration case, and the sentinel cannot
 fix it. It has two causes you can meet; the error message says which.
 Never delete state.db to clear it: that loses every Spawn row and the
-store id.
+store id. An install that meets it stops at step 4's store open
+(exit 5) with the cause line `install.sh: err_name=ErrSchemaMismatch`
+for either cause; the error envelope printed above that line says
+which.
 
 **state.db is NEWER than the binary** (the error says "found
 user_version=N, want M" with N greater than M). Migrations only run

@@ -4468,7 +4468,9 @@ claude /install-agent-director (or `bash install.sh`)
     "The config.toml merge" below)
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
-  → find both source binaries; --binary and --admin-binary arch probes
+  → find both source binaries (agent-director-admin last from its
+    installed path, never PATH; see "The two binaries" below); --binary
+    and --admin-binary arch probes
   → source-tree version check (a local agent-director in a git checkout
     must be built from HEAD)
   → version-stamp pairing: agent-director and agent-director-admin must
@@ -4488,6 +4490,8 @@ claude /install-agent-director (or `bash install.sh`)
     under a one-shot migrate-authorized sentinel (full six-step flow in
     install-agent-director/SKILL.md)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
+    (not valid JSON, or valid JSON of another shape → exit 4, the file
+    left as it was)
   → set inject_help_hook = true in config.toml's [defaults] table (see
     "The config.toml merge" below); --no-hooks skips this and the
     settings.json merge; both merges keep the file's mode (see "Merged
@@ -4498,15 +4502,63 @@ claude /install-agent-director (or `bash install.sh`)
 
 Pattern B is where the CLI / state / hooks side effects happen.
 
+**Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
+(`--help`) lists its exit codes: 2 pre-flight, 3 the source binaries or
+their version stamps, 4 the `settings.json` hook merge, 5 the config file
+or the store open and schema migration. Exit 5 has causes needing
+different remedies, so every exit-5 path ends with one line on stderr, its
+last, `install.sh: err_name=<Name>`. That line is the contract: a caller
+branches on `<Name>`, never on the English above it. The status stays 5
+for every cause, so a caller that checks only for 5 is unaffected.
+
+| `<Name>` | Sites | Remedy |
+|---|---|---|
+| `ErrVersionUnreadable` | `ad_fail_unreadable_version`: step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
+| `ErrConfigMalformed` | pre-flight `ad_store_db_path` and (hooks on) `ad_config_merge_check`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml`, then re-run |
+| `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
+| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded, or a readable `user_version` that is not the target | a human |
+| any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
+
+`ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
+signals, not agent-director error names: they are not in `errnames.Catalog`
+and no verb returns them (b.cfq's decision, overriding b.7b4's "no new
+error name" for these two). The `^Err[A-Za-z0-9]+$` check keeps a relayed
+name holding a newline from adding a second cause-line-shaped line at the
+end of stderr, and every relayed output (the open's stderr at step 4, the
+envelope in `ad_fail_config_refused`, a read's output under
+`<unreadable>`) is indented line by line, so no line but the cause line
+starts `install.sh: err_name=`. **Must use:** every exit-5 path calls
+`ad_exit_5 <Name>`, never a bare `exit 5`. A command whose failure is left
+to `set -e` stops the install with that command's own status (usually 1)
+and no cause line, so none is left there where its status can be 5: jq
+exits 5 on a runtime error, so the `settings.json` merge checks jq's status
+and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
+(jq's error is above)"); sqlite3 exits 5 on a busy database, and each
+caller of `ad_user_version` captures the read's status beside its output.
+
 **The two binaries (b.vqr).** Every install installs both
 `agent-director` and the operator tool `agent-director-admin` (see
 [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin))
-from one build, because both open the same store. The admin source is
-`--admin-binary <path>`, else the in-repo `bin/agent-director-admin` beside
-the script's checkout (`make build` builds both), or, with
-`--from-release`, the release's `agent-director-admin-<os>-<arch>` asset.
-It is never looked up on PATH, so an `agent-director` found only on PATH
-cannot be paired with it.
+from one build, because both open the same store. With `--from-release`
+both come from the release's assets. Otherwise each source is the first
+of these found (b.azo):
+
+| Binary | 1st | 2nd | 3rd |
+|---|---|---|---|
+| `agent-director` | `--binary <path>` | `bin/agent-director` of the checkout the script sits in | `command -v agent-director` |
+| `agent-director-admin` | `--admin-binary <path>` | `bin/agent-director-admin` of that checkout (`make build` builds both) | the installed `~/.agent-director/admin/agent-director-admin` (`DEFAULT_ADMIN_PATH`) |
+
+`agent-director-admin` is never looked up on PATH, where it is never
+installed. The version-stamp check below guards a PATH/installed pair.
+`DEFAULT_ADMIN_PATH` is install.sh's one name for that path, both this
+fallback and the install target (`ADMIN_CANONICAL`); never spell it out
+again. An `agent-director`
+found only on PATH, with no `agent-director-admin` given, beside the script
+or installed, counts as not found ("Found on PATH, not used: <path> (no
+agent-director-admin to pair with it)"). `advice_follow.sh`'s J3 (the
+re-run of the installed skill, and the refusals naming the installed path)
+and J9 (an installed admin from another build, refused, then
+`--from-release`) pin this.
 
 - **Hashes go together.** `--sha256 <hex>` verifies the main asset and
   `--admin-sha256 <hex>` the admin asset; both apply only with
@@ -4535,9 +4587,11 @@ cannot be paired with it.
   directory) leaves both old binaries in place, never a new
   `agent-director` beside an old `agent-director-admin`; the EXIT trap
   removes a staged copy that was never moved.
-- **Other refusals, all exit 3:** the admin binary is missing (with neither
-  binary beside the script, one combined refusal naming both `--binary` and
-  `--admin-binary`); a `--from-release` tag before 0.11.0, refused at once
+- **Other refusals, all exit 3:** a source not found, naming every place
+  tried (the installed admin path included) and the flags to pass; with
+  neither found, one combined refusal ("no source binaries found") naming
+  both `--binary` and `--admin-binary`, never one per binary; a
+  `--from-release` tag before 0.11.0, refused at once
   without the CDN retry, because such a release has no admin asset
   ("release <tag> has no agent-director-admin binary"; the advice is a
   release of 0.11.0 or later).
@@ -4548,9 +4602,10 @@ and keeps its group and other bits, so the umask never takes away the
 owner's own permission bits on a file or directory install.sh creates,
 or that an `agent-director` it runs creates in `~/.agent-director/`
 (each run inherits the umask). A umask like 0777 therefore cannot make
-mktemp's sqlite3 error file or the `--from-release` downloads
-unwritable. The group and other bits follow the operator's umask, and
-an ordinary umask (022, 077, 027, 002) is unchanged. The umask
+step 3's migration sentinel temp file (`mktemp`) or the
+`--from-release` downloads unwritable. The group and other bits follow
+the operator's umask, and an ordinary umask (022, 077, 027, 002) is
+unchanged. The umask
 guarantees only the owner's access; the exact modes install.sh gives
 (the two binaries, `~/.agent-director/`, `admin/`, `state.db`, the
 sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
@@ -4691,18 +4746,29 @@ mismatch. That check runs only after the open succeeded, which leaves
 and its sentinel consumed; a readable mismatch therefore means
 `state.db` changed after the open or the read is wrong (b.wt9). A
 fresh install is one with no `state.db` on disk, never one whose
-version read failed. Every version read must print a whole number
-(0 or more) before it reaches the sentinel's `printf %d` or the version
-compare. A read that fails is reported as `<unreadable>`, showing
-sqlite3's error; a failure report adds that re-running the install
-retries the read. That error is kept
-in a mktemp file; if mktemp cannot create it (a full TMPDIR, say), every
-read still runs and a failed one is reported without it. A read that prints
-anything else is also reported as `<unreadable>`, showing that output; a
-failure report names the sqlite3 on PATH and says a re-run gets the same
-output unless that sqlite3 or state.db changes. Either kind at the first
-read stops the install (exit 5) before any sentinel is written or the
-store is opened. At step 3's read after the probe, made only when a
+version read failed. Every version read must exit 0 and print a whole
+number (0 or more), checked with `ad_got_version`, before it reaches the
+sentinel's `printf %d` or the version compare. `ad_user_version`
+captures sqlite3's stdout and stderr together (`2>&1`) in a shell
+variable, and the caller keeps its exit status beside it; no temp file
+is made for a read (b.rfn).
+A read that gives no version is reported as `<unreadable>`, with
+everything sqlite3 printed, stderr and stdout in the order they reached
+the pipe, indented under it. It failed when sqlite3 exited nonzero (a version
+printed before the failure counts for nothing) or printed nothing; a
+failure report adds that re-running the install retries the read. A
+read that exited 0 and printed anything else (stderr included, so a
+notice on stderr before the version makes it no version) printed no
+version; a failure report names the sqlite3 on PATH and says a re-run
+gets the same output unless that sqlite3 or state.db changes. **Must
+use:** every `user_version` read goes through `ad_user_version`, is
+judged with `ad_got_version` on its status and output together, and is
+reported with `ad_fail_unreadable_version` (a failure) or
+`ad_show_unreadable_version` (step 5's warning); never a temp file for
+sqlite3's error, and never `ad_is_version` on the output alone.
+`advice_follow.sh`'s J7 pins this. Either kind at the first read stops
+the install (exit 5) before any sentinel is written or the store is
+opened. At step 3's read after the probe, made only when a
 sentinel from before the install was there (see "A sentinel from before
 the install" below), it stops the install (exit 5) before step 3 prints
 its verdict, because the probe may have run a migration. At the
@@ -5038,6 +5104,12 @@ the recovery depends on the cause, and it is never to delete `state.db`:
   taken before the install. That copy is v4, so re-run the install afterwards;
   a v5 binary's install migrates it again. Writes made since the install are
   lost.
+
+An install that meets either cause stops at step 4's open with exit 5 and
+the same cause line, `install.sh: err_name=ErrSchemaMismatch` (see "Exit
+codes, and exit 5's cause line" under
+[Pattern B](#pattern-b--installsh-the-install-skill)); only the relayed
+envelope's description above it tells the two apart (open as b.o9t).
 
 Deleting the store loses every row and the store id. JSONL transcripts under
 `~/.claude/projects/` survive independently either way.
