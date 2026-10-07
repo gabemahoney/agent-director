@@ -120,8 +120,10 @@ checked as layers, because nothing legitimate puts them there:
 
 Dry and probe mode do not run this check.
 
-Credentials never come from a Claude account login or from `~/.claude`. The
-runner never forwards `ANTHROPIC_API_KEY`, `TMUX`, `CLAUDE_CONFIG_DIR`,
+L1 and L2 bill only to the InferenceHub gateway: `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_AUTH_TOKEN` point at it, and the runner forwards them by name. No
+run uses a seat login or credentials from `~/.claude`. The runner never
+forwards `ANTHROPIC_API_KEY`, `TMUX`, `CLAUDE_CONFIG_DIR`,
 `CLAUDECODE` or any other host Claude Code session variable. L0 forwards
 nothing: its container has no network and gets a dummy token literal that is
 not a secret.

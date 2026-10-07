@@ -9919,6 +9919,10 @@ reached, and a residual to violate its property.
 | AC-KILL-17 and AC-KILL-18 (the strict `kill`; PRD Traceability row "PO 2026-09-27 REVIEW") | <ul><li>`HandsOff`, `KillHonest` and `KillPendingOnlyCurrent` in the safety runs `ci_S1o_*` (fast), `ci_S1b_*` and `ci_S1h_*` (`_lab` fast, the rest full), and `ci_smoke_*` (fast): pass.</li><li>Control `ci_C5` (session kill only, with a grouped viewer) (fast): a violation.</li><li>Probes `ci_V_KillFailed` and `ci_V_KillWithViewer` (fast).</li></ul> |
 | The LABEL lookup's mechanisms from the PRD Traceability row "PO 2026-09-27 LABEL": the label as proof of launch and the four verdicts, the recorded socket, and process-only liveness. The row's other criteria (for example AC-CFG-01's timing defaults, AC-TEST-02 and AC-EXP-08) are not covered. | <ul><li>`VerdictSound` and the safety properties in `ci_S1o_*`, `ci_S3o` and `ci_smoke_*` (fast), `ci_S1b_*` and `ci_S1h_*` (`_lab` fast, the rest full), `ci_S3b` (full) and `ci_G3b_*` (`ci_G3b_lab` fast, the rest full): pass.</li><li>`PendingResolves` and `StuckHeals` in `ci_L5o`, `ci_L5b_*` and `ci_L1` (`ci_L5o`, `ci_L5b_lab` and `ci_L1` fast, the rest full): pass.</li><li>Controls `ci_C1` (token cleared at report-in), `ci_C2` (lookup by name), `ci_C3` (`$` name chained), `ci_C4` (failed label step), `ci_C6` (the caller's server, no adoption) and `ci_C7` (session presence as liveness) (fast): a violation.</li><li>The verdict probes `ci_V_*` (fast).</li></ul> |
 
+The "to be modelled" notes in the PRD (among them AC-HOOK-03 and the
+Traceability rows "WD 2026-09-29 HOOK and STORE" and "WD 2026-09-29c") and
+in SRD Appendix C predate this suite.
+
 **Not covered, and model-vs-built gaps (for b.zuj, which owns the model;
 nothing here changes it).**
 
