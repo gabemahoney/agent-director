@@ -130,11 +130,13 @@ agent runs inside the container. Interpreting a run:
 
   Judge the run by whether the failures match this known set. Anything outside
   it is a real signal from the change under review.
-- **Known-broken advice skips are expected.** Literal-follow tests
-  (`TestAdviceFollow_*`, `advice_follow.sh`) whose advice is known not to work
-  as written skip with "b.fji `<ID>`: advice does not work as written …". To
-  run them and see them fail, set the gate in the container:
-  `make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 go test ./pkg/api -run TestAdviceFollow_ -count=1 -v"`.
+- **Known-broken advice skips are expected.** A test in `install.sh`'s
+  literal-follow script (`test/install-sh/advice_follow.sh`, run under
+  `TestAdviceFollow_J_InstallShScript`) whose advice is known not to work as
+  written skips with "b.fji `<ID>`: advice does not work as written …". The Go
+  and TS literal-follow tests have no such gate. To run the skipped ones and see
+  them fail, set the gate in the container:
+  `make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 bash test/install-sh/advice_follow.sh"`.
   See docs/test-writing-guide.md "Literal-follow tests for error advice".
 - **The `test/smoke/go` canary is NOT a known failure.** It guards against any
   test writing to the real `~/.agent-director` and must stay quiet on a clean

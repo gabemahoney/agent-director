@@ -55,7 +55,7 @@ var childEnvPrefixes = []string{"LC_"}
 // realModeRefusedEnv are the credential and provider variables real mode
 // refuses (L1 and L2 bill to the gateway only, through
 // ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN). An API key, an OAuth token
-// (a plan or Enterprise seat) or the Bedrock/AWS variables would move the
+// (a plan or seat login) or the Bedrock/AWS variables would move the
 // bill elsewhere, so the run stops before anything is written, as probe
 // mode refuses every real credential; they are also dropped from real
 // mode's child environment (realModeEnv).

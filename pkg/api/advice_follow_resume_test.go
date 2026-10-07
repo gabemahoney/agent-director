@@ -4,8 +4,7 @@ package api_test
 // refusals (advice inventory B1-B6) and the resume helpers B7-B10 share
 // (advice_follow_resume_launch_test.go; the shared ones are in
 // advice_follow_helpers_test.go): trigger the error, pin its advice,
-// follow it as an automated caller would, check the promised outcome. Advice
-// that does not work as written is gated by knownBrokenAdvice.
+// follow it as an automated caller would, check the promised outcome.
 
 import (
 	"context"

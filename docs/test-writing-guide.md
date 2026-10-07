@@ -312,22 +312,20 @@ repo: new advice takes the number after the highest one in use for its prefix
 numbering started from b.fji's advice inventory, kept with that bug's ticket.)
 
 **Advice that does not work as written** is a product bug in the text or the
-behaviour; fix whichever is wrong. Until the fix lands, keep the test asserting
-that the advice works and call `knownBrokenAdvice(t, id, why)` (from the
-package's `advice_follow_gate_test.go`; `known_broken` in `advice_follow.sh`)
-just before the step that fails. It skips the rest of the test with
-"b.fji `<id>`: advice does not work as written …" unless
-`AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` is set, which runs it so you can see
-it fail. Delete the call when the bug is fixed. A package with no gate file gets
-a copy of it with its own package clause.
+behaviour; fix whichever is wrong. Only `advice_follow.sh` has a gate for such
+a test; the Go and TS literal-follow tests have none. In `advice_follow.sh`,
+until the fix lands, keep the test asserting that the advice works and put
+`known_broken <id> "<why>" || return` just before the step that fails. It skips
+the rest of the test with "b.fji `<id>`: advice does not work as written …"
+unless `AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` is set, which runs it so you
+can see it fail. Delete the call when the bug is fixed.
 
 **Running them.** `make test-sandbox` runs them all, the `install.sh` script
-included, with the known-broken ones skipped. `make test-install-sh-advice`
-runs the `install.sh` script alone (it refuses to run outside the sandbox).
-To run the known-broken ones and see them fail:
+included, with any `known_broken` test in it skipped.
+`make test-install-sh-advice` runs the `install.sh` script alone (it refuses to
+run outside the sandbox). To run the `known_broken` tests and see them fail:
 
 ```sh
-make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 go test ./pkg/api -run TestAdviceFollow_ -count=1 -v"
 make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 bash test/install-sh/advice_follow.sh"
 ```
 
@@ -363,13 +361,15 @@ packages read: a build, install or pack the test runs writes under
 **Mandatory cleanup.** A test that must add untracked paths to the real tree
 (a fixture a gate scans for) gives them unique names and registers a
 `t.Cleanup()` that removes them before it asserts anything, so a failing test
-leaves nothing behind. It holds the seeds-mutation lock
-(`pkg/api/apitest/.seeds-mutation.lock`, `syscall.Flock` with `LOCK_EX`) from
-before it creates the paths until they are removed, taking it before any other
-lock it needs, so tree readers such as the `coverage.docker-epics` gate's
-docker build context never see the paths appear or vanish.
-`worktree-pollution` adds a path without this lock and is a known gap. A
-test that reads `pkg/ts-bun-client/dist/` holds the dist-pack lock
+leaves nothing behind. It holds the tree-write lock
+(`.tree-write.lock` at the repo root, `syscall.Flock` with `LOCK_EX`) from
+before it creates the paths until they are removed, so docker build-context
+collectors such as the `coverage.docker-epic-*` gates never see the paths
+appear or vanish. A test that also needs the dist-pack lock below takes that
+lock first: nothing may take the dist-pack lock while holding the tree-write
+lock.
+`worktree-pollution` adds a path without the tree-write lock and is a known
+gap. A test that reads `pkg/ts-bun-client/dist/` holds the dist-pack lock
 (`agent-director-ts-bun-dist-pack.lock` under `os.TempDir()`, `LOCK_EX`), which
 the `coverage.bun-test` gate holds for its whole run because it rebuilds
 `dist/`. See `skills/release-agent-director/gates/README.md` "Coverage phase

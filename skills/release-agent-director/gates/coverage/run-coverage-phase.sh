@@ -32,9 +32,9 @@
 #   max_parallel:4; that oversubscription was measured harmless on the 16-CPU host
 #   (all-green at phase mp=5).
 #   This value is only valid with the cross-gate isolation preconditions in place
-#   (b.3jn): scratch HOME for the bun gates, the seeds/dist-pack flock protocol,
-#   out-of-tree pack staging, and the child-scoped no-leak count — all documented
-#   in gates/README.md "Coverage phase (parallel)".
+#   (b.3jn): scratch HOME for the bun gates, the tree-write/dist-pack flock
+#   protocol, out-of-tree pack staging, and the child-scoped no-leak count — all
+#   documented in gates/README.md "Coverage phase (parallel)".
 
 set -uo pipefail
 

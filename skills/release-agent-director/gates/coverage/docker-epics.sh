@@ -2,18 +2,20 @@
 # gates/coverage/docker-epics.sh — coverage.docker-epic-<slug> gate enumerator
 #
 # Enumerates Docker harness EPIC slugs via `make list-test-docker-epics` and
-# either emits a gates-config.json (--dry-run) or runs all coverage gates in
-# parallel via run-parallel.sh.
+# either emits a gates-config.json (--dry-run) or builds bin/ once under the
+# exclusive tree-write lock and then runs all coverage gates in parallel via
+# run-parallel.sh.
 #
 # USAGE:
 #   bash skills/release-agent-director/gates/coverage/docker-epics.sh [--dry-run]
 #
 # --dry-run: Emit the would-be gates-config.json to stdout and exit 0.
-#            No `make test-docker` invocations occur.
+#            No `make build` or `make test-docker` invocations occur.
 #
 # EXIT CODES:
 #   0   — all gates passed (or --dry-run succeeded)
-#   1   — one or more gates failed, or SR-19.3 empty-set blocker
+#   1   — one or more gates failed, the bin/ pre-build failed, or SR-19.3
+#         empty-set blocker
 #   2   — usage / configuration error
 
 set -uo pipefail
@@ -64,31 +66,20 @@ fi
 
 # ─── build gates-config.json ──────────────────────────────────────────────────
 # One entry per slug:
-#   {"name":"coverage.docker-epic-<slug>","command":"flock -s pkg/api/apitest/.seeds-mutation.lock make test-docker EPIC=<slug>","cwd":"."}
+#   {"name":"coverage.docker-epic-<slug>","command":"flock -s .tree-write.lock make test-docker EPIC=<slug>","cwd":"."}
 #
-# b.3jn: the `make test-docker` child (a) tars the whole repo tree as the docker
-# build CONTEXT and (b) bind-mounts the live worktree read-only at /work/source —
-# both are tree READS. Under the b.2y5 protocol, a test that creates and removes
-# walk-reachable repo-tree paths holds an EXCLUSIVE flock on
-# pkg/api/apitest/.seeds-mutation.lock; without it, the context enumeration can
-# see such a path and then have it vanish mid-tar ("checking context: file
-# '.../<path>' not found or excluded by .dockerignore"). Since b.9qj no Go test
-# takes the lock: the source-of-truth tests that did (e.g.
-# source-of-truth-reference-prune creating and removing reference/ at the repo
-# root) stage their fixtures in temp git repos instead. The pkg/ts-bun-client
-# test preload and rc-stamp.test.ts still take it, in flock's default exclusive
-# mode, around their `make` builds. We take the SAME lock file, but in SHARED
-# mode (-s) because these children are tree READERS: shared holders overlap each
-# other (preserving max_parallel:4 fan-out) while any exclusive holder excludes
-# all of them. cwd is "." = repo root, so the relative lock path resolves;
-# /usr/bin/flock exists in the sandbox image.
-# (Rule: readers take -s; mutators take exclusive; same lock file as b.2y5.)
+# Each child collects the whole repo root as its docker build context, so it
+# holds the repo-root tree-write lock (b.k42) SHARED for its whole run.
+# Rule: tree writers take it exclusive; context collectors take it shared (-s).
+# The race and every holder: gates/README.md "Tree-write lock". cwd is "." =
+# repo root, so the relative lock path resolves; /usr/bin/flock exists in the
+# sandbox image.
 GATES_JSON=$(
   printf '%s\n' "$SLUG_LIST" | while IFS= read -r slug; do
     [[ -z "$slug" ]] && continue
     jq -n \
       --arg name "coverage.docker-epic-${slug}" \
-      --arg cmd  "flock -s pkg/api/apitest/.seeds-mutation.lock make test-docker EPIC=${slug}" \
+      --arg cmd  "flock -s .tree-write.lock make test-docker EPIC=${slug}" \
       '{"name": $name, "command": $cmd, "cwd": "."}'
   done | jq -sc '.'
 )
@@ -103,6 +94,36 @@ CONFIG_JSON=$(jq -n \
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s\n' "$CONFIG_JSON"
   exit 0
+fi
+
+# ─── live run: pre-build bin/ once, under the EXCLUSIVE tree-write lock ───────
+# Each child's `make test-docker` runs `make build` first (test-image's
+# prerequisite), and it runs it under the child's SHARED hold. When bin/ is
+# stale, that build deletes and rewrites bin/agent-director and
+# bin/agent-director-admin while sibling children collect the tree as their
+# build context: the race the lock exists to close. In a release run bin/ is
+# always stale at this point, because `make build` stamps the HEAD commit
+# (COMMIT_SHA) into both binaries and branch-and-bump commits just before the
+# coverage phase. The test preload's exclusive build does not reliably come
+# first either: Linux flock does not favour a waiting exclusive locker, so it
+# usually queues behind the children's shared holds.
+#
+# So build bin/ here, once, as a tree writer: EXCLUSIVE, before run-parallel
+# starts any child. No child holds the lock yet, so this waits only on other
+# exclusive writers (the preload's builds, coverage.bun-test's install and
+# build). Each child's own `make build` then finds both binaries current, and
+# go build only updates their mtimes, which a concurrent context collection
+# tolerates. If the pre-build fails, the gate fails without starting a child:
+# every child would retry the same build under a shared hold.
+PREBUILD_OUT="$(flock .tree-write.lock make build 2>&1)"
+PREBUILD_EXIT=$?
+if [[ "$PREBUILD_EXIT" -ne 0 ]]; then
+  emit_diagnostic \
+    "coverage.docker-epic-prebuild" \
+    "bin/" \
+    "make build under the exclusive tree-write lock (.tree-write.lock), run once before any docker epic starts, failed with exit ${PREBUILD_EXIT}; no docker epic ran. Output tail: $(printf '%s' "$PREBUILD_OUT" | tail -c 500)" \
+    "Run 'make build' at the repo root to reproduce, fix the build, then rerun the coverage phase."
+  exit 1
 fi
 
 # ─── live run: write config to temp file, delegate to run-parallel.sh ─────────
