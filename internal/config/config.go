@@ -267,7 +267,34 @@ func (p PreTrust) refusals() []string {
 
 // Store holds storage backend paths.
 type Store struct {
+	// DbPath is the store database, as Load resolved it: the file's value
+	// when the key is set ("" for an empty db_path), otherwise
+	// DefaultDbPath. Read it only through EffectiveDbPath, which gives the
+	// default for "".
 	DbPath string `toml:"db_path"`
+}
+
+// DefaultDbPath is the default of [store] db_path. It is the value Default()
+// seeds into Store.DbPath AND the fallback EffectiveDbPath returns for an
+// empty db_path, so the two never drift.
+const DefaultDbPath = "~/.agent-director/state.db"
+
+// EffectiveDbPath returns the store database every opener uses: the verbs
+// (pkg/api.New, tiers 2 and 3 of its StorePath precedence) and the hook
+// handler, so the two always open the same store (b.8up). It is DbPath when
+// non-empty, otherwise DefaultDbPath with "~/" joined onto $HOME. It never
+// returns "", which the SQLite driver would take as a file name in the cwd.
+// When os.UserHomeDir fails (on Unix, HOME unset or empty) the default is
+// refused with an error, never resolved against another home.
+func (s Store) EffectiveDbPath() (string, error) {
+	if s.DbPath != "" {
+		return s.DbPath, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("expand tilde: %w", err)
+	}
+	return expandTilde(DefaultDbPath, home), nil
 }
 
 // Log holds logging paths.
@@ -297,7 +324,7 @@ func Default() Config {
 			LockWaitSeconds: DefaultPreTrustLockWaitSeconds,
 		},
 		Store: Store{
-			DbPath: "~/.agent-director/state.db",
+			DbPath: DefaultDbPath,
 		},
 		Log: Log{
 			ErrorLogPath: "~/.agent-director/errors.log",

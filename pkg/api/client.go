@@ -20,10 +20,6 @@ import (
 // path the CLI uses. A leading "~/" is tilde-expanded at construction time.
 const defaultConfigPath = "~/.agent-director/config.toml"
 
-// defaultStorePath is the hardcoded last-resort fallback for the store path
-// (tier 3 of the three-tier StorePath precedence).
-const defaultStorePath = "~/.agent-director/state.db"
-
 // TmuxClient is the client-level tmux injection point (Options.TmuxClient;
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
 // and reports a failure as *TmuxCallError; an error of any other type from
@@ -270,15 +266,15 @@ func (c *Client) checkClosed() error {
 // resolveStorePath applies the three-tier StorePath precedence rule:
 //  1. opts.StorePath if non-empty (tilde-expanded).
 //  2. cfg.Store.DbPath if non-empty (already expanded by config.Load).
-//  3. defaultStorePath (tilde-expanded).
+//  3. config.DefaultDbPath (tilde-expanded).
+//
+// Tiers 2 and 3 are config.Store.EffectiveDbPath, which the hook handler
+// also uses, so the verbs and the hook open the same store (b.8up).
 func resolveStorePath(optsStorePath string, cfg config.Config) (string, error) {
 	if optsStorePath != "" {
 		return expandTilde(optsStorePath)
 	}
-	if cfg.Store.DbPath != "" {
-		return cfg.Store.DbPath, nil
-	}
-	return expandTilde(defaultStorePath)
+	return cfg.Store.EffectiveDbPath()
 }
 
 // expandTilde resolves a leading "~/" using os.UserHomeDir (honours $HOME,

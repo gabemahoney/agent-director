@@ -47,6 +47,10 @@ var ErrStoreNotInitialized = errors.New("store: database not initialized")
 // see expandTilde. Nothing is opened or created.
 var errNoHome = errors.New("no home directory")
 
+// errEmptyPath is returned, wrapped, by Open and OpenOrInit for an empty
+// path; see resolvePath. Nothing is opened or created.
+var errEmptyPath = errors.New("empty database path")
+
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
 const schemaVersion = 5
@@ -74,14 +78,15 @@ type Store struct {
 // required (e.g. CLI first-run).
 //
 // A leading "~/" in path is expanded against $HOME; with HOME unset or empty
-// it is refused, never resolved against another home (see expandTilde).
+// it is refused, never resolved against another home (see expandTilde). An
+// empty path is refused (see resolvePath).
 //
 // On any error the caller does not need to close anything — Open cleans up
 // the partially-opened *sql.DB before returning.
 func Open(path string) (*Store, error) {
-	resolved, err := expandTilde(path)
+	resolved, err := resolvePath(path)
 	if err != nil {
-		return nil, fmt.Errorf("store: resolve path: %w", err)
+		return nil, err
 	}
 
 	if _, err := os.Stat(resolved); os.IsNotExist(err) {
@@ -99,14 +104,15 @@ func Open(path string) (*Store, error) {
 // the schema is at the current version.
 //
 // A leading "~/" in path is expanded against $HOME; with HOME unset or empty
-// it is refused, never resolved against another home (see expandTilde).
+// it is refused, never resolved against another home (see expandTilde). An
+// empty path is refused (see resolvePath).
 //
 // On any error the caller does not need to close anything — OpenOrInit cleans
 // up the partially-opened *sql.DB before returning.
 func OpenOrInit(path string) (*Store, error) {
-	resolved, err := expandTilde(path)
+	resolved, err := resolvePath(path)
 	if err != nil {
-		return nil, fmt.Errorf("store: resolve path: %w", err)
+		return nil, err
 	}
 
 	parent := filepath.Dir(resolved)
@@ -187,6 +193,22 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// resolvePath is Open's and OpenOrInit's path step: it refuses an empty path
+// with an error wrapping errEmptyPath and expands a leading "~/"
+// (expandTilde). An empty path would otherwise become a DSN that the SQLite
+// driver takes whole as a file name, so OpenOrInit would create that file
+// and the ".initlock" beside it in the cwd, with no PRAGMAs applied (b.8up).
+func resolvePath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("store: resolve path: %w", errEmptyPath)
+	}
+	resolved, err := expandTilde(path)
+	if err != nil {
+		return "", fmt.Errorf("store: resolve path: %w", err)
+	}
+	return resolved, nil
 }
 
 // expandTilde resolves a leading "~/" against $HOME via os.UserHomeDir. This

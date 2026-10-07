@@ -111,7 +111,8 @@ const hookExitCode = 0
 // SRD §3.2 EXEMPTION: runHook retains its own config.Load + store.Open calls
 // and does NOT go through setupClient. This is required by SRD §3.2 fail-open:
 // hook fires must never be blocked by config or store failures. The pkg/api.Client
-// startup path is intentionally bypassed here.
+// startup path is intentionally bypassed here; its store-path resolution is
+// not: both take the store from config.Store.EffectiveDbPath (b.8up).
 //
 // The function never returns an error; it logs and returns.
 func runHook() int {
@@ -156,7 +157,15 @@ func runHook() int {
 		earlyFailClosed(fmt.Sprintf("load config: %v", err))
 		return hookExitCode
 	}
-	st, err := store.OpenOrInit(cfg.Store.DbPath)
+	// The same store every verb opens: EffectiveDbPath is pkg/api.New's
+	// tiers 2 and 3 (the hook takes no --store-path), so an empty db_path
+	// gives the default store, never a file in Claude's cwd (b.8up).
+	dbPath, err := cfg.Store.EffectiveDbPath()
+	if err != nil {
+		earlyFailClosed(fmt.Sprintf("resolve store path: %v", err))
+		return hookExitCode
+	}
+	st, err := store.OpenOrInit(dbPath)
 	if err != nil {
 		earlyFailClosed(fmt.Sprintf("open store: %v", err))
 		return hookExitCode

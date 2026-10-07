@@ -6,11 +6,13 @@ package main_test
 // shapes are internal/hook's classify_test.go and TestTrailEmitHookFired.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
@@ -89,6 +91,66 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	row := assertOneHookFired(t, home)
 	if row["claude_instance_id"] != id || row["event_name"] != "SessionStart" || row["session_id"] != "session-e2e-uuid" {
 		t.Errorf("ad.hook.fired = %v; want %s's SessionStart with its session id", row, id)
+	}
+}
+
+// TestHookCLIOpensTheVerbsStore: for each kind of [store] db_path, a hook run
+// from another cwd records its SessionStart in the store `list` reads, logs
+// nothing and writes nothing to its cwd (b.8up: "" left the hook storeless).
+func TestHookCLIOpensTheVerbsStore(t *testing.T) {
+	for _, tc := range []struct {
+		name, dbPath string // the config's db_path, "<HOME>" replaced; "-" writes no config
+		store        string // the store both open, under HOME
+	}{
+		{"no config", "-", ".agent-director/state.db"},
+		{"empty", "", ".agent-director/state.db"},
+		{"tilde", "~/t/s.db", "t/s.db"},
+		{"relative", "r/s.db", ".agent-director/r/s.db"},
+		{"absolute", "<HOME>/a/s.db", "a/s.db"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, cwd := t.TempDir(), t.TempDir()
+			if tc.dbPath != "-" {
+				cfg := fmt.Sprintf("[store]\ndb_path = %q\n", strings.Replace(tc.dbPath, "<HOME>", home, 1))
+				if err := os.MkdirAll(directorDir(home), 0o700); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatalf("write config: %v", err)
+				}
+			}
+			const id = "id-b8up-1"
+			if _, err := apitest.SeedSpawn(filepath.Join(home, tc.store), id, store.StatePending, "/tmp", "off", "", true,
+				withTestProcessPane(t)); err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+
+			stdout, stderr, code := mustRun(t, cliOpts{dir: cwd, env: homeEnv(home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id}),
+				stdin: `{"hook_event_name":"SessionStart","transcript_path":"/x/b8up.jsonl"}`, deadline: surfaceDeadline}, "hook")
+			if code != 0 || stdout != "" || stderr != "" {
+				t.Fatalf("hook exit = %d, stdout = %q, stderr = %q; want 0 and both empty", code, stdout, stderr)
+			}
+			if log, err := os.ReadFile(filepath.Join(directorDir(home), "errors.log")); len(log) != 0 {
+				t.Errorf("errors.log = %q (err %v); want nothing logged", log, err)
+			}
+			stdout, stderr, code = mustRun(t, cliOpts{dir: cwd, env: homeEnv(home, nil)}, "list")
+			var res struct {
+				Spawns []struct {
+					ID    string `json:"claude_instance_id"`
+					State string `json:"state"`
+				} `json:"spawns"`
+			}
+			if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {
+				t.Fatalf("list exit = %d, stdout = %q; want 0 and a list (stderr=%q)", code, stdout, stderr)
+			}
+			if len(res.Spawns) != 1 || res.Spawns[0].ID != id || res.Spawns[0].State != store.StateWaiting {
+				t.Errorf("list = %+v; want only %s, moved to %s by the hook", res.Spawns, id, store.StateWaiting)
+			}
+			assertHomeTree(t, cwd)
+			if row := assertOneHookFired(t, home); row["claude_instance_id"] != id {
+				t.Errorf("ad.hook.fired = %v; want %s's", row, id)
+			}
+		})
 	}
 }
 

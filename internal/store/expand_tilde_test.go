@@ -2,7 +2,7 @@ package store
 
 // "~/" store path expansion (b.hvf, b.4uz): Open and OpenOrInit resolve "~/"
 // against $HOME and refuse it with errNoHome when HOME is unset or empty,
-// never falling back to the passwd home.
+// never falling back to the passwd home. They refuse "" with errEmptyPath (b.8up).
 
 import (
 	"errors"
@@ -64,28 +64,53 @@ func TestTildeStorePathUsesHOME(t *testing.T) {
 	}
 }
 
-// TestTildeStorePathWithoutHOMERefused: with HOME empty or unset, Open and
-// OpenOrInit of "~/<rel>" fail with errNoHome and create nothing under the
-// passwd home or the cwd (b.4uz).
-func TestTildeStorePathWithoutHOMERefused(t *testing.T) {
-	for name, open := range map[string]func(string) (*Store, error){"OpenOrInit": OpenOrInit, "Open": Open} {
-		for _, unset := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/HOME unset=%t", name, unset), func(t *testing.T) {
+// TestRefusedStorePathCreatesNothing: Open and OpenOrInit refuse "~/<rel>"
+// with errNoHome when HOME is empty or unset, never falling back to the passwd
+// home (b.4uz), and refuse "" with errEmptyPath (b.8up). Either way they
+// create nothing: not in the cwd, not at the "~/" path's passwd-home
+// expansion, and not under a set HOME.
+func TestRefusedStorePathCreatesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// tilde opens "~/<rel>" with HOME empty, or unset if unset is also
+		// true; otherwise "" is opened with HOME a fresh temp dir.
+		tilde, unset bool
+		wantErr      error
+	}{
+		{"tilde HOME empty", true, false, errNoHome},
+		{"tilde HOME unset", true, true, errNoHome},
+		{"empty path HOME set", false, false, errEmptyPath},
+	} {
+		for name, open := range map[string]func(string) (*Store, error){"OpenOrInit": OpenOrInit, "Open": Open} {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
 				cwd := cwdfix.Temp(t)
-				rel, stray := tildeRel(t)
-				setHome(t, "", unset)
-				s, err := open("~/" + rel)
+				var path, home, stray string
+				empty := []string{cwd} // dirs that must stay empty
+				if tc.tilde {
+					var rel string
+					rel, stray = tildeRel(t)
+					path = "~/" + rel
+				} else {
+					home = t.TempDir()
+					empty = append(empty, home)
+				}
+				setHome(t, home, tc.unset)
+				s, err := open(path)
 				if s != nil {
 					_ = s.Close()
 				}
-				if !errors.Is(err, errNoHome) {
-					t.Errorf("%s(~/%s) error = %v; want one wrapping errNoHome", name, rel, err)
+				if !errors.Is(err, tc.wantErr) {
+					t.Errorf("%s(%q) error = %v; want one wrapping %v", name, path, err, tc.wantErr)
 				}
-				if _, err := os.Lstat(stray); !errors.Is(err, fs.ErrNotExist) {
-					t.Errorf("%s(~/%s) created %s under the passwd home (Lstat: %v)", name, rel, stray, err)
+				if tc.tilde {
+					if _, err := os.Lstat(stray); !errors.Is(err, fs.ErrNotExist) {
+						t.Errorf("%s(%q) created %s under the passwd home (Lstat: %v)", name, path, stray, err)
+					}
 				}
-				if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 0 {
-					t.Errorf("cwd %s holds %v (err %v); want nothing created there", cwd, entries, err)
+				for _, dir := range empty {
+					if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+						t.Errorf("%s(%q): %s holds %v (err %v); want nothing created there", name, path, dir, entries, err)
+					}
 				}
 			})
 		}

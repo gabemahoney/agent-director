@@ -121,6 +121,37 @@ func TestLoadResolvesPathFields(t *testing.T) {
 	}
 }
 
+// TestEffectiveDbPath: a set db_path is returned unchanged, even without HOME;
+// an empty one gives the default store under HOME, refused without HOME (b.8up).
+func TestEffectiveDbPath(t *testing.T) {
+	home := t.TempDir()
+	for _, tc := range []struct {
+		name, dbPath, home string
+		unset              bool
+		want               string
+		wantErr            bool
+	}{
+		{"set", "/abs/x.db", home, false, "/abs/x.db", false},
+		{"set without HOME", "~/x.db", "", true, "~/x.db", false},
+		{"empty", "", home, false, filepath.Join(home, ".agent-director", "state.db"), false},
+		{"empty with HOME empty", "", "", false, "", true},
+		{"empty with HOME unset", "", "", true, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", tc.home)
+			if tc.unset {
+				if err := os.Unsetenv("HOME"); err != nil {
+					t.Fatalf("Unsetenv HOME: %v", err)
+				}
+			}
+			got, err := config.Store{DbPath: tc.dbPath}.EffectiveDbPath()
+			if got != tc.want || (err != nil) != tc.wantErr || (err != nil && !strings.HasPrefix(err.Error(), "expand tilde: ")) {
+				t.Errorf("EffectiveDbPath(%q) = %q, %v; want %q and an expand tilde error: %t", tc.dbPath, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
 // quoted wraps s in TOML double-quoted-string syntax with minimal escaping.
 func quoted(s string) string {
 	return "\"" + strings.ReplaceAll(s, "\\", "\\\\") + "\""

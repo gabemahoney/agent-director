@@ -84,7 +84,7 @@ func TestGlobalFlag_EmptyTwoTokenValue_Refused(t *testing.T) {
 // nothing, under the passwd home or the cwd (b.38a). With no HOME and no
 // --home, every store-opening call is ErrStoreOpen, `--store-path ~/…`
 // included, because the config path cannot be expanded; the store's own
-// refusal of a "~/" path is internal/store's TestTildeStorePathWithoutHOMERefused (b.4uz).
+// refusal of a "~/" path is internal/store's TestRefusedStorePathCreatesNothing (b.4uz).
 func TestGlobalFlag_HomeTildeWithoutHOME_Refused(t *testing.T) {
 	const noHome = `: HOME is unset or empty, so there is no home directory to expand "~" against`
 	for _, tc := range []struct {
