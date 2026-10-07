@@ -7,6 +7,7 @@ package api_test
 // sendkeys_action_test.go's.
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -189,6 +190,21 @@ func seedRelayRow(t *testing.T, e *killEnv, tokens ...string) killRow {
 	return r
 }
 
+// setRequestsCreatedAt sets the created_at of every request of id to at, in
+// whole seconds as stored, through a raw connection (the store writes none).
+func setRequestsCreatedAt(t *testing.T, e *killEnv, id string, at time.Time) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+e.dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.Exec(`UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ?`,
+		at.UTC().Format("2006-01-02 15:04:05"), id); err != nil {
+		t.Fatalf("set created_at of %s's requests: %v", id, err)
+	}
+}
+
 // TestRelayFallenBackIncidentRegression re-anchors the b.kk3 incident (SR-7.1):
 // a relay-on row whose open request fell out of its window refuses Decide
 // with ErrRelayFallenBack, and a later SendKeys delivers into the agent's pane.
@@ -214,14 +230,19 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 // check_permission row (SR-4.2, SR-7.3): it holds while any request is in its
 // window, decided or not, and with no request at all (mid-insert); it releases
 // once every request aged past the window (and the margin), decided or not.
-// A held guard refuses with no tmux call.
+// A held guard refuses with no tmux call, naming of the requests holding it an
+// open one before a decided one, then the oldest, then the lower request id (b.ah6).
 func TestSendKeysRelayGuard(t *testing.T) {
 	t.Parallel()
 	tokens := []string{storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC}
-	undeliverable := func(idx ...int) func(*testing.T, *killEnv, killRow) time.Time {
+	past := 2 * relayGuardWindow // undeliverable, the guard released on its account
+	// backdated backdates open request tokens[i] by ages[i] (0: as recorded).
+	backdated := func(ages ...time.Duration) func(*testing.T, *killEnv, killRow) time.Time {
 		return func(t *testing.T, e *killEnv, r killRow) time.Time {
-			for _, i := range idx {
-				storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokens[i], 2*relayGuardWindow)
+			for i, age := range ages {
+				if age > 0 {
+					storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokens[i], age)
+				}
 			}
 			return time.Now()
 		}
@@ -246,14 +267,27 @@ func TestSendKeysRelayGuard(t *testing.T) {
 		tokens  []string
 		arrange func(*testing.T, *killEnv, killRow) time.Time // the guard's now; nil: time.Now()
 		refuse  bool
+		named   string // the request the refusal names; "": none recorded
 	}{
-		{"no request (mid-insert) refuses", nil, nil, true},
-		{"all in window refuses", tokens, nil, true},
-		{"one undeliverable, the rest in window refuses", tokens, undeliverable(0), true},
-		{"all but one undeliverable refuses", tokens, undeliverable(0, 1), true},
-		{"all undeliverable delivers", tokens, undeliverable(0, 1, 2), false},
-		{"sole request decided, still in its window, refuses", tokens[:1], decided(false), true},
-		{"sole request decided, aged past window and margin, delivers", tokens[:1], decided(true), false},
+		{"no request (mid-insert) refuses", nil, nil, true, ""},
+		{"all in window refuses", tokens, nil, true, tokens[0]},
+		{"one undeliverable, the rest in window refuses", tokens, backdated(past), true, tokens[1]},
+		{"all but one undeliverable refuses", tokens, backdated(past, past), true, tokens[2]},
+		{"all undeliverable delivers", tokens, backdated(past, past, past), false, ""},
+		{"sole request decided, still in its window, refuses", tokens[:1], decided(false), true, tokens[0]},
+		{"sole request decided, aged past window and margin, delivers", tokens[:1], decided(true), false, ""},
+		{"an open request is named before an older decided one", tokens[:2],
+			func(t *testing.T, e *killEnv, r killRow) time.Time {
+				backdated(10*time.Minute)(t, e, r)
+				return decided(false)(t, e, r)
+			}, true, tokens[1]},
+		{"the oldest of the open requests is named", tokens, backdated(0, 20*time.Minute, 10*time.Minute), true, tokens[1]},
+		// Seeded C first, so C has the lowest request id though its token sorts last.
+		{"a created_at tie names the lower request id", []string{tokens[2], tokens[1], tokens[0]},
+			func(t *testing.T, e *killEnv, r killRow) time.Time {
+				setRequestsCreatedAt(t, e, r.ID, time.Now().Add(-10*time.Minute))
+				return time.Now()
+			}, true, tokens[2]},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -268,7 +302,11 @@ func TestSendKeysRelayGuard(t *testing.T) {
 			_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
 
 			if tc.refuse {
-				assertOneName(t, err, "ErrSendKeysWhileRelayed")
+				want := advSendKeysNoRequestYet
+				if tc.named != "" {
+					want = advSendKeysAnswerWithDecide(tc.named)
+				}
+				adviceAssertAdvice(t, err, api.ErrSendKeysWhileRelayed, want)
 				e.assertNoTmuxCall(t)
 				return
 			}

@@ -103,6 +103,13 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 // reads the request again, so ErrRelayFallenBack ("answer at the pane") is
 // returned only for a request whose row is still open once its poller is
 // presumed no longer able to answer it (b.pzy).
+//
+// The span is agent-director's to absorb, not the caller's to time (b.ah6):
+// no runtime caller-facing text (error messages, manifest Descriptions)
+// states either boundary or the margin. A send_keys refused inside it is told
+// to answer the request it names with decide, and decide's wait ends after
+// the guard has released on that request's account, so a pane answer that
+// follows its ErrRelayFallenBack is not refused on that request's account.
 
 // RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
 // whose delivery window has provably elapsed (guard may release) from rows that
@@ -178,11 +185,3 @@ func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time
 func RelayRequestGuardReleasable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
 	return !createdAt.After(RelayGuardReleaseCutoff(now, effectiveWindow))
 }
-
-// relayGuardReleaseAdvice states when the send_keys relay guard releases —
-// RelayKillSafetyMargin after every request's delivery window elapses, the
-// point RelayRequestGuardReleasable applies — in the words the
-// ErrSendKeysWhileRelayed and ErrRelayFallenBack descriptions share, so a
-// caller retrying at the stated instant is not refused again (b.2b8). The
-// margin is rendered from the constant, never restated.
-var relayGuardReleaseAdvice = inSeconds(RelayKillSafetyMargin) + " after every request's delivery window elapses"

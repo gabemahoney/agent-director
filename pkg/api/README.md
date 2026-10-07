@@ -238,15 +238,22 @@ Most-likely sentinel errors:
   check_permission` (a `pending` row needs `AllowPending`, below); nothing
   was sent.
 - `ErrSendKeysWhileRelayed`: relay_mode=on and state is `check_permission`
-  **and** at least one of the row's permission requests is still within its
-  relay window plus 1 s (`RelayKillSafetyMargin`) — or the row has zero
-  request rows; the relay still owns the answer. This guard is
-  **time-bounded**: it releases 1 s after every request row's window has
-  elapsed, when the delivering hook is dead, letting the caller recover the
-  wedged row through this sanctioned, audited surface. `Decide`'s
-  `ErrRelayFallenBack` points here; it is returned only for a request
-  still open 2 s after its window ended, so on that request's account the
-  guard has already released.
+  **and** at least one of the row's permission requests may still be
+  delivered by its relay hook, or the row has zero request rows; the relay
+  still owns the answer and nothing was sent. The message names the
+  request holding the guard (`… on request <request_token>; answer it
+  with decide`). If that request is pending, `Decide` answers it; if its
+  verdict is already recorded, `Decide` returns `ErrAlreadyDecided` and
+  there is nothing to answer: it holds the guard until the row leaves
+  `check_permission` or its relay can no longer deliver. With zero rows the
+  message names none (`… whose request is not yet recorded; answer it
+  with decide once get lists it`). `Decide` refused near the window's end
+  first waits, at most 3 s, for the relay hook's timeout deny, then
+  returns `ErrAlreadyDecided` or `ErrRelayFallenBack`. This guard is
+  **time-bounded**: it releases once no request's relay hook can deliver,
+  letting the caller recover the wedged row through this sanctioned,
+  audited surface. `Decide`'s `ErrRelayFallenBack` points here; it is
+  returned only once the guard has released on that request's account.
 - `ErrTmuxSendKeys`: the row's session or pane is not there.
 - `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
   earlier launch left behind is there on a live row, or tmux holds
@@ -485,7 +492,7 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | Relay path still owns the `check_permission` answer — refused until 1 s (`RelayKillSafetyMargin`) after every request window has elapsed |
+| `ErrSendKeysWhileRelayed` | The relay path still owns the `check_permission` answer — answer the request the message names with `Decide` (`ErrAlreadyDecided` if its verdict is already recorded) |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

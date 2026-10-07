@@ -29,16 +29,18 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // ErrRelayFallenBack is returned by Decide when the target permission
 // request's record is still open past its relay window and its relay hook can
 // no longer answer it: the hook had neither delivered a verdict nor recorded
-// its timeout deny when Decide last read the record, at created_at plus the
-// window plus RelayKillSafetyMargin plus created_at's storage resolution
-// (1 s), by which a live hook is presumed to have done one or the other.
-// Decide knows only that the record is open, not whether Claude Code's
-// permission dialog is still on screen. Recording a verdict would write
-// success into a void, so the record's decision stays NULL (no information is
-// lost). The message conveys "too late — answer at the pane": the recourse is
-// to answer at the pane directly, with send-keys, once its relay guard
-// releases, RelayKillSafetyMargin (1 s) after every request's delivery window
-// elapses, as the message says; on this request's account it already has.
+// its timeout deny when Decide last read the record, by when a live hook is
+// presumed to have done one or the other (see below). Decide knows only that
+// the record is open, not whether Claude Code's permission dialog is still on
+// screen. Recording a verdict would write success into a void, so the
+// record's decision stays NULL (no information is lost). The message conveys
+// "too late — answer at the pane": the recourse is to answer at the pane
+// directly, with send-keys. The message states no release time (b.ah6): by
+// the time Decide returns this error, the send-keys relay guard has already
+// released on this request's account. If send-keys still refuses with
+// ErrSendKeysWhileRelayed, another of the Spawn's requests holds it and the
+// refusal names that request; answer that one with decide, as that error
+// says.
 //
 // Decide refuses from window - RelayKillSafetyMargin
 // (RelayRequestUndeliverable), but a live relay hook may still reach its poll
@@ -47,12 +49,13 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // as a user message (b.pzy). The hook's deadline runs from its own clock after
 // the record was inserted, while created_at keeps whole seconds only, so the
 // deny can land up to 1 s later than created_at + window suggests, besides
-// the slack RelayKillSafetyMargin covers. A refusal
-// before the instant above therefore waits until it (at most twice the margin
-// plus the resolution, 3 s) and reads the request again: a request decided
-// meanwhile, such as by the hook's timeout deny, is ErrAlreadyDecided, and
-// only a request whose record is still open is ErrRelayFallenBack. Callers
-// detect it with errors.Is.
+// the slack RelayKillSafetyMargin covers. Decide therefore reads the record
+// last at created_at plus the window plus RelayKillSafetyMargin plus
+// created_at's storage resolution (1 s): a refusal before that instant waits
+// until it (at most twice the margin plus the resolution, 3 s) and reads the
+// request again. A request decided meanwhile, such as by the hook's timeout
+// deny, is ErrAlreadyDecided, and only a request whose record is still open
+// is ErrRelayFallenBack. Callers detect it with errors.Is.
 var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
 
 // DecideStore is the narrow store surface Decide needs.
@@ -185,7 +188,8 @@ func decide(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep f
 // RelayKillSafetyMargin plus createdAtResolution, 3 s) and repeats the SELECT
 // as of it: whatever decided the row meanwhile wins as ErrAlreadyDecided, and
 // a row still open is ErrRelayFallenBack, its hook presumed dead and its
-// send-keys guard already released.
+// send-keys guard already released, so its message states no release time
+// (b.ah6).
 func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep func(time.Duration), params DecideParams) error {
 	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
 	if err == nil && pr.Decision == "" && RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
@@ -209,8 +213,8 @@ func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, 
 	// predicate. Re-confirm via the shared single-authority signal (no second
 	// inline time comparison) and surface the typed fallen-back error.
 	if RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
-		return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys once its relay guard releases, %s (for this request it already has)",
-			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken, relayGuardReleaseAdvice)
+		return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys",
+			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken)
 	}
 	// Unreachable in practice — the row exists, decision is NULL, is within the
 	// window, yet UPDATE didn't affect it. The only way to land here is a SQL
@@ -285,14 +289,16 @@ func decideOutcome(err error) string {
 //     normally returns to Claude Code as the request's answer.
 //   - [ErrRelayFallenBack]: the request's record is still open past its relay
 //     window and its relay hook can no longer answer it; answer at the pane
-//     instead, with SendKeys once its relay guard releases,
-//     [RelayKillSafetyMargin] (1 s) after every request's delivery window
-//     elapses (for this request it already has).
+//     instead, with SendKeys. The SendKeys relay guard has already released
+//     on this request's account; see [ErrRelayFallenBack].
 //   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
 //
 // A call refused between 1 s before the request's window ends and 2 s after
 // it first waits until 2 s after it (at most 3 s), because the relay hook
-// may still deny the request in that time; see [ErrRelayFallenBack].
+// may still deny the request in that time; see [ErrRelayFallenBack]. Up to
+// then the request may also hold the SendKeys relay guard, whose refusal,
+// [ErrSendKeysWhileRelayed], names a request holding it and advises this
+// call, so the caller never times that span itself.
 //
 // Nondeterminism: none.
 func (c *Client) Decide(params DecideParams) (DecideResult, error) {

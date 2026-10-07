@@ -104,10 +104,13 @@ const (
 
 // sendKeysGuard is the internal result of evaluating the relay guard: the
 // guard-evaluation outcome string (one of guardNotApplicable/guardHeld/
-// guardReleased) plus whether the send should be refused.
+// guardReleased/guardError), whether the send should be refused and, when the
+// guard is held, the request token the refusal names (holding; "" when the
+// Spawn has zero request rows, so no request is recorded to name).
 type sendKeysGuard struct {
-	eval   string
-	refuse bool
+	eval    string
+	refuse  bool
+	holding string
 }
 
 // SendKeys is the verb-handler entry point for `agent-director send-keys`
@@ -162,7 +165,12 @@ type sendKeysGuard struct {
 // margin, both in deliverability.go). A relay-on check_permission Spawn with
 // zero rows keeps refusing:
 // with no row there is no signal and no authority to release, and the state
-// is a real mid-insert transient.
+// is a real mid-insert transient. The refusal's message names the request
+// holding the guard (an open one in preference to a decided one, then the
+// oldest; none with zero rows), advises answering it with decide and states
+// no release time (b.ah6): Decide absorbs the span between its own refusal
+// and the guard's release, and returns ErrRelayFallenBack only once the guard
+// has released on that request's account.
 //
 // After the state and relay guards, a row whose recorded name is unusable
 // (SR-3.2) is ErrInternal with no tmux call; a pending row with no launch
@@ -286,9 +294,7 @@ func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.D
 		return err
 	}
 	if guard.refuse {
-		return fmt.Errorf(
-			"%w: spawn %s is awaiting a relayed permission decision (guard releases %s)",
-			ErrSendKeysWhileRelayed, params.ClaudeInstanceID, relayGuardReleaseAdvice)
+		return relayGuardRefusal(params.ClaudeInstanceID, guard.holding)
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
@@ -339,7 +345,9 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 // might still be delivered (including the zero-rows state), or guardReleased
 // (deliver) once every row's window plus RelayKillSafetyMargin has provably
 // elapsed. If the store read fails it returns guardError with the underlying
-// error (the send fails).
+// error (the send fails). A held guard carries the token of the holding row
+// its refusal names (namedBefore picks it when several hold), or none with
+// zero rows.
 //
 // The guard releases LATE — at elapsed >= window + margin — so it never frees
 // while a live poller could still emit a decision. That is the deliberate
@@ -369,12 +377,51 @@ func evaluateRelayGuard(s SendKeysStore, effectiveWindow time.Duration, now time
 	// measured from its own created_at by the shared guard-release authority,
 	// regardless of decision status (a row decided in-window still has a live
 	// poller until ~window + margin).
-	for _, pr := range rows {
-		if !RelayRequestGuardReleasable(pr.CreatedAt, effectiveWindow, now) {
-			return sendKeysGuard{eval: guardHeld, refuse: true}, nil
+	var named *PermissionRow
+	for i := range rows {
+		pr := &rows[i]
+		if RelayRequestGuardReleasable(pr.CreatedAt, effectiveWindow, now) {
+			continue
+		}
+		if named == nil || namedBefore(*pr, *named) {
+			named = pr
 		}
 	}
-	return sendKeysGuard{eval: guardReleased, refuse: false}, nil
+	if named == nil {
+		return sendKeysGuard{eval: guardReleased, refuse: false}, nil
+	}
+	return sendKeysGuard{eval: guardHeld, refuse: true, holding: named.RequestToken}, nil
+}
+
+// namedBefore reports whether holding row a, rather than b, is the request
+// the ErrSendKeysWhileRelayed refusal names: an open (undecided) row before a
+// decided one, as the open one is what decide can still answer, then the
+// older by created_at, then the lower request id, so the choice does not
+// depend on the order the store returned the rows in.
+func namedBefore(a, b PermissionRow) bool {
+	if aOpen, bOpen := a.Decision == "", b.Decision == ""; aOpen != bOpen {
+		return aOpen
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.RequestID < b.RequestID
+}
+
+// relayGuardRefusal is the ErrSendKeysWhileRelayed refusal for a held relay
+// guard on instanceID. It names the holding request's token and advises
+// answering it with decide; with no token (zero request rows) it says the
+// request is not yet recorded and to answer it with decide once get lists it.
+// It states no release time or margin (b.ah6).
+func relayGuardRefusal(instanceID, holding string) error {
+	if holding == "" {
+		return fmt.Errorf(
+			"%w: spawn %s is awaiting a relayed permission decision whose request is not yet recorded; answer it with decide once get lists it",
+			ErrSendKeysWhileRelayed, instanceID)
+	}
+	return fmt.Errorf(
+		"%w: spawn %s is awaiting a relayed permission decision on request %s; answer it with decide",
+		ErrSendKeysWhileRelayed, instanceID, holding)
 }
 
 // isInteractiveState returns true iff the supplied state value belongs to
@@ -412,13 +459,19 @@ func isInteractiveState(state string) bool {
 //     with no launch start or launch token recorded, or pending and the
 //     lookup found only a session an earlier launch left behind; nothing was
 //     sent.
-//   - [ErrSendKeysWhileRelayed]: relay_mode is on and state is
-//     check_permission and at least one of the Spawn's permission requests is
-//     still within its relay delivery window plus [RelayKillSafetyMargin] (or
-//     the Spawn has zero request rows). The refusal is time-bounded: the guard
-//     releases that margin (1 s) after every request row's window elapses,
-//     when the delivering hook is dead, letting the operator recover the
-//     wedged Spawn through this sanctioned surface.
+//   - [ErrSendKeysWhileRelayed]: relay_mode is on, state is check_permission
+//     and the relay guard holds: at least one of the Spawn's permission
+//     requests may still be delivered by its relay hook, or the Spawn has
+//     zero request rows; nothing was sent. The message names the holding
+//     request (an open one in preference to a decided one, then the oldest)
+//     and advises answering it with Decide. That request is pending, or its
+//     verdict is recorded and still being delivered, in which case Decide
+//     returns [ErrAlreadyDecided] and there is nothing left to answer. With
+//     zero rows the request is still being recorded and the message names
+//     none. The refusal is time-bounded: the guard releases once no
+//     request's relay hook can deliver a decision, letting the operator
+//     recover the wedged Spawn through this sanctioned surface. A request
+//     Decide has refused with [ErrRelayFallenBack] no longer holds it.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there.
 //   - [ErrTmuxSessionConflict]: the agent's pane was not found, a session an
 //     earlier launch left behind is there on a live row, or tmux holds
