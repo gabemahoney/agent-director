@@ -61,6 +61,12 @@
 # appending no second [defaults]; agent-director list then loads the config,
 # and uninstall.sh takes the key out again.
 #
+# Merge modes (b.ojn): a hooks-on re-install under umask 022 or 000 leaves
+# settings.json (a symlinked one too) and config.toml at the modes they had,
+# their .bak copies at the same, also over an earlier run's .new and .bak
+# leftovers; each new file and copy is owner-only until its chmod, already has
+# its mode when moved into place, and no cp -p is needed (NFS homes).
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -637,6 +643,95 @@ bom|\xef\xbb\xbf[defaults]\nrelay_mode = "off"|\xef\xbb\xbf[defaults]\nrelay_mod
 crlf|[ defaults ]\r\nrelay_mode = "off"\r|[ defaults ]\r\nrelay_mode = "off"\r\ninject_help_hook = true|
 exact|[defaults]\nrelay_mode = "off"|[defaults]\nrelay_mode = "off"\ninject_help_hook = true|
 no-defaults|[defaultsx]\nrelay_mode = "off"|[defaultsx]\nrelay_mode = "off"\n\n[defaults]\ninject_help_hook = true|
+EOF
+HOOKS=""
+
+# Stand-ins for the b.ojn re-installs: an mv that logs "<target name> <mode>"
+# of each new settings.json or config.toml it moves into place, a chmod that
+# logs "<target name> <mode>" of each of their .new and .bak files before
+# changing it, a cp that fails on -p or -a as on an NFS home (LP#2087769), and a
+# date that names every .bak copy with BAK_STAMP.
+KEEP="$ROOT/keep-mode" BAK_STAMP=20260101-000000
+mkdir -p "$KEEP"
+{
+    printf '#!/bin/bash\nMV=%q LOG=%q\n' "$(type -P mv)" "$KEEP/mv.log"
+    cat <<'EOF'
+t="${!#}"
+case "$t" in */settings.json|*/config.toml) echo "${t##*/} $(stat -c %a "${@: -2:1}")" >>"$LOG" ;; esac
+exec "$MV" "$@"
+EOF
+} >"$KEEP/mv"
+{
+    printf '#!/bin/bash\nCHMOD=%q LOG=%q\n' "$(type -P chmod)" "$KEEP/chmod.log"
+    cat <<'EOF'
+t="${!#}"
+case "$t" in */settings.json.new|*/config.toml.new|*/settings.json.bak.*|*/config.toml.bak.*) echo "${t##*/} $(stat -c %a "$t")" >>"$LOG" ;; esac
+exec "$CHMOD" "$@"
+EOF
+} >"$KEEP/chmod"
+{
+    printf '#!/bin/bash\nCP=%q\n' "$(type -P cp)"
+    cat <<'EOF'
+for a; do [[ "$a" =~ ^(-[^-]*[ap]|--preserve|--archive) ]] && { echo "cp: b.ojn stand-in cannot preserve attributes here" >&2; exit 1; }; done
+exec "$CP" "$@"
+EOF
+} >"$KEEP/cp"
+{
+    printf '#!/bin/bash\nDATE=%q BAK_STAMP=%q\n' "$(type -P date)" "$BAK_STAMP"
+    cat <<'EOF'
+[[ "$*" == '+%Y%m%d-%H%M%S' ]] && exec echo "$BAK_STAMP"
+exec "$DATE" "$@"
+EOF
+} >"$KEEP/date"
+chmod 0755 "$KEEP/mv" "$KEEP/chmod" "$KEEP/cp" "$KEEP/date"
+
+# A hooks-on re-install keeps the modes of the settings.json and config.toml it
+# merges into, and gives their .bak copies the same (b.ojn); each .new is 600
+# and each .bak its original's owner bits until chmod gives it its mode. Per case
+# <name>|<umask>|<config mode>|<settings mode>|<setup>: after a first install,
+# both files get unmerged contents at those modes, and a re-install under
+# <umask> merges them. <setup> symlink makes settings.json a link to a file
+# elsewhere; leftovers adds 0666 junk at both .new and .bak.BAK_STAMP names.
+HOOKS=1
+while IFS='|' read -r -u 3 name mask cmode smode setup; do
+    name="keep-mode-$name"
+    new_home "$name"
+    local_install
+    rc="$RC" cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
+    if [[ "$setup" == symlink ]]; then
+        mkdir "$H/dotfiles" && mv "$sj" "$H/dotfiles/settings.json" && ln -s "$H/dotfiles/settings.json" "$sj"
+    fi
+    printf '[defaults]\nrelay_mode = "off"\n' >"$cfg"
+    printf '{"theme":"dark"}\n' >"$sj"
+    chmod "$cmode" "$cfg" && chmod "$smode" "$sj"
+    if [[ "$setup" == leftovers ]]; then
+        for f in "$cfg.new" "$cfg.bak.$BAK_STAMP" "$sj.new" "$sj.bak.$BAK_STAMP"; do
+            echo junk >"$f" && chmod 0666 "$f"
+        done
+    fi
+    : >"$KEEP/mv.log"
+    : >"$KEEP/chmod.log"
+    UMASK="$mask" PATH_PREFIX="$KEEP"
+    local_install
+    UMASK="" PATH_PREFIX=""
+    report "$name-exit-codes" "$rc $RC" "0 0"
+    report "$name-no-cp-p" "$(grep -c 'b.ojn stand-in' "$ERR")" "0"
+    report "$name-modes" "$(stat -L -c %a "$cfg" "$sj" "$cfg.bak.$BAK_STAMP" "$sj.bak.$BAK_STAMP" 2>/dev/null | paste -sd/)" \
+        "$cmode/$smode/$cmode/$smode"
+    report "$name-written-owner-only" "$(sort "$KEEP/chmod.log" | paste -sd,)" \
+        "config.toml.bak.$BAK_STAMP ${cmode:0:1}00,config.toml.new 600,settings.json.bak.$BAK_STAMP ${smode:0:1}00,settings.json.new 600"
+    report "$name-new-file-modes" "$(sort "$KEEP/mv.log" | paste -sd,)" "config.toml $cmode,settings.json $smode"
+    report "$name-no-temp-left" "$(compgen -G "$cfg.new"; compgen -G "$sj.new")" ""
+    report "$name-merged" \
+        "$(grep -cx 'inject_help_hook = true' "$cfg") $(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionEnd | length)]' "$sj" 2>&1)" \
+        '1 ["dark",1,1]'
+    report "$name-backups" "$(cat "$cfg.bak.$BAK_STAMP" "$sj.bak.$BAK_STAMP" 2>&1 | paste -sd'|')" '[defaults]|relay_mode = "off"|{"theme":"dark"}'
+done 3<<'EOF'
+private|022|600|600|
+group|022|640|660|
+read-only|000|400|400|
+symlink|022|600|600|symlink
+leftovers|022|600|600|leftovers
 EOF
 HOOKS=""
 

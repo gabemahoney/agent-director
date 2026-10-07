@@ -111,6 +111,12 @@ test: envelope-diff-ts test-install-sh
 #     indented next header and appending no second [defaults];
 #     agent-director list then loads the config, and uninstall.sh takes the
 #     key out again (b.onv)
+#   - merge modes: a hooks-on re-install under umask 022 or 000 keeps the
+#     modes of the settings.json (a symlinked one too) and config.toml it
+#     merges into and gives their .bak copies the same, also over an earlier
+#     run's .new and .bak leftovers; each .new and .bak is owner-only until
+#     its chmod, each new file already has its mode when moved into place,
+#     and no backup uses cp -p (a cp that fails on it, as on NFS) (b.ojn)
 # It builds and runs agent-director and agent-director-admin binaries, so it
 # runs in the sandbox only (retry.sh refuses anywhere else, b.8dr); no
 # network. test-sandbox runs it too, through test/install-sh/retry_test.go.

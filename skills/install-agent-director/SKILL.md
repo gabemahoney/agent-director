@@ -574,7 +574,11 @@ This skill runs `install.sh` from the same directory. The script:
    UTF-8 byte-order mark are all fine (b.onv). The summary line is
    `config  : merged inject_help_hook=true into <path> (backup <path>)`,
    or `config  : created <path> with inject_help_hook=true` when there
-   was no config.toml.
+   was no config.toml (created at mode 0600).
+
+   A merged `settings.json` or `config.toml` keeps the mode it had (a
+   0600 file stays 0600 whatever your umask), and each `.bak` has the
+   same mode as the file it copies (b.ojn).
 
    With `--no-hooks`, this step is skipped entirely: settings.json is
    not read, not backed up, not written — left byte-identical to its
@@ -710,12 +714,15 @@ destructive *additions*.
 ### What uninstall.sh does
 
 - Removes the two help hook entries (only the entries this skill
-  added; other user hooks are preserved).
+  added; other user hooks are preserved), snapshotting
+  `settings.json` to a timestamped `.bak` first.
 - Removes `inject_help_hook` from `config.toml`'s `[defaults]` table
   (its header found however it is spaced, as install finds it), and
   the `[defaults]` header too when only blank lines and comments are
   left under it. When that changes the file, it is snapshotted to a
   timestamped `.bak` first.
+- Both rewrites keep the file's mode, and each `.bak` has the same
+  mode as the file it copies (b.ojn).
 - Removes the binary at `~/.agent-director/bin/agent-director` and
   the `.prior` snapshot if one is present.
 - Removes `~/.agent-director/admin/agent-director-admin`, its `.prior`

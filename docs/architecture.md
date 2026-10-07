@@ -4464,7 +4464,8 @@ claude /install-agent-director (or `bash install.sh`)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
   → set inject_help_hook = true in config.toml's [defaults] table (see
     "The config.toml merge" below); --no-hooks skips this and the
-    settings.json merge
+    settings.json merge; both merges keep the file's mode (see "Merged
+    files keep their mode" below)
   → optional MCP registration (--register-mcp)
   → print the admin path once, for the human
 ```
@@ -4552,6 +4553,36 @@ only blank lines and comments. **Must use:** the merge and its reversal
 match the `[defaults]` header with the same pattern; a change to one
 changes the other, and adds its cases to `test/install-sh/retry.sh`'s
 config-merge table.
+
+**Merged files keep their mode (b.ojn).** install.sh replaces an existing
+`settings.json` or `config.toml` with `ad_replace_keeping_mode <file>
+<text>`: it removes a stale `<file>.new`, writes the new contents there
+under `umask 077`, `chmod`s it to `<file>`'s mode, and only then `mv`s it
+over `<file>`. The file keeps its mode (a 0600 file stays 0600 under umask
+022), and its new contents are never readable, even before the `mv`, by
+anyone who could not read the old. The mode is read with `stat -L` (GNU
+`-c '%a'`, else BSD `-f '%Lp'`), so a symlinked `<file>` gives its target's
+mode; the `mv` replaces the link with a regular file and leaves the target
+as it was. A `<file>` that does not exist yet takes the umask's mode (a new
+`config.toml` is then `chmod 0600`). The timestamped `.bak` copies are made
+with `ad_backup_keeping_mode <file> <bak>` the same way: it removes any
+`<bak>` (an earlier run's copy of the same second), copies with a plain
+`cp -f` under `umask 077`, then `chmod`s the copy to `<file>`'s mode. It
+never uses `cp -p`: GNU `cp -p` also copies ACLs and xattrs and fails
+where the file system cannot take them (NFS homes, Ubuntu LP#2087769),
+which under `set -e` would stop the install at the backup. `uninstall.sh`
+uses the same functions for its two rewrites. **Must use:** a rewrite of
+an existing operator file in either script goes through
+`ad_replace_keeping_mode` and its backup through `ad_backup_keeping_mode`,
+never a bare tempfile and `mv`, a `cp -f` alone, or a `cp -p`;
+`ad_mode_of`, `ad_replace_keeping_mode` and `ad_backup_keeping_mode`
+exist in both scripts (install.sh, uninstall.sh) and change together.
+`test/install-sh/retry.sh`'s merge-modes table and
+`TestUninstallKeepsFileModes` pin this with `chmod` and `cp` stand-ins on
+`PATH`: each `.new` is 600 and each `.bak` holds only its original's owner
+bits before its `chmod` (retry.sh's `-written-owner-only` rows), and a
+`cp` that fails on `-p`/`--preserve`, as on NFS, is never hit (its
+`-no-cp-p` rows); a change adds its cases to both.
 
 #### Schema migration at install-time
 
@@ -4752,7 +4783,9 @@ agent-director with one script.
 │                                    and the store open that consumes it)
 ├── templates/                     (mode 0700; created lazily)
 │   └── <name>.toml                (mode 0600)
-├── config.toml                    (operator-owned; not created here)
+├── config.toml                    (operator-owned; a hooks-on install
+│                                    creates it, mode 0600, only when it
+│                                    is missing, and a merge keeps its mode)
 └── errors.log                     (touched on first hook-fire failure)
 
 ~/.local/bin/agent-director       → ~/.agent-director/bin/agent-director   (optional)
@@ -4841,7 +4874,10 @@ the optional PATH symlink, and the two hook entries it injected
 (matched by the install root prefix in their command string), and the
 `inject_help_hook` key the config merge set in `config.toml`'s
 `[defaults]` (see "The config.toml merge" above). Other
-user hooks in `SessionStart` / `SessionEnd` survive verbatim.
+user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
+rewrite of `settings.json` or `config.toml` takes a timestamped `.bak`
+first and keeps the file's mode, as install.sh's merges do (see "Merged
+files keep their mode" above).
 `~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.
 

@@ -1691,6 +1691,43 @@ fi
 # up — leaving settings.json byte-identical to its pre-install state.
 # --------------------------------------------------------------------
 
+# ad_mode_of <file> — print <file>'s permission bits in octal. stat -L
+# reads the mode of the file a symlinked <file> points at, not the link's
+# own 777; -c is GNU stat, -f BSD stat.
+ad_mode_of() {
+    stat -L -c '%a' "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
+}
+
+# ad_replace_keeping_mode <file> <text> — replace <file> with <text> and a
+# newline: write <file>.new beside it, then mv it over <file>. An existing
+# <file> keeps its permission bits (b.ojn): the new file is written
+# owner-only (umask 077) and only then given them, so no one who could not
+# read the old contents can read the new ones, even before the mv. A new
+# <file> takes the umask's mode.
+ad_replace_keeping_mode() {
+    local tmp="${1}.new"
+    rm -f "$tmp"
+    if [[ -f "$1" ]]; then
+        (umask 077; printf '%s\n' "$2" >"$tmp")
+        chmod "$(ad_mode_of "$1")" "$tmp"
+    else
+        printf '%s\n' "$2" >"$tmp"
+    fi
+    mv -f "$tmp" "$1"
+}
+
+# ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
+# permission bits, the same way (b.ojn): remove any <bak> first (an earlier
+# run's copy of the same second, at whatever mode it has), copy owner-only
+# (umask 077), then chmod. Not cp -p: GNU cp -p also copies ACLs and
+# xattrs, and fails where the file system cannot take them (NFS homes;
+# Ubuntu LP#2087769), which would stop the install here.
+ad_backup_keeping_mode() {
+    rm -f "$2"
+    (umask 077; cp -f "$1" "$2")
+    chmod "$(ad_mode_of "$1")" "$2"
+}
+
 if [[ "$NO_HOOKS" -eq 1 ]]; then
     echo "  hooks   : skipped (--no-hooks)"
 else
@@ -1742,14 +1779,12 @@ else
     # re-runs of the install will keep the most recent pre-edit copy.
     if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -f "$DEFAULT_SETTINGS_PATH" "$backup_settings"
+        ad_backup_keeping_mode "$DEFAULT_SETTINGS_PATH" "$backup_settings"
         echo "  backup  : $backup_settings"
     fi
 
-    # Atomic write: tempfile + mv.
-    tmp_settings="${DEFAULT_SETTINGS_PATH}.new"
-    printf '%s\n' "$new_settings" > "$tmp_settings"
-    mv -f "$tmp_settings" "$DEFAULT_SETTINGS_PATH"
+    # Atomic write: tempfile + mv, keeping an existing file's mode.
+    ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new_settings"
 
     echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
 fi
@@ -1771,7 +1806,7 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
     CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
     if [[ -f "$CONFIG_TOML" ]]; then
         backup_cfg="${CONFIG_TOML}.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -f "$CONFIG_TOML" "$backup_cfg"
+        ad_backup_keeping_mode "$CONFIG_TOML" "$backup_cfg"
         # awk merge: rewrite an existing inject_help_hook line under
         # [defaults] to =true; if [defaults] exists but lacks the key,
         # append it inside the section; if no [defaults] section exists
@@ -1814,9 +1849,7 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
                 }
             }
         ' "$CONFIG_TOML")
-        tmp_cfg="${CONFIG_TOML}.new"
-        printf '%s\n' "$merged" > "$tmp_cfg"
-        mv -f "$tmp_cfg" "$CONFIG_TOML"
+        ad_replace_keeping_mode "$CONFIG_TOML" "$merged"
         echo "  config  : merged inject_help_hook=true into $CONFIG_TOML (backup $backup_cfg)"
     else
         printf '[defaults]\ninject_help_hook = true\n' > "$CONFIG_TOML"

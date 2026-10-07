@@ -50,6 +50,36 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ad_mode_of, ad_replace_keeping_mode and ad_backup_keeping_mode are
+# install.sh's functions of the same names (b.ojn); keep them in step.
+#
+# ad_mode_of <file> — print <file>'s permission bits in octal (stat -L: a
+# symlink's target, not the link; -c is GNU stat, -f BSD stat).
+ad_mode_of() {
+    stat -L -c '%a' "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
+}
+
+# ad_replace_keeping_mode <file> <text> — replace the existing <file> with
+# <text> and a newline, keeping its permission bits: write <file>.new
+# owner-only (umask 077), give it <file>'s mode, then mv it over <file>.
+ad_replace_keeping_mode() {
+    local tmp="${1}.new"
+    rm -f "$tmp"
+    (umask 077; printf '%s\n' "$2" >"$tmp")
+    chmod "$(ad_mode_of "$1")" "$tmp"
+    mv -f "$tmp" "$1"
+}
+
+# ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
+# permission bits: remove any <bak> first, copy owner-only (umask 077),
+# then chmod. Not cp -p, which also copies ACLs and xattrs and fails where
+# the file system cannot take them (NFS homes; Ubuntu LP#2087769).
+ad_backup_keeping_mode() {
+    rm -f "$2"
+    (umask 077; cp -f "$1" "$2")
+    chmod "$(ad_mode_of "$1")" "$2"
+}
+
 # --------------------------------------------------------------------
 # Remove hook entries from ~/.claude/settings.json.
 # Match by command suffix " help" + path prefix matching the install
@@ -87,10 +117,8 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         # Backup-before-edit (symmetric with install.sh) so a regressed
         # jq filter is recoverable from a timestamped .bak.
         backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -f "$DEFAULT_SETTINGS_PATH" "$backup_settings"
-        tmp="${DEFAULT_SETTINGS_PATH}.new"
-        printf '%s\n' "$new" > "$tmp"
-        mv -f "$tmp" "$DEFAULT_SETTINGS_PATH"
+        ad_backup_keeping_mode "$DEFAULT_SETTINGS_PATH" "$backup_settings"
+        ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new"
         echo "uninstall.sh: backed up prior settings to $backup_settings"
         echo "uninstall.sh: removed help hook entries from $DEFAULT_SETTINGS_PATH"
     fi
@@ -159,10 +187,8 @@ if [[ -f "$CONFIG_TOML" ]]; then
     original=$(<"$CONFIG_TOML")
     if [[ "$cleaned" != "$original" ]]; then
         backup_cfg="${CONFIG_TOML}.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -f "$CONFIG_TOML" "$backup_cfg"
-        tmp_cfg="${CONFIG_TOML}.new"
-        printf '%s\n' "$cleaned" > "$tmp_cfg"
-        mv -f "$tmp_cfg" "$CONFIG_TOML"
+        ad_backup_keeping_mode "$CONFIG_TOML" "$backup_cfg"
+        ad_replace_keeping_mode "$CONFIG_TOML" "$cleaned"
         echo "uninstall.sh: cleared inject_help_hook from $CONFIG_TOML (backup $backup_cfg)"
     fi
 fi
