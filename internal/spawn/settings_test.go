@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -21,9 +21,31 @@ func withStubExe(t *testing.T, path string) {
 	t.Cleanup(func() { executablePath = saved })
 }
 
-// withStubHelpBin redirects helpHookBinPath for the duration of a test
-// so the inject_help_hook branch can assert on a known absolute path
-// without depending on the real $HOME.
+// TestExecutablePathResolvesSymlink pins SR-1.8 and b.ue3: the real
+// executablePath of a binary run through a symlink is the binary's own
+// resolved path, never the link, so hook commands name the installed file.
+func TestExecutablePathResolvesSymlink(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "agent-director")
+	if err := os.Symlink(want, link); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(link, "-test.run=^$") //nolint:gosec // the test binary itself, through the link
+	cmd.Env = append(os.Environ(), envExePathChild+"=1")
+	out, err := cmd.Output()
+	if got := string(out); err != nil || got != want || got == link {
+		t.Errorf("executablePath() run through %s = %q, %v; want %q", link, got, err, want)
+	}
+}
+
+// withStubHelpBin redirects helpHookBinPath for the duration of a test.
 func withStubHelpBin(t *testing.T, path string) {
 	t.Helper()
 	saved := helpHookBinPath
@@ -31,680 +53,79 @@ func withStubHelpBin(t *testing.T, path string) {
 	t.Cleanup(func() { helpHookBinPath = saved })
 }
 
-// settingsShape is the minimal JSON shape we assert on. Keeping it loose
-// (any-typed value for nested objects) lets the tests focus on the
-// presence-and-structure invariants rather than re-spec'ing Claude Code's
-// settings schema.
+// settingsShape is the part of the synthesized settings the permission tests read.
 type settingsShape struct {
 	Hooks       map[string]any `json:"hooks"`
 	Permissions map[string]any `json:"permissions"`
 }
 
-// isExecHook reports whether cmdEntry is an exec-form agent-director hook
-// for exe: "command" is exe verbatim and "args" is exactly ["hook"] (SR-22.9).
-func isExecHook(cmdEntry map[string]any, exe string) bool {
-	cmd, _ := cmdEntry["command"].(string)
-	return cmd == exe && equalStringList(cmdEntry["args"], []string{"hook"})
-}
-
-func TestSynthesizeSettingsContainsAllEightHooks(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/agent-director")
-	jsonStr, err := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	if err != nil {
-		t.Fatalf("synthesizeSettings: %v", err)
-	}
-	var got settingsShape
-	if err := json.Unmarshal([]byte(jsonStr), &got); err != nil {
-		t.Fatalf("Unmarshal: %v\n%s", err, jsonStr)
-	}
-	wantEvents := []string{
-		"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-		"Stop", "Notification", "SessionEnd", "PermissionRequest",
-	}
-	for _, evt := range wantEvents {
-		if _, ok := got.Hooks[evt]; !ok {
-			t.Errorf("hooks missing event %q", evt)
-		}
-	}
-	if got.Permissions != nil {
-		t.Errorf("permissions should be omitted when no overlay supplied; got %v", got.Permissions)
-	}
-}
-
-func TestSynthesizeSettingsMatcherFields(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/agent-director")
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	check := func(evt string, wantMatcher bool) {
-		entries, _ := hooks[evt].([]any)
-		if len(entries) != 1 {
-			t.Fatalf("%s: expected 1 entry, got %d", evt, len(entries))
-		}
-		entry, _ := entries[0].(map[string]any)
-		_, hasMatcher := entry["matcher"]
-		if hasMatcher != wantMatcher {
-			t.Errorf("%s: matcher present = %v; want %v", evt, hasMatcher, wantMatcher)
-		}
-		// Hook command structure: [{type:command, command:"<bin>", args:["hook"]}]
-		hooksList, _ := entry["hooks"].([]any)
-		if len(hooksList) != 1 {
-			t.Fatalf("%s: expected 1 hook command, got %d", evt, len(hooksList))
-		}
-		cmdEntry, _ := hooksList[0].(map[string]any)
-		if cmdEntry["type"] != "command" {
-			t.Errorf("%s: type = %v; want command", evt, cmdEntry["type"])
-		}
-		// SR-22.9: exec form — "hook" is the one arg, not a " hook" command suffix.
-		if !isExecHook(cmdEntry, "/usr/local/bin/agent-director") {
-			t.Errorf("%s: command/args = %v/%v; want exec form /usr/local/bin/agent-director [hook]", evt, cmdEntry["command"], cmdEntry["args"])
-		}
-	}
-	check("PreToolUse", true)
-	check("PermissionRequest", true)
-	check("SessionStart", false)
-	check("Stop", false)
-	check("SessionEnd", false)
-}
-
-func TestSynthesizeSettingsBinaryPathIsAbsolute(t *testing.T) {
-	withStubExe(t, "/opt/agent-director/bin/agent-director")
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	// SR-22.9: exec form carries the absolute path as the whole "command".
-	if !strings.Contains(jsonStr, `"command":"/opt/agent-director/bin/agent-director"`) {
-		t.Fatalf("settings JSON does not embed the absolute path: %s", jsonStr)
-	}
-}
-
-func TestSynthesizeSettingsPathWithWhitespaceIsVerbatim(t *testing.T) {
-	withStubExe(t, "/opt/with space/agent-director")
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	// Parse the JSON to see the command's *decoded* value. Comparing the raw
-	// JSON string would hit JSON's own backslash-escaping.
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	entries, _ := hooks["SessionStart"].([]any)
-	entry, _ := entries[0].(map[string]any)
-	hl, _ := entry["hooks"].([]any)
-	cmdEntry, _ := hl[0].(map[string]any)
-	// SR-22.9: an exec-form "command" is a program path, never shell-quoted.
-	if !isExecHook(cmdEntry, "/opt/with space/agent-director") {
-		t.Fatalf("command/args = %q/%v; want the unquoted path with args [hook]", cmdEntry["command"], cmdEntry["args"])
-	}
-}
-
-func TestSynthesizeSettingsPermissionsBlock(t *testing.T) {
-	withStubExe(t, "/bin/x")
-	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID: "id",
-		Permissions: &Permissions{
-			Allow: []string{"Bash(go test)"},
-			Deny:  []string{"Bash(rm -rf)"},
-			Ask:   []string{"WebFetch"},
-		},
-	}}
-	jsonStr, _ := synthesizeSettings(r, config.Default())
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	perm, ok := top["permissions"].(map[string]any)
-	if !ok {
-		t.Fatalf("permissions block missing")
-	}
-	if !equalStringList(perm["allow"], []string{"Bash(go test)"}) {
-		t.Errorf("allow = %v; want [Bash(go test)]", perm["allow"])
-	}
-	if !equalStringList(perm["deny"], []string{"Bash(rm -rf)"}) {
-		t.Errorf("deny = %v; want [Bash(rm -rf)]", perm["deny"])
-	}
-	if !equalStringList(perm["ask"], []string{"WebFetch"}) {
-		t.Errorf("ask = %v; want [WebFetch]", perm["ask"])
-	}
-}
-
-func TestSynthesizeSettingsDisableAskUserQuestionAlone(t *testing.T) {
-	withStubExe(t, "/bin/x")
-	cfg := config.Default()
-	cfg.Defaults.DisableAskUserQuestion = true
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		cfg,
-	)
-	var top map[string]any
-	_ = json.Unmarshal([]byte(jsonStr), &top)
-	perm, _ := top["permissions"].(map[string]any)
-	if !equalStringList(perm["deny"], []string{"AskUserQuestion"}) {
-		t.Fatalf("deny = %v; want [AskUserQuestion]", perm["deny"])
-	}
-}
-
-func TestSynthesizeSettingsDisableAskUserQuestionAdditive(t *testing.T) {
-	withStubExe(t, "/bin/x")
-	cfg := config.Default()
-	cfg.Defaults.DisableAskUserQuestion = true
-	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID: "id",
-		Permissions:      &Permissions{Deny: []string{"Bash(rm -rf)"}},
-	}}
-	jsonStr, _ := synthesizeSettings(r, cfg)
-	var top map[string]any
-	_ = json.Unmarshal([]byte(jsonStr), &top)
-	perm, _ := top["permissions"].(map[string]any)
-	want := []string{"AskUserQuestion", "Bash(rm -rf)"}
-	if !equalStringList(perm["deny"], want) {
-		t.Fatalf("deny = %v; want %v", perm["deny"], want)
-	}
-}
-
-func TestSynthesizeSettingsDisabledFalseLeavesDenyAlone(t *testing.T) {
-	withStubExe(t, "/bin/x")
-	cfg := config.Default()
-	cfg.Defaults.DisableAskUserQuestion = false
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		cfg,
-	)
-	if strings.Contains(jsonStr, "AskUserQuestion") {
-		t.Fatalf("settings JSON should not mention AskUserQuestion when disabled-flag=false: %s", jsonStr)
-	}
-}
-
-// TestSynthesizeSettingsInjectHelpHookTrue asserts that when the
-// inject_help_hook config flag is on, the SessionStart hook list grows
-// by exactly one entry whose command is "<canonical-bin> help" — the
-// hook agent-director's install.sh writes statically into
-// ~/.claude/settings.json. The pre-existing state-tracking SessionStart
-// entry must remain alongside it.
-func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/agent-director")
-	withStubHelpBin(t, "/home/operator/.agent-director/bin/agent-director")
-	cfg := config.Default()
-	cfg.Defaults.InjectHelpHook = true
-	jsonStr, err := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		cfg,
-	)
-	if err != nil {
-		t.Fatalf("synthesizeSettings: %v", err)
-	}
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v\n%s", err, jsonStr)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	entries, _ := hooks["SessionStart"].([]any)
-	if len(entries) != 2 {
-		t.Fatalf("SessionStart: got %d entries; want 2 (state-tracking + help-injection)", len(entries))
-	}
-	// Collect every command across all entries.
-	var commands []any
-	wantHelp := "/home/operator/.agent-director/bin/agent-director help"
-	var sawHook, sawHelp bool
-	for _, e := range entries {
-		entry, _ := e.(map[string]any)
-		hl, _ := entry["hooks"].([]any)
-		for _, h := range hl {
-			cmdEntry, _ := h.(map[string]any)
-			commands = append(commands, cmdEntry)
-			// SR-22.9: the state-tracking hook is exec form; help stays shell form.
-			if isExecHook(cmdEntry, "/usr/local/bin/agent-director") {
-				sawHook = true
-			}
-			if cmdEntry["command"] == wantHelp {
-				sawHelp = true
-			}
-		}
-	}
-	if !sawHook {
-		t.Errorf("state-tracking SessionStart hook missing; commands=%v", commands)
-	}
-	if !sawHelp {
-		t.Errorf("inject_help_hook command missing; commands=%v", commands)
-	}
-}
-
-// TestSynthesizeSettingsInjectHelpHookFalse asserts that when the
-// inject_help_hook config flag is off (default), the SessionStart hook
-// list shape is unchanged from today's behavior — exactly one entry,
-// the state-tracking hook. Tightens the regression surface around the
-// new conditional code path.
-func TestSynthesizeSettingsInjectHelpHookFalse(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/agent-director")
-	// Stub help-bin to a path that would be obvious if it leaked in.
-	withStubHelpBin(t, "/SHOULD-NOT-APPEAR/agent-director")
-	cfg := config.Default()
-	cfg.Defaults.InjectHelpHook = false
-	jsonStr, err := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		cfg,
-	)
-	if err != nil {
-		t.Fatalf("synthesizeSettings: %v", err)
-	}
-	if strings.Contains(jsonStr, "SHOULD-NOT-APPEAR") {
-		t.Fatalf("help-hook binary path leaked into JSON despite InjectHelpHook=false:\n%s", jsonStr)
-	}
-	if strings.Contains(jsonStr, " help") {
-		t.Fatalf("`help` command appeared in JSON despite InjectHelpHook=false:\n%s", jsonStr)
-	}
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	entries, _ := hooks["SessionStart"].([]any)
-	if len(entries) != 1 {
-		t.Fatalf("SessionStart: got %d entries; want 1 (state-tracking only)", len(entries))
-	}
-}
-
-// TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath confirms
-// that an install path containing whitespace ends up defensively
-// double-quoted in the help-hook command. The synth's pre-flight
-// blocks this in production (SRD §4.3), but the help entry is shell form
-// (unlike the exec-form state-tracking hooks, SR-22.9), so a hand-edited
-// install can't trigger a split-on-space bug.
-func TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/agent-director")
-	withStubHelpBin(t, "/opt/with space/agent-director")
-	cfg := config.Default()
-	cfg.Defaults.InjectHelpHook = true
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		cfg,
-	)
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	entries, _ := hooks["SessionStart"].([]any)
-	var found string
-	for _, e := range entries {
-		entry, _ := e.(map[string]any)
-		hl, _ := entry["hooks"].([]any)
-		for _, h := range hl {
-			cmdEntry, _ := h.(map[string]any)
-			cmd, _ := cmdEntry["command"].(string)
-			if strings.HasSuffix(cmd, " help") {
-				found = cmd
-			}
-		}
-	}
-	want := `"/opt/with space/agent-director" help`
-	if found != want {
-		t.Fatalf("help-hook command = %q; want %q", found, want)
-	}
-}
-
-// synthTop synthesizes settings with a stubbed exe path and returns the
-// parsed top-level object. Shared setup for the timeout tests below.
-func synthTop(t *testing.T, cfg config.Config) map[string]any {
+// synthSettings synthesizes r's settings under cfg, failing the test on an error.
+func synthSettings(t *testing.T, r Resolved, cfg config.Config) string {
 	t.Helper()
-	withStubExe(t, "/usr/local/bin/agent-director")
-	jsonStr, err := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		cfg,
-	)
+	r.ClaudeInstanceID = "id"
+	got, err := synthesizeSettings(r, cfg)
 	if err != nil {
 		t.Fatalf("synthesizeSettings: %v", err)
 	}
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v\n%s", err, jsonStr)
-	}
-	return top
+	return got
 }
 
-// innerCommand returns the single inner command object of event evt's first
-// hook entry (the sibling of "type"/"command" where "timeout" must land).
-func innerCommand(t *testing.T, top map[string]any, evt string) map[string]any {
-	t.Helper()
-	hooks, _ := top["hooks"].(map[string]any)
-	entries, _ := hooks[evt].([]any)
-	if len(entries) != 1 {
-		t.Fatalf("%s: expected 1 entry, got %d", evt, len(entries))
-	}
-	entry, _ := entries[0].(map[string]any)
-	hl, _ := entry["hooks"].([]any)
-	if len(hl) != 1 {
-		t.Fatalf("%s: expected 1 inner command, got %d", evt, len(hl))
-	}
-	cmd, _ := hl[0].(map[string]any)
-	return cmd
-}
-
-// TestSynthesizeSettingsRelayTimeout verifies SR-1.3: the inner command
-// object of both relay hook entries (PermissionRequest, PreToolUse) carries
-// a "timeout" equal to cfg.Relay.EffectiveTimeoutSeconds() — the same value
-// the poll loop's deadline uses. Default is 86400; a positive override flows
-// through verbatim, up to the largest value Load accepts, whose milliseconds
-// still fit Claude Code's 32-bit hook timer (b.8q2); 0 gives 86400 (never 0,
-// never an omitted key), and so does a Go caller's negative value, which Load
-// refuses. In every case SessionStart's timeout stays at
-// sessionStartHookTimeoutSeconds: it does not move with relay settings.
-func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
+// TestSynthesizeSettingsPermissions: the per-spawn overlay is written as given,
+// disable_ask_user_question adds AskUserQuestion to deny first, and with
+// neither the permissions block is omitted.
+func TestSynthesizeSettingsPermissions(t *testing.T) {
+	withStubExe(t, "/bin/x")
+	overlay := &Permissions{Allow: []string{"Bash(go test)"}, Deny: []string{"Bash(rm -rf)"}, Ask: []string{"WebFetch"}}
 	cases := []struct {
-		name    string
-		configd int // value written to cfg.Relay.TimeoutSeconds
-		want    float64
+		name       string
+		perms      *Permissions
+		disableAUQ bool
+		want       map[string]any
 	}{
-		{"default", config.DefaultRelayTimeoutSeconds, 86400},
-		{"override", 3600, 3600},
-		{"largest", config.MaxRelayTimeoutSeconds, 2147483},
-		{"zero_falls_back", 0, 86400},
-		{"negative_falls_back", -5, 86400},
+		{name: "none"},
+		{name: "overlay", perms: overlay,
+			want: map[string]any{"allow": []any{"Bash(go test)"}, "deny": []any{"Bash(rm -rf)"}, "ask": []any{"WebFetch"}}},
+		{name: "AskUserQuestion alone", disableAUQ: true, want: map[string]any{"deny": []any{"AskUserQuestion"}}},
+		{name: "AskUserQuestion before the overlay's deny", disableAUQ: true, perms: &Permissions{Deny: []string{"Bash(rm -rf)"}},
+			want: map[string]any{"deny": []any{"AskUserQuestion", "Bash(rm -rf)"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Default()
-			cfg.Relay.TimeoutSeconds = tc.configd
-			top := synthTop(t, cfg)
-			for _, evt := range []string{"PermissionRequest", "PreToolUse"} {
-				cmd := innerCommand(t, top, evt)
-				got, ok := cmd["timeout"]
-				if !ok {
-					t.Fatalf("%s: inner command missing 'timeout' key (must never be omitted); cmd=%v", evt, cmd)
-				}
-				// json.Unmarshal into any yields float64 for numbers.
-				if got != tc.want {
-					t.Errorf("%s: timeout = %v; want %v", evt, got, tc.want)
-				}
-				if secs, _ := got.(float64); secs*1000 > math.MaxInt32 {
-					t.Errorf("%s: timeout = %v s; its milliseconds overflow Claude Code's 32-bit hook timer", evt, got)
-				}
+			cfg.Defaults.DisableAskUserQuestion = tc.disableAUQ
+			var got settingsShape
+			if err := json.Unmarshal([]byte(synthSettings(t, Resolved{SpawnParams: SpawnParams{Permissions: tc.perms}}, cfg)), &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
 			}
-			ss := innerCommand(t, top, "SessionStart")
-			if got := ss["timeout"]; got != float64(sessionStartHookTimeoutSeconds) {
-				t.Errorf("SessionStart: timeout = %v; want %d regardless of relay config", got, sessionStartHookTimeoutSeconds)
+			if !reflect.DeepEqual(got.Permissions, tc.want) {
+				t.Errorf("permissions = %v; want %v", got.Permissions, tc.want)
 			}
 		})
 	}
 }
 
-// TestSynthesizeSettingsTimeoutOnInnerNotOuter verifies the "timeout" key
-// lands on the inner command object (sibling of type/command), never on the
-// outer matcher entry.
-func TestSynthesizeSettingsTimeoutOnInnerNotOuter(t *testing.T) {
-	top := synthTop(t, config.Default())
-	hooks, _ := top["hooks"].(map[string]any)
-	for _, evt := range []string{"PermissionRequest", "PreToolUse"} {
-		entries, _ := hooks[evt].([]any)
-		entry, _ := entries[0].(map[string]any)
-		if _, leaked := entry["timeout"]; leaked {
-			t.Errorf("%s: 'timeout' leaked onto the outer matcher entry; want it only on the inner command", evt)
+// TestSynthesizeSettingsRelayTimeout pins SR-1.3 and b.8q2: both relay hooks
+// carry the effective relay timeout (86400 for 0 or a negative value), whose
+// milliseconds fit Claude Code's 32-bit hook timer; SessionStart keeps 600 s.
+func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
+	const exe = "/opt/ad/bin/agent-director"
+	withStubExe(t, exe)
+	for _, tc := range []struct{ configured, want int }{
+		{config.DefaultRelayTimeoutSeconds, 86400}, {3600, 3600}, {config.MaxRelayTimeoutSeconds, 2147483}, {0, 86400}, {-5, 86400},
+	} {
+		cfg := config.Default()
+		cfg.Relay.TimeoutSeconds = tc.configured
+		if got := cfg.Relay.EffectiveTimeoutSeconds(); got != tc.want || float64(got)*1000 > math.MaxInt32 {
+			t.Errorf("timeout_seconds %d: effective %d; want %d, within a 32-bit millisecond timer", tc.configured, got, tc.want)
 		}
-		cmd := innerCommand(t, top, evt)
-		if _, ok := cmd["timeout"]; !ok {
-			t.Errorf("%s: inner command missing 'timeout'", evt)
-		}
+		assertExecFormSettings(t, synthSettings(t, Resolved{}, cfg), exe, "", cfg)
 	}
 }
 
 // TestSettingsSessionStartHookTimeoutIs600 pins the SessionStart hook timeout
-// constant at the SRD-mandated 600 s (SR-22.9). It is checked once here; the
-// other tests compare against the constant. The internal/hook wait cap must
-// stay below it (checked in internal/hook's own tests, not across packages).
+// at the SRD-mandated 600 s (SR-22.9); other tests compare against the constant.
 func TestSettingsSessionStartHookTimeoutIs600(t *testing.T) {
 	if sessionStartHookTimeoutSeconds != 600 {
 		t.Fatalf("sessionStartHookTimeoutSeconds = %d; want 600 (SR-22.9)", sessionStartHookTimeoutSeconds)
-	}
-}
-
-// TestSynthesizeSettingsTimeoutOnlyRelayAndSessionStart verifies where the
-// inner "timeout" key appears (SR-1.3, SR-22.9), with InjectHelpHook on:
-//   - PermissionRequest[0] and PreToolUse[0]: the relay timeout (checked for
-//     value in TestSynthesizeSettingsRelayTimeout).
-//   - SessionStart[0] (the agent-director hook entry):
-//     sessionStartHookTimeoutSeconds.
-//   - SessionStart[1] (the inject_help_hook entry), the other five events and
-//     every outer entry: no timeout.
-func TestSynthesizeSettingsTimeoutOnlyRelayAndSessionStart(t *testing.T) {
-	withStubHelpBin(t, "/home/operator/.agent-director/bin/agent-director")
-	cfg := config.Default()
-	cfg.Defaults.InjectHelpHook = true
-	top := synthTop(t, cfg)
-	hooks, _ := top["hooks"].(map[string]any)
-
-	if got, _ := hooks["SessionStart"].([]any); len(got) != 2 {
-		t.Fatalf("SessionStart: expected 2 entries (hook + help), got %d", len(got))
-	}
-	relay := map[string]bool{"PermissionRequest": true, "PreToolUse": true}
-	for evt, raw := range hooks {
-		entries, _ := raw.([]any)
-		for i, e := range entries {
-			entry, _ := e.(map[string]any)
-			if _, leaked := entry["timeout"]; leaked {
-				t.Errorf("%s[%d]: 'timeout' present on outer entry; never allowed", evt, i)
-			}
-			hl, _ := entry["hooks"].([]any)
-			for _, h := range hl {
-				cmd, _ := h.(map[string]any)
-				got, hasTimeout := cmd["timeout"]
-				switch {
-				case relay[evt] && i == 0:
-					if !hasTimeout {
-						t.Errorf("%s[%d]: relay event missing inner 'timeout'", evt, i)
-					}
-				case evt == "SessionStart" && i == 0:
-					// json.Unmarshal into any yields float64 for numbers.
-					if got != float64(sessionStartHookTimeoutSeconds) {
-						t.Errorf("%s[%d]: timeout = %v (present=%v); want %d", evt, i, got, hasTimeout, sessionStartHookTimeoutSeconds)
-					}
-				case hasTimeout:
-					// Includes SessionStart[1], the help-hook entry.
-					t.Errorf("%s[%d]: hook command must carry no 'timeout' key: %v", evt, i, cmd)
-				}
-			}
-		}
-	}
-}
-
-// equalStringList accepts either nil/[]string or []any (json.Unmarshal's
-// default for arrays) and reports element-by-element equality. Used by
-// permissions tests to compare against tightly-typed expectations.
-func equalStringList(got any, want []string) bool {
-	switch v := got.(type) {
-	case nil:
-		return len(want) == 0
-	case []string:
-		return reflect.DeepEqual(v, want)
-	case []any:
-		if len(v) != len(want) {
-			return false
-		}
-		for i := range v {
-			s, ok := v[i].(string)
-			if !ok || s != want[i] {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// TestSynthesizeSettingsRoundTrip parses the JSON back into Go and confirms
-// every event's command points at the abs path passed in. This guards
-// against regressions where a hook gets dropped or the command is rendered
-// without the full path.
-func TestSynthesizeSettingsRoundTrip(t *testing.T) {
-	abs, err := filepath.Abs("/usr/local/bin/agent-director")
-	if err != nil {
-		t.Fatalf("filepath.Abs: %v", err)
-	}
-	withStubExe(t, abs)
-	jsonStr, _ := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	for _, evt := range hookEvents {
-		entries, _ := hooks[string(evt)].([]any)
-		entry, _ := entries[0].(map[string]any)
-		hooksList, _ := entry["hooks"].([]any)
-		cmdEntry, _ := hooksList[0].(map[string]any)
-		cmd, _ := cmdEntry["command"].(string)
-		if !strings.Contains(cmd, abs) {
-			t.Errorf("event %s command %q does not contain abs path %q", evt, cmd, abs)
-		}
-	}
-}
-
-// TestExecutablePathResolvesSymlinks verifies SR-1.8: the hook-command
-// path written into settings.json is the symlink-resolved absolute path
-// of the running binary, not the symlink itself.  b.ue3 / Epic 5.
-func TestExecutablePathResolvesSymlinks(t *testing.T) {
-	// Stage a fake binary file and a symlink pointing at it; verify
-	// executablePath() returns the resolved real path.  We exercise the
-	// in-place EvalSymlinks step by re-running the production var (not
-	// the stub) against a controlled filesystem layout.
-	dir := t.TempDir()
-	realPath := filepath.Join(dir, "real-agent-director")
-	if err := os.WriteFile(realPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile real: %v", err)
-	}
-	symlinkPath := filepath.Join(dir, "linked-agent-director")
-	if err := os.Symlink(realPath, symlinkPath); err != nil {
-		t.Fatalf("Symlink: %v", err)
-	}
-	// Stub executablePath to return the symlink, then re-run the
-	// EvalSymlinks step the production var would have applied.
-	saved := executablePath
-	executablePath = func() (string, error) {
-		abs, err := filepath.Abs(symlinkPath)
-		if err != nil {
-			return "", err
-		}
-		resolved, err := filepath.EvalSymlinks(abs)
-		if err != nil {
-			return abs, nil
-		}
-		return resolved, nil
-	}
-	t.Cleanup(func() { executablePath = saved })
-
-	got, err := executablePath()
-	if err != nil {
-		t.Fatalf("executablePath: %v", err)
-	}
-	wantResolved, err := filepath.EvalSymlinks(realPath)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(realPath): %v", err)
-	}
-	if got != wantResolved {
-		t.Errorf("executablePath returned %q; want symlink-resolved %q", got, wantResolved)
-	}
-	if got == symlinkPath {
-		t.Errorf("executablePath returned the symlink path; expected resolved real path")
-	}
-}
-
-// TestSynthesizeSettingsPermissionRequestCaseBNoRelayShim verifies the
-// CASE B determination: the synthesized PermissionRequest hook is exactly
-// "<bin>" with args ["hook"] — no external relay-shim invocation, no trail-emit
-// sub-verb wrapper, no "relay" token in the command string.  CASE B means
-// relay is DB-poll-based and the in-process trail.Emit call in runRelay
-// handles the ad.relay_attempt.completed event directly.
-func TestSynthesizeSettingsPermissionRequestCaseBNoRelayShim(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/agent-director")
-	jsonStr, err := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	if err != nil {
-		t.Fatalf("synthesizeSettings: %v", err)
-	}
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	entries, _ := hooks["PermissionRequest"].([]any)
-	if len(entries) != 1 {
-		t.Fatalf("PermissionRequest: want 1 hook entry, got %d", len(entries))
-	}
-	entry, _ := entries[0].(map[string]any)
-	hooksList, _ := entry["hooks"].([]any)
-	if len(hooksList) != 1 {
-		t.Fatalf("PermissionRequest hooks list: want 1 command, got %d", len(hooksList))
-	}
-	cmdEntry, _ := hooksList[0].(map[string]any)
-	cmd, _ := cmdEntry["command"].(string)
-	// SR-22.9: exec form — the path as command, "hook" as the one arg.
-	if !isExecHook(cmdEntry, "/usr/local/bin/agent-director") {
-		t.Fatalf("PermissionRequest command/args = %q/%v; want /usr/local/bin/agent-director [hook] (CASE B: no relay-shim)", cmd, cmdEntry["args"])
-	}
-	// CASE B guard: no relay-shim or external-process trail-emit tokens.
-	for _, forbidden := range []string{"shim", "trail-emit", "relay-attempt"} {
-		if strings.Contains(cmd, forbidden) {
-			t.Errorf("CASE B violation: command %q contains relay-shim token %q", cmd, forbidden)
-		}
-	}
-}
-
-// TestSynthesizeSettingsHookCommandsAreAbsolute verifies SR-1.8: every
-// hook command starts with "/" (absolute) and never contains the bare
-// token "agent-director " or shell-variable references.
-// b.ue3 / Epic 5.
-func TestSynthesizeSettingsHookCommandsAreAbsolute(t *testing.T) {
-	withStubExe(t, "/opt/ad/bin/agent-director")
-	jsonStr, err := synthesizeSettings(
-		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
-		config.Default(),
-	)
-	if err != nil {
-		t.Fatalf("synthesizeSettings: %v", err)
-	}
-	var top map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	hooks, _ := top["hooks"].(map[string]any)
-	forbidden := []string{"$0", "${0}", "$(command -v"}
-	for evt, raw := range hooks {
-		entries, _ := raw.([]any)
-		for _, e := range entries {
-			entry, _ := e.(map[string]any)
-			hooksList, _ := entry["hooks"].([]any)
-			for _, h := range hooksList {
-				hm, _ := h.(map[string]any)
-				cmd, _ := hm["command"].(string)
-				if !strings.HasPrefix(cmd, "/") && !strings.HasPrefix(cmd, "\"/") {
-					t.Errorf("event %s: command %q is not absolute", evt, cmd)
-				}
-				if strings.HasPrefix(cmd, "agent-director ") {
-					t.Errorf("event %s: command %q starts with bare 'agent-director' token", evt, cmd)
-				}
-				for _, f := range forbidden {
-					if strings.Contains(cmd, f) {
-						t.Errorf("event %s: command %q contains forbidden token %q", evt, cmd, f)
-					}
-				}
-			}
-		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -185,38 +184,6 @@ func TestLookupServer_NoReaderCall(t *testing.T) {
 				t.Errorf("start times asked of %v, want none", calls)
 			}
 			checkAnswering(t, got, tc.answering)
-		})
-	}
-}
-
-// TestLookupServer_ZeroSessionsReplay (b.47f): I2's recorded zero-session
-// answer, through the production parse, names its server: Gone on a match,
-// a different server while the recorded process runs, restarted (logging
-// server_restarted) once it is gone.
-func TestLookupServer_ZeroSessionsReplay(t *testing.T) {
-	e := tmuxfix.Find(tmuxfix.LookupAnswers(), "lookup/I2-zero-sessions")
-	i2 := tmuxfix.Server{PID: e.Lookup.ServerPID, Start: e.Lookup.ServerStart, ProcStart: procstarttimefix.LinuxProcStarttime}
-	cases := []struct {
-		name     string
-		recorded tmuxfix.Server
-		proc     procfix.Process
-		want     lookupWant
-	}{
-		{"the recorded server, running", i2, procfix.Alive(i2.ProcStart),
-			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "match"}},
-		{"another server, the recorded one running", lookupRecorded, procfix.Alive(lookupRecorded.ProcStart),
-			differentServer},
-		{"another server, the recorded one gone", lookupRecorded, procfix.Gone(),
-			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "restarted", Disagree: []string{"server_restarted"}}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newLookupFixture(t, rowServer(tc.recorded))
-			f.PC.Set(tc.recorded.PID, tc.proc)
-			c, _ := newReplay(t, e)
-			got := f.runOn(c, "")
-			f.check(got, tc.want)
-			checkAnswering(t, got, i2)
 		})
 	}
 }

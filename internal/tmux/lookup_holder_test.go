@@ -81,105 +81,81 @@ func TestLookup_HolderStoredForms(t *testing.T) {
 }
 
 // TestLookup_HolderOnEveryVerdict: the holder, its class and case words are
-// reported on every verdict that read an answer, and absent on the others.
+// reported on every verdict that read an answer, and absent on the others or
+// when no listed session holds the name; asking for a name changes only the
+// holder fields.
 func TestLookup_HolderOnEveryVerdict(t *testing.T) {
 	n := escapedName(t)
-	cases := []struct {
+	seedAs := func(k lbl) func(f *lookupFixture) { return func(f *lookupFixture) { f.seedNamed(n.Stored, k) } }
+	held := func(v tmux.Verdict, token string, class tmux.LabelClass) lookupWant {
+		return lookupWant{Verdict: v, Token: token, Server: tmux.ServerMatch, Holder: at{0}, HolderClass: class}
+	}
+	type holderCase struct {
 		name  string
 		opts  []lookupRowOpt
 		setup func(f *lookupFixture)
 		want  lookupWant
 		words string
-	}{
-		{name: "ours/holder-is-own-session",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblCurrent) },
-			want: lookupWant{Verdict: tmux.Ours, Token: "ours", Server: tmux.ServerMatch, Ours: at{0},
-				Holder: at{0}, HolderClass: tmux.ClassCurrent}},
-		{name: "ours/holder-old",
-			setup: func(f *lookupFixture) { f.seed(lblCurrent).seedNamed(n.Stored, lblOld) },
-			want: lookupWant{Verdict: tmux.Ours, Token: "ours", Server: tmux.ServerMatch, Ours: at{0},
-				Leftovers: at{1}, Holder: at{1}, HolderClass: tmux.ClassOld},
-			words: "left over from an earlier life"},
-		{name: "leftover/holder-old",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblOld) },
-			want: lookupWant{Verdict: tmux.Leftover, Token: "leftover", Server: tmux.ServerMatch, Leftovers: at{0},
-				Holder: at{0}, HolderClass: tmux.ClassOld},
-			words: "left over from an earlier life"},
-		{name: "gone/holder-foreign",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblForeign) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassForeign},
-			words: "a different instance id"},
-		{name: "gone/holder-other-store-row-id-and-token",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblOtherStore) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassOtherStore},
-			words: "another agent-director store"},
-		{name: "gone/holder-other-store-old",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblOtherStoreOld) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassOtherStore},
-			words: "another agent-director store"},
-		{name: "gone/holder-other-store-foreign",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblOtherStoreForeign) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassOtherStore},
-			words: "another agent-director store"},
-		{name: "gone/row-without-store-id", opts: []lookupRowOpt{rowNoStoreID},
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblCurrent) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassOtherStore},
-			words: "another agent-director store"},
-		{name: "gone/holder-invalid-label",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblNone) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassNone},
-			words: "no valid instance id"},
-		{name: "gone/holder-unlabelled",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblUnset) },
-			want: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch,
-				Holder: at{0}, HolderClass: tmux.ClassNone},
-			words: "no valid instance id"},
-		{name: "ours/server-restarted",
-			setup: func(f *lookupFixture) {
-				f.Rec.RestartServer(testSocket, lookupOther)
-				f.syncProcs().seedNamed(n.Stored, lblCurrent)
-			},
-			want: lookupWant{Verdict: tmux.Ours, Token: "ours", Server: tmux.ServerRestarted, Ours: at{0},
-				Holder: at{0}, HolderClass: tmux.ClassCurrent, Disagree: []string{tmux.ReasonServerRestarted}}},
-		{name: "different-server",
-			setup: func(f *lookupFixture) {
-				f.Rec.RebindServer(testSocket, lookupOther)
-				f.syncProcs().seedNamed(n.Stored, lblForeign)
-			},
-			want: lookupWant{Verdict: tmux.CantTell, CantTell: tmux.CantTellDifferentServer, Token: "different_server",
-				Server: tmux.ServerDiffers, Holder: at{0}, HolderClass: tmux.ClassForeign,
-				Disagree: []string{tmux.ReasonServerMismatch}},
-			words: "a different instance id"},
+	}
+	ours, old := held(tmux.Ours, "ours", tmux.ClassCurrent), held(tmux.Ours, "ours", tmux.ClassOld)
+	ours.Ours, old.Ours, old.Leftovers, old.Holder = at{0}, at{0}, at{1}, at{1}
+	leftover := held(tmux.Leftover, "leftover", tmux.ClassOld)
+	leftover.Leftovers = at{0}
+	restarted := ours
+	restarted.Server, restarted.Disagree = tmux.ServerRestarted, []string{tmux.ReasonServerRestarted}
+	different := held(tmux.CantTell, "different_server", tmux.ClassForeign)
+	different.CantTell, different.Server, different.Disagree = tmux.CantTellDifferentServer, tmux.ServerDiffers, []string{tmux.ReasonServerMismatch}
+	duplicate := held(tmux.CantTell, "provenance_conflict", tmux.ClassCurrent)
+	duplicate.CantTell, duplicate.Disagree = tmux.CantTellProvenanceConflict, []string{tmux.ReasonDuplicateLabel}
+	scope := held(tmux.CantTell, "provenance_conflict", tmux.ClassOld)
+	scope.CantTell, scope.Disagree = tmux.CantTellProvenanceConflict, []string{tmux.ReasonScopeValue}
+	const lifeWords, storeWords = "left over from an earlier life", "another agent-director store"
+	cases := []holderCase{
+		{name: "ours/holder-is-own-session", setup: seedAs(lblCurrent), want: ours},
+		{name: "ours/holder-old", setup: func(f *lookupFixture) { f.seed(lblCurrent).seedNamed(n.Stored, lblOld) },
+			want: old, words: lifeWords},
+		{name: "ours/name-not-held", setup: func(f *lookupFixture) { f.seedNamed(dollarNames()[1].Stored, lblCurrent) },
+			want: lookupWant{Verdict: tmux.Ours, Token: "ours", Server: tmux.ServerMatch, Ours: at{0}}},
+		{name: "leftover/holder-old", setup: seedAs(lblOld), want: leftover, words: lifeWords},
+		{name: "ours/server-restarted", setup: func(f *lookupFixture) {
+			f.Rec.RestartServer(testSocket, lookupOther)
+			f.syncProcs().seedNamed(n.Stored, lblCurrent)
+		}, want: restarted},
+		{name: "different-server", setup: func(f *lookupFixture) {
+			f.Rec.RebindServer(testSocket, lookupOther)
+			f.syncProcs().seedNamed(n.Stored, lblForeign)
+		}, want: different, words: "a different instance id"},
 		{name: "provenance-conflict/duplicate-label",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblCurrent).seed(lblCurrent) },
-			want: lookupWant{Verdict: tmux.CantTell, CantTell: tmux.CantTellProvenanceConflict, Token: "provenance_conflict",
-				Server: tmux.ServerMatch, Holder: at{0}, HolderClass: tmux.ClassCurrent,
-				Disagree: []string{tmux.ReasonDuplicateLabel}}},
-		{name: "provenance-conflict/scope-value",
-			setup: func(f *lookupFixture) {
-				f.seedNamed(n.Stored, lblOld)
-				f.Rec.SetScope(testSocket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{SessionID: f.ID(0), Label: f.Label(lblCurrent)})
-			},
-			want: lookupWant{Verdict: tmux.CantTell, CantTell: tmux.CantTellProvenanceConflict, Token: "provenance_conflict",
-				Server: tmux.ServerMatch, Holder: at{0}, HolderClass: tmux.ClassOld, Disagree: []string{tmux.ReasonScopeValue}},
-			words: "left over from an earlier life"},
+			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblCurrent).seed(lblCurrent) }, want: duplicate},
+		{name: "provenance-conflict/scope-value", setup: func(f *lookupFixture) {
+			f.seedNamed(n.Stored, lblOld)
+			f.Rec.SetScope(testSocket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{SessionID: f.ID(0), Label: f.Label(lblCurrent)})
+		}, want: scope, words: lifeWords},
 		{name: "gone/no-server-reply",
 			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblForeign).noServer(tmux.FailNoServer).syncProcs() },
 			want:  lookupWant{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerRestarted}},
-		{name: "unreadable",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblForeign).fail(tmux.FailTimeout) },
-			want: lookupWant{Verdict: tmux.CantTell, CantTell: tmux.CantTellUnreadable, Token: "cant_tell",
-				Cause: tmux.FailTimeout}},
-		{name: "tmux-unavailable",
-			setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblForeign).fail(tmux.FailUnavailable) },
-			want: lookupWant{Verdict: tmux.CantTell, CantTell: tmux.CantTellUnavailable, Token: "tmux_unavailable",
-				Cause: tmux.FailUnavailable}},
+		{name: "unreadable", setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblForeign).fail(tmux.FailTimeout) },
+			want: wantUnreadable(tmux.FailTimeout)},
+		{name: "tmux-unavailable", setup: func(f *lookupFixture) { f.seedNamed(n.Stored, lblForeign).fail(tmux.FailUnavailable) },
+			want: wantUnavailable(tmux.FailUnavailable)},
+	}
+	for _, g := range []struct {
+		name  string
+		opts  []lookupRowOpt
+		k     lbl
+		class tmux.LabelClass
+		words string
+	}{
+		{"holder-foreign", nil, lblForeign, tmux.ClassForeign, "a different instance id"},
+		{"holder-other-store-row-id-and-token", nil, lblOtherStore, tmux.ClassOtherStore, storeWords},
+		{"holder-other-store-old", nil, lblOtherStoreOld, tmux.ClassOtherStore, storeWords},
+		{"holder-other-store-foreign", nil, lblOtherStoreForeign, tmux.ClassOtherStore, storeWords},
+		{"row-without-store-id", []lookupRowOpt{rowNoStoreID}, lblCurrent, tmux.ClassOtherStore, storeWords},
+		{"holder-invalid-label", nil, lblNone, tmux.ClassNone, "no valid instance id"},
+		{"holder-unlabelled", nil, lblUnset, tmux.ClassNone, "no valid instance id"},
+	} {
+		cases = append(cases, holderCase{name: "gone/" + g.name, opts: g.opts, setup: seedAs(g.k),
+			want: held(tmux.Gone, "gone", g.class), words: g.words})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,33 +165,11 @@ func TestLookup_HolderOnEveryVerdict(t *testing.T) {
 			if w := got.HolderClass.CaseWords(); w != tc.words {
 				t.Errorf("holder case words %q, want %q", w, tc.words)
 			}
-		})
-	}
-}
-
-// TestLookup_HolderNotHeld: a name no listed session holds, or no name, gives
-// no holder, no Can't tell and the labels' verdict.
-func TestLookup_HolderNotHeld(t *testing.T) {
-	names := dollarNames()
-	n, other := names[0], names[1]
-	cases := []struct {
-		name   string
-		holder string
-		setup  func(f *lookupFixture)
-		want   lookupWant
-	}{
-		{name: "other-name-listed", holder: n.Raw,
-			setup: func(f *lookupFixture) { f.seedNamed(other.Stored, lblCurrent) },
-			want:  lookupWant{Verdict: tmux.Ours, Token: "ours", Server: tmux.ServerMatch, Ours: at{0}}},
-		{name: "no-name-asked", holder: "",
-			setup: func(f *lookupFixture) { f.seed(lblOld) },
-			want:  lookupWant{Verdict: tmux.Leftover, Token: "leftover", Server: tmux.ServerMatch, Leftovers: at{0}}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newLookupFixture(t)
-			tc.setup(f)
-			f.expect(tc.holder, tc.want)
+			unasked := f.run("")
+			got.Holder, got.HolderClass = nil, 0
+			if !reflect.DeepEqual(got, unasked) {
+				t.Errorf("with the holder %+v, without %+v", got, unasked)
+			}
 		})
 	}
 }
@@ -241,30 +195,6 @@ func TestLookup_HolderAmbiguous(t *testing.T) {
 			f := newLookupFixture(t).seedNamed(n.Raw, tc.raw).seedNamed(n.Stored, tc.esc)
 			tc.want.Server, tc.want.HolderAmbiguous = tmux.ServerMatch, true
 			f.expect(n.Raw, tc.want)
-		})
-	}
-}
-
-// TestLookup_HolderNeverChangesVerdict: asking for the name a session holds
-// changes only the holder fields of the Result.
-func TestLookup_HolderNeverChangesVerdict(t *testing.T) {
-	n := escapedName(t)
-	kinds := []struct {
-		name string
-		k    lbl
-	}{{"current", lblCurrent}, {"old", lblOld}, {"foreign", lblForeign}, {"other-store", lblOtherStore},
-		{"none", lblNone}, {"unset", lblUnset}}
-	for _, tc := range kinds {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newLookupFixture(t).seedNamed(n.Stored, tc.k)
-			held, unasked := f.run(n.Raw), f.run("")
-			if held.Holder == nil {
-				t.Fatalf("no holder for %q listed as %q", n.Raw, n.Stored)
-			}
-			held.Holder, held.HolderClass = nil, 0
-			if !reflect.DeepEqual(held, unasked) {
-				t.Errorf("with the holder %+v, without %+v", held, unasked)
-			}
 		})
 	}
 }

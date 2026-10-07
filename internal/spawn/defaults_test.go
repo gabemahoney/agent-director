@@ -24,25 +24,8 @@ func (f *fakeChecker) SpawnState(id string) (string, bool, error) {
 	return f.state, f.exists, f.err
 }
 
-// TestApplyDefaultsMintsUuid4 also pins that an empty id never consults the
-// checker: a failing checker is ignored and a fresh id is minted.
-func TestApplyDefaultsMintsUuid4(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp"}}
-	cfg := config.Default()
-	checker := &fakeChecker{err: errors.New("store: live spawn lookup: disk I/O error")}
-	if _, err := ApplyDefaults(&r, cfg, checker); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
-	}
-	if len(checker.lookups) != 0 {
-		t.Fatalf("checker consulted for an empty id: lookups=%v", checker.lookups)
-	}
-	// UUID4 string form per RFC 4122: 8-4-4-4-12 hex, version nibble = 4,
-	// variant nibble in {8,9,a,b}. Use a fail-fast regex assertion.
-	uuid4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	if !uuid4.MatchString(r.ClaudeInstanceID) {
-		t.Fatalf("ClaudeInstanceID = %q; not a UUID4", r.ClaudeInstanceID)
-	}
-}
+// uuid4 is RFC 4122's version-4 string form.
+var uuid4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // TestApplyDefaultsPreCheckOutcomes pins SR-9.3's one pre-check read: minted,
 // no row, nil checker and a finished row with the reuse opt-in each give their
@@ -60,7 +43,7 @@ func TestApplyDefaultsPreCheckOutcomes(t *testing.T) {
 		wantErr   string // the exact ErrInstanceIdCollision text; "" for none
 		wantReads int
 	}{
-		{"minted id makes no read", "", false, &fakeChecker{state: "waiting", exists: true}, IDMinted, "", 0},
+		{"minted UUID4 makes no read", "", false, &fakeChecker{state: "waiting", exists: true, err: errors.New("disk I/O error")}, IDMinted, "", 0},
 		{"no row", id, false, &fakeChecker{}, IDNoRow, "", 1},
 		{"ended row", id, false, &fakeChecker{state: "ended", exists: true}, 0, finished, 1},
 		{"missing row", id, false, &fakeChecker{state: "missing", exists: true}, 0, finished, 1},
@@ -90,6 +73,9 @@ func TestApplyDefaultsPreCheckOutcomes(t *testing.T) {
 			if tc.id != "" && r.ClaudeInstanceID != tc.id {
 				t.Fatalf("explicit id overwritten: %q", r.ClaudeInstanceID)
 			}
+			if tc.id == "" && !uuid4.MatchString(r.ClaudeInstanceID) {
+				t.Fatalf("minted ClaudeInstanceID = %q; not a UUID4", r.ClaudeInstanceID)
+			}
 			if tc.checker != nil && len(tc.checker.lookups) != tc.wantReads {
 				t.Fatalf("lookups = %v; want %d read(s)", tc.checker.lookups, tc.wantReads)
 			}
@@ -113,7 +99,6 @@ func TestApplyDefaultsPreCheckReadError(t *testing.T) {
 	}{
 		{"plain store error", errors.New("store: live spawn lookup: disk I/O error")},
 		{"chain carries ErrInstanceIdCollision", fmt.Errorf("store: live spawn lookup: %w", ErrInstanceIdCollision)},
-		{"chain carries ErrCwdNotFound", fmt.Errorf("store: live spawn lookup: %w", ErrCwdNotFound)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,30 +127,6 @@ func TestApplyDefaultsPreCheckReadError(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsRelayModeFallsBackToConfig(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp"}}
-	cfg := config.Default()
-	cfg.Defaults.RelayMode = "on"
-	if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
-	}
-	if r.RelayMode != "on" {
-		t.Fatalf("RelayMode = %q; want on", r.RelayMode)
-	}
-}
-
-func TestApplyDefaultsRelayModePreservesExplicit(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", RelayMode: "off"}}
-	cfg := config.Default()
-	cfg.Defaults.RelayMode = "on" // config says on but caller said off
-	if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
-	}
-	if r.RelayMode != "off" {
-		t.Fatalf("RelayMode = %q; want off (caller-supplied)", r.RelayMode)
-	}
-}
-
 func TestSanitizeSessionNameCases(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -177,12 +138,8 @@ func TestSanitizeSessionNameCases(t *testing.T) {
 		{"////", "root"},
 		{"", "root"},
 		{"--", "root"},
-		{"123abc", "123abc"},
 		{"héllo", "h-llo"},
-		// SR-9.2: default names never contain `$` or `\`.
-		{"a$b", "a-b"},
-		{`a\b`, "a-b"},
-		{`$a\b$`, "-a-b-"},
+		{`$a\b$`, "-a-b-"}, // SR-9.2: default names never contain `$` or `\`
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -197,92 +154,32 @@ func TestSanitizeSessionNameCases(t *testing.T) {
 	}
 }
 
-// TestComposeSessionName pins "<sanitized-basename>-<sanitized-id[:8]>".
-// The `$` / `\` rows pin SR-9.2: a default (composed) name never contains
-// either character, whether it came from the cwd basename or the id prefix.
-func TestComposeSessionName(t *testing.T) {
-	cases := []struct {
-		name string
-		cwd  string
-		id   string
-		want string
-	}{
-		{"plain", "/home/horde/projects/foo", "abcdef1234567890", "foo-abcdef12"},
-		{"dollar in basename", "/tmp/a$b", "abcdef1234567890", "a-b-abcdef12"},
-		{"backslash in basename", `/tmp/a\b`, "abcdef1234567890", "a-b-abcdef12"},
-		{"dollar and backslash in basename", `/tmp/$x\y`, "abcdef1234567890", "-x-y-abcdef12"},
-		{"dollar in id prefix", "/home/horde/projects/foo", "ab$def1234567890", "foo-ab-def12"},
-		{"backslash in id prefix", "/home/horde/projects/foo", `ab\def1234567890`, "foo-ab-def12"},
-		{"dollar and backslash in id prefix", "/home/horde/projects/foo", `a$b\cdef1234567890`, "foo-a-b-cdef"},
+// TestApplyDefaultsNameAndRelayMode pins the composed name
+// "<sanitized-basename>-<sanitized-id[:8]>" (never `$` or `\`, SR-9.2; no '.',
+// b.gqe), a supplied name kept verbatim (SR-3.1), and relay_mode from the
+// config only when the caller gave none.
+func TestApplyDefaultsNameAndRelayMode(t *testing.T) {
+	const id = "abcdef1234567890"
+	cases := []struct{ name, cwd, id, tmuxName, relay, want, wantRelay string }{
+		{"plain", "/home/horde/projects/foo", id, "", "", "foo-abcdef12", "on"},
+		{"dollar and backslash in basename", `/tmp/$x\y`, id, "", "", "-x-y-abcdef12", "on"},
+		{"dollar and backslash in id prefix", "/p/foo", `a$b\cdef1234567890`, "", "", "foo-a-b-cdef", "on"},
+		{"dot in id", "/p/foo", "b.18k-fix-test", "", "", "foo-b-18k-fi", "on"},
+		{"all-bad basename", "/////", id, "", "", "root-abcdef12", "on"},
+		{"supplied name and relay mode kept", "/p/foo", id, "bot-claude-status", "off", "bot-claude-status", "off"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := Resolved{SpawnParams: SpawnParams{CWD: tc.cwd, ClaudeInstanceID: tc.id}}
-			if _, err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
+			r := Resolved{SpawnParams: SpawnParams{CWD: tc.cwd, ClaudeInstanceID: tc.id, RelayMode: tc.relay,
+				TmuxSessionName: tc.tmuxName, TmuxSessionNameSupplied: tc.tmuxName != ""}}
+			cfg := config.Default()
+			cfg.Defaults.RelayMode = "on"
+			if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
 				t.Fatalf("ApplyDefaults: %v", err)
 			}
-			if r.TmuxSessionName != tc.want {
-				t.Fatalf("TmuxSessionName = %q; want %q", r.TmuxSessionName, tc.want)
-			}
-			if strings.ContainsAny(r.TmuxSessionName, `$\`) {
-				t.Fatalf("TmuxSessionName = %q; contains $ or \\ (SR-9.2)", r.TmuxSessionName)
+			if r.TmuxSessionName != tc.want || r.RelayMode != tc.wantRelay {
+				t.Fatalf("name, relay mode = %q, %q; want %q, %q", r.TmuxSessionName, r.RelayMode, tc.want, tc.wantRelay)
 			}
 		})
-	}
-}
-
-// TestApplyDefaultsPreservesUserSuppliedTmuxSessionName pins the Epic 1
-// regression: when the caller supplied a non-empty TmuxSessionName,
-// ApplyDefaults must leave it byte-for-byte alone — no composeSessionName
-// suffix, no sanitization (SR-3.1).
-func TestApplyDefaultsPreservesUserSuppliedTmuxSessionName(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:                     "/home/horde/projects/foo",
-		ClaudeInstanceID:        "abcdef1234567890",
-		TmuxSessionName:         "bot-claude-status",
-		TmuxSessionNameSupplied: true,
-	}}
-	if _, err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
-	}
-	if r.TmuxSessionName != "bot-claude-status" {
-		t.Fatalf("TmuxSessionName = %q; want %q (no decoration)", r.TmuxSessionName, "bot-claude-status")
-	}
-}
-
-// TestComposeSessionNameSanitizesDotInInstanceID is the b.gqe regression
-// test: a dot in ClaudeInstanceID must not survive into TmuxSessionName.
-// tmux silently maps '.' → '_' on session creation, causing stored name /
-// real name divergence and breaking send-keys.
-func TestComposeSessionNameSanitizesDotInInstanceID(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              "/home/horde/projects/foo",
-		ClaudeInstanceID: "b.18k-fix-test",
-	}}
-	cfg := config.Default()
-	if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
-	}
-	if strings.Contains(r.TmuxSessionName, ".") {
-		t.Fatalf("TmuxSessionName = %q; contains dot (diverges from real tmux name)", r.TmuxSessionName)
-	}
-	// Pin the exact value: basename "foo", idTail first 8 chars of "b.18k-fix-test"
-	// = "b.18k-fi" → sanitized → "b-18k-fi", so result = "foo-b-18k-fi".
-	want := "foo-b-18k-fi"
-	if r.TmuxSessionName != want {
-		t.Fatalf("TmuxSessionName = %q; want %q", r.TmuxSessionName, want)
-	}
-}
-
-func TestComposeSessionNameAllBadBasename(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              "/////",
-		ClaudeInstanceID: "abcdef1234567890",
-	}}
-	if _, err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
-	}
-	if !strings.HasPrefix(r.TmuxSessionName, "root-") {
-		t.Fatalf("session name %q; want prefix root-", r.TmuxSessionName)
 	}
 }

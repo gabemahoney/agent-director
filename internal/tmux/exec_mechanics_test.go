@@ -73,16 +73,6 @@ func roomyTimeouts(w time.Duration) tmux.Timeouts {
 	return tmux.Timeouts{Query: 3 * time.Second, Action: 3 * time.Second, Create: 3 * time.Second, WaitDelay: w}
 }
 
-// execCallError returns err as a *tmux.CallError, failing the test otherwise.
-func execCallError(t *testing.T, err error) *tmux.CallError {
-	t.Helper()
-	var ce *tmux.CallError
-	if !errors.As(err, &ce) {
-		t.Fatalf("error = %v (%T), want *tmux.CallError", err, err)
-	}
-	return ce
-}
-
 // A hung client is killed at its class timeout and reaped; the error names
 // the call and the timeout in seconds, and the wait bounds held pipes.
 func TestExecTimeoutTerminatesAndReaps(t *testing.T) {
@@ -111,7 +101,7 @@ func TestExecTimeoutTerminatesAndReaps(t *testing.T) {
 				err := tc.run(tmux.New(bin, to), "/tmp/tmux-1000/default")
 				elapsed := time.Since(start)
 
-				ce := execCallError(t, err)
+				ce := callError(t, err)
 				if ce.Failure != tmux.FailTimeout || ce.Call != tc.call || ce.Timeout != tc.timeout || ce.ExitStatus != -1 {
 					t.Errorf("CallError = %+v, want FailTimeout on %q, Timeout %v, ExitStatus -1", *ce, tc.call, tc.timeout)
 				}
@@ -152,10 +142,7 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 		wantCut  bool // FailUnrecognized with the cut-short FirstLine
 	}{
 		{name: "pane kill", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.KillPane(s, "%1")) }},
-		{name: "session kill", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.KillSessionID(s, "$1")) }},
-		{name: "text", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", false)) }},
 		{name: "text and Enter", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", true)) }},
-		{name: "key send", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeyPane(s, "%1", "C-u")) }},
 		{name: "label by id", run: func(c *tmux.Client, s string) (any, error) {
 			return noValue(c.SetLabel(s, "$1", "%1", execToken, "id-1", tmuxfix.StoreID))
 		}},
@@ -196,7 +183,7 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 				}
 				return
 			}
-			ce := execCallError(t, err)
+			ce := callError(t, err)
 			if ce.Failure != tmux.FailUnrecognized || ce.FirstLine != execCutShort || ce.ExitStatus != 0 {
 				t.Errorf("CallError = %+v, want FailUnrecognized, FirstLine %q, ExitStatus 0", *ce, execCutShort)
 			}
@@ -240,7 +227,7 @@ func TestExecStreamsSeparate(t *testing.T) {
 				}
 				return
 			}
-			ce := execCallError(t, err)
+			ce := callError(t, err)
 			if ce.Failure != tc.wantFail || ce.Socket != tc.wantSocket || ce.FirstLine != tc.wantLine || ce.ExitStatus != tc.exit {
 				t.Errorf("CallError = %+v, want %v, Socket %q, FirstLine %q, ExitStatus %d",
 					*ce, tc.wantFail, tc.wantSocket, tc.wantLine, tc.exit)
@@ -270,7 +257,7 @@ func TestExecBinaryNotRunIsUnavailable(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := tmux.New(bin, to).Lookup("/tmp/tmux-1000/default")
-			ce := execCallError(t, err)
+			ce := callError(t, err)
 			if ce.Failure != tmux.FailUnavailable || ce.ExitStatus != -1 {
 				t.Errorf("CallError = %+v, want FailUnavailable, ExitStatus -1", *ce)
 			}

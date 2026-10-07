@@ -38,12 +38,13 @@ func adPanes(panes []tmux.Pane) map[string]string {
 }
 
 // TestCreatePaneLabelOnNewPaneOnly checks a create labels its own new pane
-// only: chained, it lists the token; a failed chain or a '$' name, nothing.
+// only: chained, it lists the token; a failed chain or a '$' name, nothing,
+// the '$' name's session listed unlabelled under its stored form.
 func TestCreatePaneLabelOnNewPaneOnly(t *testing.T) {
-	var byID string
+	var byID tmuxfix.StoredName
 	for _, n := range tmuxfix.StoredNames() {
-		if n.LabelByID && byID == "" {
-			byID = n.Raw
+		if n.LabelByID && byID.Raw == "" {
+			byID = n
 		}
 	}
 	cases := []struct {
@@ -53,7 +54,7 @@ func TestCreatePaneLabelOnNewPaneOnly(t *testing.T) {
 	}{
 		{name: "chained", session: "fresh", want: tmuxfix.Token},
 		{name: "chain fails", session: "fresh", inj: ptrInj(faketmuxfix.ChainFails())},
-		{name: "label-by-id name", session: byID},
+		{name: "label-by-id name", session: byID.Raw},
 	}
 	c := newClient(t, callTimeout)
 	for _, tc := range cases {
@@ -77,6 +78,13 @@ func TestCreatePaneLabelOnNewPaneOnly(t *testing.T) {
 			if got := adPanes(listPanes(t, c, socket)); !reflect.DeepEqual(got, want) {
 				t.Errorf("listed AdPane = %q, want %q", got, want)
 			}
+			if tc.session == byID.Raw {
+				for _, s := range lookup(t, c, socket).Sessions {
+					if s.ID == reply.SessionID && (s.Name != byID.Stored || s.Label != (tmux.Label{})) {
+						t.Errorf("session %+v, want named %q and unlabelled", s, byID.Stored)
+					}
+				}
+			}
 		})
 	}
 }
@@ -85,11 +93,11 @@ func TestCreatePaneLabelOnNewPaneOnly(t *testing.T) {
 func ptrInj(inj faketmuxfix.Injection) *faketmuxfix.Injection { return &inj }
 
 // TestSetLabelSetsPaneLabelByID checks the label by id sets the session
-// label then the named pane's label; an unknown pane leaves the session
-// labelled, an unknown session changes nothing.
+// label, with the caller's store id, then the named pane's label; an unknown
+// pane leaves the session labelled, an unknown session changes nothing.
 func TestSetLabelSetsPaneLabelByID(t *testing.T) {
 	alpha := tmuxfix.Valid(tmuxfix.Token, "agent-a", tmuxfix.StoreID)
-	valid := tmuxfix.Valid(tmuxfix.Token, "agent-b", tmuxfix.StoreID)
+	valid := tmuxfix.Valid(tmuxfix.Token, "agent-b", tmuxfix.OtherStoreID)
 	old := tmuxfix.PaneLabelValue(tmuxfix.OtherToken, "%1")
 	cases := []struct {
 		name, session, pane string
@@ -115,7 +123,7 @@ func TestSetLabelSetsPaneLabelByID(t *testing.T) {
 			tb := seeded()
 			tb.Sessions[1].Panes[1].AdPane = old // alpha's %1
 			tables.Write(t, socket, tb)
-			err := c.SetLabel(socket, tc.session, tc.pane, tmuxfix.Token, "agent-b", tmuxfix.StoreID)
+			err := c.SetLabel(socket, tc.session, tc.pane, tmuxfix.Token, "agent-b", tmuxfix.OtherStoreID)
 			var e tmuxfix.Entry
 			if tc.reply != "" {
 				e = tmuxfix.Find(tmuxfix.Replies(socket), tc.reply)

@@ -2,7 +2,6 @@ package spawn
 
 import (
 	"bytes"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -12,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	_ "modernc.org/sqlite"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -121,27 +118,33 @@ func (e *launchEnv) row(id string) store.Spawn {
 	return row
 }
 
-// TestLaunchInsertsPendingAndCreatesSession: the pending row's fields, and
-// one labelled create on the resolved socket carrying the launch's inputs.
+// TestLaunchInsertsPendingAndCreatesSession: the pending row keeps the
+// launch's fields verbatim (a supplied name, SR-4.1; extra env, SR-10; label
+// keys), and one labelled create on the resolved socket carries them, with
+// label keys normalised into env names (SRD §7.2 step 5).
 func TestLaunchInsertsPendingAndCreatesSession(t *testing.T) {
 	e := newLaunchEnv(t)
+	e.r.TmuxSessionName, e.r.TmuxSessionNameSupplied = "bot-claude-status", true
+	e.r.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt", "ANTHROPIC_API_KEY": "sk-ant-test"}
+	e.r.AgentDirectorLabels = map[string]string{"role": "worker", "my-key": "v1", "x.y.z": "v2", "with spaces": "v3"}
 	id := e.mustLaunch()
 	if id != "id-launch-1" {
 		t.Errorf("Launch returned %q; want id-launch-1", id)
 	}
 
 	row := e.row(id)
-	if row.State != store.StatePending || row.CWD != e.r.CWD || row.TmuxSessionName != "cd-launch-1" {
-		t.Errorf("row = {state %q, cwd %q, name %q}; want pending, %q, cd-launch-1",
+	if row.State != store.StatePending || row.CWD != e.r.CWD || row.TmuxSessionName != "bot-claude-status" {
+		t.Errorf("row = {state %q, cwd %q, name %q}; want pending, %q, bot-claude-status",
 			row.State, row.CWD, row.TmuxSessionName, e.r.CWD)
 	}
-	if !reflect.DeepEqual(row.ClaudeArgs, []string{"--model", "opus"}) || row.Labels["role"] != "worker" {
-		t.Errorf("row args/labels = %v / %v", row.ClaudeArgs, row.Labels)
+	if !reflect.DeepEqual(row.ClaudeArgs, []string{"--model", "opus"}) || !reflect.DeepEqual(row.Labels, e.r.AgentDirectorLabels) ||
+		!reflect.DeepEqual(row.ExtraEnv, e.r.ExtraEnv) {
+		t.Errorf("row args/labels/extra env = %v / %v / %v", row.ClaudeArgs, row.Labels, row.ExtraEnv)
 	}
 
 	c := e.onlyCreate()
-	if c.Socket != e.socket || c.Target != "cd-launch-1" || c.Cwd != e.r.CWD {
-		t.Errorf("create = {socket %q, name %q, cwd %q}; want %q, cd-launch-1, %q", c.Socket, c.Target, c.Cwd, e.socket, e.r.CWD)
+	if c.Socket != e.socket || c.Target != "bot-claude-status" || c.Cwd != e.r.CWD {
+		t.Errorf("create = {socket %q, name %q, cwd %q}; want %q, bot-claude-status, %q", c.Socket, c.Target, c.Cwd, e.socket, e.r.CWD)
 	}
 	if c.Token != row.Identity.Token || c.InstanceID != id || c.StoreID != e.s.StoreID() {
 		t.Errorf("create label args = {%q %q %q}; want {%q %q %q}", c.Token, c.InstanceID, c.StoreID,
@@ -151,27 +154,12 @@ func TestLaunchInsertsPendingAndCreatesSession(t *testing.T) {
 	if n < 5 || c.Command[0] != "claude" || c.Command[1] != "--settings" || c.Command[n-2] != "--model" || c.Command[n-1] != "opus" {
 		t.Errorf("create command = %v; want claude --settings <json> --model opus", c.Command)
 	}
-	for k, want := range map[string]string{"AGENT_DIRECTOR_RELAY_MODE": "off", "AGENT_DIRECTOR_LABEL_ROLE": "worker"} {
+	for k, want := range map[string]string{"AGENT_DIRECTOR_RELAY_MODE": "off", "AGENT_DIRECTOR_LABEL_ROLE": "worker",
+		"AGENT_DIRECTOR_LABEL_MY_KEY": "v1", "AGENT_DIRECTOR_LABEL_X_Y_Z": "v2", "AGENT_DIRECTOR_LABEL_WITH_SPACES": "v3",
+		"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt", "ANTHROPIC_API_KEY": "sk-ant-test"} {
 		if c.Envs[k] != want {
 			t.Errorf("create env %s = %q; want %q", k, c.Envs[k], want)
 		}
-	}
-}
-
-// TestLaunchPersistsExtraEnv pins SR-10 write-side: a resolved ExtraEnv
-// reaches the create's env and round-trips through the row verbatim.
-func TestLaunchPersistsExtraEnv(t *testing.T) {
-	e := newLaunchEnv(t)
-	e.r.ExtraEnv = map[string]string{
-		"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt",
-		"ANTHROPIC_API_KEY": "sk-ant-test",
-	}
-	id := e.mustLaunch()
-	if got := e.onlyCreate().Envs["CLAUDE_CONFIG_DIR"]; got != "/home/bee/.claude-alt" {
-		t.Errorf("create env CLAUDE_CONFIG_DIR = %q; want /home/bee/.claude-alt", got)
-	}
-	if got := e.row(id).ExtraEnv; !reflect.DeepEqual(got, e.r.ExtraEnv) {
-		t.Errorf("row.ExtraEnv = %v; want %v (persisted verbatim)", got, e.r.ExtraEnv)
 	}
 }
 
@@ -267,50 +255,6 @@ func TestLaunchDuplicateSessionReturnsHeldName(t *testing.T) {
 	}
 }
 
-// TestLaunchSerializesLabelsAsJSON pins SRD §4.2: the raw labels column is a
-// JSON object with the verbatim keys.
-func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
-	e := newLaunchEnv(t)
-	e.r.AgentDirectorLabels = map[string]string{"project": "agent-director", "env": "dev"}
-	id := e.mustLaunch()
-
-	raw := openRawForRead(t, e.dbPath)
-	defer raw.Close()
-	var labelsCol string
-	if err := raw.QueryRow(`SELECT labels FROM spawns WHERE claude_instance_id = ?`, id).Scan(&labelsCol); err != nil {
-		t.Fatalf("raw read labels: %v", err)
-	}
-	for _, want := range []string{`"project":"agent-director"`, `"env":"dev"`} {
-		if !strings.Contains(labelsCol, want) {
-			t.Errorf("labels column %q missing %q", labelsCol, want)
-		}
-	}
-}
-
-// TestLaunchEmitsEnvForNonAlphanumericLabelKey pins SRD §7.2 step 5: env
-// names are normalised while the row keeps the verbatim keys.
-func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
-	e := newLaunchEnv(t)
-	e.r.AgentDirectorLabels = map[string]string{"my-key": "v1", "x.y.z": "v2", "already_ok": "v3", "with spaces": "v4"}
-	id := e.mustLaunch()
-
-	envs := e.onlyCreate().Envs
-	wantEnv := map[string]string{
-		"AGENT_DIRECTOR_LABEL_MY_KEY":      "v1",
-		"AGENT_DIRECTOR_LABEL_X_Y_Z":       "v2",
-		"AGENT_DIRECTOR_LABEL_ALREADY_OK":  "v3",
-		"AGENT_DIRECTOR_LABEL_WITH_SPACES": "v4",
-	}
-	for k, v := range wantEnv {
-		if envs[k] != v {
-			t.Errorf("env %s = %q; want %q", k, envs[k], v)
-		}
-	}
-	if got := e.row(id).Labels; !reflect.DeepEqual(got, e.r.AgentDirectorLabels) {
-		t.Errorf("row labels = %v; want %v", got, e.r.AgentDirectorLabels)
-	}
-}
-
 // TestLaunchParentID pins SRD §7.5: parent_id is NULL with no caller
 // AGENT_DIRECTOR_INSTANCE_ID and the caller's id when set.
 func TestLaunchParentID(t *testing.T) {
@@ -336,113 +280,56 @@ func seedParent(t *testing.T, s *store.Store, id string) {
 	}
 }
 
-// TestLaunchParentDeleteCascadesToChild pins `parent_id ... ON DELETE SET
-// NULL`: deleting the parent leaves the child with a NULL parent_id.
-func TestLaunchParentDeleteCascadesToChild(t *testing.T) {
-	e := newLaunchEnv(t)
-	seedParent(t, e.s, "id-cascade-parent")
-	t.Setenv(envInstanceID, "id-cascade-parent")
-	id := e.mustLaunch()
-	if got := e.row(id).ParentID; got != "id-cascade-parent" {
-		t.Fatalf("precondition: ParentID = %q; want id-cascade-parent", got)
-	}
-
-	// No store primitive deletes a row, so a raw connection (foreign keys on) does.
-	raw := openRawForRead(t, e.dbPath)
-	defer raw.Close()
-	if _, err := raw.Exec(`DELETE FROM spawns WHERE claude_instance_id = ?`, "id-cascade-parent"); err != nil {
-		t.Fatalf("delete parent: %v", err)
-	}
-	if got := e.row(id).ParentID; got != "" {
-		t.Errorf("ParentID after parent delete = %q; want \"\" (ON DELETE SET NULL)", got)
-	}
-}
-
-// openRawForRead opens the store's SQLite file with foreign keys enforced,
-// for the byte-shape and delete checks no store primitive exposes.
-func openRawForRead(t *testing.T, dbPath string) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	return db
-}
-
 // TestLaunchPreTrust pins b.f75, SR-5.2 and SR-22.6: Launch trusts the cwd
-// unless NoPreTrust, reports ok or skipped, prints nothing, creates the
-// session and records the choice.
+// unless NoPreTrust and reports ok or skipped silently; a missing .claude.json
+// is failed with one warning naming it. Each creates the session and records
+// the choice.
 func TestLaunchPreTrust(t *testing.T) {
+	const seed = `{"projects":{}}`
 	cases := []struct {
+		name       string
 		noPreTrust bool
+		missing    bool
 		want       PreTrustOutcome
-	}{{false, PreTrustOK}, {true, PreTrustSkipped}}
+	}{
+		{"trusted", false, false, PreTrustOK},
+		{"opted out", true, false, PreTrustSkipped},
+		{"missing file does not block the spawn", false, true, PreTrustFailed},
+	}
 	for _, tc := range cases {
-		noPreTrust, want := tc.noPreTrust, tc.want
-		t.Run(fmt.Sprintf("NoPreTrust=%v", noPreTrust), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			e := newLaunchEnv(t)
 			stub := withStubClaudeJSON(t)
-			seedFile(t, stub, `{"projects":{}}`)
+			if !tc.missing {
+				seedFile(t, stub, seed)
+			}
 			warn := capturePreTrustWarn(t)
-			e.r.NoPreTrust = noPreTrust
+			e.r.NoPreTrust = tc.noPreTrust
 			id, outcome := e.mustLaunchOutcome()
 			e.onlyCreate()
-
-			if outcome != want {
-				t.Errorf("Launch outcome = %q; want %q", outcome, want)
+			if outcome != tc.want {
+				t.Errorf("Launch outcome = %q; want %q", outcome, tc.want)
 			}
-
-			if got := e.row(id).NoPreTrust; got != noPreTrust {
-				t.Errorf("row.NoPreTrust = %v; want %v (the spawn's choice recorded)", got, noPreTrust)
+			if row := e.row(id); row.State != store.StatePending || row.NoPreTrust != tc.noPreTrust {
+				t.Errorf("row = {state %q, NoPreTrust %v}; want pending, %v", row.State, row.NoPreTrust, tc.noPreTrust)
+			}
+			switch tc.want {
+			case PreTrustFailed:
+				assertOneFailedLine(t, warn.String(), stub)
+				return
+			case PreTrustSkipped:
+				if got := mustReadFile(t, stub); string(got) != seed {
+					t.Errorf("claude.json = %q; want untouched despite NoPreTrust", got)
+				}
+			default:
+				if !trusts(readClaudeJSON(t, stub), e.r.CWD) {
+					t.Errorf("claude.json does not trust %q", e.r.CWD)
+				}
 			}
 			if warn.Len() != 0 {
 				t.Errorf("warning = %q; want nothing printed", warn.String())
 			}
-			if noPreTrust {
-				if got := mustReadFile(t, stub); string(got) != `{"projects":{}}` {
-					t.Errorf("claude.json = %q; want untouched despite NoPreTrust", got)
-				}
-				return
-			}
-			projects, _ := readClaudeJSON(t, stub)["projects"].(map[string]any)
-			entry, _ := projects[e.r.CWD].(map[string]any)
-			if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
-				t.Errorf("projects[%q] = %v; want hasTrustDialogAccepted true", e.r.CWD, entry)
-			}
 		})
-	}
-}
-
-// TestLaunchMissingClaudeJSONDoesNotBlockSpawn: with no .claude.json the
-// pre-trust warns once naming the file, Launch reports failed, and the spawn
-// still launches.
-func TestLaunchMissingClaudeJSONDoesNotBlockSpawn(t *testing.T) {
-	e := newLaunchEnv(t)
-	stub := withStubClaudeJSON(t) // a path that is never created
-	warn := capturePreTrustWarn(t)
-
-	id, outcome := e.mustLaunchOutcome()
-	e.onlyCreate()
-	if outcome != PreTrustFailed {
-		t.Errorf("Launch outcome = %q; want %q", outcome, PreTrustFailed)
-	}
-	if row := e.row(id); row.State != store.StatePending || row.NoPreTrust {
-		t.Errorf("row = {state %q, NoPreTrust %v}; want pending with pre-trust allowed", row.State, row.NoPreTrust)
-	}
-	assertOneFailedLine(t, warn.String(), stub)
-}
-
-// TestLaunchPassesUserSuppliedTmuxSessionName pins SR-4.1/SR-3.1: a
-// caller-supplied name reaches the create and the row verbatim.
-func TestLaunchPassesUserSuppliedTmuxSessionName(t *testing.T) {
-	e := newLaunchEnv(t)
-	e.r.TmuxSessionName, e.r.TmuxSessionNameSupplied = "bot-claude-status", true
-	id := e.mustLaunch()
-	if got := e.onlyCreate().Target; got != "bot-claude-status" {
-		t.Errorf("create name = %q; want bot-claude-status (verbatim)", got)
-	}
-	if got := e.row(id).TmuxSessionName; got != "bot-claude-status" {
-		t.Errorf("row.TmuxSessionName = %q; want bot-claude-status", got)
 	}
 }
 

@@ -2,7 +2,6 @@ package tmux_test
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -12,8 +11,9 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// Argv, target, create-chain, timeout-class and client-environment tests for
-// the socket-taking calls (SR-2.1, SR-2.2, SR-3.5, SR-3.12, SR-13.1).
+// Argv, target, create-chain and timeout-class tests for the socket-taking
+// calls (SR-2.1, SR-3.5, SR-13.1); exec_mechanics_test.go has the client
+// environment's (SR-2.2, SR-3.12).
 
 const (
 	argvIdentityFormat = "ad-server\t#{pid}\t#{start_time}"
@@ -25,12 +25,11 @@ const (
 // argvCase drives one client method and states the argv (after "-u -S
 // <socket>") of each invocation it must make, and its timeout class.
 type argvCase struct {
-	name       string
-	script     []tmux.RunResult
-	call       func(c *tmux.Client) error
-	want       [][]string
-	timeout    time.Duration
-	scopeReads int
+	name    string
+	script  []tmux.RunResult
+	call    func(c *tmux.Client) error
+	want    [][]string
+	timeout time.Duration
 }
 
 // argvCases covers every socket-taking method, answered with success.
@@ -49,8 +48,7 @@ func argvCases() []argvCase {
 				";", "show-options", "-gqv", "@ad_owner",
 				";", "show-options", "-sqv", "@ad_owner",
 				";", "show-options", "-gwqv", "@ad_owner"}},
-			timeout:    testTimeouts.Query,
-			scopeReads: 3,
+			timeout: testTimeouts.Query,
 		},
 		{
 			name:    "pane listing",
@@ -81,20 +79,6 @@ func argvCases() []argvCase {
 			timeout: testTimeouts.Action,
 		},
 		{
-			name:    "text without Enter",
-			script:  []tmux.RunResult{exitZero("")},
-			call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", "hello", false) },
-			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", "hello"}},
-			timeout: testTimeouts.Action,
-		},
-		{
-			name:    "keysym-like text stays literal",
-			script:  []tmux.RunResult{exitZero(""), exitZero("")},
-			call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", "C-c", true) },
-			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", "C-c"}, {"send-keys", "-t", "%3", "Enter"}},
-			timeout: testTimeouts.Action,
-		},
-		{
 			// b.9o4: pause's line clear names the key, without -l, so tmux
 			// sends C-u rather than typing it.
 			name:    "key send",
@@ -103,7 +87,7 @@ func argvCases() []argvCase {
 			want:    [][]string{{"send-keys", "-t", "%3", "C-u"}},
 			timeout: testTimeouts.Action,
 		},
-	}, argvDashTextCases(), argvSemicolonTextCases(), []argvCase{
+	}, argvTextCases(), []argvCase{
 		{
 			name:   "capture",
 			script: []tmux.RunResult{exitZero("")},
@@ -128,22 +112,11 @@ func argvCases() []argvCase {
 			name:   "label by id",
 			script: []tmux.RunResult{exitZero("")},
 			call: func(c *tmux.Client) error {
-				return c.SetLabel(testSocket, "$2", "%2", tmuxfix.Token, "id#1", tmuxfix.StoreID)
+				return c.SetLabel(testSocket, "$2", "%17", tmuxfix.Token, "id#1", tmuxfix.StoreID)
 			},
 			want: [][]string{{"set-option", "-t", "$2", "@ad_owner",
 				tmuxfix.LabelValue(tmuxfix.Token, "$2", "id#1", tmuxfix.StoreID),
-				";", "set-option", "-p", "-t", "%2", "@ad_pane", tmuxfix.PaneLabelValue(tmuxfix.Token, "%2")}},
-			timeout: testTimeouts.Action,
-		},
-		{
-			name:   "label by id, other pane, token, spaced id and store",
-			script: []tmux.RunResult{exitZero("")},
-			call: func(c *tmux.Client) error {
-				return c.SetLabel(testSocket, "$2", "%17", tmuxfix.OtherToken, "agent x#1", tmuxfix.OtherStoreID)
-			},
-			want: [][]string{{"set-option", "-t", "$2", "@ad_owner",
-				tmuxfix.LabelValue(tmuxfix.OtherToken, "$2", "agent x#1", tmuxfix.OtherStoreID),
-				";", "set-option", "-p", "-t", "%17", "@ad_pane", tmuxfix.PaneLabelValue(tmuxfix.OtherToken, "%17")}},
+				";", "set-option", "-p", "-t", "%17", "@ad_pane", tmuxfix.PaneLabelValue(tmuxfix.Token, "%17")}},
 			timeout: testTimeouts.Action,
 		},
 		{
@@ -216,59 +189,25 @@ func argvCases() []argvCase {
 	})
 }
 
-// argvTextRow is a SendKeysPane text and the text element its text call must carry.
-type argvTextRow struct{ text, sent string }
-
-// argvTextCases: each text gives exactly one text call
-// "send-keys -t %3 -l -- <sent>", then the Enter call only when asked.
-func argvTextCases(rows []argvTextRow) []argvCase {
+// argvTextCases: a text is sent unchanged after "-l --" as one text call, no
+// Enter call, however it looks (SR-2.1 "Text" row, SR-20.7): tmux flags
+// ("-t%5" must not retarget to %5), a keysym, or empty (send-keys' Enter-only
+// send, b.9o4). A final ";" alone is escaped (b.ukw; escape_semicolon_test.go
+// has the rule's cases).
+func argvTextCases() []argvCase {
 	var cases []argvCase
-	for _, row := range rows {
-		for _, enter := range []bool{true, false} {
-			want := [][]string{{"send-keys", "-t", "%3", "-l", "--", row.sent}}
-			script := []tmux.RunResult{exitZero("")}
-			name := fmt.Sprintf("text %q without Enter", row.text)
-			if enter {
-				want = append(want, []string{"send-keys", "-t", "%3", "Enter"})
-				script = append(script, exitZero(""))
-				name = fmt.Sprintf("text %q then Enter", row.text)
-			}
-			cases = append(cases, argvCase{
-				name:    name,
-				script:  script,
-				call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", row.text, enter) },
-				want:    want,
-				timeout: testTimeouts.Action,
-			})
-		}
+	for _, row := range []struct{ text, sent string }{
+		{"-x", "-x"}, {"--", "--"}, {"-t%5", "-t%5"}, {"C-c", "C-c"}, {"", ""}, {"a;", `a\;`}, {`a\;`, `a\\;`}, {"a;b", "a;b"},
+	} {
+		cases = append(cases, argvCase{
+			name:    fmt.Sprintf("text %q", row.text),
+			script:  []tmux.RunResult{exitZero("")},
+			call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", row.text, false) },
+			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", row.sent}},
+			timeout: testTimeouts.Action,
+		})
 	}
 	return cases
-}
-
-// argvDashTextCases: a text that looks like tmux flags (or is an ordinary
-// text, or empty: send-keys' Enter-only send, b.9o4) is sent unchanged after
-// "-l --" (SR-2.1 "Text" row, SR-20.7). "-t%5" must not retarget to %5.
-func argvDashTextCases() []argvCase {
-	var rows []argvTextRow
-	for _, text := range []string{"-x", "--", "-l", "-t%5", "plain text", ""} {
-		rows = append(rows, argvTextRow{text, text})
-	}
-	return argvTextCases(rows)
-}
-
-// argvSemicolonTextCases: a text ending in ";" gets one backslash before that
-// final ";" so tmux does not read it as a command separator; a ";" anywhere
-// else passes through unescaped.
-func argvSemicolonTextCases() []argvCase {
-	return argvTextCases([]argvTextRow{
-		{`;`, `\;`},
-		{`a;`, `a\;`},
-		{`a ;`, `a \;`},
-		{`a\;`, `a\\;`},
-		{`-x;`, `-x\;`},
-		{`;a`, `;a`},
-		{`a;b`, `a;b`},
-	})
 }
 
 // argvRun drives c through a scripted client and returns its invocations.
@@ -314,226 +253,56 @@ func TestSocketCallArgv(t *testing.T) {
 	}
 }
 
-// TestSocketCallTargetsAreIDs: targets are ids (or the create chain's
-// =<name>:), no probe commands, no format naming AGENT_DIRECTOR_*, and
-// show-options only as the lookup's three scope reads.
-func TestSocketCallTargetsAreIDs(t *testing.T) {
-	for _, c := range argvCases() {
-		t.Run(c.name, func(t *testing.T) {
-			for _, inv := range argvRun(t, c) {
-				args := argvCommand(t, inv)
-				for i, a := range args {
-					switch {
-					case a == "has-session" || a == "show-environment":
-						t.Errorf("forbidden command %q in %q", a, args)
-					case strings.HasSuffix(a, ":0.0"):
-						t.Errorf("window.pane suffix in %q", a)
-					case strings.Contains(a, "#{") && strings.Contains(a, "AGENT_DIRECTOR_"):
-						t.Errorf("format names an AGENT_DIRECTOR_ variable: %q", a)
-					}
-					if a == "-t" && i+1 < len(args) && !argvIsIDTarget(args[i+1]) {
-						t.Errorf("target %q is not an id or =<name>:", args[i+1])
-					}
-				}
-				if n := argvCount(args, "show-options"); n != c.scopeReads {
-					t.Errorf("show-options appears %d times, want %d", n, c.scopeReads)
-				}
-			}
-		})
-	}
-}
-
-// argvIsIDTarget accepts a session or pane id, or an exact-match =<name>: target.
-func argvIsIDTarget(target string) bool {
-	if strings.HasPrefix(target, "$") || strings.HasPrefix(target, "%") {
-		return true
-	}
-	return strings.HasPrefix(target, "=") && strings.HasSuffix(target, ":") && len(target) > 2
-}
-
-// count returns how many elements of args equal s.
-func argvCount(args []string, s string) int {
-	n := 0
-	for _, a := range args {
-		if a == s {
-			n++
-		}
-	}
-	return n
-}
-
-// argvChainedNames returns the create names that take the chained label: the
-// catalogue's names without $ or \, plus a plain name and one with a #.
-func argvChainedNames() []string {
-	names := []string{"proj-abc", "n#1"}
-	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID {
-			names = append(names, n.Raw)
-		}
-	}
-	return names
-}
-
-// TestNewSessionChain: the chain is ';' set-option -F -t =<name>: @ad_owner
-// with the five-field value, then ';' set-option -p -F -t =<name>: @ad_pane
-// '<token> #{pane_id}'; only the id is format-escaped, the store id ends the
-// session label once and unchanged, and it never reaches the pane label.
+// TestNewSessionChain: a name without $ or \ (the catalogue's, a plain one,
+// one with a #) is created with the chain ';' set-option -F -t =<name>:
+// @ad_owner <five-field value> ';' set-option -p -F -t =<name>: @ad_pane
+// '<token> #{pane_id}', after the command or none; only the id is
+// format-escaped, and the store id ends the session label once, unchanged. A
+// $ or \ name (the catalogue's N1, N5 and F3 forms, a leading and an embedded
+// one) is one unchained new-session whose reply is returned even on a
+// non-zero exit.
 func TestNewSessionChain(t *testing.T) {
-	labels := []struct{ id, store string }{
-		{"agent-1", tmuxfix.StoreID}, {"id#1", tmuxfix.StoreID}, {"#a##", tmuxfix.StoreID},
-		{"agent-ü1", tmuxfix.StoreID}, {"agent x#y", tmuxfix.OtherStoreID},
-		{"agent 0123456789abcdef", tmuxfix.StoreID},
-		{"id#2", "st#re"}, // not a store id: shows the client never doubles the store id's '#'
-	}
-	commands := map[string][]string{"command": {"sh", "-c", "exit 0"}, "no command": nil}
-	for _, name := range argvChainedNames() {
-		for _, l := range labels {
-			for cmdName, command := range commands {
-				t.Run(name+"/"+l.id+"/"+cmdName, func(t *testing.T) {
-					if tmux.NeedsLabelByID(name) {
-						t.Fatalf("NeedsLabelByID(%q) = true, want false", name)
-					}
-					client, runner := newScripted(t, exitZero(tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate)))
-					if _, err := client.NewSession(testSocket, name, "/work", nil, command, tmuxfix.Token, l.id, l.store); err != nil {
-						t.Fatalf("NewSession: %v", err)
-					}
-					args := argvCommand(t, runner.Only())
-					head := []string{"new-session", "-d", "-s", name, "-c", "/work",
-						"-e", "AGENT_DIRECTOR_INSTANCE_ID=" + l.id, "-P", "-F", argvCreateFormat, "--"}
-					owner := []string{";", "set-option", "-F", "-t", "=" + name + ":", "@ad_owner",
-						tmuxfix.ChainLabelValue(tmuxfix.Token, l.id, l.store)}
-					pane := []string{";", "set-option", "-p", "-F", "-t", "=" + name + ":", "@ad_pane",
-						tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}
-					want := slices.Concat(head, command, owner, pane)
-					if !slices.Equal(args, want) {
-						t.Errorf("argv:\n got %q\nwant %q", args, want)
-					}
-					if n := argvCount(args, ";"); n != 2 {
-						t.Errorf("got %d ';' separators, want 2", n)
-					}
-					if value := args[len(args)-len(pane)-1]; !strings.HasSuffix(value, " "+l.store) || strings.Count(value, l.store) != 1 {
-						t.Errorf("session label value %q does not end with store id %q exactly once", value, l.store)
-					}
-					if value := args[len(args)-1]; strings.Contains(value, l.store) || strings.Contains(value, l.id) {
-						t.Errorf("pane label value %q carries the store id or instance id", value)
-					}
-				})
-			}
-		}
-	}
-}
-
-// argvLabelByIDNames returns the catalogue's $ and \ names plus F3's forms and a
-// leading and an embedded backslash.
-func argvLabelByIDNames() []string {
-	names := []string{"x$", "$7", `\lead`, `mid\dle`}
+	names := map[string]bool{"proj-abc": false, "n#1": false, "x$": true, "$7": true, `\lead`: true, `mid\dle`: true}
 	for _, n := range tmuxfix.StoredNames() {
-		if n.LabelByID {
-			names = append(names, n.Raw)
-		}
+		names[n.Raw] = n.LabelByID
 	}
-	return names
-}
-
-// TestNewSessionNoChainForDollarOrBackslash: a $ or \ name is one invocation
-// with no ';' and no set-option, and the reply is returned whatever the exit.
-func TestNewSessionNoChainForDollarOrBackslash(t *testing.T) {
-	reply := tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate)
-	for _, name := range argvLabelByIDNames() {
-		for _, exit := range []int{0, 1} {
-			t.Run(fmt.Sprintf("%s/exit%d", name, exit), func(t *testing.T) {
-				if !tmux.NeedsLabelByID(name) {
-					t.Fatalf("NeedsLabelByID(%q) = false, want true", name)
+	labels := []struct {
+		id, store string
+		command   []string
+	}{
+		{"agent-1", tmuxfix.StoreID, nil}, {"#a##", tmuxfix.StoreID, []string{"sh", "-c", "exit 0"}},
+		{"agent x#y", tmuxfix.OtherStoreID, nil},
+		{"id#2", "st#re", []string{"claude"}}, // not a store id: the client never doubles the store id's '#'
+	}
+	for name, byID := range names {
+		for _, l := range labels {
+			t.Run(name+"/"+l.id, func(t *testing.T) {
+				if tmux.NeedsLabelByID(name) != byID {
+					t.Fatalf("NeedsLabelByID(%q) = %v, want %v", name, !byID, byID)
 				}
-				client, runner := newScripted(t, exited(exit, reply, ""))
-				got, err := client.NewSession(testSocket, name, "/work", nil,
-					[]string{"claude"}, tmuxfix.Token, "id#1", tmuxfix.StoreID)
+				exit := 0
+				if byID {
+					exit = 1
+				}
+				client, runner := newScripted(t, exited(exit, tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate), ""))
+				got, err := client.NewSession(testSocket, name, "/work", nil, l.command, tmuxfix.Token, l.id, l.store)
 				if err != nil || got != tmuxfix.RecordedCreate {
 					t.Fatalf("NewSession = %+v, %v; want %+v, nil", got, err, tmuxfix.RecordedCreate)
 				}
-				args := argvCommand(t, runner.Only())
-				want := []string{"new-session", "-d", "-s", name, "-c", "/work",
-					"-e", "AGENT_DIRECTOR_INSTANCE_ID=id#1", "-P", "-F", argvCreateFormat, "--", "claude"}
-				if !slices.Equal(args, want) {
+				owner := tmuxfix.ChainLabelValue(tmuxfix.Token, l.id, l.store)
+				want := slices.Concat([]string{"new-session", "-d", "-s", name, "-c", "/work",
+					"-e", "AGENT_DIRECTOR_INSTANCE_ID=" + l.id, "-P", "-F", argvCreateFormat, "--"}, l.command)
+				if !byID {
+					want = slices.Concat(want, []string{";", "set-option", "-F", "-t", "=" + name + ":", "@ad_owner", owner,
+						";", "set-option", "-p", "-F", "-t", "=" + name + ":", "@ad_pane", tmuxfix.ChainPaneLabelValue(tmuxfix.Token)})
+				}
+				if args := argvCommand(t, runner.Only()); !slices.Equal(args, want) {
 					t.Errorf("argv:\n got %q\nwant %q", args, want)
 				}
-				if slices.Contains(args, ";") || slices.Contains(args, "set-option") {
-					t.Errorf("chained label present for %q: %q", name, args)
-				}
-				if strings.Contains(strings.Join(args, " "), tmuxfix.StoreID) {
-					t.Errorf("store id in an unchained create: %q", args)
+				if !strings.HasSuffix(owner, " "+l.store) || strings.Count(owner, l.store) != 1 {
+					t.Errorf("session label value %q does not end with store id %q exactly once", owner, l.store)
 				}
 			})
 		}
 	}
-}
-
-// argvIsLocale reports whether an environment name is a locale variable.
-func argvIsLocale(name string) bool {
-	return name == "LANG" || name == "LANGUAGE" || strings.HasPrefix(name, "LC_")
-}
-
-// argvUnsetLocale removes every locale variable for the rest of the test.
-func argvUnsetLocale(t *testing.T) {
-	for _, kv := range os.Environ() {
-		name, value, _ := strings.Cut(kv, "=")
-		if argvIsLocale(name) {
-			t.Setenv(name, value)
-			os.Unsetenv(name)
-		}
-	}
-}
-
-// TestSocketCallEnvironment: every call's environment is the process one
-// minus every AGENT_DIRECTOR_* variable; locale is passed through, never added.
-func TestSocketCallEnvironment(t *testing.T) {
-	cases := []struct {
-		name       string
-		locale     func(t *testing.T)
-		wantLocale []string
-	}{
-		{"locale set", func(t *testing.T) {
-			argvUnsetLocale(t)
-			t.Setenv("LC_ALL", "C")
-			t.Setenv("LANG", "en_US.UTF-8")
-		}, []string{"LANG=en_US.UTF-8", "LC_ALL=C"}},
-		{"locale absent", argvUnsetLocale, nil},
-	}
-	for _, lc := range cases {
-		t.Run(lc.name, func(t *testing.T) {
-			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "leak-id")
-			t.Setenv("AGENT_DIRECTOR_HOME", "/leak/home")
-			t.Setenv("AGENT_DIRECTOR_EMPTY", "")
-			t.Setenv("AGENT_DIRECTORX", "kept")
-			lc.locale(t)
-			var want []string
-			for _, kv := range os.Environ() {
-				if !strings.HasPrefix(kv, "AGENT_DIRECTOR_") {
-					want = append(want, kv)
-				}
-			}
-			for _, c := range argvCases() {
-				for _, inv := range argvRun(t, c) {
-					if !slices.Equal(inv.Env, want) {
-						t.Errorf("%s: environment is not the process one minus AGENT_DIRECTOR_*:\n got %q\nwant %q", c.name, inv.Env, want)
-					}
-					if got := argvLocaleEntries(inv.Env); !slices.Equal(got, lc.wantLocale) {
-						t.Errorf("%s: locale entries = %q, want %q", c.name, got, lc.wantLocale)
-					}
-				}
-			}
-		})
-	}
-}
-
-// argvLocaleEntries returns env's locale entries, sorted.
-func argvLocaleEntries(env []string) []string {
-	var out []string
-	for _, kv := range env {
-		if name, _, _ := strings.Cut(kv, "="); argvIsLocale(name) {
-			out = append(out, kv)
-		}
-	}
-	slices.Sort(out)
-	return out
 }

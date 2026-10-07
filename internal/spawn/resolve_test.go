@@ -2,19 +2,18 @@ package spawn_test
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 )
 
-// withTemplate seeds a TOML template under $HOME/.agent-director/templates/
-// for the duration of a test. Returns the temp HOME directory in case
-// the caller wants to introspect on-disk state.
-func withTemplate(t *testing.T, name, body string) string {
+// withTemplates seeds TOML templates, by name, under a temp $HOME's
+// .agent-director/templates/ for the duration of a test.
+func withTemplates(t *testing.T, bodies map[string]string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -22,291 +21,86 @@ func withTemplate(t *testing.T, name, body string) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(body), 0o600); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
-	return home
-}
-
-func TestResolveWithoutTemplateIsPassthrough(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	p := spawn.SpawnParams{
-		CWD:       "/tmp",
-		RelayMode: "off",
-	}
-	r, err := spawn.Resolve(p, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if r.CWD != "/tmp" || r.RelayMode != "off" {
-		t.Errorf("passthrough lost: %+v", r)
+	for name, body := range bodies {
+		if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(body), 0o600); err != nil {
+			t.Fatalf("write template: %v", err)
+		}
 	}
 }
 
-func TestResolvePureTemplateUsesAllTemplateFields(t *testing.T) {
-	withTemplate(t, "base", `
+// TestResolveMergesTemplate pins SRD §7.1's merge: per-call scalars replace
+// the template's, maps merge with per-call winning, permission arrays
+// concatenate (nil per-call keeps the template's), per-call claude_args
+// replace wholesale (nil keeps the template's), and ReuseFinished is per-call
+// only (SR-10.1). No template is a passthrough; a resolved value shares no
+// state with the template.
+func TestResolveMergesTemplate(t *testing.T) {
+	withTemplates(t, map[string]string{"bare": `cwd = "/tmp"`, "base": `
 cwd = "/tmp"
 relay_mode = "off"
 claude_args = ["--model", "opus"]
 
-[labels]
-project = "foo"
-
-[permissions]
-allow = ["Bash(jq)"]
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if r.CWD != "/tmp" {
-		t.Errorf("CWD = %q; want /tmp", r.CWD)
-	}
-	if r.RelayMode != "off" {
-		t.Errorf("RelayMode = %q; want off", r.RelayMode)
-	}
-	if len(r.ClaudeArgs) != 2 || r.ClaudeArgs[0] != "--model" {
-		t.Errorf("ClaudeArgs = %v", r.ClaudeArgs)
-	}
-	if r.AgentDirectorLabels["project"] != "foo" {
-		t.Errorf("Labels = %v", r.AgentDirectorLabels)
-	}
-	if r.Permissions == nil || r.Permissions.Allow[0] != "Bash(jq)" {
-		t.Errorf("Permissions = %+v", r.Permissions)
-	}
-}
-
-func TestResolveScalarPerCallOverridesTemplate(t *testing.T) {
-	// Per-call CWD replaces template CWD; RelayMode falls through.
-	withTemplate(t, "base", `
-cwd = "/tmp"
-relay_mode = "off"
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{
-		Template: "base",
-		CWD:      "/var/data",
-	}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if r.CWD != "/var/data" {
-		t.Errorf("CWD = %q; want /var/data (per-call override)", r.CWD)
-	}
-	if r.RelayMode != "off" {
-		t.Errorf("RelayMode = %q; want off (template fallback)", r.RelayMode)
-	}
-}
-
-func TestResolveLabelMapsMergeWithPerCallWinning(t *testing.T) {
-	// Template has project=foo + env=dev. Per-call adds owner=alice and
-	// overrides project=bar. Expected: bar / dev / alice.
-	withTemplate(t, "base", `
 [labels]
 project = "foo"
 env = "dev"
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{
-		Template: "base",
-		AgentDirectorLabels: map[string]string{
-			"owner":   "alice",
-			"project": "bar",
-		},
-	}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	want := map[string]string{"project": "bar", "env": "dev", "owner": "alice"}
-	if !mapsEqual(r.AgentDirectorLabels, want) {
-		t.Errorf("Labels = %v; want %v", r.AgentDirectorLabels, want)
-	}
-}
 
-func TestResolveExtraEnvMergesWithPerCallWinning(t *testing.T) {
-	withTemplate(t, "base", `
 [extra_env]
 ANTHROPIC_API_KEY = "from-template"
 EXTRA = "kept"
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{
-		Template: "base",
-		ExtraEnv: map[string]string{
-			"ANTHROPIC_API_KEY": "from-call",
-			"NEW":               "added",
-		},
-	}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	want := map[string]string{
-		"ANTHROPIC_API_KEY": "from-call",
-		"EXTRA":             "kept",
-		"NEW":               "added",
-	}
-	if !mapsEqual(r.ExtraEnv, want) {
-		t.Errorf("ExtraEnv = %v; want %v", r.ExtraEnv, want)
-	}
-}
 
-func TestResolvePermissionsArraysConcatenate(t *testing.T) {
-	// Template has allow=[A], deny=[X]. Per-call adds allow=[B], ask=[Q].
-	// Expected: allow=[A,B], deny=[X], ask=[Q].
-	withTemplate(t, "base", `
 [permissions]
 allow = ["A"]
 deny = ["X"]
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{
-		Template: "base",
-		Permissions: &spawn.Permissions{
-			Allow: []string{"B"},
-			Ask:   []string{"Q"},
-		},
-	}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+`})
+	pureTemplate := spawn.SpawnParams{Template: "base", CWD: "/tmp", RelayMode: "off", ClaudeArgs: []string{"--model", "opus"},
+		AgentDirectorLabels: map[string]string{"project": "foo", "env": "dev"},
+		ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "from-template", "EXTRA": "kept"},
+		Permissions:         &spawn.Permissions{Allow: []string{"A"}, Deny: []string{"X"}}}
+	cases := []struct {
+		name string
+		p    spawn.SpawnParams
+		want spawn.SpawnParams
+	}{
+		{name: "no template is a passthrough",
+			p:    spawn.SpawnParams{CWD: "/tmp", RelayMode: "off", ReuseFinished: true},
+			want: spawn.SpawnParams{CWD: "/tmp", RelayMode: "off", ReuseFinished: true}},
+		{name: "pure template", p: spawn.SpawnParams{Template: "base"}, want: pureTemplate},
+		{name: "template with no maps or permissions", p: spawn.SpawnParams{Template: "bare"},
+			want: spawn.SpawnParams{Template: "bare", CWD: "/tmp"}},
+		{name: "per-call values layered on the template",
+			p: spawn.SpawnParams{Template: "base", CWD: "/var/data", ClaudeArgs: []string{"--model", "sonnet"}, ReuseFinished: true,
+				AgentDirectorLabels: map[string]string{"owner": "alice", "project": "bar"},
+				ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "from-call", "NEW": "added"},
+				Permissions:         &spawn.Permissions{Allow: []string{"B"}, Ask: []string{"Q"}}},
+			want: spawn.SpawnParams{Template: "base", CWD: "/var/data", RelayMode: "off", ClaudeArgs: []string{"--model", "sonnet"},
+				ReuseFinished:       true,
+				AgentDirectorLabels: map[string]string{"project": "bar", "env": "dev", "owner": "alice"},
+				ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "from-call", "EXTRA": "kept", "NEW": "added"},
+				Permissions:         &spawn.Permissions{Allow: []string{"A", "B"}, Deny: []string{"X"}, Ask: []string{"Q"}}}},
 	}
-	if got, want := r.Permissions.Allow, []string{"A", "B"}; !slicesEqual(got, want) {
-		t.Errorf("Allow = %v; want %v", got, want)
-	}
-	if got, want := r.Permissions.Deny, []string{"X"}; !slicesEqual(got, want) {
-		t.Errorf("Deny = %v; want %v", got, want)
-	}
-	if got, want := r.Permissions.Ask, []string{"Q"}; !slicesEqual(got, want) {
-		t.Errorf("Ask = %v; want %v", got, want)
-	}
-}
-
-func TestResolvePermissionsNilPerCallKeepsTemplate(t *testing.T) {
-	withTemplate(t, "base", `
-[permissions]
-allow = ["A", "B"]
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if r.Permissions == nil || len(r.Permissions.Allow) != 2 {
-		t.Fatalf("Permissions lost: %+v", r.Permissions)
-	}
-}
-
-func TestResolveClaudeArgsPerCallReplacesWholesale(t *testing.T) {
-	// Per-call non-nil ClaudeArgs replaces — does NOT concat.
-	withTemplate(t, "base", `
-claude_args = ["--model", "opus"]
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{
-		Template:   "base",
-		ClaudeArgs: []string{"--model", "sonnet"},
-	}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got, want := r.ClaudeArgs, []string{"--model", "sonnet"}; !slicesEqual(got, want) {
-		t.Errorf("ClaudeArgs = %v; want %v (per-call replace)", got, want)
-	}
-}
-
-func TestResolveClaudeArgsNilFallsBackToTemplate(t *testing.T) {
-	withTemplate(t, "base", `
-claude_args = ["--model", "opus"]
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got, want := r.ClaudeArgs, []string{"--model", "opus"}; !slicesEqual(got, want) {
-		t.Errorf("ClaudeArgs = %v; want %v (template fallback)", got, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := spawn.Resolve(tc.p, config.Default())
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !reflect.DeepEqual(r.SpawnParams, tc.want) {
+				t.Fatalf("Resolve = %+v (permissions %+v)\nwant      %+v (permissions %+v)", r.SpawnParams, r.Permissions, tc.want, tc.want.Permissions)
+			}
+			if tc.name != "pure template" {
+				return
+			}
+			r.AgentDirectorLabels["project"], r.ClaudeArgs[1], r.Permissions.Allow[0] = "corrupted", "corrupted", "corrupted"
+			if again, err := spawn.Resolve(tc.p, config.Default()); err != nil || !reflect.DeepEqual(again.SpawnParams, tc.want) {
+				t.Errorf("Resolve after changing the first result = %+v, %v; want %+v", again.SpawnParams, err, tc.want)
+			}
+		})
 	}
 }
 
 func TestResolveTemplateNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	_, err := spawn.Resolve(spawn.SpawnParams{Template: "nope"}, config.Default())
-	if !errors.Is(err, config.ErrTemplateNotFound) {
+	if _, err := spawn.Resolve(spawn.SpawnParams{Template: "nope"}, config.Default()); !errors.Is(err, config.ErrTemplateNotFound) {
 		t.Fatalf("err = %v; want ErrTemplateNotFound", err)
 	}
-}
-
-func TestResolveBaseTemplateNotMutatedByResolve(t *testing.T) {
-	// Mutating the resolved struct's maps/slices must not corrupt the
-	// template's cached state. Pin this by mutating result.Labels and
-	// re-loading the template: a second Resolve should still see the
-	// unmodified template values.
-	withTemplate(t, "base", `
-[labels]
-project = "foo"
-`)
-	r1, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())
-	if err != nil {
-		t.Fatalf("first Resolve: %v", err)
-	}
-	r1.AgentDirectorLabels["project"] = "corrupted"
-
-	r2, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())
-	if err != nil {
-		t.Fatalf("second Resolve: %v", err)
-	}
-	if r2.AgentDirectorLabels["project"] != "foo" {
-		t.Errorf("template state was mutated: %v", r2.AgentDirectorLabels)
-	}
-}
-
-// TestResolveReuseFinishedIsPerCallOnly pins SR-10.1: the per-call
-// ReuseFinished value leaves Resolve unchanged, and a template never sets it.
-func TestResolveReuseFinishedIsPerCallOnly(t *testing.T) {
-	for _, template := range []string{"", "base"} {
-		for _, reuse := range []bool{true, false} {
-			t.Run(fmt.Sprintf("template=%q,reuse=%v", template, reuse), func(t *testing.T) {
-				withTemplate(t, "base", `
-cwd = "/tmp"
-relay_mode = "off"
-claude_args = ["--model", "opus"]
-
-[labels]
-project = "foo"
-
-[extra_env]
-EXTRA = "kept"
-
-[permissions]
-allow = ["A"]
-`)
-				r, err := spawn.Resolve(spawn.SpawnParams{
-					Template:      template,
-					ReuseFinished: reuse,
-				}, config.Default())
-				if err != nil {
-					t.Fatalf("Resolve: %v", err)
-				}
-				if r.ReuseFinished != reuse {
-					t.Errorf("ReuseFinished = %v; want %v (per-call value)", r.ReuseFinished, reuse)
-				}
-			})
-		}
-	}
-}
-
-func mapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

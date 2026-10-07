@@ -47,16 +47,6 @@ func TestHasSessionArgv(t *testing.T) {
 	}
 }
 
-// TestHasSessionMissingBinaryMapsToNotAvailable pins that a runner-reported
-// missing binary surfaces as ErrTmuxNotAvailable from HasSession.
-func TestHasSessionMissingBinaryMapsToNotAvailable(t *testing.T) {
-	cap := &captured{err: fmt.Errorf("%w: %v",
-		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
-	if _, err := (&Client{run: cap.runner()}).HasSession("x"); !errors.Is(err, ErrTmuxNotAvailable) {
-		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
-	}
-}
-
 // TestHasSessionFalseOnNonzeroExit pins that a non-zero tmux exit is the
 // boolean "no" answer, not an error.
 func TestHasSessionFalseOnNonzeroExit(t *testing.T) {

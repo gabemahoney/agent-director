@@ -2,94 +2,33 @@ package spawn
 
 import (
 	"reflect"
-	"sort"
 	"testing"
 )
 
-func TestComposeEnvBaseKeys(t *testing.T) {
+// TestComposeEnv: the base keys, one AGENT_DIRECTOR_LABEL_<normalised key>
+// per label and ExtraEnv verbatim, the same map on every composition.
+func TestComposeEnv(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID: "id-abc",
-		RelayMode:        "on",
+		ClaudeInstanceID:    "id-abc",
+		RelayMode:           "on",
+		AgentDirectorLabels: map[string]string{"my-key": "v1", "another.k": "v2", "alreadyOK": "v3", "123numeric": "v4"},
+		ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "sk-ant-test", "FOO": "bar"},
 	}}
-	env := composeEnv(r)
-	if env["AGENT_DIRECTOR_INSTANCE_ID"] != "id-abc" {
-		t.Errorf("AGENT_DIRECTOR_INSTANCE_ID = %q; want id-abc", env["AGENT_DIRECTOR_INSTANCE_ID"])
-	}
-	if env["AGENT_DIRECTOR_RELAY_MODE"] != "on" {
-		t.Errorf("AGENT_DIRECTOR_RELAY_MODE = %q; want on", env["AGENT_DIRECTOR_RELAY_MODE"])
-	}
-}
-
-func TestComposeEnvLabelsAreNormalized(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID: "id-abc",
-		RelayMode:        "off",
-		AgentDirectorLabels: map[string]string{
-			"my-key":     "v1",
-			"another.k":  "v2",
-			"alreadyOK":  "v3",
-			"123numeric": "v4",
-		},
-	}}
-	env := composeEnv(r)
-	cases := map[string]string{
+	want := map[string]string{
+		"AGENT_DIRECTOR_INSTANCE_ID":      "id-abc",
+		"AGENT_DIRECTOR_RELAY_MODE":       "on",
 		"AGENT_DIRECTOR_LABEL_MY_KEY":     "v1",
 		"AGENT_DIRECTOR_LABEL_ANOTHER_K":  "v2",
 		"AGENT_DIRECTOR_LABEL_ALREADYOK":  "v3",
 		"AGENT_DIRECTOR_LABEL_123NUMERIC": "v4",
+		"ANTHROPIC_API_KEY":               "sk-ant-test",
+		"FOO":                             "bar",
 	}
-	for k, want := range cases {
-		if env[k] != want {
-			t.Errorf("env[%q] = %q; want %q", k, env[k], want)
+	for i := 0; i < 2; i++ {
+		if got := composeEnv(r); !reflect.DeepEqual(got, want) {
+			t.Fatalf("composeEnv #%d = %v; want %v", i+1, got, want)
 		}
 	}
-}
-
-func TestComposeEnvExtraEnvPassthrough(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID: "id-abc",
-		RelayMode:        "off",
-		ExtraEnv: map[string]string{
-			"ANTHROPIC_API_KEY":       "sk-ant-test",
-			"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
-			"FOO":                     "bar",
-		},
-	}}
-	env := composeEnv(r)
-	wants := map[string]string{
-		"ANTHROPIC_API_KEY":       "sk-ant-test",
-		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
-		"FOO":                     "bar",
-	}
-	for k, want := range wants {
-		if env[k] != want {
-			t.Errorf("env[%q] = %q; want %q", k, env[k], want)
-		}
-	}
-}
-
-func TestComposeEnvDeterministic(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID:    "id",
-		RelayMode:           "off",
-		AgentDirectorLabels: map[string]string{"k1": "v1", "k2": "v2"},
-		ExtraEnv:            map[string]string{"E": "1"},
-	}}
-	env1 := composeEnv(r)
-	env2 := composeEnv(r)
-	// Two compositions of the same input must yield exactly the same map.
-	if !reflect.DeepEqual(keysSorted(env1), keysSorted(env2)) {
-		t.Fatalf("composeEnv key set not stable: %v vs %v", keysSorted(env1), keysSorted(env2))
-	}
-}
-
-func keysSorted(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func TestNormalizeLabelKey(t *testing.T) {

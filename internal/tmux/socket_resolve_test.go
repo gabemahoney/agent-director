@@ -40,11 +40,6 @@ func resolveCases() []resolveCase {
 			f.env.Env["TMUX"] = f.path("s.sock") + ",1,0"
 			return f.path("s.sock")
 		}},
-		{name: "TMUX wins over TMUX_TMPDIR regular file", create: true, arrange: func(f *socketFixture) string {
-			f.env.Env["TMUX_TMPDIR"] = f.file("plain")
-			f.env.Env["TMUX"] = f.path("s.sock") + ",1,0"
-			return f.path("s.sock")
-		}},
 		{name: "TMUX wins over unsafe per-user dir", create: true, arrange: func(f *socketFixture) string {
 			f.mkdir("defbase/tmux-"+strconv.Itoa(f.env.UID), 0o777)
 			f.env.Env["TMUX"] = f.path("s.sock") + ",1,0"

@@ -1,12 +1,18 @@
 package spawn
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
+
+// envExePathChild flips this test binary into child mode for
+// TestExecutablePathResolvesSymlink: TestMain prints the real
+// executablePath() and exits before any test runs.
+const envExePathChild = "AD_SPAWN_TEST_EXE_PATH_CHILD"
 
 // TestMain stubs claudeJSONPath to a per-process temp file so existing
 // Launch tests (which create real tmpdir cwds) don't leak project
@@ -16,6 +22,15 @@ import (
 // saves and restores the var via t.Cleanup.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
+	if os.Getenv(envExePathChild) != "" {
+		p, err := executablePath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Print(p)
+		os.Exit(0)
+	}
 	dir, err := os.MkdirTemp("", "agent-director-spawn-tests-*")
 	if err != nil {
 		panic("setup: mkdtemp: " + err.Error())

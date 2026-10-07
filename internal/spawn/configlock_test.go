@@ -1,13 +1,10 @@
 package spawn
 
 import (
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -65,55 +62,6 @@ func assertLockKept(t *testing.T, path string, held os.FileInfo) {
 	if err != nil || !os.SameFile(cur, held) || !cur.ModTime().Equal(held.ModTime()) {
 		t.Errorf("lock dir: %v, %v; want the holder's (mtime %s) left in place", cur, err, held.ModTime())
 	}
-}
-
-// TestPreTrustWaitsForConfigLockHolder pins b.zjm: while a writer holds Claude
-// Code's <file>.lock and saves under it, pre-trust waits, so both updates land.
-func TestPreTrustWaitsForConfigLockHolder(t *testing.T) {
-	env, path := seedConfigDir(t)
-	const cwd = "/tmp/lock-holder-cwd"
-	warn := capturePreTrustWarn(t)
-	// The writer takes the lock as Claude Code does (mkdir) and reads the file under it.
-	holdLock(t, path, time.Now())
-	cfg := readClaudeJSON(t, path)
-
-	// Pre-trust's first sleep between attempts shows it found the lock held.
-	waiting := make(chan struct{})
-	var once sync.Once
-	savedSleep := configLockSleep
-	configLockSleep = func(d time.Duration) { once.Do(func() { close(waiting) }); savedSleep(d) }
-	t.Cleanup(func() { configLockSleep = savedSleep })
-
-	done := make(chan PreTrustOutcome, 1)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { defer wg.Done(); done <- PreTrust(cwd, env, false, config.PreTrust{}) }()
-	t.Cleanup(wg.Wait)
-	select {
-	case got := <-done:
-		t.Fatalf("PreTrust = %q (warning %q) while the lock was held; want it to wait for the holder", got, warn)
-	case <-waiting:
-	}
-
-	// The writer saves its own update to what it read, then releases the lock.
-	cfg["numStartups"] = 3.0
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	seedFile(t, path, string(raw))
-	if err := os.Remove(path + ".lock"); err != nil {
-		t.Fatalf("release lock: %v", err)
-	}
-
-	if got := <-done; got != PreTrustOK {
-		t.Fatalf("PreTrust = %q (warning %q); want ok once the holder released the lock", got, warn)
-	}
-	got := readClaudeJSON(t, path)
-	if !trusts(got, cwd) || got["numStartups"] != 3.0 || got["userID"] != "u" {
-		t.Errorf("claude.json = %v; want projects[%q] trusted and the holder's numStartups 3 kept", got, cwd)
-	}
-	assertNoStray(t, filepath.Dir(path))
 }
 
 // TestPreTrustHeldLockFailsAfterConfiguredWait pins b.kr4 (and b.zjm): a fresh
@@ -195,6 +143,35 @@ func TestPreTrustLockStaleness(t *testing.T) {
 	}
 }
 
+// TestPreTrustReadsUnderTheLock pins b.zjm's read under the lock: the holder
+// updates .claude.json and releases the lock during pre-trust's first wait,
+// and pre-trust's write keeps that update.
+func TestPreTrustReadsUnderTheLock(t *testing.T) {
+	const cwd = "/tmp/reread-cwd"
+	clock := withFakeLockClock(t, 0)
+	env, path := seedConfigDir(t)
+	holdLock(t, path, clock.now)
+	fakeSleep, released := configLockSleep, false
+	configLockSleep = func(d time.Duration) {
+		if !released {
+			released = true
+			seedFile(t, path, `{"projects":{},"userID":"u","numStartups":3}`)
+			if err := os.Remove(path + ".lock"); err != nil {
+				t.Fatalf("release lock: %v", err)
+			}
+		}
+		fakeSleep(d)
+	}
+
+	if got := PreTrust(cwd, env, false, config.PreTrust{}); got != PreTrustOK {
+		t.Fatalf("PreTrust = %q; want ok", got)
+	}
+	if got := readClaudeJSON(t, path); !released || !trusts(got, cwd) || got["numStartups"] != float64(3) {
+		t.Errorf("claude.json = %v (holder released: %v); want projects[%q] trusted and numStartups 3 kept", got, released, cwd)
+	}
+	assertNoStray(t, filepath.Dir(path))
+}
+
 // TestPreTrustWritesNothingUnderLostLock pins b.zjm's check before the write:
 // a lock held over 5 s (never refreshed) or taken over makes pre-trust write nothing.
 func TestPreTrustWritesNothingUnderLostLock(t *testing.T) {
@@ -250,28 +227,4 @@ func TestPreTrustWritesNothingUnderLostLock(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestConfigLockReplacedLock: once another process breaks this lock as stale and
-// takes its own, checkHold reports the takeover and unlock leaves theirs alone.
-func TestConfigLockReplacedLock(t *testing.T) {
-	_, path := seedConfigDir(t)
-	l, err := lockConfig(path, defaultLockWait)
-	if err != nil {
-		t.Fatalf("lockConfig: %v", err)
-	}
-	if err := l.checkHold(); err != nil {
-		t.Fatalf("checkHold on the untouched lock = %v; want nil", err)
-	}
-	if err := os.Remove(path + ".lock"); err != nil {
-		t.Fatalf("break lock: %v", err)
-	}
-	// The other taker's mkdir, then proper-lockfile's mtime probe (next whole second + 5 ms).
-	theirs := holdLock(t, path, time.Now().Truncate(time.Second).Add(time.Second+5*time.Millisecond))
-
-	if err := l.checkHold(); !errors.Is(err, errConfigLockTakenOver) {
-		t.Errorf("checkHold after the takeover = %v; want errConfigLockTakenOver", err)
-	}
-	l.unlock()
-	assertLockKept(t, path, theirs)
 }

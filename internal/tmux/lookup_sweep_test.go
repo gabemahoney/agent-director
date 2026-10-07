@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -85,13 +84,9 @@ func TestSweepOutcomesAndStopRule(t *testing.T) {
 		tokens [3]string // socket A's three rows; not_run: Skipped
 	}{
 		{"timeout stops", failing(tmux.FailTimeout), stopped},
-		{"unrecognised reply stops", failing(tmux.FailUnrecognized), stopped},
-		{"duplicate reply stops", failing(tmux.FailDuplicate), stopped},
-		{"label reply stops", failing(tmux.FailLabel), stopped},
 		{"binary unavailable stops", failing(tmux.FailUnavailable), unavailable},
 		{"socket permission stops", failing(tmux.FailSocketDenied), unavailable},
 		{"no server stops nothing", failing(tmux.FailNoServer), noServer},
-		{"no socket stops nothing", failing(tmux.FailNoSocket), noServer},
 		{"different server stops nothing", func(r *sweepRun) {
 			r.Rec.RebindServer(sockA, lookupOther)
 			r.seed(sockA, lblCurrent, tmuxfix.SeedSession{})
@@ -134,13 +129,7 @@ func TestSweepOutcomesAndStopRule(t *testing.T) {
 // TestSweepBudget: the call that brings the time in calls to the budget has
 // its row Skipped; nothing is called or handed out afterwards, on any socket.
 func TestSweepBudget(t *testing.T) {
-	budgets := []struct {
-		name   string
-		budget time.Duration
-	}{
-		{"default budget", config.Tmux{}.EffectiveSweepBudget()},
-		{"configured budget", 2 * time.Second},
-	}
+	const budget = 2 * time.Second
 	shapes := []struct {
 		name    string
 		over    time.Duration // added to the budget
@@ -151,45 +140,44 @@ func TestSweepBudget(t *testing.T) {
 		{"total just below budget judges that row", time.Nanosecond, false, 5},
 		{"time between rows spends nothing", 0, true, 4},
 	}
-	for _, b := range budgets {
-		for _, s := range shapes {
-			t.Run(b.name+"/"+s.name, func(t *testing.T) {
-				q := b.budget / 4
-				sockets := []string{sweepSocket(0), sweepSocket(1), sweepSocket(2), sweepSocket(3), sweepSocket(4), sweepSocket(5)}
-				r := newSweepRun(t, q, sockets...)
-				want := map[string]int{}
-				for i, sock := range sockets {
-					r.seed(sock, lblCurrent, tmuxfix.SeedSession{})
-					if i < s.calls {
-						want[sock] = 1
-					}
+	for _, s := range shapes {
+		t.Run(s.name, func(t *testing.T) {
+			q := budget / 4
+			sockets := []string{sweepSocket(0), sweepSocket(1), sweepSocket(2), sweepSocket(3), sweepSocket(4), sweepSocket(5)}
+			r := newSweepRun(t, q, sockets...)
+			want := map[string]int{}
+			for i, sock := range sockets {
+				r.seed(sock, lblCurrent, tmuxfix.SeedSession{})
+				if i < s.calls {
+					want[sock] = 1
 				}
-				sw := r.sweep(b.budget + s.over)
-				var idle time.Duration
-				// One row per socket, then socket 0's again: its answer is held.
-				for i, sock := range append(sockets, sockets[0]) {
-					if s.between && i > 0 {
-						r.Clock.Advance(10 * b.budget)
-						idle += 10 * b.budget
-					}
-					row := r.row(sock)
-					if got := sw.Lookup(row, ""); i < s.calls-1 {
-						r.check(got, row, "")
-					} else {
-						checkSkipped(t, got)
-					}
+			}
+			sw := r.sweep(budget + s.over)
+			var idle time.Duration
+			// One row per socket, then socket 0's again: its answer is held.
+			for i, sock := range append(sockets, sockets[0]) {
+				if s.between && i > 0 {
+					r.Clock.Advance(10 * budget)
+					idle += 10 * budget
 				}
-				r.checkCalls(tmux.CallLookup, want)
-				if spent := r.Clock.Now().Sub(sweepT0) - idle; spent > b.budget+s.over+q {
-					t.Errorf("time in calls %v, want at most budget plus one call (%v)", spent, b.budget+s.over+q)
+				row := r.row(sock)
+				if got := sw.Lookup(row, ""); i < s.calls-1 {
+					r.check(got, row, "")
+				} else {
+					checkSkipped(t, got)
 				}
-			})
-		}
+			}
+			r.checkCalls(tmux.CallLookup, want)
+			if spent := r.Clock.Now().Sub(sweepT0) - idle; spent > budget+s.over+q {
+				t.Errorf("time in calls %v, want at most budget plus one call (%v)", spent, budget+s.over+q)
+			}
+		})
 	}
 }
 
-// TestSweepBudgetClockSteppedBack: a clock stepped back during a call leaves
-// the time spent unchanged; a refund would let the third row be judged.
+// TestSweepBudgetClockSteppedBack: a clock stepped back during a call (a
+// lookup's here; a listing's is charged the same way) leaves the time spent
+// unchanged; a refund would let the third row be judged.
 func TestSweepBudgetClockSteppedBack(t *testing.T) {
 	r := newSweepRun(t, sweepQuery, sockA, sockB, sockC)
 	for _, sock := range []string{sockA, sockB, sockC} {

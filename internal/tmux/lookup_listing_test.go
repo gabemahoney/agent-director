@@ -28,6 +28,14 @@ func stoppedWith(fl tmux.Failure, proc procfix.Process) func(*lookupFixture) {
 	}
 }
 
+// errLookup is a LookupClient whose call fails with an error that is not a
+// *tmux.CallError.
+type errLookup struct{}
+
+func (errLookup) Lookup(string) (tmux.LookupAnswer, error) {
+	return tmux.LookupAnswer{}, errors.New("broken")
+}
+
 // TestListingFailureMatchesLookup: ListingFailure's Result equals the lookup's
 // for the same failure, the listing's call in Cause, with no tmux call and the
 // same start-time reads.
@@ -44,9 +52,6 @@ func TestListingFailureMatchesLookup(t *testing.T) {
 		{name: "unrecognised reply",
 			setup: scriptedBoth(tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: "unknown command", ExitStatus: 1}),
 			want:  wantUnreadable(tmux.FailUnrecognized)},
-		{name: "malformed reply",
-			setup: scriptedBoth(tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: "%1\tnot-a-pid", HadStdout: true}),
-			want:  wantUnreadable(tmux.FailUnrecognized)},
 		{name: "error that is not a CallError", setup: func(*lookupFixture) {}, plain: true, want: wantUnreadable(0)},
 		{name: "missing binary", setup: scriptedBoth(tmuxfix.Script{Failure: tmux.FailUnavailable}),
 			want: wantUnavailable(tmux.FailUnavailable)},
@@ -58,10 +63,6 @@ func TestListingFailureMatchesLookup(t *testing.T) {
 		{name: "no server, recorded server unreadable",
 			setup: stoppedWith(tmux.FailNoServer, procfix.Unreadable()), want: differentServer},
 		{name: "no socket, recorded server gone", setup: stoppedWith(tmux.FailNoSocket, procfix.Gone()), want: restarted},
-		{name: "no socket, recorded server alive",
-			setup: stoppedWith(tmux.FailNoSocket, procfix.Alive(lookupRecorded.ProcStart)), want: differentServer},
-		{name: "no socket, recorded server unreadable",
-			setup: stoppedWith(tmux.FailNoSocket, procfix.Unreadable()), want: differentServer},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

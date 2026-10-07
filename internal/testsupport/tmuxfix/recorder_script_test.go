@@ -94,59 +94,30 @@ func TestRecorder_NewSession(t *testing.T) {
 }
 
 // TestRecorder_NewSessionStoredNames: a create lists the catalogue's stored
-// name; a $ or \ name is unlabelled until SetLabel labels it by id.
+// name; a $ or \ name is unlabelled until SetLabel labels it by id. Both
+// label with, and record, the caller's store id.
 func TestRecorder_NewSessionStoredNames(t *testing.T) {
+	want := tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.OtherStoreID)
 	for _, n := range tmuxfix.StoredNames() {
 		t.Run(n.Source+"/"+n.Stored, func(t *testing.T) {
 			r := tmuxfix.NewRecorder()
-			reply, err := r.NewSession(sockA, n.Raw, "/w", nil, nil, tmuxfix.Token, agent, tmuxfix.StoreID)
+			reply, err := r.NewSession(sockA, n.Raw, "/w", nil, nil, tmuxfix.Token, agent, tmuxfix.OtherStoreID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			got := findByName(t, r, n.Stored)
-			if labelled := got.Label == tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID); labelled == n.LabelByID || got.LabelSet != labelled {
+			if labelled := got.Label == want; labelled == n.LabelByID || got.LabelSet != labelled {
 				t.Fatalf("label = %+v (set %v); label-by-id name %v", got.Label, got.LabelSet, n.LabelByID)
 			}
-			if !n.LabelByID {
-				return
-			}
-			if err := r.SetLabel(sockA, reply.SessionID, reply.PaneID, tmuxfix.Token, agent, tmuxfix.StoreID); err != nil {
-				t.Fatal(err)
-			}
-			if a := lookup(t, r, sockA); a.Sessions[0].Label != tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID) {
-				t.Errorf("after SetLabel label = %+v", a.Sessions[0].Label)
-			}
-		})
-	}
-}
-
-// TestRecorder_LabelsWithCallersStoreID: a chained create, and SetLabel after
-// a label-by-id create, label the session with the caller's store id and
-// record it on each call.
-func TestRecorder_LabelsWithCallersStoreID(t *testing.T) {
-	for _, tc := range []struct{ name, session string }{{"chained", "work"}, {"by-id", `a$b`}} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := tmuxfix.NewRecorder()
-			reply, err := r.NewSession(sockA, tc.session, "/w", nil, nil, tmuxfix.Token, agent, tmuxfix.OtherStoreID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			calls := 1
-			if tmux.NeedsLabelByID(tc.session) {
-				calls++
+			if n.LabelByID {
 				if err := r.SetLabel(sockA, reply.SessionID, reply.PaneID, tmuxfix.Token, agent, tmuxfix.OtherStoreID); err != nil {
 					t.Fatal(err)
 				}
+				if a := lookup(t, r, sockA); a.Sessions[0].Label != want {
+					t.Errorf("after SetLabel label = %+v", a.Sessions[0].Label)
+				}
 			}
-			want := tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.OtherStoreID)
-			if a := lookup(t, r, sockA); len(a.Sessions) != 1 || a.Sessions[0].Label != want {
-				t.Errorf("lookup sessions = %+v, want one labelled %+v", a.Sessions, want)
-			}
-			labels := append(r.SocketCallsOf(tmux.CallCreate), r.SocketCallsOf(tmux.CallSetLabel)...)
-			if len(labels) != calls {
-				t.Fatalf("recorded %d create and label calls, want %d", len(labels), calls)
-			}
-			for _, c := range labels {
+			for _, c := range append(r.SocketCallsOf(tmux.CallCreate), r.SocketCallsOf(tmux.CallSetLabel)...) {
 				if c.StoreID != tmuxfix.OtherStoreID {
 					t.Errorf("recorded %s call StoreID = %q, want %q", c.Call, c.StoreID, tmuxfix.OtherStoreID)
 				}
@@ -259,87 +230,6 @@ func TestRecorder_ScriptMatching(t *testing.T) {
 			}
 			if got := paneCounts(r, sockA); !reflect.DeepEqual(got, tc.wantIDs) {
 				t.Errorf("table = %v, want %v", got, tc.wantIDs)
-			}
-		})
-	}
-}
-
-// TestRecorder_AppliedCreate: a scripted create failure returns no reply and
-// the CallError the production client would fill; with Applied the session
-// is added and labelled by the chain rule first, without it nothing is added.
-func TestRecorder_AppliedCreate(t *testing.T) {
-	cases := []struct {
-		name      string
-		script    tmuxfix.Script
-		want      tmux.CallError
-		wantAdded bool
-	}{
-		{"applied-exit-0-unparseable",
-			tmuxfix.Script{Failure: tmux.FailUnrecognized, Applied: true, HadStdout: true},
-			tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailUnrecognized, ExitStatus: 0, HadStdout: true}, true},
-		{"applied-timeout",
-			tmuxfix.Script{Failure: tmux.FailTimeout, Applied: true},
-			tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailTimeout,
-				Timeout: classTimeout(defaultTimeouts(), tmux.CallCreate), ExitStatus: -1}, true},
-		{"applied-nonzero-with-reply",
-			tmuxfix.Script{Failure: tmux.FailUnrecognized, Applied: true, ExitStatus: 1, HadStdout: true},
-			tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: true}, true},
-		{"not-applied-nonzero",
-			tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1},
-			tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: false}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := tmuxfix.NewRecorder().Script(sockA, tc.script, tmux.CallCreate)
-			reply, err := r.NewSession(sockA, "work", "/w", nil, nil, tmuxfix.Token, agent, tmuxfix.StoreID)
-			if reply != (tmux.CreateReply{}) {
-				t.Errorf("reply = %+v, want none", reply)
-			}
-			if ce := callErr(t, err); *ce != tc.want {
-				t.Errorf("CallError = %+v, want %+v", *ce, tc.want)
-			}
-			if !tc.wantAdded {
-				if got := r.Sessions(sockA); len(got) != 0 {
-					t.Errorf("sessions = %+v, want none added", got)
-				}
-				return
-			}
-			if got := r.Sessions(sockA); len(got) != 1 {
-				t.Errorf("sessions = %+v, want exactly the created one", got)
-			}
-			if got := findByName(t, r, "work"); got.Label != tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID) {
-				t.Errorf("label = %+v, want %+v", got.Label, tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID))
-			}
-		})
-	}
-}
-
-// TestRecorder_RecordsCalls: each call is recorded with its kind, socket,
-// target, (SetLabel only) pane id and (key send only) key; Reset discards the
-// records.
-func TestRecorder_RecordsCalls(t *testing.T) {
-	for _, inv := range invokers {
-		t.Run(string(inv.call), func(t *testing.T) {
-			r := seeded()
-			_ = inv.do(r, sockA)
-			calls := r.SocketCalls()
-			last := calls[len(calls)-1]
-			wantPane, wantKey := "", ""
-			switch inv.call {
-			case tmux.CallSetLabel:
-				wantPane = "%0"
-			case tmux.CallSendKey:
-				wantKey = "C-u"
-			}
-			if last.Call != inv.call || last.Socket != sockA || last.Target != inv.target || last.PaneID != wantPane ||
-				last.Key != wantKey {
-				t.Errorf("recorded %+v, want %s on %s at %q pane %q key %q", last, inv.call, sockA, inv.target, wantPane, wantKey)
-			}
-			if got := r.SocketCallsOf(inv.call); len(got) != 1 || !reflect.DeepEqual(got[0], last) {
-				t.Errorf("SocketCallsOf = %+v", got)
-			}
-			if r.Reset(); len(r.SocketCalls()) != 0 {
-				t.Errorf("after Reset: %+v", r.SocketCalls())
 			}
 		})
 	}

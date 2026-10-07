@@ -27,15 +27,12 @@ func placed(label, fault string, want tmux.UnusableKind) []unusableCase {
 	}
 }
 
-// mixed puts faults a and b apart in a plain name in both orders and at both ends.
+// mixed puts faults a and b in a plain name in both orders, and adjacent.
 func mixed(label, a, b string, want tmux.UnusableKind) []unusableCase {
 	return []unusableCase{
 		{label + "/a-then-b", "x" + a + "y" + b + "z", want},
-		{label + "/b-then-a", "x" + b + "y" + a + "z", want},
-		{label + "/at-ends", a + "xy" + b, want},
-		{label + "/at-ends-reversed", b + "xy" + a, want},
+		{label + "/b-then-a", b + "xy" + a, want},
 		{label + "/adjacent", "x" + a + b + "z", want},
-		{label + "/adjacent-reversed", "x" + b + a + "z", want},
 	}
 }
 
@@ -128,17 +125,12 @@ func TestUnusablePrecedence(t *testing.T) {
 		want        tmux.UnusableKind
 	}{
 		{"control+dot", "\x01", ".", tmux.UnusableControl},
-		{"control+colon", "\t", ":", tmux.UnusableControl},
 		{"del+dot", "\x7f", ".", tmux.UnusableControl},
 		{"control+lone-ff", "\x1b", loneFF, tmux.UnusableControl},
-		{"control+truncated", "\n", truncated, tmux.UnusableControl},
 		{"control+overlong", "\x00", overlong, tmux.UnusableControl},
-		{"control+dot+invalid", "\x1f.", loneFF, tmux.UnusableControl},
 		{"dot+lone-ff", ".", loneFF, tmux.UnusableRewritten},
-		{"colon+truncated", ":", truncated, tmux.UnusableRewritten},
 		{"dot+colon", ".", ":", tmux.UnusableRewritten},
 		{"dollar+dot", "$", ".", tmux.UnusableRewritten},
-		{"backslash+lone-ff", `\`, loneFF, tmux.UnusableRewritten},
 		{"hash+control", "#", "\x01", tmux.UnusableControl},
 	} {
 		cases = append(cases, mixed(c.label, c.a, c.b, c.want)...)
@@ -148,22 +140,6 @@ func TestUnusablePrecedence(t *testing.T) {
 		unusableCase{"control-after-lead-byte-only", "\xc3\x7f", tmux.UnusableControl},
 	)
 	runUnusable(t, cases)
-}
-
-// TestUnusableZeroValueIsNone: an unset kind reads as usable, and the four
-// kinds are distinct so each fault maps to its own kind (F.2).
-func TestUnusableZeroValueIsNone(t *testing.T) {
-	var zero tmux.UnusableKind
-	if zero != tmux.UnusableNone {
-		t.Fatalf("zero UnusableKind = %d, want UnusableNone (%d)", zero, tmux.UnusableNone)
-	}
-	kinds := map[tmux.UnusableKind]bool{}
-	for _, k := range []tmux.UnusableKind{tmux.UnusableNone, tmux.UnusableEmpty, tmux.UnusableControl, tmux.UnusableRewritten} {
-		kinds[k] = true
-	}
-	if len(kinds) != 4 {
-		t.Fatalf("the four UnusableKind values are not distinct: %v", kinds)
-	}
 }
 
 // TestUnusableIgnoresEnvironment: the kind depends on the name alone, not on

@@ -26,12 +26,8 @@ func TestEnsureSocketDir(t *testing.T) {
 		{name: "existing valid per-user dir unchanged", arrange: func(f *socketFixture) string {
 			return f.mkdir("base/tmux-"+strconv.Itoa(f.env.UID), 0o700) + "/default"
 		}},
-		{name: "existing unsafe per-user dir unchanged", arrange: func(f *socketFixture) string {
+		{name: "existing unsafe per-user dir left unchecked", arrange: func(f *socketFixture) string {
 			return f.mkdir("base/tmux-"+strconv.Itoa(f.env.UID), 0o777) + "/default"
-		}},
-		{name: "existing per-user dir not owned by seam uid unchanged", arrange: func(f *socketFixture) string {
-			f.env.UID = 4242
-			return f.mkdir("base/tmux-4242", 0o700) + "/default"
 		}},
 		{name: "existing dir of another server's TMUX socket unchanged", arrange: func(f *socketFixture) string {
 			return f.mkdir("other", 0o777) + "/x.sock"

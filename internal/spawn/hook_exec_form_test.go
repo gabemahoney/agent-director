@@ -60,6 +60,11 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 		}
 		var ours, help []map[string]any
 		for _, entry := range top.Hooks[evt] {
+			for k := range entry {
+				if k != "matcher" && k != "hooks" {
+					t.Errorf("%s: outer entry carries %q; want only matcher and hooks (timeout is inner only)", evt, k)
+				}
+			}
 			inner, _ := entry["hooks"].([]any)
 			if len(inner) != 1 {
 				t.Errorf("%s: entry %v has %d inner commands; want 1", evt, entry, len(inner))
@@ -101,13 +106,14 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 }
 
 // TestHookExecFormSettings: every agent-director hook is exec form with the
-// path verbatim (never quoted); the help entry stays shell form.
+// path verbatim (never quoted); the help entry, only with inject_help_hook,
+// stays shell form and quotes a path with a space.
 func TestHookExecFormSettings(t *testing.T) {
 	cases := []struct {
 		name, exe, helpBin, wantHelp string
 		injectHelp                   bool
 	}{
-		{name: "plain path", exe: "/opt/ad/bin/agent-director"},
+		{name: "plain path, no help entry unless injected", exe: "/opt/ad/bin/agent-director", helpBin: "/opt/help/agent-director"},
 		{name: "path with a space is verbatim", exe: "/opt/with space/agent-director"},
 		{name: "help entry shell form", exe: "/opt/ad/bin/agent-director", injectHelp: true,
 			helpBin: "/home/op/.agent-director/bin/agent-director", wantHelp: "/home/op/.agent-director/bin/agent-director help"},

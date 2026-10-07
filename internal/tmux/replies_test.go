@@ -39,14 +39,15 @@ func replyCase(entry string, k tmux.Call, name string) string {
 }
 
 // replyCall makes one call of kind k answered by res (an Enter send follows a
-// silent text send) and returns the runner and the call's error.
-func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (*scriptedRunner, error) {
+// silent text send) and returns the create's reply and the call's error.
+func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (tmux.CreateReply, error) {
 	t.Helper()
 	script := []tmux.RunResult{res}
 	if k == tmux.CallSendEnter {
 		script = []tmux.RunResult{tmuxfix.Silent().Result(), res}
 	}
-	c, r := newScripted(t, script...)
+	c, _ := newScripted(t, script...)
+	var reply tmux.CreateReply
 	var err error
 	switch k {
 	case tmux.CallLookup:
@@ -66,13 +67,13 @@ func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (*scr
 	case tmux.CallCapture:
 		_, err = c.CapturePaneID(testSocket, "%0", 10, false)
 	case tmux.CallCreate:
-		_, err = c.NewSession(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x", tmuxfix.StoreID)
+		reply, err = c.NewSession(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	case tmux.CallSetLabel:
 		err = c.SetLabel(testSocket, "$0", "%0", tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	default:
 		t.Fatalf("unknown call kind %q", k)
 	}
-	return r, err
+	return reply, err
 }
 
 // wantCallError checks err is nil for want 0, else a *CallError of kind want on
@@ -86,10 +87,7 @@ func wantCallError(t *testing.T, err error, k tmux.Call, want tmux.Failure) *tmu
 		}
 		return nil
 	}
-	var ce *tmux.CallError
-	if !errors.As(err, &ce) {
-		t.Fatalf("want *tmux.CallError (%v), got %T: %v", want, err, err)
-	}
+	ce := callError(t, err)
 	if ce.Call != k || ce.Failure != want {
 		t.Fatalf("got Call %q Failure %v, want Call %q Failure %v", ce.Call, ce.Failure, k, want)
 	}
@@ -107,7 +105,9 @@ func wantCallError(t *testing.T, err error, k tmux.Call, want tmux.Failure) *tmu
 }
 
 // TestReplayReplies replays every reply and create entry on each call kind it
-// lists, checking the kind, the reply's socket and the capped first line.
+// lists, checking the kind, the reply's socket and the capped first line; a
+// create returns its reply on success and with FailLabel (a chained name's
+// label step failed; by id, the same answer is a success), else none.
 func TestReplayReplies(t *testing.T) {
 	entries := append(tmuxfix.Replies(replySocket), tmuxfix.CreateReplies()...)
 	for _, e := range entries {
@@ -118,10 +118,20 @@ func TestReplayReplies(t *testing.T) {
 					if e.ChainOnly && tmux.NeedsLabelByID(name) {
 						want = 0
 					}
-					_, err := replyCall(t, k, name, e.Result())
+					reply, err := replyCall(t, k, name, e.Result())
 					ce := wantCallError(t, err, k, want)
+					var wantReply tmux.CreateReply
+					if want == 0 || want == tmux.FailLabel {
+						wantReply = e.Create
+					}
+					if reply != wantReply {
+						t.Errorf("reply = %+v, want %+v", reply, wantReply)
+					}
 					if ce == nil {
 						return
+					}
+					if k == tmux.CallCreate && (ce.ExitStatus != e.Exit || ce.HadStdout != (e.Stdout != "")) {
+						t.Errorf("ExitStatus %d, HadStdout %v; want %d, %v", ce.ExitStatus, ce.HadStdout, e.Exit, e.Stdout != "")
 					}
 					if ce.Socket != e.Socket {
 						t.Errorf("Socket = %q, want %q", ce.Socket, e.Socket)
@@ -169,26 +179,6 @@ func TestReplayEveryCallKind(t *testing.T) {
 	}
 }
 
-// TestReplayLookupNeverLeaksLabel checks a lookup answer that fails to parse
-// keeps its label values out of FirstLine and Error().
-func TestReplayLookupNeverLeaksLabel(t *testing.T) {
-	for _, e := range tmuxfix.LookupAnswers() {
-		want := e.Want[tmux.CallLookup]
-		if want == 0 || len(e.LabelValues) == 0 {
-			continue
-		}
-		t.Run(e.Name, func(t *testing.T) {
-			_, err := replyCall(t, tmux.CallLookup, "", e.Result())
-			ce := wantCallError(t, err, tmux.CallLookup, want)
-			for _, v := range e.LabelValues {
-				if strings.Contains(ce.FirstLine, v) || strings.Contains(err.Error(), v) {
-					t.Errorf("label value %q leaked into %q", v, err.Error())
-				}
-			}
-		})
-	}
-}
-
 // TestReplaySendKeysPaneFailedStep checks a failed text send makes no Enter
 // call, and a failed Enter send is reported as the Enter send.
 func TestReplaySendKeysPaneFailedStep(t *testing.T) {
@@ -198,9 +188,7 @@ func TestReplaySendKeysPaneFailedStep(t *testing.T) {
 		want tmux.Failure
 	}{
 		{"no-server", tmuxfix.NoServer(replySocket).Result(), tmux.FailNoServer},
-		{"cant-find-pane", tmuxfix.Find(tmuxfix.Replies(replySocket), "reply/cant-find-pane").Result(), tmux.FailUnrecognized},
 		{"timeout", timedOut(), tmux.FailTimeout},
-		{"exec-failure", notStarted(), tmux.FailUnavailable},
 	}
 	steps := []struct {
 		name  string

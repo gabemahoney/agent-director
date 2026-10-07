@@ -127,15 +127,11 @@ func TestJudgeProcess(t *testing.T) {
 		{"alive with the recorded start and an instance environment", paneIdent(),
 			listed(procfix.Alive(agentStart).WithEnv(instanceEnv)), tmux.ProcAlive, []int{pid}},
 		{"alive with another start", paneIdent(), listed(procfix.Alive(agentOtherStart)), tmux.ProcGone, []int{pid}},
-		{"another start despite an instance environment", paneIdent(),
-			listed(procfix.Alive(agentOtherStart).WithEnv(instanceEnv)), tmux.ProcGone, []int{pid}},
 		{"not listed", paneIdent(), nil, tmux.ProcGone, []int{pid}},
 		{"gone", paneIdent(), listed(procfix.Gone()), tmux.ProcGone, []int{pid}},
 		{"zombie", paneIdent(), listed(procfix.Zombie()), tmux.ProcGone, []int{pid}},
 		{"unreadable", paneIdent(), listed(procfix.Unreadable()), tmux.ProcUnknown, []int{pid}},
 		{"pid-only alive", paneIdent(identStart("")), listed(procfix.Alive(agentStart)), tmux.ProcUnknown, []int{pid}},
-		{"pid-only alive with an instance environment", paneIdent(identStart("")),
-			listed(procfix.Alive(agentStart).WithEnv(instanceEnv)), tmux.ProcUnknown, []int{pid}},
 		{"pid-only unreadable", paneIdent(identStart("")), listed(procfix.Unreadable()), tmux.ProcUnknown, []int{pid}},
 		{"pid-only absent", paneIdent(identStart("")), nil, tmux.ProcGone, []int{pid}},
 		{"pid-only zombie", paneIdent(identStart("")), listed(procfix.Zombie()), tmux.ProcGone, []int{pid}},
@@ -170,6 +166,10 @@ func TestJudgeProcess_SelectedAgent(t *testing.T) {
 		{"pid-only pane differs, pane alive", ssIdent(), paneIdent(identStart("")), procfix.Alive(agentStart),
 			tmux.ProcUnknown, []int{agentPanePID}},
 		{"neither recorded", identNone, identNone, procfix.Alive(agentStart), tmux.ProcNone, nil},
+		// Equal pids, SessionStart start time missing: the pid-only SessionStart
+		// identity is selected and never judged alive, though the pane's would be.
+		{"equal pids, pid-only SessionStart", ssIdent(identStart("")), paneIdent(identPID(agentSSPID)),
+			procfix.Gone(), tmux.ProcUnknown, []int{agentSSPID}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,15 +180,6 @@ func TestJudgeProcess_SelectedAgent(t *testing.T) {
 			checkJudged(t, pc, tmux.JudgeProcess(pc, sel.Identity), tc.want, tc.asked)
 		})
 	}
-}
-
-// Equal pids with the SessionStart start time missing select the pid-only
-// SessionStart identity, which is never judged alive even though the pane's is.
-func TestJudgeProcess_SelectedPidOnlyNeverAlive(t *testing.T) {
-	pc := procfix.New()
-	pc.Set(agentSSPID, procfix.Alive(agentStart))
-	sel := tmux.SelectAgentProcess(ssIdent(identStart("")), paneIdent(identPID(agentSSPID)))
-	checkJudged(t, pc, tmux.JudgeProcess(pc, sel.Identity), tmux.ProcUnknown, []int{agentSSPID})
 }
 
 // listed is p as a listed process-table entry.

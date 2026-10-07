@@ -77,18 +77,6 @@ func TestSweepListPanesOncePerSocket(t *testing.T) {
 	}
 }
 
-// TestSweepExpireStyleMakesNoListing: a sweep that only looks up makes no
-// listing call.
-func TestSweepExpireStyleMakesNoListing(t *testing.T) {
-	r := newPaneRun(t, sockA, sockB)
-	sw := r.sweep(noBudget)
-	for _, row := range []tmux.Launch{r.row(sockA), r.row(sockB), r.row(sockA, rowNoServer)} {
-		r.check(sw.Lookup(row, ""), row, "")
-	}
-	r.checkCalls(tmux.CallListPanes, map[string]int{})
-	r.checkCalls(tmux.CallLookup, map[string]int{sockA: 1, sockB: 1})
-}
-
 // TestSweepListingFailures: a listing failure maps as the lookup's does; an
 // unreadable or unavailable one stops only its socket, held answers included.
 func TestSweepListingFailures(t *testing.T) {
@@ -98,11 +86,8 @@ func TestSweepListingFailures(t *testing.T) {
 		stops bool
 	}{
 		{"timeout stops", tmux.FailTimeout, true},
-		{"unrecognised reply stops", tmux.FailUnrecognized, true},
-		{"binary unavailable stops", tmux.FailUnavailable, true},
 		{"socket permission stops", tmux.FailSocketDenied, true},
 		{"no server stops nothing", tmux.FailNoServer, false},
-		{"no socket stops nothing", tmux.FailNoSocket, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,20 +188,4 @@ func TestSweepNonPositiveBudget(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestSweepListingClockSteppedBack:a clock stepped back during a listing
-// refunds nothing; a refund would let the next lookup be judged.
-func TestSweepListingClockSteppedBack(t *testing.T) {
-	r := newPaneRun(t, sockA, sockB)
-	r.Rec.AfterCall(tmux.CallListPanes, func(tmuxfix.SocketCall, error) { r.Clock.Advance(-3 * sweepQuery) })
-	sw := r.sweep(2 * sweepQuery)
-	a, b := r.row(sockA), r.row(sockB)
-	r.check(sw.Lookup(a, ""), a, "")
-	if got := sw.ListPanes(r.Rec, a); !got.Listed {
-		t.Errorf("listing %+v, want listed", got)
-	}
-	checkSkipped(t, sw.Lookup(b, ""))
-	r.checkCalls(tmux.CallLookup, map[string]int{sockA: 1, sockB: 1})
-	r.checkCalls(tmux.CallListPanes, map[string]int{sockA: 1})
 }

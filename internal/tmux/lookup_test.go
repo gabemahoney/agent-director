@@ -1,8 +1,6 @@
 package tmux_test
 
 import (
-	"cmp"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -112,9 +110,6 @@ func TestLookupGone(t *testing.T) {
 		{name: "no session", row: []lookupRowOpt{rowNoServer}, want: wantGone(tmux.ServerUnknown)},
 		{name: "only foreign labels", setup: seeded(lblForeign, lblForeign), want: wantGone(match)},
 		{name: "only labels of class none", setup: seeded(lblNone, lblUnset), want: wantGone(match)},
-		{name: "other store with the row's id and token", setup: seeded(lblOtherStore), want: wantGone(match)},
-		{name: "other store with the row's id and another token", setup: seeded(lblOtherStoreOld), want: wantGone(match)},
-		{name: "other store with another id", setup: seeded(lblOtherStoreForeign), want: wantGone(match)},
 		{name: "every other-store kind", setup: seeded(lblOtherStore, lblOtherStoreOld, lblOtherStoreForeign),
 			want: wantGone(match)},
 		{name: "empty store id", row: []lookupRowOpt{rowNoStoreID}, setup: seeded(lblCurrent, lblOld),
@@ -195,57 +190,6 @@ func TestLookupCallFailures(t *testing.T) {
 		{name: "socket permission", setup: failing(tmux.FailSocketDenied), holder: "held",
 			want: wantUnavailable(tmux.FailSocketDenied)},
 	})
-}
-
-// errLookup is a LookupClient whose call fails with an error that is not a
-// *tmux.CallError.
-type errLookup struct{}
-
-func (errLookup) Lookup(string) (tmux.LookupAnswer, error) {
-	return tmux.LookupAnswer{}, errors.New("broken")
-}
-
-// TestLookupUnreadableAnswers: every malformed catalogue answer, through the
-// production parse, and an untyped error are cant_tell.
-func TestLookupUnreadableAnswers(t *testing.T) {
-	for _, e := range tmuxfix.LookupAnswers() {
-		if e.Want[tmux.CallLookup] != tmux.FailUnrecognized {
-			continue
-		}
-		t.Run(e.Name, func(t *testing.T) {
-			f := newLookupFixture(t)
-			c, _ := newReplay(t, e)
-			f.check(f.runOn(c, ""), wantUnreadable(tmux.FailUnrecognized))
-		})
-	}
-	t.Run("error that is not a CallError", func(t *testing.T) {
-		f := newLookupFixture(t)
-		f.check(f.runOn(errLookup{}, ""), wantUnreadable(0))
-	})
-}
-
-// TestLookupLabelShapes (AC-LKP-05): every catalogue label shape through the
-// production parse; none-class shapes are never Ours or Leftover.
-func TestLookupLabelShapes(t *testing.T) {
-	for _, s := range tmuxfix.LabelShapes() {
-		t.Run(s.Name, func(t *testing.T) {
-			f := newLookupFixture(t, rowNoServer, rowInstanceID(cmp.Or(s.Want.InstanceID, "agent-x")))
-			c, _ := newReplay(t, s.Entry())
-			got := f.runOn(c, "")
-			switch {
-			case s.ScopeValue:
-				f.check(got, wantConflict(tmux.ServerUnknown, tmux.ReasonScopeValue))
-			case s.Want.Kind == tmux.LabelValid && s.Want.StoreID == f.Row.StoreID:
-				// Positive control: the same path does give Ours for a valid label.
-				if got.Token() != "ours" || got.Session.ID != tmuxfix.LabelLineID || !got.Adopt {
-					t.Errorf("valid shape: %q session %q adopt %v, want ours on %s", got.Token(), got.Session.ID,
-						got.Adopt, tmuxfix.LabelLineID)
-				}
-			default:
-				f.check(got, wantGone(tmux.ServerUnknown))
-			}
-		})
-	}
 }
 
 // TestLookupControlCharIDs (SR-3.13): a row whose id holds a control

@@ -1,6 +1,7 @@
 package tmux_test
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -67,29 +68,24 @@ func (s *scriptedRunner) Only() tmux.Invocation {
 // newScripted builds a client with testTimeouts whose socket-taking calls are
 // answered, in order, by script.
 func newScripted(t testing.TB, script ...tmux.RunResult) (*tmux.Client, *scriptedRunner) {
-	return newScriptedWith(t, "", testTimeouts, script...)
-}
-
-// newScriptedWith is newScripted with a chosen binary and timeouts.
-func newScriptedWith(t testing.TB, binary string, to tmux.Timeouts, script ...tmux.RunResult) (*tmux.Client, *scriptedRunner) {
 	s := &scriptedRunner{t: t, script: script}
-	return tmux.NewWithRunner(binary, to, s.run), s
+	return tmux.NewWithRunner("", testTimeouts, s.run), s
 }
 
-// newReplay builds a client with testTimeouts whose calls are answered, in
-// order, by the recorded bytes and exit status of the catalogue entries.
-func newReplay(t testing.TB, entries ...tmuxfix.Entry) (*tmux.Client, *scriptedRunner) {
-	return newScripted(t, replayed(entries...)...)
+// newReplay builds a client with testTimeouts whose one call is answered by
+// the recorded bytes and exit status of the catalogue entry e.
+func newReplay(t testing.TB, e tmuxfix.Entry) (*tmux.Client, *scriptedRunner) {
+	return newScripted(t, e.Result())
 }
 
-// replayed turns catalogue entries into script steps, to mix with the
-// timeout, exec-failure and pipe-close-wait steps below.
-func replayed(entries ...tmuxfix.Entry) []tmux.RunResult {
-	out := make([]tmux.RunResult, len(entries))
-	for i, e := range entries {
-		out[i] = e.Result()
+// callError returns err as a *tmux.CallError, failing the test otherwise.
+func callError(t testing.TB, err error) *tmux.CallError {
+	t.Helper()
+	var ce *tmux.CallError
+	if !errors.As(err, &ce) {
+		t.Fatalf("error = %v (%T), want *tmux.CallError", err, err)
 	}
-	return out
+	return ce
 }
 
 // exited answers with a process that exited on its own.
@@ -99,11 +95,6 @@ func exited(status int, stdout, stderr string) tmux.RunResult {
 
 // exitZero answers with an exit 0 printing stdout and nothing on stderr.
 func exitZero(stdout string) tmux.RunResult { return exited(0, stdout, "") }
-
-// pipesCut answers with an exit 0 whose pipes the pipe-close wait closed.
-func pipesCut(stdout string) tmux.RunResult {
-	return tmux.RunResult{Status: tmux.RunPipesCut, ExitStatus: 0, Stdout: []byte(stdout)}
-}
 
 // timedOut answers with a client terminated at its class timeout.
 func timedOut() tmux.RunResult { return tmux.RunResult{Status: tmux.RunTimedOut, ExitStatus: -1} }

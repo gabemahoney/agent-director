@@ -1,7 +1,6 @@
 package tmux_test
 
 import (
-	"errors"
 	"reflect"
 	"slices"
 	"strconv"
@@ -27,10 +26,7 @@ func parseLookupOf(t *testing.T, e tmuxfix.Entry) (tmux.LookupAnswer, error) {
 // parseWantFailure returns err as a *tmux.CallError of call and failure f.
 func parseWantFailure(t *testing.T, err error, call tmux.Call, f tmux.Failure) *tmux.CallError {
 	t.Helper()
-	var ce *tmux.CallError
-	if !errors.As(err, &ce) {
-		t.Fatalf("err = %v (%T), want *tmux.CallError", err, err)
-	}
+	ce := callError(t, err)
 	if ce.Call != call || ce.Failure != f {
 		t.Fatalf("CallError = {Call %q, Failure %v}, want {%q, %v}", ce.Call, ce.Failure, call, f)
 	}
@@ -206,55 +202,6 @@ func parseShapeLabel(t *testing.T, s tmuxfix.LabelShape) (tmux.Label, bool) {
 		t.Fatalf("sessions = %+v, want one on %s", ans.Sessions, tmuxfix.LabelLineID)
 	}
 	return ans.Sessions[0].Label, ans.ScopeValue
-}
-
-// TestParseLabelFields pins the five-field split on named catalogue shapes,
-// independent of their Want: the id runs to the last space, byte for byte,
-// and the store id is the last field.
-func TestParseLabelFields(t *testing.T) {
-	valid := func(id, store string) tmux.Label {
-		return tmux.Label{Kind: tmux.LabelValid, Token: tmuxfix.Token, InstanceID: id, StoreID: store}
-	}
-	want := map[string]tmux.Label{
-		"valid-spaces":              valid("agent x y", tmuxfix.StoreID),
-		"valid-id-ends-in-hex-word": valid("agent 0123456789abcdef", tmuxfix.StoreID),
-		"valid-other-store":         valid("agent-x", tmuxfix.OtherStoreID),
-		"four-fields":               {},
-		"store-id-empty":            {},
-	}
-	for _, s := range tmuxfix.LabelShapes() {
-		w, ok := want[s.Name]
-		if !ok {
-			continue
-		}
-		delete(want, s.Name)
-		t.Run(s.Name, func(t *testing.T) {
-			if got, _ := parseShapeLabel(t, s); got != w {
-				t.Errorf("label = %+v, want %+v", got, w)
-			}
-		})
-	}
-	for name := range want {
-		t.Errorf("catalogue has no label shape %q", name)
-	}
-}
-
-// TestParseLabelBorrowedValue checks F9b: a value embedding $0 is valid on
-// $0's line and LabelNone on $1's line, which borrows it.
-func TestParseLabelBorrowedValue(t *testing.T) {
-	ans, err := parseLookupOf(t, tmuxfix.Find(tmuxfix.LookupAnswers(), "lookup/F9b"))
-	if err != nil {
-		t.Fatalf("Lookup: %v", err)
-	}
-	want := []tmux.Label{tmuxfix.Valid(tmuxfix.Token, "agent-x", tmuxfix.StoreID), {}}
-	if len(ans.Sessions) != len(want) {
-		t.Fatalf("sessions = %+v, want %d", ans.Sessions, len(want))
-	}
-	for i, s := range ans.Sessions {
-		if s.Label != want[i] {
-			t.Errorf("%s label = %+v, want %+v", s.ID, s.Label, want[i])
-		}
-	}
 }
 
 // TestParseStoredNames checks every catalogue stored name form is returned

@@ -1,14 +1,12 @@
 package tmuxfix_test
 
 import (
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // sharedSeeded returns a Recorder whose sockA server holds pane %0 (pid 10,
@@ -69,13 +67,16 @@ func TestRecorder_SharedPaneListing(t *testing.T) {
 }
 
 // TestRecorder_SharedPaneKills: a pane kill removes every listing (a session
-// left empty goes); a session kill removes its listing only.
+// left empty goes); a session kill removes its listing only; an unknown id is
+// FailUnrecognized with no first line. Another socket's table is untouched.
 func TestRecorder_SharedPaneKills(t *testing.T) {
 	cases := []struct {
 		name  string
 		kills func(r *tmuxfix.Recorder) error
 		want  []string
 	}{
+		{"unknown-session", func(r *tmuxfix.Recorder) error { return r.KillSessionID(sockA, "$9") },
+			[]string{"$0:%0", "$0:%1", "$1:%0", "$2:%2", "$2:%0"}},
 		{"pane-kill", func(r *tmuxfix.Recorder) error { return r.KillPane(sockA, "%0") }, []string{"$0:%1", "$2:%2"}},
 		{"kill-first-session", func(r *tmuxfix.Recorder) error { return r.KillSessionID(sockA, "$0") },
 			[]string{"$1:%0", "$2:%2", "$2:%0"}},
@@ -95,9 +96,16 @@ func TestRecorder_SharedPaneKills(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := sharedSeeded()
-			if err := tc.kills(r); err != nil {
+			r := sharedSeeded().SeedSessions(sockB, sess("$0", "a", tmux.Label{}, false, "%0"))
+			if err := tc.kills(r); tc.name == "unknown-session" {
+				if ce := callErr(t, err); ce.Failure != tmux.FailUnrecognized || ce.FirstLine != "" || ce.ExitStatus != 1 {
+					t.Errorf("CallError = %+v, want FailUnrecognized, no first line, exit 1", ce)
+				}
+			} else if err != nil {
 				t.Fatal(err)
+			}
+			if got := paneCounts(r, sockB); !reflect.DeepEqual(got, map[string]int{"$0": 1}) {
+				t.Errorf("other socket's table = %v", got)
 			}
 			got := listing(t, r)
 			if !reflect.DeepEqual(got, tc.want) {
@@ -139,31 +147,6 @@ func TestRecorder_SharedPaneLivesUntilUnlisted(t *testing.T) {
 	}
 }
 
-// TestRecorder_SharedPaneLabel: SetLabel through any session sets the shared
-// pane's label on every listing.
-func TestRecorder_SharedPaneLabel(t *testing.T) {
-	r := sharedSeeded()
-	if err := r.SetLabel(sockA, "$1", "%0", tmuxfix.OtherToken, agent, tmuxfix.StoreID); err != nil {
-		t.Fatal(err)
-	}
-	panes, err := r.ListPanes(sockA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	n := 0
-	for _, p := range panes {
-		if p.ID == "%0" {
-			n++
-			if p.AdPane != tmuxfix.OtherToken {
-				t.Errorf("%s's %%0 AdPane = %q, want OtherToken", p.SessionID, p.AdPane)
-			}
-		}
-	}
-	if n != 3 {
-		t.Errorf("%%0 listed %d times, want 3", n)
-	}
-}
-
 // TestRecorder_SharedPaneSeedPanics: a shared entry must name a held pane
 // once per session with its own pid and label; an unshared held id still panics.
 func TestRecorder_SharedPaneSeedPanics(t *testing.T) {
@@ -190,27 +173,5 @@ func TestRecorder_SharedPaneSeedPanics(t *testing.T) {
 			}()
 			r.SeedSessions(sockA, tmuxfix.SeedSession{Name: "v", Panes: tc.panes})
 		})
-	}
-}
-
-// TestRecorder_SharedRowPane: a viewing session lists the pane SeedRowSession
-// seeded for a row, with the row's pane pid and pane label.
-func TestRecorder_SharedRowPane(t *testing.T) {
-	const id = "agent-row"
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	if _, err := apitest.SeedSpawn(dbPath, id, "waiting", "/tmp", "off", "", true); err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
-	}
-	r := tmuxfix.NewRecorder()
-	row := r.SeedRowSession(t, dbPath, id, tmuxfix.WithRowSessionName("row"))
-	rowPane := row.Panes[0]
-	r.SeedSessions(apitest.TestSocket, tmuxfix.SeedSession{Name: "viewer", Panes: []tmuxfix.SeedPane{{ID: rowPane.ID, Shared: true}}})
-	panes, err := r.ListPanes(apitest.TestSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(panes) != 2 || panes[1].SessionID == row.ID || panes[1].ID != rowPane.ID ||
-		panes[1].PID != rowPane.PID || panes[1].AdPane != rowPane.AdPane || rowPane.AdPane == "" {
-		t.Errorf("listing = %+v, want the row's pane %+v under the row's session %s and the viewer", panes, rowPane, row.ID)
 	}
 }

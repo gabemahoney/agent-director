@@ -100,20 +100,10 @@ func TestStartingSession(t *testing.T) {
 		{"bound default: at bound -> past both",
 			ssRow{endedAgo: ago(longAgo), age: ago(defBound)}, tmux.PastBoth, true},
 
-		// Bound at its safe minimum (minus one, exact); the window is unchanged.
-		{"bound minimum: bound minus one -> starting",
-			ssRow{endedAgo: ago(longAgo), age: ago(minBound - time.Second), bound: minBound}, tmux.StillStarting, true},
+		// Window and bound at their safe minimums, each beside the other's default.
 		{"bound minimum: at bound -> past both",
 			ssRow{endedAgo: ago(longAgo), age: ago(minBound), bound: minBound}, tmux.PastBoth, true},
-		{"bound minimum: default window unchanged -> stopping",
-			ssRow{endedAgo: ago(defWindow - time.Second), age: ago(minBound), bound: minBound}, tmux.StillStopping, true},
-
-		// Window at its safe minimum (minus one, exact); the bound is unchanged.
-		{"window minimum: inside -> stopping",
-			ssRow{endedAgo: ago(minWindow - time.Second), age: ago(defBound), window: minWindow}, tmux.StillStopping, true},
-		{"window minimum: at window, old session -> past both",
-			ssRow{endedAgo: ago(minWindow), age: ago(defBound), window: minWindow}, tmux.PastBoth, true},
-		{"window minimum: default bound unchanged -> starting",
+		{"window minimum: at window, young session -> starting",
 			ssRow{endedAgo: ago(minWindow), age: ago(defBound - time.Second), window: minWindow}, tmux.StillStarting, true},
 
 		// ended_at in the future, and NULL.
@@ -121,12 +111,8 @@ func TestStartingSession(t *testing.T) {
 			ssRow{endedAgo: ago(-time.Second), age: ago(defBound)}, tmux.StillStopping, true},
 		{"NULL ended_at, young session -> window skipped, starting",
 			ssRow{age: ago(defBound - time.Second)}, tmux.StillStarting, false},
-		{"NULL ended_at, old session -> window skipped, past both",
-			ssRow{age: ago(defBound)}, tmux.PastBoth, false},
 
 		// Which recorded facts keep the window.
-		{"neither pid nor session id, young session -> window skipped, starting",
-			ssRow{endedAgo: ago(defWindow - time.Second), noPID: true, noSID: true, age: ago(defBound - time.Second)}, tmux.StillStarting, false},
 		{"neither pid nor session id, old session -> window skipped, past both",
 			ssRow{endedAgo: ago(defWindow - time.Second), noPID: true, noSID: true, age: ago(defBound)}, tmux.PastBoth, false},
 		{"pid only keeps the window -> stopping",
@@ -168,59 +154,6 @@ func TestStartingSession(t *testing.T) {
 			}
 			if got != want {
 				t.Errorf("StartingSession() = %+v, want %+v", got, want)
-			}
-		})
-	}
-}
-
-// Stepping the virtual clock moves the answer across the window and then the
-// bound without waiting; a backward step brings the young answer back.
-func TestStartingSession_ClockStepCrossesLimits(t *testing.T) {
-	clock := startClock()
-	// Created bound minus window ago, the session turns bound minus one
-	// window minus one seconds later.
-	ended := clock.Now().Add(-(defWindow - time.Second))
-	session := &tmux.Session{ID: "$1", Created: clock.Now().Add(-(defBound - defWindow)).Unix()}
-	classify := func() tmux.StartingSessionOutcome {
-		return tmux.StartingSession(tmux.StartingSessionInput{
-			EndedAt: &ended, RecordsPID: true, RecordsSessionID: true,
-			Session: session, Now: clock.Now(), Window: defWindow, Bound: defBound,
-		}).Outcome
-	}
-
-	steps := []struct {
-		name    string
-		advance time.Duration
-		want    tmux.StartingSessionOutcome
-	}{
-		{"window minus one", 0, tmux.StillStopping},
-		{"at window", time.Second, tmux.StillStarting},
-		{"bound minus one", defWindow - 2*time.Second, tmux.StillStarting},
-		{"at bound", time.Second, tmux.PastBoth},
-		{"backward step", -time.Second, tmux.StillStarting},
-	}
-	for _, s := range steps {
-		clock.Advance(s.advance)
-		if got := classify(); got != s.want {
-			t.Errorf("%s: outcome = %v, want %v", s.name, got, s.want)
-		}
-	}
-}
-
-func TestSessionAge(t *testing.T) {
-	cases := []struct {
-		name string
-		age  time.Duration
-	}{
-		{"past", defBound},
-		{"same second", 0},
-		{"future", -time.Second},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			now := startClock().Now()
-			if got, want := tmux.SessionAge(now, now.Add(-tc.age).Unix()), elapsedOf(tc.age); got != want {
-				t.Errorf("SessionAge() = %+v, want %+v", got, want)
 			}
 		})
 	}

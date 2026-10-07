@@ -1,7 +1,6 @@
 package spawn
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -72,62 +71,35 @@ func TestLaunchRecordsLaunchStartTokenAndSocket(t *testing.T) {
 	}
 }
 
-// TestLaunchRefusesUnusableSocketDir: an unsafe or uncreatable per-user
-// directory is ErrTmuxNotAvailable with no row, no tmux call and no pre-trust write.
+// TestLaunchRefusesUnusableSocketDir: an unsafe per-user directory is
+// ErrTmuxNotAvailable with no row, no tmux call and no pre-trust write. Every
+// refusal is internal/tmux TestResolveSocket's; pkg/api
+// TestSpawnRefusesUnusableSocketDir runs all three TMUX_TMPDIR refusal shapes
+// end to end (SR-20.6, RN-5).
 func TestLaunchRefusesUnusableSocketDir(t *testing.T) {
-	userDir := func(base string) string { return filepath.Join(base, fmt.Sprintf("tmux-%d", os.Getuid())) }
-	cases := []struct {
-		name  string
-		setup func(t *testing.T, base string)
-	}{
-		{"per-user directory mode 0755", func(t *testing.T, base string) {
-			if err := os.Mkdir(userDir(base), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Chmod(userDir(base), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"per-user directory is a symlink", func(t *testing.T, base string) {
-			if err := os.Symlink(t.TempDir(), userDir(base)); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"TMUX_TMPDIR names a regular file", func(t *testing.T, base string) {
-			file := filepath.Join(base, "not-a-dir")
-			if err := os.WriteFile(file, nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("TMUX_TMPDIR", file)
-		}},
+	e := newLaunchEnv(t)
+	userDir := filepath.Join(os.Getenv("TMUX_TMPDIR"), fmt.Sprintf("tmux-%d", os.Getuid()))
+	if err := os.Mkdir(userDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newLaunchEnv(t)
-			tc.setup(t, os.Getenv("TMUX_TMPDIR"))
-			stub := withStubClaudeJSON(t)
-			seed := []byte(`{"projects":{}}`)
-			if err := os.WriteFile(stub, seed, 0o600); err != nil {
-				t.Fatalf("seed claude.json: %v", err)
-			}
+	if err := os.Chmod(userDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := withStubClaudeJSON(t)
+	seedFile(t, stub, `{"projects":{}}`)
 
-			_, _, err := e.launch()
-			if !errors.Is(err, tmux.ErrTmuxNotAvailable) {
-				t.Fatalf("Launch err = %v; want ErrTmuxNotAvailable", err)
-			}
-			if errors.Is(err, tmux.ErrTmuxSessionCreate) || errors.Is(err, tmux.ErrTmuxUnresponsive) {
-				t.Errorf("err = %v; matches another tmux sentinel", err)
-			}
-			if _, gerr := e.s.GetSpawn(e.r.ClaudeInstanceID); !errors.Is(gerr, store.ErrSpawnNotFound) {
-				t.Errorf("GetSpawn err = %v; want ErrSpawnNotFound (no row)", gerr)
-			}
-			if n, m := len(e.rec.Calls()), len(e.rec.SocketCalls()); n+m != 0 {
-				t.Errorf("tmux calls = %d name-based, %d socket; want none", n, m)
-			}
-			if got, _ := os.ReadFile(stub); !bytes.Equal(got, seed) {
-				t.Errorf("claude.json = %s; want it untouched (no pre-trust write)", got)
-			}
-		})
+	_, _, err := e.launch()
+	if !errors.Is(err, tmux.ErrTmuxNotAvailable) || errors.Is(err, tmux.ErrTmuxSessionCreate) || errors.Is(err, tmux.ErrTmuxUnresponsive) {
+		t.Fatalf("Launch err = %v; want ErrTmuxNotAvailable and no other tmux sentinel", err)
+	}
+	if _, gerr := e.s.GetSpawn(e.r.ClaudeInstanceID); !errors.Is(gerr, store.ErrSpawnNotFound) {
+		t.Errorf("GetSpawn err = %v; want ErrSpawnNotFound (no row)", gerr)
+	}
+	if n, m := len(e.rec.Calls()), len(e.rec.SocketCalls()); n+m != 0 {
+		t.Errorf("tmux calls = %d name-based, %d socket; want none", n, m)
+	}
+	if got := mustReadFile(t, stub); string(got) != `{"projects":{}}` {
+		t.Errorf("claude.json = %s; want it untouched (no pre-trust write)", got)
 	}
 }
 

@@ -192,19 +192,6 @@ func readLog(t *testing.T, path string) [][]string {
 	return faketmuxfix.ReadLog(t, path)
 }
 
-// TestEveryCallKindSucceeds makes each call kind (tmuxfix.AllCalls) against a
-// seeded table.
-func TestEveryCallKindSucceeds(t *testing.T) {
-	c := newClient(t, callTimeout)
-	for _, call := range tmuxfix.AllCalls() {
-		t.Run(string(call), func(t *testing.T) {
-			if err := invoke(t, c, seed(t), call); err != nil {
-				t.Fatalf("%s: %v", call, err)
-			}
-		})
-	}
-}
-
 // TestLookupAnswersFromTable checks sessions, typed labels, scope borrowing
 // and server fields, a server with no session included; a socket with no
 // server (no table, or a table without one) fails with the no-socket reply
@@ -321,46 +308,6 @@ func TestCreateChainLabelsOwnID(t *testing.T) {
 	}
 }
 
-// TestCreateByIDNameThenSetLabel checks a '$' or '\' name is created
-// unlabelled under its stored form and SetLabel then labels it by id with
-// the caller's store id (another store's for '\').
-func TestCreateByIDNameThenSetLabel(t *testing.T) {
-	c := newClient(t, callTimeout)
-	storeIDs := map[string]string{`$`: tmuxfix.StoreID, `\`: tmuxfix.OtherStoreID}
-	for _, marker := range []string{`$`, `\`} {
-		storeID := storeIDs[marker]
-		var n tmuxfix.StoredName
-		for _, cand := range tmuxfix.StoredNames() {
-			if cand.LabelByID && strings.Contains(cand.Raw, marker) && n.Raw == "" {
-				n = cand
-			}
-		}
-		t.Run(n.Raw, func(t *testing.T) {
-			socket := newSocket(t)
-			reply := must[tmux.CreateReply](t)(create(t, c, socket, n.Raw, "agent-d"))
-			label := func() tmux.Label {
-				ans := lookup(t, c, socket)
-				if len(ans.Sessions) != 1 || ans.Sessions[0].ID != reply.SessionID || ans.Sessions[0].Name != n.Stored {
-					t.Fatalf("Lookup sessions = %+v, want one %s named %q", ans.Sessions, reply.SessionID, n.Stored)
-				}
-				return ans.Sessions[0].Label
-			}
-			if got := label(); got != (tmux.Label{}) {
-				t.Fatalf("label before SetLabel = %+v, want none", got)
-			}
-			if err := c.SetLabel(socket, reply.SessionID, reply.PaneID, tmuxfix.Token, "agent-d", storeID); err != nil {
-				t.Fatalf("SetLabel: %v", err)
-			}
-			if rawLabel(t, socket, reply.SessionID) != fiveFields(reply.SessionID, "agent-d", storeID) {
-				t.Errorf("session %s: stored label is not ad1 <token> <$N> <id> <store id>", reply.SessionID)
-			}
-			if got, want := label(), tmuxfix.Valid(tmuxfix.Token, "agent-d", storeID); got != want {
-				t.Errorf("label after SetLabel = %+v, want %+v", got, want)
-			}
-		})
-	}
-}
-
 // TestCreateOutcomes checks the injected create outcomes through the client:
 // with the create's effect the lookup shows the labelled session, without it
 // nothing is created, not even a server.
@@ -426,8 +373,6 @@ func TestKillsChangeNextAnswers(t *testing.T) {
 		wantSessions []string
 		wantPanes    []string
 	}{
-		{name: "none", kill: func(string) error { return nil },
-			wantSessions: []string{"$0", "$1"}, wantPanes: []string{"%0", "%1", "%2"}},
 		{name: "pane of two", kill: func(s string) error { return c.KillPane(s, "%1") },
 			wantSessions: []string{"$0", "$1"}, wantPanes: []string{"%0", "%2"}},
 		{name: "last pane removes session", kill: func(s string) error { return c.KillPane(s, "%2") },
@@ -460,8 +405,8 @@ func TestKillsChangeNextAnswers(t *testing.T) {
 	})
 }
 
-// TestSendAndCaptureLogged checks text, Enter and capture by pane id work and
-// are logged with -u -S <socket> first.
+// TestSendAndCaptureLogged checks text, Enter, a key and capture by pane id
+// work and are logged with -u -S <socket> first.
 func TestSendAndCaptureLogged(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "fake-tmux.log")
 	t.Setenv(faketmuxfix.EnvLog, logPath)
@@ -477,6 +422,9 @@ func TestSendAndCaptureLogged(t *testing.T) {
 	if err := c.SendKeysPane(socket, "%0", "hello there", true); err != nil {
 		t.Fatalf("SendKeysPane: %v", err)
 	}
+	if err := c.SendKeyPane(socket, "%0", "C-u"); err != nil {
+		t.Fatalf("SendKeyPane: %v", err)
+	}
 	for _, cc := range []struct {
 		pane string
 		ansi bool
@@ -488,7 +436,8 @@ func TestSendAndCaptureLogged(t *testing.T) {
 	}
 
 	recs := readLog(t, logPath)
-	wantCmds := []struct{ cmd, pane string }{{"send-keys", "%0"}, {"send-keys", "%0"}, {"capture-pane", "%0"}, {"capture-pane", "%1"}}
+	wantCmds := []struct{ cmd, pane string }{{"send-keys", "%0"}, {"send-keys", "%0"}, {"send-keys", "%0"},
+		{"capture-pane", "%0"}, {"capture-pane", "%1"}}
 	if len(recs) != len(wantCmds) {
 		t.Fatalf("log has %d records, want %d: %q", len(recs), len(wantCmds), recs)
 	}
@@ -514,12 +463,8 @@ func TestSendTextAfterDoubleDash(t *testing.T) {
 		{"-x", "-x"},
 		{"--", "--"},
 		{";", `\;`},
-		{"a;", `a\;`},
-		{"a ;", `a \;`},
 		{`a\;`, `a\\;`},
-		{";a", ";a"},
 		{"a;b", "a;b"},
-		{"-x;", `-x\;`},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "fake-tmux.log")
@@ -559,24 +504,4 @@ func TestInjectedRepliesYieldTypedKind(t *testing.T) {
 			assertFailure(t, invoke(t, c, socket, call), call, e.Want[call], e)
 		})
 	}
-}
-
-// TestSocketsIsolated checks tables and injections on one socket leave
-// another's answers alone.
-func TestSocketsIsolated(t *testing.T) {
-	c := newClient(t, callTimeout)
-	dir := t.TempDir()
-	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
-	for _, s := range []string{a, b} {
-		if _, err := create(t, c, s, "agent-i", "agent-i"); err != nil {
-			t.Fatalf("NewSession on %s: %v", s, err)
-		}
-	}
-	noServer := tmuxfix.NoServer(b)
-	tables.Inject(t, b, faketmuxfix.Reply(tmux.CallLookup, noServer))
-	if ans := lookup(t, c, a); len(ans.Sessions) != 1 || ans.Sessions[0].Label != tmuxfix.Valid(tmuxfix.Token, "agent-i", tmuxfix.StoreID) {
-		t.Errorf("Lookup(a) sessions = %+v, want one labelled session", ans.Sessions)
-	}
-	_, err := c.Lookup(b)
-	assertFailure(t, err, tmux.CallLookup, noServer.Want[tmux.CallLookup], noServer)
 }

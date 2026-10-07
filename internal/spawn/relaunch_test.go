@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -71,31 +70,31 @@ func (e *relaunchEnv) onlyCreate() tmuxfix.SocketCall {
 	return calls[0]
 }
 
-// TestRelaunchRestoresExtraEnvVerbatim: the row's ExtraEnv reaches the create's
-// environment verbatim and the argv starts `claude --resume <session id> --settings`.
-func TestRelaunchRestoresExtraEnvVerbatim(t *testing.T) {
-	e := newRelaunchEnv(t)
-	e.row.ExtraEnv = map[string]string{
-		"CLAUDE_CONFIG_DIR":       "/home/bee/.claude-alt",
-		"ANTHROPIC_API_KEY":       "sk-ant-test",
-		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
-	}
-
-	if out := e.relaunch("session-uuid-1"); out.Kind != CreateLabelled {
-		t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
-	}
-	c := e.onlyCreate()
-	for k, want := range e.row.ExtraEnv {
-		if got := c.Envs[k]; got != want {
-			t.Errorf("create env[%q] = %q; want %q (ExtraEnv restored verbatim)", k, got, want)
+// TestRelaunchEnvAndArgv (SR-10): the create's environment is exactly the
+// base keys, one variable per row label and the row's ExtraEnv verbatim (none
+// for a legacy '{}' column), and its argv is `claude --resume <session id>
+// --settings <json>` then the row's claude_args.
+func TestRelaunchEnvAndArgv(t *testing.T) {
+	for _, extra := range []map[string]string{nil, {}, {"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt",
+		"ANTHROPIC_API_KEY": "sk-ant-test", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}} {
+		e := newRelaunchEnv(t)
+		e.row.ExtraEnv = extra
+		if out := e.relaunch("session-uuid-1"); out.Kind != CreateLabelled {
+			t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 		}
-	}
-	want := []string{"claude", "--resume", "session-uuid-1", "--settings"}
-	if len(c.Command) < 5 || !reflect.DeepEqual(c.Command[:4], want) {
-		t.Errorf("create argv = %v; want prefix %v then the settings", c.Command, want)
-	}
-	if got, wantArgs := c.Command[5:], e.row.ClaudeArgs; !reflect.DeepEqual(got, wantArgs) {
-		t.Errorf("create argv after the settings = %v; want the row's claude_args %v", got, wantArgs)
+		c := e.onlyCreate()
+		want := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": e.row.ClaudeInstanceID,
+			"AGENT_DIRECTOR_RELAY_MODE": e.row.RelayMode, "AGENT_DIRECTOR_LABEL_ROLE": "worker"}
+		for k, v := range extra {
+			want[k] = v
+		}
+		if !reflect.DeepEqual(c.Envs, want) {
+			t.Errorf("ExtraEnv=%v: relaunch env = %v; want exactly %v", extra, c.Envs, want)
+		}
+		if len(c.Command) < 5 || !reflect.DeepEqual(c.Command[:4], []string{"claude", "--resume", "session-uuid-1", "--settings"}) ||
+			!reflect.DeepEqual(c.Command[5:], e.row.ClaudeArgs) {
+			t.Errorf("create argv = %v; want claude --resume session-uuid-1 --settings <json> %v", c.Command, e.row.ClaudeArgs)
+		}
 	}
 }
 
@@ -120,89 +119,28 @@ func TestRelaunchLeavesPermissionsNil(t *testing.T) {
 	}
 }
 
-// TestRelaunchLegacyEmptyExtraEnvBaseline: a nil or empty ExtraEnv (the '{}'
-// column) yields exactly the base keys plus one label variable per row label.
-func TestRelaunchLegacyEmptyExtraEnvBaseline(t *testing.T) {
-	for _, extra := range []map[string]string{nil, {}} {
-		e := newRelaunchEnv(t)
-		e.row.ExtraEnv = extra
-		e.relaunch("s1")
-		envs := e.onlyCreate().Envs
-
-		want := map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": e.row.ClaudeInstanceID,
-			"AGENT_DIRECTOR_RELAY_MODE":  e.row.RelayMode,
-		}
-		for k, v := range e.row.Labels {
-			want["AGENT_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v
-		}
-		if got, wantKeys := sortedKeys(envs), sortedKeys(want); !reflect.DeepEqual(got, wantKeys) {
-			t.Errorf("ExtraEnv=%v: env key set = %v; want %v", extra, got, wantKeys)
-		}
-		if !reflect.DeepEqual(envs, want) {
-			t.Errorf("ExtraEnv=%v: relaunch env = %v; want exactly %v", extra, envs, want)
-		}
-	}
-}
-
 // TestRelaunchLabelledCreateOnPassedSocket: the create names the passed socket
-// and the row's name; a plain name is labelled by the chain, a $ or \ name by id.
+// and the row's name and cwd, and labels the session and its pane with the
+// passed token and store id. Relaunch is CreateAndLabel, whose label by id of
+// a $ or \ name launch_label_test.go covers.
 func TestRelaunchLabelledCreateOnPassedSocket(t *testing.T) {
-	cases := []struct {
-		name      string
-		labelByID bool
-	}{
-		{"cd-relaunch-1", false},
-		{`a$b`, true},
-		{`a\b`, true},
+	e := newRelaunchEnv(t)
+	out := e.relaunch("session-uuid-1")
+	if out.Kind != CreateLabelled {
+		t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newRelaunchEnv(t)
-			e.row.TmuxSessionName = tc.name
-			var atCreate tmuxfix.SeedSession
-			e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) { atCreate = e.rec.Sessions(e.socket)[0] })
-
-			out := e.relaunch("session-uuid-1")
-			if out.Kind != CreateLabelled {
-				t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
-			}
-			c := e.onlyCreate()
-			if c.Socket != e.socket || c.Target != tc.name || c.Cwd != e.row.CWD {
-				t.Errorf("create {socket %q, name %q, cwd %q}; want {%q %q %q}", c.Socket, c.Target, c.Cwd, e.socket, tc.name, e.row.CWD)
-			}
-			id := e.row.ClaudeInstanceID
-			if c.Token != relaunchToken || c.InstanceID != id || c.StoreID != relaunchStoreID {
-				t.Errorf("create label args {%q %q %q}; want {%q %q %q}", c.Token, c.InstanceID, c.StoreID, relaunchToken, id, relaunchStoreID)
-			}
-			if chained := atCreate.LabelSet || atCreate.Panes[0].AdPane != ""; chained == tc.labelByID {
-				t.Errorf("session after the create = %+v; chained label = %v, want %v", atCreate, chained, !tc.labelByID)
-			}
-
-			labels := e.rec.SocketCallsOf(tmux.CallSetLabel)
-			switch {
-			case !tc.labelByID && len(labels) != 0:
-				t.Errorf("labels by id = %+v; want none for a chained name", labels)
-			case tc.labelByID && len(labels) != 1:
-				t.Fatalf("labels by id = %+v; want exactly one", labels)
-			case tc.labelByID:
-				l := labels[0]
-				if l.Socket != e.socket || l.Target != atCreate.ID || l.PaneID != atCreate.Panes[0].ID ||
-					l.Token != relaunchToken || l.InstanceID != id || l.StoreID != relaunchStoreID {
-					t.Errorf("label by id = %+v; want socket %q, session %q, pane %q, value {%q %q %q}",
-						l, e.socket, atCreate.ID, atCreate.Panes[0].ID, relaunchToken, id, relaunchStoreID)
-				}
-			}
-
-			after := e.rec.Sessions(e.socket)[0]
-			if want := tmuxfix.Valid(relaunchToken, id, relaunchStoreID); after.Label != want || after.Panes[0].AdPane != relaunchToken {
-				t.Errorf("session = %+v; want label ad1 %s %s %s %s and pane label %s",
-					after, relaunchToken, after.ID, id, relaunchStoreID, relaunchToken)
-			}
-			if out.Reply.SessionID != after.ID || out.Reply.PaneID != after.Panes[0].ID {
-				t.Errorf("outcome reply = %+v; want session %q pane %q", out.Reply, after.ID, after.Panes[0].ID)
-			}
-		})
+	c, id := e.onlyCreate(), e.row.ClaudeInstanceID
+	if c.Socket != e.socket || c.Target != e.row.TmuxSessionName || c.Cwd != e.row.CWD ||
+		c.Token != relaunchToken || c.InstanceID != id || c.StoreID != relaunchStoreID {
+		t.Errorf("create = %+v; want socket %q, name %q, cwd %q, label {%q %q %q}", c, e.socket, e.row.TmuxSessionName,
+			e.row.CWD, relaunchToken, id, relaunchStoreID)
+	}
+	after := e.rec.Sessions(e.socket)[0]
+	if want := tmuxfix.Valid(relaunchToken, id, relaunchStoreID); after.Label != want || after.Panes[0].AdPane != relaunchToken {
+		t.Errorf("session = %+v; want label %+v and pane label %s", after, want, relaunchToken)
+	}
+	if out.Reply.SessionID != after.ID || out.Reply.PaneID != after.Panes[0].ID {
+		t.Errorf("outcome reply = %+v; want session %q pane %q", out.Reply, after.ID, after.Panes[0].ID)
 	}
 }
 
@@ -230,13 +168,4 @@ func TestRelaunchWritesNoTrustEntry(t *testing.T) {
 			}
 		})
 	}
-}
-
-func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

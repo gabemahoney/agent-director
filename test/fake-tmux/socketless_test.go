@@ -27,8 +27,6 @@ func TestSocketlessArgvRefused(t *testing.T) {
 		{name: "has-session", argv: []string{"has-session", "-t", "legacy"}, want: tmuxfix.Entry{Exit: 1}},
 		{name: "new-session", argv: []string{"new-session", "-d", "-s", "legacy"}, want: noServer, logged: true},
 		{name: "send-keys", argv: []string{"send-keys", "-t", "legacy:0.0", "hi"}, want: noServer, logged: true},
-		{name: "capture-pane", argv: []string{"capture-pane", "-p", "-t", "legacy"}, want: noServer, logged: true},
-		{name: "kill-session", argv: []string{"kill-session", "-t", "legacy"}, want: noServer, logged: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

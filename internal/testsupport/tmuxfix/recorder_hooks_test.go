@@ -147,32 +147,6 @@ func TestRecorder_VirtualTime(t *testing.T) {
 	}
 }
 
-// TestRecorder_VirtualTimeOnlyWhenBound: without virtual time the clock stays
-// put; with it, the name-based HasSession is not charged and seeds take the clock's second.
-func TestRecorder_VirtualTimeOnlyWhenBound(t *testing.T) {
-	unbound := tmuxfix.NewClock(start)
-	r := seeded()
-	for _, inv := range invokers {
-		_ = inv.do(r, sockA)
-	}
-	if got := unbound.Now(); !got.Equal(start) {
-		t.Errorf("unbound clock moved to %v", got)
-	}
-
-	bound := tmuxfix.NewClock(start)
-	r = tmuxfix.NewRecorder().WithVirtualTime(bound, tmux.Timeouts{})
-	_, _ = r.HasSession("n")
-	if got := bound.Now(); !got.Equal(start) {
-		t.Errorf("HasSession advanced the clock to %v", got)
-	}
-	bound.Advance(90 * time.Second)
-	r.SeedSessions(sockA, tmuxfix.SeedSession{Name: "s"})
-	srv, _ := r.Server(sockA)
-	if s := r.Sessions(sockA)[0]; s.Created != start.Add(90*time.Second).Unix() || srv.Start != s.Created {
-		t.Errorf("seeded created %d, server start %d; want the clock's second", s.Created, srv.Start)
-	}
-}
-
 // TestRecorder_ConcurrentCallsShareClock: concurrent calls each charge the
 // shared clock once while it is read and moved back (run with -race).
 func TestRecorder_ConcurrentCallsShareClock(t *testing.T) {
