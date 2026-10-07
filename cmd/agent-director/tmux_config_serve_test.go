@@ -7,13 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -163,26 +161,32 @@ func refusalNamed(t *testing.T, name string) configRefusal {
 	return configRefusal{}
 }
 
-// TestTmuxConfigServeReadsAtStartup pins that `serve --stdio` reads [tmux] once
-// at startup: a running server keeps serving after a refused rewrite (SR-4.1).
-func TestTmuxConfigServeReadsAtStartup(t *testing.T) {
-	t.Parallel()
-	const offset = 100
-	start := []apitest.TmuxSetting{
-		apitest.TmuxInt(config.TmuxQueryTimeoutMs, config.DefaultQueryTimeoutMs+offset),
-		apitest.TmuxInt(config.TmuxActionTimeoutMs, config.DefaultActionTimeoutMs+offset),
-		apitest.TmuxInt(config.TmuxCreateTimeoutMs, config.DefaultCreateTimeoutMs+offset),
-		apitest.TmuxInt(config.TmuxPipeCloseWaitMs, config.DefaultPipeCloseWaitMs+offset),
+// killNamesTimeout calls the MCP kill tool on id and checks it fails on the
+// hung lookup naming timeout.
+func (s *serveSession) killNamesTimeout(t *testing.T, id string, timeout time.Duration) {
+	t.Helper()
+	s.nextID++
+	r := s.request(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"kill","arguments":{"claude_instance_id":%q}}}`+"\n", s.nextID, id))
+	if r.Error == nil {
+		t.Fatalf("kill tool result = %+v; want an error", r.Result)
 	}
-	rc := refusalNamed(t, "stopping_window_below_minimum")
+	assertHungLookup(t, r.Error.Data.ErrName, r.Error.Message, timeout)
+}
 
-	home := t.TempDir()
-	id, err := apitest.SeedSpawn(stateDB(home), "", store.StatePending, "", "", "", true)
-	if err != nil {
-		t.Fatalf("SeedSpawn: %v", err)
+// TestTmuxConfigServeReadsAtStartup pins that `serve --stdio` reads its config
+// once at startup (SR-4.1): a running server keeps serving, with the query
+// timeout it started with, after a valid rewrite and after a rewrite the CLI
+// refuses; a restart refuses
+// that file; and once fixed a restarted server uses the new timeout.
+func TestTmuxConfigServeReadsAtStartup(t *testing.T) {
+	const startup, rewritten = 300 * time.Millisecond, 500 * time.Millisecond
+	rc := refusalNamed(t, "stopping_window_below_minimum")
+	home, id, cfgPath := hungKillRow(t, startup)
+	h := refusedHome{home: home, cfgPath: cfgPath, instanceID: id}
+	env := []string{"PATH=" + buildFakeTmux(t) + ":" + os.Getenv("PATH"), "TMUX_TMPDIR=" + spawnTmuxTmpdir(t, home)}
+	query := func(d time.Duration) apitest.TmuxSetting {
+		return apitest.TmuxInt(config.TmuxQueryTimeoutMs, d.Milliseconds())
 	}
-	h := refusedHome{home: home, cfgPath: filepath.Join(directorDir(home), "config.toml"), instanceID: id}
-	apitest.WriteTmuxConfig(t, h.cfgPath, start...)
 
 	var srv *serveSession
 	t.Cleanup(func() { srv.kill() })
@@ -191,18 +195,21 @@ func TestTmuxConfigServeReadsAtStartup(t *testing.T) {
 		run  func(t *testing.T)
 	}{
 		{"starts_and_serves", func(t *testing.T) {
-			srv = startServe(t, home)
+			srv = startServe(t, home, env...)
 			srv.initialize(t)
 			srv.listIncludes(t, id)
+			srv.killNamesTimeout(t, id, startup)
 		}},
-		{"keeps_serving_after_refused_rewrite", func(t *testing.T) {
-			apitest.WriteTmuxConfig(t, h.cfgPath, append(start, rc.bad...)...)
+		{"keeps_startup_config_after_valid_rewrite", func(t *testing.T) {
+			apitest.WriteTmuxConfig(t, cfgPath, append([]apitest.TmuxSetting{query(rewritten)}, rc.fix...)...)
+			srv.killNamesTimeout(t, id, startup)
+		}},
+		{"keeps_startup_config_after_refused_rewrite", func(t *testing.T) {
+			apitest.WriteTmuxConfig(t, cfgPath, append([]apitest.TmuxSetting{query(rewritten)}, rc.bad...)...)
 			stdout, stderr, code := runCLIWithHome(t, home, "list")
-			if code != 1 {
-				t.Errorf("CLI list exit=%d want 1", code)
-			}
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 			srv.listIncludes(t, id)
+			srv.killNamesTimeout(t, id, startup)
 		}},
 		{"restart_refuses", func(t *testing.T) {
 			srv.stop(t)
@@ -212,13 +219,13 @@ func TestTmuxConfigServeReadsAtStartup(t *testing.T) {
 			}
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 		}},
-		{"serves_after_fix", func(t *testing.T) {
-			apitest.WriteTmuxConfig(t, h.cfgPath, append(start, rc.fix...)...)
-			fixed := startServe(t, home)
-			t.Cleanup(fixed.kill)
-			fixed.initialize(t)
-			fixed.listIncludes(t, id)
-			fixed.stop(t)
+		{"new_config_after_fix_and_restart", func(t *testing.T) {
+			apitest.WriteTmuxConfig(t, cfgPath, append([]apitest.TmuxSetting{query(rewritten)}, rc.fix...)...)
+			srv = startServe(t, home, env...)
+			srv.initialize(t)
+			srv.listIncludes(t, id)
+			srv.killNamesTimeout(t, id, rewritten)
+			srv.stop(t)
 		}},
 	}
 	for _, s := range steps {

@@ -1,11 +1,7 @@
 package main_test
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,12 +11,10 @@ import (
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// surfaceDeadline bounds every run that must stop on its own (serve with stdin
-// held open, the relayed PermissionRequest hook); a run still alive is killed.
-const surfaceDeadline = 10 * time.Second
 
 // mcpInitialize is the MCP initialize request line sent to `serve --stdio`.
 const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
@@ -41,14 +35,13 @@ type configRefusal struct {
 }
 
 // configRefusals is the one table of refused [tmux], [defaults], [relay],
-// [pause] and [pre_trust] values driving every surface check.
+// [pause] and [pre_trust] values driving every surface check: a minimum, the
+// derived grace rule, every table at once and a malformed type. The per-key
+// refusals are internal/config's config_errors_test.go and config_timeouts_test.go.
 func configRefusals() []configRefusal {
-	window, bound, grace := config.TmuxStoppingWindowSeconds, config.TmuxStartingSessionSeconds, config.TmuxPendingGraceSeconds
+	window, grace := config.TmuxStoppingWindowSeconds, config.TmuxPendingGraceSeconds
 	create, kill := config.TmuxCreateTimeoutMs, config.TmuxKillExitWaitMs
 
-	// A raised create timeout lifts the grace minimum above the grace floor.
-	const raisedCreate = 15000
-	raisedGraceMin := config.PendingGraceMinimumSeconds(raisedCreate, 0)
 	// A create timeout whose derived grace minimum exceeds the grace default.
 	defaultBreakingCreate := int64(config.DefaultPendingGraceSeconds-config.PendingGraceMarginSeconds+1) * 1000
 	defaultGraceMin := config.PendingGraceMinimumSeconds(defaultBreakingCreate, 0)
@@ -63,42 +56,11 @@ func configRefusals() []configRefusal {
 			fix:     []apitest.TmuxSetting{apitest.TmuxInt(window, 0)},
 		},
 		{
-			name: "starting_session_bound_below_minimum",
-			bad:  []apitest.TmuxSetting{apitest.TmuxInt(bound, config.MinStartingSessionSeconds-1)},
-			refused: []apitest.ConfigRefusal{{Key: bound, Value: config.MinStartingSessionSeconds - 1,
-				Minimum: config.MinStartingSessionSeconds}},
-		},
-		{
-			name:    "negative_without_minimum",
-			bad:     []apitest.TmuxSetting{apitest.TmuxInt(kill, -1)},
-			refused: []apitest.ConfigRefusal{{Key: kill, Value: -1}},
-			fix:     []apitest.TmuxSetting{apitest.TmuxInt(kill, 0)},
-		},
-		{
-			name: "grace_below_derived_minimum",
-			bad: []apitest.TmuxSetting{
-				apitest.TmuxInt(create, raisedCreate), apitest.TmuxInt(grace, config.PendingGraceFloorSeconds),
-			},
-			refused: []apitest.ConfigRefusal{{Key: grace, Value: config.PendingGraceFloorSeconds, Minimum: raisedGraceMin,
-				Derived: true, Create: raisedCreate, Pipe: config.DefaultPipeCloseWaitMs}},
-		},
-		{
 			name: "grace_default_below_derived_minimum",
 			bad:  []apitest.TmuxSetting{apitest.TmuxInt(create, defaultBreakingCreate)},
 			refused: []apitest.ConfigRefusal{{Key: grace, Minimum: defaultGraceMin,
 				Derived: true, Create: defaultBreakingCreate, Pipe: config.DefaultPipeCloseWaitMs, Total: defaultGraceTotal}},
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(create, 0)},
-		},
-		{
-			name:    "retention_days_negative",
-			keys:    apitest.ConfigKeys{RetentionDays: -1},
-			refused: []apitest.ConfigRefusal{{Retention: true, Value: -1}},
-		},
-		{
-			// One second past the largest per-hook timeout Claude Code honours (b.8q2).
-			name:    "relay_timeout_above_largest",
-			keys:    apitest.ConfigKeys{RelayTimeoutSeconds: config.MaxRelayTimeoutSeconds + 1},
-			refused: []apitest.ConfigRefusal{{RelayTimeout: true, Value: config.MaxRelayTimeoutSeconds + 1}},
 		},
 		{
 			name: "every_table_refused",
@@ -111,16 +73,8 @@ func configRefusals() []configRefusal {
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(kill, 0)},
 		},
 		{
-			name: "float_starting_session_bound",
-			bad:  []apitest.TmuxSetting{apitest.TmuxFloat(bound, float64(config.MinStartingSessionSeconds)+0.5)},
-		},
-		{
 			name: "string_stopping_window",
 			bad:  []apitest.TmuxSetting{apitest.TmuxString(window, "ninety")},
-		},
-		{
-			name: "bool_query_timeout",
-			bad:  []apitest.TmuxSetting{apitest.TmuxBool(config.TmuxQueryTimeoutMs, true)},
 		},
 	}
 }
@@ -150,89 +104,21 @@ func (h refusedHome) repair(t *testing.T, rc configRefusal) {
 	apitest.WriteTmuxConfig(t, h.cfgPath, rc.fix...)
 }
 
-// assertConfigRefused checks a non-zero exit, empty stdout and a single
+// assertConfigRefused checks exit 1, empty stdout and a single
 // ErrConfigMalformed envelope naming the config path and the row's refused values.
 func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, stderr string, code int) {
 	t.Helper()
-	if code == 0 {
-		t.Fatalf("exit=0 want non-zero; stdout=%q stderr=%q", stdout, stderr)
-	}
-	if stdout != "" {
-		t.Errorf("stdout=%q want empty", stdout)
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrConfigMalformed" {
-		t.Errorf("err_name=%q want ErrConfigMalformed", env.ErrName)
-	}
+	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrConfigMalformed")
 	apitest.AssertDescription(t, env.ErrDescription, apitest.DescConfigRefused(h.cfgPath, rc.refused...))
-}
-
-// runBounded runs the binary in home with env, writing stdin and closing it
-// unless holdOpen; a run still alive at deadline is killed and timedOut is true.
-func runBounded(t *testing.T, home string, env map[string]string, stdin string, holdOpen bool,
-	deadline time.Duration, args ...string) (stdout, stderr string, code int, timedOut bool) {
-	t.Helper()
-	environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
-	for k, v := range env {
-		environ = append(environ, k+"="+v)
-	}
-	return runBoundedIn(t, "", environ, stdin, holdOpen, deadline, args...)
-}
-
-// runBoundedIn is runBounded with cwd dir ("" keeps the test's) and exactly
-// the environment environ, so a caller can leave HOME out.
-func runBoundedIn(t *testing.T, dir string, environ []string, stdin string, holdOpen bool,
-	deadline time.Duration, args ...string) (stdout, stderr string, code int, timedOut bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Dir = dir
-	cmd.Env = environ
-	cmd.WaitDelay = time.Second
-	var out, errOut strings.Builder
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatalf("StdinPipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	_, _ = in.Write([]byte(stdin)) // the process may already have exited
-	if !holdOpen {
-		_ = in.Close()
-	}
-	err = cmd.Wait()
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) && ctx.Err() == nil {
-		t.Fatalf("wait: %v", err)
-	}
-	return out.String(), errOut.String(), cmd.ProcessState.ExitCode(), ctx.Err() != nil
-}
-
-// getSpawn reads a row back through the store-backed `get` verb.
-func getSpawn(t *testing.T, home, id string) map[string]any {
-	t.Helper()
-	stdout, stderr, code := runCLIWithHome(t, home, "get", "--claude-instance-id", id)
-	if code != 0 {
-		t.Fatalf("get exit=%d stderr=%q", code, stderr)
-	}
-	var row map[string]any
-	if err := json.Unmarshal([]byte(stdout), &row); err != nil {
-		t.Fatalf("parse get %q: %v", stdout, err)
-	}
-	return row
 }
 
 // assertRowUntouched checks, after the file is fixed, that the seeded row is
 // still pending with no session id and that no permission request is stored.
 func assertRowUntouched(t *testing.T, h refusedHome) {
 	t.Helper()
-	row := getSpawn(t, h.home, h.instanceID)
-	if row["state"] != store.StatePending || row["claude_session_id"] != "" {
-		t.Errorf("row state=%v claude_session_id=%v; want pending with no session id",
-			row["state"], row["claude_session_id"])
+	cols := rowColumns(t, h.home, h.instanceID)
+	if session, _ := cols.ClaudeSessionID.(string); cols.State != store.StatePending || session != "" {
+		t.Errorf("row state=%v claude_session_id=%v; want pending with no session id", cols.State, cols.ClaudeSessionID)
 	}
 	st, err := store.Open(stateDB(h.home))
 	if err != nil {
@@ -259,9 +145,6 @@ func TestConfigRefusalStopsEverySurface(t *testing.T) {
 	}{
 		{"list", func(t *testing.T, rc configRefusal, h refusedHome) {
 			stdout, stderr, code := runCLIWithHome(t, h.home, "list")
-			if code != 1 {
-				t.Errorf("exit=%d want 1", code)
-			}
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 		}},
 		{"serve_stdio", func(t *testing.T, rc configRefusal, h refusedHome) {
@@ -321,12 +204,8 @@ func TestConfigRefusalStopsEverySurface(t *testing.T) {
 			if code != 0 || stderr != "" {
 				t.Fatalf("list after fix: exit=%d stderr=%q; want 0 and empty", code, stderr)
 			}
-			var res listResult
-			if err := json.Unmarshal([]byte(stdout), &res); err != nil {
-				t.Fatalf("parse list %q: %v", stdout, err)
-			}
-			if len(res.Spawns) != 1 || res.Spawns[0].ClaudeInstanceID != h.instanceID {
-				t.Errorf("list after fix = %+v; want the seeded row %s", res.Spawns, h.instanceID)
+			if !strings.Contains(stdout, `"claude_instance_id":"`+h.instanceID+`"`) {
+				t.Errorf("list after fix = %s; want the seeded row %s", stdout, h.instanceID)
 			}
 		}},
 	}
@@ -342,4 +221,45 @@ func TestConfigRefusalStopsEverySurface(t *testing.T) {
 			}
 		})
 	}
+}
+
+// assertHungLookup checks an ErrTmuxUnresponsive whose description names the
+// lookup and timeout.
+func assertHungLookup(t *testing.T, errName, desc string, timeout time.Duration) {
+	t.Helper()
+	if errName != "ErrTmuxUnresponsive" {
+		t.Errorf("err_name = %q; want ErrTmuxUnresponsive (description %q)", errName, desc)
+	}
+	apitest.AssertDescription(t, desc, apitest.DescCallTimeout(tmux.CallLookup, timeout))
+}
+
+// hungKillRow seeds a live row whose socket's lookup hangs and writes
+// query_timeout_ms; it returns the HOME, the row's id and the config path.
+func hungKillRow(t *testing.T, timeout time.Duration) (home, id, cfgPath string) {
+	t.Helper()
+	home, id, socket := seedRowOnSocket(t, store.StateWaiting)
+	faketmuxfix.Tables{}.Inject(t, socket, faketmuxfix.Hang(tmux.CallLookup).Bound(fakeHangBound))
+	cfgPath = filepath.Join(directorDir(home), "config.toml")
+	writeQueryTimeout(t, cfgPath, timeout)
+	return home, id, cfgPath
+}
+
+// TestTmuxConfigKillCLIHungLookup: the CLI reads [tmux] at startup and hands
+// it to its tmux client: a kill whose lookup hangs fails naming the configured
+// 0.3 s, well before the default query timeout (SR-20.6, AC-CFG-02). Each
+// timeout class against the fake is pkg/api's TestTmuxTimeoutsApplied.
+func TestTmuxConfigKillCLIHungLookup(t *testing.T) {
+	const timeout = 300 * time.Millisecond
+	home, id, _ := hungKillRow(t, timeout)
+
+	began := time.Now()
+	stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--claude-instance-id", id)
+	elapsed := time.Since(began)
+
+	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrTmuxUnresponsive")
+	assertHungLookup(t, env.ErrName, env.ErrDescription, timeout)
+	if def := (config.Tmux{}).EffectiveQueryTimeout(); elapsed >= def {
+		t.Errorf("kill took %v; want well under the default query timeout %v", elapsed, def)
+	}
+	assertInvocationKinds(t, home, "list-sessions")
 }

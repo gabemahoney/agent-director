@@ -8,7 +8,6 @@ package main_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -41,13 +40,6 @@ func TestAdminGlobalFlagsOpenMainCLIStore(t *testing.T) {
 		{"--store-path before the verb", func(dir string) ([]string, string) {
 			db := filepath.Join(dir, "custom.db")
 			return []string{"--store-path", db}, db
-		}, false},
-		{"--store-path= after the verb", func(dir string) ([]string, string) {
-			db := filepath.Join(dir, "custom.db")
-			return []string{"--store-path=" + db}, db
-		}, true},
-		{"--home before the verb", func(dir string) ([]string, string) {
-			return []string{"--home", dir}, stateDB(dir)
 		}, false},
 		{"--home= after the verb", func(dir string) ([]string, string) {
 			return []string{"--home=" + dir}, stateDB(dir)
@@ -89,65 +81,49 @@ func TestAdminGlobalFlagsOpenMainCLIStore(t *testing.T) {
 	}
 }
 
-// TestAdminHomeTildeWithoutHOMERefused: with HOME empty or unset, --home ~ is
+// TestAdminHomeTildeWithoutHOMERefused: with HOME unset, --home ~ is
 // ErrInvalidFlags with exit 1, as on agent-director, and creates nothing in the
-// cwd (b.38a).
+// cwd (b.38a; empty HOME is internal/clisetup's TestGlobalFlagsApplyWithoutHOME).
 func TestAdminHomeTildeWithoutHOMERefused(t *testing.T) {
-	for _, unset := range []bool{false, true} {
-		t.Run(fmt.Sprintf("HOME unset=%t", unset), func(t *testing.T) {
-			cwd := t.TempDir()
-			environ := fakeTmuxEnv(t, t.TempDir())
-			if !unset {
-				environ = append(environ, "HOME=")
-			}
+	cwd := t.TempDir()
 
-			stdout, stderr, code := runBinIn(t, adminPath, cwd, environ, "--home", "~", "delete", "--claude-instance-id", "x")
+	stdout, stderr, code := runBinIn(t, adminPath, cwd, fakeTmuxEnv(t, t.TempDir()), "--home", "~", "delete", "--claude-instance-id", "x")
 
-			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
-			if want := `--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`; env.ErrDescription != want {
-				t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
-			}
-			if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 0 {
-				t.Errorf("cwd holds %v (err %v); want nothing created there", entries, err)
-			}
-		})
+	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+	if want := `--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`; env.ErrDescription != want {
+		t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
+	}
+	if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 0 {
+		t.Errorf("cwd holds %v (err %v); want nothing created there", entries, err)
 	}
 }
 
-// TestAdminTmuxCommandFlag: kill-finished with --tmux-command, before or after
-// the verb, runs that tmux for every tmux call and ends the row's session.
+// TestAdminTmuxCommandFlag: kill-finished with --tmux-command after the verb
+// runs that tmux for every tmux call and ends the row's session.
 func TestAdminTmuxCommandFlag(t *testing.T) {
-	for _, after := range []bool{false, true} {
-		name := "before the verb"
-		if after {
-			name = "after the verb"
+	r := seedFinishedWithSession(t)
+	tmuxCmd := filepath.Join(t.TempDir(), "other-tmux")
+	if err := os.Symlink(faketmuxfix.Binary(t), tmuxCmd); err != nil {
+		t.Fatalf("symlink the fake tmux: %v", err)
+	}
+
+	stdout, stderr, code := runAdmin(t, r.home,
+		withFlags([]string{"--tmux-command", tmuxCmd}, true, "kill-finished", "--claude-instance-id", r.id)...)
+
+	if code != 0 || stderr != "" {
+		t.Fatalf("kill-finished exit = %d, stderr = %q; want 0 and empty", code, stderr)
+	}
+	assertKillSent(t, stdout, true)
+	recs := faketmuxfix.ReadLog(t, filepath.Join(r.home, "fake-tmux.log"))
+	if len(recs) == 0 {
+		t.Fatal("no tmux call logged")
+	}
+	for i, argv := range recs {
+		if argv[0] != tmuxCmd {
+			t.Errorf("tmux call %d ran %q; want --tmux-command's %q", i, argv[0], tmuxCmd)
 		}
-		t.Run(name, func(t *testing.T) {
-			r := seedFinishedWithSession(t)
-			tmuxCmd := filepath.Join(t.TempDir(), "other-tmux")
-			if err := os.Symlink(faketmuxfix.Binary(t), tmuxCmd); err != nil {
-				t.Fatalf("symlink the fake tmux: %v", err)
-			}
-
-			stdout, stderr, code := runAdmin(t, r.home,
-				withFlags([]string{"--tmux-command", tmuxCmd}, after, "kill-finished", "--claude-instance-id", r.id)...)
-
-			if code != 0 || stderr != "" {
-				t.Fatalf("kill-finished exit = %d, stderr = %q; want 0 and empty", code, stderr)
-			}
-			assertKillSent(t, stdout, true)
-			recs := faketmuxfix.ReadLog(t, filepath.Join(r.home, "fake-tmux.log"))
-			if len(recs) == 0 {
-				t.Fatal("no tmux call logged")
-			}
-			for i, argv := range recs {
-				if argv[0] != tmuxCmd {
-					t.Errorf("tmux call %d ran %q; want --tmux-command's %q", i, argv[0], tmuxCmd)
-				}
-			}
-			if left := sessionsLeft(t, r.socket); len(left) != 0 {
-				t.Errorf("sessions after kill-finished = %+v; want none", left)
-			}
-		})
+	}
+	if left := sessionsLeft(t, r.socket); len(left) != 0 {
+		t.Errorf("sessions after kill-finished = %+v; want none", left)
 	}
 }

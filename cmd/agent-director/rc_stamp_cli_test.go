@@ -73,7 +73,7 @@ func TestRCStampReportedByVersionVerbAndMCPTool(t *testing.T) {
 	bin := buildRCBinary(t, root, want)
 
 	t.Run("version verb", func(t *testing.T) {
-		stdout, stderr, code := runBinWithHome(t, bin, t.TempDir(), "version")
+		stdout, stderr, code := mustRun(t, cliOpts{bin: bin, env: homeEnv(t.TempDir(), nil)}, "version")
 		if code != 0 || stderr != "" {
 			t.Fatalf("version exit=%d stderr=%q; want exit 0 and empty stderr", code, stderr)
 		}

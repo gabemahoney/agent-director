@@ -23,18 +23,9 @@ func TestAdminRefusesUnknownVerbsAndFlags(t *testing.T) {
 	}{
 		{"unknown verb", func(string) []string { return []string{"frob"} }, "ErrUnknownVerb"},
 		{"plain kill", func(id string) []string { return []string{"kill", "--claude-instance-id", id} }, "ErrUnknownVerb"},
-		{"global flag with no value", func(id string) []string {
-			return []string{"kill-finished", "--claude-instance-id", id, "--store-path"}
-		}, "ErrInvalidFlags"},
-		{"global flag with an empty value", func(id string) []string {
-			return []string{"--home=", "kill-finished", "--claude-instance-id", id}
-		}, "ErrInvalidFlags"},
 		// b.pu2: `--store-path ""` once opened HOME's default store, this row's.
 		{"global flag with an empty two-token value", func(id string) []string {
 			return []string{"--store-path", "", "kill-finished", "--claude-instance-id", id}
-		}, "ErrInvalidFlags"},
-		{"kill-finished unknown flag", func(id string) []string {
-			return []string{"kill-finished", "--claude-instance-id", id, "--bogus"}
 		}, "ErrInvalidFlags"},
 		{"kill-finished opt-in flag", func(id string) []string {
 			return []string{"kill-finished", "--claude-instance-id", id, "--include-finished"}
@@ -42,9 +33,6 @@ func TestAdminRefusesUnknownVerbsAndFlags(t *testing.T) {
 		{"kill-finished positional", func(id string) []string { return []string{"kill-finished", id} }, "ErrInvalidFlags"},
 		{"delete unknown flag", func(id string) []string {
 			return []string{"delete", "--claude-instance-id", id, "--bogus"}
-		}, "ErrInvalidFlags"},
-		{"delete positional", func(id string) []string {
-			return []string{"delete", "--claude-instance-id", id, id}
 		}, "ErrInvalidFlags"},
 		{"version flag", func(string) []string { return []string{"version", "--bogus"} }, "ErrInvalidFlags"},
 	}

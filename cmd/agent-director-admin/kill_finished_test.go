@@ -2,11 +2,9 @@ package main_test
 
 // kill_finished_test.go covers agent-director-admin kill-finished, kill's
 // operator-only finished-row opt-in (SR-6.5, SR-6.7, b.vqr), through the built
-// binary and the fake tmux: a finished row's own reported-in session is
-// ended by ids, a row that never reported in is refused with no kill, a live
-// row is refused with no tmux call, and an unknown id is ErrSpawnNotFound.
-// agent-director kill on the same finished row stays the no-op
-// (cmd/agent-director TestKillCLIEndedRowIsNoop).
+// binary and the fake tmux: a finished row's own reported-in session is ended
+// by ids and a live row is refused with no tmux call. The opt-in's other rows
+// (never reported in, unknown id) are pkg/api's kill_optin_*_test.go.
 
 import (
 	"encoding/json"
@@ -77,39 +75,6 @@ func TestKillFinishedReportedInSession(t *testing.T) {
 	if code != 0 || json.Unmarshal([]byte(stdout), &got) != nil || got.State != store.StateEnded {
 		t.Errorf("agent-director get exit = %d, stdout = %q (stderr %q); want state %s", code, stdout, stderr, store.StateEnded)
 	}
-}
-
-// TestKillFinishedNeverReportedIn: the same row with no pid recorded exits 1
-// with only the "never reported in" envelope and sends no kill.
-func TestKillFinishedNeverReportedIn(t *testing.T) {
-	r := seedFinishedWithSession(t, apitest.WithNoPID())
-	token, storeID := launchIdentity(t, r.home, r.id)
-	name, _ := r.before.TmuxSessionName.(string)
-
-	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--claude-instance-id", r.id)
-
-	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrTmuxSessionConflict")
-	apitest.AssertDescription(t, env.ErrDescription, apitest.DescKillOptInNeverReportedIn(r.id, name, defBound), token, storeID)
-	if m := optInRe.FindString(stderr); m != "" {
-		t.Errorf("SR-6.8: the refusal names the opt-in %q: %s", m, stderr)
-	}
-	assertInvocationKinds(t, r.home, "list-sessions")
-	if left := sessionsLeft(t, r.socket); len(left) != 1 {
-		t.Errorf("sessions after kill-finished = %+v; want the row's session untouched", left)
-	}
-	assertRowUnchanged(t, r.home, r.id, r.before)
-	assertOneKillCalled(t, r.home, r.id, false)
-}
-
-// TestKillFinishedUnknownID: an unknown id is ErrSpawnNotFound with no tmux
-// call.
-func TestKillFinishedUnknownID(t *testing.T) {
-	home := t.TempDir()
-
-	stdout, stderr, code := runAdmin(t, home, "kill-finished", "--claude-instance-id", "absent")
-
-	assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotFound")
-	assertInvocationKinds(t, home)
 }
 
 // TestKillFinishedRefusesLiveRow: a live row (pending included) is refused

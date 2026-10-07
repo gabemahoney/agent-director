@@ -1,330 +1,69 @@
 package main_test
 
+// The hook verb through the built CLI: its own config load, store open and
+// production parent-process reader wired to internal/hook.Handle, fail-open
+// on every path (SRD §3.2). The per-event transitions and the ad.hook.fired
+// shapes are internal/hook's classify_test.go and TestTrailEmitHookFired.
+
 import (
-	"bufio"
-	"bytes"
-	"database/sql"
-	"encoding/json"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	_ "modernc.org/sqlite"
 )
 
-// linuxProcStarttimeRe is the canonical Linux proc_starttime FORM: field 22 of
-// /proc/<pid>/stat is a decimal clock-ticks-since-boot integer, stored verbatim
-// (no unit conversion). The end-to-end SessionStart test asserts the recorded
-// value matches this shape as well as the test process's live start time (the
-// hook's parent, SR-22.9). The FORM is cross-checked
-// against apitest.LinuxProcStarttime (the shared canonical fixture) below so the
-// two never silently diverge.
-var linuxProcStarttimeRe = regexp.MustCompile(`^[0-9]+$`)
-
-// tsRe is the SR-A-7.9 timestamp regex validated on every ad.hook.fired line.
+// tsRe is the SR-A-7.9 trail timestamp form.
 var tsRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$`)
 
-// readTrailLines opens <home>/.agent-director/ad-trail.jsonl and returns each
-// line as a parsed map. The trail always lands under the process HOME, so tests
-// isolate their trail by giving each subprocess its own HOME. It fails the test
-// immediately on any I/O or parse error.
-func readTrailLines(t *testing.T, home string) []map[string]any {
+// runHook pipes payload into the hook verb under home with env.
+func runHook(t *testing.T, home string, env map[string]string, payload string) (string, string, int) {
 	t.Helper()
-	path := filepath.Join(home, ".agent-director", "ad-trail.jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("readTrailLines: open %s: %v", path, err)
+	stdout, stderr, code, timedOut := runBounded(t, home, env, payload, false, surfaceDeadline, "hook")
+	if timedOut {
+		t.Fatalf("hook still running after %v; stderr=%q", surfaceDeadline, stderr)
 	}
-	defer f.Close()
-	var rows []map[string]any
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		var m map[string]any
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-			t.Fatalf("readTrailLines: unmarshal %q: %v", sc.Text(), err)
-		}
-		rows = append(rows, m)
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatalf("readTrailLines: scan: %v", err)
-	}
-	return rows
+	return stdout, stderr, code
 }
 
-// hookFiredLines returns every ad.hook.fired line in lines, preserving order.
-// Used both by assertHookFiredLine (exactly-one case) and by tests that share a
-// single HOME trail across invocations and measure their contribution as a
-// checkpoint/delta line count (SR-12.1).
-func hookFiredLines(lines []map[string]any) []map[string]any {
-	var fired []map[string]any
-	for _, l := range lines {
-		if l["event"] == "ad.hook.fired" {
-			fired = append(fired, l)
-		}
-	}
-	return fired
-}
-
-// assertHookFiredLine finds the single ad.hook.fired line in lines, validates
-// the SR-A-2.1 required fields (ts, source, relay_mode, session_id, matcher
-// shape, upsert_outcome, no tool_input), and returns it for further assertions.
-func assertHookFiredLine(t *testing.T, lines []map[string]any) map[string]any {
+// assertOneHookFired returns the one ad.hook.fired line of home's trail,
+// checking its SR-A-2.1 shape: ts, source ad_hook, string relay_mode and
+// session_id, an array matcher, and no tool_input.
+func assertOneHookFired(t *testing.T, home string) map[string]any {
 	t.Helper()
-	fired := hookFiredLines(lines)
+	fired := eventsOf(readTrailLines(t, home), "ad.hook.fired")
 	if len(fired) != 1 {
-		t.Fatalf("ad.hook.fired line count = %d; want exactly 1", len(fired))
+		t.Fatalf("ad.hook.fired lines = %v; want exactly one", fired)
 	}
 	row := fired[0]
-
-	// ts: SR-A-7.9 format.
-	if ts, ok := row["ts"].(string); !ok || !tsRe.MatchString(ts) {
-		t.Errorf("ts %v does not match SR-A-7.9 regex", row["ts"])
-	}
-	// source: always "ad_hook".
-	if row["source"] != "ad_hook" {
-		t.Errorf("source = %v; want ad_hook", row["source"])
-	}
-	// relay_mode: always a string (may be empty when env unset).
-	if _, ok := row["relay_mode"].(string); !ok {
-		t.Errorf("relay_mode type %T; want string", row["relay_mode"])
-	}
-	// session_id: always a string (may be empty for non-SessionStart events).
-	if _, ok := row["session_id"].(string); !ok {
-		t.Errorf("session_id type %T; want string", row["session_id"])
-	}
-	// matcher: must be a JSON array, never a scalar.
-	switch row["matcher"].(type) {
-	case []interface{}:
-		// OK — serialised from []string{"*"}.
-	default:
-		t.Errorf("matcher type %T; want []interface{} (JSON array)", row["matcher"])
-	}
-	// upsert_outcome: must be one of the four valid strings, or nil on early
-	// exit (before the store call was reached).
-	if outcome := row["upsert_outcome"]; outcome != nil {
-		valid := map[string]bool{"inserted": true, "updated": true, "no_change": true, "error": true}
-		if s, ok := outcome.(string); !ok || !valid[s] {
-			t.Errorf("upsert_outcome = %v; want one of inserted/updated/no_change/error", outcome)
-		}
-	}
-	// tool_input: must NEVER be present (SR-A-7 binding invariant).
-	if _, ok := row["tool_input"]; ok {
-		t.Errorf("tool_input present in trail line; must be silently dropped")
+	ts, _ := row["ts"].(string)
+	_, relay := row["relay_mode"].(string)
+	_, session := row["session_id"].(string)
+	_, matcher := row["matcher"].([]any)
+	_, toolInput := row["tool_input"]
+	if !tsRe.MatchString(ts) || row["source"] != "ad_hook" || !relay || !session || !matcher || toolInput {
+		t.Errorf("ad.hook.fired = %v; want an SR-A-7.9 ts, source ad_hook, string relay_mode and session_id, "+
+			"an array matcher and no tool_input", row)
 	}
 	return row
 }
 
-// runCLIWithStdin is a variant of runCLI that pipes a payload into stdin.
-// Used by the hook tests to deliver synthesized Claude Code event JSON.
-func runCLIWithStdin(t *testing.T, home, stdin string, args ...string) (string, string, int) {
-	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
-	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + home,
-		"AGENT_DIRECTOR_INSTANCE_ID=" + os.Getenv("AGENT_DIRECTOR_INSTANCE_ID"),
-	}
-	cmd.Stdin = strings.NewReader(stdin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			t.Fatalf("unexpected exec error: %v", err)
-		}
-	}
-	return stdout.String(), stderr.String(), exitCode
-}
-
-func runCLIWithEnv(t *testing.T, home string, env map[string]string, stdin string, args ...string) (string, string, int) {
-	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
-	envArr := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + home,
-	}
-	for k, v := range env {
-		envArr = append(envArr, k+"="+v)
-	}
-	cmd.Env = envArr
-	cmd.Stdin = strings.NewReader(stdin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			t.Fatalf("unexpected exec error: %v", err)
-		}
-	}
-	return stdout.String(), stderr.String(), exitCode
-}
-
-// withTestProcessPane records this test process as the row's pane process
-// (pane pid = os.Getpid(), pane start time = its real probe start time). The
-// test process is the parent of every hook it pipes into the built CLI, so
-// those hooks pass the SR-22.9 parent gate on the row.
-func withTestProcessPane(t *testing.T) apitest.SpawnOption {
-	t.Helper()
-	pid := os.Getpid()
-	start, alive, known := probe.NewProcChecker().StartTime(pid)
-	if !known || !alive || start == "" {
-		t.Fatalf("StartTime(test pid %d) = (%q, alive=%v, known=%v); want the live start time", pid, start, alive, known)
-	}
-	return apitest.WithLaunchIdentity(store.LaunchIdentity{
-		Token:         "5eed0000000000a1",
-		Socket:        apitest.TestSocket,
-		PaneID:        apitest.TestPaneID,
-		PanePID:       pid,
-		PaneStarttime: start,
-	})
-}
-
-// insertPendingRow seeds a pending relay-off row whose pane process is this
-// test process (withTestProcessPane), so the hooks the test pipes apply.
-func insertPendingRow(t *testing.T, dbPath, instanceID string) {
-	t.Helper()
-	if _, err := apitest.SeedSpawn(dbPath, instanceID, store.StatePending, "/tmp", "off", "", false, withTestProcessPane(t)); err != nil {
+// TestHookCLISessionStartRecordsIdentityAndTranscript: a SessionStart from
+// the row's pane process (this test process, the hook's parent, SR-22.9)
+// moves the pending row to waiting and records the session id, pid and
+// proc_starttime of the parent (read by the production reader) and the
+// payload's existing transcript path (b.v2c), with one ad.hook.fired line.
+func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
+	home := t.TempDir()
+	const id = "id-e2e-1"
+	if _, err := apitest.SeedSpawn(stateDB(home), id, store.StatePending, "/tmp", "off", "", true, withTestProcessPane(t)); err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
-}
-
-// readSpawnRow returns the (state, claude_session_id) of a row. Helper for
-// the hook integration tests so each test reads its own observations.
-func readSpawnRow(t *testing.T, dbPath, instanceID string) (string, string) {
-	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer db.Close()
-	var state, sessionID sql.NullString
-	err = db.QueryRow(`SELECT state, COALESCE(claude_session_id,'') FROM spawns WHERE claude_instance_id = ?`,
-		instanceID).Scan(&state, &sessionID)
-	if err != nil {
-		t.Fatalf("read row: %v", err)
-	}
-	return state.String, sessionID.String
-}
-
-// spawnIdentity is the schema-v3 identity/transcript triplet the SessionStart
-// write site populates: pid, proc_starttime, jsonl_path. Each field carries
-// its own SQL NULL flag so the caller can assert non-NULL explicitly rather
-// than conflating NULL with a zero/empty value.
-type spawnIdentity struct {
-	pid           sql.NullInt64
-	procStarttime sql.NullString
-	jsonlPath     sql.NullString
-}
-
-// readSpawnIdentity reads the pid, proc_starttime, and jsonl_path columns raw
-// (no COALESCE) so the end-to-end SessionStart test can distinguish NULL from a
-// present value. This is the observable proof that the CLI's hook verb wrote
-// the tracked identity onto the spawn row.
-func readSpawnIdentity(t *testing.T, dbPath, instanceID string) spawnIdentity {
-	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer db.Close()
-	var id spawnIdentity
-	err = db.QueryRow(`SELECT pid, proc_starttime, jsonl_path FROM spawns WHERE claude_instance_id = ?`,
-		instanceID).Scan(&id.pid, &id.procStarttime, &id.jsonlPath)
-	if err != nil {
-		t.Fatalf("read identity row: %v", err)
-	}
-	return id
-}
-
-func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
-	home := t.TempDir()
-	// First call: a store-opening verb (`list`) triggers schema bootstrap.
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("list bootstrap exit = %d", code)
-	}
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	insertPendingRow(t, dbPath, "id-hook-1")
-
-	payload := `{"hook_event_name":"SessionStart","transcript_path":"/x/y/abc-uuid.jsonl"}`
-	stdout, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-1",
-		},
-		payload, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
-	}
-	if stdout != "" {
-		t.Fatalf("hook stdout must be empty (state-tracking fail-open); got %q", stdout)
-	}
-	state, sessionID := readSpawnRow(t, dbPath, "id-hook-1")
-	if state != "waiting" {
-		t.Errorf("state = %q; want waiting", state)
-	}
-	if sessionID != "abc-uuid" {
-		t.Errorf("claude_session_id = %q; want abc-uuid", sessionID)
-	}
-
-	row := assertHookFiredLine(t, readTrailLines(t, home))
-	if row["claude_instance_id"] != "id-hook-1" {
-		t.Errorf("claude_instance_id = %v; want id-hook-1", row["claude_instance_id"])
-	}
-	if row["event_name"] != "SessionStart" {
-		t.Errorf("event_name = %v; want SessionStart", row["event_name"])
-	}
-	if row["session_id"] != "abc-uuid" {
-		t.Errorf("session_id = %v; want abc-uuid", row["session_id"])
-	}
-}
-
-// TestHookCLISessionStartRecordsIdentityAndTranscript is the Epic's sprint-demo
-// acceptance, exercised end-to-end against the REAL binary subprocess (not an
-// in-process Handle): seed a spawn, fire a SessionStart hook carrying a
-// transcript_path, and assert the row shows the tracked identity — pid and
-// proc_starttime equal to the hook's parent (this test process, the row's
-// recorded pane process) and jsonl_path exactly equal to the payload
-// transcript_path. A subsequent non-SessionStart hook invocation must leave all
-// three unchanged (no-clobber).
-//
-// SR-22.9: an applied SessionStart records the hook's getppid() as the row's
-// pid; the built CLI's parent is this test process, so pid = os.Getpid() and
-// proc_starttime = its probe start time (also checked by canonical FORM).
-func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
-	// Guard: the canonical-form regex must accept the shared fixture constant.
-	// This anchors the FORM the test asserts to apitest's re-exported canonical
-	// value so a future change to the canonical proc_starttime shape trips here.
-	if !linuxProcStarttimeRe.MatchString(apitest.LinuxProcStarttime) {
-		t.Fatalf("canonical-form regex rejects apitest.LinuxProcStarttime %q — form/fixture drift",
-			apitest.LinuxProcStarttime)
-	}
-
-	home := t.TempDir()
-	// list bootstrap: opens the store and runs schema migration to v3.
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("list bootstrap exit = %d", code)
-	}
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	insertPendingRow(t, dbPath, "id-e2e-1")
-
-	// b.v2c AC1: the SessionStart hook now stats transcript_path and records
-	// jsonl_path only when the file exists on disk, so the E2E transcript must be
-	// a real file (a fresh session that has not yet been messaged writes none,
-	// and the row would carry NULL — that is the idle-session case covered in the
-	// hook handler tests). Plant it under the test's HOME temp tree.
 	transcript := filepath.Join(home, ".claude", "projects", "e2e", "session-e2e-uuid.jsonl")
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
 		t.Fatalf("mkdir transcript parent: %v", err)
@@ -332,440 +71,60 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
-	payload := `{"hook_event_name":"SessionStart","transcript_path":"` + transcript + `"}`
-	_, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-e2e-1",
-		},
-		payload, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
+
+	stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id},
+		`{"hook_event_name":"SessionStart","transcript_path":"`+transcript+`"}`)
+
+	if code != 0 || stdout != "" {
+		t.Fatalf("hook exit = %d, stdout = %q; want 0 and empty\nstderr=%s", code, stdout, stderr)
 	}
-
-	id := readSpawnIdentity(t, dbPath, "id-e2e-1")
-
-	// SR-22.9: pid is the hook's parent, i.e. this test process.
 	pid := os.Getpid()
-	if !id.pid.Valid {
-		t.Errorf("pid is NULL; want non-NULL == test pid %d", pid)
-	} else if id.pid.Int64 != int64(pid) {
-		t.Errorf("pid = %d; want %d (the hook's parent, this test process)", id.pid.Int64, pid)
+	start, _, _ := probe.NewProcChecker().StartTime(pid)
+	cols := rowColumns(t, home, id)
+	got := []any{cols.State, cols.ClaudeSessionID, fmt.Sprint(cols.PID), cols.ProcStarttime, cols.JSONLPath}
+	want := []any{store.StateWaiting, "session-e2e-uuid", strconv.Itoa(pid), start, transcript}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("state, session id, pid, proc_starttime, jsonl_path = %v; want %v", got, want)
 	}
-
-	// proc_starttime: the parent's start time, in the canonical Linux form.
-	wantStart, _, _ := probe.NewProcChecker().StartTime(pid)
-	if !id.procStarttime.Valid {
-		t.Errorf("proc_starttime is NULL; want %q", wantStart)
-	} else if !linuxProcStarttimeRe.MatchString(id.procStarttime.String) {
-		t.Errorf("proc_starttime = %q; want canonical form %s", id.procStarttime.String, linuxProcStarttimeRe)
-	} else if id.procStarttime.String != wantStart {
-		t.Errorf("proc_starttime = %q; want %q (the test process's start time)", id.procStarttime.String, wantStart)
-	}
-
-	// jsonl_path: non-NULL and EXACTLY the payload transcript_path (no basename
-	// extraction, no COALESCE surprise).
-	if !id.jsonlPath.Valid {
-		t.Errorf("jsonl_path is NULL; want %q", transcript)
-	} else if id.jsonlPath.String != transcript {
-		t.Errorf("jsonl_path = %q; want %q (exact payload transcript_path)", id.jsonlPath.String, transcript)
-	}
-
-	// No-clobber: a subsequent non-SessionStart hook (PreToolUse) must NOT touch
-	// pid / proc_starttime / jsonl_path — only SessionStart records the identity.
-	_, stderr2, code2 := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-e2e-1",
-		},
-		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, "hook")
-	if code2 != 0 {
-		t.Fatalf("second hook exit = %d; want 0\nstderr=%s", code2, stderr2)
-	}
-	after := readSpawnIdentity(t, dbPath, "id-e2e-1")
-	if after.pid != id.pid {
-		t.Errorf("pid changed after non-SessionStart event: %v -> %v", id.pid, after.pid)
-	}
-	if after.procStarttime != id.procStarttime {
-		t.Errorf("proc_starttime changed after non-SessionStart event: %v -> %v",
-			id.procStarttime, after.procStarttime)
-	}
-	if after.jsonlPath != id.jsonlPath {
-		t.Errorf("jsonl_path changed after non-SessionStart event: %v -> %v",
-			id.jsonlPath, after.jsonlPath)
+	row := assertOneHookFired(t, home)
+	if row["claude_instance_id"] != id || row["event_name"] != "SessionStart" || row["session_id"] != "session-e2e-uuid" {
+		t.Errorf("ad.hook.fired = %v; want %s's SessionStart with its session id", row, id)
 	}
 }
 
-func TestHookCLIMissingEnvExitsZero(t *testing.T) {
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("list bootstrap exit = %d", code)
-	}
-	// No AGENT_DIRECTOR_INSTANCE_ID set — fail-open, exit 0 with no stdout.
-	stdout, _, code := runCLIWithEnv(t, home,
-		map[string]string{},
-		`{"hook_event_name":"SessionStart"}`, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0 (fail-open)", code)
-	}
-	if stdout != "" {
-		t.Fatalf("hook stdout must be empty; got %q", stdout)
-	}
-
-	// Trail line must still be emitted (defer fires on all exit paths).
-	row := assertHookFiredLine(t, readTrailLines(t, home))
-	// claude_instance_id is nil because ResolveInstanceID failed before it was set.
-	if row["claude_instance_id"] != nil {
-		t.Errorf("claude_instance_id = %v; want nil (missing env)", row["claude_instance_id"])
-	}
-}
-
-func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("list bootstrap exit = %d", code)
-	}
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	insertPendingRow(t, dbPath, "id-hook-2")
-	payload := `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`
-	_, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-2",
-		},
-		payload, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
-	}
-	state, _ := readSpawnRow(t, dbPath, "id-hook-2")
-	if state != "ask_user" {
-		t.Errorf("state = %q; want ask_user", state)
-	}
-
-	row := assertHookFiredLine(t, readTrailLines(t, home))
-	if row["claude_instance_id"] != "id-hook-2" {
-		t.Errorf("claude_instance_id = %v; want id-hook-2", row["claude_instance_id"])
-	}
-	if row["event_name"] != "PreToolUse" {
-		t.Errorf("event_name = %v; want PreToolUse", row["event_name"])
-	}
-	if row["tool_name"] != "AskUserQuestion" {
-		t.Errorf("tool_name = %v; want AskUserQuestion", row["tool_name"])
-	}
-}
-
-func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("list bootstrap exit = %d", code)
-	}
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	insertPendingRow(t, dbPath, "id-hook-3")
-
-	// Bump to waiting first so soft-refresh has a non-pending baseline. Both
-	// invocations share this HOME (and its state.db + trail), so the bump's
-	// ad.hook.fired line is isolated from the compact assertion via a
-	// checkpoint/delta line-count against the shared trail (SR-12.1) rather
-	// than a separate trail file.
-	_, _, _ = runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-3",
-		},
-		`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`, "hook")
-	state, _ := readSpawnRow(t, dbPath, "id-hook-3")
-	if state != "waiting" {
-		t.Fatalf("baseline state = %q; want waiting", state)
-	}
-	// Checkpoint: the bump has already emitted one ad.hook.fired line; the
-	// compact's contribution is measured as the delta past this point.
-	checkpoint := len(hookFiredLines(readTrailLines(t, home)))
-
-	// Now compact — must NOT change state.
-	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-3",
-		},
-		`{"hook_event_name":"SessionEnd","reason":"compact"}`, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0", code)
-	}
-	state, _ = readSpawnRow(t, dbPath, "id-hook-3")
-	if state != "waiting" {
-		t.Errorf("state after compact = %q; want waiting (soft refresh)", state)
-	}
-
-	fired := hookFiredLines(readTrailLines(t, home))
-	if got := len(fired) - checkpoint; got != 1 {
-		t.Fatalf("ad.hook.fired delta = %d; want 1 (total %d, checkpoint %d)", got, len(fired), checkpoint)
-	}
-	row := fired[len(fired)-1]
-	if row["claude_instance_id"] != "id-hook-3" {
-		t.Errorf("claude_instance_id = %v; want id-hook-3", row["claude_instance_id"])
-	}
-	if row["event_name"] != "SessionEnd" {
-		t.Errorf("event_name = %v; want SessionEnd", row["event_name"])
-	}
-}
-
-func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
-	// b.pmn: a `logout` SessionEnd (one of the closed set of terminal causes)
-	// transitions to `ended`. Renamed from the older user_quit case — that
-	// label no longer matches the post-b.pmn terminal-cause set.
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("list bootstrap exit = %d", code)
-	}
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	insertPendingRow(t, dbPath, "id-hook-4")
-	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-4",
-		},
-		`{"hook_event_name":"SessionEnd","reason":"logout"}`, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0", code)
-	}
-	state, _ := readSpawnRow(t, dbPath, "id-hook-4")
-	if state != "ended" {
-		t.Errorf("state = %q; want ended", state)
-	}
-
-	row := assertHookFiredLine(t, readTrailLines(t, home))
-	if row["claude_instance_id"] != "id-hook-4" {
-		t.Errorf("claude_instance_id = %v; want id-hook-4", row["claude_instance_id"])
-	}
-	if row["event_name"] != "SessionEnd" {
-		t.Errorf("event_name = %v; want SessionEnd", row["event_name"])
-	}
-}
-
-// trailLifecycleCase parameterizes TestHookCLITrailLifecycles.
-type trailLifecycleCase struct {
-	name              string
-	payload           string
-	instanceID        string
-	seedRow           bool
-	wantEvent         string
-	wantTool          string // non-empty: assert tool_name equals this value
-	wantSession       string // expected session_id value (default "")
-	checkRequestToken bool   // assert request_token key is present (PermissionRequest)
-}
-
-// TestHookCLITrailLifecycles is a table-driven test covering every hook
-// lifecycle event. Each sub-test asserts exactly one ad.hook.fired line with
-// the correct SR-A-2.1 shape.
-func TestHookCLITrailLifecycles(t *testing.T) {
-	cases := []trailLifecycleCase{
-		{
-			name:        "SessionStart",
-			payload:     `{"hook_event_name":"SessionStart","transcript_path":"/x/tl-uuid.jsonl"}`,
-			instanceID:  "id-tl-1",
-			seedRow:     true,
-			wantEvent:   "SessionStart",
-			wantSession: "tl-uuid",
-		},
-		{
-			name:       "UserPromptSubmit",
-			payload:    `{"hook_event_name":"UserPromptSubmit"}`,
-			instanceID: "id-tl-2",
-			seedRow:    true,
-			wantEvent:  "UserPromptSubmit",
-		},
-		{
-			name:       "PreToolUse",
-			payload:    `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`,
-			instanceID: "id-tl-3",
-			seedRow:    true,
-			wantEvent:  "PreToolUse",
-			wantTool:   "Bash",
-		},
-		{
-			name:       "PostToolUse",
-			payload:    `{"hook_event_name":"PostToolUse","tool_name":"Bash"}`,
-			instanceID: "id-tl-4",
-			seedRow:    true,
-			wantEvent:  "PostToolUse",
-			wantTool:   "Bash",
-		},
-		{
-			name:              "PermissionRequest",
-			payload:           `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`,
-			instanceID:        "id-tl-5",
-			seedRow:           true,
-			wantEvent:         "PermissionRequest",
-			wantTool:          "Bash",
-			checkRequestToken: true,
-		},
-		{
-			name:       "Notification",
-			payload:    `{"hook_event_name":"Notification"}`,
-			instanceID: "id-tl-6",
-			seedRow:    true,
-			wantEvent:  "Notification",
-		},
-		{
-			name:       "SessionEnd_user_quit",
-			payload:    `{"hook_event_name":"SessionEnd","reason":"user_quit"}`,
-			instanceID: "id-tl-7",
-			seedRow:    true,
-			wantEvent:  "SessionEnd",
-		},
-		{
-			name:       "SessionEnd_compact",
-			payload:    `{"hook_event_name":"SessionEnd","reason":"compact"}`,
-			instanceID: "id-tl-8",
-			seedRow:    true,
-			wantEvent:  "SessionEnd",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-
-			if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-				t.Fatalf("bootstrap exit = %d", code)
-			}
-			if tc.seedRow {
-				dbPath := filepath.Join(home, ".agent-director", "state.db")
-				insertPendingRow(t, dbPath, tc.instanceID)
-			}
-
-			_, stderr, code := runCLIWithEnv(t, home,
-				map[string]string{
-					"AGENT_DIRECTOR_INSTANCE_ID": tc.instanceID,
-				},
-				tc.payload, "hook")
-			if code != 0 {
-				t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
-			}
-
-			row := assertHookFiredLine(t, readTrailLines(t, home))
-
-			if row["claude_instance_id"] != tc.instanceID {
-				t.Errorf("claude_instance_id = %v; want %q", row["claude_instance_id"], tc.instanceID)
-			}
-			if row["event_name"] != tc.wantEvent {
-				t.Errorf("event_name = %v; want %q", row["event_name"], tc.wantEvent)
-			}
-			if tc.wantTool != "" && row["tool_name"] != tc.wantTool {
-				t.Errorf("tool_name = %v; want %q", row["tool_name"], tc.wantTool)
-			}
-			if s, _ := row["session_id"].(string); s != tc.wantSession {
-				t.Errorf("session_id = %q; want %q", s, tc.wantSession)
-			}
-			if tc.checkRequestToken {
-				if _, ok := row["request_token"]; !ok {
-					t.Errorf("request_token key missing for PermissionRequest event")
-				}
-			}
-		})
-	}
-}
-
-// TestHookCLINoOpUpsert invokes the hook twice with the same payload against
-// an instance that has no pre-seeded row. Both emissions land in separate
-// trail files; the second upsert_outcome must be "no_change".
-func TestHookCLINoOpUpsert(t *testing.T) {
-	// No insertPendingRow — both UPDATEs will find zero rows → no_change.
-	// Neither invocation depends on the other's DB state, so each gets its own
-	// HOME; that keeps their trail lines in separate files (one ad.hook.fired
-	// line apiece) without a shared-trail checkpoint/delta.
-	payload := `{"hook_event_name":"UserPromptSubmit"}`
-	instanceID := "id-noop-1"
-
-	home1 := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home1, "", "list"); code != 0 {
-		t.Fatalf("first bootstrap exit = %d", code)
-	}
-	_, _, code := runCLIWithEnv(t, home1,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": instanceID,
-		},
-		payload, "hook")
-	if code != 0 {
-		t.Fatalf("first hook exit = %d; want 0", code)
-	}
-	row1 := assertHookFiredLine(t, readTrailLines(t, home1))
-	if row1["upsert_outcome"] != "no_change" {
-		t.Errorf("first upsert_outcome = %v; want no_change (no matching row)", row1["upsert_outcome"])
-	}
-
-	home2 := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home2, "", "list"); code != 0 {
-		t.Fatalf("second bootstrap exit = %d", code)
-	}
-	_, _, code = runCLIWithEnv(t, home2,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": instanceID,
-		},
-		payload, "hook")
-	if code != 0 {
-		t.Fatalf("second hook exit = %d; want 0", code)
-	}
-	row2 := assertHookFiredLine(t, readTrailLines(t, home2))
-	if row2["upsert_outcome"] != "no_change" {
-		t.Errorf("second upsert_outcome = %v; want no_change", row2["upsert_outcome"])
-	}
-}
-
-// TestHookCLIFailOpenEmitsLine asserts that a fail-open early exit (missing
-// AGENT_DIRECTOR_INSTANCE_ID) still emits exactly one ad.hook.fired line.
-// The trail event is the observable proof that the defer fired.
-func TestHookCLIFailOpenEmitsLine(t *testing.T) {
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("bootstrap exit = %d", code)
-	}
-
-	// No AGENT_DIRECTOR_INSTANCE_ID → ResolveInstanceID fails → early exit.
-	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{},
-		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0 (fail-open)", code)
-	}
-
-	// Line must exist; upsert_outcome may be nil (store call was never reached).
-	row := assertHookFiredLine(t, readTrailLines(t, home))
-	// claude_instance_id stays nil because resolve failed before it was set.
-	if row["claude_instance_id"] != nil {
-		t.Errorf("claude_instance_id = %v; want nil on early-exit path", row["claude_instance_id"])
-	}
-}
-
-// TestHookCLITrailWriteFailureExitsZero makes the isolated HOME's
-// ~/.agent-director directory read-only (0o500) after the store is fully
-// warmed, so the trail writer's O_CREATE of a fresh ad-trail.jsonl in that
-// directory genuinely fails with EACCES. The hook must still exit 0 — trail
-// write failures are fail-soft (SR-A-7). The trail resolves to
-// <home>/.agent-director/ad-trail.jsonl (os.UserHomeDir), so making that
-// directory unwritable is the HOME-based equivalent of the former
-// read-only-state-dir provocation.
-func TestHookCLITrailWriteFailureExitsZero(t *testing.T) {
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("bootstrap exit = %d", code)
-	}
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	// Seed while the directory is still writable — this opens state.db RW and
-	// materializes the WAL/-shm sidecars, so the hook's own store open below
-	// needs no new files in the soon-to-be-read-only directory.
-	insertPendingRow(t, dbPath, "id-twf-1")
-
-	// Freeze ~/.agent-director read-only so the trail append (a fresh-file
-	// O_CREATE) fails, while the pre-existing state.db + sidecars stay openable.
-	adDir := filepath.Join(home, ".agent-director")
-	if err := os.Chmod(adDir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(adDir, 0o700) })
-
-	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": "id-twf-1",
-		},
-		`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`, "hook")
-	if code != 0 {
-		t.Fatalf("hook exit = %d; want 0 (trail write failure must not kill the hook)", code)
-	}
-	// Trail file cannot be created — no readTrailLines assertion. The meta-event
-	// lands in the operational log (not verifiable at the CLI surface).
+// TestHookCLIFailOpen: with no AGENT_DIRECTOR_INSTANCE_ID the hook exits 0
+// with no stdout and still writes its ad.hook.fired line (instance id null);
+// with the trail unwritable (an empty 0400 ad-trail.jsonl) it still exits 0
+// and moves the row to waiting, writing nothing to the trail (SR-A-7).
+func TestHookCLIFailOpen(t *testing.T) {
+	t.Run("no instance id", func(t *testing.T) {
+		home := t.TempDir()
+		bootstrapDB(t, home)
+		stdout, stderr, code := runHook(t, home, nil, `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`)
+		if code != 0 || stdout != "" {
+			t.Fatalf("hook exit = %d, stdout = %q; want 0 and empty (stderr=%q)", code, stdout, stderr)
+		}
+		if row := assertOneHookFired(t, home); row["claude_instance_id"] != nil {
+			t.Errorf("claude_instance_id = %v; want null on the early-exit path", row["claude_instance_id"])
+		}
+	})
+	t.Run("trail unwritable", func(t *testing.T) {
+		home := t.TempDir()
+		const id = "id-twf-1"
+		if _, err := apitest.SeedSpawn(stateDB(home), id, store.StatePending, "/tmp", "off", "", true, withTestProcessPane(t)); err != nil {
+			t.Fatalf("SeedSpawn: %v", err)
+		}
+		trailPath := filepath.Join(directorDir(home), "ad-trail.jsonl")
+		if err := os.WriteFile(trailPath, nil, 0o400); err != nil {
+			t.Fatalf("write read-only trail: %v", err)
+		}
+		stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id},
+			`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`)
+		if code != 0 || stdout != "" {
+			t.Fatalf("hook exit = %d, stdout = %q; want 0 and empty (stderr=%q)", code, stdout, stderr)
+		}
+		if state := rowColumns(t, home, id).State; state != store.StateWaiting || len(readTrailLines(t, home)) != 0 {
+			t.Errorf("state = %s, trail = %v; want %s and the trail still empty", state, readTrailLines(t, home), store.StateWaiting)
+		}
+	})
 }

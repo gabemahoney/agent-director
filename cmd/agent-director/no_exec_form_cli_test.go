@@ -7,53 +7,26 @@ package main_test
 // run is bounded, because a stdin read with no deadline hangs on an open pipe.
 
 import (
-	"context"
-	"errors"
-	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// noExecFormDeadline bounds every run; a run alive at it applied no stdin deadline (the binary's is 1 s).
-const noExecFormDeadline = 10 * time.Second
-
 // noExecFormTranscript is a payload transcript_path; hook_session_id is its
 // basename without the extension.
 const noExecFormTranscript = "/home/agent/.claude/projects/-work/0a1b2c3d-noexec-uuid.jsonl"
 
-// runBoundedStdinFile runs the binary in home with env and stdin as the given
-// file (nil gives /dev/null); a run still alive at deadline is killed.
-func runBoundedStdinFile(t *testing.T, home string, env map[string]string, stdin *os.File,
-	deadline time.Duration, args ...string) (stdout, stderr string, code int, timedOut bool) {
+// runNoVerb runs the binary under home with env and stdin, failing the test
+// when it outlives surfaceDeadline (the binary's own stdin deadline is 1 s).
+func runNoVerb(t *testing.T, home string, env map[string]string, o cliOpts, args ...string) (string, string, int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	cmd.WaitDelay = time.Second
-	if stdin != nil {
-		cmd.Stdin = stdin
-	}
-	var out, errOut strings.Builder
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	err := cmd.Run()
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) && ctx.Err() == nil {
-		t.Fatalf("run: %v", err)
-	}
-	return out.String(), errOut.String(), cmd.ProcessState.ExitCode(), ctx.Err() != nil
+	o.env, o.deadline = homeEnv(home, env), surfaceDeadline
+	return mustRun(t, o, args...)
 }
 
 // helpVerbStdout returns the `help` verb's stdout from a fresh home.
@@ -64,36 +37,6 @@ func helpVerbStdout(t *testing.T) string {
 		t.Fatalf("help: exit=%d stdout=%q stderr=%q; want exit 0 and output", code, stdout, stderr)
 	}
 	return stdout
-}
-
-// homeTree lists every path under home, relative and sorted.
-func homeTree(t *testing.T, home string) []string {
-	t.Helper()
-	var paths []string
-	err := filepath.WalkDir(home, func(p string, _ fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p != home {
-			rel, _ := filepath.Rel(home, p)
-			paths = append(paths, rel)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", home, err)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-// assertHomeTree fails unless home holds exactly want (relative paths).
-func assertHomeTree(t *testing.T, home string, want ...string) {
-	t.Helper()
-	sort.Strings(want)
-	if got := homeTree(t, home); strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Errorf("home %s holds %q; want exactly %q", home, got, want)
-	}
 }
 
 // oversizedHookPayload is a valid SessionStart payload padded to exactly n
@@ -164,10 +107,7 @@ func TestNoExecFormCLIHookPayloadIgnored(t *testing.T) {
 				env["AGENT_DIRECTOR_INSTANCE_ID"] = tc.instanceID
 			}
 
-			stdout, stderr, code, timedOut := runBounded(t, envHome, env, tc.stdin, false, noExecFormDeadline, args...)
-			if timedOut {
-				t.Fatalf("no-verb run still alive after %s", noExecFormDeadline)
-			}
+			stdout, stderr, code := runNoVerb(t, envHome, env, cliOpts{stdin: tc.stdin}, args...)
 			if code != 0 || stdout != "" || stderr != "" {
 				t.Errorf("exit=%d stdout=%.300q stderr=%q; want exit 0 and nothing on stdout or stderr", code, stdout, stderr)
 			}
@@ -235,17 +175,16 @@ func TestNoExecFormCLINonHookStdinPrintsHelp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			env := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-noexec-help"}
-			var stdout, stderr string
-			var code int
-			var timedOut bool
+			o := cliOpts{stdin: tc.stdin, holdOpen: tc.holdOpen}
 			if tc.devNull {
-				stdout, stderr, code, timedOut = runBoundedStdinFile(t, home, env, nil, noExecFormDeadline, tc.args...)
-			} else {
-				stdout, stderr, code, timedOut = runBounded(t, home, env, tc.stdin, tc.holdOpen, noExecFormDeadline, tc.args...)
+				devNull, err := os.Open(os.DevNull)
+				if err != nil {
+					t.Fatalf("open %s: %v", os.DevNull, err)
+				}
+				defer devNull.Close()
+				o.stdinFile = devNull
 			}
-			if timedOut {
-				t.Fatalf("run still alive after %s; want help within the stdin deadline", noExecFormDeadline)
-			}
+			stdout, stderr, code := runNoVerb(t, home, env, o, tc.args...)
 			if code != 0 || stderr != "" {
 				t.Errorf("exit=%d stderr=%q; want exit 0 and nothing on stderr", code, stderr)
 			}
@@ -270,10 +209,7 @@ func TestNoExecFormCLITerminalStdinPrintsHelp(t *testing.T) {
 
 	home := t.TempDir()
 	env := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-noexec-pty"}
-	stdout, stderr, code, timedOut := runBoundedStdinFile(t, home, env, slave, noExecFormDeadline)
-	if timedOut {
-		t.Fatalf("run still alive after %s", noExecFormDeadline)
-	}
+	stdout, stderr, code := runNoVerb(t, home, env, cliOpts{stdinFile: slave})
 	if code != 0 || stderr != "" {
 		t.Errorf("exit=%d stderr=%q; want exit 0 and nothing on stderr", code, stderr)
 	}

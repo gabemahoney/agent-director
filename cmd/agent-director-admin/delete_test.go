@@ -56,25 +56,22 @@ func TestDeletePerRowResults(t *testing.T) {
 }
 
 // TestAdminRefusesUnmigratedStore: on a store stamped at an older schema
-// version, delete and kill-finished refuse with ErrSchemaMigrationRequired, as
-// agent-director does, and remove or kill nothing.
+// version, kill-finished refuses with ErrSchemaMigrationRequired, as
+// agent-director does, and kills nothing (delete opens the store through the
+// same runOnClient).
 func TestAdminRefusesUnmigratedStore(t *testing.T) {
-	for _, verb := range []string{"delete", "kill-finished"} {
-		t.Run(verb, func(t *testing.T) {
-			r := seedFinishedWithSession(t)
-			current := stampUserVersion(t, r.home, 1)
+	r := seedFinishedWithSession(t)
+	current := stampUserVersion(t, r.home, 1)
 
-			stdout, stderr, code := runAdmin(t, r.home, verb, "--claude-instance-id", r.id)
+	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--claude-instance-id", r.id)
 
-			assertOnlyEnvelope(t, stdout, stderr, code, "ErrSchemaMigrationRequired")
-			assertInvocationKinds(t, r.home)
-			if left := sessionsLeft(t, r.socket); len(left) != 1 {
-				t.Errorf("sessions after %s = %+v; want the row's session untouched", verb, left)
-			}
-			stampUserVersion(t, r.home, current)
-			assertRowUnchanged(t, r.home, r.id, r.before)
-		})
+	assertOnlyEnvelope(t, stdout, stderr, code, "ErrSchemaMigrationRequired")
+	assertInvocationKinds(t, r.home)
+	if left := sessionsLeft(t, r.socket); len(left) != 1 {
+		t.Errorf("sessions after kill-finished = %+v; want the row's session untouched", left)
 	}
+	stampUserVersion(t, r.home, current)
+	assertRowUnchanged(t, r.home, r.id, r.before)
 }
 
 // stampUserVersion sets the store under home to schema version v and returns

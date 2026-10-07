@@ -1,833 +1,198 @@
 package main_test
 
+// spawn's flags through the built CLI and test/fake-tmux. Validation, the
+// label scan, pre-trust and reuse themselves are pkg/api's spawn_*_test.go.
+
 import (
 	"encoding/json"
-	"errors"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// buildFakeTmux returns the directory of faketmuxfix's fake "tmux", built
-// once per test binary, for a PATH prepend.
-func buildFakeTmux(t *testing.T) string {
-	t.Helper()
-	return faketmuxfix.Dir(t)
-}
-
-// runSpawnCLI is a thin wrapper around exec.Command that runs the built
-// CLI with PATH manipulated so the fake-tmux binary wins over any
-// system-installed tmux. HOME is overridden to t.TempDir() so each test
-// has its own ~/.agent-director DB.
-func runSpawnCLI(t *testing.T, home, fakeTmuxDir string, args ...string) (string, string, int) {
-	t.Helper()
-	return runSpawnCLIEnv(t, home, fakeTmuxDir, nil, args...)
-}
-
-// runSpawnCLIEnv is the same as runSpawnCLI plus an optional extraEnv
-// map appended to the child env. Used by tests that need to inject
-// fake-tmux failure-injection vars (e.g. FAKE_TMUX_FAIL_NEWSESSION_NAME)
-// without rebuilding the binary. The child gets home's private TMUX_TMPDIR
-// and no TMUX, so no two tests share a tmux socket or fake-tmux table
-// (SR-20.3).
-func runSpawnCLIEnv(t *testing.T, home, fakeTmuxDir string, extraEnv map[string]string, args ...string) (string, string, int) {
-	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
-	logPath := filepath.Join(home, "fake-tmux.log")
-	env := []string{
-		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
-		"HOME=" + home,
-		"FAKE_TMUX_LOG=" + logPath,
-		"TMUX_TMPDIR=" + spawnTmuxTmpdir(t, home),
-	}
-	for k, v := range extraEnv {
-		env = append(env, k+"="+v)
-	}
-	cmd.Env = env
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			exitCode = ee.ExitCode()
-		} else {
-			t.Fatalf("unexpected exec error: %v", err)
-		}
-	}
-	return stdout.String(), stderr.String(), exitCode
-}
-
-// spawnTmuxTmpdir returns home's private TMUX_TMPDIR, <home>/tmux-tmpdir,
-// creating it (mode 0700) so tmux's resolution takes it rather than /tmp.
-func spawnTmuxTmpdir(t *testing.T, home string) string {
-	t.Helper()
-	dir := filepath.Join(home, "tmux-tmpdir")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("mkdir TMUX_TMPDIR: %v", err)
-	}
-	return dir
-}
-
-// spawnResult mirrors api.SpawnResult for the CLI integration tests.
+// spawnResult mirrors api.SpawnResult for the CLI tests.
 type spawnResult struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
+// spawnOK runs spawn under home with args, requires exit 0 and returns the
+// new row's id.
+func spawnOK(t *testing.T, home, fakeDir string, args ...string) string {
+	t.Helper()
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"spawn"}, args...)...)
+	var res spawnResult
+	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil || res.ClaudeInstanceID == "" {
+		t.Fatalf("spawn %q: exit = %d, stdout = %q; want 0 and an id (stderr=%s)", args, code, stdout, stderr)
+	}
+	return res.ClaudeInstanceID
+}
+
+// getRow runs `get` for id and returns its JSON object.
+func getRow(t *testing.T, home, fakeDir, id string) map[string]any {
+	t.Helper()
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "get", "--claude-instance-id", id)
+	var row map[string]any
+	if code != 0 || json.Unmarshal([]byte(stdout), &row) != nil {
+		t.Fatalf("get %s: exit = %d, stdout = %q (stderr=%q)", id, code, stdout, stderr)
+	}
+	return row
+}
+
+// TestSpawnCLIHappyPath: --cwd, --label, --extra-env, --tmux-session-name and
+// the claude args after -- reach the row and the one create, which runs on
+// the socket under the test's TMUX_TMPDIR with the launch's chained labels
+// (SR-2.1, SR-3.5); the row is pending with the config's relay mode.
 func TestSpawnCLIHappyPath(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
-	cwd := t.TempDir()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--label", "role=worker", "--extra-env", "AD_CLI_EXTRA=set", "--", "--model", "opus")
-	if code != 0 {
-		t.Fatalf("exit = %d; stderr=%s", code, stderr)
-	}
-	var res spawnResult
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	if res.ClaudeInstanceID == "" {
-		t.Fatalf("claude_instance_id empty in result %s", stdout)
-	}
+	const name = "bot-claude-status"
+	id := spawnOK(t, home, fakeDir, "--cwd", t.TempDir(), "--label", "role=worker", "--extra-env", "AD_CLI_EXTRA=set",
+		"--tmux-session-name", name, "--", "--model", "opus")
 
-	// Confirm the row exists by calling `status`.
-	statusOut, _, code := runSpawnCLI(t, home, fakeDir,
-		"status", "--claude-instance-id", res.ClaudeInstanceID)
-	if code != 0 {
-		t.Fatalf("status exit = %d", code)
-	}
-	var st struct {
-		State string `json:"state"`
-	}
-	if err := json.Unmarshal([]byte(statusOut), &st); err != nil {
-		t.Fatalf("parse status %q: %v", statusOut, err)
-	}
-	if st.State != "pending" {
-		t.Errorf("state = %q; want pending", st.State)
-	}
-
-	// Confirm `get` returns the full row.
-	getOut, _, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", res.ClaudeInstanceID)
-	if code != 0 {
-		t.Fatalf("get exit = %d", code)
-	}
-	var row map[string]any
-	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
-		t.Fatalf("parse get %q: %v", getOut, err)
-	}
-	if row["state"] != "pending" {
-		t.Errorf("get.state = %v; want pending", row["state"])
-	}
-	if row["cwd"] == "" {
-		t.Errorf("get.cwd empty")
-	}
-	if row["relay_mode"] != "off" {
-		t.Errorf("get.relay_mode = %v; want off (config default)", row["relay_mode"])
-	}
-	// claude_args should round-trip the passthrough.
-	args, _ := row["claude_args"].([]any)
-	if len(args) != 2 || args[0] != "--model" || args[1] != "opus" {
-		t.Errorf("get.claude_args = %v; want [--model opus]", args)
-	}
-	// Labels should round-trip.
+	row := getRow(t, home, fakeDir, id)
 	labels, _ := row["labels"].(map[string]any)
-	if labels["role"] != "worker" {
-		t.Errorf("get.labels.role = %v; want worker", labels["role"])
+	if row["state"] != "pending" || row["relay_mode"] != "off" || row["tmux_session_name"] != name ||
+		labels["role"] != "worker" || jsonOf(t, row["claude_args"]) != `["--model","opus"]` {
+		t.Errorf("get = %v; want pending, relay off, %s, label role=worker, claude_args [--model opus]", row, name)
 	}
 
-	// Verify fake-tmux saw a new-session invocation.
-	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
+	socket := spawnSocket(t, home)
+	token, rowSocket, storeID := launchIdentity(t, home, id)
+	if len(token) != 16 || rowSocket != socket {
+		t.Errorf("row token = %q, socket = %q; want a 16-hex token on %q", token, rowSocket, socket)
 	}
-	logContent := string(logBytes)
-	if !strings.Contains(logContent, "new-session") {
-		t.Errorf("fake-tmux log missing new-session: %s", logContent)
+	argv := assertInvocationKinds(t, home, "new-session")[0]
+	if !slices.Equal(argv[:4], []string{"-u", "-S", socket, "new-session"}) {
+		t.Errorf("create argv head = %q; want [-u -S %s new-session]", argv[:4], socket)
 	}
-	if !strings.Contains(logContent, "--settings") {
-		t.Errorf("fake-tmux log missing --settings: %s", logContent)
+	target := "=" + name + ":"
+	chain := []string{
+		";", "set-option", "-F", "-t", target, "@ad_owner", tmuxfix.ChainLabelValue(token, id, storeID),
+		";", "set-option", "-p", "-F", "-t", target, "@ad_pane", tmuxfix.ChainPaneLabelValue(token),
 	}
-	if !strings.Contains(logContent, "AGENT_DIRECTOR_INSTANCE_ID="+res.ClaudeInstanceID) {
-		t.Errorf("fake-tmux log missing instance-id env: %s", logContent)
+	if len(argv) < len(chain) || !slices.Equal(argv[len(argv)-len(chain):], chain) {
+		t.Errorf("create argv = %q; want it to end with the chain %q", argv, chain)
 	}
-	if !strings.Contains(logContent, "AGENT_DIRECTOR_LABEL_ROLE=worker") {
-		t.Errorf("fake-tmux log missing label env: %s", logContent)
-	}
-	if !strings.Contains(logContent, "AD_CLI_EXTRA=set") {
-		t.Errorf("fake-tmux log missing --extra-env env: %s", logContent)
-	}
-}
-
-// TestSpawnCLIPreTrustWritesClaudeJSON pins bug b.f75 at the CLI
-// boundary: `agent-director spawn --cwd <fresh>` with no other flags
-// writes hasTrustDialogAccepted=true into ~/.claude.json for the
-// resolved cwd before exec'ing tmux, and records no_pre_trust 0 on the
-// row. HOME is overridden to a per-test tmpdir so the operator's real
-// ~/.claude.json is never touched.
-func TestSpawnCLIPreTrustWritesClaudeJSON(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	// Seed an empty ~/.claude.json so preTrustCwd has a file to mutate
-	// (the missing-file path is the AC#5 case, covered elsewhere).
-	claudeJSON := filepath.Join(home, ".claude.json")
-	if err := os.WriteFile(claudeJSON, []byte(`{"projects":{}}`), 0o600); err != nil {
-		t.Fatalf("seed claude.json: %v", err)
-	}
-	cwd := t.TempDir()
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd)
-	if code != 0 {
-		t.Fatalf("exit = %d; stderr=%s", code, stderr)
-	}
-	assertRecordedNoPreTrust(t, home, stdout, 0)
-
-	raw, err := os.ReadFile(claudeJSON)
-	if err != nil {
-		t.Fatalf("read claude.json: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("parse claude.json: %v (raw=%q)", err, string(raw))
-	}
-	projects, _ := got["projects"].(map[string]any)
-	entry, ok := projects[cwd].(map[string]any)
-	if !ok {
-		t.Fatalf("projects[%q] missing after spawn: %v", cwd, projects)
-	}
-	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
-		t.Errorf("hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
-	}
-}
-
-// TestSpawnCLINoPreTrustFlagSkipsWrite pins AC #2: --no-pre-trust opts
-// out of the workspace-trust pre-write and records no_pre_trust 1 on
-// the row (SR-22.6).
-func TestSpawnCLINoPreTrustFlagSkipsWrite(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	claudeJSON := filepath.Join(home, ".claude.json")
-	if err := os.WriteFile(claudeJSON, []byte(`{"projects":{}}`), 0o600); err != nil {
-		t.Fatalf("seed claude.json: %v", err)
-	}
-	cwd := t.TempDir()
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd, "--no-pre-trust")
-	if code != 0 {
-		t.Fatalf("exit = %d; stderr=%s", code, stderr)
-	}
-	assertRecordedNoPreTrust(t, home, stdout, 1)
-
-	raw, _ := os.ReadFile(claudeJSON)
-	var got map[string]any
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("parse claude.json: %v", err)
-	}
-	projects, _ := got["projects"].(map[string]any)
-	if _, present := projects[cwd]; present {
-		t.Errorf("projects[%q] was written despite --no-pre-trust", cwd)
-	}
-}
-
-// assertRecordedNoPreTrust reads the spawned row's no_pre_trust column
-// from home's store and fails unless it is want (SR-22.6, SR-5.1: the
-// insert records the caller's opt-out for every resume of the life).
-// status, get and list do not expose the column, so this reads the store.
-func assertRecordedNoPreTrust(t *testing.T, home, spawnStdout string, want int64) {
-	t.Helper()
-	var res spawnResult
-	if err := json.Unmarshal([]byte(spawnStdout), &res); err != nil || res.ClaudeInstanceID == "" {
-		t.Fatalf("parse spawn stdout %q: %v", spawnStdout, err)
-	}
-	cols, err := apitest.ReadSpawnColumns(filepath.Join(home, ".agent-director", "state.db"), res.ClaudeInstanceID)
-	if err != nil {
-		t.Fatalf("ReadSpawnColumns: %v", err)
-	}
-	if cols.NoPreTrust != want {
-		t.Errorf("no_pre_trust = %#v; want %d", cols.NoPreTrust, want)
-	}
-}
-
-func TestSpawnCLIRelativeCwdErrCwdNotAPath(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", "./relative")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0 (stderr=%s)", stderr)
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrCwdNotAPath" {
-		t.Errorf("err_name = %q; want ErrCwdNotAPath", env.ErrName)
-	}
-}
-
-func TestSpawnCLIDeniedFlag(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--", "--settings={}")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0")
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrSpawnDeniedFlag" {
-		t.Errorf("err_name = %q; want ErrSpawnDeniedFlag", env.ErrName)
-	}
-}
-
-func TestSpawnCLIReservedEnvKey(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--extra-env", "AGENT_DIRECTOR_FOO=bar")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0")
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrReservedEnvKey" {
-		t.Errorf("err_name = %q; want ErrReservedEnvKey", env.ErrName)
-	}
-}
-
-func TestStatusCLIErrSpawnNotFound(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	// Bootstrap an empty DB by running help first.
-	if _, _, code := runSpawnCLI(t, home, fakeDir, "help"); code != 0 {
-		t.Fatalf("help bootstrap failed")
-	}
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"status", "--claude-instance-id", "nonexistent")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0")
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrSpawnNotFound" {
-		t.Errorf("err_name = %q; want ErrSpawnNotFound", env.ErrName)
-	}
-}
-
-func TestStatusCLIMissingFlag(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	_, stderr, code := runSpawnCLI(t, home, fakeDir, "status")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0")
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrInvalidFlags" {
-		t.Errorf("err_name = %q; want ErrInvalidFlags", env.ErrName)
-	}
-}
-
-// TestSpawnCLITmuxSessionNameHappyPath pins SR-1.1 + SR-3.1 + SR-4.1
-// end-to-end: --tmux-session-name <name> reaches the persisted row
-// verbatim and the fake-tmux log shows the same name on `-s`.
-func TestSpawnCLITmuxSessionNameHappyPath(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--tmux-session-name", "bot-claude-status")
-	if code != 0 {
-		t.Fatalf("exit = %d; stderr=%s", code, stderr)
-	}
-	var res spawnResult
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	getOut, _, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", res.ClaudeInstanceID)
-	if code != 0 {
-		t.Fatalf("get exit = %d", code)
-	}
-	var row map[string]any
-	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
-		t.Fatalf("parse get %q: %v", getOut, err)
-	}
-	if row["tmux_session_name"] != "bot-claude-status" {
-		t.Errorf("get.tmux_session_name = %v; want bot-claude-status", row["tmux_session_name"])
-	}
-	logBytes, _ := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if !strings.Contains(string(logBytes), "\nbot-claude-status\n") {
-		t.Errorf("fake-tmux log missing the user-supplied session name: %s", logBytes)
-	}
-}
-
-// TestSpawnCLITmuxSessionNameOmittedDefaults pins SR-1.1: bare-omit of
-// --tmux-session-name keeps today's composeSessionName behavior.
-func TestSpawnCLITmuxSessionNameOmittedDefaults(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-	stdout, _, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd)
-	if code != 0 {
-		t.Fatalf("exit = %d", code)
-	}
-	var res spawnResult
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
-		t.Fatalf("parse stdout: %v", err)
-	}
-	getOut, _, _ := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", res.ClaudeInstanceID)
-	var row map[string]any
-	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
-		t.Fatalf("parse get: %v", err)
-	}
-	name, _ := row["tmux_session_name"].(string)
-	// <basename(cwd)>-<id[:8]>. cwd basename is the tempdir's leaf
-	// (varies per run); assert via shape regex.
-	if !regexp.MustCompile(`^[A-Za-z0-9_-]+-[0-9a-f]{8}$`).MatchString(name) {
-		t.Errorf("tmux_session_name = %q; want <basename>-<id[:8]> shape", name)
-	}
-}
-
-// assertNoRowNoSession fails t if `list` under home shows any row or the
-// fake-tmux log records a new-session (a missing log means no tmux call).
-func assertNoRowNoSession(t *testing.T, home, fakeDir string) {
-	t.Helper()
-	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read fake-tmux log: %v", err)
-	}
-	for _, line := range strings.Split(string(logBytes), "\n") {
-		if line == "new-session" {
-			t.Errorf("fake-tmux log records a new-session: %s", logBytes)
-			break
+	for _, want := range []string{name, "--settings", "--model", "AGENT_DIRECTOR_INSTANCE_ID=" + id,
+		"AGENT_DIRECTOR_LABEL_ROLE=worker", "AD_CLI_EXTRA=set"} {
+		if !slices.ContainsFunc(argv, func(a string) bool { return strings.Contains(a, want) }) {
+			t.Errorf("create argv lacks %q: %q", want, argv)
 		}
 	}
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "list")
-	if code != 0 {
-		t.Fatalf("list exit = %d; stderr=%q", code, stderr)
-	}
-	var listed struct {
-		Spawns []json.RawMessage `json:"spawns"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
-		t.Fatalf("parse list %q: %v", stdout, err)
-	}
-	if len(listed.Spawns) != 0 {
-		t.Errorf("list shows %d rows; want 0: %s", len(listed.Spawns), stdout)
+	sessions := faketmuxfix.Tables{}.Read(t, socket).Sessions
+	if len(sessions) != 1 || sessions[0].Label != tmuxfix.LabelValue(token, sessions[0].ID, id, storeID) {
+		t.Errorf("fake sessions = %+v; want one session with this launch's label", sessions)
 	}
 }
 
-// TestSpawnCLITmuxSessionNameValidationFailures covers each new sentinel
-// driven by parseEnvelope's err_name, and that no row or session results.
-func TestSpawnCLITmuxSessionNameValidationFailures(t *testing.T) {
+// TestSpawnCLITmuxSessionNameSupplied: an omitted --tmux-session-name gives
+// the <basename(cwd)>-<id[:8]> default, while --tmux-session-name= (supplied,
+// empty) is ErrTmuxSessionNameEmpty naming the CLI flag (b.ro3) with no row
+// and no create: the CLI tells the two apart (TmuxSessionNameSupplied).
+func TestSpawnCLITmuxSessionNameSupplied(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	cwd := t.TempDir()
-	cases := []struct {
-		name    string
-		value   string
-		argEq   bool // pass as --tmux-session-name=<value> to allow explicit empty
-		wantErr string
+	home := t.TempDir()
+	id := spawnOK(t, home, fakeDir, "--cwd", t.TempDir(), "--no-pre-trust")
+	if name, _ := getRow(t, home, fakeDir, id)["tmux_session_name"].(string); !regexp.MustCompile(`^[A-Za-z0-9_-]+-[0-9a-f]{8}$`).MatchString(name) {
+		t.Errorf("tmux_session_name = %q; want the <basename>-<id[:8]> default", name)
+	}
+
+	home = t.TempDir()
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--tmux-session-name=")
+	env := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrTmuxSessionNameEmpty")
+	const desc = "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"
+	if !strings.Contains(env.ErrDescription, desc) {
+		t.Errorf("err_description = %q; want it to carry %q", env.ErrDescription, desc)
+	}
+	assertInvocationKinds(t, home)
+	if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
+		t.Errorf("rows = %v; want none", ids)
+	}
+}
+
+// TestSpawnCLITemplateClaudeArgs: with --template and no args after --, the
+// template's claude_args reach the create (b.qjk: they were wiped); args after
+// -- replace them wholesale.
+func TestSpawnCLITemplateClaudeArgs(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, tc := range []struct {
+		name       string
+		extra      []string
+		want, gone string
 	}{
-		{"reserved colon", "bad:name", false, "ErrTmuxSessionNameInvalid"},
-		{"reserved dot", "bad.name", false, "ErrTmuxSessionNameInvalid"},
-		{"reserved hash", "bad#name", false, "ErrTmuxSessionNameInvalid"},
-		{"reserved dollar", "bad$name", false, "ErrTmuxSessionNameInvalid"},
-		{"reserved backslash", `bad\name`, false, "ErrTmuxSessionNameInvalid"},
-		{"control SOH", "bad\x01name", false, "ErrTmuxSessionNameInvalid"},
-		// NUL (\x00) cannot be passed through exec on linux; unit test
-		// covers that branch (TestValidateTmuxSessionName).
-		{"control DEL", "bad\x7fname", false, "ErrTmuxSessionNameInvalid"},
-		{"non-UTF-8", string([]byte{0xff, 0xfe, 0x80}), false, "ErrTmuxSessionNameInvalid"},
-		{"too long", strings.Repeat("a", 65), false, "ErrTmuxSessionNameTooLong"},
-		{"explicit empty", "", true, "ErrTmuxSessionNameEmpty"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			var args []string
-			if tc.argEq {
-				args = []string{"spawn", "--cwd", cwd, "--tmux-session-name="}
-			} else {
-				args = []string{"spawn", "--cwd", cwd, "--tmux-session-name", tc.value}
-			}
-			_, stderr, code := runSpawnCLI(t, home, fakeDir, args...)
-			if code == 0 {
-				t.Fatalf("expected non-zero exit; stderr=%q", stderr)
-			}
-			env := parseEnvelope(t, stderr)
-			if env.ErrName != tc.wantErr {
-				t.Errorf("err_name = %q; want %q (stderr=%q)", env.ErrName, tc.wantErr, stderr)
-			}
-			// b.ro3: the empty refusal names the param, with the CLI flag a caller here needs.
-			const emptyDesc = "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"
-			if tc.argEq && !strings.Contains(env.ErrDescription, emptyDesc) {
-				t.Errorf("err_description = %q; want it to carry %q", env.ErrDescription, emptyDesc)
-			}
-			assertNoRowNoSession(t, home, fakeDir)
-		})
-	}
-}
-
-// TestSpawnCLIInstanceIDControlCharRejected pins SR-9.1 on the CLI: a
-// control character in an explicit id gives ErrInvalidFlags, never echoes
-// the id, and creates no row or session. NUL cannot pass through exec.
-func TestSpawnCLIInstanceIDControlCharRejected(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	cwd := t.TempDir()
-	for _, tc := range []struct{ name, ctl string }{
-		{"newline", "\n"},
-		{"tab", "\t"},
-		{"DEL", "\x7f"},
+		{"template args when none follow --", nil, "--foo", ""},
+		{"args after -- replace the template's", []string{"--", "--bar"}, "--bar", "--foo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			id := "leakmarker" + tc.ctl + "tail"
-			_, stderr, code := runSpawnCLI(t, home, fakeDir,
-				"spawn", "--cwd", cwd, "--claude-instance-id", id)
-			if code == 0 {
-				t.Fatalf("expected non-zero exit; stderr=%q", stderr)
+			if _, err := apitest.SeedTemplate(filepath.Join(directorDir(home), "templates"), "tpl", `claude_args = ["--foo"]`+"\n"); err != nil {
+				t.Fatalf("SeedTemplate: %v", err)
 			}
-			env := parseEnvelope(t, stderr)
-			if env.ErrName != "ErrInvalidFlags" {
-				t.Errorf("err_name = %q; want ErrInvalidFlags (stderr=%q)", env.ErrName, stderr)
+			id := spawnOK(t, home, fakeDir, append([]string{"--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
+
+			argv := assertInvocationKinds(t, home, "new-session")[0]
+			if !slices.Contains(argv, tc.want) || (tc.gone != "" && slices.Contains(argv, tc.gone)) {
+				t.Errorf("create argv = %q; want %s and not %q", argv, tc.want, tc.gone)
 			}
-			apitest.AssertDescription(t, env.ErrDescription, apitest.DescInstanceIDControlChar(id), "leakmarker")
-			assertNoRowNoSession(t, home, fakeDir)
+			if got := jsonOf(t, getRow(t, home, fakeDir, id)["claude_args"]); got != `["`+tc.want+`"]` {
+				t.Errorf("get.claude_args = %s; want [%s]", got, tc.want)
+			}
 		})
 	}
 }
 
-// lastJSONLine returns the last non-empty line of s that begins with `{`.
-// Used to skip soft warning lines (e.g. "pre-trust failed for <path> …")
-// that the spawn path may emit on stderr ahead of the JSON envelope.
-func lastJSONLine(s string) string {
-	lines := strings.Split(s, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		ln := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(ln, "{") {
-			return ln
-		}
-	}
-	return s
-}
-
-// TestSpawnCLICwdMissing covers the bare-required-flag case: no --cwd
-// at all → ErrCwdMissing (NOT ErrInvalidFlags — the empty-string is
-// passed through to Validate which produces the typed error).
-func TestSpawnCLICwdMissing(t *testing.T) {
+// TestSpawnCLIReuseFinishedFlag: --reuse-finished with an explicit id reuses
+// an ended row with no session left (get: pending, a launch start, no prior
+// sessions), while --reuse-finished=false leaves it colliding with
+// ErrInstanceIdCollision and no create (SR-10.1, SR-10.2; AC-REUSE-13).
+func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	_, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0")
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrCwdMissing" {
-		t.Errorf("err_name = %q; want ErrCwdMissing", env.ErrName)
-	}
-}
+	for _, tc := range []struct {
+		flag  string
+		reuse bool
+	}{{"--reuse-finished", true}, {"--reuse-finished=false", false}} {
+		t.Run(tc.flag, func(t *testing.T) {
+			home, id, _ := seedRowOnSocket(t, store.StateEnded, apitest.WithLifeNumber(1),
+				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: uuid.NewString(), Life: 1}))
+			before := rowColumns(t, home, id)
 
-// TestGetCLICheckPermissionOpenRow pins SR-8.3 case 1: spawn at
-// check_permission with an open permission_requests row → `get`
-// response carries a populated permission_requests array with one
-// element containing all documented fields. tool_input must round-trip
-// as the raw JSON string byte-for-byte (no parse/re-emit per req-review
-// m2). The request_token field must echo back the seeded token.
-func TestGetCLICheckPermissionOpenRow(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--claude-instance-id", id, tc.flag)
 
-	const id = "id-gp-1"
-	const toolName = "Read"
-	const toolInput = `{"file":"/tmp/x","mode":"rw"}`
-	seedSpawnRow(t, dbPath, id, "cd-gp-1", "check_permission", "on")
-	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, toolName, toolInput)
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", id)
-	if code != 0 {
-		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	prs, ok := m["permission_requests"].([]any)
-	if !ok {
-		t.Fatalf("permission_requests missing or not an array: %v (raw=%s)", m["permission_requests"], stdout)
-	}
-	if len(prs) != 1 {
-		t.Fatalf("len(permission_requests) = %d; want 1 (raw=%s)", len(prs), stdout)
-	}
-	pr, ok := prs[0].(map[string]any)
-	if !ok {
-		t.Fatalf("permission_requests[0] is not an object: %v", prs[0])
-	}
-	if got, _ := pr["request_token"].(string); got != testRequestToken {
-		t.Errorf("request_token = %v; want %q", pr["request_token"], testRequestToken)
-	}
-	if got, _ := pr["tool_name"].(string); got != toolName {
-		t.Errorf("tool_name = %v; want %q", pr["tool_name"], toolName)
-	}
-	if got, _ := pr["tool_input"].(string); got != toolInput {
-		t.Errorf("tool_input = %v; want %q (raw JSON string, no parse/re-emit)", pr["tool_input"], toolInput)
-	}
-	if _, ok := pr["requested_at"].(string); !ok {
-		t.Errorf("requested_at missing or not a string: %v", pr["requested_at"])
-	}
-	// request_id JSON-unmarshals to float64 for any[]; just assert non-zero.
-	if rid, _ := pr["request_id"].(float64); rid == 0 {
-		t.Errorf("request_id = %v; want non-zero", pr["request_id"])
+			if !tc.reuse {
+				assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInstanceIdCollision")
+				if after := rowColumns(t, home, id); jsonOf(t, after) != jsonOf(t, before) {
+					t.Errorf("row = %+v; want unchanged %+v", after, before)
+				}
+				assertInvocationKinds(t, home)
+				return
+			}
+			if code != 0 {
+				t.Fatalf("exit = %d; stderr=%s", code, stderr)
+			}
+			row := getRow(t, home, fakeDir, id)
+			if prior, _ := row["prior_sessions"].([]any); row["state"] != "pending" || row["launch_started_at"] == nil || len(prior) != 0 {
+				t.Errorf("get = %v; want pending, a launch start and no prior sessions", row)
+			}
+			assertInvocationKinds(t, home, "list-sessions", "new-session")
+		})
 	}
 }
 
-// TestGetCLICheckPermissionNoRowOmitsField pins SR-8.3 case 2: spawn at
-// check_permission with NO permission_requests row → `get` response
-// carries permission_requests as an empty array []. The field is always
-// present (never omitted); it must not be null and must not be absent.
-func TestGetCLICheckPermissionNoRowOmitsField(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	const id = "id-gp-2"
-	seedSpawnRow(t, dbPath, id, "cd-gp-2", "check_permission", "on")
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", id)
-	if code != 0 {
-		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	prs, ok := m["permission_requests"].([]any)
-	if !ok {
-		t.Errorf("permission_requests missing or not an array: %v (raw=%s)", m["permission_requests"], stdout)
-		return
-	}
-	if len(prs) != 0 {
-		t.Errorf("len(permission_requests) = %d; want 0 (no open rows). raw=%s", len(prs), stdout)
-	}
-}
-
-// TestGetCLICheckPermissionDecidedRowOmitsField pins SR-8.3 case 3 +
-// req-review MAJOR M1: even though the spawn is at check_permission
-// and a permission_requests row exists, a non-empty decision means
-// the row was decided in a prior cycle. OpenPermissionRequestsForSpawn
-// filters on decision IS NULL, so the decided row is absent from
-// permission_requests. The array must be empty, not absent.
-func TestGetCLICheckPermissionDecidedRowOmitsField(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	const id = "id-gp-3"
-	seedSpawnRow(t, dbPath, id, "cd-gp-3", "check_permission", "on")
-	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
-	markPermissionRequestDecided(t, dbPath, id, "allow")
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", id)
-	if code != 0 {
-		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	prs, ok := m["permission_requests"].([]any)
-	if !ok {
-		t.Errorf("permission_requests missing or not an array: %v (raw=%s)", m["permission_requests"], stdout)
-		return
-	}
-	if len(prs) != 0 {
-		t.Errorf("len(permission_requests) = %d; want 0 — decided rows absent (M1). raw=%s", len(prs), stdout)
-	}
-}
-
-// TestGetCLINonCheckPermissionStateOmitsField pins SR-8.3 case 4: when
-// state != check_permission, the existing SpawnRow assertions still
-// hold and permission_requests is an empty array (always present).
-func TestGetCLINonCheckPermissionStateOmitsField(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	const id = "id-gp-4"
-	seedSpawnRow(t, dbPath, id, "cd-gp-4", "waiting", "on")
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", id)
-	if code != 0 {
-		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	prs, ok := m["permission_requests"].([]any)
-	if !ok {
-		t.Errorf("permission_requests missing or not an array for state=waiting: %v (raw=%s)", m["permission_requests"], stdout)
-	} else if len(prs) != 0 {
-		t.Errorf("len(permission_requests) = %d; want 0 for state=waiting. raw=%s", len(prs), stdout)
-	}
-	// Existing SpawnRow assertions still pass.
-	if m["state"] != "waiting" {
-		t.Errorf("state = %v; want waiting", m["state"])
-	}
-	if m["tmux_session_name"] != "cd-gp-4" {
-		t.Errorf("tmux_session_name = %v; want cd-gp-4", m["tmux_session_name"])
-	}
-}
-
-// TestGetCLINonCheckPermissionStateWithStaleRowOmitsField pins SR-8.3
-// case 5: even when an open permission_requests row coincidentally
-// exists (e.g. residue from a prior cycle), the verb MUST gate on
-// STATE, not on row presence. permission_requests is an empty array
-// for non-check_permission states regardless of row existence.
-func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	const id = "id-gp-5"
-	seedSpawnRow(t, dbPath, id, "cd-gp-5", "waiting", "on")
-	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Read", `{"file":"/etc/hosts"}`)
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", id)
-	if code != 0 {
-		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-	prs, ok := m["permission_requests"].([]any)
-	if !ok {
-		t.Errorf("permission_requests missing or not an array for state=waiting with stale row: %v (raw=%s)", m["permission_requests"], stdout)
-	} else if len(prs) != 0 {
-		t.Errorf("len(permission_requests) = %d; want 0 — verb gates on state, not row presence. raw=%s", len(prs), stdout)
-	}
-}
-
-// TestSpawnCLITemplateClaudeArgsAppliedWhenNoTrailingArgs pins bug b.qjk:
-// template claude_args were silently wiped when no trailing `--` args were
-// supplied. Template-only path must flow through to the spawned command line.
-func TestSpawnCLITemplateClaudeArgsAppliedWhenNoTrailingArgs(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-
-	// Write a template with claude_args into the home's templates dir.
-	tplDir := filepath.Join(home, ".agent-director", "templates")
-	if err := os.MkdirAll(tplDir, 0o700); err != nil {
-		t.Fatalf("mkdir templates: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tplDir, "tpl-b-qjk.toml"), []byte(`claude_args = ["--foo"]`+"\n"), 0o600); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
-
-	// Spawn with template but NO trailing `--` args.
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--template", "tpl-b-qjk")
-	if code != 0 {
-		t.Fatalf("exit = %d; stderr=%s", code, stderr)
-	}
-	var res spawnResult
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-
-	// The fake-tmux log must show --foo reached the command line.
-	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+// jsonOf is v encoded as JSON.
+func jsonOf(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
+		t.Fatalf("json.Marshal: %v", err)
 	}
-	if !strings.Contains(string(logBytes), "\n--foo\n") {
-		t.Errorf("fake-tmux log missing --foo; template claude_args were not applied. log=%s", logBytes)
-	}
-
-	// get must round-trip claude_args as ["--foo"].
-	getOut, _, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", res.ClaudeInstanceID)
-	if code != 0 {
-		t.Fatalf("get exit = %d", code)
-	}
-	var row map[string]any
-	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
-		t.Fatalf("parse get %q: %v", getOut, err)
-	}
-	args, _ := row["claude_args"].([]any)
-	if len(args) != 1 || args[0] != "--foo" {
-		t.Errorf("get.claude_args = %v; want [--foo]", args)
-	}
-}
-
-// TestSpawnCLIPerCallClaudeArgsReplacesTemplate verifies that trailing `--`
-// args wholesale-replace the template's claude_args (not merge).
-func TestSpawnCLIPerCallClaudeArgsReplacesTemplate(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-
-	tplDir := filepath.Join(home, ".agent-director", "templates")
-	if err := os.MkdirAll(tplDir, 0o700); err != nil {
-		t.Fatalf("mkdir templates: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tplDir, "tpl-replace.toml"), []byte(`claude_args = ["--foo"]`+"\n"), 0o600); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
-
-	// Spawn with template AND per-call trailing args.
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--template", "tpl-replace", "--", "--bar")
-	if code != 0 {
-		t.Fatalf("exit = %d; stderr=%s", code, stderr)
-	}
-	var res spawnResult
-	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
-		t.Fatalf("parse stdout %q: %v", stdout, err)
-	}
-
-	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
-	}
-	logContent := string(logBytes)
-	if !strings.Contains(logContent, "\n--bar\n") {
-		t.Errorf("fake-tmux log missing --bar (per-call arg). log=%s", logContent)
-	}
-	if strings.Contains(logContent, "\n--foo\n") {
-		t.Errorf("fake-tmux log contains --foo; per-call must wholesale-replace template args. log=%s", logContent)
-	}
-
-	// get must round-trip claude_args as ["--bar"].
-	getOut, _, code := runSpawnCLI(t, home, fakeDir,
-		"get", "--claude-instance-id", res.ClaudeInstanceID)
-	if code != 0 {
-		t.Fatalf("get exit = %d", code)
-	}
-	var row map[string]any
-	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
-		t.Fatalf("parse get %q: %v", getOut, err)
-	}
-	args, _ := row["claude_args"].([]any)
-	if len(args) != 1 || args[0] != "--bar" {
-		t.Errorf("get.claude_args = %v; want [--bar]", args)
-	}
+	return string(b)
 }

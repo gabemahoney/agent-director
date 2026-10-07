@@ -7,33 +7,11 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"os/user"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/hook"
-	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
-
-// passwdAgentDir returns the passwd home's .agent-director, failing unless it is
-// absent and removing it at cleanup; outside the sandbox (the real store) it skips.
-func passwdAgentDir(t *testing.T) string {
-	t.Helper()
-	if os.Getenv(sandboxguard.EnvVar) != "1" {
-		t.Skipf("runs only in the sandbox (%s=1): a regression writes the passwd home's store", sandboxguard.EnvVar)
-	}
-	u, err := user.Current()
-	if err != nil || !filepath.IsAbs(u.HomeDir) {
-		t.Fatalf("user.Current() = %v, %v; want an absolute passwd home", u, err)
-	}
-	dir := filepath.Join(u.HomeDir, ".agent-director")
-	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("%s must be absent before the hook runs (Lstat: %v); the sandbox image has none", dir, err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
-}
 
 // TestHookWithoutHOMEOpensNoStore: with HOME empty or unset the hook exits 0, writes nothing under the
 // passwd home or the cwd, logs one line, and prints only a relayed PermissionRequest's deny (b.4uz).
@@ -64,10 +42,7 @@ func TestHookWithoutHOMEOpensNoStore(t *testing.T) {
 			if !tc.unset {
 				environ = append(environ, "HOME=")
 			}
-			stdout, stderr, code, timedOut := runBoundedIn(t, cwd, environ, tc.payload, false, noExecFormDeadline, "hook")
-			if timedOut {
-				t.Fatalf("hook still running after %s; stderr=%q", noExecFormDeadline, stderr)
-			}
+			stdout, stderr, code := mustRun(t, cliOpts{dir: cwd, env: environ, stdin: tc.payload, deadline: surfaceDeadline}, "hook")
 			if code != 0 || stdout != tc.want {
 				t.Errorf("hook exit=%d stdout=%q; want 0 and %q (stderr=%q)", code, stdout, tc.want, stderr)
 			}

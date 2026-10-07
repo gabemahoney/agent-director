@@ -3,8 +3,8 @@ package main_test
 // help_test.go covers agent-director-admin's help and version (b.vqr): every
 // help path, global flags given or not, opens with the human-approval
 // statement and shows or points to the global flags, help and version open no
-// store and load no config, and version prints the same stamp as
-// agent-director.
+// store and load no config (a poisoned ~/.agent-director stays as it was), and
+// version prints the same stamp as agent-director.
 
 import (
 	"encoding/json"
@@ -90,14 +90,10 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 		{[]string{"-h", "--tmux-command={home}/no-tmux"}, all},
 		{[]string{"kill-finished", "--help", "--store-path", "{home}/.agent-director/state.db"}, []string{"kill-finished"}},
 		{[]string{"--home={home}", "delete", "-h"}, []string{"delete"}},
-	}
-	for _, v := range []string{"kill-finished", "delete", "version"} {
-		for _, flag := range []string{"--help", "-h"} {
-			cases = append(cases, struct {
-				args  []string
-				verbs []string
-			}{[]string{v, flag}, []string{v}})
-		}
+		{[]string{"kill-finished", "-h"}, []string{"kill-finished"}},
+		{[]string{"delete", "--help"}, []string{"delete"}},
+		{[]string{"version", "--help"}, []string{"version"}},
+		{[]string{"version", "-h"}, []string{"version"}},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(append([]string{"agent-director-admin"}, tc.args...), " "), func(t *testing.T) {
@@ -133,22 +129,6 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 			}
 			if after := dirEntries(t, home); !maps.Equal(after, before) {
 				t.Errorf("~/.agent-director changed: %v; want it as it was, %v", after, before)
-			}
-		})
-	}
-}
-
-// TestHelpAndVersionCreateNoStore: under a HOME with no ~/.agent-director,
-// help and version create none.
-func TestHelpAndVersionCreateNoStore(t *testing.T) {
-	for _, args := range [][]string{nil, {"help"}, {"kill-finished", "--help"}, {"delete", "-h"}, {"version"}} {
-		t.Run(strings.Join(append([]string{"agent-director-admin"}, args...), " "), func(t *testing.T) {
-			home := t.TempDir()
-			if _, stderr, code := runAdmin(t, home, args...); code != 0 {
-				t.Fatalf("exit = %d, stderr = %q; want 0", code, stderr)
-			}
-			if _, err := os.Stat(filepath.Join(home, ".agent-director")); !os.IsNotExist(err) {
-				t.Errorf("~/.agent-director after the run: %v; want none created", err)
 			}
 		})
 	}

@@ -1,272 +1,80 @@
 package main_test
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// TestGlobalFlag_StorePath_ListVerb verifies the end-to-end behaviour of
-// the b.32k `--store-path` flag: the CLI must accept the global flag before
-// the verb token, route it through pkg/api.Options.StorePath, and complete
-// a store-opening verb successfully against the supplied path.
-//
-// `list` is chosen because it's the cheapest verb that still opens the store
-// via setupClient (after Part D, `version` is DB-free and no longer creates
-// or opens the store, so it can no longer prove flag threading to pkg/api).
-// A successful `list` against a fresh temp dir confirms (a) the flag was
-// parsed and stripped before dispatch, (b) setupClient applied the override,
-// and (c) pkg/api.New created and opened the store at the supplied path
-// (CreateIfMissing=true is the CLI default).
-func TestGlobalFlag_StorePath_ListVerb(t *testing.T) {
-	tmp := t.TempDir()
-	storePath := filepath.Join(tmp, "custom-state.db")
-
-	stdout, stderr, code := runCLIWithHome(t, tmp,
-		"--store-path", storePath, "list",
-	)
-	if code != 0 {
-		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-	}
-	if stdout == "" {
-		t.Fatalf("stdout empty; expected JSON envelope from list")
-	}
-
-	// The store file must exist at the path we supplied — verifies the flag
-	// actually threaded through to pkg/api.New rather than silently being
-	// dropped (in which case the store would land at ~/.agent-director/state.db
-	// inside the HOME override, not the explicit path).
-	if _, err := os.Stat(storePath); err != nil {
-		t.Errorf("store file not at --store-path location %q: %v", storePath, err)
-	}
-
-	// Sanity: the list envelope parses as JSON (empty store => empty result).
-	var env json.RawMessage
-	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
-		t.Fatalf("stdout not JSON-parseable: %v\nstdout=%q", err, stdout)
-	}
-}
-
-// TestGlobalFlag_StorePath_EqualsForm exercises the `--store-path=value` form
-// against a store-opening verb (`list`; `version` is DB-free post-Part D).
-func TestGlobalFlag_StorePath_EqualsForm(t *testing.T) {
-	tmp := t.TempDir()
-	storePath := filepath.Join(tmp, "eq-state.db")
-
-	_, stderr, code := runCLIWithHome(t, tmp,
-		"--store-path="+storePath, "list",
-	)
-	if code != 0 {
-		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-	}
-	if _, err := os.Stat(storePath); err != nil {
-		t.Errorf("store file not at --store-path location %q: %v", storePath, err)
-	}
-}
-
-// TestGlobalFlag_Home_OverridesEnv verifies --home overrides the HOME env var
-// the CLI inherits, so config.Load's tilde-expansion uses the supplied path.
-// The store lands inside --home rather than $HOME. Exercised with `list`
-// (the cheapest store-opening verb; `version` no longer opens the store
-// after Part D).
-func TestGlobalFlag_Home_OverridesEnv(t *testing.T) {
-	envHome := t.TempDir()
-	flagHome := t.TempDir()
-
-	// Run with HOME=<envHome> but --home <flagHome>. The store must land
-	// under flagHome (where the default ~/.agent-director/state.db resolves).
-	_, stderr, code := runCLIWithHome(t, envHome,
-		"--home", flagHome, "list",
-	)
-	if code != 0 {
-		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-	}
-
-	wantStore := filepath.Join(flagHome, ".agent-director", "state.db")
-	if _, err := os.Stat(wantStore); err != nil {
-		t.Errorf("store file not at --home-derived location %q: %v", wantStore, err)
-	}
-
-	// And explicitly NOT at envHome — confirms HOME override actually applied.
-	envStore := filepath.Join(envHome, ".agent-director", "state.db")
-	if _, err := os.Stat(envStore); err == nil {
-		t.Errorf("store file unexpectedly exists at env-HOME location %q; --home override did not apply", envStore)
-	}
-}
-
-// TestGlobalFlag_DBFreePath_StripsFlagsCreatesNothing pins the Part D contract
-// from the flag side: global flags placed before a DB-free verb (version,
-// help) are still parsed and stripped from argv on the early pre-setupClient
-// dispatch path, the verb exits 0 with a valid envelope, and NOTHING is
-// created anywhere — neither at the --store-path/--home flag target nor under
-// the inherited HOME. This is the flag-facing complement to the side-effect
-// tests: it proves the DB-free path honours (does not choke on) global flags
-// while remaining store-free.
-func TestGlobalFlag_DBFreePath_StripsFlagsCreatesNothing(t *testing.T) {
-	// --store-path before `version`: flag accepted+stripped, version emits its
-	// JSON envelope, and no store is created at the flag target or under HOME.
-	t.Run("store-path before version", func(t *testing.T) {
-		home := t.TempDir()
-		flagStore := filepath.Join(t.TempDir(), "should-not-exist.db")
-
-		stdout, stderr, code := runCLIWithHome(t, home,
-			"--store-path", flagStore, "version",
-		)
-		if code != 0 {
-			t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-		}
-
-		var env struct {
-			Version string `json:"version"`
-			Commit  string `json:"commit"`
-		}
-		if err := json.Unmarshal([]byte(stdout), &env); err != nil {
-			t.Fatalf("stdout not JSON-parseable: %v\nstdout=%q", err, stdout)
-		}
-		if env.Version == "" {
-			t.Errorf("version envelope has empty .version: %q", stdout)
-		}
-
-		if _, err := os.Stat(flagStore); err == nil {
-			t.Errorf("store unexpectedly created at --store-path target %q; DB-free path must not open the store", flagStore)
-		}
-		if _, err := os.Stat(filepath.Join(home, ".agent-director")); err == nil {
-			t.Errorf("~/.agent-director unexpectedly created under HOME %q; DB-free path must not open the store", home)
-		}
-	})
-
-	// --home before `help`: flag accepted+stripped, help exits 0, and no store
-	// is created under the flag home or the inherited HOME.
-	t.Run("home before help", func(t *testing.T) {
-		envHome := t.TempDir()
-		flagHome := t.TempDir()
-
-		_, stderr, code := runCLIWithHome(t, envHome,
-			"--home", flagHome, "help",
-		)
-		if code != 0 {
-			t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-		}
-
-		if _, err := os.Stat(filepath.Join(flagHome, ".agent-director")); err == nil {
-			t.Errorf("~/.agent-director unexpectedly created under --home %q; DB-free path must not open the store", flagHome)
-		}
-		if _, err := os.Stat(filepath.Join(envHome, ".agent-director")); err == nil {
-			t.Errorf("~/.agent-director unexpectedly created under env-HOME %q; DB-free path must not open the store", envHome)
-		}
-	})
-}
-
-// TestGlobalFlag_TmuxCommand_AcceptedByVersionVerb verifies the b.32k
-// `--tmux-command` flag is accepted (parsed and stripped from argv) without
-// erroring when it precedes a verb. `version` is used as the carrier verb: it
-// exits 0 regardless of the flag value, so this case pins that a recognized
-// global flag before a DB-free verb is honoured (parsed + stripped) rather
-// than treated as an invalid flag. After Part D `version` no longer opens the
-// store, so this no longer asserts threading through to pkg/api.New; the
-// --tmux-command -> pkg/api.Options.TmuxCommand plumbing is unit-tested in
-// pkg/api and verb-level tmux semantics in cmd/agent-director/spawn_test.go.
-func TestGlobalFlag_TmuxCommand_AcceptedByVersionVerb(t *testing.T) {
-	tmp := t.TempDir()
-	tmuxStub := filepath.Join(tmp, "fake-tmux")
-
-	_, stderr, code := runCLIWithHome(t, tmp,
-		"--tmux-command", tmuxStub, "version",
-	)
-	if code != 0 {
-		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-	}
-}
-
-// runInHome runs the binary with HOME and cwd set to home and a hook payload on
-// stdin; cwd=home keeps a HOME="" trail write out of the package dir.
-func runInHome(t *testing.T, home string, args ...string) (string, string, int) {
-	t.Helper()
-	return runInDir(t, home, home, args...)
-}
-
-// runInDir is runInHome with cwd dir and HOME=home (which may be "").
-func runInDir(t *testing.T, dir, home string, args ...string) (string, string, int) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), noExecFormDeadline)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
-	cmd.Stdin = strings.NewReader(`{"hook_event_name":"SessionStart"}`)
-	var out, errOut strings.Builder
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		t.Fatalf("%q still running after %s", args, noExecFormDeadline)
-	}
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) {
-		t.Fatalf("run %q: %v", args, err)
-	}
-	return out.String(), errOut.String(), cmd.ProcessState.ExitCode()
-}
-
-// TestGlobalFlag_EmptyTwoTokenValue_Refused: `--flag ""` for each global flag
-// exits 1 with the `--flag=` form's envelope and creates nothing under HOME
-// (no store, config or trail), whatever the verb (b.pu2).
-func TestGlobalFlag_EmptyTwoTokenValue_Refused(t *testing.T) {
-	verbs := []struct {
-		name string
-		argv []string
-	}{
-		// The hook payload on stdin would make a no-verb run write a trail record.
-		{"no verb", nil},
-		{"help", []string{"help"}},
-		{"version", []string{"version"}},
-		{"list", []string{"list"}},
-		{"trail-emit", []string{"trail-emit", "relay-attempt", "--token", "5b3c8f0e-2d4a-4c6b-9e1f-7a8b9c0d1e2f",
-			"--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "pu2-x"}},
-	}
-	for _, flag := range []string{"--store-path", "--home", "--tmux-command"} {
-		for _, v := range verbs {
-			t.Run(flag+"/"+v.name, func(t *testing.T) {
-				home := t.TempDir()
-				stdout, stderr, code := runInHome(t, home, append([]string{flag, ""}, v.argv...)...)
-				env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
-				if want := flag + " requires a value"; env.ErrDescription != want {
-					t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
-				}
-				assertHomeTree(t, home)
-			})
-		}
-	}
-}
-
-// TestGlobalFlag_TildeValuesUseHOME: with an absolute HOME, "~" values open the
-// store under HOME and leave the cwd empty; `--home ~` is HOME itself, not a
-// literal "~" directory under the cwd (b.38a).
-func TestGlobalFlag_TildeValuesUseHOME(t *testing.T) {
+// TestGlobalFlagsOpenTheirStore: --store-path and --home (b.32k), in either
+// form, reach the store a store-opening verb opens, and "~" values expand
+// against HOME, never a literal "~" under the cwd (b.38a); nothing lands in
+// the cwd or, for --home, under the inherited HOME.
+func TestGlobalFlagsOpenTheirStore(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		flags     []string
-		wantStore string // relative to HOME
+		name  string
+		flags func(dir string) []string
+		store func(home, dir string) string // where the store must be
 	}{
-		{"--home ~", []string{"--home", "~"}, filepath.Join(".agent-director", "state.db")},
-		{"--home ~/sub", []string{"--home", "~/sub"}, filepath.Join("sub", ".agent-director", "state.db")},
-		{"--store-path ~/s.db", []string{"--store-path", "~/s.db"}, "s.db"},
+		{"--store-path", func(dir string) []string { return []string{"--store-path", filepath.Join(dir, "s.db")} },
+			func(_, dir string) string { return filepath.Join(dir, "s.db") }},
+		{"--store-path=", func(dir string) []string { return []string{"--store-path=" + filepath.Join(dir, "s.db")} },
+			func(_, dir string) string { return filepath.Join(dir, "s.db") }},
+		{"--home", func(dir string) []string { return []string{"--home", dir} },
+			func(_, dir string) string { return stateDB(dir) }},
+		{"--home ~", func(string) []string { return []string{"--home", "~"} },
+			func(home, _ string) string { return stateDB(home) }},
+		{"--home ~/sub", func(string) []string { return []string{"--home", "~/sub"} },
+			func(home, _ string) string { return stateDB(filepath.Join(home, "sub")) }},
+		{"--store-path ~/s.db", func(string) []string { return []string{"--store-path", "~/s.db"} },
+			func(home, _ string) string { return filepath.Join(home, "s.db") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home, cwd := t.TempDir(), t.TempDir()
-			if _, stderr, code := runInDir(t, cwd, home, append(tc.flags, "list")...); code != 0 {
-				t.Fatalf("%q list: exit=%d want 0; stderr=%q", tc.flags, code, stderr)
+			home, dir, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+			if _, stderr, code := runInDir(t, cwd, home, append(tc.flags(dir), "list")...); code != 0 {
+				t.Fatalf("list: exit=%d want 0; stderr=%q", code, stderr)
 			}
-			if _, err := os.Stat(filepath.Join(home, tc.wantStore)); err != nil {
-				t.Errorf("no store at $HOME/%s: %v", tc.wantStore, err)
+			if _, err := os.Stat(tc.store(home, dir)); err != nil {
+				t.Errorf("no store at %s: %v", tc.store(home, dir), err)
 			}
 			assertHomeTree(t, cwd)
+			if tc.name == "--home" {
+				assertHomeTree(t, home)
+			}
+		})
+	}
+}
+
+// TestGlobalFlag_EmptyTwoTokenValue_Refused: `--flag ""` exits 1 with the
+// `--flag=` form's envelope and creates nothing under HOME (no store, config
+// or trail), on every dispatch path (b.pu2); so does a flag with no value at
+// all. The parse itself is internal/clisetup's TestParseGlobalFlagsMissingValue.
+func TestGlobalFlag_EmptyTwoTokenValue_Refused(t *testing.T) {
+	relayAttempt := []string{"trail-emit", "relay-attempt", "--token", "5b3c8f0e-2d4a-4c6b-9e1f-7a8b9c0d1e2f",
+		"--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "pu2-x"}
+	for _, tc := range []struct {
+		name, flag string
+		argv       []string
+	}{
+		// The hook payload runInDir pipes would make a no-verb run write a trail record.
+		{"no verb", "--store-path", []string{"--store-path", ""}},
+		{"help", "--home", []string{"--home", "", "help"}},
+		{"version", "--tmux-command", []string{"--tmux-command", "", "version"}},
+		{"list", "--home", []string{"--home", "", "list"}},
+		{"trail-emit", "--store-path", append([]string{"--store-path", ""}, relayAttempt...)},
+		{"no value at the tail", "--store-path", []string{"list", "--store-path"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			stdout, stderr, code := runInDir(t, home, home, tc.argv...)
+			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+			if want := tc.flag + " requires a value"; env.ErrDescription != want {
+				t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
+			}
+			assertHomeTree(t, home)
 		})
 	}
 }
@@ -275,9 +83,8 @@ func TestGlobalFlag_TildeValuesUseHOME(t *testing.T) {
 // `--home ~` and `--home ~/x` are ErrInvalidFlags with exit 1 and open
 // nothing, under the passwd home or the cwd (b.38a). With no HOME and no
 // --home, every store-opening call is ErrStoreOpen, `--store-path ~/…`
-// included, because the config path ~/.agent-director/config.toml cannot be
-// expanded; the store's own refusal of a "~/" path is
-// internal/store's TestTildeStorePathWithoutHOMERefused (b.4uz).
+// included, because the config path cannot be expanded; the store's own
+// refusal of a "~/" path is internal/store's TestTildeStorePathWithoutHOMERefused (b.4uz).
 func TestGlobalFlag_HomeTildeWithoutHOME_Refused(t *testing.T) {
 	const noHome = `: HOME is unset or empty, so there is no home directory to expand "~" against`
 	for _, tc := range []struct {
@@ -298,10 +105,7 @@ func TestGlobalFlag_HomeTildeWithoutHOME_Refused(t *testing.T) {
 				if !unset {
 					environ = append(environ, "HOME=")
 				}
-				stdout, stderr, code, timedOut := runBoundedIn(t, cwd, environ, "", false, noExecFormDeadline, tc.argv...)
-				if timedOut {
-					t.Fatalf("%q still running after %s", tc.argv, noExecFormDeadline)
-				}
+				stdout, stderr, code := mustRun(t, cliOpts{dir: cwd, env: environ, deadline: surfaceDeadline}, tc.argv...)
 				env := assertOnlyEnvelope(t, stdout, stderr, code, tc.wantErr)
 				if env.ErrDescription != tc.wantDesc {
 					t.Errorf("err_description = %q; want %q", env.ErrDescription, tc.wantDesc)
@@ -312,22 +116,5 @@ func TestGlobalFlag_HomeTildeWithoutHOME_Refused(t *testing.T) {
 				assertHomeTree(t, cwd)
 			})
 		}
-	}
-}
-
-// TestGlobalFlag_InvalidFlag_TailValue covers the error envelope path:
-// a recognized flag at the tail of argv with no value must yield
-// ErrInvalidFlags and a non-zero exit.
-func TestGlobalFlag_InvalidFlag_TailValue(t *testing.T) {
-	stdout, stderr, code := runCLI(t, "--store-path")
-	if code == 0 {
-		t.Errorf("exit=0 want non-zero; stdout=%q stderr=%q", stdout, stderr)
-	}
-	if stdout != "" {
-		t.Errorf("stdout=%q want empty (error envelope goes to stderr)", stdout)
-	}
-	env := parseEnvelope(t, stderr)
-	if env.ErrName != "ErrInvalidFlags" {
-		t.Errorf("err_name = %q, want %q", env.ErrName, "ErrInvalidFlags")
 	}
 }
