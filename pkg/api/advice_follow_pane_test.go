@@ -532,9 +532,10 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	}
 	pauAssertState(t, e, r.ID, store.StateCheckPermission)
 
-	knownBrokenAdvice(t, "E7", "b.ceq: B's verdict, recorded in its window, holds the relay guard until B's window ends, "+
-		"delivered or not, while A's open record keeps the row in check_permission: send-keys is refused naming B, "+
-		"and decide on B, as that refusal advises, is ErrAlreadyDecided")
+	// Delete this skip when b.ceq is fixed; the rest of the test then pins the fix.
+	t.Skip("b.ceq E7: advice does not work as written: B's verdict, recorded in its window, holds the relay guard " +
+		"until B's window ends, delivered or not, while A's open record keeps the row in check_permission: " +
+		"send-keys is refused naming B, and decide on B, as that refusal advises, is ErrAlreadyDecided")
 	if err := send(); err != nil {
 		t.Fatalf("send-keys (A's answer at the pane) once B's verdict is delivered: %v; want delivery", err)
 	}
