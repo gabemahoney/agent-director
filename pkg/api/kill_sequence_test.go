@@ -14,7 +14,8 @@ package api_test
 // resume launching on an ended row and again on a missing row. After the
 // opt-in's check the sequence is kill's own, so its failed kills and the
 // follow-up's other outcomes are TestKillSequenceCheckDecides' and
-// TestKillCheckFollowUp's; the opt-in never branches on ended against
+// TestKillCheckFollowUp's (an unanswered follow-up with the opt-in is
+// TestKillTrailCalledPerReturnPath's); the opt-in never branches on ended against
 // missing. Kill never changes a row's state. A
 // session holding the row's name is TestKillIncludeFinishedTable's (its Gone
 // rows) and the call table's, as is another store's session (AC-LKP-20).

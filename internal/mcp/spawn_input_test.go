@@ -11,7 +11,7 @@ import (
 // whose id holds a control character is ErrInvalidFlags with the Client's
 // description, which never echoes the id, and nothing is created. Each control
 // character, and the reuse opt-in alongside, is pkg/api's
-// (TestSpawnRejectsControlCharacterInstanceID, TestSpawnReuseFinishedControlCharacterID).
+// TestSpawnRejectsControlCharacterInstanceID.
 func TestToolsCallSpawnRejectsControlCharacterID(t *testing.T) {
 	const id = "mcp-head\nmcp-tail"
 	e, c := newReuseParamEnv(t)

@@ -2,12 +2,10 @@
 // named kind of store write fail in a test (SR-20.3, SRD-RR2 T4).
 //
 // This is a LEAF test-support package, like procstarttimefix: it imports
-// nothing from internal/store (or any other agent-director package), so both
-// installers can use it without an import cycle:
-//
-//   - storefix.InjectWriteFailure, for tests outside internal/store;
-//   - the white-box helper in internal/store's migration_fixtures_test.go,
-//     which cannot import storefix (storefix imports store).
+// nothing from internal/store (or any other agent-director package). Its one
+// installer is storefix.InjectWriteFailure, which every test that fails a
+// write by kind uses, internal/store's own (package store_test, e.g.
+// store_errors_test.go) included.
 //
 // Every trigger's SQL text lives in this file and nowhere else. A trigger is
 // fixed text per kind; the instance id it applies to is never spliced into the

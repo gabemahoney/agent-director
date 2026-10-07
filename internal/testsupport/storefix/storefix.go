@@ -62,46 +62,12 @@ func defaultSpawn(id string) store.Spawn {
 	}
 }
 
-// seed inserts a spawn row and then transitions it to targetState.
-// It uses InsertPending followed by the gated hook transition, played by the
-// row's own agent through a seed pane (WithSeedPane, SeedAgentWrites), so
-// the row ends up in any desired state without exposing raw SQL to callers.
-// The seed pane is removed afterwards: the row records no pane and no
-// process identity, as InsertPending left it. row_version: 0 for pending,
-// else 1. s must come from OpenTempStore (or be registered).
-func seed(t *testing.T, s *store.Store, id, targetState string) store.Spawn {
-	t.Helper()
-	sp := defaultSpawn(id)
-	if err := s.InsertPending(sp); err != nil {
-		t.Fatalf("storefix.seed: InsertPending(%q): %v", id, err)
-	}
-	if targetState != store.StatePending {
-		dbPath := StorePath(t, s, "storefix.seed")
-		if err := WithSeedPane(dbPath, id, func(gate store.HookGate) error {
-			return SeedAgentWrites(s, gate, id, "", targetState)
-		}); err != nil {
-			t.Fatalf("storefix.seed(%q, %q): %v", id, targetState, err)
-		}
-	}
-	row, err := s.GetSpawn(id)
-	if err != nil {
-		t.Fatalf("storefix.seed: GetSpawn(%q): %v", id, err)
-	}
-	return row
-}
-
-// SeedSpawn inserts a Spawn in StateWorking — a live, interactive row
-// suitable for send-keys, kill, and list examples. Returns the fetched row.
-func SeedSpawn(t *testing.T, s *store.Store, id string) store.Spawn {
-	t.Helper()
-	return seed(t, s, id, store.StateWorking)
-}
-
 // SeedCheckPermission inserts a Spawn in StateCheckPermission with relay_mode=on
 // and writes an open permission_requests row for it. Use this as the precondition
 // for the decide verb, which requires relay_mode=on and an undecided request.
 // Both writes are gated hook writes played by the row's own agent through a
-// seed pane, removed afterwards (see seed). s must come from OpenTempStore.
+// seed pane (WithSeedPane), removed afterwards: the row records no pane and no
+// process identity. s must come from OpenTempStore.
 func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	t.Helper()
 	sp := defaultSpawn(id)
@@ -127,8 +93,8 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 }
 
 // SeedResumable inserts a Spawn in StateEnded with a claude_session_id
-// (recorded by the agent's gated writes through a seed pane, see seed;
-// row_version 2) and a placeholder transcript at spawn.JsonlPath under HOME,
+// (recorded by the agent's gated writes through a seed pane, removed
+// afterwards, as for SeedCheckPermission; row_version 2) and a placeholder transcript at spawn.JsonlPath under HOME,
 // which must be a temp directory, so resume's pre-flight passes. s must come
 // from OpenTempStore.
 func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
@@ -314,8 +280,8 @@ const (
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a
-// store error (SR-20.3, SRD-RR2 T4): the only way tests outside internal/store
-// make the concrete *store.Store's writes fail. Through a second raw
+// store error (SR-20.3, SRD-RR2 T4): the only way tests, internal/store's
+// own included, make the concrete *store.Store's writes fail by kind. Through a second raw
 // connection to dbPath (the temp store file the test already holds) it
 // installs writefailfix's trigger for kind, scoped to instanceID, so other
 // rows, other ids and cleanup are unaffected; the test's cleanup removes it.

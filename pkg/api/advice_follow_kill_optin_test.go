@@ -2,7 +2,8 @@ package api_test
 
 // advice_follow_kill_optin_test.go: b.fji literal-follow tests for kill's
 // operator-only finished-row opt-in (advice inventory C9, C10) on the kill
-// fixture. The CLI forms are cmd/agent-director/advice_follow_kill_cli_test.go's.
+// fixture. The CLI form is cmd/agent-director-admin/kill_finished_test.go's
+// (TestAdviceFollow_C9_AdminStillStoppingRetryLater).
 
 import (
 	"strings"

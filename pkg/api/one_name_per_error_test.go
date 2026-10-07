@@ -6,9 +6,19 @@ package api_test
 // that no other test checks by catalogue match: the call-site table
 // (lookup_calltable_*_test.go) checks every lookup outcome's error, and the
 // spawn, reuse and advice-follow tests their own (kill's past the lookup are
-// TestAdviceFollow_C1 to C6's). The pane verbs' rows are in
-// one_name_pane_verbs_test.go and kill's finished-row opt-in's in
-// one_name_kill_optin_test.go.
+// TestAdviceFollow_C1 to C6's; with the finished-row opt-in,
+// TestKillTrailCalledPerReturnPath's and TestKillIncludeFinishedSequence's).
+// Read-pane, send-keys and pause have no row: assertOneName checks each of
+// their errors where its tests trigger it:
+//   - each lookup outcome, the first action failing and each unusable name:
+//     the call table; a failed capture's follow-up outcomes:
+//     TestCallTableReadPaneFollowUp;
+//   - the pane not found, a lost reply's, read-pane's leftovers and the failed
+//     listing: readpane_pane_test.go;
+//   - the keys calls' timeouts and follow-up outcomes:
+//     TestKeysVerbsActionTimeout and TestKeysVerbsActionFailureFollowUp;
+//   - send-keys' pending refusals: sendkeys_pending_test.go; pause's state
+//     refusals and its wait's timeout: TestPauseGuards and TestPauseTimeout.
 
 import (
 	"errors"
@@ -17,13 +27,11 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
@@ -83,8 +91,7 @@ type oneNameRow struct {
 
 // oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
-	return slices.Concat(oneNameSpawnRows(), oneNameResumeRows(), oneNameReadPaneRows(), oneNameSendKeysRows(),
-		oneNamePauseRows())
+	return slices.Concat(oneNameSpawnRows(), oneNameResumeRows())
 }
 
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches
@@ -138,21 +145,5 @@ func oneNameResumeRows() []oneNameRow {
 			_, err := e.resume(r.ID)
 			return err
 		}},
-		// Reuse of a row already live after a reuse (SR-10.3); no other test reaches it.
-		{name: "spawn Reuse/live row: pending after a reuse", want: "ErrInstanceIdCollision", run: func(t *testing.T) error {
-			e := newKillEnv(t)
-			r := e.reusePending(t, agentAlive, reuseRowSpec{Age: time.Hour}, reuseRequest{})
-			_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
-			return err
-		}},
-	}
-}
-
-// scriptKill scripts ss in order on every call of kind call on r's socket.
-func scriptKill(call tmux.Call, ss ...tmuxfix.Script) func(*testing.T, *killEnv, *killRow) {
-	return func(_ *testing.T, e *killEnv, r *killRow) {
-		for _, s := range ss {
-			e.rec.Script(r.Socket, s, call)
-		}
 	}
 }

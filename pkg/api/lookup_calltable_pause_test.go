@@ -6,8 +6,10 @@ package api_test
 // the agent's pane by id and then waits for the row to end, plus a pending
 // and an ended row, whose state guards
 // answer before any tmux call in every column. Only the /exit call is failed
-// in the action columns. The agent's pane, lost replies, adoption, the Enter
-// failures and the other follow-up outcomes are pause's per-verb files'.
+// in the action columns. The agent's pane and lost replies are
+// readpane_pane_test.go's (TestPaneVerbs*); adoption, the line-clear and Enter
+// failures and the other follow-up outcomes are sendkeys_action_test.go's
+// (TestKeysVerbs*); the guards and the wait are pause_test.go's.
 
 import (
 	"maps"

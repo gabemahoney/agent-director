@@ -132,12 +132,6 @@ func assertLaunchSentinel(t *testing.T, err, want error) {
 	assertOneSentinel(t, err, want)
 }
 
-// assertOnlyCatalogued is assertOneName for a non-internal want.
-func assertOnlyCatalogued(t *testing.T, err error, want string) {
-	t.Helper()
-	assertOneName(t, err, want)
-}
-
 // reuseRowState is everything about one row a spawn could change: its
 // columns, its session history over every life and its permission requests.
 type reuseRowState struct {

@@ -3,9 +3,11 @@ package api_test
 // lookup_calltable_sendkeys_test.go is send-keys' two rows of the call-site
 // table (lookup_calltable_test.go; SR-7.2, SR-7.3, SR-20.6): the live row,
 // and a pending row sent to with allow_pending (SR-7.1, SR-22.8). Only the
-// text call is failed in the action columns. The agent's pane, lost replies,
-// the Enter-call failures and the other follow-up outcomes are
-// sendkeys_action_test.go's; pending launch shapes are sendkeys_pending_test.go's.
+// text call is failed in the action columns. The agent's pane and lost
+// replies are readpane_pane_test.go's (TestPaneVerbs*); the Enter-call
+// failures, the other follow-up outcomes and the adoption write are
+// sendkeys_action_test.go's (TestKeysVerbs*); pending launch shapes are
+// sendkeys_pending_test.go's.
 
 import (
 	"maps"

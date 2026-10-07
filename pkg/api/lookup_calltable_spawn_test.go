@@ -5,7 +5,7 @@ package api_test
 // answers "duplicate session" (SR-9.4, SR-3.10). Spawn inserts its own row,
 // so each cell builds its world on the held-name fixture (spawn_held_test.go)
 // and checks the new row ended; end-write details, trail and ceiling are
-// spawn_held*_test.go's.
+// TestSpawnHeldTrailPerOutcome's.
 
 import (
 	"maps"

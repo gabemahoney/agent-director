@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HOME", tmpHome) // nolint:errcheck — os.Setenv never errors on non-nil key
 	apiTrailDir = tmpHome
-	// Pin the trail path now: tests that move HOME (e.g. TestResumeDelegation)
+	// Pin the trail path now: tests that move HOME (e.g. TestClientVerbsDelegate)
 	// would otherwise fix it to their own HOME if they emit first.
 	trail.Default()
 

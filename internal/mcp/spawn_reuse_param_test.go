@@ -3,7 +3,10 @@ package mcp_test
 // spawn_reuse_param_test.go pins the MCP side of spawn's reuse_finished opt-in
 // (SR-10.1, AC-REUSE-13; b.c4u's name): without it a finished row's id
 // collides with the Go client's error envelope. The opt-in's behaviour matrix
-// is pkg/api's (spawn_reuse_test.go); its MCP spelling and a reuse it launches
+// is pkg/api's: TestSpawnExistingRowCollides (an ended or missing row without
+// it, a live one with it), TestSpawnAcceptsEmptyAndPrintableInstanceID (no id
+// with it mints one), TestSpawnRejectsControlCharacterInstanceID and
+// spawn_reuse_test.go's applied reset; its MCP spelling and a reuse it launches
 // are TestAdviceFollow_I4_MCPLiteralReuseSpelling's; its schema and decode are
 // TestMCPParamToolsListNames', TestMCPParamTypesAgree's and TestMCPParamParity's.
 
