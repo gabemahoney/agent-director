@@ -53,8 +53,7 @@ SQLite file; everything else is tmux.
     shim that runs Claude Code as a child (for example a JS launcher left
     by an install that skipped its scripts, or a version-manager shim)
     makes every hook `ad.hook.ignored` with reason `pid_mismatch`, and the
-    rows stay `pending`; the trail then also records
-    `ad.hook.launcher_detected` (see
+    rows stay `pending` (see
     [A row stays `pending` and the trail shows `pid_mismatch`](#a-row-stays-pending-and-the-trail-shows-pid_mismatch)).
 - `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
   run and recorded replies) and 3.3a (by the test suites).
@@ -1385,29 +1384,25 @@ so every hook of every agent is ignored and rows stay `pending`. List the
 records:
 
 ```sh
-jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, claude_instance_id, hook_event, parent_pid, parent_command, row_pane_pid, launcher_pid}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, claude_instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.agent-director/ad-trail.jsonl | tail -n 5
 ```
 
 `parent_command` is the command name of the process that fired the hook.
-A few such records are expected and need no
-action: a nested `claude`, a teammate pane or a leftover session carrying
-the id is never the row's own agent. `launcher_pid` is set when the pane
-process (`row_pane_pid`) started that process as a child; a refused
-SessionStart of a `pending` row then also writes
-`ad.hook.launcher_detected`, with the pane process's command and advice:
+A few such records are expected and need no action: a nested `claude`, a
+teammate pane or a leftover session carrying the id is never the row's own
+agent. When the pane process started that process as a child, each refused
+SessionStart of a `pending` row also writes `ad.hook.pane_is_grandparent`:
 
 ```sh
-jq -c 'select(.event == "ad.hook.launcher_detected") | {ts, claude_instance_id, launcher_pid, launcher_command, parent_command, advice}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.pane_is_grandparent") | {ts, claude_instance_id, pane_command, parent_command, advice}' ~/.agent-director/ad-trail.jsonl | tail -n 5
 ```
 
-When every row's hooks are refused with `launcher_pid` set and
-`parent_command` is Claude Code itself, the `claude` on PATH is a
+When its `parent_command` is Claude Code, the `claude` on PATH is a
 launcher: replace it with Claude Code's native binary or a wrapper that
-`exec`s it (see [Prerequisites](#prerequisites)). Then end and relaunch
+`exec`s it (see [Prerequisites](#prerequisites)), then end and relaunch
 each row that stays `pending` as the [caller contract](#caller-contract)
-says. When `parent_command` is a shell, the hook ran through a shell
-instead of in exec form, and the `ad.hook.launcher_detected` record's
-`advice` says so.
+says. When it is a shell, the hook ran through a shell instead of in exec
+form.
 
 ### A row on a different tmux server
 

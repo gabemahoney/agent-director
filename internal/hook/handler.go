@@ -59,10 +59,11 @@ type HandleConfig struct {
 	// row.
 	ParentPID func() int
 	// ParentProc reads the parent's start time (the gate), command name
-	// (ad.hook.ignored and ad.hook.launcher_detected only) and parent pid
-	// (the launcher warning only, b.9n6). cmd/agent-director wires the per-OS
-	// probe readers; tests inject a double. A nil ParentProc leaves the start
-	// time unreadable, so the hook matches no row.
+	// (ad.hook.ignored and ad.hook.pane_is_grandparent only) and parent pid
+	// (ad.hook.pane_is_grandparent's check only, b.9n6, b.zde).
+	// cmd/agent-director wires the per-OS probe readers; tests inject a
+	// double. A nil ParentProc leaves the start time unreadable, so the hook
+	// matches no row.
 	ParentProc ParentProc
 	// Now reads the injected clock that bounds SessionStart's wait for its
 	// launch's identity write (SR-22.9, SR-20.2): the grace bound is compared
@@ -104,13 +105,13 @@ type HandleConfig struct {
 // (SR-14; emitIgnored) with the store's reason. A hook for an id with no row
 // is today's silent no-op, with no ad.hook.ignored (decision A2). The hook
 // path makes no tmux call and walks no process ancestry: past the parent it
-// reads only, for a pid_mismatch hook, the parent's own parent pid, once,
-// after the gate has decided. When that is the row's pane process (a `claude`
-// launcher that does not exec, or a hook run through a shell instead of in
-// exec form; the two look alike), ad.hook.ignored names it as launcher_pid and,
-// for a SessionStart while the row is still pending, an
-// ad.hook.launcher_detected says so, with that process's command name
-// (b.9n6); the decision, the row and the exit stay those of any ignored hook.
+// reads only, for a SessionStart refused with pid_mismatch while the row is
+// still pending, the parent's own parent pid, once, after the gate has
+// decided. When that is the row's pane process (a `claude` launcher that does
+// not exec, or a hook run through a shell instead of in exec form; the two
+// look alike), an ad.hook.pane_is_grandparent says so, with that process's
+// command name (b.9n6, b.zde); the decision, the row and the exit stay those
+// of any ignored hook.
 //
 // Subagents and in-process teammates (SR-22.9; WD 2026-09-30b) run inside the
 // agent's process, so their hooks pass the gate; the payload marks them with a

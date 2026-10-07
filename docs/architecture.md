@@ -80,7 +80,7 @@ in `init`. The verb registry
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; its read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: the server identity read `display-message -p 'ad-server<TAB>#{pid}<TAB>#{start_time}'`, then the session listing with labels, then the three `@ad_owner` scope reads; LFR H5; b.47f. The identity read answers on a server with no sessions too (tmux's `exit-empty` off), so every answer names the server that gave it. `parseLookup` takes the first line as the identity line, exactly `ad-server`, the decimal pid and the decimal start time, tab separated; then the session lines, whose pid and start time must equal the identity line's; then the scope section (LFR H6). A first line that is not an identity line, empty output included, or a session line that disagrees with it makes the answer malformed, `FailUnrecognized`), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`; the key is a fixed name the caller chooses, never caller text). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the identity read's, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row to `waiting` and soft-refreshes any other (b.svb; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. On the hook path (`emitIgnored`), after a `pid_mismatch` refusal, and only then, the hook reads the parent's own parent pid once (`ParentProc.PPID`) for the launcher warning (`launcher_pid`, `ad.hook.launcher_detected`; b.9n6), plus, only when it writes `ad.hook.launcher_detected`, the launcher's command name (`ParentProc.CommandName`, `launcher_command`); neither read feeds the gate's decision (see "Launcher warning" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, and the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; the reads past the parent are the launcher warning's parent-pid read, plus the launcher's command-name read only when `ad.hook.launcher_detected` is written, both through `ParentProc`). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row to `waiting` and soft-refreshes any other (b.svb; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, and the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; its only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`). |
 
 ### `[tmux]` timing settings
 
@@ -2321,7 +2321,7 @@ unchanged   (nothing written; one ad.hook.ignored)
 | `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — no state change; bumps `last_seen_at` |
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
 | unknown event | — | soft refresh + info-level log entry |
-| any event | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` (for a `pending` row's SessionStart whose parent is the pane process's child, also one `ad.hook.launcher_detected`; see "Launcher warning" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)) |
+| any event | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` (for a `pending` row's SessionStart whose parent is the pane process's child, also one `ad.hook.pane_is_grandparent`; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)) |
 | `SessionStart`, `SessionEnd` | the payload carries a non-empty `agent_id` (a subagent or in-process teammate), any reason or source | unchanged, decided before the gate; one `ad.hook.ignored` `subagent_event` (none when no row has the id) |
 
 Every ordinary (non-SessionStart) hook that applies to a row with no
@@ -2677,49 +2677,35 @@ reason constants (`store.HookReasonPIDMismatch`,
 `internal/store/hook_gate.go`; a new reason goes beside them. Every
 `ad.hook.ignored` record's SR-14 fields come from the one builder
 `ignoredFields` (`internal/hook/gate.go`), which `emitIgnored` (hook
-path, then filling `row_session_id` / `row_pane_pid` / `launcher_pid`
-from its row read) and `emitNoExecForm` (no-verb path, row fields and
-`launcher_pid` null) both use; never build those fields elsewhere.
+path, then filling `row_session_id` / `row_pane_pid` from its row read)
+and `emitNoExecForm` (no-verb path, row fields null) both use; never
+build those fields elsewhere.
 
-**Launcher warning (b.9n6).** When the `claude` on PATH is a launcher or
-shim that runs Claude Code as a child instead of exec-ing it, the pane
-process is the launcher and every hook's parent is its child, so SR-22.9
-refuses every hook of the agent with `pid_mismatch` and the row stays
-`pending`. A hook run through a shell instead of in exec form has the
-same structure (the pane process is Claude Code, the parent that shell);
-the two are not told apart. The gate's decision does not change; only
-the trail says more. For a hook refused with `pid_mismatch`, and only
-then, `emitIgnored` reads the parent's own parent pid once, after the
-decision, through `HandleConfig.ParentProc.PPID` (the per-OS
-[parent-pid reader](#parent-pid-reader-parentpidreader-ppidgo), wired by
-`hookParentProc`), and compares it with the `pane_pid` of its one row
-read (`launcherPID`, `internal/hook/gate.go`). When they are equal:
-
-- `ad.hook.ignored` carries `launcher_pid` = that pid, for any event and
-  any row state. Otherwise `launcher_pid` is null; it is always null for
-  `no_pane_recorded`, `subagent_event` and `no_exec_form`.
-- When the hook is also a SessionStart and that row read found the row
-  `pending`, `emitLauncherDetected` then reads the launcher's command
-  name once (`ParentProc.CommandName`, for `launcher_command`) and writes
-  one `ad.hook.launcher_detected` after the `ad.hook.ignored` record (see
-  [`ad.*` event namespace](#ad-event-namespace)). It keeps no record of
-  having warned: each refused SessionStart (startup, `/clear`,
-  compaction, resume) writes one. Callers branch on the event name;
-  its `advice` (`launcherAdvice`) names both causes, asserts neither,
-  and never advises ending a session by hand.
-
-Both are fail-open: a nil reader, an unreadable parent pid or a
-trail-write failure leaves `launcher_pid` null or writes nothing, an
-unreadable launcher command name leaves `launcher_command` null, and the
-row, stdout and exit stay those of any ignored hook. Neither read is
-evidence: no gate, ownership, liveness or launch decision reads them.
+**Pane is the hook's grandparent (b.9n6, b.zde).** A `claude` on PATH
+that runs Claude Code as a child instead of exec-ing it makes the pane
+process the launcher, so SR-22.9 refuses every hook of the agent with
+`pid_mismatch` and the row stays `pending`. A hook run through a shell
+instead of in exec form has the same structure; the two are not told
+apart. Only for a SessionStart refused with `pid_mismatch` whose one row
+read found the row `pending` does `emitIgnored`, after writing
+`ad.hook.ignored`, read the parent's own parent pid, once
+(`paneIsGrandparent`, through `HandleConfig.ParentProc.PPID`, the
+[parent-pid reader](#parent-pid-reader-parentpidreader-ppidgo)); no other
+hook reads it. When it is the row's `pane_pid`, `emitPaneIsGrandparent`
+reads the pane process's command name and writes one
+`ad.hook.pane_is_grandparent` (see [`ad.*` event
+namespace](#ad-event-namespace)). The event claims only that structure;
+its `advice` (`paneIsGrandparentAdvice`) names both causes, asserts
+neither, and never advises ending a session by hand. Fail-open: an
+unreadable parent pid writes no record, an unreadable command name
+leaves `pane_command` null, and the gate's decision, the row, stdout and
+exit stay those of any ignored hook. Neither read is evidence.
 
 **No resolver, no tmux.** The hook path makes no tmux call and walks no
 process ancestry: `internal/hook` imports neither `internal/tmux` nor
-`internal/probe`. Its reads past the parent are the launcher warning's
-parent-pid read above, plus the launcher's command-name read only when
-`ad.hook.launcher_detected` is written; both report and never decide. A slow or
-wedged tmux never delays a hook. Adopting the
+`internal/probe`. Its only reads past the parent are
+`ad.hook.pane_is_grandparent`'s, above; they report and never decide. A
+slow or wedged tmux never delays a hook. Adopting the
 pane of a row whose create reply was lost is never a hook's job (SR-3.6
 gives it to `kill`, `send-keys`, `pause` and `find-missing`).
 
@@ -2768,10 +2754,9 @@ until `kill` or `find-missing`; each of its hooks writes
 `ad.hook.ignored` `no_exec_form`, so the trail says why (RN-9; the
 README states the minimum version). A `claude` on PATH that runs Claude
 Code as a child instead of exec-ing it likewise never applies a hook, and
-its rows stay `pending`; its hooks' `ad.hook.ignored` records carry
-`launcher_pid`, and each refused SessionStart of a `pending` row writes
-`ad.hook.launcher_detected` (see "Launcher warning" above; the README
-states the prerequisite). Subagents' and in-process teammates'
+its rows stay `pending`; each refused SessionStart writes
+`ad.hook.pane_is_grandparent` (see above; the README states the
+prerequisite). Subagents' and in-process teammates'
 tool and permission events move the row's state and use its relay, so a
 row can read `working` while only they work: the row reflects the
 process. Other agent
@@ -4259,7 +4244,9 @@ which point the delivering hook is dead and send-keys becomes the
 sanctioned recovery of a fallen-back relay (see "Send-keys interaction"
 and "Invariant — relay-listener pairing" in the relay chapter). There is
 no second independent check — no dialog-visibility probe, no re-derived
-timeout arithmetic.
+timeout arithmetic. The refusal names the request holding the guard (by
+`request_token`; none with zero rows) and advises answering it with
+`decide`; it states no release time (see "Send-keys interaction").
 
 Order of the refusals before any tmux call (`sendKeysRun.run`): the state
 guard (which also refuses a `pending` row with no launch start or no
@@ -5656,17 +5643,27 @@ decide allow/deny out-of-band. Conceptually:
   written its timeout deny, which `decide` waits for (see
   `pkg/api/decide.go` below). Neither the deliverability nor the
   guard-release boundary adds the resolution. Code needing that instant
-  MUST use `relayHookSettledAt`. The same file holds the advice text for the
-  guard's release point: `relayGuardReleaseAdvice` ("1 s after every
-  request's delivery window elapses", rendered from
-  `RelayKillSafetyMargin`). The `ErrSendKeysWhileRelayed` and
-  `ErrRelayFallenBack` messages use it, so a caller retrying at the
-  stated instant is not refused again; any new text stating when the
-  guard releases MUST use it too, never a restated margin. `decide`'s
-  manifest Description states no figure — it names the wait at the
+  MUST use `relayHookSettledAt`.
+
+  **The span between the two boundaries is agent-director's to absorb,
+  not the caller's to time (b.ah6).** From `decide`'s cutoff
+  (`window − margin`) to the guard's release (`window + margin`),
+  `decide` refuses while the send-keys guard still holds. Neither
+  boundary moves and `send-keys` never sleeps; `decide`'s wait (see
+  `pkg/api/decide.go` below) ends at `relayHookSettledAt`, after
+  `relayGuardReleaseAt`, so by the time it returns `ErrRelayFallenBack`
+  the guard has released on that request's account. A `send-keys`
+  refused inside the span gets `ErrSendKeysWhileRelayed`, whose message
+  names the request holding the guard and advises answering it with
+  `decide` (see "Send-keys interaction" below for the cases that
+  request can be in). `RelayKillSafetyMargin` is an internal constant: no runtime
+  caller-facing text (error messages, manifest Descriptions) states the
+  margin, either boundary or a release time, and new text MUST NOT
+  either. `decide`'s manifest Description names the wait at the
   window's end, `ErrAlreadyDecided` for a request the relay hook denied
-  at its timeout, and "(answer at the pane)" for `ErrRelayFallenBack` —
-  so the figures live in the runtime error messages alone.
+  at its timeout, and "(answer at the pane)" for `ErrRelayFallenBack`,
+  with no figure; the wait's bound (at most 3 s) is documented in
+  `docs/permissions.md` and the client READMEs.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
@@ -5717,15 +5714,17 @@ decide allow/deny out-of-band. Conceptually:
     screen. On this request's account the send-keys guard released at
     `relayGuardReleaseAt`, before the wait ended, so `send-keys` is not
     refused by it for this request (a later request of the same spawn
-    can still hold it until its own window plus the margin).
+    can still hold it until its own window plus the margin; `send-keys`
+    then refuses with `ErrSendKeysWhileRelayed`, naming that request and
+    advising `decide` on it).
 
   So, on the same presumption, a caller that follows `ErrRelayFallenBack`
   does not type into Claude's prompt after the hook's timeout deny. The
   `ErrRelayFallenBack` message (advice; the error name is the contract)
   says the request's record is still open and its relay hook can no
-  longer answer it, and to answer at the pane with `send-keys` once its
-  relay guard releases, `RelayKillSafetyMargin` after every request's
-  window, which for this request it already has.
+  longer answer it, and to answer at the pane with `send-keys`. It
+  states no release time: the guard has already released on this
+  request's account.
 
 - **`pkg/api/get_permission.go`** — verb wrapper. Read-only: delegates to
   `GetPermissionRequestByToken` and projects the row onto the SR-7.4 wire
@@ -5824,10 +5823,37 @@ fails late (`window + margin`), so the guard never frees while a live
 poller could still emit. It refuses while any row might still be delivered
 (and refuses on the zero-row transient — no signal, no authority to
 release), and **releases only when every row's window plus the safety
-margin has elapsed**; the refusal's message states that release point,
-margin included (`relayGuardReleaseAdvice`). Once released, the
-delivering hook is provably dead, so send-keys is the sanctioned
-recovery of a fallen-back relay — see the
+margin has elapsed**.
+
+The refusal names one request and states no release point (b.ah6). A
+held `sendKeysGuard` carries that request's token in `holding`: among
+the rows still holding, `namedBefore` picks an undecided row before a
+decided one (the open one is what `decide` can still answer), then the
+older `created_at`, then the lower request id, so the choice does not
+depend on store order; with zero rows `holding` is empty.
+`relayGuardRefusal` builds the message: `spawn <id> is awaiting a
+relayed permission decision on request <request_token>; answer it with
+decide`, or with zero rows `… whose request is not yet recorded; answer
+it with decide once get lists it`. Any code refusing with
+`ErrSendKeysWhileRelayed` MUST build the error through
+`relayGuardRefusal`. The error name is the contract; the
+named request is in one of three cases:
+
+- **Pending.** `decide` answers it. Near the window's end `decide`'s
+  wait absorbs the span between its own cutoff and the guard's release
+  (see `pkg/api/deliverability.go` above), then returns
+  `ErrAlreadyDecided` or `ErrRelayFallenBack`.
+- **Decided, verdict possibly still being delivered.** `decide` returns
+  `ErrAlreadyDecided`; there is nothing to answer. The row holds the
+  guard until the spawn leaves `check_permission` or its relay can no
+  longer deliver, whichever is first. Known limitation (b.ceq): while the
+  spawn stays in `check_permission`, that can be up to the request's full
+  relay window.
+- **Not yet recorded** (zero rows, the mid-insert transient). `decide`
+  once `get` lists it.
+
+Once the guard has released, the delivering hook is provably dead, so
+send-keys is the sanctioned recovery of a fallen-back relay — see the
 invariant below and the `ad.send_keys.called` audit event. (If the store
 read fails, the guard records `guard_evaluation="error"` — distinct from
 the ordinary-send `"not-applicable"` — and the send fails with the store
@@ -6145,8 +6171,8 @@ are also emitted but are not listed here.
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
-| `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `claude_instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `claude_instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails), `launcher_pid` (the row's `pane_pid` when the hook was refused with `pid_mismatch` and the parent's own parent, read once through `probe.ParentPIDReader`, is the row's pane process, for any event and any row state; null otherwise, and always null for the other three reasons; b.9n6). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
-| `ad.hook.launcher_detected` | `ad_hook` | The launcher warning (b.9n6; see "Launcher warning" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)): one per SessionStart refused with `pid_mismatch` whose `ad.hook.ignored` carries `launcher_pid` while the row is `pending`, written by `emitLauncherDetected` (`internal/hook/gate.go`) right after that record. Not once-only: each such SessionStart (startup, `/clear`, compaction, resume) writes one. Carries `claude_instance_id`, `launcher_pid` (the row's pane process, the parent's own parent), `launcher_command` (its command name from `probe.CommandNameReader`; null when unreadable), `parent_pid` and `parent_command` (the `ad.hook.ignored` record's values), `advice` and `source`. The event name is the contract; `advice` is supplementary English naming both causes the check cannot tell apart (a `claude` launcher that runs Claude Code as a child instead of exec-ing it, or a hook run through a shell instead of in exec form) and never advises ending a session by hand. It does not change the gate's decision, the row or the hook's exit; fail-open: a trail-write failure changes nothing. Never another row's id or any session-environment content (SR-14, SR-15) |
+| `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `claude_instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `claude_instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
+| `ad.hook.pane_is_grandparent` | `ad_hook` | One per SessionStart refused with `pid_mismatch` on a `pending` row whose pane process is the hook's grandparent (b.9n6, b.zde; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), written by `emitPaneIsGrandparent` (`internal/hook/gate.go`) right after that hook's `ad.hook.ignored`; not once-only. Carries `claude_instance_id`, `pane_pid` (the row's pane process), `pane_command` (its command name; null when unreadable), `parent_pid` and `parent_command` (the `ad.hook.ignored` record's values), `advice` and `source`. The event name is the contract and claims only that structure; `advice` is supplementary English naming both causes (a `claude` launcher that does not exec, a hook run through a shell). Fail-open; it changes nothing else. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write (`ApplyHookTransition`, `ApplyHookWaitingIfWorking`, `RecordSessionStartIdentity`), including same-state writes, soft-refresh ticks and the gated `working` hold; a hook the gate did not apply emits none. SessionStart on a resumed row records `prior_state` `pending`. Hook-driven writes are the only ones that emit it: a spawn's insert and `find-missing`'s mark never did, `resume`'s move and restore do not (their own `ad.resume.*` events record them), and reuse's reset and restore do not (`ad.spawn.reused` and `ad.spawn.reuse_restored` record them) (SR-A-2.2, SR-14) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
@@ -6170,7 +6196,7 @@ The `source` field identifies which emitter wrote the line:
 
 | Value | Emitter |
 |-------|---------|
-| `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` on the hook path (`emitIgnored`) and `ad.hook.launcher_detected` (`emitLauncherDetected`); `internal/hook/noexec.go` — `ad.hook.ignored` `no_exec_form` (`emitNoExecForm`), called from the no-verb run in `cmd/agent-director/noverb.go` |
+| `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` on the hook path (`emitIgnored`) and `ad.hook.pane_is_grandparent` (`emitPaneIsGrandparent`); `internal/hook/noexec.go` — `ad.hook.ignored` `no_exec_form` (`emitNoExecForm`), called from the no-verb run in `cmd/agent-director/noverb.go` |
 | `ad_spawn_store` | `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` |
 | `ad_store` | `internal/store/permission.go` — permission-request row mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
@@ -6952,12 +6978,10 @@ readers, each picked by build tag at compile time:
   (with the start time), gone or unreadable.
 - the [command-name reader](#command-name-reader-commandnamereader-commnamego)
   (`CommandNameReader`, `NewCommandNameReader()`): the hook's
-  `parent_command` and `launcher_command` trail fields only, never
-  evidence.
+  `parent_command` and `pane_command` trail fields only, never evidence.
 - the [parent-pid reader](#parent-pid-reader-parentpidreader-ppidgo)
-  (`ParentPIDReader`, `NewParentPIDReader()`): the hook's launcher
-  warning only (`launcher_pid`, `ad.hook.launcher_detected`), never
-  evidence.
+  (`ParentPIDReader`, `NewParentPIDReader()`): the hook's
+  `ad.hook.pane_is_grandparent` check only, never evidence.
 
 No reader reads a process environment or the clock. The environment
 scan (which listed every process's `AGENT_DIRECTOR_INSTANCE_ID`) and the
@@ -7038,9 +7062,9 @@ and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus
 `macos-probe` job; `starttime_darwin_test.go` drives the real
 KERN_PROC_PID sysctl). A drift in the start-time or state offsets changes
 every process judgement's answers on darwin (to unreadable); a drift in
-the command-name offsets empties `parent_command` and `launcher_command`;
-a drift in `kinfoEprocPPIDOffset` leaves `launcher_pid` null and writes no
-`ad.hook.launcher_detected`. The plausibility guards
+the command-name offsets empties `parent_command` and `pane_command`; a
+drift in `kinfoEprocPPIDOffset` writes no `ad.hook.pane_is_grandparent`.
+The plausibility guards
 are a safety net, not a substitute for the bump.
 
 #### Start-time reader (`ProcChecker`, `starttime.go`)
@@ -7147,7 +7171,7 @@ entry, layout drift) is `("", false)`; it never errors, logs or reads an
 environment. `NewCommandNameReader()` picks the implementation by build
 tag, and the cores are build-tag-free like the start-time reader's. Its
 uses are `ad.hook.ignored`'s `parent_command` and
-`ad.hook.launcher_detected`'s `launcher_command`, each read only when its
+`ad.hook.pane_is_grandparent`'s `pane_command`, each read only when its
 record is written. It is **never evidence**: no ownership, liveness,
 launch or hook-gate decision reads it. The hook gate compares only the
 parent's pid and start time.
@@ -7165,21 +7189,22 @@ layout drift) is `(0, false)`; it never errors, logs or reads an
 environment. `NewParentPIDReader()` picks the implementation by build
 tag, and the cores are build-tag-free like the start-time reader's.
 `cmd/agent-director`'s `hookParentProc` wires it into the hook handler
-as `HandleConfig.ParentProc`'s `PPID`. Its one use is the hook's launcher
-warning: after the gate refuses a hook with `pid_mismatch`, one read of
-the parent's own parent pid, compared with the row's `pane_pid` (see
-"Launcher warning" in [Hooks move a row only for its own
-agent](#hooks-move-a-row-only-for-its-own-agent)). It is **never
+as `HandleConfig.ParentProc`'s `PPID`. Its one use is
+`ad.hook.pane_is_grandparent`'s check: after the gate refuses a `pending`
+row's SessionStart with `pid_mismatch`, one read of the parent's own
+parent pid, compared with the row's `pane_pid` (see "Pane is the hook's
+grandparent" in [Hooks move a row only for its own
+agent](#hooks-move-a-row-only-for-its-own-agent)); no other hook reads
+it. It is **never
 evidence**: no ownership, liveness, launch or hook-gate decision reads
 it, and no code may use it to walk ancestry or to identify a hook's
 agent.
 
 #### The ancestry resolver is retired
 
-The hook no longer walks process ancestry; its reads past the parent
-are the launcher warning's parent-pid read, plus the launcher's
-command-name read only when `ad.hook.launcher_detected` is written; both
-report and never identify an agent. `probe.Resolver` (the
+The hook no longer walks process ancestry; its only reads past the
+parent are `ad.hook.pane_is_grandparent`'s, which report and never
+identify an agent. `probe.Resolver` (the
 topmost-ancestor walk that chose SessionStart's recorded pid) and its
 per-OS files are deleted: it let a nested `claude` pass as the pane's
 agent. SessionStart's `pid` and `proc_starttime` are now the exec-form
@@ -8622,6 +8647,13 @@ meaning and links to the section that describes it in detail.
   of agents on a Claude Code that does not run exec-form hooks stay
   `pending` (see
   [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
+- **`ad.hook.launcher_detected` is renamed (breaking).** The trail event
+  is now `ad.hook.pane_is_grandparent`, with `pane_pid` and
+  `pane_command` in place of `launcher_pid` and `launcher_command`; it is
+  written when it was before, and its other fields and `advice` are
+  unchanged. `ad.hook.ignored` no longer carries `launcher_pid`, which
+  when set equalled `row_pane_pid`. Trail lines written before the upgrade
+  keep the old names (see [`ad.*` event namespace](#ad-event-namespace)).
 - **A refused `[tmux]` value fails store verbs.** A negative value, a
   positive value below a safe minimum or a non-integer in `[tmux]` makes
   store-backed verbs return `ErrConfigMalformed` instead of running on a

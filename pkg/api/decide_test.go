@@ -215,7 +215,7 @@ func TestClientDecideWaitsForRelayHook(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
-	createdAt, _ := advRelayGuardReleased(t, e, r)
+	createdAt := advRequestCreatedAt(t, e, r)
 	c, _ := e.client(t)
 	api.SetClockForTest(c, func() time.Time { return createdAt.Add(sendKeysWindow() - api.RelayKillSafetyMargin) })
 	var slept time.Duration

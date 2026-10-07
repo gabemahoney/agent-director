@@ -174,14 +174,14 @@ func runHook() int {
 
 	// The hook gate's parent process (SR-22.9): with exec-form hooks
 	// getppid() is the agent process; its start time comes from the
-	// start-time reader, its command name (for ad.hook.ignored and the
-	// launcher warning only, SR-14) from the command-name reader, and its
-	// parent pid (for the launcher warning only, b.9n6) from the parent-pid
-	// reader. Now and the loaded config's effective pending grace period
-	// bound SessionStart's wait for its launch's identity write, which the
-	// hook also caps at 540 s from its start on Now's monotonic reading
-	// (SR-22.9, SR-13.4; WD 2026-09-30c): time.Now is passed as is, never
-	// stripped by .UTC or .Round(0).
+	// start-time reader, its command name (for ad.hook.ignored and
+	// ad.hook.pane_is_grandparent only, SR-14) from the command-name reader,
+	// and its parent pid (for ad.hook.pane_is_grandparent's check only,
+	// b.9n6, b.zde) from the parent-pid reader. Now and the loaded config's
+	// effective pending grace period bound SessionStart's wait for its
+	// launch's identity write, which the hook also caps at 540 s from its
+	// start on Now's monotonic reading (SR-22.9, SR-13.4; WD 2026-09-30c):
+	// time.Now is passed as is, never stripped by .UTC or .Round(0).
 	hc := hook.HandleConfig{
 		Env:          hook.OSGetenv,
 		Cfg:          cfg.Relay,
@@ -199,9 +199,9 @@ func runHook() int {
 
 // hookParentProc is the hook's parent-process reader: the per-OS start-time
 // reader (the gate, SR-22.9), command-name reader (ad.hook.ignored's
-// parent_command, SR-14, and ad.hook.launcher_detected's commands only) and
-// parent-pid reader (the launcher warning only, b.9n6). runHook and a no-verb
-// run's hook check (noVerbHookIgnored) share it.
+// parent_command, SR-14, and ad.hook.pane_is_grandparent's commands only) and
+// parent-pid reader (ad.hook.pane_is_grandparent's check only, b.9n6, b.zde).
+// runHook and a no-verb run's hook check (noVerbHookIgnored) share it.
 func hookParentProc() hook.ParentProc {
 	return struct {
 		probe.ProcChecker

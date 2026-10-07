@@ -125,16 +125,30 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // modal answer; a parallel send-keys would race the relay's decide() write and
 // split the answer across two pane events.
 //
+// Its message names the request holding the guard — an open one in preference
+// to a decided one, then the oldest — and advises answering it with decide; it
+// states no release time (b.ah6). The named request is either pending, so
+// decide answers it, or its verdict is recorded and still being delivered by
+// its relay hook, so decide on it returns ErrAlreadyDecided and there is
+// nothing left to answer: it holds the guard until the Spawn leaves
+// check_permission or its relay can no longer deliver, whichever is first.
+// When the Spawn has zero request rows the request is still being recorded:
+// the message names none and advises decide once get lists it.
+//
 // The refusal is time-bounded, not unconditional: Claude Code kills the relay
 // hook at its per-hook timeout, after which the poller can no longer deliver a
 // decision. The guard consults the shared guard-release signal
 // (RelayRequestGuardReleasable) across every one of the Spawn's
-// permission-request rows and RELEASES RelayKillSafetyMargin (1 s) after every
-// request's delivery window elapses — at that point send-keys is the
-// sanctioned recovery surface for a Spawn wedged in check_permission behind a
-// dead relay. The refusal stands only while at least one request row is still
-// within its window plus that margin (or the Spawn has zero request rows), and
-// its message states the release point, margin included.
+// permission-request rows, decided or not, and refuses while any of them may
+// still be delivered by its relay hook — a verdict recorded in its window, or
+// the timeout deny the hook records at its poll deadline, at or slightly
+// after the end of the request's window — or the Spawn has zero request rows.
+// For an open request decide covers the window's end: it waits it out and
+// then returns ErrAlreadyDecided for a request the hook denied, or
+// ErrRelayFallenBack for one still open, by when the guard has released on
+// that request's account. Once it has released on every request's account,
+// send-keys is the sanctioned recovery surface for a Spawn wedged in
+// check_permission behind a dead relay.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
 // ErrInvalidFlags is returned when a flag or parameter value fails basic

@@ -15,10 +15,11 @@ package hook_test
 //   - hookClock: that virtual clock, for its recorded sleeps.
 //   - identityAtSleep: the launch's identity write, landing at the Nth sleep.
 //   - fakeParentProc: the hook.ParentProc double (procfix.Checker + name and
-//     parent-pid tables).
+//     parent-pid tables, and a count of parent-pid reads).
 //   - hookIgnoredAfter: the ad.hook.ignored lines one row got after a checkpoint.
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,11 +41,13 @@ type hookParent struct {
 }
 
 // fakeParentProc is a hook.ParentProc double: StartTime comes from
-// procfix.Checker's process table, CommandName from names, PPID from ppids.
+// procfix.Checker's process table, CommandName from names, PPID from ppids
+// (each call counted in ppidReads).
 type fakeParentProc struct {
 	*procfix.Checker
-	names map[int]string
-	ppids map[int]int
+	names     map[int]string
+	ppids     map[int]int
+	ppidReads atomic.Int64
 }
 
 // CommandName answers from the name table; an unlisted or empty name is unreadable.
@@ -53,9 +56,11 @@ func (p *fakeParentProc) CommandName(pid int) (string, bool) {
 	return n, n != ""
 }
 
-// PPID answers from the parent-pid table; an unlisted or non-positive entry is
-// unreadable, so by default no hook reports a launcher.
+// PPID counts the read and answers from the parent-pid table; an unlisted or
+// non-positive entry is unreadable, so by default the pane is never the
+// hook's grandparent.
 func (p *fakeParentProc) PPID(pid int) (int, bool) {
+	p.ppidReads.Add(1)
 	ppid := p.ppids[pid]
 	return ppid, ppid > 0
 }

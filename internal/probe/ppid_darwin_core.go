@@ -1,8 +1,8 @@
 package probe
 
 // darwinParentPIDReader is the darwin parent-pid reader core (the hook's
-// launcher warning; see ParentPIDReader). Its ONLY injected seam is the
-// per-pid KERN_PROC_PID kinfo fetch (fetchKinfo, wired to fetchKinfoPID by
+// pane_is_grandparent check; see ParentPIDReader). Its ONLY injected seam is
+// the per-pid KERN_PROC_PID kinfo fetch (fetchKinfo, wired to fetchKinfoPID by
 // newParentPIDReader on darwin — see ppid_darwin.go), so the answer logic is
 // build-tag-free and unit-testable off-darwin against synthetic kinfo_proc
 // entries (the darwinStartTimeReader precedent). It carries no KERN_PROCARGS2

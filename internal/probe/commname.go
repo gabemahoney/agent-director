@@ -4,12 +4,13 @@ package probe
 // `parent_command`: "its command name, from /proc/<pid>/comm or the darwin
 // equivalent").
 //
-// It is used ONLY to fill `parent_command` in the `ad.hook.ignored` trail
-// record, so a human reading the trail can see what the ignored hook's parent
-// process was (for example `sh`, `dash` or a nested `claude`). It is NEVER
-// evidence: no ownership, launch, liveness or hook-gate decision reads it — the
-// hook gate compares only the parent's pid and start time (SR-22.9, via
-// ProcChecker.StartTime).
+// It is used ONLY to fill `ad.hook.ignored`'s `parent_command` and
+// `ad.hook.pane_is_grandparent`'s `pane_command` trail fields, so a human
+// reading the trail can see what the ignored hook's parent process was (for
+// example `sh`, `dash` or a nested `claude`) and what the row's pane process
+// was. It is NEVER evidence: no ownership, launch, liveness or hook-gate
+// decision reads it — the hook gate compares only the parent's pid and start
+// time (SR-22.9, via ProcChecker.StartTime).
 //
 // Contract of CommandName(pid):
 //
