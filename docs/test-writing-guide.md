@@ -363,13 +363,15 @@ packages read: a build, install or pack the test runs writes under
 **Mandatory cleanup.** A test that must add untracked paths to the real tree
 (a fixture a gate scans for) gives them unique names and registers a
 `t.Cleanup()` that removes them before it asserts anything, so a failing test
-leaves nothing behind. It holds the seeds-mutation lock
-(`pkg/api/apitest/.seeds-mutation.lock`, `syscall.Flock` with `LOCK_EX`) from
-before it creates the paths until they are removed, taking it before any other
-lock it needs, so tree readers such as the `coverage.docker-epics` gate's
-docker build context never see the paths appear or vanish.
-`worktree-pollution` adds a path without this lock and is a known gap. A
-test that reads `pkg/ts-bun-client/dist/` holds the dist-pack lock
+leaves nothing behind. It holds the tree-write lock
+(`.tree-write.lock` at the repo root, `syscall.Flock` with `LOCK_EX`) from
+before it creates the paths until they are removed, so docker build-context
+collectors such as the `coverage.docker-epic-*` gates never see the paths
+appear or vanish. A test that also needs the dist-pack lock below takes that
+lock first: nothing may take the dist-pack lock while holding the tree-write
+lock.
+`worktree-pollution` adds a path without the tree-write lock and is a known
+gap. A test that reads `pkg/ts-bun-client/dist/` holds the dist-pack lock
 (`agent-director-ts-bun-dist-pack.lock` under `os.TempDir()`, `LOCK_EX`), which
 the `coverage.bun-test` gate holds for its whole run because it rebuilds
 `dist/`. See `skills/release-agent-director/gates/README.md` "Coverage phase

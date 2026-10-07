@@ -60,11 +60,11 @@ list below names each phase and its Epic owner.
    `gates/coverage/run-coverage-phase.sh`. The gate-isolation fix (Bugs bee
    b.3jn) has landed, so the parallel path is release-ready: each bun gate
    runs under its own scratch `HOME`, the no-leak process count is scoped to
-   the children of the bun test process, `docker-epics.sh`'s children run
-   under a shared (`flock -s`) seeds-mutation lock so they read the tree
-   without racing exclusive-lock tree mutators, and `coverage.bun-test`
-   holds an exclusive `flock` on the dist-pack lock for its whole run. See
-   `gates/README.md` "Coverage phase (parallel)"
+   the children of the bun test process, `coverage.bun-test` holds an
+   exclusive `flock` on the dist-pack lock for its whole run, and the
+   tree-write lock (`.tree-write.lock`) keeps writes inside the tree from
+   racing docker build-context collection (holders: `gates/README.md`
+   "Tree-write lock"). See `gates/README.md` "Coverage phase (parallel)"
    for the isolation model and the executor-to-report field mapping. Built
    in E5.
 

@@ -34,9 +34,13 @@ tickets/testplans/index.md
 # and out of git. Belt-and-suspenders for the mid-tar vanish race.
 pack-staging*/
 
-# Advisory lock (b.2y5): tests that add paths to the repo tree hold it
-# exclusively, tree readers hold it while reading. Despite the name, no test
-# writes seeds.go.
+# Tree-write lock (b.k42): skills/release-agent-director/gates/README.md "Tree-write lock".
+/.tree-write.lock
+
+# Former name of the tree-write lock (the b.2y5 "seeds-mutation" lock, renamed
+# in b.k42). Nothing takes it now, but checkouts that ran the older tests or
+# gates still hold the file; ignoring it keeps it out of git status, which
+# preflight.worktree-clean requires to be empty.
 pkg/api/apitest/.seeds-mutation.lock
 
 # Former advisory lock of the source-of-truth gate tests. Since b.9qj nothing

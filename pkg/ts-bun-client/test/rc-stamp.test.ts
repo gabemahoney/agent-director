@@ -12,7 +12,6 @@ import { join, resolve } from "node:path";
 import { MIN_BINARY_VERSION } from "../src/internal/constants.js";
 import { compareVersions, parseVersion } from "../src/internal/semver.js";
 import { PKG_VERSION, openClient } from "./internal/helper.js";
-import { underSeedsLock } from "./internal/seedsLock.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
@@ -37,7 +36,9 @@ test.skipIf(releaseTarget === null)(
   async () => {
     const dist = mkdtempSync(join(tmpdir(), "ad-rc-stamp-"));
     try {
-      const build = Bun.spawnSync(underSeedsLock(["make", "-C", repoRoot, "release-binaries"]), {
+      // No tree-write lock (test/internal/treeWriteLock.ts): RELEASE_DIST_DIR
+      // is a temp dir, so this build writes nothing inside the repo tree.
+      const build = Bun.spawnSync(["make", "-C", repoRoot, "release-binaries"], {
         env: { ...process.env, AGENT_DIRECTOR_BUILD_VERSION: rc, RELEASE_DIST_DIR: dist },
         stdout: "pipe",
         stderr: "pipe",

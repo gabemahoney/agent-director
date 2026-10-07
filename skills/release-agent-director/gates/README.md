@@ -96,7 +96,7 @@ gates in the order defined for that phase. For each gate:
 > >= 2; `coverage.go-root`'s leaked-file detector also fired at >= 3). The
 > gate-isolation fix (Bugs bee b.3jn) has since landed, so the parallel path is
 > viable and the orchestrator no longer needs to serialize the coverage gates.
-> The fix has six parts:
+> The fix has five parts:
 >
 > - Each bun gate (`coverage.bun-test`, `coverage.bun-extra-scripts`) runs
 >   under its own scratch `HOME` (`mktemp -d`), with `GOCACHE`, `GOMODCACHE`,
@@ -104,30 +104,15 @@ gates in the order defined for that phase. For each gate:
 >   so the caches are still shared. This keeps each gate's `$HOME`-resolved
 >   writes (e.g. `~/.agent-director/ad-trail.jsonl`, templates) out of the real
 >   home that `coverage.go-root`'s smoke canary watches via `user.Current()`.
-> - The `pkg/ts-bun-client` test preload and `rc-stamp.test.ts` hold the b.2y5
->   seeds flock (`pkg/api/apitest/.seeds-mutation.lock`, in `flock`'s default
->   exclusive mode) around their `make` invocations, as readers of the tree. No
->   test writes a tracked file (helper-tag-replay mutates a copy of the Go
->   module under a temp dir). No Go test takes the lock: since b.9qj the
->   source-of-truth tests run the gate in temp git repos, and
->   `check-version-coherence.test.ts` and `version-bump.test.ts` stage their
->   versioned `package.json` fixtures under the OS temp dir, so no version
->   fixture appears in the real tree for a source-of-truth scan to report.
+> - The tree-write lock (`.tree-write.lock` at the repo root) keeps writes
+>   inside the tree from racing the `coverage.docker-epic-*` children, which
+>   collect the repo root as their docker build context. Tree writers hold it
+>   exclusive; the children hold it shared (`flock -s`). See "Tree-write lock"
+>   below.
 > - `no-leak.test.ts` scopes its process count to children of its own process
 >   (`pgrep -c -P $pid agent-director`) rather than the host-global
 >   `pgrep -c agent-director`, so sibling gates' binary spawns no longer break
 >   its strict-equality assertion.
-> - `docker-epics.sh`'s children run under a **shared** flock (`flock -s`) on
->   `pkg/api/apitest/.seeds-mutation.lock` around each
->   `make test-docker EPIC=<slug>`. Those children are tree *readers* — the
->   docker build-context tar plus a read-only bind mount of the live worktree —
->   so they take the lock shared and run concurrently with one another, while
->   any exclusive holder (such as the bun builds above) excludes all of them.
->   The source-of-truth tests once took it exclusively as tree *mutators* (e.g.
->   `source-of-truth-reference-prune` creating/removing `reference/` at the repo
->   root mid-context-tar); since b.9qj they stage their fixtures outside the
->   tree and take no lock. The invariant is: reader takes shared, mutator takes
->   exclusive.
 > - `coverage.bun-test` holds an **exclusive** `flock` on
 >   `${TMPDIR:-/tmp}/agent-director-ts-bun-dist-pack.lock` for its entire run.
 >   go-root's four pack-first tests read `pkg/ts-bun-client/dist/` under that
@@ -214,6 +199,105 @@ siblings fail; nothing is masked by the first failure. Every gate's
 individual outcome and its diagnostics appear in the consolidated output
 regardless of sibling failures. The phase's overall outcome is `failed` if
 any gate failed, `passed` only if all passed.
+
+#### Tree-write lock
+
+`.tree-write.lock` at the repo root (b.k42; formerly the b.2y5
+`pkg/api/apitest/.seeds-mutation.lock`) keeps writes inside the repo tree from
+racing the `coverage.docker-epic-*` children. Each child's
+`make test-docker EPIC=<slug>` collects the whole repo root as its docker build
+context (the repo has no `.dockerignore`, and `test/Dockerfile` copies
+`bin/agent-director` and `bin/agent-director-admin` from it) and bind-mounts
+the live worktree read-only.
+
+**The race.** In the sandbox the tree is a bind mount, so `go build` cannot
+rename its output into the tree from the container's `/tmp` (the rename
+crosses filesystems). It deletes the old binary, then copies the new one in
+(unless the output directory is setgid, it first also creates and deletes an
+`<output>-go-tmp-umask` probe beside the output). `bun install` rewrites
+`pkg/ts-bun-client/node_modules/`, and `bun run build` deletes and recreates
+`pkg/ts-bun-client/dist/`. A context collection that reaches such a path
+mid-write fails with `checking context: file '.../<path>' not found` (the
+b.3jn class) or bakes a half-written binary into the image.
+
+**Holders.** Tree writers take the lock exclusive; context collectors take it
+shared.
+
+| Holder | Mode | Held around |
+| --- | --- | --- |
+| test preload (`pkg/ts-bun-client/test/setup.ts`) | exclusive | each `make`, which rewrites `bin/agent-director`, `bin/agent-director-admin`, `bin/ts-helper` and `test/fake-tmux/tmux` |
+| `coverage.bun-test` (`bun-test.sh`) | exclusive | `bun install --frozen-lockfile`, then `bun run build`, one hold each. Not `bun test`: its preload takes the lock itself |
+| `docker-epics.sh` | exclusive | one `make build`, before any child starts |
+| each `coverage.docker-epic-*` child | shared (`flock -s`) | its whole `make test-docker` run |
+
+Shared holders overlap one another, so the docker epics keep their
+`max_parallel` fan-out, and an exclusive holder excludes all of them. Linux
+`flock` does not favour a waiting exclusive locker, so a writer can wait behind
+a run of children.
+
+No other test takes the lock. `rc-stamp.test.ts`'s `make release-binaries`
+writes only to a temp `RELEASE_DIST_DIR`. No test writes a tracked file
+(helper-tag-replay mutates a copy of the Go module under a temp dir). Since
+b.9qj the source-of-truth tests run the gate in temp git repos, and
+`check-version-coherence.test.ts` and `version-bump.test.ts` stage their
+versioned `package.json` fixtures under the OS temp dir.
+
+**`bin/` pre-build.** Each child's `make test-docker` runs `make build` first
+(`test-docker` depends on `test-image`, which depends on `build`), under the
+child's shared hold. In a release run `bin/` is always stale when the coverage
+phase starts: `make build` stamps the HEAD commit (`COMMIT_SHA`) into both
+binaries, and branch-and-bump commits just before. So `docker-epics.sh` first
+runs `flock .tree-write.lock make build` once, before `run-parallel.sh` starts
+any child. Each child's own build then finds both binaries current and only
+updates their mtimes, which a concurrent context collection tolerates. If the
+pre-build fails, the gate emits one SR-14 diagnostic (gate
+`coverage.docker-epic-prebuild`, artifact `bin/`) and exits 1 without starting
+a child. `--dry-run` builds nothing.
+
+**Lock order.** The dist-pack lock first, then the tree-write lock.
+`coverage.bun-test` holds the dist-pack lock for its whole run and takes the
+tree-write lock per command. The preload's builds nest the same way, because
+`bun test` inherits the gate's dist-pack lock fd. Nothing that holds the
+tree-write lock takes the dist-pack lock, so the two cannot deadlock. A new
+holder of both must keep this order.
+
+**Reproduction.** Docker is not available in the sandbox, so `tar` stands in
+for docker's context collection:
+
+```bash
+make sandbox CMD='
+( while [ ! -e /tmp/stop ]; do tar -cf - bin 2>&1 >/dev/null | cat; done ) > /tmp/tar.log &
+( while [ ! -e /tmp/stop ]; do [ -e bin/agent-director ] || echo "bin/agent-director: missing"; done ) > /tmp/poll.log &
+for v in 1 2 3 4 5; do AGENT_DIRECTOR_BUILD_VERSION=0.0.0-race$v make build >/dev/null 2>&1; done
+touch /tmp/stop; wait
+sort /tmp/tar.log /tmp/poll.log | uniq -c | sort -rn
+make build >/dev/null 2>&1'
+```
+
+Each version stands in for a new commit's `COMMIT_SHA`, so every `make build`
+really rewrites `bin/`. The tar loop stands in for context collection, and the
+poll loop reports each moment `bin/agent-director` is missing. The last
+`make build` restores a normally stamped `bin/`. One run printed:
+
+- 551 `bin/agent-director: missing`
+- 13 `tar: bin/agent-director: file changed as we read it`, and 11 of the same
+  for `bin/agent-director-admin`
+- 6 `tar: bin: file changed as we read it`
+- 2 `tar: bin/agent-director-admin: File removed before we read it`
+
+`File removed before we read it` is tar's form of docker's
+`checking context: file '…' not found`. `file changed as we read it` means a
+half-written binary in the image. The control, the same loop building one
+fixed version so that `bin/` stays current, printed nothing.
+
+**Known gaps.** Two tests add a path to the tree without taking the lock:
+
+- `TestWorktreePollution` (b.ngj, open) adds a path at the repo root.
+- "README TS snippets typecheck" in
+  `pkg/ts-bun-client/test/readme-snippets.test.ts` (b.1xi, open) writes
+  `test/tmp-readme-check-<ms>.ts` beside itself for the few seconds `tsc`
+  takes to check it, then deletes it. It runs in `coverage.bun-test`'s
+  `bun test`, concurrently with the docker epics' context collection.
 
 #### Field-mapping: executor output → report phase object
 

@@ -26,10 +26,14 @@
 //     itself, so this test may wait for a pack-first test or another
 //     coverage.bun-test gate.
 //
+// TestCoverageBunTestTreeWriteLock (b.k42) runs the same gate over a passing
+// fixture whose install, build and test steps each record whether the
+// fixture root's .tree-write.lock is held exclusively.
+//
 // SLOW TEST
 // =========
-// Runs bun three times over the fixture (about a second, plus any wait for the
-// dist-pack lock).  Skipped in -short mode.
+// Each test runs bun three times over its fixture (about a second, plus any
+// wait for the dist-pack lock).  Skipped in -short mode.
 package coveragebuntestfires_test
 
 import (
@@ -73,16 +77,42 @@ test("` + fixtureTestName + `", () => {
 });
 `
 
-// materializeFixture writes the fixture pkg/ts-bun-client under worktreeRoot.
-func materializeFixture(t *testing.T, worktreeRoot string) {
+// lockProbe writes "exclusive" or "free" to <fixture root>/<step>.lock-state,
+// from the fixture package directory: a shared non-blocking flock fails only
+// while another process holds the root's .tree-write.lock exclusively.
+const lockProbe = `if flock -n -s ../../.tree-write.lock true; then echo free; else echo exclusive; fi > ../../`
+
+// lockFixturePackageJSON records the lock state during the gate's install
+// (root postinstall script) and build steps.
+const lockFixturePackageJSON = `{
+  "name": "coverage-bun-test-lock-fixture",
+  "private": true,
+  "scripts": {
+    "postinstall": "` + lockProbe + `install.lock-state",
+    "build": "` + lockProbe + `build.lock-state"
+  }
+}
+`
+
+// lockFixtureTest records the lock state during the gate's bun test step.
+const lockFixtureTest = `import { test } from "bun:test";
+
+test("record the tree-write lock state", () => {
+  Bun.spawnSync(["sh", "-c", ` + "`" + lockProbe + "test.lock-state`" + `]);
+});
+`
+
+// materializeFixture writes a fixture pkg/ts-bun-client, with the given
+// package.json and one test file, under worktreeRoot.
+func materializeFixture(t *testing.T, worktreeRoot, packageJSON, testSource string) {
 	t.Helper()
 	pkgDir := filepath.Join(worktreeRoot, "pkg", "ts-bun-client")
 	if err := os.MkdirAll(filepath.Join(pkgDir, "test"), 0o755); err != nil {
 		t.Fatalf("mkdir fixture package: %v", err)
 	}
 	writes := map[string]string{
-		filepath.Join(pkgDir, "package.json"):          fixturePackageJSON,
-		filepath.Join(pkgDir, "test", "fires.test.ts"): fixtureFailingTest,
+		filepath.Join(pkgDir, "package.json"):            packageJSON,
+		filepath.Join(pkgDir, "test", "fixture.test.ts"): testSource,
 	}
 	for path, content := range writes {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -163,10 +193,9 @@ func TestCoverageBunTestFires(t *testing.T) {
 	requireUnwritten(t, filepath.Join(root, "pkg", "ts-bun-client", "test", "setup.test.ts"))
 
 	fixtureRoot := t.TempDir()
-	materializeFixture(t, fixtureRoot)
+	materializeFixture(t, fixtureRoot, fixturePackageJSON, fixtureFailingTest)
 
-	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "bun-test.sh")
-	cmd := exec.Command("bash", gateScript, fixtureRoot)
+	cmd := exec.Command("bash", gateScript(root), fixtureRoot)
 	var stdoutBuf, stderrBuf strings.Builder
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
@@ -189,4 +218,48 @@ func TestCoverageBunTestFires(t *testing.T) {
 	}
 
 	t.Logf("coverage.bun-test fired correctly (exit %d).\nGate stderr: %s", exitErr.ExitCode(), stderr)
+}
+
+// TestCoverageBunTestTreeWriteLock verifies that coverage.bun-test runs bun
+// install and build under an exclusive hold of the root's .tree-write.lock,
+// even from a relative root, and bun test outside it (b.k42).
+func TestCoverageBunTestTreeWriteLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: runs the coverage.bun-test gate over a fixture package")
+	}
+	for _, tool := range []string{"bun", "flock"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not in PATH — skipping coverage.bun-test lock test", tool)
+		}
+	}
+
+	fixtureRoot := t.TempDir()
+	materializeFixture(t, fixtureRoot, lockFixturePackageJSON, lockFixtureTest)
+
+	// A relative root: the gate must resolve the lock before it cds into the package.
+	cmd := exec.Command("bash", gateScript(repoRoot(t)), filepath.Base(fixtureRoot))
+	cmd.Dir = filepath.Dir(fixtureRoot)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("coverage.bun-test gate on the passing fixture: %v\n%s", err, out)
+	}
+
+	for _, step := range []struct{ name, want string }{
+		{"install", "exclusive"},
+		{"build", "exclusive"},
+		{"test", "free"},
+	} {
+		got, err := os.ReadFile(filepath.Join(fixtureRoot, step.name+".lock-state"))
+		if err != nil {
+			t.Errorf("%s step recorded no lock state: %v", step.name, err)
+			continue
+		}
+		if s := strings.TrimSpace(string(got)); s != step.want {
+			t.Errorf("tree-write lock during the %s step = %q, want %q", step.name, s, step.want)
+		}
+	}
+}
+
+// gateScript is the coverage.bun-test gate under root.
+func gateScript(root string) string {
+	return filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "bun-test.sh")
 }

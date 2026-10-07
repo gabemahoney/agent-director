@@ -21,7 +21,7 @@
 
 import { resolve } from "path";
 import { chmodSync } from "fs";
-import { underSeedsLock } from "./internal/seedsLock.js";
+import { underTreeWriteLock } from "./internal/treeWriteLock.js";
 
 // ── Sandbox guard (b.nh2 / absorbed b.4v7) ─────────────────────────────────
 // These tests build and exec the agent-director binary, which can open (and,
@@ -44,13 +44,12 @@ const helperBin = resolve(repoRoot, "bin/ts-helper");
 const fakeTmuxDir = resolve(repoRoot, "test/fake-tmux");
 const cliBin = resolve(repoRoot, "bin/agent-director");
 
-// ── Seeds flock (b.3jn / b.2y5 seeds-flock protocol) ───────────────────────
-// Each `make` below is a cross-package builder that reads tree sources, so it
-// holds the seeds flock as the protocol's reader side; see
-// test/internal/seedsLock.ts for what that lock still excludes since b.9qj. One
-// short flock per make call (three holds), not one long hold.
+// ── Tree-write lock (b.k42) ───────────────────────────────────────────────
+// Each `make` below writes bin/ and test/fake-tmux/ in the repo tree, so it holds
+// the tree-write lock (one short hold per make). Why: gates/README.md
+// "Coverage phase (parallel)".
 const flockMake = (target: string) =>
-  Bun.spawnSync(underSeedsLock(["make", "-C", repoRoot, target]), {
+  Bun.spawnSync(underTreeWriteLock(["make", "-C", repoRoot, target]), {
     stdout: "inherit",
     stderr: "inherit",
   });
