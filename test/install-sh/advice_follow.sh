@@ -253,10 +253,10 @@ GH_DIR="$ROOT/gh-on-path" ON_PATH="$ROOT/ad-on-path"
 mkdir -p "$GH_DIR" "$ON_PATH"
 ln -s "$GH_FAKE" "$GH_DIR/gh" && ln -s "$BIN_OLD" "$ON_PATH/agent-director" || die "PATH_EXTRA dirs"
 # sqlite3 stand-in for J7: on call number FAKE_SQLITE3_FAIL_CALL it prints
-# FAKE_SQLITE3_ANSWER (through printf %b, so \n breaks a line) when that is set
-# (a wrong user_version, or output that is no version), and otherwise fails
-# like sqlite3 whose busy timeout ran out under a lock, with SHIM_LOCK_ERR on
-# stderr; every other call runs the real one.
+# FAKE_SQLITE3_ERR on stderr, then FAKE_SQLITE3_ANSWER on stdout (each through
+# printf %b, so \n breaks a line, and only when set), and exits
+# FAKE_SQLITE3_RC; every other call runs the real one. SHIM_LOCK_ERR (exit 5)
+# is the error of a sqlite3 whose busy timeout ran out under a lock.
 SHIM_LOCK_ERR="Error: in prepare, database is locked (5)"
 SQLITE_SHIM="$ROOT/sqlite3-shim"
 cat >"$SQLITE_SHIM" <<EOF
@@ -264,8 +264,9 @@ cat >"$SQLITE_SHIM" <<EOF
 n=\$(( \$(cat "\$FAKE_SQLITE3_COUNT" 2>/dev/null || echo 0) + 1 ))
 echo "\$n" >"\$FAKE_SQLITE3_COUNT"
 if [[ "\$n" == "\${FAKE_SQLITE3_FAIL_CALL:-0}" ]]; then
-    [[ -n "\${FAKE_SQLITE3_ANSWER:-}" ]] && { printf '%b\n' "\$FAKE_SQLITE3_ANSWER"; exit 0; }
-    echo "$SHIM_LOCK_ERR" >&2; exit 5
+    [[ -z "\${FAKE_SQLITE3_ERR:-}" ]] || printf '%b\n' "\$FAKE_SQLITE3_ERR" >&2
+    [[ -z "\${FAKE_SQLITE3_ANSWER:-}" ]] || printf '%b\n' "\$FAKE_SQLITE3_ANSWER"
+    exit "\${FAKE_SQLITE3_RC:-0}"
 fi
 exec "$SQLITE" "\$@"
 EOF
@@ -287,9 +288,10 @@ exec "$(type -P mktemp)" "\$@"
 EOF
     chmod 0755 "$1/mktemp" || die "chmod $1/mktemp"
 }
-# J7: install.sh's sqlite3 error file, as in a full TMPDIR (b.wfe).
+# J7: every temp file install.sh asks for in TMPDIR, as in a full TMPDIR
+# (b.wfe, b.rfn).
 MKTEMP_FAILS="$ROOT/mktemp-fails" MKTEMP_REFUSALS="$ROOT/mktemp-fails.refusals"
-mktemp_fails "$MKTEMP_FAILS" 'agent-director-sqlite3.*' "No space left on device"
+mktemp_fails "$MKTEMP_FAILS" 'agent-director*' "No space left on device"
 # J15: the step-3 sentinel's temp file, as in a store directory one cannot write
 # (b.2io).
 SENTINEL_MKTEMP_FAILS="$ROOT/mktemp-sentinel-fails"
@@ -300,7 +302,7 @@ mktemp_fails "$SENTINEL_MKTEMP_FAILS" '*/migrate-authorized.tmp.*' "Permission d
 pass=0 fail=0 skip=0
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
-PATH_EXTRA=""
+FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
 
 bad() { echo "    FAIL: $*"; T_FAILED=1; }
 
@@ -333,7 +335,7 @@ run_in() {
         FAKE_CURL_STATUS="$FAKE_CURL_STATUS" FAKE_CURL_ADMIN_STATUS="$FAKE_CURL_ADMIN_STATUS" \
         FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
         FAKE_SQLITE3_FAIL_CALL="$FAKE_SQLITE3_FAIL_CALL" FAKE_SQLITE3_ANSWER="$FAKE_SQLITE3_ANSWER" \
-        FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
+        FAKE_SQLITE3_ERR="$FAKE_SQLITE3_ERR" FAKE_SQLITE3_RC="$FAKE_SQLITE3_RC" FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
         "$@") >"$OUT" 2>"$ERR"
     RC=$?
 }
@@ -412,7 +414,7 @@ sentinel() { printf '%s' "$1/.agent-director/migrate-authorized"; }
 
 run_test() {
     T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
-    FAKE_SQLITE3_ANSWER="" PATH_EXTRA=""
+    FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
     echo "=== RUN   $1"
     "$1"
     if [[ "$T_FAILED" -ne 0 ]]; then
@@ -778,20 +780,23 @@ j7_older_store() {
     "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
 }
 
-# j7_run <call> [<answer>]: run J7ARGV in J7H with sqlite3 call <call> (1 is
-# step 2's read of an existing store, the next step 5's; 0 none) answering
-# <answer>, or failing as when a lock outlasts its busy timeout; no sqlite3
-# error file may be left in TMPDIR.
+# j7_run <call> [<answer> [<stderr> [<status>]]]: run J7ARGV in J7H with
+# sqlite3 call <call> (1 is step 2's read of an existing store, the next step
+# 5's; 0 none) printing <stderr> on stderr, then <answer>, and exiting <status>
+# (default 0). Given no <stderr> and an empty or no <answer>, it fails as when a
+# lock outlasts its busy timeout.
 j7_run() {
     ln -sf "$SQLITE_SHIM" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL="$1" FAKE_SQLITE3_ANSWER="${2:-}"
-    rm -f "$J7H.sqlite3-calls" "$ROOT"/tmp/agent-director-sqlite3.* # count from 1; a leftover below is this run's
+    FAKE_SQLITE3_FAIL_CALL="$1" FAKE_SQLITE3_ANSWER="${2:-}" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
+    if [[ $# -ge 3 ]]; then
+        FAKE_SQLITE3_ERR="$3" FAKE_SQLITE3_RC="${4:-0}"
+    elif [[ -z "$FAKE_SQLITE3_ANSWER" ]]; then
+        FAKE_SQLITE3_ERR="$SHIM_LOCK_ERR" FAKE_SQLITE3_RC=5
+    fi
+    rm -f "$J7H.sqlite3-calls" # count from 1
     run "$J7H" "${J7ARGV[@]}"
     ln -sf "$SQLITE" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
-    if compgen -G "$ROOT/tmp/agent-director-sqlite3.*" >/dev/null; then
-        bad "the sqlite3 error file left behind: $(compgen -G "$ROOT/tmp/agent-director-sqlite3.*")"
-    fi
+    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
 }
 
 # j7_verify_fails <answer>: an older store, and an install whose verification
@@ -847,14 +852,6 @@ j7_warned() {
     expect_installed "$J7H" "$BIN" "$ADMIN"
 }
 
-# j7_unverified: j7_verify_fails with the verification read failing; checks
-# its advice.
-j7_unverified() {
-    j7_verify_fails "" || return 1
-    j7_schema_unreadable
-    j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not check the migration. Re-running this install retries the read."
-}
-
 # j7_mismatch: j7_verify_fails with the verification read answering the
 # pre-migration version; checks its advice (state.db's path shell-quoted).
 j7_mismatch() {
@@ -872,12 +869,6 @@ j7_rerun_verified() {
     expect_rc 0 "$1" || return
     grep -qF "(schema v$SCHEMA)" "$OUT" || bad "the re-run did not read the store's version: $(flat "$OUT")"
     [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J7H"); want v$SCHEMA"
-}
-
-# J7: "Re-running this install retries the read."
-test_J7_VerificationFailedRerun() {
-    j7_unverified || return
-    j7_rerun_verified "re-run once the read works"
 }
 
 # J7: "A re-run of this install reads the version again: below v<T> it
@@ -926,22 +917,6 @@ test_J7_VersionMismatchCheckVersion() {
     done
 }
 
-# J7: "Re-running this install retries the read." when step 2 cannot read an
-# existing store's version: nothing authorized, the store left as it was (b.n5a).
-test_J7_UnreadableBeforeOpenRerun() {
-    j7_older_store || return
-    j7_run 1
-    expect_rc 5 "step 2's read failed" || return
-    local want="install.sh: reading state.db's schema version FAILED"
-    [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-    grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "the failure does not name state.db: $(flat "$ERR")"
-    j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not tell whether state.db needs a migration. No migration was authorized. Re-running this install retries the read."
-    grep -qF "no existing state.db" "$OUT" && bad "an existing state.db reported as a fresh create: $(flat "$OUT")"
-    [[ ! -e "$(sentinel "$J7H")" ]] || bad "a migration was authorized without the store's version"
-    [[ "$(db_version "$J7H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)): v$(db_version "$J7H")"
-    j7_rerun_verified "re-run once the read works"
-}
-
 # J7: "Check the version later with: <command>" when step 5's read of a fresh
 # or already-current store, no migration expected, gives no version: it fails
 # (a lock outlasting its busy timeout) or prints no whole number (JSON, b.hk7).
@@ -972,40 +947,67 @@ test_J7_UnreadableAfterOpenCheckVersion() {
     done
 }
 
-# J7: "Re-running this install retries the read." when mktemp cannot create the
-# reads' sqlite3 error file: a failed read at step 2 or 5 is reported without
-# sqlite3's error, and the re-run, mktemp still failing, verifies the store
-# (b.wfe).
-test_J7_NoErrorFileUnreadableRerun() {
-    local call want could refused
-    for call in 1 2; do # step 2's read, then step 5's after the migrating open
+# J7: "Re-running this install retries the read." when step 2's or step 5's
+# read fails: it exits nonzero (under a lock, or after printing a version, which
+# then counts for nothing, alone or after an error) or exits 0 printing nothing.
+# The report shows all the read printed, in order, and no pointer to a human
+# (time may resolve a lock, b.ady). A failed step-2 read names state.db, does not
+# take it for a fresh create and authorizes nothing, the store left as it was
+# (b.n5a). TMPDIR is full throughout: the reads need no temp file, so mktemp is
+# never asked for one there, sqlite3's error is still shown, and the re-run
+# verifies the store (b.wfe, b.rfn). Per case <call>|<stdout>|<stderr>|<status>.
+test_J7_FailedReadRerun() {
+    local call out err rc what want could printed
+    while IFS='|' read -r call out err rc <&3; do
+        what="read $call (stdout \"$out\", stderr \"$err\", exit $rc)"
         PATH_EXTRA=""
         j7_older_store || continue
         PATH_EXTRA="$MKTEMP_FAILS"
         rm -f "$MKTEMP_REFUSALS"
-        j7_run "$call"
-        expect_rc 5 "no error file, read $call failed" || continue
+        j7_run "$call" "$out" "$err" "$rc"
+        expect_rc 5 "$what" || continue
         want="install.sh: reading state.db's schema version FAILED"
         could="tell whether state.db needs a migration. No migration was authorized."
         if [[ "$call" == 2 ]]; then
             want="install.sh: schema migration verification FAILED" could="check the migration."
             j7_schema_unreadable
+        else
+            grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "$what: the failure does not name state.db: $(flat "$ERR")"
+            if grep -qF "no existing state.db" "$OUT"; then
+                bad "$what: an existing state.db reported as a fresh create: $(flat "$OUT")"
+            fi
+            [[ ! -e "$(sentinel "$J7H")" ]] || bad "$what: a migration was authorized without the store's version"
+            [[ "$(db_version "$J7H")" == $((SCHEMA - 1)) ]] || bad "$what: store moved off v$((SCHEMA - 1)): v$(db_version "$J7H")"
         fi
-        grep -qxF "$want" "$ERR" || bad "read $call: no \"$want\" line: $(flat "$ERR")"
-        j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read." \
-            "  Reading state.db's user_version (sqlite3 PRAGMA user_version)"
-        j7_rerun_verified "read $call: re-run, mktemp still failing" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$what: first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        grep -qxF "  actual   user_version: <unreadable>" "$ERR" || bad "$what: no <unreadable> line: $(flat "$ERR")"
+        printed="$({ [[ -z "$err" ]] || echo "$err"; [[ -z "$out" ]] || echo "$out"; } | sed 's/^/    /')"
+        [[ "$(j7_shown)" == "$printed" ]] \
+            || bad "$what: the report shows \"$(j7_shown)\" under \"<unreadable>\"; want all the read printed, \"$printed\""
+        expect_advice "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read."
+        if grep -qF "contact the maintainers" "$ERR"; then
+            bad "$what: the failure tells the operator to contact the maintainers"
+        fi
+        j7_rerun_verified "$what: re-run, TMPDIR still full" || continue
         if [[ "$call" == 1 ]]; then
             grep -qxF "  schema  : migration verified — state.db now at v$SCHEMA" "$OUT" \
-                || bad "read 1: the re-run did not verify the migration: $(flat "$OUT")"
+                || bad "$what: the re-run did not verify the migration: $(flat "$OUT")"
         fi
-        refused="$(cat "$MKTEMP_REFUSALS" 2>/dev/null | wc -l)"
-        [[ "$refused" == 2 ]] || bad "read $call: mktemp refused the sqlite3 error file $refused times; want 2, once per run"
-    done
+        if [[ -s "$MKTEMP_REFUSALS" ]]; then
+            bad "$what: install.sh asked mktemp for a temp file in TMPDIR: $(paste -sd' ' "$MKTEMP_REFUSALS")"
+        fi
+    done 3<<EOF
+1||$SHIM_LOCK_ERR|5
+1|$((SCHEMA - 1))||10
+1|$((SCHEMA - 1))|Error: stepping, disk I/O error (10)|10
+2||$SHIM_LOCK_ERR|5
+2|$SCHEMA||10
+2|||0
+EOF
 }
 
 # j7_shown: the lines the report (a failure's, or step 5's warning) shows under
-# "<unreadable>": the read's output, then sqlite3's error.
+# "<unreadable>": all the read printed, stderr and stdout as they came.
 j7_shown() {
     awk '/^  (Reading state\.db|The store open)/ { f = 0 } f; $0 == "  actual   user_version: <unreadable>" { f = 1 }' "$ERR"
 }
@@ -1027,8 +1029,9 @@ j7_not_a_version() {
     fi
 }
 
-# j7_rerun_same <rc> <call> [<answer>]: re-run as the last j7_run did, with
-# that sqlite3 and state.db: exit <rc>, showing the same output.
+# j7_rerun_same <rc> <call> [<answer> [<stderr> [<status>]]]: re-run j7_run with
+# the arguments after <rc>, those the last j7_run had, so with that sqlite3 and
+# state.db: exit <rc>, showing the same output.
 j7_rerun_same() {
     local rc="$1" shown; shown="$(j7_shown)"
     shift
@@ -1040,12 +1043,17 @@ j7_rerun_same() {
 # J7: "A re-run gets the same output unless that sqlite3 or state.db changes."
 # when step 2's read prints no whole number: a sqlite3 printing a header line
 # (as a .headers on ~/.sqliterc does) or a leading zero (08, which printf %d
-# rejects as octal; 010, which it reads as 8), or a store at user_version -1.
-# Nothing is authorized; once the one named changes, the re-run migrates (b.hk7).
+# rejects as octal; 010, which it reads as 8), one exiting 0 that prints a
+# notice on stderr before the version (as -init does without -batch; it joins
+# the output, b.rfn), or a store at user_version -1. Nothing is authorized;
+# once the one named changes, the re-run migrates (b.hk7). Per case
+# <changed>|<stdout>|<stderr>.
 test_J7_NotAVersionBeforeOpenRerun() {
-    local spec changed call answer stand_in version want="install.sh: reading state.db's schema version FAILED"
-    for spec in "sqlite3|user_version\n$((SCHEMA - 1))" "sqlite3|08" "sqlite3|010" "state.db|-1"; do
-        changed="${spec%%|*}" answer="${spec#*|}"
+    local spec changed call answer err printed stand_in version want="install.sh: reading state.db's schema version FAILED"
+    for spec in "sqlite3|user_version\n$((SCHEMA - 1))|" "sqlite3|08|" "sqlite3|010|" \
+        "sqlite3|$((SCHEMA - 1))|-- Loading resources from /dev/null" "state.db|-1|"; do
+        IFS='|' read -r changed answer err <<<"$spec"
+        printed="${err:+$err\n}$answer" # stderr first, as the stand-in prints them
         j7_older_store || continue
         if [[ "$changed" == sqlite3 ]]; then
             version=$((SCHEMA - 1)) call=1 stand_in="$answer"
@@ -1053,16 +1061,16 @@ test_J7_NotAVersionBeforeOpenRerun() {
             version="$answer" call=0 stand_in=""
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
         fi
-        j7_run "$call" "$stand_in"
-        expect_rc 5 "step 2's read printed \"$answer\"" || continue
-        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-        j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not tell whether state.db needs a migration. No migration was authorized."
-        j7_rerun_same 5 "$call" "$stand_in" || continue
-        [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$answer\": store moved off v$version: v$(db_version "$J7H")"
+        j7_run "$call" "$stand_in" "$err" 0
+        expect_rc 5 "step 2's read printed \"$printed\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$printed\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        j7_not_a_version "$printed" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not tell whether state.db needs a migration. No migration was authorized."
+        j7_rerun_same 5 "$call" "$stand_in" "$err" 0 || continue
+        [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$printed\": store moved off v$version: v$(db_version "$J7H")"
         if [[ "$changed" == state.db ]]; then
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
         fi
-        j7_rerun_verified "\"$answer\": re-run once $changed changed"
+        j7_rerun_verified "\"$printed\": re-run once $changed changed"
     done
 }
 

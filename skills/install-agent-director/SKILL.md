@@ -991,21 +991,22 @@ or prints anything but a whole number (0 or more), the install reports
 `actual user_version: <unreadable>` and exits 5, except at step 5
 with no migration expected, where it warns and carries on (see "Which
 read it was" below). Do NOT delete state.db. The rest of an exit 5's
-report depends on which happened:
+report depends on which happened. Either way, everything sqlite3
+printed for the read (its errors and its output together) is indented
+under that line.
 
-- **The read failed** (it printed nothing): sqlite3's own error,
-  indented under that line, shows why (for example a lock held longer
-  than the 10 s wait). If the install could not create a temp file for
-  that error (a full TMPDIR, say), the report has none. Re-running the
-  install retries the read.
-- **The read printed something else** ("printed the output above,
-  not a whole number (0 or more)"): that output, then any sqlite3
-  error, is indented under that line, and the report names the
-  `sqlite3 on PATH: <path>`. The read ignores `~/.sqliterc`, so the
-  sqlite3 at that path printed it for this state.db: for example a
-  wrapper that changes sqlite3's output, or a `user_version` below 0.
-  A re-run gets the same output unless that sqlite3 or state.db
-  changes.
+- **The read failed** (sqlite3 exited nonzero, or printed nothing):
+  what sqlite3 printed shows why (for example a lock held longer than
+  the 10 s wait). A version printed before the failure is not used.
+  Re-running the install retries the read.
+- **The read printed something else** (sqlite3 exited 0; "printed the
+  output above, not a whole number (0 or more)"): the report names the
+  `sqlite3 on PATH: <path>`. Anything sqlite3 printed counts, including
+  a message on stderr beside the version. The read ignores
+  `~/.sqliterc`, so the sqlite3 at that path printed it for this
+  state.db: for example a wrapper that changes sqlite3's output, or a
+  `user_version` below 0. A re-run gets the same output unless that
+  sqlite3 or state.db changes.
 
 Which read it was:
 
@@ -1033,7 +1034,7 @@ Which read it was:
   already-current store; `warning: state.db's schema version is
   unreadable after the store open`): not a failure. The store open
   succeeded, so the read only reports the version. The warning shows
-  sqlite3's error, or the read's output, under the `<unreadable>`
+  what sqlite3 printed for the read under the `<unreadable>`
   line, then `Check the version later with:` and the `sqlite3 ...
   "PRAGMA user_version;"` command for this state.db. The install
   carries on (hooks, the config.toml merge, MCP registration) and

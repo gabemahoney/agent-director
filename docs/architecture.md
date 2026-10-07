@@ -4561,9 +4561,10 @@ and keeps its group and other bits, so the umask never takes away the
 owner's own permission bits on a file or directory install.sh creates,
 or that an `agent-director` it runs creates in `~/.agent-director/`
 (each run inherits the umask). A umask like 0777 therefore cannot make
-mktemp's sqlite3 error file or the `--from-release` downloads
-unwritable. The group and other bits follow the operator's umask, and
-an ordinary umask (022, 077, 027, 002) is unchanged. The umask
+step 3's migration sentinel temp file (`mktemp`) or the
+`--from-release` downloads unwritable. The group and other bits follow
+the operator's umask, and an ordinary umask (022, 077, 027, 002) is
+unchanged. The umask
 guarantees only the owner's access; the exact modes install.sh gives
 (the two binaries, `~/.agent-director/`, `admin/`, `state.db`, the
 sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
@@ -4704,18 +4705,29 @@ mismatch. That check runs only after the open succeeded, which leaves
 and its sentinel consumed; a readable mismatch therefore means
 `state.db` changed after the open or the read is wrong (b.wt9). A
 fresh install is one with no `state.db` on disk, never one whose
-version read failed. Every version read must print a whole number
-(0 or more) before it reaches the sentinel's `printf %d` or the version
-compare. A read that fails is reported as `<unreadable>`, showing
-sqlite3's error; a failure report adds that re-running the install
-retries the read. That error is kept
-in a mktemp file; if mktemp cannot create it (a full TMPDIR, say), every
-read still runs and a failed one is reported without it. A read that prints
-anything else is also reported as `<unreadable>`, showing that output; a
-failure report names the sqlite3 on PATH and says a re-run gets the same
-output unless that sqlite3 or state.db changes. Either kind at the first
-read stops the install (exit 5) before any sentinel is written or the
-store is opened. At step 3's read after the probe, made only when a
+version read failed. Every version read must exit 0 and print a whole
+number (0 or more), checked with `ad_got_version`, before it reaches the
+sentinel's `printf %d` or the version compare. `ad_user_version`
+captures sqlite3's stdout and stderr together (`2>&1`) in a shell
+variable, and the caller keeps its exit status beside it; no temp file
+is made for a read (b.rfn).
+A read that gives no version is reported as `<unreadable>`, with
+everything sqlite3 printed, stderr and stdout in the order they reached
+the pipe, indented under it. It failed when sqlite3 exited nonzero (a version
+printed before the failure counts for nothing) or printed nothing; a
+failure report adds that re-running the install retries the read. A
+read that exited 0 and printed anything else (stderr included, so a
+notice on stderr before the version makes it no version) printed no
+version; a failure report names the sqlite3 on PATH and says a re-run
+gets the same output unless that sqlite3 or state.db changes. **Must
+use:** every `user_version` read goes through `ad_user_version`, is
+judged with `ad_got_version` on its status and output together, and is
+reported with `ad_fail_unreadable_version` (a failure) or
+`ad_show_unreadable_version` (step 5's warning); never a temp file for
+sqlite3's error, and never `ad_is_version` on the output alone.
+`advice_follow.sh`'s J7 pins this. Either kind at the first read stops
+the install (exit 5) before any sentinel is written or the store is
+opened. At step 3's read after the probe, made only when a
 sentinel from before the install was there (see "A sentinel from before
 the install" below), it stops the install (exit 5) before step 3 prints
 its verdict, because the probe may have run a migration. At the
