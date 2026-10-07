@@ -1,43 +1,28 @@
 package api_test
 
-// spawn_reuse_restore_test.go covers reuse's restore after a failed launch at
-// the verb (SR-10.4, SR-8.7; AC-REUSE-07): every non-timeout launch failure,
-// on an ended and a missing row, restores the pre-reuse row byte for byte; a
-// NULL ended_at becomes the failure time and a parent deleted meanwhile a NULL
-// parent_id; the archive and the deleted permission requests stay; and
-// resume, get, expire and a second reuse behave afterwards as before. The
-// restore not applied is spawn_reuse_restore_cond_test.go's; the fixture is
-// spawn_reuse_fixture_test.go.
+// spawn_reuse_restore_test.go covers reuse's restore after a failed launch
+// (SR-10.4, SR-8.7, SR-5.8, SR-22.9; AC-REUSE-07, 17, 23, AC-HOOK-02): the
+// pre-reuse row restored byte for byte after every non-timeout failure, a
+// competing write or a delete standing, hooks on the reset row ignored, a
+// failing restore leaving it pending, and one ad.spawn.reuse_restored each.
+// A parent deleted meanwhile is the store's (TestReuseRestoreApplied).
 
 import (
 	"errors"
-	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// rrRestored is before after an applied restore: every column as it was but
-// the launch start, cleared, and row_version, two past (reset, restore).
-func rrRestored(before apitest.SpawnColumns) apitest.SpawnColumns {
-	w := before
-	w.LaunchStartedAt = nil
-	w.RowVersion = before.RowVersion.(int64) + 2
-	return w
-}
-
-// rrFailCreate makes r's next create fail with f, creating nothing.
-func rrFailCreate(e *killEnv, r reuseRow, f tmux.Failure) {
-	e.rec.Script(r.Socket, tmuxfix.Script{Failure: f, ExitStatus: 1, Times: 1}, tmux.CallCreate)
-}
 
 // rrHistory reads id's history over every life.
 func rrHistory(t *testing.T, e *killEnv, id string) []apitest.HistoryEntry {
@@ -49,10 +34,9 @@ func rrHistory(t *testing.T, e *killEnv, id string) []apitest.HistoryEntry {
 	return h
 }
 
-// rrAssertRestored fails unless r's row is want, its history is before plus
-// the reset's archive of its session (life reuseLife, want's transcript
-// path), it has no permission request, and one applied
-// ad.spawn.reuse_restored names launchErr.
+// rrAssertRestored fails unless r's row is want, its history before plus the
+// reset's archive, no permission request, and one applied reuse_restored
+// after reused names launchErr.
 func rrAssertRestored(t *testing.T, e *killEnv, r reuseRow, want apitest.SpawnColumns, before []apitest.HistoryEntry, launchErr string) {
 	t.Helper()
 	if got := e.columns(t, r.ID); !reflect.DeepEqual(got, want) {
@@ -75,15 +59,13 @@ func rrAssertRestored(t *testing.T, e *killEnv, r reuseRow, want apitest.SpawnCo
 	if perms, err := e.st.PermissionRequestsForSpawn(r.ID); err != nil || len(perms) != 0 {
 		t.Errorf("permission requests = %+v (%v); want the reset's deletion kept", perms, err)
 	}
-	l := pendTrail(t, "ad.spawn.reuse_restored", r.ID)
-	if len(l) != 1 || l[0]["applied"] != true || l[0]["launch_error"] != launchErr || l[0]["restore_error"] != nil ||
-		l[0]["source"] != "ad_spawn" {
-		t.Errorf("ad.spawn.reuse_restored = %v; want one applied, launch_error %s, no restore_error, source ad_spawn", l, launchErr)
-	}
+	rutAssertRestored(t, 0, r.ID, true, launchErr, "")
+	rutAssertOrder(t, 0, r.ID, rutReused, rutRestored)
 }
 
-// TestSpawnReuseRestoreAfterEachLaunchFailure: each non-timeout launch failure, on an ended and a missing
-// row, returns its error with the restore's sentence and restores the row byte for byte; a second reuse launches.
+// TestSpawnReuseRestoreAfterEachLaunchFailure (AC-REUSE-07, AC-REUSE-23): each non-timeout launch failure,
+// on an ended and a missing row, returns its error with the restore's sentence and restores the row byte for
+// byte, so get and resume see the pre-reuse life as before; a second reuse launches.
 func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 	t.Parallel()
 	lookup, create, label, kill := tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
@@ -91,7 +73,9 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 		return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{})
 	}
 	failWith := func(f tmux.Failure) func(*killEnv, reuseRow) {
-		return func(e *killEnv, r reuseRow) { rrFailCreate(e, r, f) }
+		return func(e *killEnv, r reuseRow) {
+			e.rec.Script(r.Socket, tmuxfix.Script{Failure: f, ExitStatus: 1, Times: 1}, tmux.CallCreate)
+		}
 	}
 	triggers := []struct {
 		name     string
@@ -124,7 +108,13 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 			t.Run(tr.name+"/"+prior, func(t *testing.T) {
 				t.Parallel()
 				e := newKillEnv(t)
-				r := e.seedReusable(t, agentGone, reuseRowSpec{State: prior, Age: time.Hour})
+				// The old life opted out of pre-trust and the call does not: the restore brings 1 back. A missing
+				// row's NULL ended_at is restored as the failure time, read from the Client clock.
+				spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true}
+				if prior == store.StateMissing {
+					spec.EndedAt = endedNull
+				}
+				r := e.seedReusable(t, agentGone, spec)
 				tr.arrange(e, r)
 				before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
 
@@ -133,7 +123,12 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 				c := rlOneCreate(t, e, r.Socket, tr.calls...)
 				restore := apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior, Launch: apitest.LaunchReuse}
 				apitest.AssertDescription(t, err.Error(), tr.desc(e, r).AfterResumeRestore(restore), c.Token, e.storeID, r.Token)
-				rrAssertRestored(t, e, r, rrRestored(before), hist, tr.wantName)
+				want := before // every column restored but the launch start, cleared, two versions on (reset, restore)
+				want.LaunchStartedAt, want.RowVersion = nil, before.RowVersion.(int64)+2
+				if spec.EndedAt == endedNull {
+					want.EndedAt = e.clock.Now().UTC().Format(time.DateTime) // the clock when the restore ran
+				}
+				rrAssertRestored(t, e, r, want, hist, tr.wantName)
 				for _, s := range e.rec.Sessions(r.Socket) {
 					if s.Name == storedFormOf(c.Target) {
 						t.Errorf("session %+v left under the requested name; want none", s)
@@ -152,111 +147,180 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 	}
 }
 
-// TestSpawnReuseRestoreEndedAtAndParent: a NULL ended_at is restored as the failure time in the store's
-// layout; a parent deleted after the reset is restored as a NULL parent_id; the restore applies in both.
-func TestSpawnReuseRestoreEndedAtAndParent(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name         string
-		endedAt      reuseEndedAt
-		deleteParent bool
-	}{
-		{"NULL ended_at becomes the failure time", endedNull, false},
-		{"parent deleted meanwhile", endedAged, true},
+// rrcRun is one reuse whose create failed: the row, its snapshot taken just
+// before the call, the create's new token, the error and the Client's log.
+type rrcRun struct {
+	r      reuseRow
+	before writesSnapshot
+	token  string
+	err    error
+	logs   string
+}
+
+// rrcReuse reuses r through the reuse-store seam with its create failing
+// (ErrTmuxSessionCreate) and act run once as that create returns, between
+// the reset and the restore.
+func (e *killEnv) rrcReuse(t *testing.T, r reuseRow, act func()) rrcRun {
+	t.Helper()
+	e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
+	rs := &hookedReuseStore{st: e.st}
+	var done bool
+	e.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, _ error) {
+		if !done && c.InstanceID == r.ID {
+			done = true
+			act()
+		}
+	})
+	p := reuseParams(t, r, reuseRequest{})
+	run := rrcRun{r: r, before: e.snapshotReuse(t, r)}
+	_, run.logs, run.err = e.reuseWith(t, rs, p)
+	if creates := e.rec.SocketCallsOf(tmux.CallCreate); len(creates) == 1 {
+		run.token = creates[0].Token
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	return run
+}
+
+// rrcAssertLaunchError fails unless run's error is the create failure alone,
+// ending with restore's sentence and naming no launch token or store id.
+func (e *killEnv) rrcAssertLaunchError(t *testing.T, run rrcRun, restore apitest.ResumeRestore) {
+	t.Helper()
+	assertOneSentinel(t, run.err, tmux.ErrTmuxSessionCreate)
+	if run.err == nil {
+		t.Fatal("reuse err = nil; want the create failure")
+	}
+	restore.Launch = apitest.LaunchReuse
+	apitest.AssertDescription(t, run.err.Error(), apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{}).
+		AfterResumeRestore(restore), run.token, run.r.Token, e.storeID)
+}
+
+// rrcAssertOneAttempt fails unless the call made only the lookup and one
+// create on the row's socket and wrote one ad.spawn.reuse_restored with
+// applied and, when failed, the restore WARN line's text as restore_error.
+func (e *killEnv) rrcAssertOneAttempt(t *testing.T, run rrcRun, applied, failed bool) {
+	t.Helper()
+	var calls []tmux.Call
+	for _, c := range e.rec.SocketCalls()[run.before.calls:] {
+		if c.Socket != run.r.Socket {
+			t.Errorf("tmux call %v on %s; want every call on %s", c.Call, c.Socket, run.r.Socket)
+		}
+		calls = append(calls, c.Call)
+	}
+	if want := []tmux.Call{tmux.CallLookup, tmux.CallCreate}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("tmux calls = %q; want %q (one create, no retry)", calls, want)
+	}
+	if failed != (rutRestoreError(run.logs, run.r.ID) != "") {
+		t.Errorf("restore WARN line in %q; want one only for a failed restore", run.logs)
+	}
+	rutAssertRestored(t, run.before.mark, run.r.ID, applied, "ErrTmuxSessionCreate", run.logs)
+}
+
+// rrcColumns reads id's row raw; present is false once no row has the id.
+func (e *killEnv) rrcColumns(t *testing.T, id string) (cols apitest.SpawnColumns, present bool) {
+	t.Helper()
+	cols, err := apitest.ReadSpawnColumns(e.dbPath, id)
+	if errors.Is(err, store.ErrSpawnNotFound) {
+		return apitest.SpawnColumns{}, false
+	}
+	if err != nil {
+		t.Fatalf("ReadSpawnColumns(%s): %v", id, err)
+	}
+	return cols, true
+}
+
+// TestSpawnReuseRestoreNotAppliedAfterAnotherWrite (SR-10.4, SR-5.8): a
+// parent-id write or a delete between the reset and the restore stands and
+// the restore writes nothing; a failing restore leaves the reset row pending
+// with one WARN line; each returns the launch error (not ErrInternal) after
+// one create, with the restore's sentence.
+func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
+	t.Parallel()
+	writes := []struct {
+		name    string
+		write   func(e *killEnv, id, other string) error // nil: the restore write fails instead
+		outcome apitest.RestoreOutcome
+	}{
+		{"parent id written", func(e *killEnv, id, other string) error { return e.st.SetParentID(id, other) },
+			apitest.RestoreRowChanged},
+		{"row deleted", func(e *killEnv, id, _ string) error { return e.st.DeleteSpawn(id) }, apitest.RestoreRowRemoved},
+		{"restore store error", nil, apitest.RestoreStoreError},
+	}
+	for _, wr := range writes {
+		t.Run(wr.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, EndedAt: tc.endedAt})
-			rs := &hookedReuseStore{st: e.st}
-			if tc.deleteParent {
-				rs.afterReset(func() {
-					if err := e.st.DeleteSpawn(r.ParentID); err != nil {
-						t.Errorf("DeleteSpawn(%s): %v", r.ParentID, err)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
+			other := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true}).ID
+			if wr.write == nil {
+				storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, r.ID)
+			}
+			var written apitest.SpawnColumns
+			var present bool
+			run := e.rrcReuse(t, r, func() {
+				if wr.write != nil {
+					if err := wr.write(e, r.ID, other); err != nil {
+						t.Errorf("write: %v", err)
 					}
-				})
-			}
-			rrFailCreate(e, r, tmux.FailUnavailable)
-			before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
+				}
+				written, present = e.rrcColumns(t, r.ID)
+			})
 
-			_, _, err := e.reuseWith(t, rs, reuseParams(t, r, reuseRequest{}))
-			assertLaunchSentinel(t, err, tmux.ErrTmuxNotAvailable)
-			want := rrRestored(before)
-			if tc.endedAt == endedNull {
-				if before.EndedAt != nil {
-					t.Fatalf("seeded ended_at = %v; want NULL", before.EndedAt)
-				}
-				want.EndedAt = e.clock.Now().UTC().Format(time.DateTime) // read when the restore ran
+			e.rrcAssertLaunchError(t, run, apitest.ResumeRestore{Outcome: wr.outcome})
+			final, still := e.rrcColumns(t, r.ID)
+			if still != present || !reflect.DeepEqual(final, written) {
+				t.Errorf("row after the reuse (present %v) =\n  %+v\nwant as left before the restore (present %v)\n  %+v",
+					still, final, present, written)
 			}
-			if tc.deleteParent {
-				want.ParentID = nil
-				if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ParentID); !errors.Is(err, store.ErrSpawnNotFound) {
-					t.Errorf("parent %s: %v; want deleted", r.ParentID, err)
+			switch wr.outcome {
+			case apitest.RestoreRowRemoved:
+				if still {
+					t.Error("row present after the reuse; want it to stay deleted")
+				}
+			case apitest.RestoreRowChanged:
+				if final.State != store.StatePending || final.ParentID != other || final.LifeNumber != reuseLife+1 {
+					t.Errorf("row {state %v, parent %v, life %v}; want pending, %s, %d (the reset's life)",
+						final.State, final.ParentID, final.LifeNumber, other, reuseLife+1)
+				}
+			case apitest.RestoreStoreError:
+				if written.State != store.StatePending {
+					t.Errorf("row = %v; want the reset's, pending", written.State)
 				}
 			}
-			rrAssertRestored(t, e, r, want, hist, "ErrTmuxNotAvailable")
+			lines := strings.Split(strings.TrimSpace(run.logs), "\n")
+			switch {
+			case wr.write != nil && run.logs != "":
+				t.Errorf("client log = %q; want nothing", run.logs)
+			case wr.write == nil && (len(lines) != 1 || !strings.HasPrefix(lines[0], "WARN: spawn: ") ||
+				!strings.Contains(lines[0], r.ID) || strings.Contains(lines[0], run.token) || strings.Contains(lines[0], r.Token)):
+				t.Errorf("client log lines = %q; want one spawn WARN line naming %s and no token", lines, r.ID)
+			}
+			e.rrcAssertOneAttempt(t, run, false, wr.write == nil)
 		})
 	}
 }
 
-// TestSpawnReuseFailedThenResumeAsBefore (AC-REUSE-07): after a failed reuse of a never-messaged row,
-// resume refuses with the same ErrJsonlNeverWritten and get shows never_written, the archive kept.
-func TestSpawnReuseFailedThenResumeAsBefore(t *testing.T) {
+// TestSpawnReuseHooksBeforeRestoreIgnored (SR-22.9): the reset row records no
+// pane, so hooks naming the archived or another session id are ignored and the restore applies.
+func TestSpawnReuseHooksBeforeRestoreIgnored(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, Bare: true,
-		Opts: []apitest.SpawnOption{apitest.WithJsonlPath("")}})
-	if err := os.Remove(r.JSONLPath); err != nil { // never messaged: no transcript at the fallback path either
-		t.Fatalf("remove the seeded transcript: %v", err)
-	}
-	c, _ := e.client(t)
-	observe := func(when string) (api.SpawnRow, error) {
-		_, rerr := e.resume(r.ID)
-		if !errors.Is(rerr, api.ErrJsonlNeverWritten) || errors.Is(rerr, api.ErrJsonlMissing) {
-			t.Fatalf("resume %s the reuse = %v; want ErrJsonlNeverWritten only", when, rerr)
+	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
+	ignored := store.HookApplied{Reason: store.HookReasonNoPaneRecorded}
+	run := e.rrcReuse(t, r, func() {
+		reset := e.columns(t, r.ID)
+		for _, sid := range []string{r.Spawn.ClaudeSessionID, "sess-other-" + uuid.NewString()[:8]} {
+			for _, ev := range []string{"Stop", "SessionEnd", "PermissionRequest", "SessionStart"} {
+				if got := apitest.ApplyAgentHook(t, e.dbPath, r.ID, ev, sid,
+					apitest.HookTranscript(r.JSONLPath, true)); got != ignored {
+					t.Errorf("%s with session %s = %+v; want %+v", ev, sid, got, ignored)
+				}
+			}
 		}
-		got, gerr := c.Get(r.ID)
-		if gerr != nil || got.TranscriptStatus != "never_written" {
-			t.Fatalf("get %s the reuse = %+v, %v; want transcript_status never_written", when, got, gerr)
+		if got := e.columns(t, r.ID); !reflect.DeepEqual(got, reset) {
+			t.Errorf("row after the hooks =\n  %+v\nwant as the reset left it\n  %+v", got, reset)
 		}
-		return got, rerr
-	}
-	getBefore, errBefore := observe("before")
-	before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
-	rrFailCreate(e, r, tmux.FailUnavailable)
-	_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
-	assertLaunchSentinel(t, err, tmux.ErrTmuxNotAvailable)
+	})
 
-	getAfter, errAfter := observe("after")
-	if errAfter.Error() != errBefore.Error() {
-		t.Errorf("resume after the failed reuse = %q; want as before, %q", errAfter, errBefore)
-	}
-	if !reflect.DeepEqual(getAfter.PriorSessions, getBefore.PriorSessions) {
-		t.Errorf("get prior_sessions = %+v; want as before, %+v", getAfter.PriorSessions, getBefore.PriorSessions)
-	}
-	rrAssertRestored(t, e, r, rrRestored(before), hist, "ErrTmuxNotAvailable")
-}
-
-// TestSpawnReuseFailedThenExpired (AC-REUSE-07): a row restored by a failed reuse keeps its
-// ended_at, so expire removes it once that is past the retention window.
-func TestSpawnReuseFailedThenExpired(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	retention := time.Duration(config.Default().Defaults.ExpireRetentionDays) * 24 * time.Hour
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: retention + time.Hour})
-	rrFailCreate(e, r, tmux.FailUnavailable)
-	_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
-	assertLaunchSentinel(t, err, tmux.ErrTmuxNotAvailable)
-	if cols := e.columns(t, r.ID); cols.State != store.StateEnded {
-		t.Fatalf("state after the failed reuse = %v; want ended (restored)", cols.State)
-	}
-
-	res, _, err := e.expire(nil)
-	if err != nil || !slices.Contains(res.IDs, r.ID) {
-		t.Fatalf("expire = %+v, %v; want %s deleted", res, err, r.ID)
-	}
-	if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ID); !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Errorf("row %s after expire: %v; want removed", r.ID, err)
-	}
+	e.rrcAssertLaunchError(t, run, apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: store.StateEnded})
+	e.assertRowUnchanged(t, r.ID, rstRestored(resumableRow{Before: run.before.cols}, run.before.cols.ParentID))
+	e.rrcAssertOneAttempt(t, run, true, false)
 }

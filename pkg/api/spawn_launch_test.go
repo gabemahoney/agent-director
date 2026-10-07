@@ -1,10 +1,11 @@
 package api_test
 
-// spawn_launch_test.go covers plain spawn's recorded launch (SR-3.3, SR-3.5,
-// SR-3.6, SR-9.4, SR-22.2; AC-LKP-17, AC-LKP-19, AC-CLS-02) through the public
-// Client: the one create invocation and its argv, the launch columns and the
-// identity write with its guard, socket resolution end to end, and create
-// failures. The spawnEnv fixture is in spawn_test.go.
+// spawn_launch_test.go covers plain spawn's recorded and bounded launch
+// (SR-3.3, SR-3.5, SR-3.6, SR-9.4, SR-13.2, SR-22.2; AC-LKP-17, AC-LKP-19,
+// AC-SPN-05, AC-SPN-06, AC-CLS-02) through the public Client: the one create
+// and the identity write with its guard, socket resolution, create failures,
+// a lost or unanswered create keeping its label, and the longest path's
+// virtual time. The create argv is spawn_reuse_launch_test.go's parity case.
 
 import (
 	"errors"
@@ -12,13 +13,16 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
@@ -36,6 +40,16 @@ var spawnTokenRE = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // noIdentity is identityCols of a row with no server or pane identity.
 var noIdentity = make([]any, 6)
+
+// The default call timeouts, from the internal/config constants (SR-13.1),
+// and SR-13.2's bound on a single-row verb's tmux time at the defaults.
+var (
+	boundQ = time.Duration(config.DefaultQueryTimeoutMs) * time.Millisecond
+	boundA = time.Duration(config.DefaultActionTimeoutMs) * time.Millisecond
+	boundC = time.Duration(config.DefaultCreateTimeoutMs) * time.Millisecond
+)
+
+const boundCap = 15 * time.Second
 
 // mustSpawn runs Spawn with p and returns the instance id, failing on an error.
 func mustSpawn(t *testing.T, env spawnEnv, p api.SpawnParams) string {
@@ -66,89 +80,6 @@ func identityCols(r apitest.SpawnColumns) []any {
 	return []any{r.TmuxServerPID, r.TmuxServerStarted, r.TmuxServerStarttime, r.PaneID, r.PanePID, r.PaneStarttime}
 }
 
-// spawnCallKinds returns the kind of every recorded socket-taking call, in order.
-func spawnCallKinds(rec *tmuxfix.Recorder) []tmux.Call {
-	var out []tmux.Call
-	for _, c := range rec.SocketCalls() {
-		out = append(out, c.Call)
-	}
-	return out
-}
-
-// assertLaunchSentinel fails unless err matches want and no other catalogued sentinel (SR-1.5).
-func assertLaunchSentinel(t *testing.T, err, want error) {
-	t.Helper()
-	if !errors.Is(err, want) {
-		t.Fatalf("err = %v; want %v", err, want)
-	}
-	for _, e := range errnames.Catalog {
-		if e.Err != want && errors.Is(err, e.Err) {
-			t.Errorf("err %v also matches catalogued %s", err, e.Name)
-		}
-	}
-}
-
-// TestSpawnRecordsLaunchAndIdentity: one create on the resolved socket labels the
-// session; the row holds the launch start, token, socket and identity at version 1.
-func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	const serverPID = 4242
-	alive := procfix.Alive(procstarttimefix.DarwinProcStarttime)
-	cases := []struct {
-		name      string
-		id        string
-		pane      procfix.Process
-		wantCalls []tmux.Call
-		paneStart any
-	}{
-		{"minted id", "", alive, []tmux.Call{tmux.CallCreate}, procstarttimefix.DarwinProcStarttime},
-		{"caller-supplied id", "launch-" + uuid.NewString()[:8], alive,
-			[]tmux.Call{tmux.CallLookup, tmux.CallCreate}, procstarttimefix.DarwinProcStarttime},
-		{"unreadable pane start time", "", procfix.Unreadable(), []tmux.Call{tmux.CallCreate}, nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			env := newSpawnEnv(t)
-			env.rec.StartServer(env.socket, tmuxfix.Server{PID: serverPID})
-			env.pc.Set(serverPID, procfix.Alive(procstarttimefix.LinuxProcStarttime))
-			env.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
-				env.pc.Set(env.rec.Sessions(env.socket)[0].Panes[0].PID, tc.pane)
-			})
-			wantStart := env.clock.Now().UnixMilli()
-			id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id})
-			row, tok, storeID := spawnRow(t, env, id)
-
-			calls := env.rec.SocketCalls()
-			if got := spawnCallKinds(env.rec); !reflect.DeepEqual(got, tc.wantCalls) || len(env.rec.Calls()) != 0 {
-				t.Fatalf("tmux calls = %v (+%d name-based); want %v only", got, len(env.rec.Calls()), tc.wantCalls)
-			}
-			for _, c := range calls {
-				if c.Socket != env.socket {
-					t.Errorf("%s on socket %q; want %q", c.Call, c.Socket, env.socket)
-				}
-			}
-			if c := calls[len(calls)-1]; c.Token != tok || c.InstanceID != id || c.StoreID != storeID {
-				t.Errorf("create label {%q %q %q}; want {%q %q %q}", c.Token, c.InstanceID, c.StoreID, tok, id, storeID)
-			}
-			sessions := env.rec.Sessions(env.socket)
-			if len(sessions) != 1 || sessions[0].Label != tmuxfix.Valid(tok, id, storeID) || sessions[0].Panes[0].AdPane != tok {
-				t.Fatalf("sessions = %+v; want one labelled ad1 %s <$N> %s %s with pane label %s", sessions, tok, id, storeID, tok)
-			}
-			srv, _ := env.rec.Server(env.socket)
-			pane := sessions[0].Panes[0]
-			want := []any{int64(serverPID), srv.Start, procstarttimefix.LinuxProcStarttime, pane.ID, int64(pane.PID), tc.paneStart}
-			if got := identityCols(row); !reflect.DeepEqual(got, want) {
-				t.Errorf("identity columns = %#v; want %#v", got, want)
-			}
-			if row.State != store.StatePending || row.RowVersion != int64(1) || row.LaunchStartedAt != wantStart ||
-				row.TmuxSocket != env.socket || !spawnTokenRE.MatchString(tok) {
-				t.Errorf("row {state %v, row_version %v, launch_started_at %v, socket %v, token %q}; want {pending, 1, %d, %s, 16 hex}",
-					row.State, row.RowVersion, row.LaunchStartedAt, row.TmuxSocket, tok, wantStart, env.socket)
-			}
-		})
-	}
-}
-
 // fakeTmuxArgvs reads fake-tmux's argv log: one argv per invocation, program name dropped.
 func fakeTmuxArgvs(t *testing.T, path string) [][]string {
 	t.Helper()
@@ -175,100 +106,96 @@ func isLookupOn(argv []string, socket string) bool {
 	return containsRun(argv, []string{"-S", socket, "display-message", "-p"}) && slices.Contains(argv, "list-sessions")
 }
 
-// TestSpawnCreateArgvCarriesChainedLabels: the one create invocation chains the
-// @ad_owner and @ad_pane steps on =<name>: and launches an argv of 2+ elements.
-func TestSpawnCreateArgvCarriesChainedLabels(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR, test/fake-tmux's log variable
-	// with t.Setenv.
-	env := buildSpawnEnv(t, faketmuxfix.Binary(t))
-	logPath := filepath.Join(env.home, "fake-tmux.log")
-	t.Setenv(faketmuxfix.EnvLog, logPath)
-	name := "argv-" + uuid.NewString()[:8]
-	id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir(), TmuxSessionName: name, TmuxSessionNameSupplied: true})
-	_, tok, storeID := spawnRow(t, env, id)
-
-	argvs := fakeTmuxArgvs(t, logPath)
-	if len(argvs) != 1 {
-		t.Fatalf("tmux invocations = %d (%q); want exactly one create", len(argvs), argvs)
-	}
-	argv, target := argvs[0], "="+name+":"
-	for _, seq := range [][]string{
-		{"-u", "-S", env.socket, "new-session"},
-		{";", "set-option", "-F", "-t", target, "@ad_owner", tmuxfix.ChainLabelValue(tok, id, storeID)},
-		{";", "set-option", "-p", "-F", "-t", target, "@ad_pane", tmuxfix.ChainPaneLabelValue(tok)},
-	} {
-		if !containsRun(argv, seq) {
-			t.Errorf("create argv lacks %q:\n%q", seq, argv)
-		}
-	}
-	dash, semi := slices.Index(argv, "--"), slices.Index(argv, ";")
-	if dash < 0 || semi-dash-1 < 2 || argv[dash+1] != "claude" {
-		t.Errorf("create argv %q: want claude and at least one more element between -- and ; (SR-3.8)", argv)
-	}
-}
-
-// TestSpawnRecordsResolvedSocket: the create and the row use the socket tmux
-// would resolve from TMUX and TMUX_TMPDIR (SR-3.3; AC-LKP-19).
-func TestSpawnRecordsResolvedSocket(t *testing.T) {
+// TestSpawnRecordsLaunchAndIdentity (SR-3.5, SR-22.9): one create on the
+// resolved socket labels the session; the row holds the launch start, token,
+// socket and identity at version 1. The pending row records no pane until the
+// identity write, so a hook between the create and it is ignored
+// (no_pane_recorded); the hook handler's own wait is internal/hook's.
+func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	realDir := func(t *testing.T) string {
-		d, err := filepath.EvalSymlinks(t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d
-	}
+	const serverPID = 4242
+	alive := procfix.Alive(procstarttimefix.DarwinProcStarttime)
 	cases := []struct {
-		name  string
-		setup func(t *testing.T, env spawnEnv) string
+		name      string
+		id        string
+		pane      procfix.Process
+		wantCalls []tmux.Call
+		paneStart any
+		hook      bool // the agent's SessionStart arrives before the identity write
 	}{
-		{"TMUX first field given", func(t *testing.T, _ spawnEnv) string {
-			sock := filepath.Join(t.TempDir(), "other.sock")
-			t.Setenv("TMUX", sock+",123,0")
-			return sock
-		}},
-		{"TMUX empty first field ignored", func(t *testing.T, env spawnEnv) string {
-			t.Setenv("TMUX", ",123,0")
-			return env.socket
-		}},
-		{"TMUX_TMPDIR through a symlink", func(t *testing.T, _ spawnEnv) string {
-			target, link := realDir(t), filepath.Join(t.TempDir(), "link")
-			if err := os.Symlink(target, link); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("TMUX_TMPDIR", link)
-			return filepath.Join(userSocketDir(target), "default")
-		}},
-		{"relative TMUX_TMPDIR", func(t *testing.T, _ spawnEnv) string {
-			parent := realDir(t)
-			if err := os.Mkdir(filepath.Join(parent, "rel"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			wd, err := os.Getwd()
-			if err != nil || os.Chdir(parent) != nil {
-				t.Fatalf("chdir %s: %v", parent, err)
-			}
-			t.Cleanup(func() { _ = os.Chdir(wd) })
-			t.Setenv("TMUX_TMPDIR", "rel")
-			return filepath.Join(userSocketDir(filepath.Join(parent, "rel")), "default")
-		}},
+		{"minted id", "", alive, []tmux.Call{tmux.CallCreate}, procstarttimefix.DarwinProcStarttime, false},
+		{"caller-supplied id", "launch-" + uuid.NewString()[:8], alive,
+			[]tmux.Call{tmux.CallLookup, tmux.CallCreate}, procstarttimefix.DarwinProcStarttime, false},
+		{"unreadable pane start time", "", procfix.Unreadable(), []tmux.Call{tmux.CallCreate}, nil, false},
+		{"a hook before the identity write", "", alive, []tmux.Call{tmux.CallCreate}, procstarttimefix.DarwinProcStarttime, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
-			want := tc.setup(t, env)
-			id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir()})
-			row, _, _ := spawnRow(t, env, id)
-			creates := env.rec.SocketCallsOf(tmux.CallCreate)
-			if len(creates) != 1 || creates[0].Socket != want || row.TmuxSocket != want {
-				t.Errorf("create calls %+v, row socket %v; want one create and the row on %q", creates, row.TmuxSocket, want)
+			env.rec.StartServer(env.socket, tmuxfix.Server{PID: serverPID})
+			env.pc.Set(serverPID, procfix.Alive(procstarttimefix.LinuxProcStarttime))
+			var hooked store.HookApplied
+			env.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, _ error) {
+				env.pc.Set(env.rec.Sessions(env.socket)[0].Panes[0].PID, tc.pane)
+				if tc.hook {
+					hooked = apitest.ApplyAgentHook(t, env.dbPath, c.InstanceID, "SessionStart", "sess-early")
+				}
+			})
+			wantStart := env.clock.Now().UnixMilli()
+			id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id})
+			row, tok, storeID := spawnRow(t, env, id)
+
+			calls := env.rec.SocketCalls()
+			if got := callKinds(env.rec); !reflect.DeepEqual(got, tc.wantCalls) || len(env.rec.Calls()) != 0 {
+				t.Fatalf("tmux calls = %v (+%d name-based); want %v only", got, len(env.rec.Calls()), tc.wantCalls)
+			}
+			for _, c := range calls {
+				if c.Socket != env.socket {
+					t.Errorf("%s on socket %q; want %q", c.Call, c.Socket, env.socket)
+				}
+			}
+			if c := calls[len(calls)-1]; c.Token != tok || c.InstanceID != id || c.StoreID != storeID {
+				t.Errorf("create label {%q %q %q}; want {%q %q %q}", c.Token, c.InstanceID, c.StoreID, tok, id, storeID)
+			}
+			sessions := env.rec.Sessions(env.socket)
+			if len(sessions) != 1 || sessions[0].Label != tmuxfix.Valid(tok, id, storeID) || sessions[0].Panes[0].AdPane != tok {
+				t.Fatalf("sessions = %+v; want one labelled ad1 %s <$N> %s %s with pane label %s", sessions, tok, id, storeID, tok)
+			}
+			srv, _ := env.rec.Server(env.socket)
+			pane := sessions[0].Panes[0]
+			want := []any{int64(serverPID), srv.Start, procstarttimefix.LinuxProcStarttime, pane.ID, int64(pane.PID), tc.paneStart}
+			if got := identityCols(row); !reflect.DeepEqual(got, want) {
+				t.Errorf("identity columns = %#v; want %#v", got, want)
+			}
+			if row.State != store.StatePending || row.RowVersion != int64(1) || row.LaunchStartedAt != wantStart ||
+				row.TmuxSocket != env.socket || !spawnTokenRE.MatchString(tok) || row.ClaudeSessionID != nil {
+				t.Errorf("row {state %v, row_version %v, launch_started_at %v, socket %v, token %q, session %v}; want {pending, 1, %d, %s, 16 hex, NULL}",
+					row.State, row.RowVersion, row.LaunchStartedAt, row.TmuxSocket, tok, row.ClaudeSessionID, wantStart, env.socket)
+			}
+			if tc.hook && (hooked != (store.HookApplied{Reason: store.HookReasonNoPaneRecorded}) || env.logs.Len() != 0) {
+				t.Errorf("SessionStart before the identity write = %+v, client log %q; want ignored, %s, and no log",
+					hooked, env.logs.String(), store.HookReasonNoPaneRecorded)
 			}
 		})
 	}
 }
 
-// TestSpawnRefusesUnusableSocketDir: an unsafe per-user directory or a regular-file
-// TMUX_TMPDIR is ErrTmuxNotAvailable with tmux's reason, no row and no tmux call.
+// TestSpawnRecordsResolvedSocket (SR-3.3; AC-LKP-19): the create and the row use
+// the socket TMUX's first field names; internal/tmux owns the resolution rules.
+func TestSpawnRecordsResolvedSocket(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
+	env := newSpawnEnv(t)
+	sock := filepath.Join(t.TempDir(), "other.sock")
+	t.Setenv("TMUX", sock+",123,0")
+	row, _, _ := spawnRow(t, env, mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir()}))
+	if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Socket != sock || row.TmuxSocket != sock {
+		t.Errorf("create calls %+v, row socket %v; want one create and the row on %q", creates, row.TmuxSocket, sock)
+	}
+}
+
+// TestSpawnRefusesUnusableSocketDir (SR-20.6 RN-5): a 0755 or symlinked
+// per-user directory, or a regular-file TMUX_TMPDIR, is ErrTmuxNotAvailable
+// with tmux's reason, no row and no tmux call.
 func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
@@ -314,35 +241,6 @@ func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
 	}
 }
 
-// TestSpawnHookBeforeIdentityWriteIsIgnored (SR-22.9): the pending row records no
-// pane until the identity write, so a hook between the create and it is ignored
-// (no_pane_recorded); the identity write applies and spawn succeeds. The hook
-// here is the store's gated write, driven directly; the hook handler's
-// SessionStart first waits for the identity write, bounded by the pending
-// grace (SR-13.4), and that wait is tested in internal/hook.
-func TestSpawnHookBeforeIdentityWriteIsIgnored(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	env := newSpawnEnv(t)
-	var got store.HookApplied
-	env.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, _ error) {
-		got = apitest.ApplyAgentHook(t, env.dbPath, c.InstanceID, "SessionStart", "sess-early")
-	})
-	id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir()})
-	if want := (store.HookApplied{Reason: store.HookReasonNoPaneRecorded}); got != want {
-		t.Errorf("SessionStart before the identity write = %+v; want %+v", got, want)
-	}
-	row, _, _ := spawnRow(t, env, id)
-	pane := env.rec.Sessions(env.socket)[0].Panes[0]
-	if row.State != store.StatePending || row.RowVersion != int64(1) || row.ClaudeSessionID != nil ||
-		row.PaneID != pane.ID || row.PanePID != int64(pane.PID) {
-		t.Errorf("row {state %v, row_version %v, session %#v, pane %#v pid %#v}; want pending, 1, NULL, the create's pane %s pid %d",
-			row.State, row.RowVersion, row.ClaudeSessionID, row.PaneID, row.PanePID, pane.ID, pane.PID)
-	}
-	if env.logs.Len() != 0 {
-		t.Errorf("client log = %q; want nothing", env.logs.String())
-	}
-}
-
 // TestSpawnIdentityWriteStoreErrorWarnsOnce: a failed identity write gives one
 // WARN line and leaves the result and the pending row unchanged.
 func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
@@ -367,7 +265,8 @@ func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
 
 // TestSpawnCreateFailureLeavesRowPending: tmux unavailable at the create is
 // ErrTmuxNotAvailable, other failures ErrTmuxSessionCreate ("duplicate session"
-// is spawn_held_test.go's).
+// is spawn_held_test.go's); the row stays pending with no identity, and no
+// held-name end write, re-lookup or ad.launch.name_held follows.
 func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	createFailed := func(_ spawnEnv, name string) apitest.DescCase {
@@ -384,7 +283,6 @@ func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 		{"socket permission denied", tmux.FailSocketDenied, tmux.ErrTmuxNotAvailable,
 			func(env spawnEnv, _ string) apitest.DescCase { return apitest.DescSocketPermission(env.socket) }},
 		{"no server", tmux.FailNoServer, tmux.ErrTmuxSessionCreate, createFailed},
-		{"no socket", tmux.FailNoSocket, tmux.ErrTmuxSessionCreate, createFailed},
 		{"non-zero exit with no reply", tmux.FailUnrecognized, tmux.ErrTmuxSessionCreate, createFailed},
 	}
 	for _, tc := range cases {
@@ -392,7 +290,7 @@ func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 			env := newSpawnEnv(t)
 			name := "fail-" + uuid.NewString()[:8]
 			env.rec.Script(env.socket, tmuxfix.Script{Failure: tc.fail, ExitStatus: 1}, tmux.CallCreate)
-			wantStart := env.clock.Now().UnixMilli()
+			wantStart, mark := env.clock.Now().UnixMilli(), trailLen(t)
 			_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), TmuxSessionName: name, TmuxSessionNameSupplied: true})
 			assertLaunchSentinel(t, err, tc.want)
 			ids := listIDs(t, env.c)
@@ -406,8 +304,159 @@ func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 				t.Errorf("row {state %v, launch_started_at %v, token %q, identity %#v}; want pending, %d, a token, none",
 					row.State, row.LaunchStartedAt, tok, identityCols(row), wantStart)
 			}
-			if got := spawnCallKinds(env.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallCreate}) {
-				t.Errorf("tmux calls = %v; want the one create", got)
+			if got := callKinds(env.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallCreate}) {
+				t.Errorf("tmux calls = %v; want the one create (no end write, no re-lookup)", got)
+			}
+			if recs := ptRecords(t, mark, "ad.launch.name_held", ids[0]); len(recs) != 0 || strings.Contains(env.logs.String(), "WARN") {
+				t.Errorf("ad.launch.name_held records = %v, client log %q; want none, no WARN", recs, env.logs.String())
+			}
+		})
+	}
+}
+
+// spawnReturned runs Spawn in its own goroutine, so an after-call hook may end
+// it with runtime.Goexit; returned is false when it was ended that way.
+func spawnReturned(c *api.Client, p api.SpawnParams) (res api.SpawnResult, err error, returned bool) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err = c.Spawn(p)
+		returned = true
+	}()
+	<-done
+	return res, err, returned
+}
+
+// TestSpawnLaunchBoundLostReplyKeepsLabel (SR-3.5, SR-9.4, SR-13.2; AC-LKP-17,
+// AC-SPN-05): a create that times out (charged its default timeout), gives
+// an unparseable reply, or whose launch stops before the identity write
+// leaves its session labelled and the row pending with no identity.
+func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
+	cases := []struct {
+		name         string
+		minted       bool            // no caller-supplied id, so no scan lookup
+		script       *tmuxfix.Script // the create's scripted result; nil answers from the table
+		stop         bool            // an after-call hook on the create ends Spawn
+		unresponsive bool            // ErrTmuxUnresponsive; else Spawn succeeds (or never returns)
+		unrecognised bool            // the description's unrecognised-reply form
+	}{
+		{name: "create times out, minted id", minted: true, script: &tmuxfix.Script{Failure: tmux.FailTimeout, Applied: true},
+			unresponsive: true},
+		{name: "non-zero exit with unparseable reply", script: &tmuxfix.Script{Failure: tmux.FailUnrecognized,
+			ExitStatus: 1, HadStdout: true, Applied: true}, unresponsive: true, unrecognised: true},
+		{name: "exit 0 with unparseable reply", script: &tmuxfix.Script{Failure: tmux.FailUnrecognized,
+			ExitStatus: 0, HadStdout: true, Applied: true}},
+		{name: "stop before the identity write", stop: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newHeldEnv(t)
+			id, calls, launchStart := heldID(), []tmux.Call{tmux.CallLookup, tmux.CallCreate}, e.start.Add(boundQ)
+			if tc.minted {
+				id, calls, launchStart = "", calls[1:], e.start
+			}
+			if tc.script != nil {
+				e.rec.Script(tmuxfix.AnySocket, *tc.script, tmux.CallCreate)
+			}
+			if tc.stop {
+				e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) { runtime.Goexit() })
+			}
+			mark := trailLen(t)
+
+			res, err, returned := spawnReturned(e.c, api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
+
+			if got := callKinds(e.rec); !reflect.DeepEqual(got, calls) {
+				t.Fatalf("tmux calls = %q; want %q (no label by id, no kill)", got, calls)
+			}
+			create := e.rec.SocketCallsOf(tmux.CallCreate)[0]
+			id = create.InstanceID
+			switch {
+			case tc.stop:
+				if returned {
+					t.Fatalf("Spawn returned (%+v, %v); want it ended by the after-call hook", res, err)
+				}
+			case tc.unresponsive:
+				assertOneName(t, err, "ErrTmuxUnresponsive")
+			case err != nil || res.ClaudeInstanceID != id:
+				t.Fatalf("Spawn = (%+v, %v); want success for %s", res, err, id)
+			}
+			cols, cerr := apitest.ReadSpawnColumns(e.dbPath, id)
+			token, _ := cols.LaunchToken.(string)
+			if cerr != nil || cols.State != store.StatePending || cols.RowVersion != int64(0) ||
+				cols.LaunchStartedAt != launchStart.UnixMilli() || !spawnTokenRE.MatchString(token) || cols.TmuxSocket != e.socket ||
+				!reflect.DeepEqual(identityCols(cols), noIdentity) {
+				t.Errorf("row %+v (err %v); want pending at version 0, launch start %d, a token, socket %s, no identity",
+					cols, cerr, launchStart.UnixMilli(), e.socket)
+			}
+			if create.Socket != e.socket || create.Token != token {
+				t.Errorf("create socket, token = %q, %q; want %q, %q", create.Socket, create.Token, e.socket, token)
+			}
+			sessions := e.rec.Sessions(e.socket)
+			if len(sessions) != 1 || sessions[0].Label != tmuxfix.Valid(token, id, e.storeID) || len(sessions[0].Panes) != 1 ||
+				sessions[0].Panes[0].AdPane != token {
+				t.Fatalf("sessions on %s = %+v; want one labelled ad1 %s <$N> %s <store id>, its pane labelled", e.socket, sessions, token, id)
+			}
+			if tc.minted {
+				if got := e.clock.Now().Sub(e.start); got != boundC || strings.Contains(e.logs.String(), "WARN") {
+					t.Errorf("virtual time charged = %v, client log %q; want the default create timeout %v, no WARN", got, e.logs.String(), boundC)
+				}
+			}
+			if recs := ptRecords(t, mark, "ad.launch.name_held", id); len(recs) != 0 {
+				t.Errorf("ad.launch.name_held records = %v; want none (no held-name path)", recs)
+			}
+			if tc.unresponsive {
+				_, desc := errnames.Classify(err)
+				apitest.AssertDescription(t, desc, apitest.DescLaunchTimeout(apitest.LaunchTimeout{InstanceID: id, Timeout: boundC,
+					Unrecognised: tc.unrecognised, ExplicitSpawnID: !tc.minted}),
+					token, e.storeID, tmuxfix.LabelValue(token, sessions[0].ID, id, e.storeID))
+			}
+		})
+	}
+}
+
+// TestSpawnLaunchBoundCeiling (SR-13.2; AC-SPN-06): the longest plain-spawn path
+// (chained label, relabel and kill all failing) charges C + 2A, plus Q for a
+// caller-supplied id's scan, and leaves the row pending.
+func TestSpawnLaunchBoundCeiling(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
+	const name = "bound-ceiling"
+	cases := []struct {
+		name     string
+		id       string
+		wantCall []tmux.Call
+		want     time.Duration
+	}{
+		{"minted id", "", []tmux.Call{tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
+			boundC + 2*boundA},
+		{"caller-supplied id", "bound-ceiling-" + uuid.NewString()[:8],
+			[]tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
+			boundQ + boundC + 2*boundA},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newHeldEnv(t)
+			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailLabel}, tmux.CallCreate).
+				Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallSetLabel, tmux.CallKillSession)
+
+			_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id,
+				TmuxSessionName: name, TmuxSessionNameSupplied: true})
+			if !errors.Is(err, api.ErrTmuxSessionCreate) {
+				t.Fatalf("Spawn err = %v; want ErrTmuxSessionCreate", err)
+			}
+			if got := callKinds(e.rec); !reflect.DeepEqual(got, tc.wantCall) {
+				t.Fatalf("tmux calls = %q; want %q", got, tc.wantCall)
+			}
+			if got := e.clock.Now().Sub(e.start); got != tc.want || got > boundCap {
+				t.Errorf("virtual time charged = %v; want %v, at most %v (SR-13.2)", got, tc.want, boundCap)
+			}
+			label := e.rec.SocketCallsOf(tmux.CallSetLabel)[0]
+			_, desc := errnames.Classify(err)
+			apitest.AssertDescription(t, desc, apitest.DescUnlabelledSession(apitest.UnlabelledSession{
+				Name: name, SessionID: label.Target, PlainSpawn: true,
+			}), label.Token, e.storeID)
+			if cols, err := apitest.ReadSpawnColumns(e.dbPath, label.InstanceID); err != nil || cols.State != store.StatePending {
+				t.Errorf("row %s = %v (err %v); want pending", label.InstanceID, cols.State, err)
 			}
 		})
 	}

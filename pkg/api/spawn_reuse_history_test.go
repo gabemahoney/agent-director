@@ -1,11 +1,10 @@
 package api_test
 
 // spawn_reuse_history_test.go: a reused id starts with no memory (SR-5.9,
-// SR-8.7; AC-REUSE-20, 21, 22, 26), end to end through the real store on the
-// reuse fixture (spawn_reuse_fixture_test.go). The new agent's report-in,
-// rotation and end are its own pane's hooks (SR-22.9). The rlf helpers here
-// are shared with spawn_reuse_lives_test.go and spawn_reuse_pretrust_test.go;
-// the reuse itself is the fixture's (newReuseEnv, reuseLaunch).
+// SR-8.7; AC-REUSE-20, 21, 22, 24, 26), end to end through the real store
+// (newReuseEnv, reuseLaunch), the new agent's report-in, rotation and end its
+// own pane's hooks (SR-22.9). The rlf helpers are shared with kill's opt-in
+// tests; a failed reuse's restore is spawn_reuse_restore_test.go's.
 
 import (
 	"context"
@@ -279,7 +278,8 @@ func rlfMessagedLife(t *testing.T) (e *killEnv, r0, r reuseRow, sid, path string
 }
 
 // TestSpawnReuseHistoryMessagedNewLife (AC-REUSE-21): a messaged new life is
-// what resume reattaches and get lists; the earlier life's never is.
+// what resume reattaches and get lists; the earlier life's never is (its
+// rotations: TestSpawnReuseLivesRotationsAndTwoReuses).
 func TestSpawnReuseHistoryMessagedNewLife(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	t.Run("resume reattaches the new life's session", func(t *testing.T) {
@@ -310,9 +310,57 @@ func TestSpawnReuseHistoryMessagedNewLife(t *testing.T) {
 		}
 		rlfAssertEarlierUnused(t, e, r0, msg)
 	})
-	t.Run("after one rotation get lists only that rotation's entry", func(t *testing.T) {
-		e, _, r, sid, path := rlfMessagedLife(t)
-		rlfReportIn(t, e, r.ID, rlfNewSession(), false)
-		rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", getWantPrior{id: sid, path: path})
-	})
+}
+
+// TestSpawnReuseLivesRotationsAndTwoReuses (AC-REUSE-24): a rotation is a
+// candidate and listed within its life; after a second reuse only the latest
+// life's entries are, and a session re-archived there moves to that life.
+func TestSpawnReuseLivesRotationsAndTwoReuses(t *testing.T) {
+	t.Parallel()
+	e := newReuseEnv(t)
+	r0 := e.seedReusable(t, agentGone, reuseRowSpec{})
+	rlfEarlierOnDisk(t, r0)
+
+	// First reuse: s1 messaged, rotated to s2, listed and resumed in that life.
+	r, _ := e.reuseLaunch(t, r0, agentAlive, reuseRequest{})
+	s1, s2 := rlfNewSession(), rlfNewSession()
+	p1 := rlfReportIn(t, e, r.ID, s1, true)
+	rlfReportIn(t, e, r.ID, s2, false)
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", getWantPrior{id: s1, path: p1})
+	rlfEndLife(t, e, r.ID)
+	if got := rlfResumed(t, e, r.ID); got != s1 {
+		t.Fatalf("--resume %s; want the rotation's %s", got, s1)
+	}
+	rlfReportIn(t, e, r.ID, s1, true)
+	rlfEndLife(t, e, r.ID)
+	rlvAssertLife(t, e, r.ID, reuseLife+1)
+
+	// Second reuse: a new life lists nothing until its own sessions archive.
+	r, _ = e.reuseLaunch(t, r, agentAlive, reuseRequest{})
+	rlvAssertLife(t, e, r.ID, reuseLife+2)
+	s3, s4 := rlfNewSession(), rlfNewSession()
+	rlfReportIn(t, e, r.ID, s3, false)
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "never_written")
+
+	// s1 reported again, then rotated out: its entry moves to this life.
+	rlfReportIn(t, e, r.ID, s1, true)
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "present", getWantPrior{id: s3})
+	rlfReportIn(t, e, r.ID, s4, false)
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", getWantPrior{id: s1, path: p1}, getWantPrior{id: s3})
+	rlfAssertStored(t, e, r.ID, s1, reuseLife+2)
+	rlfAssertStored(t, e, r.ID, s2, reuseLife+1)
+
+	rlfEndLife(t, e, r.ID)
+	if got := rlfResumed(t, e, r.ID); got != s1 {
+		t.Errorf("--resume %s; want %s, re-archived in this life", got, s1)
+	}
+	rlfAssertEarlierUnused(t, e, r0, "")
+}
+
+// rlvAssertLife fails unless id's row is in life.
+func rlvAssertLife(t *testing.T, e *killEnv, id string, life int64) {
+	t.Helper()
+	if got := e.columns(t, id).LifeNumber; got != life {
+		t.Fatalf("life_number = %#v; want %d", got, life)
+	}
 }

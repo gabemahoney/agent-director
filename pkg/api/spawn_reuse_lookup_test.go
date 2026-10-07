@@ -1,29 +1,31 @@
 package api_test
 
-// spawn_reuse_lookup_test.go covers reuse's old-row lookup at the finished-row
-// cell of the decision table (SR-10.2, SR-3.3, SR-3.4, SR-3.6, SR-4.2, SR-10.5;
-// AC-REUSE-06, AC-LKP-20): each lookup outcome on an ended and a missing row,
-// the socket refusal, the recorded socket, no adoption and the Leftover lost
-// race. The window and bound boundaries are spawn_reuse_window_test.go's.
-// Fixture: spawn_reuse_fixture_test.go.
+// spawn_reuse_lookup_test.go covers reuse's old-row lookup and new-name
+// pre-check (SR-10.2, SR-10.5, SR-10.8, SR-3.10, SR-4.2, SR-5.5, SR-14;
+// AC-REUSE-06, 07, 14, AC-LKP-14, AC-LKP-20, AC-CFG-02): each outcome (the
+// call-site table's Can't tell cells included), the socket refusal, the
+// Leftover lost race, the requested name's holder, the starting-session rule
+// and the disagree records. The recorded socket is TestSpawnReuseAppliedRow's.
 
 import (
+	"cmp"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// rulCase is one reuse of a seeded reusable row: its agent process, extra row
-// options, the requested name (nil: the recorded one), the sessions seed
-// places (returning the one the refusal names) and the refusal's error name
-// and description; want "" is the launch.
+// rulCase is one reuse of a seeded row: its agent, options, requested name
+// (nil: the recorded one), seeded sessions (returning the one the refusal
+// names) and the refusal's error name and description; want "" launches.
 type rulCase struct {
 	name      string
 	agent     agentState
@@ -202,33 +204,6 @@ func TestSpawnReuseLookupOutcomes(t *testing.T) {
 	}
 }
 
-// TestSpawnReuseLookupOnRecordedSocket: the one lookup goes to the recorded socket
-// before pre-trust and the reset; a holder on the default socket is not consulted.
-func TestSpawnReuseLookupOnRecordedSocket(t *testing.T) {
-	t.Parallel()
-	for _, state := range finishedStates {
-		t.Run(state, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			recorded := filepath.Join(filepath.Dir(e.defaultSocket), "recorded-"+uuid.NewString()[:8])
-			r := e.seedReusable(t, agentGone, reuseRowSpec{State: state, Age: rlkSettled(e),
-				Opts: []apitest.SpawnOption{apitest.WithTmuxSocket(recorded)}})
-			e.seedHolder(t, killRow{Name: r.Name, Socket: e.defaultSocket}, holderNone)
-			before := e.snapshotReuse(t, r)
-			e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
-				if st := e.columns(t, r.ID).State; st != state {
-					t.Errorf("state when the lookup returned = %v; want %s (not yet reset)", st, state)
-				}
-				r.Trust.check(t, r.CWD, false, "when the lookup returned")
-			})
-
-			_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
-
-			e.rlkAssertLaunched(t, resumeSnapshot{writesSnapshot: before, r: r.resumeRow}, err)
-		})
-	}
-}
-
 // TestSpawnReuseSocketRefused: a recorded socket whose directory cannot be
 // made is ErrTmuxNotAvailable before any tmux call, with nothing written.
 func TestSpawnReuseSocketRefused(t *testing.T) {
@@ -254,18 +229,17 @@ func TestSpawnReuseSocketRefused(t *testing.T) {
 	}
 }
 
-// TestSpawnReuseLookupLeftoverLostRace (SR-10.5): a Leftover after a competing write
-// changed or removed the row is the lost race; unchanged, the Leftover refusal stands.
+// TestSpawnReuseLookupLeftoverLostRace (SR-10.5): a Leftover after a competing write changed or removed the
+// row is the lost race, decided by the one re-read; an unchanged row's Leftover refusal is TestSpawnReuseLookupOutcomes'.
 func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []struct {
 		name    string
-		compete func(e *killEnv, id string) error // after the pre-check read; nil: none
+		compete func(e *killEnv, id string) error // after the pre-check read
 		removed bool
 	}{
 		{name: "row changed", compete: func(e *killEnv, id string) error { return e.st.SetParentID(id, "") }},
 		{name: "row removed", compete: func(e *killEnv, id string) error { return e.st.DeleteSpawn(id) }, removed: true},
-		{name: "row unchanged"},
 	} {
 		for _, state := range finishedStates {
 			t.Run(tc.name+"/"+state, func(t *testing.T) {
@@ -274,16 +248,14 @@ func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 				s := e.seedHolder(t, r.killRow, holderOld)
 				rs := &hookedReuseStore{st: e.st}
 				before := e.snapshotReuse(t, r)
-				if tc.compete != nil {
-					rs.afterRead(func() {
-						if err := tc.compete(e, r.ID); err != nil {
-							t.Fatalf("competing write: %v", err)
-						}
-						if !tc.removed {
-							before = e.snapshotReuse(t, r) // the competitor's row is what must stay
-						}
-					})
-				}
+				rs.afterRead(func() {
+					if err := tc.compete(e, r.ID); err != nil {
+						t.Fatalf("competing write: %v", err)
+					}
+					if !tc.removed {
+						before = e.snapshotReuse(t, r) // the competitor's row is what must stay
+					}
+				})
 
 				_, _, err := e.reuseWith(t, rs, reuseParams(t, r, reuseRequest{}))
 
@@ -291,13 +263,8 @@ func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 					t.Errorf("ReadForReuse calls = %d; want 2 (the pre-check and the one re-read)", n)
 				}
 				e.rulAssertOneLookup(t, r, before)
-				if tc.compete == nil {
-					assertOneName(t, err, "ErrTmuxSessionConflict")
-					apitest.AssertDescription(t, err.Error(), rulLeftover(e, r, r.Name, s), r.Token, s.Label.Token)
-				} else {
-					assertOneName(t, err, "ErrInstanceIdCollision")
-					apitest.AssertDescription(t, err.Error(), apitest.DescReuseLostRace(r.ID), r.Token, s.Label.Token)
-				}
+				assertOneName(t, err, "ErrInstanceIdCollision")
+				apitest.AssertDescription(t, err.Error(), apitest.DescReuseLostRace(r.ID), r.Token, s.Label.Token)
 				if !tc.removed {
 					e.assertWroteNothing(t, before)
 					return
@@ -314,4 +281,373 @@ func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 			})
 		}
 	}
+}
+
+// rnmNames are the requested names a pre-check case runs with.
+var rnmNames = []struct {
+	name      string
+	requested func(reuseRow) string
+}{
+	{"recorded name", nil},
+	{"new name", rulNewName},
+}
+
+// rnmAmbiguous is DescHeldAmbiguous for the requested name, forbidding the
+// tmux ids of the sessions listed under its stored form.
+func rnmAmbiguous(e *killEnv, r reuseRow, name string, _ tmuxfix.SeedSession) apitest.DescCase {
+	c := apitest.DescHeldAmbiguous(apitest.HeldName{Name: name, BeforeLaunch: true})
+	for _, s := range e.rec.Sessions(r.Socket) {
+		if s.Name == storedFormOf(name) || s.Name == name {
+			c.Forbid = append(c.Forbid, s.ID)
+		}
+	}
+	return c
+}
+
+// TestSpawnReuseNameHolders: per holder class of the requested name (the
+// recorded or a new one), the class's refusal from the one listing, or the launch.
+func TestSpawnReuseNameHolders(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	const conflict = "ErrTmuxSessionConflict"
+	for _, h := range []struct {
+		name string
+		kind holderKind
+		want string
+		desc func(*killEnv, reuseRow, string, tmuxfix.SeedSession) apitest.DescCase
+	}{
+		{"no holder", holderVanished, "", nil},
+		{"foreign label", holderForeign, conflict, func(_ *killEnv, _ reuseRow, name string, s tmuxfix.SeedSession) apitest.DescCase {
+			return apitest.DescHeldDifferentID(rulHeld(name, s))
+		}},
+		{"another store's label", holderOtherStore, conflict, func(e *killEnv, _ reuseRow, name string, s tmuxfix.SeedSession) apitest.DescCase {
+			return apitest.DescHeldOtherStore(rulHeld(name, s), e.storeID)
+		}},
+		{"no valid label", holderNone, conflict, rulNoValidID},
+		{"malformed label", holderMalformed, conflict, rulNoValidID},
+		{"more than one entry matches", holderAmbiguous, "ErrTmuxUnresponsive", rnmAmbiguous},
+	} {
+		for _, n := range rnmNames {
+			tc := rulCase{name: h.name, agent: agentGone, requested: n.requested, seed: rulHolder(h.kind), want: h.want, desc: h.desc}
+			t.Run(h.name+"/"+n.name, func(t *testing.T) { rulRun(t, tc, store.StateEnded) })
+		}
+	}
+}
+
+// TestSpawnReuseNameNotHeld: prefix neighbours, and the recorded name held while a new
+// one is requested: each launches. Gone with no server or socket is TestCallTableReuse's.
+func TestSpawnReuseNameNotHeld(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	var cases []rulCase
+	for _, n := range rnmNames {
+		cases = append(cases,
+			rulCase{name: "prefix neighbour, a longer name/" + n.name, requested: n.requested, seed: rulHolder(holderPrefixNeighbour)},
+			rulCase{name: "prefix neighbour, a prefix of the name/" + n.name, requested: n.requested,
+				seed: func(t *testing.T, e *killEnv, r *reuseRow, name string) tmuxfix.SeedSession {
+					return e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: name[:len(name)-1]})
+				}},
+		)
+	}
+	cases = append(cases, rulCase{name: "recorded name held, new name requested", requested: rulNewName,
+		seed: func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
+			return e.seedHolder(t, r.killRow, holderNone)
+		}})
+	for _, tc := range cases {
+		tc.agent = agentGone
+		t.Run(tc.name, func(t *testing.T) { rulRun(t, tc, store.StateEnded) })
+	}
+}
+
+// TestSpawnReuseNameDollarAndBackslash (AC-LKP-14): per catalogued $ or \ name, either
+// stored form blocks, both listed is ambiguous, a form matching neither is not held.
+func TestSpawnReuseNameDollarAndBackslash(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	named := func(name string) func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession {
+		return func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
+			return e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: name})
+		}
+	}
+	for _, n := range tmuxfix.StoredNames() {
+		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
+			continue
+		}
+		cases := []rulCase{
+			{name: "held in the stored form", seed: named(n.Stored), want: "ErrTmuxSessionConflict", desc: rulNoValidID},
+			{name: "no stored form matches", seed: named(`\` + n.Stored)},
+		}
+		if n.Raw != n.Stored {
+			cases = append(cases,
+				rulCase{name: "held in the raw form", seed: named(n.Raw), want: "ErrTmuxSessionConflict", desc: rulNoValidID},
+				rulCase{name: "listed in both forms", want: "ErrTmuxUnresponsive", desc: rnmAmbiguous,
+					seed: func(t *testing.T, e *killEnv, r *reuseRow, name string) tmuxfix.SeedSession {
+						named(n.Raw)(t, e, r, name)
+						return named(n.Stored)(t, e, r, name)
+					}})
+		}
+		for _, tc := range cases {
+			tc.agent = agentGone
+			tc.opts = func(*killEnv) []apitest.SpawnOption {
+				return []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}
+			}
+			t.Run(strings.ReplaceAll(n.Raw, "/", "_")+"/"+tc.name, func(t *testing.T) { rulRun(t, tc, store.StateEnded) })
+		}
+	}
+}
+
+// TestSpawnReuseNameAfterOldRowLookup: with the new name held, the old-row outcome
+// refuses first and the requested name is never quoted.
+func TestSpawnReuseNameAfterOldRowLookup(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	heldAnd := func(then func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession) func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession {
+		return func(t *testing.T, e *killEnv, r *reuseRow, name string) tmuxfix.SeedSession {
+			rulHolder(holderForeign)(t, e, r, name)
+			if then == nil {
+				return tmuxfix.SeedSession{}
+			}
+			return then(t, e, r, name)
+		}
+	}
+	notQuoting := func(desc func(*killEnv, reuseRow, string, tmuxfix.SeedSession) apitest.DescCase) func(*killEnv, reuseRow, string, tmuxfix.SeedSession) apitest.DescCase {
+		return func(e *killEnv, r reuseRow, name string, s tmuxfix.SeedSession) apitest.DescCase {
+			c := desc(e, r, name, s)
+			c.Forbid = append(c.Forbid, name)
+			return c
+		}
+	}
+	for _, tc := range []rulCase{
+		{name: "leftover under the recorded name", agent: agentGone, desc: notQuoting(rulLeftover),
+			seed: heldAnd(func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
+				return e.seedHolder(t, r.killRow, holderOld)
+			})},
+		{name: "ours, old session", agent: agentGone, seed: heldAnd(rulOwn(rlkSettled)), desc: notQuoting(rulOwnOld(false))},
+		{name: "gone, agent process running", agent: agentAlive, seed: heldAnd(nil), desc: notQuoting(rulOwnOld(true))},
+	} {
+		tc.requested, tc.want = rulNewName, "ErrTmuxSessionConflict"
+		t.Run(tc.name, func(t *testing.T) { rulRun(t, tc, store.StateEnded) })
+	}
+}
+
+// reuseStartingRow is a reusable row as the rule sees it at ruleInstant: its
+// seed spec (ended_at Age ago), its agent, and its own session's age
+// (noSession: Gone while the agent runs).
+type reuseStartingRow struct {
+	spec      reuseRowSpec
+	agent     agentState
+	noSession bool
+	age       time.Duration
+}
+
+// windowSkipped reports whether the rule skips the stopping window for s: no
+// parseable ended_at, or neither a pid nor a session id.
+func (s reuseStartingRow) windowSkipped() bool {
+	return s.spec.EndedAt != endedAged || (s.agent == agentNotRecorded && s.spec.NoSessionID)
+}
+
+// seedReuseStarting seeds s's reusable row with its own session unless
+// noSession; a raw row (GetSpawn refuses it) gets its current-labelled
+// session through placeHolder.
+func (e *killEnv) seedReuseStarting(t *testing.T, s reuseStartingRow) reuseRow {
+	t.Helper()
+	r := e.seedReusable(t, s.agent, s.spec)
+	switch {
+	case s.noSession:
+	case s.spec.EndedAt == endedUnparseable:
+		own := e.holderSessions(t, r.killRow, holderCurrent)
+		own[0].Created = e.ruleInstant().Add(-s.age).Unix()
+		e.placeHolder(t, r.killRow, holderCurrent, own)
+	default:
+		e.seedSession(t, &r.killRow, e.createdBefore(s.age))
+	}
+	return r
+}
+
+// reuseStarting reuses s's row (requesting its recorded name) through a Client
+// configured with settings and checks the refusal is want's under bound and
+// window, that nothing was written and that the Client logged nothing.
+func reuseStarting(t *testing.T, e *killEnv, r reuseRow, s reuseStartingRow, want tmux.StartingSessionOutcome,
+	bound, window time.Duration, settings ...apitest.TmuxSetting) {
+	t.Helper()
+	before := e.snapshotReuse(t, r)
+	_, logs, err := e.reuse(t, reuseParams(t, r, reuseRequest{}), settings...)
+	p := apitest.StartingSession{InstanceID: r.ID, Name: r.Name, Window: window, Bound: bound, NoSession: s.noSession,
+		WindowChecked: !s.windowSkipped(), SessionID: !s.spec.NoSessionID}
+	e.assertStartingRefusal(t, resumeSnapshot{writesSnapshot: before, r: r.resumeRow}, err, want, p)
+	if logs != "" {
+		t.Errorf("Client log = %q; want none (a refusal is reported by its error alone)", logs)
+	}
+}
+
+// TestSpawnReuseStartingCases (SR-4.2, SR-5.5; AC-REUSE-14, AC-CFG-02): the
+// starting-session rule on reuse's raw row (a NULL or unparseable ended_at is
+// none; no pid nor session id skips the window), and each setting configured
+// on its own, around the window and the bound. Rows shared with resume are
+// TestResumeStartingSessionCases', TestResumeClientStartingSettings' and
+// TestStartingSessionSettings'.
+func TestSpawnReuseStartingCases(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	longAgo, inside := defWindow+defBound, defWindow-time.Second
+	type startingCase struct {
+		name          string
+		row           reuseStartingRow
+		want          tmux.StartingSessionOutcome
+		settings      []apitest.TmuxSetting
+		bound, window time.Duration // 0: the default
+	}
+	cases := []startingCase{
+		{name: "ended long ago, session younger than the bound",
+			row: reuseStartingRow{spec: reuseRowSpec{Age: longAgo}, age: defBound - time.Second}, want: tmux.StillStarting},
+		{name: "NULL ended_at, session bound-1 s old", want: tmux.StillStarting,
+			row: reuseStartingRow{spec: reuseRowSpec{State: store.StateMissing, EndedAt: endedNull}, age: defBound - time.Second}},
+		{name: "unparseable ended_at, session bound-1 s old", want: tmux.StillStarting,
+			row: reuseStartingRow{spec: reuseRowSpec{EndedAt: endedUnparseable}, age: defBound - time.Second}},
+		{name: "unparseable ended_at, session the bound old", want: tmux.PastBoth,
+			row: reuseStartingRow{spec: reuseRowSpec{EndedAt: endedUnparseable}, age: defBound}},
+		{name: "neither pid nor session id, inside the window, session bound-1 s old", want: tmux.StillStarting,
+			row: reuseStartingRow{spec: reuseRowSpec{Age: inside, NoSessionID: true}, agent: agentNotRecorded, age: defBound - time.Second}},
+		{name: "neither pid nor session id, inside the window, session the bound old", want: tmux.PastBoth,
+			row: reuseStartingRow{spec: reuseRowSpec{Age: inside, NoSessionID: true}, agent: agentNotRecorded, age: defBound}},
+		{name: "no session id, outside the window, session the bound old", want: tmux.PastBoth,
+			row: reuseStartingRow{spec: reuseRowSpec{Age: defWindow, NoSessionID: true}, age: defBound}},
+		{name: "Gone, agent running, no session id, outside the window", want: tmux.PastBoth,
+			row: reuseStartingRow{spec: reuseRowSpec{Age: longAgo, NoSessionID: true}, noSession: true}},
+	}
+	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
+	for _, c := range []startingCase{
+		{name: "window at its safe minimum", settings: []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStoppingWindowSeconds, minW)},
+			bound: defBound, window: secs(minW)},
+		{name: "bound at its safe minimum", settings: []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStartingSessionSeconds, minB)},
+			bound: secs(minB), window: defWindow},
+	} {
+		for _, p := range []struct {
+			name     string
+			ago, age time.Duration
+			want     tmux.StartingSessionOutcome
+		}{
+			{"ended window-1 s ago, session the bound old", c.window - time.Second, c.bound, tmux.StillStopping},
+			{"ended window-1 s ago, session bound-1 s old", c.window - time.Second, c.bound - time.Second, tmux.StillStopping},
+			{"ended the window ago, session bound-1 s old", c.window, c.bound - time.Second, tmux.StillStarting},
+			{"ended the window ago, session the bound old", c.window, c.bound, tmux.PastBoth},
+		} {
+			pc := c
+			pc.name, pc.row, pc.want = c.name+"/"+p.name, reuseStartingRow{spec: reuseRowSpec{Age: p.ago}, age: p.age}, p.want
+			cases = append(cases, pc)
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedReuseStarting(t, tc.row)
+			cols := e.columns(t, r.ID)
+			if tc.row.spec.EndedAt == endedNull && cols.EndedAt != nil || tc.row.agent == agentNotRecorded && cols.PID != nil {
+				t.Fatalf("precondition: ended_at %v, pid %v; want NULL", cols.EndedAt, cols.PID)
+			}
+			if sid, _ := cols.ClaudeSessionID.(string); tc.row.spec.NoSessionID && sid != "" {
+				t.Fatalf("precondition: claude_session_id = %v; want NULL", cols.ClaudeSessionID)
+			}
+			reuseStarting(t, e, r, tc.row, tc.want, cmp.Or(tc.bound, defBound), cmp.Or(tc.window, defWindow), tc.settings...)
+		})
+	}
+}
+
+// rupCase is one old-row lookup arrangement and the records one reuse writes.
+// held seeds a foreign-label holder of the requested name, whose session
+// tmux_session_id then names; proceeds says the reuse reaches its reset.
+type rupCase struct {
+	name     string
+	setup    []rpvSetup
+	held     bool
+	want     []disagreeWant
+	proceeds bool
+}
+
+// rupCases are reuse's own rows of the reason table (each reason's rule is
+// resume's, TestResumeProvenanceDisagree): none written, one written before
+// the reset, a refusal at the old-row lookup and at the new-name pre-check,
+// and a renamed session holding the requested name.
+func rupCases() []rupCase {
+	restarted := func(action string, ours bool) []disagreeWant {
+		return []disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "gone", action: action, ours: ours}}
+	}
+	return []rupCase{
+		{name: "normal gone, names free, writes none", proceeds: true},
+		{name: "server_restarted, gone, reuse proceeds", setup: []rpvSetup{rpvRestart}, want: restarted("proceeded", false),
+			proceeds: true},
+		{name: "server_restarted, requested name held: refused at the pre-check", setup: []rpvSetup{rpvRestart}, held: true,
+			want: restarted("refused", true)},
+		{name: "server_mismatch, recorded server runs", setup: []rpvSetup{rpvServer("rebind", nil), rpvBystander},
+			want: []disagreeWant{{reason: "server_mismatch", server: "differs", verdict: "different_server", action: "refused"}}},
+		{name: "name_changed to the requested name", setup: []rpvSetup{rpvOwn(rutRequested)},
+			want: []disagreeWant{{reason: "name_changed", server: "match", verdict: "ours", action: "refused",
+				current: rutRequested, ours: true}}},
+	}
+}
+
+// seedRUPCase seeds tc's row beside another row's label, runs tc's setups and
+// places tc's holder; it returns the row, the records' row and the other id.
+func (e *killEnv) seedRUPCase(t *testing.T, tc rupCase) (reuseRow, killRow, string) {
+	t.Helper()
+	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rceSettled(e)})
+	other := "other-" + uuid.NewString()[:8]
+	e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "foreign-" + uuid.NewString()[:8], Label: r.foreign(other)})
+	for _, s := range tc.setup {
+		s(t, e, &r.resumeRow)
+	}
+	named := r.killRow
+	if tc.held {
+		named.Session = e.seedHolder(t, r.withName(rutRequested), holderForeign)
+	}
+	return r, named, other
+}
+
+// TestSpawnReuseProvenanceDisagree (SR-14, SR-3.16): the old-row lookup's
+// reasons are written once with verb spawn, source ad_spawn and the recorded
+// name, before the reset or on a refusal; never adopted.
+func TestSpawnReuseProvenanceDisagree(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	for _, tc := range rupCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r, named, other := e.seedRUPCase(t, tc)
+			w := &hookedReuseStore{st: e.st}
+			atReset := -1
+			w.beforeReset(func() { atReset = len(verbDisagrees(t, "spawn", r.ID)) })
+			before := e.snapshotReuse(t, r)
+
+			_, logs, err := e.reuseWith(t, w, reuseParams(t, r, reuseRequest{Name: rutRequested}))
+
+			if (err == nil) != tc.proceeds {
+				t.Fatalf("reuse err = %v (log %q); want proceeds %t", err, logs, tc.proceeds)
+			}
+			recs := verbDisagrees(t, "spawn", r.ID)
+			if len(recs) != len(tc.want) {
+				t.Fatalf("ad.provenance.disagree records = %d; want %d: %v", len(recs), len(tc.want), recs)
+			}
+			newTok, _ := e.columns(t, r.ID).LaunchToken.(string)
+			for i, want := range tc.want {
+				assertDisagreeRecord(t, recs[i], named, "spawn", "ad_spawn", want)
+				ktrAssertNoForeignContent(t, recs[i], rupNonEmpty(r.Token, newTok, e.storeID, other)...)
+			}
+			if n := adoptedRecords(t, "spawn", r.ID); n != 0 {
+				t.Errorf("adopted records = %d; want none", n)
+			}
+			switch {
+			case tc.proceeds && atReset != len(tc.want):
+				t.Errorf("records written before the reset = %d; want all %d", atReset, len(tc.want))
+			case !tc.proceeds && atReset >= 0:
+				t.Errorf("the refused reuse reached the reset")
+			case !tc.proceeds:
+				e.assertWroteNothing(t, before)
+			}
+		})
+	}
+}
+
+// rupNonEmpty is values without the empty ones.
+func rupNonEmpty(values ...string) []string {
+	var out []string
+	for _, v := range values {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

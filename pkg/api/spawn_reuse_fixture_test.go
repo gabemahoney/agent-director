@@ -1,21 +1,15 @@
 package api_test
 
-// spawn_reuse_fixture_test.go extends the kill fixture's resume helpers
-// (resume_lookup_fixture_test.go, resume_held_fixture_test.go) for spawn with
-// the reuse opt-in (SR-10, SR-20.2): the reusable finished row, the new
-// request, the Client runners, the reuse-store seam (hookedReuseStore), a
-// pending row made by a real reuse (reuseLaunch, reusePending, reusedAs,
-// agentOnCreate, newReuseEnv) and reuse's "wrote nothing" snapshot. It
-// holds no tests. The other arrangements are already one call on killEnv: the
-// row's own session (seedSession with createdBefore or
-// tmuxfix.WithRowSessionName), a leftover or a holder (seedHolder, under the
-// requested name through killRow.withName), the agent process (the
-// agentState argument), the bound and window (the runners' settings) and
-// "duplicate session" (arrangeHeld). Later reuse tests use these helpers,
-// never a copy of them.
+// spawn_reuse_fixture_test.go is the reuse fixture (SR-10, SR-20.2) on the
+// kill fixture's resume helpers: the reusable finished row, the request and
+// its Client runners, the reuse-store seam (hookedReuseStore), a pending row
+// made by a real reuse, a plain spawn's held-name row, and reuse's "wrote
+// nothing" snapshot. It holds no tests; reuse tests use these helpers, never
+// a copy of them.
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -82,12 +76,10 @@ func (r killRow) withName(name string) killRow {
 	return r
 }
 
-// seedReusable seeds spec's finished row, its agent in state a, through
-// seedOnServer: a full launch identity on e.defaultSocket with its server
-// running, pid and start time (unless agentNotRecorded), a session id and
-// transcript, life reuseLife, both liveness columns, raw request-field text,
-// and (unless Bare) a parent, history of this life and the one before, and
-// one open and one decided permission request.
+// seedReusable seeds spec's finished row (seedOnServer), its agent in state a:
+// life reuseLife, both liveness columns, raw request-field text and, unless
+// Bare, a parent, history of this life and the one before, and one open and
+// one decided permission request.
 func (e *killEnv) seedReusable(t *testing.T, a agentState, spec reuseRowSpec) reuseRow {
 	t.Helper()
 	ks := killRowSpec{ID: spec.ID, State: spec.State, Agent: a, NoSession: true}
@@ -267,10 +259,8 @@ func (e *killEnv) reusePending(t *testing.T, a agentState, spec reuseRowSpec, q 
 	return r
 }
 
-// reuseLaunch reuses r with q through Client.Spawn, the new pane's process
-// put in the fake in state a before the identity write reads it, failing
-// unless that succeeds; it returns r as reused (reusedAs, with its cwd and
-// agent) and the result.
+// reuseLaunch reuses r with q, the new pane's agent in state a, failing unless
+// that succeeds; it returns r as reused (reusedAs) and the result.
 func (e *killEnv) reuseLaunch(t *testing.T, r reuseRow, a agentState, q reuseRequest) (reuseRow, api.SpawnResult) {
 	t.Helper()
 	e.agentOnCreate(r.ID, a)
@@ -301,11 +291,9 @@ func (e *killEnv) reusedAs(t *testing.T, r reuseRow) reuseRow {
 	return r
 }
 
-// hookedReuseStore is api.ReuseStore over a real store, delegating every
-// call. failRead makes ReadForReuse fail (nothing read); afterRead,
-// beforeReset and afterReset run a function once (e.g. e.st.SetParentID,
-// DeleteSpawn or a competing call); reads counts ReadForReuse calls. Each
-// hook is cleared before it runs. Safe for concurrent use.
+// hookedReuseStore is api.ReuseStore over a real store: failRead makes
+// ReadForReuse fail; afterRead, beforeReset and afterReset run a function
+// once; reads counts ReadForReuse calls. Safe for concurrent use.
 type hookedReuseStore struct {
 	st *store.Store
 
@@ -390,4 +378,84 @@ func (w *hookedReuseStore) RestoreAfterFailedReuse(instanceID string, resetVersi
 // RecordLaunchIdentity delegates.
 func (w *hookedReuseStore) RecordLaunchIdentity(instanceID string, launchVersion int64, token string, id api.LaunchIdentity) (api.CondResult, error) {
 	return w.st.RecordLaunchIdentity(instanceID, launchVersion, token, id)
+}
+
+// finishedStates are the row states the reuse opt-in is about.
+var finishedStates = []string{store.StateEnded, store.StateMissing}
+
+// rtabAssertInternal fails unless err is ErrInternal (it wraps no catalogued
+// sentinel) worded as c.
+func rtabAssertInternal(t *testing.T, err error, c apitest.DescCase) {
+	t.Helper()
+	assertOneName(t, err, "ErrInternal")
+	if err != nil {
+		apitest.AssertDescription(t, err.Error(), c)
+	}
+}
+
+// plainSpawnHeld runs a plain spawn of a new id whose create meets "duplicate
+// session" from k's holder, placed as the scan returns when late; it returns
+// the row as a reusable one, the holder as stored and the spawn's error.
+func (e *killEnv) plainSpawnHeld(t *testing.T, k holderKind, late bool) (reuseRow, tmuxfix.SeedSession, error) {
+	t.Helper()
+	kr := killRow{ID: "reuse-" + uuid.NewString()[:8], Name: "held-" + uuid.NewString()[:8], Socket: e.defaultSocket,
+		StoreID: e.storeID}
+	r := reuseRow{resumeRow: resumeRow{killRow: kr, CWD: t.TempDir(), Trust: seedTrustConfig(t, t.TempDir(), trustLacksEntry)}}
+	e.ensureServer(&r.killRow)
+	e.seedBystander(t, r.Socket)
+	e.syncServers()
+	holders := e.holderSessions(t, kr, k)
+	var placed []tmuxfix.SeedSession
+	if !late {
+		placed = e.placeHolder(t, kr, k, holders)
+	}
+	e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+		if late && placed == nil {
+			placed = e.placeHolder(t, kr, k, holders)
+		}
+	})
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+	c, _ := e.client(t)
+	_, err := c.Spawn(api.SpawnParams{ClaudeInstanceID: r.ID, TmuxSessionName: r.Name, TmuxSessionNameSupplied: true,
+		CWD: r.CWD, ExtraEnv: r.Trust.extraEnv()})
+	if len(placed) == 0 {
+		t.Fatalf("no holder of %q was placed on %s", r.Name, r.Socket)
+	}
+	r.Token, _ = e.columns(t, r.ID).LaunchToken.(string)
+	return r, placed[0], err
+}
+
+// assertReused fails unless err is nil and, since calls, r's row went
+// pending in the life after life through one lookup and one create on its
+// socket, which made one session carrying the row's new token.
+func (e *killEnv) assertReused(t *testing.T, r reuseRow, life any, calls int, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("reuse of %s: %v; want success", r.ID, err)
+	}
+	cols := e.columns(t, r.ID)
+	prior, _ := life.(int64)
+	if cols.State != store.StatePending || cols.LifeNumber != any(prior+1) {
+		t.Errorf("state, life after the reuse = %v, %v; want pending, %d", cols.State, cols.LifeNumber, prior+1)
+	}
+	var kinds []tmux.Call
+	for _, c := range e.rec.SocketCalls()[calls:] {
+		if c.Socket != r.Socket {
+			t.Errorf("tmux call %v on %s; want every call on %s", c.Call, c.Socket, r.Socket)
+		}
+		kinds = append(kinds, c.Call)
+	}
+	if want := []tmux.Call{tmux.CallLookup, tmux.CallCreate}; !reflect.DeepEqual(kinds, want) {
+		t.Errorf("tmux calls = %q; want %q", kinds, want)
+	}
+	token, _ := cols.LaunchToken.(string)
+	labelled := 0
+	for _, s := range e.rec.Sessions(r.Socket) {
+		if s.Label == tmuxfix.Valid(token, r.ID, e.storeID) {
+			labelled++
+		}
+	}
+	if token == r.Token || labelled != 1 {
+		t.Errorf("token %q (was %q), %d sessions labelled with it; want a new token on one session", token, r.Token, labelled)
+	}
 }

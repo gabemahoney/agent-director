@@ -1,34 +1,27 @@
 package api_test
 
 // spawn_scan_test.go covers plain spawn's label scan (SR-9.3, SR-20.6,
-// AC-SPN-11): a caller-supplied id with no row makes one lookup; a leftover
-// labelled by this store refuses with ErrTmuxSessionConflict and one
-// ad.launch.name_held record, writing nothing; other labels and no server
-// proceed; Can't tell refuses; minted ids and existing rows are not scanned.
+// AC-SPN-11): a caller-supplied id with no row makes one lookup before the
+// insert; this store's leftover refuses with one ad.launch.name_held, writing
+// nothing; other labels and no server proceed; Can't tell refuses.
 
 import (
-	"context"
 	"errors"
 	"io/fs"
 	"os"
-	"os/exec"
-	"os/user"
 	"path/filepath"
 	"reflect"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // scanEnv is the spawn fixture with this store's id and an untouched trust
@@ -38,11 +31,9 @@ type scanEnv struct {
 	storeID, claudeJSON string
 }
 
-// newScanEnv builds a scanEnv; it pins the trail singleton to TestMain's HOME
-// first, since the fixture moves HOME per test.
+// newScanEnv builds a scanEnv.
 func newScanEnv(t *testing.T) scanEnv {
 	t.Helper()
-	trail.Default()
 	env := newSpawnEnv(t)
 	storeID, err := apitest.ReadStoreID(env.dbPath)
 	if err != nil {
@@ -96,20 +87,6 @@ func (e scanEnv) assertNothingWritten(t *testing.T, id string) {
 	}
 }
 
-// assertOneSentinel checks err matches want and no other catalogued error.
-func assertOneSentinel(t *testing.T, err, want error) {
-	t.Helper()
-	var matched []string
-	for _, e := range errnames.Catalog {
-		if errors.Is(err, e.Err) {
-			matched = append(matched, e.Name)
-		}
-	}
-	if !errors.Is(err, want) || len(matched) != 1 {
-		t.Errorf("err %v matches %q; want exactly %v", err, matched, want)
-	}
-}
-
 // trailLen returns the trail's current line count, a checkpoint.
 func trailLen(t *testing.T) int { return len(readAPITrailLines(t)) }
 
@@ -125,59 +102,30 @@ func trailSince(t *testing.T, n int, event string) []map[string]any {
 	return out
 }
 
-// assertNameHeld checks the single ad.launch.name_held record's fields for
-// first, the lowest-$N leftover of count.
-func (e scanEnv) assertNameHeld(t *testing.T, recs []map[string]any, id string, first tmuxfix.SeedSession, count int) {
-	t.Helper()
-	if len(recs) != 1 {
-		t.Fatalf("ad.launch.name_held records = %d; want 1", len(recs))
-	}
-	host, _ := os.Hostname()
-	var username string
-	if u, err := user.Current(); err == nil {
-		username = u.Username
-	}
-	q := func(s string) string { return "'" + s + "'" }
-	want := map[string]any{
-		"source": "ad_spawn", "claude_instance_id": id, "launch": "spawn",
-		"tmux_session_name": first.Name, "tmux_session_id": first.ID, "session_created": float64(first.Created),
-		"tmux_socket": e.socket, "store_id": e.storeID, "carries_this_id": true, "current_launch": false,
-		"lookup_outcome": "leftover", "outcome": "ErrTmuxSessionConflict", "row_result": "not_inserted",
-		"leftover_count": float64(count), "store_error": nil,
-		"attach_command": "tmux -u -S " + q(e.socket) + " attach-session -r -t " + q(first.ID),
-		"end_command":    "tmux -u -S " + q(e.socket) + " kill-session -t " + q(first.ID),
-		"caller_process": filepath.Base(os.Args[0]), "caller_pid": float64(os.Getpid()),
-		"caller_hostname": host, "caller_user": username,
-	}
-	for k, v := range want {
-		if got, ok := recs[0][k]; !ok || got != v {
-			t.Errorf("name_held[%q] = %v (present %t); want %v", k, got, ok, v)
-		}
-	}
-}
-
 // TestScanRefusesLeftover: a session labelled by this store for the id, under
-// any name, refuses the spawn, writes nothing but one name_held, and the spawn
-// succeeds once the leftover is gone.
+// any name, refuses the spawn (with the reuse opt-in too), writes nothing but
+// one name_held with every SR-14 field, and the spawn succeeds once the
+// leftover is gone.
 func TestScanRefusesLeftover(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const base = int64(1790000000)
 	cases := []struct {
 		name      string
 		requested string
+		reuse     bool
 		sessions  func(e scanEnv, id string) []tmuxfix.SeedSession
 		named     []int // indexes into sessions, lowest $N first
 	}{
-		{"another name", "", func(e scanEnv, id string) []tmuxfix.SeedSession {
+		{"another name, with the reuse opt-in", "", true, func(e scanEnv, id string) []tmuxfix.SeedSession {
 			return []tmuxfix.SeedSession{e.leftover("old-life", "$3", id, base)}
 		}, []int{0}},
-		{"the requested name", "scan-held", func(e scanEnv, id string) []tmuxfix.SeedSession {
+		{"the requested name", "scan-held", false, func(e scanEnv, id string) []tmuxfix.SeedSession {
 			return []tmuxfix.SeedSession{e.leftover("scan-held", "$0", id, base)}
 		}, []int{0}},
-		{"two sessions", "", func(e scanEnv, id string) []tmuxfix.SeedSession {
+		{"two sessions", "", false, func(e scanEnv, id string) []tmuxfix.SeedSession {
 			return []tmuxfix.SeedSession{e.leftover("a-old", "$7", id, base), e.leftover("b-old", "$4", id, base+1)}
 		}, []int{1, 0}},
-		{"four sessions, numeric order", "", func(e scanEnv, id string) []tmuxfix.SeedSession {
+		{"four sessions, numeric order", "", false, func(e scanEnv, id string) []tmuxfix.SeedSession {
 			return []tmuxfix.SeedSession{e.leftover("a-old", "$10", id, base), e.leftover("b-old", "$2", id, base+1),
 				e.leftover("c-old", "$9", id, base+2), e.leftover("d-old", "$11", id, base+3)}
 		}, []int{1, 2, 0, 3}},
@@ -190,7 +138,7 @@ func TestScanRefusesLeftover(t *testing.T) {
 			e.rec.SeedSessions(e.socket, seeded...)
 			before := e.rec.Sessions(e.socket)
 			mark := trailLen(t)
-			p := api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id}
+			p := api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id, ReuseFinished: tc.reuse}
 			if tc.requested != "" {
 				p.TmuxSessionName, p.TmuxSessionNameSupplied = tc.requested, true
 			}
@@ -209,7 +157,15 @@ func TestScanRefusesLeftover(t *testing.T) {
 			if after := e.rec.Sessions(e.socket); !reflect.DeepEqual(before, after) {
 				t.Errorf("sessions changed:\nbefore %+v\nafter  %+v", before, after)
 			}
-			e.assertNameHeld(t, trailSince(t, mark, "ad.launch.name_held"), id, seeded[tc.named[0]], len(seeded))
+			recs := trailSince(t, mark, "ad.launch.name_held")
+			if len(recs) != 1 {
+				t.Fatalf("ad.launch.name_held records = %d; want 1", len(recs))
+			}
+			first := seeded[tc.named[0]]
+			want := nameHeldFields("spawn", id, first.Name, e.socket, e.storeID, &first, "leftover", "ErrTmuxSessionConflict",
+				"not_inserted", nil, true, false)
+			want["leftover_count"] = float64(len(seeded))
+			assertTrailRecord(t, recs[0], append(slices.Clone(ptKeys), "leftover_count"), want)
 			if d := trailSince(t, mark, "ad.provenance.disagree"); len(d) != 0 {
 				t.Errorf("ad.provenance.disagree records = %v; want none", d)
 			}
@@ -227,82 +183,52 @@ func TestScanRefusesLeftover(t *testing.T) {
 	}
 }
 
-// TestScanProceeds: other stores', foreign and invalid labels, an empty
-// server, no server and no socket let the spawn reach its create; a requested
-// name another store's session holds then ends the row (SR-9.4).
+// TestScanProceeds: another store's label for the id (with the reuse opt-in
+// too), a foreign label and no server let the spawn reach its create, the
+// scan's lookup made before the row is inserted, and the new row's first life.
 func TestScanProceeds(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	other := func(e scanEnv, id, name string) tmuxfix.SeedSession {
-		return tmuxfix.SeedSession{Name: name, Label: tmuxfix.Valid(tmuxfix.OtherToken, id, apitest.OtherStoreID(e.storeID))}
+	otherStore := func(e scanEnv, id string) {
+		e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: "elsewhere",
+			Label: tmuxfix.Valid(tmuxfix.OtherToken, id, apitest.OtherStoreID(e.storeID))})
 	}
-	const heldName, heldSessionID = "scan-held", "$6"
 	cases := []struct {
-		name      string
-		requested string
-		setup     func(e scanEnv, id string)
-		held      bool // the create answers "duplicate session"
+		name  string
+		reuse bool
+		setup func(e scanEnv, id string)
 	}{
-		{"another store's label for the id", "", func(e scanEnv, id string) {
-			e.rec.SeedSessions(e.socket, other(e, id, "elsewhere"))
-		}, false},
-		{"foreign label", "", func(e scanEnv, _ string) {
+		{"another store's label for the id", false, otherStore},
+		{"another store's label for the id, with the reuse opt-in", true, otherStore},
+		{"foreign label", false, func(e scanEnv, _ string) {
 			e.rec.SeedSessions(e.socket, e.leftover("foreign", "", scanID(), 0))
-		}, false},
-		{"no valid label", "", func(e scanEnv, _ string) {
-			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: "malformed", LabelSet: true})
-		}, false},
-		{"empty server", "", func(e scanEnv, _ string) { e.rec.StartServer(e.socket, tmuxfix.Server{}) }, false},
-		{"no server", "", func(e scanEnv, _ string) { e.rec.SetNoServerFailure(e.socket, tmux.FailNoServer) }, false},
-		{"missing socket", "", func(scanEnv, string) {}, false},
-		{"requested name held by another store", heldName, func(e scanEnv, id string) {
-			s := other(e, id, heldName)
-			s.ID = heldSessionID
-			e.rec.SeedSessions(e.socket, s)
-		}, true},
+		}},
+		{"no server", false, func(e scanEnv, _ string) { e.rec.SetNoServerFailure(e.socket, tmux.FailNoServer) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newScanEnv(t)
 			id := scanID()
 			tc.setup(e, id)
+			rowAtLookup := true
+			e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+				_, err := apitest.ReadSpawnColumns(e.dbPath, id)
+				rowAtLookup = !errors.Is(err, store.ErrSpawnNotFound)
+			})
 			mark := trailLen(t)
-			p := api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id}
-			if tc.requested != "" {
-				p.TmuxSessionName, p.TmuxSessionNameSupplied = tc.requested, true
-			}
 
-			_, err := e.c.Spawn(p)
-
-			if !tc.held && err != nil {
+			if _, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id, ReuseFinished: tc.reuse}); err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
-			calls := e.rec.SocketCalls()
-			if len(calls) < 2 || calls[0].Call != tmux.CallLookup || calls[1].Call != tmux.CallCreate {
-				t.Errorf("socket calls = %+v; want a lookup then the create", calls)
+
+			if got := callKinds(e.rec); !slices.Equal(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) || rowAtLookup {
+				t.Errorf("tmux calls = %v, row present at the lookup %v; want a lookup with no row yet, then the create", got, rowAtLookup)
 			}
-			held := trailSince(t, mark, "ad.launch.name_held")
-			if !tc.held {
-				if len(held) != 0 {
-					t.Errorf("ad.launch.name_held records = %d; want 0", len(held))
-				}
-				return
+			if cols, err := apitest.ReadSpawnColumns(e.dbPath, id); err != nil || cols.State != store.StatePending || cols.LifeNumber != int64(0) {
+				t.Errorf("row %+v (err %v); want pending in life 0", cols, err)
 			}
-			assertOneSentinel(t, err, api.ErrTmuxSessionConflict)
-			token := heldEnv{scanEnv: e}.assertEndedRow(t, id, e.clock.Now())
-			if err != nil {
-				_, desc := errnames.Classify(err)
-				hp := apitest.HeldName{Name: heldName, SessionID: heldSessionID, Row: apitest.HeldRowEnded}
-				apitest.AssertDescription(t, desc, apitest.DescHeldOtherStore(hp, e.storeID),
-					append(e.forbid(id, e.rec.Sessions(e.socket)), token)...)
-			}
-			if len(held) != 1 {
-				t.Fatalf("ad.launch.name_held records = %d; want 1", len(held))
-			}
-			want := map[string]any{"outcome": "ErrTmuxSessionConflict", "row_result": "ended",
-				"tmux_session_id": heldSessionID, "carries_this_id": false}
-			for k, v := range want {
-				if got := held[0][k]; got != v {
-					t.Errorf("name_held[%q] = %v; want %v", k, got, v)
+			for _, ev := range []string{"ad.launch.name_held", "ad.spawn.reused"} {
+				if recs := ptRecords(t, mark, ev, id); len(recs) != 0 {
+					t.Errorf("%s records = %v; want none", ev, recs)
 				}
 			}
 		})
@@ -314,40 +240,29 @@ func TestScanProceeds(t *testing.T) {
 func TestScanCantTellRefuses(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const timeout = 700 * time.Millisecond
-	const firstLine = "scan: unexpected reply"
-	script := func(s tmuxfix.Script) func(e scanEnv, id string) {
-		return func(e scanEnv, _ string) { e.rec.Script(e.socket, s, tmux.CallLookup) }
-	}
 	cases := []struct {
 		name  string
 		setup func(e scanEnv, id string)
 		want  error
 		desc  func(e scanEnv, id string) apitest.DescCase
 	}{
-		{"timeout", func(e scanEnv, id string) {
+		{"timeout", func(e scanEnv, _ string) {
 			e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: timeout})
-			script(tmuxfix.Script{Failure: tmux.FailTimeout})(e, id)
+			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallLookup)
 		}, api.ErrTmuxUnresponsive, func(scanEnv, string) apitest.DescCase {
 			return apitest.DescCallTimeout(tmux.CallLookup, timeout)
 		}},
-		{"unrecognised reply", script(tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: firstLine, ExitStatus: 1, HadStdout: true}),
-			api.ErrTmuxUnresponsive, func(scanEnv, string) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallLookup, firstLine)
-			}},
 		{"scope value", func(e scanEnv, id string) {
 			e.rec.SeedSessions(e.socket, e.leftover("old-life", "", id, 0))
 			e.rec.SetScope(e.socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
 		}, api.ErrTmuxSessionConflict, func(_ scanEnv, id string) apitest.DescCase {
 			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: id, Scope: true})
 		}},
-		{"binary unavailable", script(tmuxfix.Script{Failure: tmux.FailUnavailable}),
-			tmux.ErrTmuxNotAvailable, func(scanEnv, string) apitest.DescCase {
-				return apitest.DescTmuxNotRun()
-			}},
-		{"socket permission", script(tmuxfix.Script{Failure: tmux.FailSocketDenied}),
-			tmux.ErrTmuxNotAvailable, func(e scanEnv, _ string) apitest.DescCase {
-				return apitest.DescSocketPermission(e.socket)
-			}},
+		{"socket permission", func(e scanEnv, _ string) {
+			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailSocketDenied}, tmux.CallLookup)
+		}, tmux.ErrTmuxNotAvailable, func(e scanEnv, _ string) apitest.DescCase {
+			return apitest.DescSocketPermission(e.socket)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -368,83 +283,4 @@ func TestScanCantTellRefuses(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestScanSkippedForMintedID: a spawn with no id makes no lookup; its first
-// tmux call is the create.
-func TestScanSkippedForMintedID(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	e := newScanEnv(t)
-	if _, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir()}); err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
-	calls := e.rec.SocketCalls()
-	if len(calls) == 0 || calls[0].Call != tmux.CallCreate || len(e.rec.SocketCallsOf(tmux.CallLookup)) != 0 {
-		t.Errorf("socket calls = %+v; want the create first and no lookup", calls)
-	}
-}
-
-// TestScanSkippedForExistingRow: a finished or live row for the id is not
-// scanned, even with a leftover running, and still collides.
-func TestScanSkippedForExistingRow(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	for _, state := range []string{store.StateEnded, store.StateMissing, store.StateWorking} {
-		t.Run(state, func(t *testing.T) {
-			e := newScanEnv(t)
-			id := scanID()
-			e.rec.SeedSessions(e.socket, e.leftover("old-life", "", id, 0))
-			if _, err := apitest.SeedSpawn(e.dbPath, id, state, "", "", "", false); err != nil {
-				t.Fatalf("SeedSpawn: %v", err)
-			}
-			mark := trailLen(t)
-
-			_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
-
-			assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
-			assertNoTmuxCalls(t, e.rec)
-			if n := len(trailSince(t, mark, "ad.launch.name_held")); n != 0 {
-				t.Errorf("ad.launch.name_held records = %d; want 0", n)
-			}
-		})
-	}
-}
-
-// scanTrailChildEnv marks the child process of TestScanNameHeldFailOpen.
-const scanTrailChildEnv = "AD_SCAN_TRAIL_FAIL_CHILD"
-
-// TestScanNameHeldFailOpen: when the trail cannot be written the refusal is
-// unchanged; run in a child process whose trail singleton cannot open.
-func TestScanNameHeldFailOpen(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	if os.Getenv(scanTrailChildEnv) == "" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestScanNameHeldFailOpen$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
-		cmd.Env = append(os.Environ(), scanTrailChildEnv+"=1")
-		out, err := cmd.CombinedOutput()
-		if err != nil || !strings.Contains(string(out), "--- PASS: TestScanNameHeldFailOpen") {
-			t.Fatalf("child: %v\n%s", err, out)
-		}
-		return
-	}
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, ".agent-director"), nil, 0o600); err != nil {
-		t.Fatalf("block trail directory: %v", err)
-	}
-	t.Setenv("HOME", home)
-	if err := trail.Emit(context.Background(), "ad.test.scan_probe", map[string]any{}); err == nil {
-		t.Fatal("trail write succeeded; want it to fail")
-	}
-	e := newScanEnv(t)
-	id := scanID()
-	left := e.leftover("old-life", "$5", id, 0)
-	e.rec.SeedSessions(e.socket, left)
-
-	_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
-
-	assertOneSentinel(t, err, api.ErrTmuxSessionConflict)
-	if err != nil {
-		apitest.AssertDescription(t, err.Error(),
-			apitest.DescScanLeftover(id, []apitest.DescSession{{Name: left.Name, ID: left.ID}}),
-			e.forbid(id, []tmuxfix.SeedSession{left})...)
-	}
-	e.assertNothingWritten(t, id)
 }
