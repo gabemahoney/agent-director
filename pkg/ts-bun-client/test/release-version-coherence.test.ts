@@ -1,356 +1,91 @@
 /**
- * release-version-coherence.test.ts — end-to-end regression test for the
- * release version-coherence flow (Plan Bee b.xsh, Epic 5).
- *
- * Regression guarded: a staged tree stamped to 9.9.9 via version-bump.ts,
- * packed via bun pm pack, installed in a consumer fixture, and verified via
- * client.version() must return exactly "9.9.9". Any deviation indicates that
- * a version site was missed in the stamp pass or that client.version() is
- * reading from a source other than the installed package.json.
- *
- * Caveat: version-bump.ts enforces /^\d+\.\d+\.\d+$/ (strict X.Y.Z, line 60).
- * The SRD's "9.9.9-test" would fail validation at the version-bump step. This
- * test uses plain "9.9.9".
- *
- * Platform guard: test runs only on linux-x64 or darwin-arm64, mirroring
- * setup.ts. Other platforms emit console.warn and skip silently. Likewise if
- * CLI_PATH is absent (setup.ts preload not run).
+ * release-version-coherence.test.ts — end-to-end release version flow (b.xsh
+ * Epic 5): a staged tree stamped 9.9.9 by version-bump.ts passes
+ * check-version-coherence, packs, installs into a consumer, and
+ * client.version() there returns exactly "9.9.9" with the version not inlined
+ * into dist/. The install carries no @agent-director/* sub-package and does
+ * ship dist/version-floor.json (SR-8.7). The live tree is left unchanged.
  */
 
 import { test, expect } from "bun:test";
-import {
-  mkdtempSync,
-  rmSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-  mkdirSync,
-  cpSync,
-  chmodSync,
-  existsSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, mkdirSync, cpSync, chmodSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const TARGET_VERSION = "9.9.9";
-
-const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const PKG_DIR = resolve(import.meta.dir, "..");
 const REPO_ROOT = resolve(PKG_DIR, "../..");
 
-// Live script paths — existence-checked before staging; staged copies are run.
-const COHERENCE_SCRIPT = join(PKG_DIR, "scripts", "check-version-coherence.ts");
-// (VERSION_BUMP_SCRIPT existence is implied by the source tree at this point)
+const sha256 = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
 
-// ---------------------------------------------------------------------------
-// Platform detection (mirrors setup.ts)
-// ---------------------------------------------------------------------------
-
-const platformTuple = (() => {
-  if (process.platform === "linux" && process.arch === "x64") return "linux-x64";
-  if (process.platform === "darwin" && process.arch === "arm64") return "darwin-arm64";
-  return null;
-})();
-
-// ---------------------------------------------------------------------------
-// Sentinel snapshot helpers
-// ---------------------------------------------------------------------------
-
-function sha256OfFile(filePath: string): string {
-  const h = createHash("sha256");
-  h.update(readFileSync(filePath));
-  return h.digest("hex");
-}
-
-// ---------------------------------------------------------------------------
-// Subprocess helper — async so tests can use Bun.spawn (not spawnSync)
-// ---------------------------------------------------------------------------
-
-interface SpawnResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-async function spawn(
-  cmd: string[],
-  opts: { cwd?: string; env?: Record<string, string> } = {}
-): Promise<SpawnResult> {
-  const proc = Bun.spawn(cmd, {
-    cwd: opts.cwd,
-    env: opts.env ? { ...process.env, ...opts.env } : process.env,
-    stdout: "pipe",
-    stderr: "pipe",
-    stdin: "ignore",
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
+/** Runs cmd in cwd (env merged over process.env) and expects exit 0; returns stdout. */
+async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
+  const proc = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   await proc.exited;
-  return { exitCode: proc.exitCode, stdout, stderr };
+  expect(proc.exitCode, `${cmd.join(" ")} failed:\n${stderr}`).toBe(0);
+  return stdout;
 }
-
-// ---------------------------------------------------------------------------
-// Test
-// ---------------------------------------------------------------------------
 
 test(
   "release-version-coherence: staged tree → pack → install → client.version() === 9.9.9",
   async () => {
-    // Guard: unsupported platform.
-    if (platformTuple === null) {
-      console.warn(
-        "release-version-coherence.test.ts: unsupported platform " +
-          `${process.platform}/${process.arch} — skipping`
-      );
-      return;
-    }
+    const livePkg = join(PKG_DIR, "package.json");
+    const liveDist = join(PKG_DIR, "dist", "index.js");
+    const before = { pkg: readFileSync(livePkg, "utf8"), dist: existsSync(liveDist) ? sha256(liveDist) : null };
 
-    // Guard: CLI not built (setup.ts preload not run).
-    const cliPath = process.env.CLI_PATH ?? "";
-    if (!cliPath || !existsSync(cliPath)) {
-      console.warn(
-        "release-version-coherence.test.ts: CLI_PATH not set or binary absent — skipping"
-      );
-      return;
-    }
-
-    // Guard: check-version-coherence.ts must exist. NOT a silent skip —
-    // its absence is the regression this test is designed to catch.
-    if (!existsSync(COHERENCE_SCRIPT)) {
-      throw new Error(
-        `release-version-coherence: missing required script: ${COHERENCE_SCRIPT} — ` +
-          "Epic 3 (check-version-coherence.ts) has not landed"
-      );
-    }
-
-    // -----------------------------------------------------------------------
-    // Step 2: Snapshot live sentinel values BEFORE staging.
-    // -----------------------------------------------------------------------
-
-    const liveUmbrellaPkg  = join(PKG_DIR, "package.json");
-    const liveDistIndexJs  = join(PKG_DIR, "dist", "index.js");
-
-    const sentinels = {
-      umbrellaRaw:  readFileSync(liveUmbrellaPkg, "utf8"),
-      distHash:     existsSync(liveDistIndexJs) ? sha256OfFile(liveDistIndexJs) : null,
-    };
-
-    // -----------------------------------------------------------------------
-    // Steps 3–12 wrapped in try/finally for reliable cleanup.
-    // -----------------------------------------------------------------------
-
-    // Allocate all three temp dirs before the try so cleanup can reference them.
-    const stageDir       = mkdtempSync(join(tmpdir(), "ad-rvc-stage-"));
-    const consumerDir    = mkdtempSync(join(tmpdir(), "ad-rvc-consumer-"));
-    const sandboxedHome  = mkdtempSync(join(tmpdir(), "ad-rvc-home-"));
-
+    const stageDir = mkdtempSync(join(tmpdir(), "ad-rvc-stage-"));
+    const consumerDir = mkdtempSync(join(tmpdir(), "ad-rvc-consumer-"));
+    const home = mkdtempSync(join(tmpdir(), "ad-rvc-home-"));
     try {
-      // -----------------------------------------------------------------------
-      // Step 4: Stage the live tree into stageDir.
-      // -----------------------------------------------------------------------
-
-      const stagePkgDir = join(stageDir, "pkg", "ts-bun-client");
-      mkdirSync(stagePkgDir, { recursive: true });
-      cpSync(join(PKG_DIR, "."), stagePkgDir, { recursive: true });
-
+      // Stage the package (plus the catalog the bundle inlines), without dev artifacts.
+      const stagePkg = join(stageDir, "pkg", "ts-bun-client");
+      mkdirSync(stagePkg, { recursive: true });
+      cpSync(PKG_DIR, stagePkg, { recursive: true });
       mkdirSync(join(stageDir, "pkg", "api", "errnames"), { recursive: true });
-      cpSync(
-        join(REPO_ROOT, "pkg", "api", "errnames", "catalog.json"),
-        join(stageDir, "pkg", "api", "errnames", "catalog.json")
-      );
+      cpSync(join(REPO_ROOT, "pkg/api/errnames/catalog.json"), join(stageDir, "pkg/api/errnames/catalog.json"));
+      rmSync(join(stagePkg, "node_modules"), { recursive: true, force: true });
+      rmSync(join(stagePkg, "skills"), { recursive: true, force: true });
 
-      // Wipe stowaway dev artifacts.
-      rmSync(join(stagePkgDir, "node_modules"), { recursive: true, force: true });
-      rmSync(join(stagePkgDir, "skills"), { recursive: true, force: true });
+      // The /release flow, run on the staged copies.
+      await run(["bun", "run", "scripts/version-bump.ts", "--version", TARGET_VERSION, "--target", "umbrella-version"], stagePkg);
+      await run(["bun", "run", "scripts/check-version-coherence.ts", "--scope", "verify", "--expected-version", TARGET_VERSION], stagePkg);
+      await run(["bun", "install", "--no-progress"], stagePkg);
+      await run(["bun", "run", "build"], stagePkg);
+      await run(["bun", "pm", "pack", "--ignore-scripts"], stagePkg);
+      const tgz = readdirSync(stagePkg).find((f) => f.startsWith("agent-director-") && f.endsWith(".tgz"));
+      expect(tgz).toBeDefined();
 
-      // -----------------------------------------------------------------------
-      // Step 5: Stamp version sites (b.ue3 / Epic 4 — umbrella + skill only).
-      //
-      // Run the STAGED copy via a relative path so import.meta.url resolves
-      // within the stage dir — mirrors the /release skill's branch-and-bump
-      // gate: `cd $stage_dir && bun run scripts/version-bump.ts`.
-      // -----------------------------------------------------------------------
-
-      const bumpResult = await spawn(
-        [
-          "bun", "run", "scripts/version-bump.ts",
-          "--version", TARGET_VERSION,
-          "--target", "umbrella-version",
-        ],
-        { cwd: stagePkgDir }
-      );
-      expect(bumpResult.exitCode).toBe(0);
-
-      // -----------------------------------------------------------------------
-      // Step 6: Run version-coherence gate (--scope verify).
-      // Run the staged copy so path resolution is scoped to the stage dir.
-      // -----------------------------------------------------------------------
-
-      const coherenceResult = await spawn(
-        [
-          "bun", "run", "scripts/check-version-coherence.ts",
-          "--scope", "verify",
-          "--expected-version", TARGET_VERSION,
-        ],
-        { cwd: stagePkgDir }
-      );
-      expect(coherenceResult.exitCode).toBe(0);
-
-      // -----------------------------------------------------------------------
-      // Step 7: bun install → bun run build → bun pm pack --ignore-scripts
-      // (b.ue3 / Epic 4: no platform binary staging, no stage-skill.ts —
-      // skills/install-agent-director ships in release tarballs separately
-      // from the npm package; the npm tarball is library-only.)
-      // -----------------------------------------------------------------------
-
-      const installResult = await spawn(
-        ["bun", "install", "--no-progress"],
-        { cwd: stagePkgDir }
-      );
-      expect(installResult.exitCode).toBe(0);
-
-      const buildResult = await spawn(
-        ["bun", "run", "build"],
-        { cwd: stagePkgDir }
-      );
-      expect(buildResult.exitCode).toBe(0);
-
-      const packResult = await spawn(
-        ["bun", "pm", "pack", "--ignore-scripts"],
-        { cwd: stagePkgDir }
-      );
-      expect(packResult.exitCode).toBe(0);
-
-      // Locate the produced tarball.
-      const tgzFiles = readdirSync(stagePkgDir).filter((f) =>
-        f.startsWith("agent-director-") && f.endsWith(".tgz")
-      );
-
-      expect(tgzFiles.length).toBeGreaterThan(0);
-      const tgzPath = join(stagePkgDir, tgzFiles[0] as string);
-
-      // -----------------------------------------------------------------------
-      // Step 8: Consumer fixture — sandboxed HOME, bun add via file: URL.
-      // b.ue3 / Epic 4: no @agent-director/<platform> sub-package; the
-      // umbrella tarball is the entire library install surface.
-      // -----------------------------------------------------------------------
-
-      writeFileSync(
-        join(consumerDir, "package.json"),
-        JSON.stringify(
-          {
-            name: "ad-rvc-consumer",
-            version: "0.0.1",
-            type: "module",
-          },
-          null,
-          2
-        ) + "\n",
-        "utf8"
-      );
-
-      const addResult = await spawn(
-        ["bun", "add", `file:${tgzPath}`],
-        {
-          cwd: consumerDir,
-          env: { HOME: sandboxedHome },
-        }
-      );
-      expect(addResult.exitCode).toBe(0);
-
-      // -----------------------------------------------------------------------
-      // Step 9: One-shot consumer.ts — invoke client.version(), emit JSON.
-      // -----------------------------------------------------------------------
-
-      // Stage the dev CLI binary at $sandboxedHome/.agent-director/bin/agent-director
-      // so the consumer's Client.create() discovery (SR-1.1 step 1) finds it.
-      // After b.ue3 the consumer is a system-install consumer; no vendored binary.
-      const sandboxedAdBinDir = join(sandboxedHome, ".agent-director", "bin");
-      mkdirSync(sandboxedAdBinDir, { recursive: true });
-      const sandboxedAdBin = join(sandboxedAdBinDir, "agent-director");
-      cpSync(cliPath, sandboxedAdBin);
-      chmodSync(sandboxedAdBin, 0o755);
-
-      const consumerStorePath = join(consumerDir, "state.db");
+      // A consumer in a sandboxed HOME, whose discovery finds the dev CLI at the standard install path.
+      writeFileSync(join(consumerDir, "package.json"), JSON.stringify({ name: "ad-rvc-consumer", version: "0.0.1", type: "module" }));
+      await run(["bun", "add", `file:${join(stagePkg, tgz!)}`], consumerDir, { HOME: home });
+      mkdirSync(join(home, ".agent-director", "bin"), { recursive: true });
+      cpSync(process.env.CLI_PATH!, join(home, ".agent-director", "bin", "agent-director"));
+      chmodSync(join(home, ".agent-director", "bin", "agent-director"), 0o755);
+      const store = JSON.stringify(join(consumerDir, "state.db"));
       writeFileSync(
         join(consumerDir, "consumer.ts"),
-        [
-          `import { Client } from "agent-director";`,
-          `const c = await Client.create({ storePath: ${JSON.stringify(consumerStorePath)}, createIfMissing: true });`,
-          `const result = await c.version({});`,
-          `console.log(JSON.stringify(result));`,
-          `c.close();`,
-        ].join("\n") + "\n",
-        "utf8"
+        `import { Client } from "agent-director";\n` +
+          `const c = await Client.create({ storePath: ${store}, createIfMissing: true });\n` +
+          `console.log(JSON.stringify(await c.version({})));\nc.close();\n`
       );
+      const out = await run(["bun", "run", "consumer.ts"], consumerDir, { HOME: home });
+      const line = out.split("\n").map((l) => l.trim()).find((l) => l.startsWith("{"));
+      expect((JSON.parse(line!) as { version: string }).version).toBe(TARGET_VERSION);
 
-      const consumerResult = await spawn(
-        ["bun", "run", "consumer.ts"],
-        { cwd: consumerDir, env: { HOME: sandboxedHome } }
-      );
-      expect(consumerResult.exitCode).toBe(0);
-
-      // Parse the first JSON line from stdout.
-      const jsonLine = consumerResult.stdout
-        .split("\n")
-        .map((l) => l.trim())
-        .find((l) => l.startsWith("{"));
-      expect(jsonLine).toBeDefined();
-
-      const parsed = JSON.parse(jsonLine!) as Record<string, unknown>;
-      expect(parsed.version).toBe(TARGET_VERSION);
-
-      // -----------------------------------------------------------------------
-      // Step 10: Scan installed dist/index.js for the target version literal.
-      //
-      // The original spec says /\b\d+\.\d+\.\d+\b/g → length === 0, but that
-      // regex also catches MIN_BUN_VERSION ("1.0.21") in platformResolve.ts —
-      // a legitimate constant that is NOT a version-stamp inlining bug.
-      // The actual regression we guard is: bun build must NOT inline the npm
-      // package version ("9.9.9") into dist/. Epic 3 makes version() resolve
-      // from package.json at runtime, so TARGET_VERSION must be absent here.
-      // -----------------------------------------------------------------------
-
-      const installedDistJs = join(
-        consumerDir,
-        "node_modules",
-        "agent-director",
-        "dist",
-        "index.js"
-      );
-      expect(existsSync(installedDistJs)).toBe(true);
-
-      const distSrc = readFileSync(installedDistJs, "utf8");
-      // Must not contain the package version literal — indicates bun build
-      // inlined it rather than deferring to the package.json runtime read.
+      const installed = join(consumerDir, "node_modules", "agent-director");
+      const distSrc = readFileSync(join(installed, "dist", "index.js"), "utf8");
       expect(distSrc).not.toContain(`"${TARGET_VERSION}"`);
       expect(distSrc).not.toContain(`'${TARGET_VERSION}'`);
-
+      expect(existsSync(join(installed, "dist", "version-floor.json"))).toBe(true);
+      expect(existsSync(join(consumerDir, "node_modules", "@agent-director"))).toBe(false);
     } finally {
-      // -----------------------------------------------------------------------
-      // Step 11: Cleanup — remove all three temp dirs on both pass and fail.
-      // -----------------------------------------------------------------------
-      rmSync(stageDir, { recursive: true, force: true });
-      rmSync(consumerDir, { recursive: true, force: true });
-      rmSync(sandboxedHome, { recursive: true, force: true });
+      for (const d of [stageDir, consumerDir, home]) rmSync(d, { recursive: true, force: true });
     }
 
-    // -----------------------------------------------------------------------
-    // Step 12: Post-cleanup sentinel assertion — live tree must be unchanged.
-    // -----------------------------------------------------------------------
-
-    expect(readFileSync(liveUmbrellaPkg, "utf8")).toBe(sentinels.umbrellaRaw);
-
-    if (sentinels.distHash !== null) {
-      expect(sha256OfFile(liveDistIndexJs)).toBe(sentinels.distHash);
-    }
+    expect(readFileSync(livePkg, "utf8")).toBe(before.pkg);
+    if (before.dist !== null) expect(sha256(liveDist)).toBe(before.dist);
   },
   120_000
 );

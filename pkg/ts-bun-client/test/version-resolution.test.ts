@@ -1,179 +1,66 @@
 /**
- * version-resolution.test.ts — cache test for loadNpmPackageVersion().
+ * version-resolution.test.ts — SR-2.3: each Client reads package.json once and
+ * caches the version; b.vod: a readFile error other than not-found propagates.
  *
- * Verifies that the per-instance #npmPkgVersion cache in SubprocessClient
- * causes package.json to be read from disk exactly once per instance, even
- * when version() is called multiple times (SR-2.3).
- *
- * Strategy: mock node:fs/promises to count readFile calls. The mock uses
- * Bun.file() internally rather than delegating to the real readFile because
- * Bun applies mock.module to the current file's own imports as well — any
- * attempt to import and call the "original" readFile from within this file
- * causes infinite recursion. Bun.file() is a Bun-native API that is not
- * routed through node:fs/promises and therefore is unaffected by the mock.
+ * node:fs/promises is mocked to count readFile calls. The mock reads through
+ * Bun.file, since mock.module also applies to this file's own imports.
  */
 
-import { test, expect, describe, beforeEach, afterAll, mock } from "bun:test";
+import { test, expect, beforeEach, afterAll, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PKG_VERSION, openClient, withProcessEnv } from "./internal/helper.js";
 
-import { Client } from "../src/client.js";
-import { withProcessEnv } from "./internal/helper.js";
-
-const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
-
-// ---------------------------------------------------------------------------
-// readFile spy — counts calls made by loadNpmPackageVersion() inside
-// subprocessClient.ts. Reset in beforeEach so each test starts at zero.
-//
-// `throwOnNextReadFile`, when set, makes the next readFile call throw the
-// supplied error and resets the latch. Used by the b.vod regression to
-// inject a non-fallback error and assert it propagates.
-// ---------------------------------------------------------------------------
-let readFileCallCount = 0;
-let throwOnNextReadFile: Error | null = null;
+let readFileCalls = 0;
+let failNextRead: Error | null = null;
 
 mock.module("node:fs/promises", () => ({
-  readFile: async (
-    url: string | URL,
-    options?: string | { encoding?: string }
-  ) => {
-    readFileCallCount++;
-    if (throwOnNextReadFile) {
-      const e = throwOnNextReadFile;
-      throwOnNextReadFile = null;
+  readFile: async (url: string | URL, options?: string | { encoding?: string }) => {
+    readFileCalls++;
+    if (failNextRead) {
+      const e = failNextRead;
+      failNextRead = null;
       throw e;
     }
-    // Use Bun.file (not node:fs/promises) to avoid circular recursion.
     const text = await Bun.file(url).text();
-    const enc =
-      typeof options === "string" ? options : options?.encoding;
-    return enc ? text : Buffer.from(text);
+    return (typeof options === "string" ? options : options?.encoding) ? text : Buffer.from(text);
   },
 }));
 
-// ---------------------------------------------------------------------------
-// Temp dir management
-// ---------------------------------------------------------------------------
-const tmpDirs: string[] = [];
-
-function makeTmpDir(): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "ad-vr-"));
-  tmpDirs.push(d);
-  return d;
-}
-
-afterAll(() => {
-  for (const d of tmpDirs.splice(0)) {
-    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
-  }
-});
-
-// Release the mock.module spy so it doesn't leak into other test files loaded
-// in the same bun process after this suite finishes.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ad-vr-"));
 afterAll(() => {
   mock.restore();
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+beforeEach(() => {
+  readFileCalls = 0;
 });
 
-function makeClient(fixturePath: string): Promise<Client> {
-  const dir = makeTmpDir();
-  return Client.create({
-    storePath: path.join(dir, "state.db"),
-    createIfMissing: true,
-    callTimeoutMs: 5000,
-    _cliPath: fixturePath,
-  } as unknown as Parameters<typeof Client.create>[0]);
-}
+const FIXTURE = path.resolve(import.meta.dir, "fixtures/epic-a/sleep-and-respond.js");
+const makeClient = () => openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: FIXTURE, callTimeoutMs: 5000 });
 
-// ---------------------------------------------------------------------------
-// Cache tests
-// ---------------------------------------------------------------------------
-describe("loadNpmPackageVersion cache (SR-3.3)", () => {
-  beforeEach(() => {
-    readFileCallCount = 0;
+test("two Clients each read package.json once across two version() calls", async () => {
+  const [c1, c2] = [await makeClient(), await makeClient()];
+  await withProcessEnv({ SLEEP_MS: "0" }, async () => {
+    expect((await c1.version({})).version).toBe(PKG_VERSION);
+    expect(readFileCalls).toBe(1);
+    expect((await c1.version({})).version).toBe(PKG_VERSION);
+    expect(readFileCalls).toBe(1);
+    await c2.version({});
+    await c2.version({});
+    expect(readFileCalls).toBe(2);
   });
+}, 15_000);
 
-  test(
-    "version() reads package.json exactly once across two calls (second is cache hit)",
-    async () => {
-      const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-      const client = await makeClient(fixturePath);
-
-      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
-        type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
-        const c = client as unknown as ClientV;
-
-        // Read expected version via Bun.file (not through the mocked readFile)
-        // so the assertion is independent of the spy.
-        const pkgVersion = (
-          JSON.parse(
-            await Bun.file(new URL("../package.json", import.meta.url)).text()
-          ) as { version: string }
-        ).version;
-
-        const r1 = await c.version({});
-        const r2 = await c.version({});
-
-        // Both calls return the correct npm package version.
-        expect(r1.version).toBe(pkgVersion);
-        expect(r2.version).toBe(pkgVersion);
-
-        // package.json was read exactly once: loadNpmPackageVersion() runs on
-        // the first version() call and caches the result in #npmPkgVersion.
-        // The second call skips loadNpmPackageVersion() entirely.
-        expect(readFileCallCount).toBe(1);
-      });
-    },
-    { timeout: 15000 }
-  );
-
-  test(
-    "b.vod: non-fallback readFile error propagates instead of being silently swallowed",
-    async () => {
-      const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-      const client = await makeClient(fixturePath);
-
-      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
-        try {
-          // Inject a real (non-MODULE_NOT_FOUND / non-ENOENT) error. Pre-fix the
-          // catch in loadNpmPackageVersion would swallow this and fall back; post-
-          // fix the catch is narrowed to import.meta.resolve() only and any
-          // readFile error must propagate.
-          const eacces = new Error("EACCES: permission denied");
-          (eacces as unknown as { code: string }).code = "EACCES";
-          throwOnNextReadFile = eacces;
-
-          type ClientV = { version(p: object): Promise<unknown> };
-          const c = client as unknown as ClientV;
-
-          await expect(c.version({})).rejects.toThrow(/EACCES/);
-        } finally {
-          throwOnNextReadFile = null;
-        }
-      });
-    },
-    { timeout: 15000 }
-  );
-
-  test(
-    "two independent SubprocessClient instances each read package.json once",
-    async () => {
-      const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-      const c1 = (await makeClient(fixturePath)) as unknown as { version(p: object): Promise<{ version: string }> };
-      const c2 = (await makeClient(fixturePath)) as unknown as { version(p: object): Promise<{ version: string }> };
-
-      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
-        await c1.version({});
-        await c1.version({}); // cache hit on c1
-
-        await c2.version({});
-        await c2.version({}); // cache hit on c2
-
-        // Two instances, each reads once: total = 2.
-        expect(readFileCallCount).toBe(2);
-      });
-    },
-    { timeout: 15000 }
-  );
-});
+test("b.vod: a non-fallback readFile error propagates instead of being swallowed", async () => {
+  const client = await makeClient();
+  await withProcessEnv({ SLEEP_MS: "0" }, async () => {
+    failNextRead = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    try {
+      await expect(client.version({})).rejects.toThrow(/EACCES/);
+    } finally {
+      failNextRead = null;
+    }
+  });
+}, 15_000);

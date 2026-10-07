@@ -1,70 +1,48 @@
 /**
- * types-exports.test.ts — verify that Params/Result types and error classes
- * are correctly exported from the package (T4 subtask 9y).
- *
- * (a) Runtime: assert representative runtime exports (error classes, factory,
- *     Client) exist on the package namespace.
- * (b) Compile-time: @ts-expect-error block proves omitting SpawnParams.cwd
- *     (a required field) is a type error caught by `bun run typecheck`.
+ * types-exports.test.ts — the package root's runtime exports (SR-4), the
+ * vendored-binary classes' removal (SR-4.6, b.ue3), and type-level pins checked
+ * by `bun run typecheck`.
  */
 
-import { test, expect, describe } from "bun:test";
+import { test, expect } from "bun:test";
+import * as ad from "../src/index.js";
 import type { SpawnParams } from "../src/types.js";
+import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
-// ---------------------------------------------------------------------------
-// (a) Runtime assertions — interfaces are type-erased; we check runtime values.
-// ---------------------------------------------------------------------------
-describe("types-exports: runtime namespace", () => {
-  test("error classes are exported as constructor functions", async () => {
-    const mod = await import("../src/index.js");
-    expect(typeof mod.AgentDirectorError).toBe("function");
-    expect(typeof mod.ErrSpawnNotFound).toBe("function");
-    expect(typeof mod.ErrClientClosed).toBe("function");
-    expect(typeof mod.ErrTmuxNotAvailable).toBe("function");
-    expect(typeof mod.ErrCwdMissing).toBe("function");
-    expect(typeof mod.errorFromEnvelope).toBe("function");
-    expect(typeof mod.Client).toBe("function");
-  });
+const mod = ad as Record<string, unknown>;
 
-  test("all catalog error subclasses are exported", async () => {
-    const mod = await import("../src/index.js") as Record<string, unknown>;
-    // Derive the expected list from the canonical catalog (same source
-    // error-map.test.ts uses) so it can't drift when catalog entries are
-    // added/removed. Every catalog err_name must be re-exported at the
-    // package root as a constructor function.
-    const catalogNames = loadErrNameCatalog(); // sorted unique array of names
-    expect(catalogNames.length).toBeGreaterThan(0);
-    for (const name of catalogNames) {
-      expect(typeof mod[name], `${name} should be a function`).toBe("function");
-    }
-  });
-
-  test("errorFromEnvelope produces typed subclasses", async () => {
-    const { errorFromEnvelope, ErrSpawnNotFound, AgentDirectorError } =
-      await import("../src/errors.js");
-    const err = errorFromEnvelope("status", "ErrSpawnNotFound", "no such spawn");
-    expect(err).toBeInstanceOf(ErrSpawnNotFound);
-    expect(err).toBeInstanceOf(AgentDirectorError);
-    expect(err.errName).toBe("ErrSpawnNotFound");
-    expect(err.verb).toBe("status");
-  });
+test("every catalog and TS-only error class, the factory, Client and resolveSystemBinary are exported", () => {
+  const names = [
+    ...loadErrNameCatalog(), ...TS_ONLY_ERROR_NAMES,
+    "AgentDirectorError", "errorFromEnvelope", "Client", "resolveSystemBinary",
+  ];
+  for (const name of names) expect(typeof mod[name], name).toBe("function");
+  expect(typeof ad.MIN_BINARY_VERSION).toBe("string");
 });
 
-// ---------------------------------------------------------------------------
-// (b) Compile-time assertion — processed by `bun run typecheck` (tsc --noEmit).
-//
-// tsconfig.json now includes test/**/* so tsc checks this file.
-//
-// The @ts-expect-error below proves SpawnParams.cwd is required. If cwd is
-// ever made optional, tsc will report "Unused '@ts-expect-error' directive"
-// and the typecheck gate will fail — keeping CI honest.
-// ---------------------------------------------------------------------------
+test("DEV_SENTINEL_VERSION is the literal '0.0.0-dev' (SR-4.5)", () => {
+  // Typecheck fails if the constant widens to `string`.
+  const x: "0.0.0-dev" = ad.DEV_SENTINEL_VERSION;
+  expect(x).toBe("0.0.0-dev");
+});
 
+test("vendored-binary error classes are gone (SR-4.6)", () => {
+  for (const name of ["ErrUnsupportedPlatform", "ErrPlatformPackageMissing", "ErrCliNotExecutable"]) {
+    expect(mod[name], name).toBeUndefined();
+  }
+  // @ts-expect-error — removed in b.ue3
+  void ad.ErrUnsupportedPlatform;
+  // @ts-expect-error — removed in b.ue3
+  void ad.ErrPlatformPackageMissing;
+  // @ts-expect-error — removed in b.ue3
+  void ad.ErrCliNotExecutable;
+});
+
+// Typecheck: SpawnParams.cwd is required; tsc reports an unused directive if it becomes optional.
 function _assertSpawnParamsCwdIsRequired(): void {
-  // @ts-expect-error — SpawnParams.cwd is required; omitting it is a type error.
+  // @ts-expect-error — SpawnParams.cwd is required
   const _bad: SpawnParams = {};
   void _bad;
 }
-// Reference the function so noUnusedLocals does not flag it.
 void _assertSpawnParamsCwdIsRequired;

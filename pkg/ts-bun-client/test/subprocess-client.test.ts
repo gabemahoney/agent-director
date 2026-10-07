@@ -1,433 +1,74 @@
 /**
- * subprocess-client.test.ts — unit tests for SubprocessClient (Task A6).
+ * subprocess-client.test.ts — the subprocess Client against fixture binaries:
+ * a rejected call does not wedge the queue (SR-3.3), timeout → ErrCallTimeout
+ * (SR-6.2/6.5), a signal → ErrConsumerSignal (SR-5.2), version() reports the
+ * package version (b.6o1), and storePath, home and tmuxCommand reach the CLI
+ * verbatim (b.38a). callTimeoutMs validation (SR-6.1) is adviceFollow.test.ts K1.
  *
- * Tests SRD SR-3 (per-Client serialization queue), SR-5.2 (ErrConsumerSignal),
- * SR-6.1–6.5 (callTimeoutMs validation + ErrCallTimeout), plus a public-surface
- * smoke check that index.ts exports are unchanged.
- *
- * Seven behaviour cases:
- *   1. callTimeoutMs <= 0 at construction → throws config error.
- *   2. Serialization: 5 parallel calls execute strictly in order (no overlap).
- *   3. Rejection-does-not-wedge-queue: call N rejects, call N+1 succeeds.
- *   4. Timeout: fixture sleeping > callTimeoutMs → rejects with ErrCallTimeout.
- *   5. Signal: fixture self-SIGINTs → rejects with ErrConsumerSignal.
- *   6. Public-surface smoke: index.ts exports unchanged (Client + typed errors present).
- *   7. storePath / home / tmuxCommand forwarded verbatim, `~` unexpanded (b.38a).
- *
- * IMPORT NOTE: Expected exports from src/internal/subprocessClient.ts:
- *   SubprocessClient class — constructor takes ClientOptions (with callTimeoutMs)
- *     plus a test-only _cliPath?: string option to inject a fixture binary
- *     instead of resolving via platformResolve.
- *   If the engineer names the test hook differently (e.g. _testCliPath or
- *   cliPathOverride), update the opts object in the helper below.
- *
- * The SubprocessClient must be distinct from the public Client (which still
- * uses FFI during Epic A); this file imports from src/internal/ directly.
- *
- * ENV INHERITANCE NOTE (Bun-specific, SR-1.4): Bun.spawn without an explicit
- * `env` option snapshots the OS-level env at process start, not at spawn time.
- * Runtime changes to process.env (e.g., LOG_FILE set in a test) are NOT seen
- * by subprocesses unless the spawner passes `env: { ...process.env }`.
- * SR-1.4 requires the subprocess to inherit the consumer's env at call time;
- * the engineer must use `env: { ...process.env }` in the Bun.spawn call.
- * Tests in this file depend on this behaviour for LOG_FILE / CALL_MARKER_FILE.
+ * The Client passes process.env to each call (SR-1.4), which the fixtures read.
  */
 
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { Client } from "../src/client.js";
 import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
-import { withProcessEnv } from "./internal/helper.js";
-// b.6o1: version() now overrides the CLI's version field with the npm
-// package version. Read at runtime (SR-3.2: no build-time JSON import).
-let pkgVersion: string;
-beforeAll(async () => {
-  const json = await Bun.file(new URL("../package.json", import.meta.url)).text();
-  pkgVersion = (JSON.parse(json) as { version: string }).version;
-});
-
-// Case 6 reads src/index.ts as source text to avoid triggering the module-level
-// FFI bootstrap (bootstrapFfi.ts → resolveNativePath() throws when the native
-// .so is absent). The source-text check is a reliable proxy: src/index.ts is a
-// pure re-export barrel, so verifying each export name is listed there is
-// sufficient to catch accidental removals without loading the FFI module.
-const INDEX_SRC = fs.readFileSync(
-  path.resolve(import.meta.dir, "../src/index.ts"),
-  "utf-8"
-);
+import { PKG_VERSION, openClient, rejection, withProcessEnv } from "./internal/helper.js";
 
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ad-sct-"));
+afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-// ---------------------------------------------------------------------------
-// Temp dir management
-// ---------------------------------------------------------------------------
-const tmpDirs: string[] = [];
-
-function makeTmpDir(): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), "ad-sct-"));
-  tmpDirs.push(d);
-  return d;
+/** A Client on a fresh temp store whose CLI is the named fixture. */
+function makeClient(fixture: string, extra: Record<string, unknown> = {}) {
+  return openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: path.join(FIXTURES, fixture), callTimeoutMs: 5000, ...extra });
 }
 
-afterAll(() => {
-  for (const d of tmpDirs.splice(0)) {
-    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
-  }
-});
+test("call N rejects (subprocess crash) → call N+1 still succeeds", async () => {
+  await withProcessEnv({ CALL_MARKER_FILE: path.join(tmp, `${crypto.randomUUID()}-marker`) }, async () => {
+    const client = await makeClient("first-call-fails.js");
+    expect(await rejection(client.version({}))).toBeInstanceOf(Error);
+    expect(await client.version({})).toMatchObject({ version: PKG_VERSION, commit: "abc123" });
+  });
+}, 15_000);
 
-/** Builds a valid ClientOptions object pointing at a fresh temp store. */
-function makeOpts(
-  overrides: Record<string, unknown> = {}
-): Record<string, unknown> {
-  const dir = makeTmpDir();
-  return {
-    storePath: path.join(dir, "state.db"),
-    createIfMissing: true,
-    callTimeoutMs: 5000,
-    ...overrides,
-  };
-}
-
-/** Constructs a Client pointed at a fixture binary for testing. */
-function makeClient(fixturePath: string, overrides: Record<string, unknown> = {}): Promise<Client> {
-  return Client.create(
-    makeOpts({
-      // Test hook: inject a custom binary path so the client uses our fixture
-      // instead of the real platformResolve path.
-      // Engineer: if you named this differently (e.g. _testCliPath), update here.
-      _cliPath: fixturePath,
-      ...overrides,
-    }) as unknown as Parameters<typeof Client.create>[0]
+test("a fixture sleeping past callTimeoutMs → ErrCallTimeout (not ErrConsumerSignal) within the grace period", async () => {
+  const start = Date.now();
+  const err = await withProcessEnv({ SLEEP_MS: "10000" }, async () =>
+    rejection((await makeClient("sleep-and-respond.js", { callTimeoutMs: 300 })).version({}))
   );
-}
+  expect(err).toBeInstanceOf(ErrCallTimeout);
+  expect(err).not.toBeInstanceOf(ErrConsumerSignal);
+  // callTimeoutMs + 2 s SIGTERM grace + 2 s margin.
+  expect(Date.now() - start).toBeLessThan(300 + 2000 + 2000);
+}, 10_000);
 
-// ---------------------------------------------------------------------------
-// Case 1: callTimeoutMs <= 0 → throws at construction
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — callTimeoutMs validation", () => {
-  test("callTimeoutMs: 0 → throws config error at construction", async () => {
-    const fixturePath = path.join(FIXTURES, "success.sh");
-    await expect(makeClient(fixturePath, { callTimeoutMs: 0 })).rejects.toThrow();
+test("a fixture that SIGINTs itself → ErrConsumerSignal carrying the signal", async () => {
+  const err = await rejection((await makeClient("self-sigint.sh")).version({}));
+  expect(err).toBeInstanceOf(ErrConsumerSignal);
+  expect((err as ErrConsumerSignal).signal).toBe("SIGINT");
+}, 15_000);
+
+test("b.6o1: version() reports the package version over the CLI's stamp; commit passes through", async () => {
+  await withProcessEnv({ SLEEP_MS: "0" }, async () => {
+    // The fixture answers {"version":"fixture-1.0.0","commit":"aabbccddeeff"}.
+    expect(await (await makeClient("sleep-and-respond.js")).version({})).toEqual({ version: PKG_VERSION, commit: "aabbccddeeff" });
   });
+}, 10_000);
 
-  test("callTimeoutMs: -1 → throws config error at construction", async () => {
-    const fixturePath = path.join(FIXTURES, "success.sh");
-    await expect(makeClient(fixturePath, { callTimeoutMs: -1 })).rejects.toThrow();
-  });
-
-  test("callTimeoutMs: 1 (positive) → does NOT throw at construction", async () => {
-    const fixturePath = path.join(FIXTURES, "success.sh");
-    await expect(makeClient(fixturePath, { callTimeoutMs: 1 })).resolves.toBeDefined();
-  });
-
-  test("callTimeoutMs omitted → uses default (30000), does NOT throw", async () => {
-    const fixturePath = path.join(FIXTURES, "success.sh");
-    const opts = makeOpts({ _cliPath: fixturePath });
-    delete (opts as Record<string, unknown>)["callTimeoutMs"];
-    await expect(Client.create(opts as unknown as Parameters<typeof Client.create>[0])).resolves.toBeDefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Case 2: Serialization — 5 parallel calls execute in strictly serial order
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — per-Client call serialization (SR-3)", () => {
-  test(
-    "5 concurrent version() calls execute strictly serially (no start/end overlap)",
-    async () => {
-      const logFile = path.join(makeTmpDir(), "serial.log");
-      await withProcessEnv({ LOG_FILE: logFile }, async () => {
-        const fixturePath = path.join(FIXTURES, "serialization-recorder.js");
-        // The fixture has #!/usr/bin/env bun + chmod +x, so passing the path
-        // directly is correct; Bun.spawn() will use the shebang interpreter.
-        const client = await makeClient(fixturePath, { callTimeoutMs: 15000 });
-        // Fire 5 calls simultaneously.
-        await Promise.all([
-          (client as unknown as { version(p: object): Promise<unknown> }).version({}),
-          (client as unknown as { version(p: object): Promise<unknown> }).version({}),
-          (client as unknown as { version(p: object): Promise<unknown> }).version({}),
-          (client as unknown as { version(p: object): Promise<unknown> }).version({}),
-          (client as unknown as { version(p: object): Promise<unknown> }).version({}),
-        ]);
-      });
-
-      // Parse the log file: each call writes "T START" then "T END" lines.
-      const lines = fs.readFileSync(logFile, "utf-8").trim().split("\n");
-      // 5 calls × 2 lines = 10 lines.
-      expect(lines.length).toBe(10);
-
-      // Verify no START comes before the previous END.
-      interface Entry { ts: number; kind: "START" | "END" }
-      const entries: Entry[] = lines.map((l) => {
-        const [ts, kind] = l.split(" ");
-        return { ts: parseInt(ts, 10), kind: kind as "START" | "END" };
-      });
-
-      for (let i = 1; i < entries.length; i++) {
-        const prev = entries[i - 1];
-        const curr = entries[i];
-        if (curr.kind === "START" && prev.kind === "END") {
-          // A new call starting after the previous one ended — correct.
-          expect(curr.ts).toBeGreaterThanOrEqual(prev.ts);
-        } else if (curr.kind === "END" && prev.kind === "START") {
-          // Within a single call: END after START — correct.
-          expect(curr.ts).toBeGreaterThanOrEqual(prev.ts);
-        }
-        // Two consecutive STARTs would indicate parallel execution — should not happen.
-        expect(!(curr.kind === "START" && prev.kind === "START")).toBe(true);
-      }
-    },
-    { timeout: 30000 }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Case 3: Rejection does not wedge the queue (SR-3.3)
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — rejection does not wedge queue", () => {
-  test(
-    "call N rejects (subprocess-crash) → call N+1 still succeeds",
-    async () => {
-      const markerFile = path.join(makeTmpDir(), "first-call-marker");
-      await withProcessEnv({ CALL_MARKER_FILE: markerFile }, async () => {
-        // Use "bun <script>" as the binary so the fixture JS runs.
-        const fixturePath = path.join(FIXTURES, "first-call-fails.js");
-        const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
-
-        type ClientWithVersion = { version(p: object): Promise<unknown> };
-        const c = client as unknown as ClientWithVersion;
-
-        // First call: fixture exits 1 → spawner throws subprocess-crash error.
-        let firstError: unknown;
-        try {
-          await c.version({});
-        } catch (e) {
-          firstError = e;
-        }
-        expect(firstError).toBeDefined();
-        expect(firstError).toBeInstanceOf(Error);
-
-        // Second call: fixture succeeds (marker file exists now).
-        const result = await c.version({});
-        expect(result).toBeDefined();
-        // The fixture returns {"version":"ok-after-fail","commit":"abc123"}.
-        // b.6o1: the wrapper overrides .version with the npm package version,
-        // but .commit still passes through unchanged.
-        const r = result as Record<string, unknown>;
-        expect(r["version"]).toBe(pkgVersion);
-        expect(r["commit"]).toBe("abc123");
-      });
-    },
-    { timeout: 15000 }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Case 4: Timeout → ErrCallTimeout (SR-6.2, NOT ErrConsumerSignal)
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — timeout", () => {
-  test(
-    "fixture sleeping > callTimeoutMs → rejects with ErrCallTimeout within callTimeoutMs + 4s",
-    async () => {
-      const start = Date.now();
-      let caught: unknown;
-
-      // The fixture sleeps 10 s — much longer than callTimeoutMs.
-      await withProcessEnv({ SLEEP_MS: "10000" }, async () => {
-        try {
-          const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-          const client = await makeClient(fixturePath, { callTimeoutMs: 300 });
-          type ClientV = { version(p: object): Promise<unknown> };
-          await (client as unknown as ClientV).version({});
-        } catch (e) {
-          caught = e;
-        }
-      });
-
-      const elapsed = Date.now() - start;
-
-      expect(caught).toBeDefined();
-      expect(caught).toBeInstanceOf(ErrCallTimeout);
-      expect(caught).not.toBeInstanceOf(ErrConsumerSignal);
-
-      const err = caught as InstanceType<typeof ErrCallTimeout>;
-      expect(err.name).toBe("ErrCallTimeout");
-      expect(err.errName).toBe("ErrCallTimeout");
-
-      // Must have resolved within callTimeoutMs(300) + 2s graceful + 2s test margin.
-      expect(elapsed).toBeLessThan(300 + 2000 + 2000);
-    },
-    { timeout: 10000 }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Case 5: Signal → ErrConsumerSignal (SR-5.2)
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — signal handling", () => {
-  test(
-    "fixture self-SIGINTs → rejects with ErrConsumerSignal",
-    async () => {
-      let caught: unknown;
-      try {
-        const fixturePath = path.join(FIXTURES, "self-sigint.sh");
-        const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
-        type ClientV = { version(p: object): Promise<unknown> };
-        await (client as unknown as ClientV).version({});
-      } catch (e) {
-        caught = e;
-      }
-
-      expect(caught).toBeDefined();
-      expect(caught).toBeInstanceOf(ErrConsumerSignal);
-
-      const err = caught as InstanceType<typeof ErrConsumerSignal>;
-      expect(err.name).toBe("ErrConsumerSignal");
-      expect(err.errName).toBe("ErrConsumerSignal");
-
-      // Signal name must be surfaced somewhere.
-      const e = err as unknown as Record<string, unknown>;
-      const hasSignalInfo =
-        err.message.includes("SIGINT") ||
-        (typeof e["signal"] === "string" && e["signal"] === "SIGINT");
-      expect(hasSignalInfo).toBe(true);
-    },
-    { timeout: 15000 }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// b.6o1 regression: version() returns npm package version, not CLI build stamp
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — version() returns npm package version (b.6o1)", () => {
-  test(
-    "CLI returns git-describe version → wrapper overrides with pkg.json version; commit passes through",
-    async () => {
-      // sleep-and-respond.js emits {"version":"fixture-1.0.0","commit":"aabbccddeeff"}.
-      // With SLEEP_MS=0 it responds immediately, simulating a CLI build-stamp
-      // version distinct from the npm package version.
-      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
-        const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-        const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
-        type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
-        const result = await (client as unknown as ClientV).version({});
-
-        // The wrapper substitutes its own pkg.json version regardless of what
-        // the CLI emitted ("fixture-1.0.0" here).
-        expect(result.version).toBe(pkgVersion);
-        expect(result.version).not.toBe("fixture-1.0.0");
-        // commit is passed through unchanged from the CLI envelope.
-        expect(result.commit).toBe("aabbccddeeff");
-      });
-    },
-    { timeout: 10000 }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// b.38a: storePath, home and tmuxCommand reach the CLI verbatim
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — storePath, home and tmuxCommand forwarded verbatim (b.38a)", () => {
-  // The CLI expands `~`; the client must not, whatever HOME holds (undefined unsets it).
-  test.each([
-    ["HOME set", "/b-38a/home"],
-    ["HOME empty", ""],
-    ["HOME unset", undefined],
-  ])("%s: `~` values reach the CLI as given, with no os.homedir() path", async (_label, home) => {
-    const argvFile = path.join(makeTmpDir(), "argv");
-    await withProcessEnv({ HOME: home, ARGV_FILE: argvFile }, async () => {
-      const client = await makeClient(path.join(FIXTURES, "argv-recorder.sh"), {
-        storePath: "~/x.db",
-        home: "~",
-        tmuxCommand: "~/bin/tmux",
-      });
-      await client.version({});
-
-      const argv = fs.readFileSync(argvFile, "utf-8").split("\n").slice(0, -1);
-      expect(argv).toEqual([
-        "--store-path", "~/x.db",
-        "--home", "~",
-        "--tmux-command", "~/bin/tmux",
-        "version",
-      ]);
-      expect(argv.join("\n")).not.toContain(os.homedir());
-    });
+// b.38a: the CLI expands `~`; the client must not, whatever HOME holds (undefined unsets it).
+test.each([
+  ["HOME set", "/b-38a/home"],
+  ["HOME empty", ""],
+  ["HOME unset", undefined],
+])("%s: `~` values reach the CLI as given, with no os.homedir() path", async (_label, home) => {
+  const argvFile = path.join(tmp, `${crypto.randomUUID()}-argv`);
+  await withProcessEnv({ HOME: home, ARGV_FILE: argvFile }, async () => {
+    const client = await makeClient("argv-recorder.sh", { storePath: "~/x.db", home: "~", tmuxCommand: "~/bin/tmux" });
+    await client.version({});
+    const argv = fs.readFileSync(argvFile, "utf-8").split("\n").slice(0, -1);
+    expect(argv).toEqual(["--store-path", "~/x.db", "--home", "~", "--tmux-command", "~/bin/tmux", "version"]);
+    expect(argv.join("\n")).not.toContain(os.homedir());
   });
 });
-
-// ---------------------------------------------------------------------------
-// Case 6: Public surface smoke — index.ts exports
-// ---------------------------------------------------------------------------
-describe("Client — public index.ts surface", () => {
-  // Exports preserved across the b.ue3 / Stream A cutover.
-  const expectedExports = [
-    "Client",
-    "AgentDirectorError",
-    "ErrClientClosed",
-    "ErrBunVersionTooOld",
-    "errorFromEnvelope",
-    // Catalog-derived (33 entries).
-    "ErrCwdMissing",
-    "ErrCwdNotAPath",
-    "ErrCwdNotFound",
-    "ErrCwdNotADirectory",
-    "ErrRelayModeInvalid",
-    "ErrSpawnDeniedFlag",
-    "ErrReservedEnvKey",
-    "ErrInstanceIdCollision",
-    "ErrTmuxSessionNameEmpty",
-    "ErrTmuxSessionNameInvalid",
-    "ErrTmuxSessionNameTooLong",
-    "ErrSpawnNotFound",
-    "ErrTmuxNotAvailable",
-    "ErrTmuxSessionCreate",
-    "ErrTmuxSendKeys",
-    "ErrTmuxCaptureFailed",
-    "ErrSpawnNotInteractive",
-    "ErrSendKeysWhileRelayed",
-    "ErrSpawnNotPausable",
-    "ErrPauseTimeout",
-    "ErrListInvalidLabel",
-    "ErrTemplateNameUnsafe",
-    "ErrTemplateNotFound",
-    "ErrTemplateMalformed",
-    "ErrTemplateExists",
-    "ErrProbeUnsupported",
-    "ErrSpawnNotResumable",
-    "ErrNoSessionId",
-    "ErrJsonlMissing",
-    "ErrRelayModeOff",
-    "ErrInvalidDecision",
-    "ErrNoOpenPermissionRequest",
-    "ErrAlreadyDecided",
-  ] as const;
-
-  test.each([...expectedExports])("index.ts still exports %s", (name) => {
-    expect(INDEX_SRC).toContain(name);
-  });
-
-  test("Epic-A pipeline TS-only errors still exported", () => {
-    expect(INDEX_SRC).toContain("ErrConsumerSignal");
-    expect(INDEX_SRC).toContain("ErrCallTimeout");
-    expect(INDEX_SRC).toContain("ErrUnknownErrorName");
-  });
-
-  test("b.ue3 / Stream A new exports present", () => {
-    expect(INDEX_SRC).toContain("ErrSystemInstallNotFound");
-    expect(INDEX_SRC).toContain("ErrSystemInstallTooOld");
-    expect(INDEX_SRC).toContain("ErrSystemInstallUnreachable");
-    expect(INDEX_SRC).toContain("resolveSystemBinary");
-    expect(INDEX_SRC).toContain("MIN_BINARY_VERSION");
-    expect(INDEX_SRC).toContain("DEV_SENTINEL_VERSION");
-  });
-
-  test("b.ue3 / Stream A: vendored-binary error classes removed", () => {
-    expect(INDEX_SRC).not.toContain("ErrUnsupportedPlatform");
-    expect(INDEX_SRC).not.toContain("ErrPlatformPackageMissing");
-    expect(INDEX_SRC).not.toContain("ErrCliNotExecutable");
-  });
-});
-

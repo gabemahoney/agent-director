@@ -1,44 +1,28 @@
 /**
- * errors-catalog-drift.test.ts
- *
- * Regression gate: asserts that the set of AgentDirectorError subclasses
- * exported by src/errors.ts exactly equals the shared err_name catalog at
- * pkg/api/errnames/catalog.json (produced by Epic 1's `go generate` mechanism).
- *
- * TS-only subclasses (ErrClientClosed, ErrBunVersionTooOld,
- * ErrConsumerSignal, ErrCallTimeout, ErrUnknownErrorName, plus the three
- * b.ue3 system-install errors ErrSystemInstallNotFound /
- * ErrSystemInstallTooOld / ErrSystemInstallUnreachable) are excluded via
- * the centralized allow-list at src/internal/tsOnlyErrors.ts.
- *
- * Must run in < 100 ms (pure in-process, no subprocess).
+ * errors-catalog-drift.test.ts — regression gate: the AgentDirectorError
+ * subclasses src/errors.ts exports equal the shared err_name catalog
+ * (pkg/api/errnames/catalog.json), less the TS-only allow-list. A failure names
+ * each drifted class on its side (the ts-bun-5 testplan injects ErrFake).
  */
 import { test, expect } from "bun:test";
 import * as errors from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
-import { compareSets } from "./internal/driftCompare.js";
 
 test("TS subclasses equal shared err_name catalog", () => {
-  // Collect constructor names of every AgentDirectorError subclass.
-  const tsNames = Object.entries(errors)
-    .filter(
-      ([k, v]) =>
-        typeof v === "function" &&
-        k.startsWith("Err") &&
-        (v as { prototype: unknown }).prototype instanceof errors.AgentDirectorError
-    )
-    .map(([k]) => k);
-
-  // Load catalog names (sorted, unique).
-  const catalogNames = loadErrNameCatalog();
-
-  // Allow-list: TS-only subclasses with no Go catalog equivalent.
-  const allowList = Array.from(errors.TS_ONLY_ERROR_NAMES);
-
-  const result = compareSets(tsNames, catalogNames, allowList);
-
-  expect(
-    result.catalogOnly.length === 0 && result.tsOnly.length === 0,
-    result.formatted
-  ).toBe(true);
+  const allow = new Set<string>(errors.TS_ONLY_ERROR_NAMES);
+  const ts = new Set(
+    Object.entries(errors)
+      .filter(([k, v]) => k.startsWith("Err") && typeof v === "function" &&
+        (v as { prototype: unknown }).prototype instanceof errors.AgentDirectorError)
+      .map(([k]) => k)
+      .filter((k) => !allow.has(k))
+  );
+  const catalog = new Set(loadErrNameCatalog().filter((n) => !allow.has(n)));
+  const catalogOnly = [...catalog].filter((n) => !ts.has(n)).sort();
+  const tsOnly = [...ts].filter((n) => !catalog.has(n)).sort();
+  const report =
+    `errors-catalog-drift: TS subclass set != catalog\n` +
+    `  in catalog but not in TS: [${catalogOnly.join(", ")}]\n` +
+    `  in TS but not in catalog: [${tsOnly.join(", ")}]`;
+  expect(catalogOnly.length + tsOnly.length, report).toBe(0);
 });

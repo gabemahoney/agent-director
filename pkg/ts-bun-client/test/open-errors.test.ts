@@ -10,21 +10,14 @@ import * as path from "node:path";
 
 import { Client } from "../src/client.js";
 import { ErrConfigMalformed, ErrStoreOpen, ErrUnknownErrorName } from "../src/errors.js";
-import { withProcessEnv } from "./internal/helper.js";
+import { rejection, withProcessEnv } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
-
-type CreateOpts = Parameters<typeof Client.create>[0];
 
 /** What list({}) rejects with on a Client over the real CLI, given storePath (or no options). */
 async function listRejection(storePath?: string): Promise<unknown> {
-  const opts = storePath === undefined ? {} : { storePath };
-  using client = await Client.create({ ...opts, _cliPath: process.env.CLI_PATH } as unknown as CreateOpts);
-  try {
-    await client.list({});
-  } catch (e) {
-    return e;
-  }
-  throw new Error("list({}) resolved; want a rejection");
+  const opts = { ...(storePath === undefined ? {} : { storePath }), _cliPath: process.env.CLI_PATH };
+  using client = await Client.create(opts as unknown as Parameters<typeof Client.create>[0]);
+  return await rejection(client.list({}));
 }
 
 // The refusal happens whatever storePath is: the CLI cannot expand its config path first.
@@ -34,13 +27,10 @@ test.each([
 ] as const)("HOME unset, no home, %s → list() rejects with ErrStoreOpen", async (_label, withStorePath) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentdirector-open-errors-"));
   try {
-    const storePath = withStorePath ? path.join(dir, "state.db") : undefined;
-    const err = await withProcessEnv({ HOME: undefined }, () => listRejection(storePath));
+    const err = await withProcessEnv({ HOME: undefined }, () => listRejection(withStorePath ? path.join(dir, "state.db") : undefined));
     expect(err).toBeInstanceOf(ErrStoreOpen);
     expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
-    expect((err as ErrStoreOpen).errDescription).toBe(
-      "api: expand config path: expand tilde: $HOME is not defined"
-    );
+    expect((err as ErrStoreOpen).errDescription).toBe("api: expand config path: expand tilde: $HOME is not defined");
     expect(fs.readdirSync(dir)).toEqual([]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -49,10 +39,8 @@ test.each([
 
 test("refused [pause] timeout_seconds → list() rejects with ErrConfigMalformed", async () => {
   await withTempHome(async (homeDir) => {
-    const dir = path.join(homeDir, ".agent-director");
-    fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, "config.toml"), "[pause]\ntimeout_seconds = -1\n");
-
+    fs.mkdirSync(path.join(homeDir, ".agent-director"));
+    fs.writeFileSync(path.join(homeDir, ".agent-director", "config.toml"), "[pause]\ntimeout_seconds = -1\n");
     const err = await listRejection();
     expect(err).toBeInstanceOf(ErrConfigMalformed);
     expect(err).not.toBeInstanceOf(ErrUnknownErrorName);

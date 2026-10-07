@@ -1,264 +1,86 @@
 /**
- * spawn-hook-stability.test.ts — SR-8.8 / SR-1.8 (b.ue3 / Epic 5).
- *
- * Integration tests for the spawn-side hook-writing pipeline:
- *
- *  - Hook commands are absolute paths, registered in exec form (SR-22.9):
- *    `command` is the binary path verbatim and `args` is ["hook"].
- *  - No PATH-relative invocation (no bare token "agent-director", no
- *    shell-variable references).
- *  - In-place re-install at the standard install path survives — captured
- *    hook command paths remain callable after the binary is overwritten.
- *  - Symlink resolution — a symlink at the standard install path resolves
- *    to the real binary path in the captured hook command.
- *
- * Runs only when CLI_PATH is set (setup.ts preload ran).  Spawn is driven
- * directly via the CLI (subprocess) — the spawn verb writes a `claude
- * --settings <inline-json>` invocation; FAKE_TMUX_LOG captures the argv so
- * we can extract the JSON without launching real Claude.
+ * spawn-hook-stability.test.ts — SR-1.8 / SR-8.8 (b.ue3 Epic 5), driving the
+ * built CLI's spawn directly: every exec-form hook (SR-22.9: args ["hook"])
+ * names the running binary by its resolved absolute path, never PATH-relative
+ * or via a shell variable, so the path survives an in-place re-install, and a
+ * symlinked install resolves to the real binary.
  */
 
-import { test, expect, describe } from "bun:test";
-import {
-  mkdtempSync,
-  mkdirSync,
-  existsSync,
-  rmSync,
-  writeFileSync,
-  chmodSync,
-  symlinkSync,
-  copyFileSync,
-  realpathSync,
-} from "node:fs";
-import { join, dirname } from "node:path";
+import { test, expect, afterEach } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, chmodSync, symlinkSync, copyFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fakeTmuxCalls } from "./internal/helper.js";
 
-const cliPath = process.env.CLI_PATH;
-const fakeTmuxDir = process.env.FAKE_TMUX_DIR;
+const cliPath = process.env.CLI_PATH!;
+const dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
-interface SettingsJson {
-  hooks?: Record<string, Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>>;
-}
-
-function runSpawn(opts: {
-  cwd: string;
-  cliBinary: string;
-  homeDir: string;
-  fakeTmuxLog: string;
-}): { exitCode: number | null; stdout: string; stderr: string } {
-  // PATH puts fake-tmux first so the CLI's `tmux` invocation hits the stub.
-  const path = `${fakeTmuxDir}:${process.env.PATH ?? ""}`;
-  // Scrub AGENT_DIRECTOR_* env vars so the spawn doesn't try to record
-  // this test's outer Claude session as a parent (would fail FK).
-  const cleanEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v !== "string") continue;
-    if (k.startsWith("AGENT_DIRECTOR_") || k.startsWith("AD_")) continue;
-    cleanEnv[k] = v;
-  }
-  cleanEnv.HOME = opts.homeDir;
-  cleanEnv.PATH = path;
-  cleanEnv.FAKE_TMUX_LOG = opts.fakeTmuxLog;
-  const proc = Bun.spawnSync(
-    [opts.cliBinary, "spawn", "--cwd", opts.cwd],
-    { env: cleanEnv },
-  );
-  return {
-    exitCode: proc.exitCode,
-    stdout: new TextDecoder().decode(proc.stdout),
-    stderr: new TextDecoder().decode(proc.stderr),
-  };
-}
-
-/** Parse the JSON value that followed `--settings` in the fake-tmux argv log. */
-function extractSettingsJson(logPath: string): SettingsJson | null {
-  for (const argv of fakeTmuxCalls(logPath)) {
-    const i = argv.indexOf("--settings");
-    if (i < 0 || i + 1 >= argv.length) continue;
-    try {
-      return JSON.parse(argv[i + 1]) as SettingsJson;
-    } catch {
-      return null;
-    }
-  }
-  return null;
+function tmp(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  dirs.push(d);
+  return d;
 }
 
 /**
- * Collect `command` from every exec-form agent-director hook: the entries
- * whose `args` is exactly ["hook"] (SR-22.9). The shell-form help entry has
- * no `args` and is skipped.
+ * Runs `<binary> spawn` under home with fake tmux first on PATH and no
+ * AGENT_DIRECTOR_* / AD_* variables (no parent row), and returns the `command`
+ * of each exec-form hook in the `--settings` JSON the fake tmux recorded.
  */
-function collectHookCommands(settings: SettingsJson): string[] {
-  const out: string[] = [];
-  for (const evt of Object.values(settings.hooks ?? {})) {
-    for (const entry of evt) {
-      for (const hook of entry.hooks ?? []) {
-        const args = hook.args;
-        const isExec = Array.isArray(args) && args.length === 1 && args[0] === "hook";
-        if (isExec && typeof hook.command === "string") out.push(hook.command);
-      }
-    }
+function spawnHookCommands(binary: string, home: string): string[] {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined && !k.startsWith("AGENT_DIRECTOR_") && !k.startsWith("AD_")) env[k] = v;
   }
-  return out;
+  const log = join(home, "fake-tmux.log");
+  Object.assign(env, { HOME: home, PATH: `${process.env.FAKE_TMUX_DIR}:${process.env.PATH ?? ""}`, FAKE_TMUX_LOG: log });
+  const proc = Bun.spawnSync([binary, "spawn", "--cwd", tmp("ad-hook-stab-cwd-")], { env });
+  expect(proc.exitCode, new TextDecoder().decode(proc.stderr)).toBe(0);
+
+  const argv = fakeTmuxCalls(log).find((a) => a.includes("--settings"))!;
+  const settings = JSON.parse(argv[argv.indexOf("--settings") + 1]!) as {
+    hooks: Record<string, Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>>;
+  };
+  const commands = Object.values(settings.hooks)
+    .flat()
+    .flatMap((entry) => entry.hooks ?? [])
+    .filter((h) => JSON.stringify(h.args) === '["hook"]')
+    .map((h) => h.command!);
+  expect(commands.length).toBeGreaterThan(0);
+  return commands;
 }
 
-function setupStandardInstall(homeDir: string, cliBin: string): string {
-  const adBinDir = join(homeDir, ".agent-director", "bin");
-  mkdirSync(adBinDir, { recursive: true });
-  const stdPath = join(adBinDir, "agent-director");
-  copyFileSync(cliBin, stdPath);
-  chmodSync(stdPath, 0o755);
-  return stdPath;
-}
+test("hooks name the installed binary's absolute path, which survives an in-place re-install", () => {
+  const home = tmp("ad-hook-stab-home-");
+  const binDir = join(home, ".agent-director", "bin");
+  mkdirSync(binDir, { recursive: true });
+  const installed = join(binDir, "agent-director");
+  copyFileSync(cliPath, installed);
+  chmodSync(installed, 0o755);
 
-describe("spawn-side hook stability (SR-1.8 / SR-8.8)", () => {
-  const skip = !cliPath || !existsSync(cliPath) || !fakeTmuxDir;
+  const commands = spawnHookCommands(installed, home);
+  for (const cmd of commands) {
+    expect(cmd).toBe(realpathSync(installed));
+    expect(cmd).not.toMatch(/^agent-director\b|\$0|\$\{0\}|\$\(command -v/);
+  }
 
-  test(
-    "hook commands are absolute paths; no PATH-relative or shell-var forms",
-    () => {
-      if (skip) {
-        console.log("spawn-hook-stability: CLI_PATH or FAKE_TMUX_DIR not set — skipping");
-        return;
-      }
-      const homeDir = mkdtempSync(join(tmpdir(), "ad-hook-stab-home-"));
-      const fakeTmuxLog = join(homeDir, "fake-tmux.log");
-      const projectCwd = mkdtempSync(join(tmpdir(), "ad-hook-stab-cwd-"));
-      try {
-        const stdPath = setupStandardInstall(homeDir, cliPath!);
-        const result = runSpawn({
-          cwd: projectCwd,
-          cliBinary: stdPath,
-          homeDir,
-          fakeTmuxLog,
-        });
-        if (result.exitCode !== 0) {
-          console.error("spawn stderr:", result.stderr);
-        }
-        expect(result.exitCode).toBe(0);
+  // install.sh re-running overwrites the binary at the same path; the hook path still runs.
+  copyFileSync(cliPath, installed);
+  chmodSync(installed, 0o755);
+  expect(Bun.spawnSync([commands[0]!, "version", "--json"]).exitCode).toBe(0);
+}, 30_000);
 
-        const settings = extractSettingsJson(fakeTmuxLog);
-        expect(settings).not.toBeNull();
-        const commands = collectHookCommands(settings!);
-        expect(commands.length).toBeGreaterThan(0);
+test("a symlinked install: hooks name the resolved real binary, not the symlink", () => {
+  const home = tmp("ad-hook-stab-home-");
+  const real = join(tmp("ad-hook-stab-real-"), "real-agent-director");
+  copyFileSync(cliPath, real);
+  chmodSync(real, 0o755);
+  const binDir = join(home, ".agent-director", "bin");
+  mkdirSync(binDir, { recursive: true });
+  const link = join(binDir, "agent-director");
+  symlinkSync(real, link);
 
-        const expectedAbs = realpathSync(stdPath);
-        for (const cmd of commands) {
-          expect(cmd.startsWith("/")).toBe(true);
-          expect(cmd).not.toMatch(/^agent-director\b/);
-          expect(cmd).not.toContain("$0");
-          expect(cmd).not.toContain("${0}");
-          expect(cmd).not.toContain("$(command -v");
-          // SR-22.9: exec form — the command IS the resolved binary path, unquoted.
-          expect(cmd).toBe(expectedAbs);
-        }
-      } finally {
-        rmSync(homeDir, { recursive: true, force: true });
-        rmSync(projectCwd, { recursive: true, force: true });
-      }
-    },
-    { timeout: 30_000 },
-  );
-
-  test(
-    "in-place re-install survives: hook path remains callable after overwrite",
-    () => {
-      if (skip) {
-        console.log("spawn-hook-stability: skipping — CLI_PATH or FAKE_TMUX_DIR not set");
-        return;
-      }
-      const homeDir = mkdtempSync(join(tmpdir(), "ad-hook-stab-home-"));
-      const fakeTmuxLog = join(homeDir, "fake-tmux.log");
-      const projectCwd = mkdtempSync(join(tmpdir(), "ad-hook-stab-cwd-"));
-      try {
-        const stdPath = setupStandardInstall(homeDir, cliPath!);
-        // First spawn.
-        const r1 = runSpawn({ cwd: projectCwd, cliBinary: stdPath, homeDir, fakeTmuxLog });
-        expect(r1.exitCode).toBe(0);
-        const settings = extractSettingsJson(fakeTmuxLog);
-        expect(settings).not.toBeNull();
-        const commands = collectHookCommands(settings!);
-        expect(commands.length).toBeGreaterThan(0);
-
-        // Simulate install.sh re-running: overwrite the binary at the same path.
-        copyFileSync(cliPath!, stdPath);
-        chmodSync(stdPath, 0o755);
-
-        // SR-22.9: exec form — commands[i] is the binary path itself.
-        const hookBinPath = commands[0]!;
-        expect(existsSync(hookBinPath)).toBe(true);
-
-        // Confirm the binary at that path is callable.
-        const probe = Bun.spawnSync([hookBinPath, "version", "--json"]);
-        expect(probe.exitCode).toBe(0);
-      } finally {
-        rmSync(homeDir, { recursive: true, force: true });
-        rmSync(projectCwd, { recursive: true, force: true });
-      }
-    },
-    { timeout: 30_000 },
-  );
-
-  test(
-    "symlink resolution: hook command references the resolved real path",
-    () => {
-      if (skip) {
-        console.log("spawn-hook-stability: skipping — CLI_PATH or FAKE_TMUX_DIR not set");
-        return;
-      }
-      const homeDir = mkdtempSync(join(tmpdir(), "ad-hook-stab-home-"));
-      const fakeTmuxLog = join(homeDir, "fake-tmux.log");
-      const projectCwd = mkdtempSync(join(tmpdir(), "ad-hook-stab-cwd-"));
-      const realDir = mkdtempSync(join(tmpdir(), "ad-hook-stab-real-"));
-      try {
-        // Place the real binary outside the standard install path.
-        const realBin = join(realDir, "real-agent-director");
-        copyFileSync(cliPath!, realBin);
-        chmodSync(realBin, 0o755);
-        // Create the standard install dir but populate it with a symlink to
-        // the real binary.
-        const adBinDir = join(homeDir, ".agent-director", "bin");
-        mkdirSync(adBinDir, { recursive: true });
-        const symPath = join(adBinDir, "agent-director");
-        symlinkSync(realBin, symPath);
-
-        const result = runSpawn({
-          cwd: projectCwd,
-          cliBinary: symPath,
-          homeDir,
-          fakeTmuxLog,
-        });
-        if (result.exitCode !== 0) {
-          console.error("spawn stderr:", result.stderr);
-        }
-        expect(result.exitCode).toBe(0);
-
-        const settings = extractSettingsJson(fakeTmuxLog);
-        expect(settings).not.toBeNull();
-        const commands = collectHookCommands(settings!);
-        const resolvedReal = realpathSync(symPath);
-
-        // Help-hook entries use the standard install path (sym-link path
-        // by design — they are written for the spawned session's lifetime
-        // and reference $HOME/.agent-director/bin/agent-director).  The
-        // regular hook commands use the running-binary's resolved path.
-        // collectHookCommands keeps only the exec-form hooks (SR-22.9), so
-        // the shell-form help entry is already excluded.
-        expect(commands.length).toBeGreaterThan(0);
-
-        for (const cmd of commands) {
-          // The command is the resolved real path, not the symlink.
-          expect(cmd).toBe(resolvedReal);
-          expect(cmd.includes(symPath)).toBe(false);
-        }
-      } finally {
-        rmSync(homeDir, { recursive: true, force: true });
-        rmSync(projectCwd, { recursive: true, force: true });
-        rmSync(realDir, { recursive: true, force: true });
-      }
-    },
-    { timeout: 30_000 },
-  );
-});
+  for (const cmd of spawnHookCommands(link, home)) expect(cmd).toBe(realpathSync(real));
+}, 30_000);

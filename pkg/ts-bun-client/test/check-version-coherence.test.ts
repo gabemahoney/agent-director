@@ -1,420 +1,83 @@
 /**
- * check-version-coherence.test.ts — tests for scripts/check-version-coherence.ts.
- *
- * Staging layout mirrors the path-resolution in check-version-coherence.ts
- * (script lives at <root>/pkg/ts-bun-client/scripts/; paths anchored via ../):
- *   <root>/                                  ← under the OS temp dir (b.9qj)
- *     pkg/ts-bun-client/
- *       scripts/check-version-coherence.ts  ← copied from real source
- *       package.json                         ← umbrella, seeded
- *       platforms/
- *         linux-x64/   bin/agent-director (shell stub), package.json
- *         darwin-arm64/ bin/agent-director (shell stub), package.json
+ * check-version-coherence.test.ts — scripts/check-version-coherence.ts on a
+ * staged tree: site 3a (umbrella package.json::version), site-dist-no-inline
+ * (SR-2.3, both scopes), the floor lockstep (SR-5.4) and, under --scope
+ * publish, the tarball SHA-256 manifest (SR-1.3).
  */
 
-import { test, expect, describe, afterEach } from "bun:test";
-import {
-  mkdirSync,
-  writeFileSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  chmodSync,
-  cpSync,
-} from "node:fs";
+import { test, expect, afterEach } from "bun:test";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join, resolve, dirname, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO_ROOT = resolve(PKG_DIR, "..", "..");
-const REAL_SCRIPT = join(PKG_DIR, "scripts", "check-version-coherence.ts");
+import { rmSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import { removeStaged, runScript, stageScript, umbrellaPkg, type Staged } from "./internal/stagedScript.js";
 
 const EXPECTED = "9.9.9";
-const WRONG = "0.0.1";
-const STUB_COMMIT = "abc1234";
+const FLOOR_JSON = `{\n  "min_binary_version": "0.7.0"\n}\n`;
+const CLEAN_DIST = `export const MIN_BINARY_VERSION = "0.7.0";\nexport const DEV_SENTINEL_VERSION = "0.0.0-dev";\n`;
 
-// ---------------------------------------------------------------------------
-// Content helpers
-// ---------------------------------------------------------------------------
+afterEach(removeStaged);
 
-/** Shell stub that emits a fixed version --json envelope regardless of args.
- *  Site-1 contract (SR-2.6, b.ue3 / Epic 1): the binary stamps plain X.Y.Z,
- *  no leading "v". */
-function makeStub(version: string): string {
-  return `#!/bin/sh\necho '{"version":"${version}","commit":"${STUB_COMMIT}"}'\n`;
-}
-
-// ---------------------------------------------------------------------------
-// Staging tree factory
-// ---------------------------------------------------------------------------
-
-interface StagingTree {
-  root: string;
-  scriptPath: string;
-  umbrellaPkgPath: string;
-  linuxPkgPath: string;
-  darwinPkgPath: string;   // path computed even when omitDarwin=true
-  linuxBinPath: string;
-  darwinBinPath: string;   // path computed even when omitDarwin=true
-  distIndexJsPath: string;
-  /** Path to the tarball-shasums.txt manifest for --scope publish tests (Epic 4 / SR-1.3). */
-  shasumsPath: string;
-}
-
-interface StagingTreeOpts {
-  /** Version written into shell stubs (site 1). Default: EXPECTED. */
-  site1Version?: string;
-  /** umbrella package.json::version (site 3a). Default: EXPECTED. */
-  site3aVersion?: string;
-  /** platform package.json::version (site 3b). Default: EXPECTED. */
-  site3bVersion?: string;
-  /** "file" = file: opt-dep paths; "pin" = ^X.Y.Z pins (site 4). Default: "file". */
-  site4Mode?: "file" | "pin";
-  /** When true, skip creating the darwin-arm64 platform directory. */
-  omitDarwin?: boolean;
-  /** Content to write into dist/index.js (site-dist-no-inline). Default: clean stub. */
-  distIndexJsContent?: string;
-}
-
-// Default dist/index.js content — exports a MIN_BINARY_VERSION constant that
-// matches the staged version-floor.json so the floor-lockstep gate (b.ue3 /
-// SR-5.4) passes. Tests that exercise the lockstep gate's drift paths
-// override this via distIndexJsContent.
-const DEFAULT_FLOOR_VALUE = "0.7.0";
-const DEFAULT_DIST_INDEX_JS =
-  `// bundled output\nexport const MIN_BINARY_VERSION = "${DEFAULT_FLOOR_VALUE}";\nexport const DEV_SENTINEL_VERSION = "0.0.0-dev";\n`;
-const DEFAULT_VERSION_FLOOR_JSON =
-  `{\n  "min_binary_version": "${DEFAULT_FLOOR_VALUE}"\n}\n`;
-
-// Staging roots live under the OS temp dir: inside the repo, their versioned
-// package.json files trip the source-of-truth gate a sibling run scans (b.9qj).
-const stagingRoots: string[] = [];
-afterEach(() => {
-  for (const root of stagingRoots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
-
-function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
-  const {
-    site1Version = EXPECTED,
-    site3aVersion = EXPECTED,
-    site3bVersion = EXPECTED,
-    site4Mode = "file",
-    omitDarwin = false,
-    distIndexJsContent = DEFAULT_DIST_INDEX_JS,
-  } = opts;
-
-  // realpath: the copied script reports paths from its resolved location.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "ad-cvc-")));
-  stagingRoots.push(root);
-  const pkgDir = join(root, "pkg", "ts-bun-client");
-  const scriptsDir = join(pkgDir, "scripts");
-  const linuxDir = join(pkgDir, "platforms", "linux-x64");
-  const darwinDir = join(pkgDir, "platforms", "darwin-arm64");
-  const distDir = join(pkgDir, "dist");
-
-  const dirs = [scriptsDir, join(linuxDir, "bin"), distDir];
-  if (!omitDarwin) dirs.push(join(darwinDir, "bin"));
-  for (const d of dirs) mkdirSync(d, { recursive: true });
-
-  // Script copy — import.meta.url in the copy resolves paths relative to staging root.
-  const scriptPath = join(scriptsDir, "check-version-coherence.ts");
-  cpSync(REAL_SCRIPT, scriptPath);
-
-  // Umbrella package.json (sites 3a + 4)
-  const umbrellaPkgPath = join(pkgDir, "package.json");
-  const optDeps =
-    site4Mode === "pin"
-      ? {
-          "@agent-director/linux-x64": `^${EXPECTED}`,
-          "@agent-director/darwin-arm64": `^${EXPECTED}`,
-        }
-      : {
-          "@agent-director/linux-x64": "file:./platforms/linux-x64",
-          "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64",
-        };
-  writeFileSync(
-    umbrellaPkgPath,
-    JSON.stringify(
-      { name: "agent-director", version: site3aVersion, optionalDependencies: optDeps },
-      null,
-      2
-    ) + "\n",
-    "utf8"
-  );
-
-  // Platform package.json files (site 3b)
-  const linuxPkgPath = join(linuxDir, "package.json");
-  writeFileSync(
-    linuxPkgPath,
-    JSON.stringify({ name: "@agent-director/linux-x64", version: site3bVersion }, null, 2) + "\n",
-    "utf8"
-  );
-
-  const darwinPkgPath = join(darwinDir, "package.json");
-  if (!omitDarwin) {
-    writeFileSync(
-      darwinPkgPath,
-      JSON.stringify({ name: "@agent-director/darwin-arm64", version: site3bVersion }, null, 2) + "\n",
-      "utf8"
-    );
-  }
-
-  // Shell stubs (site 1) — executable shell scripts that emit a fixed version JSON.
-  const linuxBinPath = join(linuxDir, "bin", "agent-director");
-  writeFileSync(linuxBinPath, makeStub(site1Version), "utf8");
-  chmodSync(linuxBinPath, 0o755);
-
-  const darwinBinPath = join(darwinDir, "bin", "agent-director");
-  if (!omitDarwin) {
-    writeFileSync(darwinBinPath, makeStub(site1Version), "utf8");
-    chmodSync(darwinBinPath, 0o755);
-  }
-
-  // dist/index.js (site-dist-no-inline) — exports MIN_BINARY_VERSION by default
-  // so the floor-lockstep gate passes (b.ue3 / SR-5.4).
-  const distIndexJsPath = join(distDir, "index.js");
-  writeFileSync(distIndexJsPath, distIndexJsContent, "utf8");
-
-  // version-floor.json (source of truth + dist copy) — required by the
-  // floor-lockstep gate. Staged with DEFAULT_FLOOR_VALUE so dist's
-  // MIN_BINARY_VERSION export agrees.
-  writeFileSync(join(pkgDir, "version-floor.json"), DEFAULT_VERSION_FLOOR_JSON, "utf8");
-  writeFileSync(join(distDir, "version-floor.json"), DEFAULT_VERSION_FLOOR_JSON, "utf8");
-
-  // Dummy tarball files + SHA-256 manifest for --scope publish tests (Epic 4 / SR-1.3).
-  // Files are placed in root (not platform dirs) so the manifest is independent of
-  // the staging tree layout options (e.g. omitDarwin).
-  const dummyTarballs = [
-    { path: join(root, "dummy-umbrella.tgz"),     content: "umbrella tarball stub\n" },
-    { path: join(root, "dummy-linux-x64.tgz"),    content: "linux-x64 tarball stub\n" },
-    { path: join(root, "dummy-darwin-arm64.tgz"), content: "darwin-arm64 tarball stub\n" },
-  ];
-  const shasumsPath = join(root, "tarball-shasums.txt");
-  const shasumsLines: string[] = [];
-  for (const { path: tgzPath, content } of dummyTarballs) {
-    writeFileSync(tgzPath, content, "utf8");
-    const hash = createHash("sha256").update(content).digest("hex");
-    shasumsLines.push(`${hash}  ${tgzPath}`);
-  }
-  writeFileSync(shasumsPath, shasumsLines.join("\n") + "\n", "utf8");
-
-  return {
-    root,
-    scriptPath,
-    umbrellaPkgPath,
-    linuxPkgPath,
-    darwinPkgPath,
-    linuxBinPath,
-    darwinBinPath,
-    distIndexJsPath,
-    shasumsPath,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Invocation helper
-// ---------------------------------------------------------------------------
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function runCheck(
-  scriptPath: string,
-  args: string[],
-  extraEnv?: Record<string, string>
-): RunResult {
-  const r = Bun.spawnSync(["bun", "run", scriptPath, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: extraEnv ? { ...process.env, ...extraEnv } : undefined,
+/** A coherent tree at EXPECTED, with overrides; plus a one-tarball SHA manifest at the root. */
+function stage(opts: { version?: string; dist?: string } = {}): Staged & { shasums: string } {
+  const s = stageScript("check-version-coherence.ts", {
+    "package.json": umbrellaPkg(opts.version ?? EXPECTED),
+    "dist/index.js": opts.dist ?? CLEAN_DIST,
+    "version-floor.json": FLOOR_JSON,
+    "dist/version-floor.json": FLOOR_JSON,
   });
-  return {
-    exitCode: r.exitCode,
-    stdout: r.stdout.toString(),
-    stderr: r.stderr.toString(),
-  };
+  const tgz = join(s.root, "dummy.tgz");
+  writeFileSync(tgz, "tarball stub\n");
+  const shasums = join(s.root, "tarball-shasums.txt");
+  writeFileSync(shasums, `${createHash("sha256").update("tarball stub\n").digest("hex")}  ${tgz}\n`);
+  return { ...s, shasums };
 }
 
-// ---------------------------------------------------------------------------
-// 0. Staging isolation (b.9qj)
-// ---------------------------------------------------------------------------
+function check(s: Staged & { shasums: string }, scope: string, version = EXPECTED) {
+  return runScript(s.script, ["--scope", scope, "--expected-version", version], { AGENT_DIRECTOR_RELEASE_SHASUMS: s.shasums });
+}
 
 test("staging tree lives outside the repo tree (b.9qj)", () => {
-  expect(relative(REPO_ROOT, makeStagingTree().root).split(sep)[0]).toBe("..");
+  expect(relative(resolve(import.meta.dir, "../../.."), stage().root).split(sep)[0]).toBe("..");
 });
 
-// ---------------------------------------------------------------------------
-// 1. Happy paths
-// ---------------------------------------------------------------------------
-
-describe("check-version-coherence happy path", () => {
-  test("--scope publish: site 3a stamped + floor lockstep + tarball SHA → exit 0, empty stderr", () => {
-    const tree = makeStagingTree();
-    const r = runCheck(
-      tree.scriptPath,
-      ["--scope", "publish", "--expected-version", EXPECTED],
-      { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-    );
-    expect(r.exitCode).toBe(0);
-    expect(r.stderr).toBe("");
-  });
-
-  test("--scope verify: site 3a stamped → exit 0", () => {
-    const tree = makeStagingTree();
-    const r = runCheck(tree.scriptPath, [
-      "--scope", "verify",
-      "--expected-version", EXPECTED,
-    ]);
-    expect(r.exitCode).toBe(0);
-    expect(r.stderr).toBe("");
-  });
+test.each(["verify", "publish"])("--scope %s on a coherent tree → exit 0, empty stderr", (scope) => {
+  const r = check(stage(), scope);
+  expect([r.exitCode, r.stderr]).toEqual([0, ""]);
 });
 
-// ---------------------------------------------------------------------------
-// 2. Per-site failures (parametrized × 5)
-// ---------------------------------------------------------------------------
-
-const PER_SITE_CASES: Array<{
-  label: string;
-  opts: StagingTreeOpts;
-  scope: "publish" | "verify";
-  /** Returns the file path that must appear in the stderr failure line. */
-  filePath: (t: StagingTree) => string;
-  actual: string;
-  expected: string;
-}> = [
-  {
-    label: "site-3a: umbrella package.json has wrong version",
-    opts: { site3aVersion: WRONG },
-    scope: "publish",
-    filePath: (t) => t.umbrellaPkgPath,
-    actual: WRONG,
-    expected: EXPECTED,
-  },
-];
-
-describe("check-version-coherence per-site failures", () => {
-  for (const c of PER_SITE_CASES) {
-    test(`${c.label} → exit 1, stderr contains file path + actual + expected`, () => {
-      const tree = makeStagingTree(c.opts);
-      const r = runCheck(tree.scriptPath, [
-        "--scope", c.scope,
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain(c.filePath(tree));
-      expect(r.stderr).toContain(c.actual);
-      expect(r.stderr).toContain(c.expected);
-    });
-  }
+test("site-3a: umbrella package.json at the wrong version → exit 1 naming the file, actual and expected", () => {
+  const s = stage({ version: "0.0.1" });
+  const r = check(s, "publish");
+  expect(r.exitCode).not.toBe(0);
+  for (const want of [join(s.pkgDir, "package.json"), "0.0.1", EXPECTED]) expect(r.stderr).toContain(want);
 });
 
-// ---------------------------------------------------------------------------
-// 5. Bad flags
-// ---------------------------------------------------------------------------
-
-describe("check-version-coherence bad flags", () => {
-  test("--scope foo → exit 1, stderr mentions the bad value", () => {
-    const tree = makeStagingTree();
-    const r = runCheck(tree.scriptPath, [
-      "--scope", "foo",
-      "--expected-version", EXPECTED,
-    ]);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain("foo");
-  });
-
-  test("--expected-version with leading v → exit 1", () => {
-    const tree = makeStagingTree();
-    const r = runCheck(tree.scriptPath, [
-      "--scope", "publish",
-      "--expected-version", `v${EXPECTED}`,
-    ]);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain(`v${EXPECTED}`);
-  });
-
-  test("missing --expected-version → exit 1, stderr mentions the flag", () => {
-    const tree = makeStagingTree();
-    const r = runCheck(tree.scriptPath, ["--scope", "publish"]);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain("--expected-version");
-  });
+test.each([
+  [["--scope", "foo", "--expected-version", EXPECTED], "foo"],
+  [["--scope", "publish", "--expected-version", `v${EXPECTED}`], `v${EXPECTED}`],
+  [["--scope", "publish"], "--expected-version"],
+])("bad flags %p → exit 1, stderr names %s", (args, want) => {
+  const r = runScript(stage().script, args);
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr).toContain(want);
 });
 
-// ---------------------------------------------------------------------------
-// 6. site-dist-no-inline negative cases (SR-2.3)
-// ---------------------------------------------------------------------------
+// SR-2.2: publish ⊇ verify, so the dist negative-grep fires under both scopes.
+test.each([
+  ["verify", 'const NPM_PACKAGE_VERSION = "1.2.3";', "NPM_PACKAGE_VERSION"],
+  ["verify", 'const version = "0.0.0";', '"0.0.0"'],
+  ["publish", 'const NPM_PACKAGE_VERSION = "1.2.3";', "NPM_PACKAGE_VERSION"],
+  ["publish", 'const version = "0.0.0";', '"0.0.0"'],
+])("site-dist-no-inline --scope %s: dist/index.js %s → exit 1 naming it", (scope, dist, want) => {
+  const r = check(stage({ dist }), scope);
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr).toContain(want);
+});
 
-describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
-  test("dist/index.js contains NPM_PACKAGE_VERSION → exit 1, stderr names the identifier", () => {
-    const tree = makeStagingTree({
-      distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
-    });
-    const r = runCheck(tree.scriptPath, [
-      "--scope", "verify",
-      "--expected-version", EXPECTED,
-    ]);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
-  });
-
-  test('dist/index.js contains "0.0.0" → exit 1, stderr names the literal', () => {
-    const tree = makeStagingTree({
-      distIndexJsContent: 'const version = "0.0.0";',
-    });
-    const r = runCheck(tree.scriptPath, [
-      "--scope", "verify",
-      "--expected-version", EXPECTED,
-    ]);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain('"0.0.0"');
-  });
-
-  test("dist/index.js absent → exit 1, stderr contains the missing path", () => {
-    const tree = makeStagingTree();
-    // Remove the dist file after staging to simulate a missing bun build output.
-    rmSync(tree.distIndexJsPath);
-    const r = runCheck(tree.scriptPath, [
-      "--scope", "verify",
-      "--expected-version", EXPECTED,
-    ]);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain(tree.distIndexJsPath);
-  });
-
-  // SR-2.2: publish ⊇ verify — dist-no-inline must also fire under --scope publish.
-
-  test("--scope publish: dist/index.js contains NPM_PACKAGE_VERSION → exit 1, stderr names the identifier", () => {
-    const tree = makeStagingTree({
-      distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
-      site4Mode: "pin",
-    });
-    const r = runCheck(
-      tree.scriptPath,
-      ["--scope", "publish", "--expected-version", EXPECTED],
-      { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-    );
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
-  });
-
-  test('--scope publish: dist/index.js contains "0.0.0" → exit 1, stderr names the literal', () => {
-    const tree = makeStagingTree({
-      distIndexJsContent: 'const version = "0.0.0";',
-      site4Mode: "pin",
-    });
-    const r = runCheck(
-      tree.scriptPath,
-      ["--scope", "publish", "--expected-version", EXPECTED],
-      { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-    );
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toContain('"0.0.0"');
-  });
+test("site-dist-no-inline: dist/index.js absent → exit 1 naming the missing path", () => {
+  const s = stage();
+  rmSync(join(s.pkgDir, "dist", "index.js"));
+  const r = check(s, "verify");
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr).toContain(join(s.pkgDir, "dist", "index.js"));
 });

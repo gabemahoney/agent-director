@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // serialization-recorder.js — records start/end timestamps to LOG_FILE,
 // sleeps briefly, then emits a JSON envelope.
-// Used by subprocess-client.test.ts to verify per-Client call serialization.
+// Used by client-serialization.test.ts to verify per-Client call serialization.
 // Set process.env.LOG_FILE to a writable path before spawning.
 //
 // Probe-aware (b.ue3 / SR-1.3): when invoked with the `version` verb,
