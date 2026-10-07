@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J16). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J18). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -135,6 +135,46 @@ grep -qx "const schemaVersion = $((SCHEMA + 1))" "$ROOT/store-newer.go" || die "
 printf '{"Replace":{"%s":"%s"}}\n' "$REPO_ROOT/internal/store/store.go" "$ROOT/store-newer.go" >"$ROOT/overlay.json"
 (cd "$REPO_ROOT" && CGO_ENABLED=0 go build -overlay "$ROOT/overlay.json" -ldflags "$STAMP" -o "$BIN_NEWER" ./cmd/agent-director) \
     || die "go build (newer)"
+
+# FAKE_AD (J17): a binary for this host stamped as ADMIN, so install.sh
+# installs it as agent-director; its `list` does what $HOME/fake-list says
+# (j17_fake), for the store-open outcomes the real binary does not give.
+FAKE_AD="$ROOT/bin/agent-director-fake"
+mkdir -p "$ROOT/fake-ad"
+{ echo "module fakead"; grep -m1 '^go ' "$REPO_ROOT/go.mod"; } >"$ROOT/fake-ad/go.mod" || die "fake go.mod"
+cat >"$ROOT/fake-ad/main.go" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+var version, commit string
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Printf("{\"version\":%q,\"commit\":%q}\n", version, commit)
+		return
+	}
+	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
+	switch string(mode) {
+	case "ok": // exit 0, no store created
+	case "odd-name":
+		fmt.Fprintln(os.Stderr, `{"err_name":"ErrOdd\ninstall.sh: err_name=ErrVersionUnreadable","err_description":"fake"}`)
+		os.Exit(1)
+	case "other-name": // an err_name install.sh's own remedies do not name
+		fmt.Fprintln(os.Stderr, `{"err_name":"ErrSchemaMigrationRequired","err_description":"fake"}`)
+		os.Exit(1)
+	default: // a Go panic: no error envelope
+		fmt.Fprint(os.Stderr, "panic: fake agent-director\n\ngoroutine 1 [running]:\nmain.main()\n")
+		os.Exit(2)
+	}
+}
+EOF
+(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT" -o "$FAKE_AD" .) \
+    || die "go build (fake agent-director)"
 
 # ---- install.sh copies ----------------------------------------------------
 
@@ -367,6 +407,16 @@ expect_rc() {
     bad "exit $RC; want $1 ($2)"
     sed 's/^/      stderr: /' "$ERR" | tail -n 15
     return 1
+}
+# expect_exit5 <err_name> <what>: exit 5 (else as expect_rc), its stderr's
+# last line `install.sh: err_name=<err_name>` and no other line its cause
+# line's shape (b.cfq).
+expect_exit5() {
+    expect_rc 5 "$2" || return 1
+    local want="install.sh: err_name=$1" last n
+    last="$(tail -n 1 "$ERR")" n="$(grep -c '^install\.sh: err_name=' "$ERR")"
+    [[ "$last" == "$want" ]] || bad "$2: last stderr line \"$last\"; want \"$want\""
+    [[ "$n" == 1 ]] || bad "$2: $n cause lines; want 1: $(grep '^install\.sh: err_name=' "$ERR" | paste -sd'|')"
 }
 expect_advice() {
     local text
@@ -665,7 +715,7 @@ j6_failing_migration() {
         DROP TABLE store_meta; CREATE TABLE store_meta (bogus TEXT);" || { bad "damage store"; return 1; }
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run "$J6H" "${J6ARGV[@]}"
-    expect_rc 5 "migration step fails" || return 1
+    expect_exit5 ErrStoreOpen "migration step fails" || return 1
     expect_advice "If this install authorized a migration above, it was NOT consumed; re-running this install will retry it."
     [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
 }
@@ -678,7 +728,7 @@ j6_failing_migration() {
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
-    expect_rc 5 "re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "re-run while store_meta is still bad" || return
     expect_advice "re-running this install will retry it."
     local could="  schema  : state.db at v$((SCHEMA - 1)); could not tell whether a migration is needed (agent-director list failed: ErrStoreOpen)"
     grep -qxF "$could" "$OUT" || bad "no \"$could\" line: $(grep -F "  schema  : " "$OUT")"
@@ -704,7 +754,7 @@ test_J6_RerunKeepsPriorRollbackCopy() {
     cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
     cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
     run "$J6H" "${J6ARGV[@]}"
-    expect_rc 5 "advised re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "advised re-run while store_meta is still bad" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -726,7 +776,7 @@ test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
     grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" \
         || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
     run "$J6H" "${J6ARGV[@]}"
-    expect_rc 5 "advised re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "advised re-run while store_meta is still bad" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -747,7 +797,7 @@ test_J6_NewerStoreInstallNewer() {
     expect_rc 0 "first install" || return
     "$SQLITE" "$h/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
     run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
-    expect_rc 5 "store newer than the binary" || return
+    expect_exit5 ErrSchemaMismatch "store newer than the binary" || return
     local none="  schema  : state.db at v$((SCHEMA + 1)); no migration authorization needed"
     grep -qxF "$none" "$OUT" || bad "no \"$none\" line: $(grep -F "  schema  : " "$OUT")"
     expect_advice "ErrSchemaMismatch"
@@ -799,12 +849,12 @@ j7_run() {
     FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0
 }
 
-# j7_verify_fails <answer>: an older store, and an install whose verification
-# read answers <answer> (empty: the read fails): exit 5, step 5's failure.
+# j7_verify_fails <version>: an older store, and an install whose verification
+# read answers <version>: exit 5, step 5's failure, ErrSchemaVerifyFailed.
 j7_verify_fails() {
     j7_older_store || return 1
     j7_run 2 "$1"
-    expect_rc 5 "verification read answered \"$1\"" || return 1
+    expect_exit5 ErrSchemaVerifyFailed "verification read answered \"$1\"" || return 1
     expect_advice "schema migration verification FAILED"
 }
 
@@ -883,7 +933,7 @@ test_J7_VersionMismatchRerun() {
         "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
         if ((version > SCHEMA)); then
             run "$J7H" "${J7ARGV[@]}"
-            expect_rc 5 "v$version: re-run" || continue
+            expect_exit5 ErrSchemaMismatch "v$version: re-run" || continue
             [[ "$(line_after "install.sh: store open (agent-director list) failed after install")" == *'"err_name":"ErrSchemaMismatch"'* ]] \
                 || bad "v$version: the re-run did not stop at the store open with ErrSchemaMismatch: $(flat "$ERR")"
             [[ "$(db_version "$J7H")" == "$version" ]] || bad "v$version: store moved to v$(db_version "$J7H")"
@@ -965,7 +1015,7 @@ test_J7_FailedReadRerun() {
         PATH_EXTRA="$MKTEMP_FAILS"
         rm -f "$MKTEMP_REFUSALS"
         j7_run "$call" "$out" "$err" "$rc"
-        expect_rc 5 "$what" || continue
+        expect_exit5 ErrVersionUnreadable "$what" || continue
         want="install.sh: reading state.db's schema version FAILED"
         could="tell whether state.db needs a migration. No migration was authorized."
         if [[ "$call" == 2 ]]; then
@@ -1029,14 +1079,20 @@ j7_not_a_version() {
     fi
 }
 
-# j7_rerun_same <rc> <call> [<answer> [<stderr> [<status>]]]: re-run j7_run with
-# the arguments after <rc>, those the last j7_run had, so with that sqlite3 and
-# state.db: exit <rc>, showing the same output.
+# j7_rerun_same <want> <call> [<answer> [<stderr> [<status>]]]: re-run j7_run
+# with the arguments after <want>, those the last j7_run had, so with that
+# sqlite3 and state.db: exit 0 when <want> is 0, else exit 5 with cause <want>,
+# showing the same output.
 j7_rerun_same() {
-    local rc="$1" shown; shown="$(j7_shown)"
+    local want="$1" shown what="re-run with that sqlite3 and state.db unchanged"
+    shown="$(j7_shown)"
     shift
     j7_run "$@"
-    expect_rc "$rc" "re-run with that sqlite3 and state.db unchanged" || return 1
+    if [[ "$want" == 0 ]]; then
+        expect_rc 0 "$what" || return 1
+    else
+        expect_exit5 "$want" "$what" || return 1
+    fi
     [[ "$(j7_shown)" == "$shown" ]] || bad "the re-run shows \"$(j7_shown)\" under \"<unreadable>\"; the first run showed \"$shown\""
 }
 
@@ -1062,10 +1118,10 @@ test_J7_NotAVersionBeforeOpenRerun() {
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
         fi
         j7_run "$call" "$stand_in" "$err" 0
-        expect_rc 5 "step 2's read printed \"$printed\"" || continue
+        expect_exit5 ErrVersionUnreadable "step 2's read printed \"$printed\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$printed\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         j7_not_a_version "$printed" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not tell whether state.db needs a migration. No migration was authorized."
-        j7_rerun_same 5 "$call" "$stand_in" "$err" 0 || continue
+        j7_rerun_same ErrVersionUnreadable "$call" "$stand_in" "$err" 0 || continue
         [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$printed\": store moved off v$version: v$(db_version "$J7H")"
         if [[ "$changed" == state.db ]]; then
             "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
@@ -1089,7 +1145,7 @@ test_J7_NotAVersionAfterOpenRerun() {
     for answer in "[{\"user_version\":$SCHEMA}]" "0$SCHEMA"; do
         j7_older_store || continue
         j7_run 2 "$answer"
-        expect_rc 5 "older store, step 5's read printed \"$answer\"" || continue
+        expect_exit5 ErrVersionUnreadable "older store, step 5's read printed \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         j7_schema_unreadable
         j7_not_a_version "$answer" "Reading state.db's user_version (sqlite3 PRAGMA user_version) printed the output above, not a whole number (0 or more), so the install could not check the migration."
@@ -1115,7 +1171,7 @@ test_J7_UnreadableAfterProbeRerun() {
         J7H="$J6H"
         J7ARGV=("${J6ARGV[@]}")
         j7_run 2 "$answer" # step 2's read, then step 3's after the probe
-        expect_rc 5 "step 3's read after the probe answered \"$answer\"" || continue
+        expect_exit5 ErrVersionUnreadable "step 3's read after the probe answered \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: reading state.db's schema version FAILED" ]] \
             || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\""
         grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "\"$answer\": the failure does not name state.db: $(flat "$ERR")"
@@ -1489,7 +1545,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         esac
         printf '%b\n' "$config" >"$J7H/.agent-director/config.toml"
         run "$J7H" "${J7ARGV[@]}"
-        expect_rc 5 "$store store, config \"$named\"" || continue
+        expect_exit5 ErrConfigMalformed "$store store, config \"$named\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store, \"$named\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         grep -qF '  {"err_name":"ErrConfigMalformed",' "$ERR" || bad "$store, \"$named\": no ErrConfigMalformed envelope: $(flat "$ERR")"
         expect_advice "$named"
@@ -1625,7 +1681,7 @@ test_J14_DbPathRefusedFixAndRerun() {
         fi
         before="$(j14_snap "$h")"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "config \"$broken\"" || continue
+        expect_exit5 ErrConfigMalformed "config \"$broken\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "$advice"
         expect_advice "Nothing was installed or changed. Re-run this install after the change."
@@ -1749,7 +1805,7 @@ test_J14_DottedKeysMoveInTurn() {
     while IFS='|' read -r line advice <&3; do
         before="$(j14_snap "$h")"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "config line 1 \"$line\"" || return
+        expect_exit5 ErrConfigMalformed "config line 1 \"$line\"" || return
         expect_advice "line 1 : $line"
         expect_advice "$advice"
         [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$line\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
@@ -1788,7 +1844,7 @@ test_J15_SentinelTempFailedFixAndRerun() {
         sum="$(sha256sum "$db")"
         PATH_EXTRA="$SENTINEL_MKTEMP_FAILS"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "$shown: mktemp fails beside the sentinel" || continue
+        expect_exit5 ErrSchemaVerifyFailed "$shown: mktemp fails beside the sentinel" || continue
         # Its error is above: mktemp's own, naming a template no one can predict.
         [[ "$(head -n 2 "$ERR")" == "mktemp: failed to create file via template '$sentinel.tmp.XXXXXX': Permission denied"$'\n'"install.sh: writing the migration sentinel FAILED" ]] \
             || bad "$shown: stderr does not open with mktemp's error for $sentinel.tmp.XXXXXX, then the failure: $(head -n 2 "$ERR" | tr '\n' '|')"
@@ -1848,7 +1904,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         if [[ "$config" == '"defaults"'* ]]; then
             before="$(j14_snap "$h")"
             run "$h" "${J7ARGV[@]}"
-            expect_rc 5 "config \"$config\"" || continue
+            expect_exit5 ErrConfigMalformed "config \"$config\"" || continue
             expect_advice "A quoted key is the same as the bare one. Write it as defaults, without the quotes."
             [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$config\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
             named_line "$cfg" || continue
@@ -1856,7 +1912,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         fi
         before="$(j14_snap "$h")"
         run "$h" "${J7ARGV[@]}"
-        expect_rc 5 "config \"$(flat "$cfg")\"" || continue
+        expect_exit5 ErrConfigMalformed "config \"$(flat "$cfg")\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$config\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         expect_advice "line 1 : $(head -n 1 "$cfg")"
         [[ -z "$reads_as" ]] \
@@ -1876,6 +1932,156 @@ test_J16_DefaultsKeyMoveUnderHeader() {
 defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100||[relay]\npoll_base_ms = 100\n[defaults]\nrelay_mode = "off"\ninject_help_hook = true
 Defaults = { inject_help_hook = false, relay_mode = "off" }\n[defaults]\nexpire_retention_days = 7|Defaults|[defaults]\ninject_help_hook = true\nrelay_mode = "off"\nexpire_retention_days = 7
 "defaults" = { relay_mode = "off" }||[defaults]\nrelay_mode = "off"\ninject_help_hook = true
+EOF
+}
+
+# ---- J17: exit 5's cause line (b.cfq) ----------------------------------------------
+
+# j17_remedy <err_name>: what a caller of install.sh does after an exit 5 whose
+# cause line names <err_name>, from the name alone, as SKILL.md's "Exit 5's
+# cause line" maps it: rerun, fix-config, newer-binary, stop for a human, or,
+# for any other name, rerun-once (stop if the re-run fails with that name).
+j17_remedy() {
+    case "$1" in
+        ErrVersionUnreadable) echo rerun ;;
+        ErrConfigMalformed) echo fix-config ;;
+        ErrSchemaMismatch) echo newer-binary ;;
+        ErrSchemaVerifyFailed) echo stop ;;
+        *) echo rerun-once ;;
+    esac
+}
+
+# The setups for test_J17's cases: each leaves an exit 5 of J7ARGV in J7H.
+# j17_lock: step 2's read of an older store fails as under a held lock.
+j17_lock() { j7_older_store && j7_run 1; }
+# j17_config_refused: an older store under a config agent-director refuses.
+j17_config_refused() {
+    j7_older_store || return 1
+    printf '[defaults]\nexpire_retention_days = -1\n' >"$J7H/.agent-director/config.toml"
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_newer_store: a store one version newer than BIN.
+j17_newer_store() {
+    j7_installed || return 1
+    "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_mismatch: an older store whose step-5 read gives the pre-migration version.
+j17_mismatch() { j7_older_store && j7_run 2 "$((SCHEMA - 1))"; }
+# j17_fake <mode>: a fresh install of FAKE_AD, J7ARGV with FAKE_AD as
+# --binary, whose `list` does <mode>; J17_RELAY is that list's stderr with
+# every line indented two spaces, as step 4 relays a failed open's.
+j17_fake() {
+    J7H="$(new_home)"
+    printf '%s' "$1" >"$J7H/fake-list"
+    J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    J17_RELAY="$(env -i HOME="$J7H" "$FAKE_AD" list 2>&1 >/dev/null | sed 's/^/  /')"
+    run "$J7H" "${J7ARGV[@]}"
+}
+
+# J17: "Every exit 5 ends with one line on stderr, its last, naming the cause:
+# `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it"
+# (install.sh --help). Per case <setup>|<headline>|<Name>|<config fix>: the
+# exit 5 <setup> leaves has <headline> on stderr (the site the case is for) and
+# one cause line, its last, naming <Name>. The remedy is chosen from that line
+# alone (j17_remedy) and followed: rerun runs J7ARGV again with the lock gone,
+# fix-config applies the sed <config fix> to config.toml and re-runs,
+# newer-binary installs BIN_NEWER; each then installs. rerun-once runs J7ARGV
+# again, which, the cause unchanged, fails with the same name: then, as for
+# stop, it is a human's turn. The FAKE_AD cases: no store after an open that
+# succeeded, and a failed open whose stderr (relayed below <headline>, every
+# line indented) holds no envelope (a multi-line panic), one whose err_name is
+# no Err... name (one holding a cause line, which must stay inside the
+# envelope), or one with an err_name install.sh's own remedies do not name.
+test_J17_ExitFiveCauseLineDecidesRemedy() {
+    local setup headline name fix cause remedy want_bin want_v relayed J17_RELAY
+    local -a words argv0=("${J7ARGV[@]}")
+    local -a J7ARGV # j17_fake sets its own
+    run "$(new_home)" bash "$LOOSE" --help
+    expect_rc 0 "install.sh --help" || return
+    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), or, when the store open fails another way, agent-director'"'"'s own err_name.'* ]] \
+        || bad "--help lacks the cause-line contract: $(flat "$OUT")"
+    while IFS='|' read -r setup headline name fix <&3; do
+        J7ARGV=("${argv0[@]}") J17_RELAY=""
+        read -r -a words <<<"$setup"
+        "${words[@]}" || { bad "$setup: setup failed"; continue; }
+        expect_exit5 "$name" "$setup" || continue
+        grep -qxF "$headline" "$ERR" || bad "$setup: no \"$headline\" line: $(flat "$ERR")"
+        if [[ -n "$J17_RELAY" ]]; then
+            relayed="$(grep -m1 -xF -A"$(wc -l <<<"$J17_RELAY")" "$headline" "$ERR" | tail -n +2)"
+            [[ "$relayed" == "$J17_RELAY" ]] \
+                || bad "$setup: below \"$headline\": $(paste -sd'|' <<<"$relayed"); want the open's stderr, every line indented two spaces: $(paste -sd'|' <<<"$J17_RELAY")"
+        fi
+        cause="$(tail -n 1 "$ERR")"
+        remedy="$(j17_remedy "${cause#install.sh: err_name=}")"
+        want_bin="$BIN" want_v="$SCHEMA"
+        case "$remedy" in
+            rerun) run "$J7H" "${J7ARGV[@]}" ;;
+            fix-config)
+                sed -i "$fix" "$J7H/.agent-director/config.toml"
+                run "$J7H" "${J7ARGV[@]}" ;;
+            newer-binary)
+                want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
+                run "$J7H" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink ;;
+            rerun-once)
+                expect_advice "re-running this install will retry it."
+                run "$J7H" "${J7ARGV[@]}"
+                expect_exit5 "${cause#install.sh: err_name=}" "$setup: re-run once after \"$cause\""
+                continue ;;
+            stop) continue ;;
+        esac
+        expect_rc 0 "$setup: $remedy after \"$cause\"" || continue
+        expect_installed "$J7H" "$want_bin" "$ADMIN"
+        [[ "$(db_version "$J7H")" == "$want_v" ]] || bad "$setup: store at v$(db_version "$J7H") after $remedy; want v$want_v"
+    done 3<<'EOF'
+j17_lock|install.sh: reading state.db's schema version FAILED|ErrVersionUnreadable|
+j17_config_refused|install.sh: agent-director refused its config file (ErrConfigMalformed)|ErrConfigMalformed|/^expire_retention_days = /d
+j17_newer_store|install.sh: store open (agent-director list) failed after install|ErrSchemaMismatch|
+j17_mismatch|install.sh: schema migration verification FAILED|ErrSchemaVerifyFailed|
+j17_fake ok|install.sh: state.db was not created by the store open|ErrSchemaVerifyFailed|
+j17_fake panic|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
+j17_fake odd-name|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
+j17_fake other-name|install.sh: store open (agent-director list) failed after install|ErrSchemaMigrationRequired|
+EOF
+}
+
+# ---- J18: settings.json of another shape, hooks on (b.cfq) -------------------------
+
+# J18: "It is valid JSON, but not an object whose hooks hold event lists, the
+# shape Claude Code reads. Fix it, then re-run this install." A hooks-on
+# install over such a settings.json exits 4, the hook merge failure, with jq's
+# error on the line above its headline and no exit-5 cause line, and leaves the
+# file as it was; rewritten to that shape, the re-run injects both hooks. Per
+# case <settings.json>|<fixed>.
+test_J18_SettingsShapeFixAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings fixed help above
+    local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
+    while IFS='|' read -r settings fixed <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json" help="$h/.agent-director/bin/agent-director help"
+        mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 4 "settings.json $settings" || continue
+        expect_advice "$want It is valid JSON, but not an object whose hooks hold event lists, the shape Claude Code reads. Fix it, then re-run this install."
+        above="$(grep -m1 -xF -B1 "$want" "$ERR" | head -n 1)"
+        [[ "$above" == "jq: error"* ]] || bad "$settings: the line above \"$want\" is not jq's error: $(paste -sd'|' "$ERR")"
+        if grep -q '^install\.sh: err_name=' "$ERR"; then
+            bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
+        fi
+        [[ "$(<"$sj")" == "$settings" ]] || bad "$settings: settings.json changed: $(<"$sj")"
+        if compgen -G "$sj.*" >/dev/null; then
+            bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
+        fi
+        printf '%s\n' "$fixed" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "$settings fixed to $fixed: re-run" || continue
+        jq -e --arg c "$help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
+            and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' "$sj" >/dev/null \
+            || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
+    done 3<<'EOF'
+[]|{}
+{"hooks":"x"}|{"hooks":{}}
+{"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}
 EOF
 }
 

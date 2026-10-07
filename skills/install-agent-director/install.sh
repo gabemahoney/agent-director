@@ -91,6 +91,12 @@
 #      pre-flight, before anything on disk changes). state.db here is
 #      the store database agent-director opens: ~/.agent-director/state.db,
 #      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
+#      Every exit 5 ends with one line on stderr, its last, naming the
+#      cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the
+#      text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed
+#      (fix config.toml, then re-run), ErrSchemaMismatch (install a newer
+#      agent-director), ErrSchemaVerifyFailed (needs a human), or, when the
+#      store open fails another way, agent-director's own err_name.
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -221,6 +227,37 @@ if [[ -n "$ADMIN_SHA256_EXPECTED" && -z "$SHA256_EXPECTED" ]]; then
     echo "  Pass --sha256 <hex> too (the sha256 of the agent-director release asset), or neither flag to skip verification." >&2
     exit 2
 fi
+
+# --------------------------------------------------------------------
+# Exit 5's machine-readable cause (b.cfq)
+#
+# Exit 5 has causes needing different remedies, so every exit-5 path ends
+# with one fixed line on stderr, its last, `install.sh: err_name=<Name>`,
+# for a caller to branch on instead of the English above it:
+#   ErrVersionUnreadable  a user_version read gave no version
+#                         (ad_fail_unreadable_version): re-run.
+#   ErrConfigMalformed    config.toml refused, by agent-director or by
+#                         install.sh's pre-flight reader or merge check:
+#                         fix it, then re-run.
+#   ErrSchemaMismatch     state.db newer than this binary (step 4's open):
+#                         install a newer agent-director.
+#   ErrSchemaVerifyFailed step 5 found state.db missing, or not at the
+#                         target version, after a successful open; or step 3
+#                         could not create the sentinel's temp file: needs
+#                         a human.
+#   any other name        step 4's open failed with that agent-director
+#                         err_name (ErrStoreOpen when its stderr held no
+#                         error envelope).
+# ErrVersionUnreadable and ErrSchemaVerifyFailed are install.sh's own
+# names, not agent-director error names.
+# --------------------------------------------------------------------
+
+# ad_exit_5 <err_name> — print exit 5's cause line naming <err_name> on
+# stderr, then exit 5.
+ad_exit_5() {
+    echo "install.sh: err_name=$1" >&2
+    exit 5
+}
 
 # --------------------------------------------------------------------
 # Pre-flight
@@ -684,7 +721,7 @@ ad_store_db_path() (
 # <<< ad_store_db_path (b.2io) <<<
 
 if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME")"; then
-    exit 5
+    ad_exit_5 ErrConfigMalformed
 fi
 # Messages name the store "state.db" when it is the default one, as
 # before, and by its path when [store] db_path moves it.
@@ -761,7 +798,7 @@ ad_config_merge_check() (
 )
 
 if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
-    exit 5
+    ad_exit_5 ErrConfigMalformed
 fi
 
 echo "install.sh: pre-flight OK"
@@ -1500,7 +1537,8 @@ ad_show_unreadable_version() {
 }
 
 # ad_fail_unreadable_version <status> <output> <what the install could not
-# do> [<line>...] — finish a user_version read's failure report and exit 5.
+# do> [<line>...] — finish a user_version read's failure report and exit 5
+# (ErrVersionUnreadable).
 # <status> and <output> are the read's (ad_user_version). It failed when
 # <status> is nonzero or it printed nothing, and otherwise printed <output>,
 # which is not a version (ad_is_version). The caller has already printed
@@ -1539,7 +1577,7 @@ ad_fail_unreadable_version() {
         echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
         echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
     fi
-    exit 5
+    ad_exit_5 ErrVersionUnreadable
 }
 
 # ad_target_version <stderr> — the schema version THIS binary requires.
@@ -1580,7 +1618,7 @@ ad_fail_config_refused() {
     printf '%s\n' "$1" | sed 's/^/  /' >&2
     echo "  Fix what the error above names in the config file, then re-run this" >&2
     echo "  install." >&2
-    exit 5
+    ad_exit_5 ErrConfigMalformed
 }
 
 # ---- Step 2: read the DB's ACTUAL current schema version ----
@@ -1693,7 +1731,9 @@ else
             echo "  The new agent-director does not open it until it is at v${target_version}." >&2
             echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2
             echo "  full disk), then re-run this install: it authorizes the migration again." >&2
-            exit 5
+            # A re-run alone does not fix it: someone must make the
+            # directory writable or free space first.
+            ad_exit_5 ErrSchemaVerifyFailed
         fi
         printf '{"from": %d, "to": %d}\n' "$db_version_before" "$target_version" > "$tmp_sentinel"
         chmod 0600 "$tmp_sentinel" 2>/dev/null || true
@@ -1716,7 +1756,8 @@ if open_err="$("$CANONICAL" list 2>&1 >/dev/null)"; then
 else
     # A refused config stopped the open before it reached state.db, so the
     # store advice below does not apply (b.7b4).
-    if [[ "$(ad_err_name "$open_err")" == ErrConfigMalformed ]]; then
+    open_name="$(ad_err_name "$open_err")"
+    if [[ "$open_name" == ErrConfigMalformed ]]; then
         ad_fail_config_refused "$open_err"
     fi
     # "If this install authorized a migration above", not "if a migration
@@ -1724,19 +1765,29 @@ else
     # install authorized ran at step 3's probe, which consumed it (b.dzw).
     echo "install.sh: store open (agent-director list) failed after install" >&2
     if [[ -n "$open_err" ]]; then
-        printf '  %s\n' "$open_err" >&2
+        printf '%s\n' "$open_err" | sed 's/^/  /' >&2
     fi
     echo "  The new binary could not open ${state_db_name}. If this install" >&2
     echo "  authorized a migration above, it was NOT consumed; re-running this" >&2
     echo "  install will retry it. If ${state_db_name} is NEWER than this binary" >&2
     echo "  (ErrSchemaMismatch), install a newer agent-director instead." >&2
-    exit 5
+    # The cause line relays the open's own err_name (b.cfq). Stderr with no
+    # envelope, or one whose err_name is not a bare Err... name, gets
+    # ErrStoreOpen, the name agent-director gives a store open that fails
+    # for no cause it names (clisetup.Open).
+    if [[ ! "$open_name" =~ ^Err[A-Za-z0-9]+$ ]]; then
+        open_name=ErrStoreOpen
+    fi
+    ad_exit_5 "$open_name"
 fi
 
 # ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
+# The open succeeded, so a missing state.db means install.sh and
+# agent-director disagree on where the store is, or it was removed since:
+# needs a human (ErrSchemaVerifyFailed).
 if [[ ! -f "$state_db" ]]; then
     echo "install.sh: ${state_db_name} was not created by the store open" >&2
-    exit 5
+    ad_exit_5 ErrSchemaVerifyFailed
 fi
 chmod 0600 "$state_db" 2>/dev/null || true
 db_version_after_rc=0
@@ -1815,7 +1866,7 @@ if [[ "$migration_expected" -eq 1 ]]; then
         echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2
         echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2
         echo "  the install. If a re-run fails this same way, contact the maintainers." >&2
-        exit 5
+        ad_exit_5 ErrSchemaVerifyFailed
     fi
     echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}"
 fi
@@ -1891,7 +1942,10 @@ else
     #     already there (matched by command).
     #   - Ensure hooks.SessionEnd is an array; append our compact-matcher
     #     entry if not already there.
-    new_settings=$(printf '%s' "$existing" | jq \
+    # Valid JSON of another shape (an array, or hooks a string, say) fails
+    # the merge with jq's runtime-error status, 5, which set -e would make
+    # the install's exit status: a hook merge failure is exit 4 (b.cfq).
+    if ! new_settings=$(printf '%s' "$existing" | jq \
         --arg cmd "$help_cmd" '
             .hooks //= {}
             | .hooks.SessionStart //= []
@@ -1908,7 +1962,12 @@ else
                   else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
                 end
             )
-        ')
+        '); then
+        echo "install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)" >&2
+        echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
+        echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        exit 4
+    fi
 
     # Backup-before-edit: snapshot the prior settings.json (if any) into a
     # timestamped .bak alongside the original so a regressed jq filter is

@@ -4501,6 +4501,8 @@ claude /install-agent-director (or `bash install.sh`)
     under a one-shot migrate-authorized sentinel (full six-step flow in
     install-agent-director/SKILL.md)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
+    (not valid JSON, or valid JSON of another shape → exit 4, the file
+    left as it was)
   → set inject_help_hook = true in config.toml's [defaults] table (see
     "The config.toml merge" below); --no-hooks skips this and the
     settings.json merge; both merges keep the file's mode (see "Merged
@@ -4510,6 +4512,40 @@ claude /install-agent-director (or `bash install.sh`)
 ```
 
 Pattern B is where the CLI / state / hooks side effects happen.
+
+**Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
+(`--help`) lists its exit codes: 2 pre-flight, 3 the source binaries or
+their version stamps, 4 the `settings.json` hook merge, 5 the config file
+or the store open and schema migration. Exit 5 has causes needing
+different remedies, so every exit-5 path ends with one line on stderr, its
+last, `install.sh: err_name=<Name>`. That line is the contract: a caller
+branches on `<Name>`, never on the English above it. The status stays 5
+for every cause, so a caller that checks only for 5 is unaffected.
+
+| `<Name>` | Sites | Remedy |
+|---|---|---|
+| `ErrVersionUnreadable` | `ad_fail_unreadable_version`: step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
+| `ErrConfigMalformed` | pre-flight `ad_store_db_path` and (hooks on) `ad_config_merge_check`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml`, then re-run |
+| `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
+| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded, or a readable `user_version` that is not the target | a human |
+| any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
+
+`ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
+signals, not agent-director error names: they are not in `errnames.Catalog`
+and no verb returns them (b.cfq's decision, overriding b.7b4's "no new
+error name" for these two). The `^Err[A-Za-z0-9]+$` check keeps a relayed
+name holding a newline from adding a second cause-line-shaped line at the
+end of stderr, and every relayed output (the open's stderr at step 4, the
+envelope in `ad_fail_config_refused`, a read's output under
+`<unreadable>`) is indented line by line, so no line but the cause line
+starts `install.sh: err_name=`. **Must use:** every exit-5 path calls
+`ad_exit_5 <Name>`, never a bare `exit 5`. A command whose failure is left
+to `set -e` stops the install with that command's own status (usually 1)
+and no cause line, so none is left there where its status can be 5: jq
+exits 5 on a runtime error, so the `settings.json` merge checks jq's status
+and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
+(jq's error is above)"); sqlite3 exits 5 on a busy database, and each
+caller of `ad_user_version` captures the read's status beside its output.
 
 **The two binaries (b.vqr).** Every install installs both
 `agent-director` and the operator tool `agent-director-admin` (see
@@ -5063,6 +5099,12 @@ the recovery depends on the cause, and it is never to delete `state.db`:
   taken before the install. That copy is v4, so re-run the install afterwards;
   a v5 binary's install migrates it again. Writes made since the install are
   lost.
+
+An install that meets either cause stops at step 4's open with exit 5 and
+the same cause line, `install.sh: err_name=ErrSchemaMismatch` (see "Exit
+codes, and exit 5's cause line" under
+[Pattern B](#pattern-b--installsh-the-install-skill)); only the relayed
+envelope's description above it tells the two apart (open as b.o9t).
 
 Deleting the store loses every row and the store id. JSONL transcripts under
 `~/.claude/projects/` survive independently either way.
