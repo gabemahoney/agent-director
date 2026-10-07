@@ -18,6 +18,7 @@ import (
 // with the cause removed a reuse is decided by its lookup (Gone), resets and launches (pending, life + 1); while a
 // "duplicate session" holder still holds the name, the reuse is refused and writes nothing.
 func TestResumeRestoreReuseAfterFailedResume(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	// createFails makes the resume's create fail with f once; the spent script is the cause removed.
 	createFails := func(f tmux.Failure) func(*testing.T, *killEnv, reuseRow) func() {
 		return func(_ *testing.T, e *killEnv, r reuseRow) func() {

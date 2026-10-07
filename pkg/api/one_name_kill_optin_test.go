@@ -19,6 +19,7 @@ import (
 // TestOneNameKillOptInReturnedErrors: every error kill with the opt-in adds
 // matches exactly one catalogued sentinel (as TestOneNameReturnedErrors).
 func TestOneNameKillOptInReturnedErrors(t *testing.T) {
+	t.Parallel()
 	for _, row := range oneNameKillOptInRows() {
 		t.Run(row.name, func(t *testing.T) { assertOneName(t, row.run(t), row.want) })
 	}

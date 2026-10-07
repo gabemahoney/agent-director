@@ -96,6 +96,7 @@ func assertGetHistory(t *testing.T, got api.SpawnRow, wantStatus string, want []
 // prior_sessions and transcript_status cover only the visible history (the
 // row's life, minus the entry for its current, non-empty session id).
 func TestGetHistoryVisible(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		life       int64
@@ -224,6 +225,7 @@ func TestGetHistoryVisible(t *testing.T) {
 // entry archived by a SessionStart rotation joins the row's life and is listed
 // by get alongside that life's older entries; the new current id is not.
 func TestGetHistoryHookRotationWithinLife(t *testing.T) {
+	t.Parallel()
 	for _, life := range []int64{0, 1} {
 		t.Run(fmt.Sprintf("life%d", life), func(t *testing.T) {
 			const id = "id-get-hist-hook"

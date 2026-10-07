@@ -10,6 +10,7 @@ import (
 )
 
 func TestDeleteSingleValidIdReturnsOk(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.DeleteRows(s, []string{"row-ended"})
 	if err != nil {
@@ -24,6 +25,7 @@ func TestDeleteSingleValidIdReturnsOk(t *testing.T) {
 }
 
 func TestDeleteBatchOfValidIdsAllReportOk(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.DeleteRows(s, []string{"row-live", "row-ended"})
 	if err != nil {
@@ -35,6 +37,7 @@ func TestDeleteBatchOfValidIdsAllReportOk(t *testing.T) {
 }
 
 func TestDeleteMixedValidAndBogusReportsPerRow(t *testing.T) {
+	t.Parallel()
 	// Per Epic 8 AC #3: partial-failure batch returns the per-row
 	// map; the batch DOES NOT abort on the bogus id.
 	s, _ := apitest.SeedDeleteFixture(t)
@@ -63,6 +66,7 @@ func TestDeleteMixedValidAndBogusReportsPerRow(t *testing.T) {
 }
 
 func TestDeleteOnLiveRowBypassesGuards(t *testing.T) {
+	t.Parallel()
 	// Delete is an admin verb — it does NOT consult state. A live row
 	// is removed exactly the same way a terminal row is. The orphan
 	// tmux session (if any) is left running; the verb makes no claim
@@ -78,6 +82,7 @@ func TestDeleteOnLiveRowBypassesGuards(t *testing.T) {
 }
 
 func TestDeleteEmptyIdSliceReturnsEmptyMap(t *testing.T) {
+	t.Parallel()
 	// Defense in depth: an empty input slice doesn't crash and
 	// returns a non-nil empty map. The CLI rejects this at flag parse
 	// (--claude-instance-id is required ≥1), but a future MCP caller

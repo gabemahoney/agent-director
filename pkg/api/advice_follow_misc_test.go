@@ -18,6 +18,7 @@ import (
 // TestAdviceFollow_F2_ListLabelKeyValueForm: F2 "%q is not in key=value
 // form"; list re-issued with the label as key=value returns the row.
 func TestAdviceFollow_F2_ListLabelKeyValueForm(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithRawLabels(`{"team":"alpha"}`)}})
 	e.seedRow(t, killRowSpec{})
@@ -37,6 +38,7 @@ func TestAdviceFollow_F2_ListLabelKeyValueForm(t *testing.T) {
 // TestAdviceFollow_F3_DecideRequestTokenRequired: F3 "request_token is
 // required"; decide re-issued with the token get shows applies the decision.
 func TestAdviceFollow_F3_DecideRequestTokenRequired(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 	now := time.Now()
@@ -61,6 +63,7 @@ func TestAdviceFollow_F3_DecideRequestTokenRequired(t *testing.T) {
 // TestAdviceFollow_G1_StoreNotInitialized: G1 Go doc "Initialize the store
 // first or set CreateIfMissing: true."; api.New then opens the store either way.
 func TestAdviceFollow_G1_StoreNotInitialized(t *testing.T) {
+	t.Parallel()
 	adviceAssertGoDoc(t, "aliases.go", "ErrStoreNotInitialized", "Initialize the store first or set CreateIfMissing: true.")
 	cases := []struct {
 		name   string

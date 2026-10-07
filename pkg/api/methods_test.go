@@ -112,6 +112,7 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 // been closed, must return ErrClientClosed and nothing else. Zero-value params
 // are intentional — the guard fires before any param inspection.
 func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	// Close explicitly now; the t.Cleanup-registered Close becomes a no-op
 	// because Close is idempotent.
@@ -157,6 +158,7 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 // TestAdminHooksRefuseNonClient: pkg/api sets internal/adminapi's hooks, and
 // each refuses any value but a non-nil *api.Client without running (b.vqr).
 func TestAdminHooksRefuseNonClient(t *testing.T) {
+	t.Parallel()
 	if adminapi.KillFinished == nil || adminapi.Delete == nil {
 		t.Fatal("importing pkg/api left an internal/adminapi hook unset")
 	}
@@ -180,6 +182,7 @@ func TestAdminHooksRefuseNonClient(t *testing.T) {
 // Version and Commit may be empty strings in test builds (no ldflags); the test
 // asserts only that no error is returned.
 func TestVersionHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	_, err := c.Version()
 	if err != nil {
@@ -192,6 +195,7 @@ func TestVersionHappy(t *testing.T) {
 // internal/api.Spawn → spawn.Validate before any tmux interaction, returning
 // spawn.ErrCwdMissing.
 func TestSpawnDelegation(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	_, err := c.Spawn(api.SpawnParams{}) // empty CWD → ErrCwdMissing
 	if !errors.Is(err, spawn.ErrCwdMissing) {
@@ -201,6 +205,7 @@ func TestSpawnDelegation(t *testing.T) {
 
 // TestStatusHappy verifies Status returns the row's state for a known id.
 func TestStatusHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		insertRow(t, dbPath, "id-st-1", "cd-st-1", store.StatePending)
 	})
@@ -215,6 +220,7 @@ func TestStatusHappy(t *testing.T) {
 
 // TestGetHappy verifies Get returns the full spawn row for a known id.
 func TestGetHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		insertRow(t, dbPath, "id-get-1", "cd-get-1", store.StatePending)
 	})
@@ -231,6 +237,7 @@ func TestGetHappy(t *testing.T) {
 // List against an empty store returns a non-nil Spawns slice (encodes as []
 // not null). Library callers and jq pipelines depend on this.
 func TestListEmptyStoreJSONStability(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	res, err := c.List(api.ListParams{})
 	if err != nil {
@@ -248,6 +255,7 @@ func TestListEmptyStoreJSONStability(t *testing.T) {
 // id causes internal/api.SendKeys to return store.ErrSpawnNotFound from the
 // store lookup — no tmux call is needed to exercise the delegation path.
 func TestSendKeysDelegation(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	_, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: "absent"})
 	if !errors.Is(err, store.ErrSpawnNotFound) {
@@ -259,6 +267,7 @@ func TestSendKeysDelegation(t *testing.T) {
 // id causes internal/api.ReadPane to return store.ErrSpawnNotFound before any
 // tmux capture is attempted.
 func TestReadPaneDelegation(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	_, err := c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
 	if !errors.Is(err, store.ErrSpawnNotFound) {
@@ -269,6 +278,7 @@ func TestReadPaneDelegation(t *testing.T) {
 // TestKillEndedRowHappy: Kill on a finished row (ended or missing) is a no-op
 // success with kill_sent false and no tmux call, even with its session still there (SR-6.1).
 func TestKillEndedRowHappy(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
 		t.Run(state, func(t *testing.T) {
 			e := newKillEnv(t)
@@ -290,6 +300,7 @@ func TestKillEndedRowHappy(t *testing.T) {
 // success. The desired post-condition is met before the /exit send-keys path
 // is reached, so no tmux call is made.
 func TestPauseEndedRowHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		insertRow(t, dbPath, "id-p-ended", "cd-p-ended", store.StateEnded)
 	})
@@ -304,6 +315,7 @@ func TestPauseEndedRowHappy(t *testing.T) {
 // the store lookup, exercising the delegation chain without needing a live
 // permission-request row.
 func TestDecideDelegation(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		// insertRow uses relay_mode="off" by default.
 		insertRow(t, dbPath, "id-dec-1", "cd-dec-1", store.StateCheckPermission)
@@ -322,6 +334,7 @@ func TestDecideDelegation(t *testing.T) {
 // live state (waiting) causes internal/api.Resume to return ErrSpawnNotResumable
 // before any JSONL or tmux check, exercising the delegation chain cleanly.
 func TestResumeDelegation(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClientWithRows(t, func(dbPath string) {
 		insertRow(t, dbPath, "id-res-1", "cd-res-1", store.StateWaiting)
 	})
@@ -334,6 +347,7 @@ func TestResumeDelegation(t *testing.T) {
 // TestFindMissingEmptyStoreHappy verifies FindMissing against an empty store
 // returns no error and Count=0 (fast no-op path: no live IDs to reconcile).
 func TestFindMissingEmptyStoreHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	res, err := c.FindMissing(context.Background())
 	if err != nil {
@@ -348,6 +362,7 @@ func TestFindMissingEmptyStoreHappy(t *testing.T) {
 // config-default retention window) against an empty store returns no error,
 // removes and keeps nothing, and returns both id lists non-nil and empty.
 func TestExpireNilOlderThanHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	res, err := c.Expire(nil)
 	if err != nil {
@@ -367,6 +382,7 @@ func TestExpireNilOlderThanHappy(t *testing.T) {
 // TestDeleteEmptySliceHappy verifies Delete with an empty id slice returns no
 // error and a non-nil empty map. This is the degenerate-input defence.
 func TestDeleteEmptySliceHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	res, err := adminapi.Delete(c, []string{})
 	if err != nil {
@@ -384,6 +400,7 @@ func TestDeleteEmptySliceHappy(t *testing.T) {
 // returns the absolute path. HOME is set to the test's temp dir so the
 // templates directory is isolated.
 func TestMakeTemplateHappy(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	res, err := c.MakeTemplate(api.MakeTemplateParams{Name: "meth-test-tmpl", CWD: "/tmp"})
 	if err != nil {
@@ -406,6 +423,7 @@ func TestMakeTemplateHappy(t *testing.T) {
 // separator triggers api.ErrListInvalidLabel inside internal/api.List, and
 // that sentinel is still matchable via errors.Is on the returned error.
 func TestListFacadePreservesErrListInvalidLabel(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	c, _ := newTestClient(t)
 	_, err := c.List(api.ListParams{Labels: []string{"noequalssign"}})
 	if !errors.Is(err, api.ErrListInvalidLabel) {

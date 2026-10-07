@@ -19,6 +19,14 @@ CLAUDE_CODE_VERSION ?= 2.1.120
 # under a different name without editing the file.
 TEST_IMAGE ?= agent-director-test
 
+# GO_TEST_TIMEOUT is the per-package -timeout of every `go test` below. Go's
+# default, 10m, is a budget for the whole package, and on the shared dev host
+# a loaded run of the largest packages without -race came near or past it
+# with no test hung (pkg/api 631 s, internal/store over 600 s; b.yo5), so the
+# run failed spuriously. 30m is about three times the slowest package seen:
+# only a real hang trips it. Override-friendly for a slower machine.
+GO_TEST_TIMEOUT ?= 30m
+
 # Version stamp embedded via -ldflags -X. Per SR-2.6 (b.ue3 / Epic 1):
 # every non-release build stamps the dev sentinel literal `0.0.0-dev`.
 #
@@ -72,7 +80,7 @@ build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director-admin ./cmd/agent-director-admin
 
 test: envelope-diff-ts test-install-sh
-	go test ./...
+	go test -timeout $(GO_TEST_TIMEOUT) ./...
 
 # test-install-sh runs test/install-sh/retry.sh, which checks install.sh's:
 #   - --from-release download retries against a fake curl (b.kym), for both
@@ -138,7 +146,7 @@ lint:
 #   (d) errnames.Catalog ⊆ callable-verb manifest ErrorNames
 #   (e) catalog.json and surface.json match their generators (via sub-tests)
 err-coherence:
-	go test ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
+	go test -timeout $(GO_TEST_TIMEOUT) ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
 
 # check-doccomments asserts that every exported identifier in pkg/api has a
 # non-empty doc comment. Exits non-zero with per-identifier diagnostics if
@@ -443,9 +451,10 @@ _sandbox-build: _sandbox-preflight
 # container. The suite's exit code propagates and output streams live.
 # Both suites always run (the go result does NOT short-circuit bun, so one
 # invocation reports both), and the combined exit is non-zero if EITHER fails.
+# Each Go package gets GO_TEST_TIMEOUT, not Go's 10m default (see above).
 test-sandbox: _sandbox-build
 	$(_SANDBOX_RUN) \
-		bash -c 'rc=0; (cd /work && go test ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
+		bash -c 'rc=0; (cd /work && go test -timeout $(GO_TEST_TIMEOUT) ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
 
 # sandbox-shell drops you into an interactive bash inside the container with the
 # same mounts as the test targets — the place to run builds, `go generate`,
@@ -831,7 +840,7 @@ release-shellcheck:
 # legacy test-*.sh harnesses (E10 retirement). Each test covers one gate or
 # phase invariant from the /release skill.
 release-smoke:
-	go test ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
+	go test -timeout $(GO_TEST_TIMEOUT) ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
 
 # release-bats was retired alongside the cabi-matrix removal — the only
 # bats tests under skills/release-agent-director/tests/ exercised the

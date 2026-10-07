@@ -22,6 +22,7 @@ import (
 )
 
 func TestDecideEmptyRequestToken(t *testing.T) {
+	t.Parallel()
 	// api.Decide must reject an empty RequestToken at the API layer,
 	// independent of CLI gating. One open row exists so the store's
 	// ErrAmbiguousRequest guard would not fire — the rejection must come
@@ -39,6 +40,7 @@ func TestDecideEmptyRequestToken(t *testing.T) {
 }
 
 func TestDecideRelayOffRejected(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "off")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
 	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
@@ -52,6 +54,7 @@ func TestDecideRelayOffRejected(t *testing.T) {
 }
 
 func TestDecideUnknownSpawn(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
 		ClaudeInstanceID: "absent",
@@ -64,6 +67,7 @@ func TestDecideUnknownSpawn(t *testing.T) {
 }
 
 func TestDecideInvalidDecision(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
 	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
@@ -77,6 +81,7 @@ func TestDecideInvalidDecision(t *testing.T) {
 }
 
 func TestDecideFirstCallWins(t *testing.T) {
+	t.Parallel()
 	// Two consecutive decides on the same open row. The first writes
 	// allow; the second sees the populated decision column and the
 	// `decision IS NULL` guard short-circuits the UPDATE.
@@ -126,6 +131,7 @@ func TestDecideFirstCallWins(t *testing.T) {
 // rest must observe ErrAlreadyDecided. Contention surface is the SQL
 // boundary, not the Go-level test.
 func TestDecideConcurrentFirstCallWins(t *testing.T) {
+	t.Parallel()
 	const workers = 8
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
@@ -180,6 +186,7 @@ func TestDecideConcurrentFirstCallWins(t *testing.T) {
 }
 
 func TestDecideNoOpenPermissionRequest(t *testing.T) {
+	t.Parallel()
 	// Spawn exists, relay_mode=on, but no row in permission_requests.
 	// The verb surfaces ErrNoOpenPermissionRequest after the UPDATE
 	// no-ops and the follow-up SELECT returns sql.ErrNoRows.
@@ -195,6 +202,7 @@ func TestDecideNoOpenPermissionRequest(t *testing.T) {
 }
 
 func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
+	t.Parallel()
 	// Task E: for a deny, the store always records DecisionReasonOperator;
 	// params.Reason is NOT written to the DB row. The canonical "operator"
 	// reason string is what the polling loop (and hook.EncodeDecision) will
@@ -229,6 +237,7 @@ func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
 // guard remains as defense-in-depth for direct DecidePermissionRequest callers;
 // api.Decide's early check supersedes it.
 func TestAmbiguousDecide(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
 	// Seed a second open row with a distinct token.
@@ -254,6 +263,7 @@ func TestAmbiguousDecide(t *testing.T) {
 //     the raw decision_reason column carries store.DecisionReasonOperator
 //     ("operator"), confirming the canonical constant is used at runtime.
 func TestDecisionReasonOnlyCanonicalValues(t *testing.T) {
+	t.Parallel()
 	t.Run("source_walk", func(t *testing.T) {
 		root := findModuleRoot(t)
 
@@ -373,6 +383,7 @@ func TestDecisionReasonOnlyCanonicalValues(t *testing.T) {
 }
 
 func TestDecideRelayFallenBack(t *testing.T) {
+	t.Parallel()
 	// A backdated (undeliverable) open request: Decide must refuse with
 	// ErrRelayFallenBack and MUST NOT record a decision — the row's decision
 	// column stays NULL so the refusal is never mistaken for a success.
@@ -402,6 +413,7 @@ func TestDecideRelayFallenBack(t *testing.T) {
 }
 
 func TestDecideInWindowRecordsDecision(t *testing.T) {
+	t.Parallel()
 	// An in-window request records allow and deny exactly as before. Two
 	// sub-cases exercise both verdicts against a comfortably-deliverable row
 	// (created just now, wide window).
@@ -437,6 +449,7 @@ func TestDecideInWindowRecordsDecision(t *testing.T) {
 }
 
 func TestDecideDeliverabilityBoundary(t *testing.T) {
+	t.Parallel()
 	// Boundary/safety-margin exercised via the injected clock and window — no
 	// sleeps, no backdating. The row's created_at is real-now (T0). Cutoff =
 	// now - (window - margin); the row is deliverable iff created_at > cutoff,
@@ -491,6 +504,7 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 }
 
 func TestDecideAlreadyDecidedBeatsFallenBack(t *testing.T) {
+	t.Parallel()
 	// Precedence: a decided row that is ALSO aged out of the window must return
 	// ErrAlreadyDecided, not ErrRelayFallenBack — fallen-back applies only to
 	// open rows. First decide in-window (records allow), then re-decide with an

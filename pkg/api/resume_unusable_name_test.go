@@ -21,6 +21,8 @@ import (
 // TestResumeUnusableNameWritesNothing: each unusable name, and the catalogue's mix.$b with its stored
 // form held, gets ErrInternal with no tmux call and nothing written, a caller instance id set.
 func TestResumeUnusableNameWritesNothing(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks every record written to the
+	// shared trail since its mark.
 	type unusableCase struct {
 		fixture unusableNameFixture
 		held    bool // a session holds the name's stored form
@@ -56,6 +58,7 @@ func TestResumeUnusableNameWritesNothing(t *testing.T) {
 // TestResumeStepOneGuardsBeatUnusableName: with an unusable recorded name, a live row, a row with
 // no session id and a missing transcript keep their own refusal, with no tmux call.
 func TestResumeStepOneGuardsBeatUnusableName(t *testing.T) {
+	t.Parallel()
 	unusable := apitest.WithTmuxSessionName(preGqeDefaultName)
 	cases := []struct {
 		name string
@@ -96,6 +99,7 @@ func TestResumeStepOneGuardsBeatUnusableName(t *testing.T) {
 // TestResumeUnusableNameLeavesVanishedSocketDir: a recorded socket whose per-user directory has
 // gone, with an unusable name, gets ErrInternal and the directory is not made again.
 func TestResumeUnusableNameLeavesVanishedSocketDir(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	sock := vanishedUserSocket(t)
 	r := e.seedResumable(t, "", apitest.WithTmuxSocket(sock), apitest.WithTmuxSessionName(preGqeDefaultName))

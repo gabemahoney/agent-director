@@ -119,6 +119,7 @@ func sktRebindAfterText(t *testing.T, e *killEnv, r *killRow) {
 // TestSendKeysTrailCalledPerReturnPath: every return path of Client.SendKeys
 // writes exactly one ad.send_keys.called, outcome by name, row_state the state read.
 func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name              string
 		seed              sktSeed // nil: an unknown id
@@ -175,6 +176,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			id := "sk-unknown-" + uuid.NewString()[:8]
 			if tc.seed != nil {
@@ -221,6 +223,7 @@ func sktAssertCalled(t *testing.T, rec map[string]any, p api.SendKeysParams, out
 // TestSendKeysTrailRowStateIsTheStateRead: a SessionStart applied between the
 // row read and the send leaves row_state the state read (pending).
 func TestSendKeysTrailRowStateIsTheStateRead(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedPending(t, pendingFresh, pendingOurs)
 	e.sessionStartAfter(t, tmux.CallLookup, r, "sess-"+uuid.NewString()[:8])
@@ -243,6 +246,7 @@ func TestSendKeysTrailRowStateIsTheStateRead(t *testing.T) {
 // TestSendKeysTrailClosedClient: a closed Client returns ErrClientClosed and
 // writes no trail record.
 func TestSendKeysTrailClosedClient(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	c, _ := e.client(t)
@@ -280,9 +284,11 @@ func (en sktEntry) send(t *testing.T, e *killEnv, id string) error {
 // written once per call with its fields and action, never with a label value
 // or another row's id; the normal Ours case writes none.
 func TestSendKeysTrailProvenanceDisagree(t *testing.T) {
+	t.Parallel()
 	for _, entry := range []sktEntry{{"SendKeys", false}, {"Client.SendKeys", true}} {
 		for _, tc := range keysDisagreeCases() {
 			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r, other := e.seedKeysDisagreeCase(t, tc)
 
@@ -354,6 +360,7 @@ func sktFailOpenRuns(t *testing.T, prefix string) []string {
 // TestSendKeysTrailFailOpen: with the trail unwritable, send-keys' errors,
 // tmux calls and rows equal those of a run with a working trail.
 func TestSendKeysTrailFailOpen(t *testing.T) {
+	t.Parallel()
 	prefix := "sk-failopen-" + uuid.NewString()[:8]
 	want := sktFailOpenRuns(t, prefix)
 	for _, l := range want {
@@ -388,6 +395,7 @@ func TestSendKeysTrailFailOpen(t *testing.T) {
 // TestSendKeysTrailFailOpenChild is TestSendKeysTrailFailOpen's child: it
 // runs the calls with an unwritable trail and prints their lines.
 func TestSendKeysTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(sktChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestSendKeysTrailFailOpen's child")

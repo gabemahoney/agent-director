@@ -66,6 +66,7 @@ func kosKill(t *testing.T, e *killEnv, r killRow, o seqOutcome) {
 // TestKillIncludeFinishedSequence: a reported-in session past both on an ended
 // or missing row is killed by ids, then the wait or one follow-up decides.
 func TestKillIncludeFinishedSequence(t *testing.T) {
+	t.Parallel()
 	both := apitest.KillSent{Pane: true, Session: true}
 	ok := seqOutcome{calls: seqOurs, sent: true}
 	okFollowUp := seqOutcome{calls: withFollowUp(seqOurs), sent: true}
@@ -122,6 +123,7 @@ func TestKillIncludeFinishedSequence(t *testing.T) {
 	for _, state := range kosFinished {
 		for _, tc := range cases {
 			t.Run(state+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r := e.seedStarting(t, kosReportedIn(state, tc.agent))
 				tc.setup(t, e, &r.killRow)
@@ -153,6 +155,7 @@ func kosAssertResumeLaunches(t *testing.T, e *killEnv, id string) {
 // pane or server identity recorded has the pane carrying its token killed by
 // id, with no adoption write (row_version and the identity unchanged).
 func TestKillIncludeFinishedSequenceUsesLostReplyPane(t *testing.T) {
+	t.Parallel()
 	for _, state := range kosFinished {
 		t.Run(state, func(t *testing.T) {
 			e := newKillEnv(t)

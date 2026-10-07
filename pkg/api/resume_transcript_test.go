@@ -51,6 +51,7 @@ func triedPaths(name string, paths ...string) apitest.DescCase {
 // TestResumeJsonlMissingReturnsErrJsonlMissing: with a rotted history entry and
 // no current transcript, ErrJsonlMissing names the computed path (b.v2c AC2).
 func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd := t.TempDir()
 	id := seedBareResumeRow(t, e, cwd, "sess-1", inRowLife("prior-rotted", filepath.Join(t.TempDir(), "gone", "prior-rotted.jsonl")))
@@ -66,6 +67,7 @@ func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
 // TestResumeNeverWrittenReturnsErrJsonlNeverWritten: a NULL jsonl_path and an
 // empty visible history give ErrJsonlNeverWritten, not ErrJsonlMissing (AC2).
 func TestResumeNeverWrittenReturnsErrJsonlNeverWritten(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	id := seedBareResumeRow(t, e, t.TempDir(), "sess-1")
 	before := e.columns(t, id)
@@ -79,6 +81,7 @@ func TestResumeNeverWrittenReturnsErrJsonlNeverWritten(t *testing.T) {
 // TestResumeRecoversRotatedSessionFromHistory: with no current transcript,
 // resume relaunches the archived session whose recorded transcript exists (AC6).
 func TestResumeRecoversRotatedSessionFromHistory(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd := t.TempDir()
 	prior := apitest.SeedJsonlUnder(t, t.TempDir(), cwd, "prior-session")
@@ -94,6 +97,7 @@ func TestResumeRecoversRotatedSessionFromHistory(t *testing.T) {
 // TestResumeRecoversHistoryEntryWithEmptyPathViaConfigDir: an archived entry
 // with a NULL path is recovered at its path recomputed under CLAUDE_CONFIG_DIR.
 func TestResumeRecoversHistoryEntryWithEmptyPathViaConfigDir(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd, cfgDir := t.TempDir(), t.TempDir()
 	id := seedBareResumeRow(t, e, cwd, "sess-1", inRowLife("prior-emptypath", ""),
@@ -110,6 +114,7 @@ func TestResumeRecoversHistoryEntryWithEmptyPathViaConfigDir(t *testing.T) {
 // TestResumeHistoryWalkFallsBackToRecomputedPathForNewerRottedEntry: a newer
 // entry whose recorded path rotted but whose recomputed path exists wins (b.5jm/1).
 func TestResumeHistoryWalkFallsBackToRecomputedPathForNewerRottedEntry(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd, cfgDir := t.TempDir(), t.TempDir()
 	older := apitest.SeedJsonlUnder(t, t.TempDir(), cwd, "older-intact")
@@ -129,6 +134,7 @@ func TestResumeHistoryWalkFallsBackToRecomputedPathForNewerRottedEntry(t *testin
 // TestResumeListSessionHistoryErrorPropagates: a failed history read is
 // returned wrapped, with nothing launched.
 func TestResumeListSessionHistoryErrorPropagates(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	id := seedBareResumeRow(t, e, t.TempDir(), "sess-1")
 	rs.historyErr = errors.New("history read boom")
@@ -141,6 +147,7 @@ func TestResumeListSessionHistoryErrorPropagates(t *testing.T) {
 // TestResumeHistoryWalkReadsRowsOwnLife: with no current transcript, resume
 // reads history for exactly the life of the row it read (Epic 6).
 func TestResumeHistoryWalkReadsRowsOwnLife(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	id := seedBareResumeRow(t, e, t.TempDir(), "sess-1")
 	_, _ = rs.resume(e, id)
@@ -152,6 +159,7 @@ func TestResumeHistoryWalkReadsRowsOwnLife(t *testing.T) {
 // TestResumePrefersPersistedJsonlPath: a persisted jsonl_path away from the
 // computed location lets resume launch, so the persisted path was the one stat'd.
 func TestResumePrefersPersistedJsonlPath(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd := t.TempDir()
 	persisted := apitest.SeedJsonlUnder(t, t.TempDir(), cwd, "sess-1")
@@ -167,6 +175,7 @@ func TestResumePrefersPersistedJsonlPath(t *testing.T) {
 // TestResumeFallbackSuccess (b.1ba): resume finds the transcript through the
 // CLAUDE_CONFIG_DIR-aware fallback, or ~/.claude when that value is unusable.
 func TestResumeFallbackSuccess(t *testing.T) {
+	t.Parallel()
 	cfgEnv := func(v string) func(string) map[string]string {
 		return func(string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": v} }
 	}
@@ -219,6 +228,7 @@ func TestResumeFallbackSuccess(t *testing.T) {
 // TestResumeBothCandidatesAbsentReturnsErrJsonlMissing: with neither the
 // persisted nor the fallback path present, the message names both with sources.
 func TestResumeBothCandidatesAbsentReturnsErrJsonlMissing(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd, cfgDir := t.TempDir(), t.TempDir()
 	persisted := filepath.Join(t.TempDir(), "custom", "gone.jsonl")
@@ -237,6 +247,7 @@ func TestResumeBothCandidatesAbsentReturnsErrJsonlMissing(t *testing.T) {
 // TestResumeNullPathBothAbsentReportsSingleFallback: a NULL jsonl_path with no
 // transcript anywhere is ErrJsonlNeverWritten naming only the fallback.
 func TestResumeNullPathBothAbsentReportsSingleFallback(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	cwd, cfgDir := t.TempDir(), t.TempDir()
 	id := seedBareResumeRow(t, e, cwd, "sess-1", apitest.WithExtraEnv(map[string]string{"CLAUDE_CONFIG_DIR": cfgDir}))

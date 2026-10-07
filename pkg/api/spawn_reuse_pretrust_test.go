@@ -54,6 +54,7 @@ func rtrResume(t *testing.T, e *killEnv, id, cwd string, c trustConfig, want str
 // TestSpawnReuseFollowsOwnPreTrustChoice: the reuse pre-trusts by its own
 // call's opt-out, not the old life's, records it, and a later resume follows it.
 func TestSpawnReuseFollowsOwnPreTrustChoice(t *testing.T) {
+	t.Parallel()
 	for _, tc := range rtrChoices {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newReuseEnv(t)
@@ -85,6 +86,7 @@ func TestSpawnReuseFollowsOwnPreTrustChoice(t *testing.T) {
 // whose restore applies leaves the old life's choice recorded, and a following
 // resume follows it.
 func TestSpawnReuseFailedRestoresPreTrustChoice(t *testing.T) {
+	t.Parallel()
 	for _, tc := range rtrChoices {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newReuseEnv(t)
@@ -107,6 +109,7 @@ func TestSpawnReuseFailedRestoresPreTrustChoice(t *testing.T) {
 // TestSpawnReusePreTrustAfterNamePreCheck: a reuse refused at the old-row
 // lookup or the new-name pre-check writes no trust entry (nor anything else).
 func TestSpawnReusePreTrustAfterNamePreCheck(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name   string
 		holder holderKind
@@ -137,6 +140,7 @@ func TestSpawnReusePreTrustAfterNamePreCheck(t *testing.T) {
 // TestSpawnReusePreTrustWriteFailureStillLaunches: a trust file that cannot
 // be written reports failed and the reuse still launches.
 func TestSpawnReusePreTrustWriteFailureStillLaunches(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		file trustFile

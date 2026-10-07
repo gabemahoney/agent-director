@@ -78,6 +78,7 @@ func mustExpire(t *testing.T, e *killEnv, over *time.Duration) api.ExpireResult 
 // TestExpireSweepHungSocket: a hung socket A costs one lookup of at most Q + W; its first row is cant_tell, its
 // later rows tmux_skipped, while socket B's rows, between A's in id order, are decided by B's lookup.
 func TestExpireSweepHungSocket(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	sockA, sockB := fmbSocket(1), fmbSocket(2)
 	e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: exsHang}).
@@ -103,6 +104,7 @@ func TestExpireSweepHungSocket(t *testing.T) {
 // TestExpireSweepBudget: Client.Expire at the default and at a configured budget, each lookup charged Q + W: no
 // call starts once the budget is spent, every row from the spending call on is kept tmux_skipped, the run succeeds.
 func TestExpireSweepBudget(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []struct {
 		name     string
 		settings []apitest.TmuxSetting
@@ -143,6 +145,7 @@ func TestExpireSweepBudget(t *testing.T) {
 // kept: each socket's first row with the failure's reason, its later rows tmux_skipped, a live agent's row
 // process_alive.
 func TestExpireSweepTmuxUnreachable(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []struct {
 		name    string
 		failure tmux.Failure
@@ -174,6 +177,7 @@ func TestExpireSweepTmuxUnreachable(t *testing.T) {
 // TestExpireSweepWrongServer (AC-EXP-10, TLA+ F-7): a sweep on another server marks a live row missing; expire
 // on the agents' server then keeps it as ours and does not delete it.
 func TestExpireSweepWrongServer(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{NoServerIdentity: true, Agent: agentUnreadable})
 	other := tmuxfix.NewRecorder()
@@ -200,6 +204,8 @@ func TestExpireSweepWrongServer(t *testing.T) {
 // TestExpireSweepNoSocketRule: recorded-socket rows are looked up there whatever the caller's environment; rows
 // recording none share one lookup on the caller's socket, resolved creating nothing, or get none when refused.
 func TestExpireSweepNoSocketRule(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv; it checks every record written to the shared trail
+	// since its mark.
 	t.Run("caller's TMUX names another server", func(t *testing.T) {
 		e := newKillEnv(t)
 		caller := filepath.Join(t.TempDir(), "caller")
@@ -241,6 +247,7 @@ func TestExpireSweepNoSocketRule(t *testing.T) {
 
 	t.Run("per-user directory mode 0755", func(t *testing.T) {
 		e := newKillEnv(t)
+		e.ownSocketDir(t)
 		if err := os.Chmod(filepath.Dir(e.defaultSocket), 0o755); err != nil {
 			t.Fatalf("chmod: %v", err)
 		}

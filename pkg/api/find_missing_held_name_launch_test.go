@@ -23,6 +23,7 @@ import (
 // TestFindMissingHeldNameOursNeverMarked (AC-FM-18): a pending row whose current-launch session is present, under
 // its recorded name or renamed, is never marked, however late the sweep.
 func TestFindMissingHeldNameOursNeverMarked(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name string
 		seed func(t *testing.T, e *hnEnv, rename func(string) string) hnRow
@@ -76,6 +77,8 @@ func TestFindMissingHeldNameOursNeverMarked(t *testing.T) {
 // TestFindMissingHeldNameAfterSpawnEndWriteFailed (Epic 13, AC-SPN-09): a plain spawn meeting "duplicate session"
 // whose end write fails leaves the row pending; find-missing marks it only past grace, with one sweep record.
 func TestFindMissingHeldNameAfterSpawnEndWriteFailed(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv; it checks the
+	// shared trail by literal row ids other find-missing tests reuse.
 	e := newHeldEnv(t)
 	id := heldID()
 	e.rec.SeedSessions(e.socket, heldSession(heldRowName, "$4", tmux.Label{}, false))

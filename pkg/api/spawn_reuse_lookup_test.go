@@ -151,6 +151,7 @@ func rulCantTell() []rulCase {
 // TestSpawnReuseLookupOutcomes: per lookup outcome on an ended and a missing
 // row, the starting-session step, the conflict, Can't tell's error or the launch.
 func TestSpawnReuseLookupOutcomes(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	const conflict, unresponsive = "ErrTmuxSessionConflict", "ErrTmuxUnresponsive"
 	settled := rlkSettled
 	elsewhere := func(t *testing.T, e *killEnv, r *reuseRow, k holderKind) tmuxfix.SeedSession {
@@ -204,8 +205,10 @@ func TestSpawnReuseLookupOutcomes(t *testing.T) {
 // TestSpawnReuseLookupOnRecordedSocket: the one lookup goes to the recorded socket
 // before pre-trust and the reset; a holder on the default socket is not consulted.
 func TestSpawnReuseLookupOnRecordedSocket(t *testing.T) {
+	t.Parallel()
 	for _, state := range finishedStates {
 		t.Run(state, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			recorded := filepath.Join(filepath.Dir(e.defaultSocket), "recorded-"+uuid.NewString()[:8])
 			r := e.seedReusable(t, agentGone, reuseRowSpec{State: state, Age: rlkSettled(e),
@@ -229,6 +232,7 @@ func TestSpawnReuseLookupOnRecordedSocket(t *testing.T) {
 // TestSpawnReuseSocketRefused: a recorded socket whose directory cannot be
 // made is ErrTmuxNotAvailable before any tmux call, with nothing written.
 func TestSpawnReuseSocketRefused(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, state := range finishedStates {
 		t.Run(state, func(t *testing.T) {
 			e := newKillEnv(t)
@@ -253,6 +257,7 @@ func TestSpawnReuseSocketRefused(t *testing.T) {
 // TestSpawnReuseLookupLeftoverLostRace (SR-10.5): a Leftover after a competing write
 // changed or removed the row is the lost race; unchanged, the Leftover refusal stands.
 func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []struct {
 		name    string
 		compete func(e *killEnv, id string) error // after the pre-check read; nil: none

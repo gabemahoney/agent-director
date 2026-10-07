@@ -73,6 +73,7 @@ func skaOtherPane(e *killEnv) tmuxfix.SeedPane { return tmuxfix.SeedPane{PID: e.
 // TestSendKeysAgentPane: the keys go once to the agent's pane id wherever it
 // now is; a missing or respawned pane is the pane-not-found conflict, unsent.
 func TestSendKeysAgentPane(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		spec  killRowSpec
@@ -130,6 +131,7 @@ func TestSendKeysAgentPane(t *testing.T) {
 // TestSendKeysLostReplyPane: a row recording no pane types into the one pane
 // carrying its token, at any index; none or two is the lost-reply conflict.
 func TestSendKeysLostReplyPane(t *testing.T) {
+	t.Parallel()
 	token := func(t *testing.T, _ *killEnv, r *killRow) skaWant {
 		return skaDelivered(labelledPane(t, r.Session, r.Token))
 	}
@@ -170,6 +172,7 @@ func TestSendKeysLostReplyPane(t *testing.T) {
 // TestSendKeysListingFails: a pane listing that times out or gives an
 // unrecognised reply is ErrTmuxUnresponsive naming the listing; nothing sent.
 func TestSendKeysListingFails(t *testing.T) {
+	t.Parallel()
 	const firstLine = "list-panes: unexpected reply"
 	cases := []struct {
 		name   string
@@ -220,6 +223,7 @@ func skaAssertTyped(t *testing.T, e *killEnv, r killRow, action tmux.Call) {
 // ErrTmuxUnresponsive, the keys may have been delivered, with send-keys'
 // next step (b.9o4) and no follow-up.
 func TestSendKeysActionTimeout(t *testing.T) {
+	t.Parallel()
 	for _, a := range skaActions {
 		t.Run(string(a.call), func(t *testing.T) {
 			e := newKillEnv(t)
@@ -256,6 +260,7 @@ func skaFollowUpLookup(s tmuxfix.Script) func(*testing.T, *killEnv, killRow, tmu
 // ErrTmuxUnresponsive says send-keys with empty text submits it (b.9o4).
 // Reply text never classifies.
 func TestSendKeysActionFailureFollowUp(t *testing.T) {
+	t.Parallel()
 	gone := func(r killRow, action tmux.Call) apitest.DescCase {
 		return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PaneSendKeys, InstanceID: r.ID, Name: r.Name,
 			FailedCall: action})
@@ -309,6 +314,7 @@ func TestSendKeysActionFailureFollowUp(t *testing.T) {
 	for _, a := range skaActions {
 		for _, tc := range cases {
 			t.Run(string(a.call)+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r := e.seedRow(t, killRowSpec{})
 				e.seedBystander(t, r.Socket)
@@ -336,6 +342,7 @@ func TestSendKeysActionFailureFollowUp(t *testing.T) {
 // logged adopted only when applied; no write when it adds nothing; the
 // write's outcome never changes where the keys go (SR-3.6).
 func TestSendKeysAdoptionWrite(t *testing.T) {
+	// Serial: it redirects the process-wide standard logger (log.SetOutput).
 	lost := killRowSpec{NoPane: true, NoServerIdentity: true}
 	tokenPane := func(t *testing.T, r killRow) string { return labelledPane(t, r.Session, r.Token) }
 	recorded := func(_ *testing.T, r killRow) string { return r.Spawn.Identity.PaneID }

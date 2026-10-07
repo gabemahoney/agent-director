@@ -61,7 +61,10 @@ func mxuUnusable(id string, k mxKind, p mxPane, lk mxLookup, f unusableNameFixtu
 
 // TestFindMissingUnusableNameMatrix: every row kind x pane evidence x lookup cell with an unusable name (the
 // fixtures in turn) and with the usable control: only the name switches an unknown or absent row off the lookup.
+// Each cell sweeps its own fake store and reads only its own id's trail records, so the cells run in parallel;
+// a cell's two sweeps share its id and stay in order.
 func TestFindMissingUnusableNameMatrix(t *testing.T) {
+	t.Parallel()
 	fixtures, usable := unusableNameFixtures(), usableNameFixture()
 	for si, s := range mxuStates {
 		for pi, p := range mxPanes {
@@ -71,6 +74,7 @@ func TestFindMissingUnusableNameMatrix(t *testing.T) {
 				}
 				f := fixtures[(li+pi)%len(fixtures)]
 				t.Run(s.name+"/"+p.name+"/"+lk.name, func(t *testing.T) {
+					t.Parallel()
 					k, id := s.k.made(t), fmt.Sprintf("mxu-%d-%d-%d", si, pi, li)
 					t.Run(f.label, func(t *testing.T) { runMxCell(t, mxuUnusable(id, k, p, lk, f, s.rowOpts(p, f.raw))) })
 					t.Run(usable.label, func(t *testing.T) { runMxCell(t, mxuControl(id, k, p, lk, s.rowOpts(p, usable.raw))) })
@@ -83,6 +87,7 @@ func TestFindMissingUnusableNameMatrix(t *testing.T) {
 // TestFindMissingUnusableNameMatrixGrace: a pending row with an unusable name inside its grace period is not
 // judged (no reader or tmux call, no write); one with no launch start is past grace and gets its note.
 func TestFindMissingUnusableNameMatrixGrace(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		launch int64
@@ -94,7 +99,7 @@ func TestFindMissingUnusableNameMatrixGrace(t *testing.T) {
 	for si, s := range mxuStates[:3] {
 		for _, f := range fmuReps() {
 			for ci, tc := range cases {
-				t.Run(s.name+"/"+f.label+"/"+tc.name, func(t *testing.T) {
+				t.Run(s.name+"/"+f.label+"/"+tc.name, func(t *testing.T) { // in order: fixtures share an id
 					r := mxRow(fmt.Sprintf("mxu-grace-%d-%d", si, ci), s.k.made(t), true, true,
 						withLaunch(store.StatePending, tc.launch), fmuNamed(f.raw))
 					want := mxWant{reads: []int{}}

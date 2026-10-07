@@ -9909,20 +9909,25 @@ second extraction of the block.
 - Reply wording always comes from the replay catalogue, and timing tests use `tmuxfix.Clock`.
 - The server check's process reader (`tmux.ProcChecker`): `procfix.Checker` in in-process tests ([procfix](#procfix-the-process-checker-fake-reusable-test-fixture)); the production reader, `probe.NewProcChecker()`, in `test/realtmux`.
 
-**Must use (server isolation, SR-20.3):** a test that reaches a tmux
-server, real or fake, uses a per-test `TMUX_TMPDIR` with `TMUX` unset, or
-puts the fake first on `PATH`, so no two tests share a server. Existing
-per-package fixtures that do this: `newSpawnEnv` / `buildSpawnEnv` in
-`pkg/api/spawn_test.go` (temp `HOME`, per-test `TMUX_TMPDIR`, `TMUX`
-unset); `spawnTmuxTmpdir` in `cmd/agent-director/spawn_cli_test.go`
-(`<home>/tmux-tmpdir`, which `runSpawnCLIEnv` passes to the child);
-`newResumeEnv` in `pkg/api/resume_fixture_test.go` (see
-[pkg/api resume fixture](#pkgapi-resume-fixture-package-internal-test-fixture));
-and `usePrivateFakeTmux` in `test/envelope-diff/error_cases_spawn_tmux.go`
-(fresh `TMUX_TMPDIR` and `FAKE_TMUX_TABLES`, `TMUX` empty), which the spawn
-tmux error rows call and `TestEnvelopeDiff_Success` calls before the CLI run
-and again before the Client run, so the two runs never share a server or
-fake-tmux tables.
+**Must use (server isolation, SR-20.3):** no two tests share a tmux
+server, real or fake. A test that reaches a real tmux or `test/fake-tmux`
+uses a per-test `TMUX_TMPDIR` with `TMUX` unset, or puts the fake first on
+`PATH`. Existing per-package fixtures that do this: `newSpawnEnv` /
+`buildSpawnEnv` in `pkg/api/spawn_test.go` (temp `HOME`, per-test
+`TMUX_TMPDIR`, `TMUX` unset); `spawnTmuxTmpdir` in
+`cmd/agent-director/spawn_cli_test.go` (`<home>/tmux-tmpdir`, which
+`runSpawnCLIEnv` passes to the child); `ownSocketDir` on the `pkg/api` kill
+and resume fixtures (`useOwnTmuxTmpdir`); and `usePrivateFakeTmux` in
+`test/envelope-diff/error_cases_spawn_tmux.go` (fresh `TMUX_TMPDIR` and
+`FAKE_TMUX_TABLES`, `TMUX` empty), which the spawn tmux error rows call and
+`TestEnvelopeDiff_Success` calls before the CLI run and again before the
+Client run, so the two runs never share a server or fake-tmux tables. An
+in-process `tmuxfix.Recorder` belongs to one test and holds its servers in
+memory, keyed by socket path, so tests on separate Recorders may resolve
+the same socket: the `pkg/api` kill and resume fixtures use `TestMain`'s
+one `TMUX_TMPDIR` and run in parallel (see
+[pkg/api tests: parallel or serial](#pkgapi-tests-parallel-or-serial-package-internal-test-convention)).
+A test that changes that socket directory on disk takes its own first.
 
 ### tmux test doubles: replay catalogue, Recorder and Clock (reusable test fixtures)
 
@@ -11748,10 +11753,17 @@ detail.
 - `newResumeEnv(t)` returns a `resumeEnv`: a real store; a
   `tmuxfix.Recorder` on a `tmuxfix.Clock` with no server started; a
   `procfix.Checker`; a captured logger; `config.Default()`; an `api.Client`
-  on the same store file; the store id; and a per-test `TMUX_TMPDIR`
-  (`TMUX` unset, `AGENT_DIRECTOR_INSTANCE_ID` empty) whose per-user
-  socket directory exists. `e.resume(id)` calls `api.Resume` with all of
-  them; `e.columns(t, id)` reads the row through `apitest.ReadSpawnColumns`.
+  on the same store file; the store id; and `TestMain`'s `TMUX_TMPDIR`
+  (`apiTmuxTmpdir`, through `useSharedTmuxTmpdir`; `TMUX` unset,
+  `AGENT_DIRECTOR_INSTANCE_ID` empty), whose per-user socket directory
+  exists. It sets no environment unless its test already changed one of
+  those variables, so its test may run in parallel. `e.resume(id)` calls
+  `api.Resume` with all of them; `e.columns(t, id)` reads the row through
+  `apitest.ReadSpawnColumns`.
+- `e.ownSocketDir(t)` moves `e.tmpdir` and `e.socket` into the test's own
+  `TMUX_TMPDIR` (`useOwnTmuxTmpdir`), for a test that keeps state beside the
+  socket (`test/fake-tmux`'s table). Call it before seeding. It uses
+  `t.Setenv`, so the test is serial.
 - `e.seedResumable(t, state, opts...)` / `e.seedRow(t, resumableSpec)` seed
   a resumable row (default `ended`) through `apitest.SeedSpawn` options:
   a full launch identity on `e.socket`, a transcript, and one archived
@@ -11805,7 +11817,8 @@ not `resumeEnv`:
   record other than `ad.provenance.disagree`, any tmux call beyond one
   lookup, any name-based call and every bound socket's sessions.
   `snapshotResume` / `assertResumeWroteNothing` are resume's wrappers
-  over it, and `snapshotReuse` reuse's.
+  over it, and `snapshotReuse` reuse's. Because it reads every trail
+  record since the snapshot, a test that uses it is serial.
 - `pkg/api/resume_fixture_test.go` also holds `hookLock`, the lock and
   one-shot-hook helper shared by the hooked store wrappers
   (`hookedResumeStore`, `hookedReuseStore`).
@@ -11833,7 +11846,43 @@ and calls `trail.Default()` before `m.Run()`, so the trail singleton is
 fixed at `apiTrailDir/.agent-director/ad-trail.jsonl` before any test runs.
 A test that moves HOME and emits first no longer moves the trail. The one
 exception is the `TestScanNameHeldFailOpen` child process
-(`scanTrailChildEnv` set), which needs the singleton unfixed.
+(`scanTrailChildEnv` set), which needs the singleton unfixed. `TestMain`
+also unsets `AGENT_DIRECTOR_INSTANCE_ID` and `TMUX` and points
+`TMUX_TMPDIR` at one fresh temp dir for the whole test binary
+(`apiTmuxTmpdir`, with its per-user socket directory made at mode 0700), so
+a default socket resolves there, never under the caller's tmux or
+`/tmp/tmux-<uid>`.
+
+**Reading the trail: `readAPITrailLines`.** `readAPITrailLines`
+(`find_missing_trail_test.go`) is the one reader of the shared trail file
+for `pkg/api` tests. It parses each line once and is safe to call from
+parallel tests. Its rules for callers are in docs/test-writing-guide.md
+"pkg/api tests: parallel or serial".
+
+### pkg/api tests: parallel or serial (package-internal test convention)
+
+Every top-level test in package `pkg/api` starts with `t.Parallel()` or with
+a `// Serial: <reason>.` comment as the first line of its body (b.yo5).
+`TestEveryTestDeclaresParallelOrSerial`
+(`pkg/api/parallel_declared_test.go`) parses the `*_test.go` files in
+`pkg/api` itself and fails any top-level test that has neither. It does not
+check the tests of `pkg/api/manifest`, `pkg/api/errnames` or
+`pkg/api/apitest`. docs/test-writing-guide.md "pkg/api tests: parallel or
+serial" says when a test must stay serial and how to word the reason.
+
+**Must use:** the environment helpers in `pkg/api/kill_fixture_test.go`.
+They are:
+
+- `setenvIfChanged(t, key, value)` and `unsetenvIfSet(t, key)`, which call
+  `t.Setenv` only when the current value differs, so a fixture that needs
+  `TestMain`'s value leaves a parallel test parallel.
+- `useSharedTmuxTmpdir(t)`, `TestMain`'s `TMUX_TMPDIR` with `TMUX` unset.
+- `useOwnTmuxTmpdir(t)` and the fixtures' `ownSocketDir`, a test's own
+  `TMUX_TMPDIR` for a test that changes the socket directory on disk or
+  uses `test/fake-tmux`. Never chmod or remove `apiTmuxTmpdir`.
+
+A new `pkg/api` fixture gets a test's own `TMUX_TMPDIR` through
+`useOwnTmuxTmpdir`, never a hand-rolled `t.Setenv`.
 
 ### pkg/api find-missing sweep helper (package-internal test fixture)
 
@@ -11939,10 +11988,15 @@ each file's doc comments carry the detail.
   `failStateReads` fail the relay guard's read and pause's wait polls), a
   `tmuxfix.Recorder` on virtual
   time (`e.rec`, `e.clock`), a `procfix.Checker` (`e.pc`), the `[tmux]`
-  defaults (`e.cfg`), `kill`'s sleep (`e.sleep`, the clock's `Advance`) and a
-  per-test `TMUX_TMPDIR` (so no `t.Parallel`). `e.kill(id)` calls the
-  exported `api.Kill`; `e.client(t, settings...)` gives an `api.Client` on
-  the same store with a config written by `apitest.WriteTmuxConfig`, and
+  defaults (`e.cfg`), `kill`'s sleep (`e.sleep`, the clock's `Advance`) and
+  `TestMain`'s `TMUX_TMPDIR` (`useSharedTmuxTmpdir`), whose default socket
+  is `e.defaultSocket`. It sets no environment, so its test may run in
+  parallel. `e.ownSocketDir(t)` moves `e.defaultSocket` into the test's own
+  `TMUX_TMPDIR` (`useOwnTmuxTmpdir`, so the test is serial), for a test
+  that removes that socket's directory or opens its permissions. Call it
+  before seeding a row that records or resolves the default socket.
+  `e.kill(id)` calls the exported `api.Kill`; `e.client(t, settings...)`
+  gives an `api.Client` on the same store with a config written by `apitest.WriteTmuxConfig`, and
   `e.clientFor(t, cfgPath)` the same on a config file already written,
   returning `api.New`'s error (a refused config) instead of failing the
   test.
@@ -12045,7 +12099,8 @@ each file's doc comments carry the detail.
   `C-u` to the agent's pane, before every text call);
   `pauseDisagrees(t, id)`. The wait is driven through
   the test knob seam: `fastPausePolls(t)` (`api.SetPauseTestKnobs` with a
-  1 ms poll, restored at cleanup through `api.PauseTestKnobs`) and
+  1 ms poll, restored at cleanup through `api.PauseTestKnobs`; the knobs
+  are process-wide, so a test that calls it is serial) and
   `pauseTimeoutSeconds` (1 s): a row nothing ends times out after about
   1 s. `e.store` is the failing `PauseStore` wrapper (`failStateReads`,
   `failAdopt`, `refuseAdopt`).
@@ -12103,7 +12158,12 @@ each file's doc comments carry the detail.
   `find-missing` and `expire` build theirs from the fixture's `note` and
   `kept`. `callTableCell.keptLater` is `expire`'s expected kept reason for
   a later row on the same socket (`""` deleted). `-run
-  'CallTable/.*/Unusable'` selects the family.
+  'CallTable/.*/Unusable'` selects the family. `TestCallTable` and
+  `TestCallTableReuse` are serial, and `runCallTableVerbs` runs each cell
+  in parallel (its own store, tmux fake and clock) unless the verb's
+  `callTableVerb.serial` gives a reason it cannot, or the column sets
+  `callTableColumn.ownTmuxTmpdir` (the unusable-socket-directory column,
+  whose world takes its own directory through `ownSocketDir`).
 - **Unusable recorded names** (`unusable_name_fixture_test.go`, no tests;
   SR-3.2, SR-11.3, SR-12.2). `unusableNameFixtures()` is the one table of
   unusable recorded names: empty, a newline, DEL, ESC, the pre-b.gqe
@@ -12133,7 +12193,11 @@ each file's doc comments carry the detail.
   (`read-pane`, `pause`) sets `event` `""`: the harness then requires no
   record for the subject but the `ad.provenance.disagree` records a case
   expects (`disagree`) and the events listed in `others` (the agent's own
-  hooks, such as `pause`'s SessionEnd).
+  hooks, such as `pause`'s SessionEnd). `runSecurityVerbs` runs a verb's
+  cases in parallel unless its `securityVerb.serial` gives a reason they
+  cannot (`securityMovesHome` for the verbs whose call sets HOME). The
+  top-level test stays serial because each case scans every trail record
+  written since its mark.
 - **Go doc "Errors:" lists** (`pkg/api/manifest/godoc_errors_test.go`,
   package `manifest_test`): `assertGoDocErrorsMatchManifest(t, method,
   verb)` checks that a `Client` method's "Errors:" list names exactly its

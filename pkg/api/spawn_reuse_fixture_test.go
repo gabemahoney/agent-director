@@ -189,9 +189,10 @@ type reuseRequest struct {
 }
 
 // reuseParams is q's SpawnParams for r with the opt-in; it sets the test's
-// AGENT_DIRECTOR_INSTANCE_ID to q.Parent, the parent id the reuse records.
+// AGENT_DIRECTOR_INSTANCE_ID to q.Parent, the parent id the reuse records
+// (setenvIfChanged: with no parent, as TestMain leaves it, nothing is set).
 func reuseParams(t *testing.T, r reuseRow, q reuseRequest) api.SpawnParams {
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", q.Parent)
+	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", q.Parent)
 	p := api.SpawnParams{ClaudeInstanceID: r.ID, ReuseFinished: true, TmuxSessionName: q.Name, CWD: q.CWD,
 		ClaudeArgs: q.Args, AgentDirectorLabels: q.Labels, NoPreTrust: q.NoPreTrust, ExtraEnv: r.Trust.extraEnv()}
 	if p.TmuxSessionName == "" {

@@ -142,6 +142,7 @@ func kftKill(e *killEnv, r resumeRow) (api.KillResult, error) { return e.killOpt
 // TestKillIncludeFinishedTableBoundaries: Ours with ended_at window-1 s or the
 // window ago and a reported-in session bound-1 s or the bound old; the window decides first.
 func TestKillIncludeFinishedTableBoundaries(t *testing.T) {
+	t.Parallel()
 	ended := []struct {
 		name   string
 		ago    time.Duration
@@ -316,9 +317,11 @@ func kftCases() []kftCase {
 // tmux-unavailable row on an ended and a missing row; only Ours reaches the
 // window, the bound and the reported-in rule.
 func TestKillIncludeFinishedTable(t *testing.T) {
+	t.Parallel()
 	for _, state := range kftStates {
 		for _, tc := range kftCases() {
 			t.Run(state+", "+tc.name, func(t *testing.T) {
+				t.Parallel() // each case has its own fixture and random ids
 				e := newKillEnv(t)
 				row := tc.row
 				row.state = state

@@ -212,6 +212,7 @@ func docTimingStatements() []docStatement {
 // default, minimum or worst case states, after its anchors, the value
 // recomputed from the internal/config constants.
 func TestReadmeTimingValuesStatements(t *testing.T) {
+	t.Parallel()
 	docs := map[string]mdDoc{}
 	for _, s := range docTimingStatements() {
 		t.Run(s.name, func(t *testing.T) {
@@ -238,6 +239,7 @@ func TestReadmeTimingValuesStatements(t *testing.T) {
 // TestReadmeTimingValuesExampleBlock: the README's commented [tmux] example
 // block lists exactly the nine keys, in table order, each at its default.
 func TestReadmeTimingValuesExampleBlock(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	start := -1
 	for i, line := range d.lines {
@@ -281,6 +283,7 @@ func TestReadmeTimingValuesExampleBlock(t *testing.T) {
 // key, in table order, each with its unit, its default and its safe minimum
 // ("none" for a key without one), comparing each cell's leading number.
 func TestReadmeTimingValuesTable(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	hs := d.titled(timingSettingsTitle)
 	if len(hs) != 1 {
@@ -357,6 +360,7 @@ const claudeVersionRe = `([0-9]+\.[0-9]+\.[0-9]+)`
 // Code minimum statements appears exactly once in its section, and all three
 // state the same version.
 func TestReadmeTimingValuesClaudeCodeMinimum(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	var versions, stated []string
 	for _, s := range claudeMinimumStatements {

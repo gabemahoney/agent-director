@@ -44,8 +44,12 @@ Full suite (Go + bun), the normal command:
 make test-sandbox
 ```
 
-- Runs `go test ./...` and `bun test` (in `pkg/ts-bun-client`) inside the
-  sandbox container.
+- Runs `go test -timeout $(GO_TEST_TIMEOUT) ./...` and `bun test` (in
+  `pkg/ts-bun-client`) inside the sandbox container. `GO_TEST_TIMEOUT` is 30m
+  per package, not Go's 10m default, so host load alone does not time a
+  package out. Raise it on a slower machine:
+  `make test-sandbox GO_TEST_TIMEOUT=60m`. A `make sandbox CMD="go test …"`
+  run does not get it; pass `-timeout` yourself.
 - The worktree is mounted at `/work`; the host Go module cache, Go build cache,
   and bun cache are mounted so runs are fast after the first.
 - Output streams live. Both suites always run (a Go failure does not skip bun),
@@ -114,6 +118,9 @@ agent runs inside the container. Interpreting a run:
   suite failed. A green run exits 0.
 - The Go section prints one `ok`/`FAIL` line per package; the bun section ends
   with a `N pass / M fail` summary and `Ran … tests`.
+- With the default timeout, `panic: test timed out after 30m0s` points at a
+  hung test in that package, not a slow host. The `running tests:` lines under
+  it name the tests still running and how long each had run.
 - **Known non-regression flakes** (documented in
   `docs/engineering-guide.md` "Sandboxed execution" → "Known caveats") — do NOT
   treat these as caused by a change under review unless the change is in that

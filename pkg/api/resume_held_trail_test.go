@@ -144,6 +144,7 @@ func rhtAssertOrder(t *testing.T, mark int, id string) {
 // ad.launch.name_held with every SR-14 field for its re-lookup outcome, after
 // one ad.resume.restored naming the same error, and restores the row.
 func TestResumeHeldTrailPerOutcome(t *testing.T) {
+	t.Parallel()
 	conflict, unresponsive, unavailable := api.ErrTmuxSessionConflict, api.ErrTmuxUnresponsive, api.ErrTmuxNotAvailable
 	held := func(lookup string, sentinel error, carries, current any) rhtWant {
 		return rhtWant{lookup: lookup, sentinel: sentinel, holder: true, carries: carries, current: current}
@@ -197,6 +198,7 @@ func TestResumeHeldTrailPerOutcome(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			age := rceSettled(e)
 			if tc.age != nil {
@@ -225,6 +227,7 @@ func holderOnly(k holderKind) func(*killEnv) heldSpec {
 // first, a store error); hooks before it are ignored; the returned error's
 // class is the same throughout.
 func TestResumeHeldTrailRowResult(t *testing.T) {
+	t.Parallel()
 	type arrange func(t *testing.T, e *killEnv, r resumeRow, w *hookedResumeStore)
 	cases := []struct {
 		name       string
@@ -268,6 +271,7 @@ func TestResumeHeldTrailRowResult(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedHeldResumable(t, rceSettled(e), agentGone)
 			w := &hookedResumeStore{st: e.st}
@@ -308,6 +312,7 @@ func TestResumeHeldTrailRowResult(t *testing.T) {
 // the launch, or whose create fails other than "duplicate session" writes no
 // ad.launch.name_held.
 func TestResumeHeldTrailNoOtherPath(t *testing.T) {
+	t.Parallel()
 	create := func(s tmuxfix.Script) func(*testing.T, *killEnv, resumeRow) {
 		return func(_ *testing.T, e *killEnv, r resumeRow) { e.rec.Script(r.Socket, s, tmux.CallCreate) }
 	}
@@ -331,6 +336,7 @@ func TestResumeHeldTrailNoOtherPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedResumable(t, rceSettled(e), agentGone)
 			if tc.setup != nil {
@@ -394,6 +400,7 @@ func rhtFailOpenRuns(t *testing.T, prefix string) []string {
 // TestResumeHeldTrailFailOpen: with the trail unwritable, held-name resumes
 // return the same errors and leave the same rows as with a working trail.
 func TestResumeHeldTrailFailOpen(t *testing.T) {
+	t.Parallel()
 	prefix := "resume-held-failopen-" + uuid.NewString()[:8]
 	mark := trailMark(t)
 	want := rhtFailOpenRuns(t, prefix)
@@ -424,6 +431,7 @@ func TestResumeHeldTrailFailOpen(t *testing.T) {
 // TestResumeHeldTrailFailOpenChild is TestResumeHeldTrailFailOpen's child: it
 // runs the resumes with a 0500 .agent-director and prints their lines.
 func TestResumeHeldTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(rhtChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestResumeHeldTrailFailOpen's child")

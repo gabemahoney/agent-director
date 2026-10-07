@@ -68,6 +68,7 @@ func lostReplyStoreRec(t *testing.T, dbPath string, tokenPane bool) *tmuxfix.Rec
 // TestFindMissingAdoptRealStore: the adoption records the server identity (and the token pane) at +1 version, and
 // the verdict guarded on that snapshot applies: the adopted pane's unreadable process notes, no token pane marks.
 func TestFindMissingAdoptRealStore(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name      string
 		tokenPane bool
@@ -130,6 +131,7 @@ func ownRowRec(t *testing.T, dbPath string) *tmuxfix.Recorder {
 // TestFindMissingTmuxPathChangedBeforeWrite (AC-FM-07/08/09): a row relaunched, reused (a new life, same second)
 // or deleted between the sweep's read and its adoption, note or mark gets no write, tick or adopted record.
 func TestFindMissingTmuxPathChangedBeforeWrite(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	rows := []struct {
 		name  string
 		after tmux.Call // the call after which the row changes

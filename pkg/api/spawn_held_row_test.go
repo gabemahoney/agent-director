@@ -77,6 +77,7 @@ func (e heldEnv) assertHeldDesc(t *testing.T, err error, id string, row apitest.
 // insert and the end write keeps the end write from applying; the row reads
 // as that write left it and the error says "left as it is".
 func TestSpawnHeldEndNotApplied(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name  string
 		write func(t *testing.T, e heldEnv, id string) // the competing write, as the create returns
@@ -137,6 +138,7 @@ func TestSpawnHeldEndNotApplied(t *testing.T) {
 // TestSpawnHeldEndStoreError: a failed end write leaves the row pending with
 // its launch start; the error says so and the client log has one WARN line.
 func TestSpawnHeldEndStoreError(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newHeldEnv(t)
 	id := heldID()
 	holder := heldSession(heldRowName, "$4", tmux.Label{}, false)
@@ -170,6 +172,7 @@ func TestSpawnHeldEndStoreError(t *testing.T) {
 // missing, then the opted-in retry once the name is free (SR-1.4; WD
 // 2026-09-30d (a); b.1qq).
 func TestSpawnHeldUnansweredRow(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	relookups := []struct {
 		name    string
 		holders []tmuxfix.SeedSession
@@ -252,6 +255,7 @@ func TestSpawnHeldUnansweredRow(t *testing.T) {
 // (as itself or as the row's agent) and find-missing, inside and past the
 // grace period, leave the ended row exactly as it is.
 func TestSpawnHeldEndedSticks(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newHeldEnv(t)
 	id := heldID()
 	run := e.spawnHeld(t, id, heldRowName, func() {
@@ -303,6 +307,7 @@ func TestSpawnHeldEndedSticks(t *testing.T) {
 // lone leftover), one pane listing and a capture of the leftover's pane by
 // its pane id, while send-keys and kill make no tmux call.
 func TestSpawnHeldIdAfterwards(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name     string
 		leftover bool // placed after the scan (SR-20.9); otherwise no label, seeded before
@@ -375,6 +380,7 @@ func TestSpawnHeldIdAfterwards(t *testing.T) {
 // TestSpawnHeldNoEndWithoutDuplicate: a create that succeeds, times out or
 // fails otherwise makes no end write and no re-lookup; the row stays pending.
 func TestSpawnHeldNoEndWithoutDuplicate(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name string
 		fail tmux.Failure // 0: the create succeeds

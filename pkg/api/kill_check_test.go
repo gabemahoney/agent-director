@@ -94,6 +94,7 @@ func kcAssertErr(t *testing.T, err error, name string, want *apitest.DescCase) {
 // TestKillCheckWait covers the checkable path: every reading after the kills
 // polls every KillPollInterval up to the exit wait, zombie = gone, no follow-up.
 func TestKillCheckWait(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		teammates int
@@ -134,6 +135,7 @@ func TestKillCheckWait(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{Teammates: tc.teammates})
 			tc.setup(e, r)
@@ -188,6 +190,7 @@ func TestKillCheckWait(t *testing.T) {
 // TestKillCheckFollowUp covers the not-checkable path: exactly one follow-up
 // lookup after the kills, no wait, and its verdict decides.
 func TestKillCheckFollowUp(t *testing.T) {
+	t.Parallel()
 	scriptFollowUp := func(f tmux.Failure) func(*testing.T, *killEnv, killRow) {
 		return func(_ *testing.T, e *killEnv, r killRow) {
 			e.rec.AfterCall(tmux.CallKillSession, func(tmuxfix.SocketCall, error) {
@@ -242,6 +245,7 @@ func TestKillCheckFollowUp(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{Agent: tc.agent})
 			tc.setup(t, e, r)
@@ -277,6 +281,7 @@ func TestKillCheckFollowUp(t *testing.T) {
 // TestKillCheckGoneUnreadableResidual: a Gone lookup with the agent's process
 // unreadable is success with nothing sent, no listing and no follow-up.
 func TestKillCheckGoneUnreadableResidual(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{NoSession: true, Agent: agentUnreadable})
 	run := kcKill(t, e, r, e.pc)
@@ -297,6 +302,7 @@ func TestKillCheckGoneUnreadableResidual(t *testing.T) {
 // TestKillCheckPaneIdentityChosen: when the SessionStart pid differs from the
 // pane pid, the pane process is waited for and no disagree record is written.
 func TestKillCheckPaneIdentityChosen(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		paneGone  bool // the pane process goes at the session kill
@@ -341,6 +347,7 @@ func TestKillCheckPaneIdentityChosen(t *testing.T) {
 // TestKillCheckNeverSignals: with the production start-time reader and a real
 // child as the agent, a Recorder kill ends in ErrTmuxKillFailed and the child still runs.
 func TestKillCheckNeverSignals(t *testing.T) {
+	t.Parallel()
 	pc := probe.NewProcChecker()
 	child := exec.Command("sleep", "60")
 	if err := child.Start(); err != nil {

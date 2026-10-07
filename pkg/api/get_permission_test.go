@@ -20,6 +20,7 @@ import (
 // pointers that marshal to literal JSON null. tool_input passes through
 // byte-identical to the raw JSON seed.
 func TestGetPermissionOpenRow(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
 	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0)
@@ -76,6 +77,7 @@ func TestGetPermissionOpenRow(t *testing.T) {
 // (SR-1.3 allow rows carry no reason annotation), and a non-nil
 // DecidedAt pointer parseable as RFC3339.
 func TestGetPermissionClosedAllow(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
 	updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "", "")
@@ -126,6 +128,7 @@ func TestGetPermissionClosedAllow(t *testing.T) {
 // decision_reason values per SR-1.3. Each variant pins decision="deny" and
 // the exact reason string surfacing through the *string pointer.
 func TestGetPermissionClosedDeny(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		reason string
@@ -171,6 +174,7 @@ func TestGetPermissionClosedDeny(t *testing.T) {
 // open row in the same store must be unaffected — the lookup is token-scoped,
 // no other rows should be touched.
 func TestGetPermissionMissingRow(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	// Unrelated open row — separate token, must survive untouched.
 	apitest.SeedPermissionRow(t, s, "id-d-1") // uses TestRequestTokenA
@@ -200,6 +204,7 @@ func TestGetPermissionMissingRow(t *testing.T) {
 // Seeded with deliberately non-canonical key ordering and embedded
 // whitespace to flush any rewrite that round-trips through json.Marshal.
 func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	// Non-canonical whitespace + key order. Any JSON round-trip would
 	// produce {"command":"ls","extra":"x"} with no spaces.
@@ -229,6 +234,7 @@ func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
 // and triggers eviction of that oldest closed row. The newly inserted open
 // row (TestRequestTokenB) must remain readable after eviction.
 func TestGetPermissionEvictedRow(t *testing.T) {
+	t.Parallel()
 	s, dbPath := apitest.SeedDecideFixture(t, "on")
 
 	// Cap sourced from a config.Relay fixture — not a literal (per ticket AC).

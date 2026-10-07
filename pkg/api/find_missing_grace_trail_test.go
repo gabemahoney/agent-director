@@ -40,6 +40,7 @@ func seedGracePendingRow(t *testing.T, id string, launchAt time.Time, opts ...ap
 // TestFindMissingPendingGraceTrail: inside grace a pending row gets no tick of
 // any reason and its permission request stays open; past grace the usual ticks appear.
 func TestFindMissingPendingGraceTrail(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	launchAt := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	kinds := []struct {
 		name     string

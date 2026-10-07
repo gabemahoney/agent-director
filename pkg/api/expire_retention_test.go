@@ -66,6 +66,7 @@ func (e *killEnv) assertRetentionRun(t *testing.T, res api.ExpireResult, mark in
 // TestExpireRetentionDaysNeverWrap: exported Expire with a day count at or above
 // the largest a Duration holds deletes only the row older than that window.
 func TestExpireRetentionDaysNeverWrap(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, days := range []int{config.MaxExpireRetentionDays, config.MaxExpireRetentionDays + 1, 365000, math.MaxInt} {
 		t.Run(strconv.Itoa(days), func(t *testing.T) {
 			e := newKillEnv(t)
@@ -86,6 +87,7 @@ func TestExpireRetentionDaysNeverWrap(t *testing.T) {
 // TestClientExpireRetentionConfig: Client.Expire(nil) uses expire_retention_days
 // (31 when 0); api.New refuses a negative or over-limit value, touching no row.
 func TestClientExpireRetentionConfig(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name    string
 		days    int64

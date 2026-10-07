@@ -32,6 +32,7 @@ import (
 // call after its lookup; when the winner moves and creates after the loser's
 // lookup, the loser loses at its conditional move.
 func TestResumeLoserExaminedBeforeWinnersMove(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, atLookup := range []bool{true, false} {
 		t.Run(map[bool]string{true: "winner's session up at the loser's lookup", false: "winner moves after the loser's lookup"}[atLookup], func(t *testing.T) {
 			e := newResumeEnv(t)
@@ -89,6 +90,7 @@ func TestResumeLoserExaminedBeforeWinnersMove(t *testing.T) {
 // return the move's ErrSpawnNotFound, not the Leftover conflict; resume makes
 // only that lookup and writes nothing (no move, no trust entry, no ad.resume.*).
 func TestResumeLoserRowDeletedBeforeReRead(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	r := e.seedResumable(t, time.Hour, agentGone)
 	e.seedHolder(t, r.killRow, holderOld)
@@ -130,6 +132,7 @@ func TestResumeLoserRowDeletedBeforeReRead(t *testing.T) {
 // another's move, while pending and once its agent reported in, is refused by
 // its state guard and writes nothing.
 func TestResumeLoserExaminedAfterWinnersMove(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, reportedIn := range []bool{false, true} {
 		name := map[bool]string{false: "winner pending", true: "winner reported in"}[reportedIn]
 		t.Run(name, func(t *testing.T) {

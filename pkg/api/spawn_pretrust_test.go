@@ -25,6 +25,8 @@ import (
 // or a relative CLAUDE_CONFIG_DIR (b.nje), still spawns. $HOME/.claude.json is
 // never touched.
 func TestSpawnRecordsNoPreTrust(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, the working directory and PWD, TMUX, TMUX_TMPDIR
+	// with t.Setenv.
 	cases := []struct {
 		name         string
 		file         trustFile

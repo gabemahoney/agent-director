@@ -71,6 +71,7 @@ func reuseStarting(t *testing.T, e *killEnv, r reuseRow, s reuseStartingRow, wan
 // TestSpawnReuseStartingWindowAndBound: ended and missing rows at window-1 s and the window, with a session
 // at bound-1 s and the bound, per configuration; the window decides first and neither setting moves the other.
 func TestSpawnReuseStartingWindowAndBound(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
 	configs := []struct {
 		name          string
@@ -111,6 +112,7 @@ func TestSpawnReuseStartingWindowAndBound(t *testing.T) {
 // TestSpawnReuseStartingCases: a future ended_at, the window's skip rules, the no-session-id texts and Gone
 // while the agent runs, at the defaults (AC-REUSE-14; SR-5.5's unparseable ended_at reads as none).
 func TestSpawnReuseStartingCases(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	longAgo := defWindow + defBound
 	inside := defWindow - time.Second
 	cases := []struct {

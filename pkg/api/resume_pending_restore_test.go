@@ -129,6 +129,7 @@ func rstOneCreate(t *testing.T, e *resumeEnv) tmuxfix.SocketCall {
 // and "duplicate session" whose holder vanished (SR-8.5), restores the row byte
 // for byte with the move's parent id and one applied ad.resume.restored; a second resume launches.
 func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	createFailed := func(*resumeEnv, string) apitest.DescCase {
 		return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{})
 	}
@@ -208,6 +209,7 @@ func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
 // resume still fails. SR-22.9 (decision A7): a hook cannot be that write, since
 // the moved row records no pane (TestResumeHooksBeforeRestoreIgnored, resume_pending_hook_test.go).
 func TestResumeRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		onCreate  bool // run write from the create's after-call hook; else after the move
@@ -227,6 +229,7 @@ func TestResumeRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newResumeEnv(t)
 			other := rstSeedOther(t, e)
 			r := e.seedResumable(t, store.StateEnded)
@@ -268,6 +271,7 @@ func TestResumeRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 // TestResumeRestoreSkippedOnMoveStoreError: a failing move is ErrInternal with
 // no tmux call after the lookup, no trail line and the row unchanged.
 func TestResumeRestoreSkippedOnMoveStoreError(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateMissing)
 	e.store.failMove(nil)
@@ -290,6 +294,7 @@ func TestResumeRestoreSkippedOnMoveStoreError(t *testing.T) {
 // TestResumeRestoreStoreErrorLeavesPending: a failing restore leaves the row
 // pending, logs one WARN, records restore_error and still returns the launch error.
 func TestResumeRestoreStoreErrorLeavesPending(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
 	e.store.failRestore(nil)
@@ -330,6 +335,7 @@ func rstResumeAsync(e *resumeEnv, id string) (err error, returned bool) {
 // create, or a resume stopped before its create, leaves the row pending with
 // its launch start and new token, and attempts no restore.
 func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		script       *tmuxfix.Script // nil: resume stops after its move, before the create
@@ -341,6 +347,7 @@ func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newResumeEnv(t)
 			r := e.seedResumable(t, store.StateEnded)
 			if tc.script != nil {
@@ -382,6 +389,7 @@ func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
 // TestResumeRestoreAfterUnlabelledSession: a failed chained label is relabelled
 // by id with this store's id; a failed relabel kills by id, then restores.
 func TestResumeRestoreAfterUnlabelledSession(t *testing.T) {
+	t.Parallel()
 	lookup, create, label, kill := tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
 	cases := []struct {
 		name      string
@@ -395,6 +403,7 @@ func TestResumeRestoreAfterUnlabelledSession(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newResumeEnv(t)
 			r := e.seedResumable(t, store.StateEnded)
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, create)
@@ -459,6 +468,7 @@ func TestResumeRestoreAfterUnlabelledSession(t *testing.T) {
 // TestResumeRestoreClientTrailOrder: Client.Resume with the default logger
 // records ad.resume.moved_to_pending, then ad.resume.restored (SR-14, SR-20.6).
 func TestResumeRestoreClientTrailOrder(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateMissing)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")

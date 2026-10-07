@@ -27,6 +27,7 @@ func idsOf(rows []api.ListRow) []string {
 }
 
 func TestListNoFiltersReturnsAllRows(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{})
 	if err != nil {
@@ -42,6 +43,7 @@ func TestListNoFiltersReturnsAllRows(t *testing.T) {
 }
 
 func TestListSingleStateFilter(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{State: []string{"waiting"}})
 	if err != nil {
@@ -54,6 +56,7 @@ func TestListSingleStateFilter(t *testing.T) {
 }
 
 func TestListMultiStateFilter(t *testing.T) {
+	t.Parallel()
 	// state filter is OR within the slice, AND with other filters
 	// (none used here).
 	s, _ := apitest.SeedListFixture(t)
@@ -68,6 +71,7 @@ func TestListMultiStateFilter(t *testing.T) {
 }
 
 func TestListSingleLabelFilter(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Labels: []string{"project=foo"}})
 	if err != nil {
@@ -80,6 +84,7 @@ func TestListSingleLabelFilter(t *testing.T) {
 }
 
 func TestListMultipleLabelsAndTogether(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{
 		Labels: []string{"project=foo", "env=dev"},
@@ -95,6 +100,7 @@ func TestListMultipleLabelsAndTogether(t *testing.T) {
 }
 
 func TestListParentFilter(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Parent: "row-a-wait-foo"})
 	if err != nil {
@@ -107,6 +113,7 @@ func TestListParentFilter(t *testing.T) {
 }
 
 func TestListCwdFilter(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Cwd: "/opt"})
 	if err != nil {
@@ -119,6 +126,7 @@ func TestListCwdFilter(t *testing.T) {
 }
 
 func TestListLimitCapsResults(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Limit: 2})
 	if err != nil {
@@ -130,6 +138,7 @@ func TestListLimitCapsResults(t *testing.T) {
 }
 
 func TestListCombinedFiltersAndTogether(t *testing.T) {
+	t.Parallel()
 	// state=waiting AND label project=foo AND cwd=/tmp.
 	// Matches row-a (project=foo, waiting, /tmp) and row-b (project=foo,
 	// waiting, /tmp). Excludes row-c (working), row-d (/opt + ended),
@@ -150,6 +159,7 @@ func TestListCombinedFiltersAndTogether(t *testing.T) {
 }
 
 func TestListInvalidLabelSyntaxRejected(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	// `foo` has no `=` → ErrListInvalidLabel; store never invoked.
 	_, err := api.List(s, api.ListParams{Labels: []string{"foo"}})
@@ -159,6 +169,7 @@ func TestListInvalidLabelSyntaxRejected(t *testing.T) {
 }
 
 func TestListEmptyLabelKeyRejected(t *testing.T) {
+	t.Parallel()
 	s, _ := apitest.SeedListFixture(t)
 	// `=value` has an empty key — would coerce json_extract into a
 	// degenerate path. Reject at the verb seam.
@@ -169,6 +180,7 @@ func TestListEmptyLabelKeyRejected(t *testing.T) {
 }
 
 func TestListResultSliceNeverNil(t *testing.T) {
+	t.Parallel()
 	// JSON-stability invariant: even a no-match query encodes as
 	// `{"spawns": []}`, never `{"spawns": null}`. Callers that walk
 	// the slice without nil checks (jq, the MCP client) depend on it.
@@ -186,6 +198,7 @@ func TestListResultSliceNeverNil(t *testing.T) {
 }
 
 func TestListTmuxSessionNameFilterNarrows(t *testing.T) {
+	t.Parallel()
 	// Fixture rows all carry tmux_session_name = "cd-" + id. The filter
 	// is byte-exact, so picking one of those names returns just that row.
 	s, _ := apitest.SeedListFixture(t)
@@ -200,6 +213,7 @@ func TestListTmuxSessionNameFilterNarrows(t *testing.T) {
 }
 
 func TestListTmuxSessionNameFilterNoMatchEmpty(t *testing.T) {
+	t.Parallel()
 	// A non-matching name returns an empty (non-nil) slice — same
 	// JSON-stability invariant as TestListResultSliceNeverNil.
 	s, _ := apitest.SeedListFixture(t)
@@ -216,6 +230,7 @@ func TestListTmuxSessionNameFilterNoMatchEmpty(t *testing.T) {
 }
 
 func TestListTmuxSessionNameAndCombinesWithState(t *testing.T) {
+	t.Parallel()
 	// AND-combine: tmux name pinpoints one row; pairing it with a state
 	// that does NOT match that row must return zero rows. (Confirms the
 	// filter is AND'd, not OR'd.)
@@ -245,6 +260,7 @@ func TestListTmuxSessionNameAndCombinesWithState(t *testing.T) {
 }
 
 func TestListTmuxSessionNameEmptyIsPermissive(t *testing.T) {
+	t.Parallel()
 	// Explicit empty string in ListParams must not emit a SQL clause —
 	// the result must equal the no-filter result.
 	s, _ := apitest.SeedListFixture(t)
@@ -272,6 +288,7 @@ func TestListTmuxSessionNameEmptyIsPermissive(t *testing.T) {
 //   - row-flagged is seeded with both columns → its marshaled ListRow carries
 //     the stored values verbatim.
 func TestListLivenessFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
 	// rfc3339_passthrough: a value already in RFC3339 form is surfaced
 	// normalized (still RFC3339 UTC) — pins pass-through normalization.
 	t.Run("rfc3339_passthrough", func(t *testing.T) {
@@ -404,6 +421,7 @@ func TestListLivenessFieldsRoundTrip(t *testing.T) {
 // on the store row too, proving the list projection drops them rather than that
 // they merely happened to be absent.
 func TestListRowKeySetUnchanged(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	if _, err := apitest.SeedSpawn(dbPath, "row-parent", store.StateWaiting, "/tmp", "off", "", true); err != nil {
 		t.Fatalf("SeedSpawn(row-parent): %v", err)

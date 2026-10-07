@@ -115,6 +115,7 @@ func fgcLaunchStart(t *testing.T, e *resumeEnv, id string) int64 {
 // TestFindMissingGraceNeverReportedIn (AC-FM-15): a pending row with no session and
 // no pane process is left alone inside the grace period and marked tmux_absent past it; then resume by its history.
 func TestFindMissingGraceNeverReportedIn(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	spawnFails := func(failure tmux.Failure) func(*testing.T, *resumeEnv) (string, bool) {
 		return func(t *testing.T, e *resumeEnv) (string, bool) {
 			fgcFailCreate(e, failure)
@@ -176,6 +177,7 @@ func TestFindMissingGraceNeverReportedIn(t *testing.T) {
 // TestFindMissingGraceResumedAgentDiesBeforeReportingIn (AC-RES-14): once the resumed
 // agent's pane process is gone, resume is refused until the first sweep past the grace period marks the row, then it launches.
 func TestFindMissingGraceResumedAgentDiesBeforeReportingIn(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := fgcResumeLaunched(t, e)
 	launch := time.UnixMilli(r.start)
@@ -194,6 +196,7 @@ func TestFindMissingGraceResumedAgentDiesBeforeReportingIn(t *testing.T) {
 // TestFindMissingGraceResumedPastGraceNotMarked (AC-FM-16): past the grace period a resumed row
 // (started_at hours old) stays pending with its agent alive, and unverified (probe_eacces) behind a /proc wall with its session Ours.
 func TestFindMissingGraceResumedPastGraceNotMarked(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		agent procfix.Process
@@ -236,6 +239,7 @@ func TestFindMissingGraceResumedPastGraceNotMarked(t *testing.T) {
 // TestFindMissingGraceResumedAgentReportsInThenEnds (AC-RES-14): once the resumed
 // agent reports in the row is live and refused; after its life ends resume launches.
 func TestFindMissingGraceResumedAgentReportsInThenEnds(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := fgcResumeLaunched(t, e)
 

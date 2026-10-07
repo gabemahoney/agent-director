@@ -46,6 +46,7 @@ func (e *killEnv) assertStillStored(t *testing.T, rows ...killRow) {
 // TestExpireSelection checks the window (override, else config's retention)
 // selects finished rows by ended_at on the fixture clock; zero or less selects all.
 func TestExpireSelection(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	ages := map[string]time.Duration{
 		"ended-2h":              2 * time.Hour,
 		"missing-2h":            2 * time.Hour,
@@ -108,6 +109,7 @@ func TestExpireSelection(t *testing.T) {
 // TestExpireNeverSelectsLiveOrNullEndedAt checks a live row and a NULL-ended_at
 // row survive a zero override with no tmux call.
 func TestExpireNeverSelectsLiveOrNullEndedAt(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	rows := e.seedUnselectable(t)
 	if got := e.columns(t, "null-ended-at").EndedAt; got != nil {
@@ -126,6 +128,7 @@ func TestExpireNeverSelectsLiveOrNullEndedAt(t *testing.T) {
 // TestExpireCutoffFollowsClock checks the cutoff is read from the injected
 // clock: a row too young is selected once the clock moves past the window.
 func TestExpireCutoffFollowsClock(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	r := e.seedFinished(t, 30*time.Minute, agentGone)
 	mark := trailMark(t)
@@ -147,6 +150,7 @@ func TestExpireCutoffFollowsClock(t *testing.T) {
 // TestExpireCandidateReadFailure checks a failed candidate read fails the
 // verb, is logged, and makes no tmux call and no trail record (SR-20.6).
 func TestExpireCandidateReadFailure(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedFinished(t, 2*time.Hour, agentGone)
 	w := e.expireStore()
@@ -167,6 +171,7 @@ func TestExpireCandidateReadFailure(t *testing.T) {
 // TestExpireDeleteFailureKeepsRow checks a failed per-row delete keeps that
 // row store_error, logs only its id and the error, and the run goes on (SR-20.6).
 func TestExpireDeleteFailureKeepsRow(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	const secret = "expire-secret-env-value"
 	e := newKillEnv(t)
 	seed := func(id string, opts ...apitest.SpawnOption) killRow {
@@ -202,6 +207,7 @@ func TestExpireDeleteFailureKeepsRow(t *testing.T) {
 // TestExpireStoreErrorsWithNilLogger checks exported Expire with a nil logger
 // does not panic on either store error and keeps its outcome.
 func TestExpireStoreErrorsWithNilLogger(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name   string
 		inject func(w *expireStore, id string)
@@ -237,6 +243,7 @@ func TestExpireStoreErrorsWithNilLogger(t *testing.T) {
 // TestExpireResultShape checks count/ids and kept/kept_ids agree, both lists
 // are sorted, and JSON encodes them as [] when empty (SR-12.4).
 func TestExpireResultShape(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	t.Run("mixed", func(t *testing.T) {
 		e := newKillEnv(t)
 		seed := func(id string, a agentState, session bool) {
@@ -282,6 +289,7 @@ func assertExpireJSON(t *testing.T, res api.ExpireResult, want string) {
 // TestExpireLeavesTranscripts checks a deleted row's transcript file is
 // still on disk afterwards.
 func TestExpireLeavesTranscripts(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	const sid = "expire-transcript-session"
 	path := apitest.SeedJsonl(t, "/tmp", sid)
@@ -302,6 +310,7 @@ func TestExpireLeavesTranscripts(t *testing.T) {
 // TestClientExpireDefaultRetention checks Client.Expire with no override
 // applies the configured retention and returns kept and kept_ids.
 func TestClientExpireDefaultRetention(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	gone := e.seedFinished(t, expireRetention+time.Hour, agentGone)
 	ours := e.finishedSpec(expireRetention+time.Hour, agentGone)

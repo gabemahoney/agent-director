@@ -95,7 +95,12 @@ type securityVerb struct {
 	call   func(t *testing.T, c *api.Client, s *securityScene) (any, error)
 	record func(t *testing.T, s *securityScene, rec map[string]any, texts map[string]string)
 	cases  []securityCase
+	serial string // why the verb's cases cannot run in parallel ("": they do)
 }
+
+// securityMovesHome is the serial reason of a verb whose call points HOME at
+// a fresh directory for its launch's files (t.Setenv).
+const securityMovesHome = "its call sets HOME with t.Setenv"
 
 // securityVerbs is the per-verb table; later Epics append their verbs.
 var securityVerbs = append([]securityVerb{{
@@ -109,6 +114,7 @@ var securityVerbs = append([]securityVerb{{
 	verb:   "spawn",
 	event:  "ad.launch.name_held",
 	launch: true,
+	serial: securityMovesHome,
 	call: func(t *testing.T, c *api.Client, s *securityScene) (any, error) {
 		home := t.TempDir() // the trail is pinned by TestMain; the launch's files go here
 		t.Setenv("HOME", home)
@@ -341,13 +347,26 @@ func securityAbsent(t *testing.T, what, text string, s *securityScene) {
 
 // TestSecuritySecretAndOtherRowID checks SR-15 for every verb in the table:
 // no result, description, log line or trail record carries a forbidden value.
-func TestSecuritySecretAndOtherRowID(t *testing.T) { runSecurityVerbs(t, securityVerbs) }
+func TestSecuritySecretAndOtherRowID(t *testing.T) {
+	// Serial: its spawn and resume cases set HOME with t.Setenv, and its cases scan every record written to
+	// the shared trail since their mark (runSecurityVerbs); its other cases run in parallel.
+	runSecurityVerbs(t, securityVerbs)
+}
 
 // runSecurityVerbs runs every case of verbs (reuse's: TestSecurityReuse).
+// Each case builds its own scene (store, tmux fake, random ids) and counts
+// only its subject's trail records, so the cases of a verb with no serial
+// reason run in parallel; scanning other cases' records too for the
+// forbidden values only widens that check. Its caller stays serial: the scan
+// covers every record written since the case's mark, which another test
+// running meanwhile could write.
 func runSecurityVerbs(t *testing.T, verbs []securityVerb) {
 	for _, v := range verbs {
 		for _, c := range v.cases {
 			t.Run(v.verb+"/"+c.name, func(t *testing.T) {
+				if v.serial == "" {
+					t.Parallel()
+				}
 				s := newSecurityScene(t, v, c)
 				client, logs := s.e.client(t)
 				s.e.rec.Reset()

@@ -151,6 +151,7 @@ func (e heldEnv) ptForbid(id, rowToken string, seeded []tmuxfix.SeedSession, ext
 // TestSpawnHeldTrailPerOutcome: each held-name spawn writes exactly one
 // ad.launch.name_held with every SR-14 field for its re-lookup outcome.
 func TestSpawnHeldTrailPerOutcome(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	other := "other-" + uuid.NewString()[:8]
 	noLabel := func(heldEnv, string) []tmuxfix.SeedSession {
 		return []tmuxfix.SeedSession{ptHolder("$4", tmux.Label{}, false)}
@@ -261,6 +262,7 @@ func TestSpawnHeldTrailPerOutcome(t *testing.T) {
 // TestSpawnHeldTrailRowResult: row_result and store_error follow the end
 // write: applied, a competing versioned write first, or a store error.
 func TestSpawnHeldTrailRowResult(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name     string
 		atCreate func(t *testing.T, e heldEnv, id string) // run as the create returns, before the end write
@@ -307,6 +309,7 @@ func TestSpawnHeldTrailRowResult(t *testing.T) {
 // TestSpawnHeldTrailNoOtherPath: a spawn whose create succeeds, times out or
 // fails otherwise writes no ad.launch.name_held.
 func TestSpawnHeldTrailNoOtherPath(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name    string
 		create  *tmuxfix.Script
@@ -342,6 +345,7 @@ func TestSpawnHeldTrailNoOtherPath(t *testing.T) {
 // TestSpawnScanNameHeldKeys: the label scan's record through the shared
 // emitter keeps its exact key set, leftover_count included.
 func TestSpawnScanNameHeldKeys(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newScanEnv(t)
 	id := scanID()
 	e.rec.SeedSessions(e.socket, e.leftover("old-life", "$5", id, ptCreated))
@@ -425,6 +429,7 @@ func ptFailOpenRuns(t *testing.T, prefix string) []string {
 // TestSpawnHeldTrailFailOpen: with the trail file unwritable, held-name
 // spawns return the same errors and leave the same rows as with a working trail.
 func TestSpawnHeldTrailFailOpen(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	prefix := "held-failopen-" + uuid.NewString()[:8]
 	mark := trailLen(t)
 	want := ptFailOpenRuns(t, prefix)
@@ -455,6 +460,7 @@ func TestSpawnHeldTrailFailOpen(t *testing.T) {
 // TestSpawnHeldTrailFailOpenChild is TestSpawnHeldTrailFailOpen's child: it
 // makes the trail file read-only, runs the spawns and prints their lines.
 func TestSpawnHeldTrailFailOpenChild(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	prefix := os.Getenv(ptChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestSpawnHeldTrailFailOpen's child")

@@ -160,6 +160,7 @@ func (e scanEnv) assertNameHeld(t *testing.T, recs []map[string]any, id string, 
 // any name, refuses the spawn, writes nothing but one name_held, and the spawn
 // succeeds once the leftover is gone.
 func TestScanRefusesLeftover(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const base = int64(1790000000)
 	cases := []struct {
 		name      string
@@ -230,6 +231,7 @@ func TestScanRefusesLeftover(t *testing.T) {
 // server, no server and no socket let the spawn reach its create; a requested
 // name another store's session holds then ends the row (SR-9.4).
 func TestScanProceeds(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	other := func(e scanEnv, id, name string) tmuxfix.SeedSession {
 		return tmuxfix.SeedSession{Name: name, Label: tmuxfix.Valid(tmuxfix.OtherToken, id, apitest.OtherStoreID(e.storeID))}
 	}
@@ -310,6 +312,7 @@ func TestScanProceeds(t *testing.T) {
 // TestScanCantTellRefuses: an unreadable, conflicting or unavailable lookup
 // refuses with its usual error and writes nothing.
 func TestScanCantTellRefuses(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const timeout = 700 * time.Millisecond
 	const firstLine = "scan: unexpected reply"
 	script := func(s tmuxfix.Script) func(e scanEnv, id string) {
@@ -370,6 +373,7 @@ func TestScanCantTellRefuses(t *testing.T) {
 // TestScanSkippedForMintedID: a spawn with no id makes no lookup; its first
 // tmux call is the create.
 func TestScanSkippedForMintedID(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newScanEnv(t)
 	if _, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir()}); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -383,6 +387,7 @@ func TestScanSkippedForMintedID(t *testing.T) {
 // TestScanSkippedForExistingRow: a finished or live row for the id is not
 // scanned, even with a leftover running, and still collides.
 func TestScanSkippedForExistingRow(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, state := range []string{store.StateEnded, store.StateMissing, store.StateWorking} {
 		t.Run(state, func(t *testing.T) {
 			e := newScanEnv(t)
@@ -410,6 +415,7 @@ const scanTrailChildEnv = "AD_SCAN_TRAIL_FAIL_CHILD"
 // TestScanNameHeldFailOpen: when the trail cannot be written the refusal is
 // unchanged; run in a child process whose trail singleton cannot open.
 func TestScanNameHeldFailOpen(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	if os.Getenv(scanTrailChildEnv) == "" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestScanNameHeldFailOpen$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
 		cmd.Env = append(os.Environ(), scanTrailChildEnv+"=1")

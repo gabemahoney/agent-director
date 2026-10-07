@@ -19,6 +19,7 @@ import (
 // charges 3Q + A in four calls, a capture timeout 2Q + A in three, at the
 // defaults and with Q raised above 2A.
 func TestReadPaneCeilingVirtualTime(t *testing.T) {
+	t.Parallel()
 	q, a, _ := ceilDefaults()
 	if got := 3*q + a; got != 6500*time.Millisecond {
 		t.Fatalf("3Q + A at the defaults = %v; SR-7.5 says 6.5 s", got)

@@ -23,7 +23,11 @@ import (
 
 // TestSecurityKillOptIn checks SR-15 for kill with the opt-in on a finished
 // row: nothing it returns, logs or records carries a forbidden value.
-func TestSecurityKillOptIn(t *testing.T) { runSecurityVerbs(t, securityKillOptInVerbs) }
+func TestSecurityKillOptIn(t *testing.T) {
+	// Serial: its cases scan every record written to the shared trail since their mark for the forbidden
+	// values, which only its own cases may write meanwhile; its cases run in parallel.
+	runSecurityVerbs(t, securityKillOptInVerbs)
+}
 
 // securityKillOptInVerbs is kill with the opt-in through Client.Kill.
 var securityKillOptInVerbs = []securityVerb{{

@@ -40,6 +40,7 @@ func rnmAmbiguous(e *killEnv, r reuseRow, name string, _ tmuxfix.SeedSession) ap
 // TestSpawnReuseNameHolders: per holder class of the requested name (the
 // recorded or a new one), the class's refusal from the one listing, or the launch.
 func TestSpawnReuseNameHolders(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	const conflict = "ErrTmuxSessionConflict"
 	for _, h := range []struct {
 		name string
@@ -72,6 +73,7 @@ func TestSpawnReuseNameHolders(t *testing.T) {
 // TestSpawnReuseNameNotHeld: prefix neighbours, Gone with no server or socket, and the
 // recorded name held while a new one is requested: each launches.
 func TestSpawnReuseNameNotHeld(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	stopped := func(f tmux.Failure) func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession {
 		return func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
 			callTableStop(f, true)(t, e, &r.killRow)
@@ -103,6 +105,7 @@ func TestSpawnReuseNameNotHeld(t *testing.T) {
 // TestSpawnReuseNameDollarAndBackslash (AC-LKP-14): per catalogued $ or \ name, either
 // stored form blocks, both listed is ambiguous, a form matching neither is not held.
 func TestSpawnReuseNameDollarAndBackslash(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	named := func(name string) func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession {
 		return func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
 			return e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: name})
@@ -138,6 +141,7 @@ func TestSpawnReuseNameDollarAndBackslash(t *testing.T) {
 // TestSpawnReuseNameAfterOldRowLookup: with the new name held, the old-row outcome
 // refuses first and the requested name is never quoted.
 func TestSpawnReuseNameAfterOldRowLookup(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	heldAnd := func(then func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession) func(*testing.T, *killEnv, *reuseRow, string) tmuxfix.SeedSession {
 		return func(t *testing.T, e *killEnv, r *reuseRow, name string) tmuxfix.SeedSession {
 			rulHolder(holderForeign)(t, e, r, name)

@@ -90,6 +90,7 @@ var otherTmuxSentinels = []error{
 // TestSpawnLabelStepFailure: a failed chained label is relabelled once by the
 // reply's session and pane ids; a failed relabel kills the session by id.
 func TestSpawnLabelStepFailure(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	create, label, kill := tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
 	cases := []struct {
 		name      string

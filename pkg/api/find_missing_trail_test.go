@@ -10,13 +10,15 @@ package api_test
 // find_missing_grace_trail_test.go.
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,31 +34,68 @@ func apiTrailFilePath() string {
 	return filepath.Join(apiTrailDir, ".agent-director", "ad-trail.jsonl")
 }
 
+// apiTrail is the api trail file parsed so far: the file only ever grows in
+// this process (the singleton appends one whole line per Emit; no test in
+// this process truncates, replaces or removes it), so each read parses only
+// the lines appended since the last one, instead of the whole file again.
+// Re-parsing the whole file on every checkpoint made the trail-reading tests'
+// cost grow with the run's length. The lock lets parallel tests read while
+// others append; the parsed lines are shared, so callers must not modify them.
+var apiTrail struct {
+	mu    sync.Mutex
+	file  os.FileInfo      // the file parsed so far; nil until it exists
+	off   int64            // the file offset just past the last whole line parsed
+	lines []map[string]any // every whole line parsed so far, in file order
+}
+
 // readAPITrailLines parses every JSONL line from the api trail file.
-// Returns nil when the file does not exist yet.
+// Returns nil when the file does not exist yet. A last line not yet ended by
+// its newline (a write in flight in a parallel test) is left for a later read.
+// A file removed, replaced or truncated after a read fails the test: the
+// cached lines and every caller's mark would no longer match it.
 func readAPITrailLines(t *testing.T) []map[string]any {
 	t.Helper()
+	apiTrail.mu.Lock()
+	defer apiTrail.mu.Unlock()
 	f, err := os.Open(apiTrailFilePath())
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) && apiTrail.file == nil {
 		return nil
 	}
 	if err != nil {
 		t.Fatalf("readAPITrailLines: %v", err)
 	}
 	defer f.Close()
-	var rows []map[string]any
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		var m map[string]any
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-			t.Fatalf("readAPITrailLines: unmarshal %q: %v", sc.Text(), err)
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatalf("readAPITrailLines: stat: %v", err)
+	}
+	if apiTrail.file != nil && (!os.SameFile(apiTrail.file, fi) || fi.Size() < apiTrail.off) {
+		t.Fatalf("readAPITrailLines: the trail file was replaced or truncated (%d bytes, %d already read); "+
+			"the cache needs it to only grow", fi.Size(), apiTrail.off)
+	}
+	apiTrail.file = fi
+	if _, err := f.Seek(apiTrail.off, io.SeekStart); err != nil {
+		t.Fatalf("readAPITrailLines: seek: %v", err)
+	}
+	added, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("readAPITrailLines: read: %v", err)
+	}
+	for {
+		line, rest, whole := bytes.Cut(added, []byte("\n"))
+		if !whole {
+			break
 		}
-		rows = append(rows, m)
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatalf("readAPITrailLines: unmarshal %q: %v", line, err)
+		}
+		apiTrail.lines = append(apiTrail.lines, m)
+		apiTrail.off += int64(len(line) + 1)
+		added = rest
 	}
-	if sc.Err() != nil {
-		t.Fatalf("readAPITrailLines: scan: %v", sc.Err())
-	}
-	return rows
+	n := len(apiTrail.lines)
+	return apiTrail.lines[:n:n] // full capacity: a caller's append copies
 }
 
 // apiFindMissingTicksAt returns ad.find_missing.tick lines added after prevCount
@@ -208,6 +247,7 @@ func assertProcAbsentTick(t *testing.T, ticks []map[string]any, id, prior string
 // TestFindMissingProcAbsentEmitsTrail: a dead SessionStart or pane process gives its row one proc_absent tick;
 // rows whose process is alive get no record of any kind, and no environment is read.
 func TestFindMissingProcAbsentEmitsTrail(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		row  trailRow
 		proc procfix.Process // the answer for the row's recorded pid
@@ -261,6 +301,7 @@ func TestFindMissingProcAbsentEmitsTrail(t *testing.T) {
 // TestFindMissingIdentitiesDisagreePaneDecides: when the SessionStart and pane identities disagree the pane
 // process decides (dead: proc_absent mark; alive: untouched) and no sweep writes ad.provenance.disagree.
 func TestFindMissingIdentitiesDisagreePaneDecides(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	pc := procfix.New()
 	pc.Set(1201, procfix.Alive(fmStart)) // dm-pane-dead's SessionStart process
 	pc.Set(1203, procfix.Alive(fmStart)) // dm-pane-alive's pane process; its SessionStart 1204 is gone
@@ -300,6 +341,7 @@ func TestFindMissingIdentitiesDisagreePaneDecides(t *testing.T) {
 // TestFindMissingAllDeadNoDegradedModeSkip: when every recorded process is gone (after a reboot) every row is
 // marked with only proc_absent ticks; no refusal is recorded.
 func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	st, _ := seedTrailStore(t,
 		trailRow{id: "dg-1", ssPID: 1401},
 		trailRow{id: "dg-2", panePID: 1402},
@@ -326,6 +368,7 @@ func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
 // differing with the pane unreadable, or no evidence) get only their entry tick, with no lookup fields, no
 // disagree or name-held record, nothing of another row or any environment; a second sweep writes nothing.
 func TestFindMissingUnusableNameTrail(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	const marker = "ut-environment-marker"
 	env := map[string]string{"AD_TRAIL_MARKER": marker}
 	for _, f := range fmuReps() {

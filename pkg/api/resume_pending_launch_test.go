@@ -71,6 +71,7 @@ func rplTrailCount(t *testing.T, event, id string) int {
 // TestResumeCreatesLabelledSessionOnRecordedSocket: the lookup, then one create, both on the
 // recorded socket; the create carries the new token, the id and this store's id; the session holds the five-field label.
 func TestResumeCreatesLabelledSessionOnRecordedSocket(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
 		t.Run(state, func(t *testing.T) {
 			e := newResumeEnv(t)
@@ -109,10 +110,12 @@ func TestResumeCreatesLabelledSessionOnRecordedSocket(t *testing.T) {
 // TestResumeCreateArgvChainsLabelOnRecordedSocket: through the production client, after the lookup on -S <socket>,
 // a plain name gets one create there with both chained labels; a $ or \ name gets no chain and one label by id.
 func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
+	// Serial: it sets test/fake-tmux's log variable, TMUX_TMPDIR with t.Setenv.
 	bin := faketmuxfix.Binary(t)
 	for _, name := range []string{"", `a$b`, `a\b`} {
 		t.Run("name "+name, func(t *testing.T) {
 			e := newResumeEnv(t)
+			e.ownSocketDir(t) // test/fake-tmux keeps its table beside the socket
 			logPath := filepath.Join(t.TempDir(), "fake-tmux.log")
 			t.Setenv(faketmuxfix.EnvLog, logPath)
 			var opts []apitest.SpawnOption
@@ -196,6 +199,7 @@ func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
 // their start times; a lost reply and a write that lost to another versioned write record none;
 // hooks before it are ignored and it records the pane.
 func TestResumeRecordsLaunchIdentity(t *testing.T) {
+	t.Parallel()
 	// recorded is the identity of the reply's server and pane.
 	recorded := func(e *resumeEnv, s tmuxfix.SeedSession) []any {
 		srv, _ := e.rec.Server(e.socket)
@@ -272,11 +276,13 @@ func TestResumeRecordsLaunchIdentity(t *testing.T) {
 // TestResumeLabelsDollarAndBackslashNamesByID: every catalogued $ or \ name gets the lookup, the create, then one
 // label by id on the reply's session and pane; the session whose id "$7" spells keeps its label.
 func TestResumeLabelsDollarAndBackslashNamesByID(t *testing.T) {
+	t.Parallel()
 	for _, n := range tmuxfix.StoredNames() {
 		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are refused (resume_unusable_name_test.go)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {
+			t.Parallel()
 			e := newResumeEnv(t)
 			otherTok := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{ID: "$7", Name: "bystander",
@@ -320,6 +326,7 @@ func vanishedUserSocket(t *testing.T) string {
 // TestResumeLaunchSocket: resume launches on the recorded socket (its vanished per-user directory
 // made again 0700), refuses a socket whose parent vanished before the move, and records a resolved one for a pre-release row.
 func TestResumeLaunchSocket(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		made  bool // the per-user directory must be made again, 0700
@@ -384,6 +391,7 @@ func TestResumeLaunchSocket(t *testing.T) {
 // before anything: no tmux call, the row (version, parent id) unchanged, no move trail. When
 // the recorded name holds the id (so is unusable too), the name's refusal wins, never printing the raw id.
 func TestResumeRefusesControlCharacterID(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, tc := range []struct {
 		name, ctl  string
 		nameFromID bool // keep seedRow's default name, "ts-" + the id

@@ -125,8 +125,9 @@ func callTableSpawn() callTableVerb {
 	noServerIdentity := "the new row records no tmux server identity, so no recorded server can be restarted, rebound or gone"
 	noDuplicate := noServerIdentity + `; a create finding no server or no socket answers that, not "duplicate session"`
 	v := callTableVerb{
-		name: "spawn",
-		run:  runCallTableSpawn,
+		name:   "spawn",
+		run:    runCallTableSpawn,
+		serial: "its world (newHeldEnv, newSpawnEnv) sets HOME and TMUX_TMPDIR with t.Setenv",
 		cells: map[callTableOutcome]callTableCell{
 			ctOurs: {na: "a current label cannot occur: the new row's token is fresh and its create made no session"},
 			ctLeftover: cell("ErrTmuxSessionConflict", callTableHeld{holderID: "$4",

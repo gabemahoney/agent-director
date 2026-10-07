@@ -17,6 +17,7 @@ import (
 // regression for every params struct the dispatcher decodes directly via
 // its decodeParams helper.
 func TestParamsStructsDecodeSnakeCaseJSON(t *testing.T) {
+	t.Parallel()
 	t.Run("SendKeysParams", func(t *testing.T) {
 		var p api.SendKeysParams
 		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-1","text":"hello","allow_pending":true}`), &p); err != nil {

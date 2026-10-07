@@ -156,6 +156,7 @@ func kohResumed(t *testing.T, e *killEnv) string {
 // spawn's row and a resumed row, finished before their agent reported in
 // (no pid), get "never reported in" past both, with nothing sent.
 func TestKillIncludeFinishedNeverReportedInHistory(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	rows := []struct {
 		name string
 		make func(t *testing.T, e *killEnv) string
@@ -185,6 +186,7 @@ func TestKillIncludeFinishedNeverReportedInHistory(t *testing.T) {
 // earlier launch reported in; its old session, created before the restored
 // ended_at, is killed, and a session created after the restore is refused.
 func TestKillIncludeFinishedRestoredRow(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, after := range []bool{false, true} {
 		name := "old session killed"
 		if after {
@@ -237,6 +239,7 @@ func TestKillIncludeFinishedRestoredRow(t *testing.T) {
 // row ended by "duplicate session" from a leftover of its id placed after the
 // scan (SR-20.9) gets "never reported in" (Leftover); the leftover still runs.
 func TestKillIncludeFinishedPlainSpawnHeldName(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	e := newKillEnv(t)
 	r, holder, err := e.plainSpawnHeld(t, holderOld, true)
 	assertOneSentinel(t, err, api.ErrTmuxSessionConflict)

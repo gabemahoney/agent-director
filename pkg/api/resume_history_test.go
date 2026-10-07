@@ -173,6 +173,7 @@ func (e *histEnv) columns() apitest.SpawnColumns {
 // TestResumeHistorySelectsVisibleCandidate pins which history entry resume
 // relaunches: never the current-id entry, never another life's entry.
 func TestResumeHistorySelectsVisibleCandidate(t *testing.T) {
+	// Serial: it sets CLAUDE_CONFIG_DIR with t.Setenv.
 	cases := []struct {
 		name string
 		row  histRow
@@ -242,6 +243,7 @@ func TestResumeHistorySelectsVisibleCandidate(t *testing.T) {
 // TestResumeHistoryRefusals pins the ErrJsonl* choice and the paths named, all
 // decided on the visible history; a refusal never touches tmux or the row.
 func TestResumeHistoryRefusals(t *testing.T) {
+	// Serial: it sets CLAUDE_CONFIG_DIR with t.Setenv.
 	cases := []struct {
 		name    string
 		row     histRow
@@ -362,6 +364,7 @@ func TestResumeHistoryRefusals(t *testing.T) {
 // TestResumeHistoryKeepsHookRotationWithinLife pins AC-REUSE-24's first
 // sentence: a rotation archived by the SessionStart hook stays a candidate.
 func TestResumeHistoryKeepsHookRotationWithinLife(t *testing.T) {
+	// Serial: it sets CLAUDE_CONFIG_DIR with t.Setenv.
 	for _, life := range []int64{0, 1} {
 		t.Run(fmt.Sprintf("life %d", life), func(t *testing.T) {
 			// SR-22.9: only the row's own pane process moves the row, so the

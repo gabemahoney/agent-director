@@ -83,6 +83,7 @@ func rlEnvEntries(argv []string, prefix string) int {
 // TestSpawnReuseCreateArgv: after the lookup on -S <socket>, one create there chains both labels
 // (a # in the id doubled); a $ or \ name gets no chain and one label by id; the id's env entry appears once.
 func TestSpawnReuseCreateArgv(t *testing.T) {
+	// Serial: it sets test/fake-tmux's log variable, TMUX_TMPDIR with t.Setenv.
 	cases := []struct{ name, id, session string }{
 		{"plain name", "", ""},
 		{"dollar name", "", `a$b`},
@@ -92,6 +93,7 @@ func TestSpawnReuseCreateArgv(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.ownSocketDir(t) // test/fake-tmux keeps its table beside the socket
 			var r reuseRow
 			if tc.id == "" {
 				r = e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour})
@@ -171,7 +173,9 @@ func TestSpawnReuseCreateArgv(t *testing.T) {
 // TestSpawnReuseCreateMatchesPlainSpawn: reuse's create argv (settings, environment and command) equals a
 // plain spawn's for the same request, but for the id and token, with AGENT_DIRECTOR_INSTANCE_ID once.
 func TestSpawnReuseCreateMatchesPlainSpawn(t *testing.T) {
+	// Serial: it sets test/fake-tmux's log variable, TMUX_TMPDIR with t.Setenv.
 	e := newKillEnv(t)
+	e.ownSocketDir(t) // test/fake-tmux keeps its table beside the socket
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour})
 	c, logPath := e.rlFakeTmuxClient(t, r)
 	q := reuseRequest{Name: "parity-" + uuid.NewString()[:8], Args: []string{"--model", "sonnet"},

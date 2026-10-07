@@ -148,6 +148,7 @@ func mdAnchor(title string) string {
 // TestREADMESectionHeadings checks each pointed-to section heading exists
 // exactly once in its file (SR-18.1, SR-18.17).
 func TestREADMESectionHeadings(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ path, title string }{
 		{mdTopREADME, apitest.OperatorActionsTitle},
 		{mdTopREADME, callerContractTitle},
@@ -162,6 +163,7 @@ func TestREADMESectionHeadings(t *testing.T) {
 // TestREADMEOperatorActionsForHumansOnly checks the section's first sentence
 // says automated callers must not perform its actions (SR-18.17).
 func TestREADMEOperatorActionsForHumansOnly(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	hs := d.titled(apitest.OperatorActionsTitle)
 	if len(hs) == 0 {
@@ -263,6 +265,7 @@ func collectREADMEPointers(t *testing.T) []readmePointer {
 // TestREADMEPointersNameExistingSections checks every pointer to a README
 // section names a heading the README has exactly once (SR-1.4, SR-18.17).
 func TestREADMEPointersNameExistingSections(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	ptrs := collectREADMEPointers(t)
 	for _, p := range ptrs {
@@ -308,6 +311,7 @@ func TestREADMEPointersNameExistingSections(t *testing.T) {
 // TestREADMEAnchorLinksResolve checks every anchored Markdown link in the two
 // READMEs resolves to exactly one heading, the caller-contract links included.
 func TestREADMEAnchorLinksResolve(t *testing.T) {
+	t.Parallel()
 	type link struct{ from, to, anchor string }
 	var links []link
 	for _, from := range []string{mdTopREADME, "README.md"} {

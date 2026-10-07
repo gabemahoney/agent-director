@@ -124,6 +124,7 @@ func assertInvalidFlags(t *testing.T, err error, id, marker string) {
 // TestSpawnRejectsControlCharacterInstanceID: every byte 0x00-0x1f or 0x7f,
 // at any position, returns ErrInvalidFlags with no row and no tmux call.
 func TestSpawnRejectsControlCharacterInstanceID(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const marker = "idmark"
 	cases := []struct {
 		name string
@@ -157,6 +158,7 @@ func TestSpawnRejectsControlCharacterInstanceID(t *testing.T) {
 // TestSpawnControlCharacterIDCheckedFirst: ErrInvalidFlags wins over cwd,
 // template, session-name and collision failures, so no template is loaded.
 func TestSpawnControlCharacterIDCheckedFirst(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const marker = "firstmark"
 	id := marker + "\tx"
 	cases := []struct {
@@ -201,6 +203,7 @@ func TestSpawnControlCharacterIDCheckedFirst(t *testing.T) {
 // TestSpawnAcceptsEmptyAndPrintableInstanceID: an empty id mints a fresh
 // UUID and printable ids (space, '~', non-ASCII) spawn; neither is over-rejected.
 func TestSpawnAcceptsEmptyAndPrintableInstanceID(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	suffix := uuid.NewString()[:8]
 	cases := []struct {
 		name string
@@ -238,6 +241,7 @@ func TestSpawnAcceptsEmptyAndPrintableInstanceID(t *testing.T) {
 // TestSpawnControlCharacterRowStillListed: a pre-existing row whose id holds
 // a control character is unaffected and still returned by List.
 func TestSpawnControlCharacterRowStillListed(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env := newSpawnEnv(t)
 	id := "legacy\trow-" + uuid.NewString()[:8]
 	if _, err := apitest.SeedSpawn(env.dbPath, id, store.StateWaiting, "", "", "", false); err != nil {
@@ -256,6 +260,7 @@ func (f failingCollisionReader) SpawnState(string) (string, bool, error) { retur
 // TestSpawnPreCheckReadFailureIsErrInternal: a failed pre-check read is
 // ErrInternal (even when the store error wraps a sentinel) and creates nothing.
 func TestSpawnPreCheckReadFailureIsErrInternal(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name    string
 		readErr error
@@ -304,6 +309,7 @@ func TestSpawnPreCheckReadFailureIsErrInternal(t *testing.T) {
 // TestSpawnLiveRowStillCollides: a pending or live row with the same id is
 // still ErrInstanceIdCollision on the ordinary path, with no tmux call.
 func TestSpawnLiveRowStillCollides(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, state := range []string{store.StatePending, store.StateWorking} {
 		t.Run(state, func(t *testing.T) {
 			env := newSpawnEnv(t)

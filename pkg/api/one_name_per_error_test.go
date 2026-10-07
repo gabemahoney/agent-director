@@ -73,6 +73,7 @@ func orInternal(want string) string {
 // TestOneNameCatalogue: each catalogued sentinel, wrapped, and each typed
 // ErrTmuxNotAvailable carrier matches its own entry and no other.
 func TestOneNameCatalogue(t *testing.T) {
+	t.Parallel()
 	for _, e := range errnames.Catalog {
 		t.Run(e.Name, func(t *testing.T) {
 			assertOneName(t, fmt.Errorf("verb: %w", e.Err), e.Name)
@@ -90,6 +91,7 @@ func TestOneNameCatalogue(t *testing.T) {
 // TestOneNameTmuxClasses: an ErrTmuxUnresponsive, ErrTmuxSessionConflict or
 // ErrTmuxKillFailed error wraps none of the send, capture, create or unavailable sentinels.
 func TestOneNameTmuxClasses(t *testing.T) {
+	t.Parallel()
 	classes := map[string]error{"ErrTmuxUnresponsive": api.ErrTmuxUnresponsive,
 		"ErrTmuxSessionConflict": api.ErrTmuxSessionConflict, "ErrTmuxKillFailed": api.ErrTmuxKillFailed}
 	others := map[string]error{"ErrTmuxSendKeys": api.ErrTmuxSendKeys, "ErrTmuxCaptureFailed": api.ErrTmuxCaptureFailed,
@@ -124,6 +126,7 @@ func oneNameRows() []oneNameRow {
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches
 // exactly one catalogued sentinel, and every ErrInternal case none.
 func TestOneNameReturnedErrors(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, row := range oneNameRows() {
 		t.Run(row.name, func(t *testing.T) { assertOneName(t, row.run(t), row.want) })
 	}

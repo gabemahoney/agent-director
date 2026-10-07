@@ -112,6 +112,7 @@ func rupAssertNoReason(t *testing.T, recs []map[string]any, reason string) {
 // TestSpawnReuseProvenanceDisagree: each old-row lookup reason is written once,
 // with the recorded name, before the reset or on a refusal; never adopted or pid_mismatch.
 func TestSpawnReuseProvenanceDisagree(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range rupCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)

@@ -217,6 +217,7 @@ func rlfNewSession() string { return "sess-" + uuid.NewString()[:8] }
 // messaged resumes to ErrJsonlNeverWritten (ErrNoSessionId if it never
 // reported in) and get lists nothing, though the earlier life's transcripts are on disk.
 func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name       string
 		request    func(t *testing.T) reuseRequest
@@ -280,6 +281,7 @@ func rlfMessagedLife(t *testing.T) (e *killEnv, r0, r reuseRow, sid, path string
 // TestSpawnReuseHistoryMessagedNewLife (AC-REUSE-21): a messaged new life is
 // what resume reattaches and get lists; the earlier life's never is.
 func TestSpawnReuseHistoryMessagedNewLife(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	t.Run("resume reattaches the new life's session", func(t *testing.T) {
 		e, r0, r, sid, _ := rlfMessagedLife(t)
 		rlfEndLife(t, e, r.ID)

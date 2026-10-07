@@ -26,6 +26,7 @@ import (
 // TestResumeClientStartingSettings: the configured bound and window decide at
 // value-1 s and value, each leaving the other at its default; 0 and absent keys give the defaults.
 func TestResumeClientStartingSettings(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
 	cases := []struct {
 		name          string
@@ -71,7 +72,10 @@ func TestResumeClientStartingSettings(t *testing.T) {
 // TestResumeClientUnreadableCreationTime: over fake-tmux, a lookup reply whose own session has a non-decimal
 // creation field is the lookup's unrecognised reply, never a starting-session answer; nothing is created or written.
 func TestResumeClientUnreadableCreationTime(t *testing.T) {
+	// Serial: it sets test/fake-tmux's log variable, TMUX_TMPDIR with t.Setenv; it checks every record
+	// written to the shared trail since its mark.
 	e := newKillEnv(t)
+	e.ownSocketDir(t) // test/fake-tmux keeps its table beside the socket
 	row := startingRow{state: store.StateEnded, endedAgo: defWindow + defBound, noSession: true}
 	r := e.seedStarting(t, row)
 	paneID := r.Spawn.Identity.PaneID

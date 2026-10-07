@@ -130,6 +130,7 @@ var securityExpireKeptCases = []securityCase{
 // TestSecurityExpireStoreErrorLog checks SR-15 when each Gone case's delete
 // fails in the store: the logged error, the result and the store_error record carry no forbidden value.
 func TestSecurityExpireStoreErrorLog(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, c := range securityExpireGoneCases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSecurityScene(t, securityVerb{verb: "expire"}, c)

@@ -95,6 +95,7 @@ func readPaneFollowUpLookup(s tmuxfix.Script) func(*testing.T, *killEnv, killRow
 // per outcome (SR-7.3): Gone or Leftover is ErrTmuxCaptureFailed, the rest
 // ErrTmuxUnresponsive or ErrTmuxNotAvailable; the reply text never classifies.
 func TestCallTableReadPaneFollowUp(t *testing.T) {
+	t.Parallel()
 	gone := func(_ *killEnv, r killRow) apitest.DescCase {
 		return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PaneReadPane, InstanceID: r.ID, Name: r.Name,
 			FailedCall: tmux.CallCapture})

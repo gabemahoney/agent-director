@@ -249,6 +249,7 @@ func (s *advKillSeq) run(t *testing.T, wantConversation bool, afterFirstKill fun
 // TestAdviceFollow_C11_LiveRowSequence: the six steps taken literally end
 // every live or pending row resumable or reusable, within the stated bounds.
 func TestAdviceFollow_C11_LiveRowSequence(t *testing.T) {
+	t.Parallel()
 	// C11 kill Description's live-row sequence, its six steps quoted in advKillSteps: "1. kill and check the result; ... otherwise spawn with
 	// reuse_finished (--reuse-finished on the CLI); ...".
 	adviceAssertManifest(t, "kill", "", advKillSteps...)

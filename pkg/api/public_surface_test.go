@@ -27,6 +27,7 @@ import (
 )
 
 func TestPublicSurface(t *testing.T) {
+	t.Parallel()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")
@@ -67,6 +68,7 @@ func TestPublicSurface(t *testing.T) {
 // check and cannot be silenced by regenerating any manifest artifact: adding a
 // (c *Client) Migrate(...) method would trip it at the source level.
 func TestNoMigrationTriggerMethod(t *testing.T) {
+	t.Parallel()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")

@@ -154,6 +154,7 @@ func assertPendingNoIdentity(t *testing.T, e boundEnv, id string, launchStart ti
 // unparseable reply, or whose launch stops before the identity write leaves
 // its session labelled and records no identity (SR-3.5, SR-9.4; AC-LKP-17).
 func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name         string
 		script       *tmuxfix.Script // the create's scripted result; nil answers from the table
@@ -232,6 +233,7 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 // TestSpawnLaunchBoundHungCreate: a create charged its full default create
 // timeout returns ErrTmuxUnresponsive, with the row pending and its launch start set.
 func TestSpawnLaunchBoundHungCreate(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newBoundEnv(t)
 	e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallCreate)
 
@@ -258,6 +260,7 @@ func TestSpawnLaunchBoundHungCreate(t *testing.T) {
 // TestSpawnLaunchBoundCeiling: the longest plain-spawn path (chained label,
 // relabel and kill all failing) charges C + 2A, plus Q for a caller-supplied id's scan.
 func TestSpawnLaunchBoundCeiling(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const name = "bound-ceiling"
 	cases := []struct {
 		name     string

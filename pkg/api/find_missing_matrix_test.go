@@ -374,10 +374,14 @@ func assertMxCalls(t *testing.T, rec *tmuxfix.Recorder, lookups, listings int) {
 }
 
 // TestFindMissingPendingMatrix: mxMatrix for a fresh spawn's and a resume's pending row.
-func TestFindMissingPendingMatrix(t *testing.T) { mxMatrix(t, mxKinds) }
+func TestFindMissingPendingMatrix(t *testing.T) {
+	t.Parallel()
+	mxMatrix(t, mxKinds)
+}
 
 // mxMatrix: each pending row kind of kinds x pane identity x lookup cell past the grace period gets SR-11.3's
-// outcome, and the holding session is never touched.
+// outcome, and the holding session is never touched. Each cell sweeps its own fake store and reads only its
+// own id's trail records (a reuse's row has its own random id), so the cells run in parallel.
 func mxMatrix(t *testing.T, kinds []mxKind) {
 	for ki, k := range kinds {
 		for pi, p := range mxPanes {
@@ -387,11 +391,15 @@ func mxMatrix(t *testing.T, kinds []mxKind) {
 				}
 				name, id := k.name+"/"+p.name+"/"+lk.name, fmt.Sprintf("mx-%d-%d-%d", ki, pi, li)
 				if !lk.ours || !p.none {
-					t.Run(name, func(t *testing.T) { runMxCell(t, mxPlainCell(id, k.made(t), p, lk)) })
+					t.Run(name, func(t *testing.T) {
+						t.Parallel()
+						runMxCell(t, mxPlainCell(id, k.made(t), p, lk))
+					})
 					continue
 				}
 				for vi, v := range mxListings {
 					t.Run(name+"/"+v.name, func(t *testing.T) {
+						t.Parallel()
 						runMxCell(t, mxOursNoPaneCell(fmt.Sprintf("%s-%d", id, vi), k.made(t), lk, v))
 					})
 				}
@@ -401,13 +409,17 @@ func mxMatrix(t *testing.T, kinds []mxKind) {
 }
 
 // TestFindMissingPendingMatrixInsideGrace: mxInsideGrace for a fresh spawn's and a resume's pending row.
-func TestFindMissingPendingMatrixInsideGrace(t *testing.T) { mxInsideGrace(t, mxKinds) }
+func TestFindMissingPendingMatrixInsideGrace(t *testing.T) {
+	t.Parallel()
+	mxInsideGrace(t, mxKinds)
+}
 
 // mxInsideGrace: a pending row of each of kinds 59 s into the default grace period, whose name an unlabelled
 // session holds, is not judged: no reader or tmux call, no write, in neither list.
 func mxInsideGrace(t *testing.T, kinds []mxKind) {
 	for ki, k := range kinds {
 		t.Run(k.name, func(t *testing.T) {
+			t.Parallel() // one id per kind
 			r := mxRow(fmt.Sprintf("mx-grace-%d", ki), k.made(t), true, true,
 				withLaunch(store.StatePending, fmNow.Add(-(fmGrace-time.Second)).UnixMilli()))
 			runMxCell(t, mxCell{row: r, pc: mxChecker(mxPanePID, procfix.Unreadable()),
@@ -422,6 +434,7 @@ func mxNoToken(r *store.LiveSpawnIdentity) { r.Identity.Token = "" }
 // TestFindMissingPendingMatrixExtraRows: rows with no launch start or no token (never Ours), a working row whose
 // name an unlabelled session holds, and a row whose id a live leaked process carries, by the same rules.
 func TestFindMissingPendingMatrixExtraRows(t *testing.T) {
+	t.Parallel()
 	fresh, unreadable := mxKinds[0], procfix.Unreadable()
 	noStart := withLaunch(store.StatePending, 0)
 	cases := []struct {
@@ -448,6 +461,7 @@ func TestFindMissingPendingMatrixExtraRows(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel() // one id per case
 			pc := mxChecker(mxPanePID, tc.proc)
 			pc.Set(mxLeakPID, procfix.Alive(fmStart).WithEnv(map[string]string{probe.EnvKey: tc.row.ClaudeInstanceID}))
 			runMxCell(t, mxCell{row: tc.row, pc: pc, rec: tc.rec(tc.row, []tmuxfix.SeedPane{mxTokenPane}), want: tc.want})
@@ -458,6 +472,8 @@ func TestFindMissingPendingMatrixExtraRows(t *testing.T) {
 // TestFindMissingPendingMatrixLocaleNames: a ü-x name and an agent-ü1 id are Ours and not marked, under
 // LC_ALL=C and with no locale variables (AC-LKP-08's unit half).
 func TestFindMissingPendingMatrixLocaleNames(t *testing.T) {
+	// Serial: it sets the locale variables with t.Setenv; it checks the shared trail by literal row ids
+	// other find-missing tests reuse.
 	ours := mxLookups[0]
 	for locale, lcAll := range map[string]string{"LC_ALL=C": "C", "no locale variables": ""} {
 		for _, p := range mxPanes[2:] {

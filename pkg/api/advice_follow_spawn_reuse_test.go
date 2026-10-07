@@ -45,6 +45,7 @@ func advSpawnGetThenAct(t *testing.T, e *killEnv, p api.SpawnParams) (string, ap
 // TestAdviceFollow_A9_ReuseLookupRetryLater: A9 "...nothing was done; retry later" at reuse's lookup. A retry while the condition holds
 // gets the same refusal; past the window or bound with the session or agent still there, the own-id conflict (spawn's Go doc); cleared, it launches.
 func TestAdviceFollow_A9_ReuseLookupRetryLater(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name    string
 		words   string        // the case's own words before "nothing was done; retry later"
@@ -124,6 +125,7 @@ func TestAdviceFollow_A9_ReuseLookupRetryLater(t *testing.T) {
 
 // TestAdviceFollow_A10_ReuseLaunchTimeoutRetryAfterFinished: A10 "the row was reset; the row stays pending; do not retry until get shows the row ended or missing".
 func TestAdviceFollow_A10_ReuseLaunchTimeoutRetryAfterFinished(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := adviceReuseSettled(t, e)
 	e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallCreate)
@@ -187,6 +189,7 @@ func advSpawnRestoreCases() []advSpawnRestoreCase {
 // TestAdviceFollow_A11_ReuseRestoreSentenceGetThenAct: A11 the restore's row sentence ("the row was restored to its prior state, <state>" /
 // "... left as it is" / "... so nothing was restored" / "... stays pending"); get, then act on the state, launches.
 func TestAdviceFollow_A11_ReuseRestoreSentenceGetThenAct(t *testing.T) {
+	t.Parallel()
 	for _, tc := range advSpawnRestoreCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
@@ -220,6 +223,8 @@ func TestAdviceFollow_A11_ReuseRestoreSentenceGetThenAct(t *testing.T) {
 // session" whose re-lookup timed out or met the row's own session still starting; retried long after, or once find-missing
 // past grace shows it missing, with the name free. A starting session that outlives the wait is a leftover until it goes.
 func TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks every record written to the
+	// shared trail since its mark.
 	adviceAssertGoDoc(t, "spawn.go", "Spawn", "then the row is restored: retry later if it was restored or removed; if it could not be "+
 		"restored, or changed after the reset, do not retry until get shows the row ended or missing")
 	for _, h := range adviceHeldFollows() {
@@ -278,6 +283,7 @@ func TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater(t *testing.T) {
 // TestAdviceFollow_A13_ReuseLostRaceGetThenAct: A13 "the row changed or was removed after this spawn examined it and nothing was changed";
 // get, then act on the state, launches.
 func TestAdviceFollow_A13_ReuseLostRaceGetThenAct(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, shown string
 		change      func(t *testing.T, e *killEnv, id string) // between the reuse's read and its reset

@@ -139,6 +139,8 @@ func (e *killEnv) rcoAssertReuseWon(t *testing.T, r reuseRow, name, parent, sess
 // first to reset launches; the other, examined before that reset (or after
 // it), gets ErrInstanceIdCollision, creates nothing and writes nothing.
 func TestSpawnReuseTwoReusesOneLaunch(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with os.Setenv around a call; it checks every record
+	// written to the shared trail since its mark.
 	cases := []struct {
 		name     string
 		at       func(*hookedReuseStore, func()) // where the winner runs inside the loser; nil: before it
@@ -200,6 +202,7 @@ func TestSpawnReuseTwoReusesOneLaunch(t *testing.T) {
 // together, every round: one launches, the other gets ErrInstanceIdCollision;
 // one create, one session and one archive entry.
 func TestSpawnReuseTwoConcurrentReuses(t *testing.T) {
+	t.Parallel()
 	for round := range rcoRounds {
 		t.Run(fmt.Sprintf("round %d", round), func(t *testing.T) {
 			e := newKillEnv(t)
@@ -246,6 +249,7 @@ func TestSpawnReuseTwoConcurrentReuses(t *testing.T) {
 // read it, before its lookup or its reset, makes the reset find it removed:
 // ErrInstanceIdCollision, no create, no ad.spawn.reused (AC-REUSE-15).
 func TestSpawnReuseRowExpiredAfterRead(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		at   func(*hookedReuseStore, func())
@@ -254,6 +258,7 @@ func TestSpawnReuseRowExpiredAfterRead(t *testing.T) {
 		{"before the reset", (*hookedReuseStore).beforeReset},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r, _, _ := e.rcoSeed(t, reuseRowSpec{Bare: true})
 			w := &hookedReuseStore{st: e.st}

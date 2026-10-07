@@ -142,6 +142,7 @@ func ruhRun(t *testing.T, tc rhdCase, prior string) {
 // TestSpawnReuseHeldRelookupOutcomes: per re-lookup outcome and prior state,
 // one classified error quoting the requested name, the row restored, the holder untouched.
 func TestSpawnReuseHeldRelookupOutcomes(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, tc := range rhdCases() {
 		for _, prior := range []string{store.StateEnded, store.StateMissing} {
 			t.Run(tc.name+"/"+prior, func(t *testing.T) { ruhRun(t, tc, prior) })
@@ -152,6 +153,7 @@ func TestSpawnReuseHeldRelookupOutcomes(t *testing.T) {
 // TestSpawnReuseHeldRetryFollowsRestore (b.gu6): an ErrTmuxUnresponsive after reuse's "duplicate session" (unreadable,
 // ambiguous, still stopping or starting) whose restore did not apply ends with the retry sentence its result picks.
 func TestSpawnReuseHeldRetryFollowsRestore(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, tc := range rhdCases() {
 		if tc.want != api.ErrTmuxUnresponsive {
 			continue
@@ -189,6 +191,7 @@ func TestSpawnReuseHeldRetryFollowsRestore(t *testing.T) {
 // TestSpawnReuseHeldRowResult: the description's row sentence follows the
 // restore: changed after the reset, removed at the create, or a failed write.
 func TestSpawnReuseHeldRowResult(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, e *killEnv, s *ruhScene, rs *hookedReuseStore)
@@ -248,6 +251,8 @@ func TestSpawnReuseHeldRowResult(t *testing.T) {
 // TestSpawnReuseHeldReissue (AC-RES-12's reuse half): after the restored
 // refusal a re-issue is refused before its reset while the holder runs; once it is gone one launches.
 func TestSpawnReuseHeldReissue(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks every record written to the
+	// shared trail since its mark.
 	e := newKillEnv(t)
 	s := e.ruhArrange(t, store.StateEnded, rlkSettled(e), heldSpec{Holder: holderForeign, Created: rlkSettled(e)})
 	if _, _, err := e.reuse(t, s.p); err == nil {

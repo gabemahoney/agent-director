@@ -92,6 +92,7 @@ func assertRowStateUnchanged(t *testing.T, dbPath, id string, before reuseRowSta
 // has no effect: a minted id, one pending row, one create, and a finished row
 // with another id left as it was.
 func TestSpawnReuseFinishedWithoutIDIsFreshSpawn(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, state := range finishedStates {
 		t.Run(state, func(t *testing.T) {
 			env := newSpawnEnv(t)
@@ -124,6 +125,7 @@ func TestSpawnReuseFinishedWithoutIDIsFreshSpawn(t *testing.T) {
 // TestSpawnReuseFinishedControlCharacterID: the opt-in does not bypass the
 // control-character check: ErrInvalidFlags, no row and no tmux call.
 func TestSpawnReuseFinishedControlCharacterID(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const marker = "reusemark"
 	for _, tc := range []struct{ name, ctl string }{
 		{"newline", "\n"},
@@ -149,6 +151,7 @@ func TestSpawnReuseFinishedControlCharacterID(t *testing.T) {
 // missing row is ErrInstanceIdCollision at the pre-check (b.hjs): no tmux call,
 // no socket directory, .claude.json byte-identical, and the row unchanged.
 func TestSpawnFinishedRowCollidesWithoutReuse(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, state := range finishedStates {
 		t.Run(state, func(t *testing.T) {
 			env := newSpawnEnv(t)
@@ -202,6 +205,7 @@ func rtabAssertInternal(t *testing.T, err error, c apitest.DescCase) {
 // before the insert; another store's label proceeds to a plain launch (life 0,
 // no archive, no ad.spawn.reused) and this store's leftover refuses, writing nothing.
 func TestSpawnReuseNoRowIsFreshSpawn(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		label   func(e *killEnv, id string) tmux.Label // nil: no session, no server
@@ -217,6 +221,7 @@ func TestSpawnReuseNoRowIsFreshSpawn(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			id := "reuse-" + uuid.NewString()[:8]
 			var held tmuxfix.SeedSession
@@ -275,6 +280,7 @@ func TestSpawnReuseNoRowIsFreshSpawn(t *testing.T) {
 // none makes the insert collide: ErrInstanceIdCollision, no create, and the
 // competing row is left as it was.
 func TestSpawnReuseInsertRace(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	id := "reuse-" + uuid.NewString()[:8]
 	w := &hookedReuseStore{st: e.st}
@@ -352,6 +358,7 @@ func rtabLiveRows() []rtabLive {
 // name or another, is ErrInstanceIdCollision with no tmux call and nothing
 // written, its launch start and the trust file included.
 func TestSpawnReuseLiveRowCollides(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, row := range rtabLiveRows() {
 		for _, other := range []bool{false, true} {
 			name := row.name + "/recorded name"
@@ -380,6 +387,7 @@ func TestSpawnReuseLiveRowCollides(t *testing.T) {
 // TestSpawnReusePreCheckReadFails: a failed pre-check read is ErrInternal with
 // the pre-check wording, no tmux call and nothing written, trust file included.
 func TestSpawnReusePreCheckReadFails(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{})
 	w := &hookedReuseStore{st: e.st}

@@ -67,6 +67,7 @@ func ptrEnds(t *testing.T, e *killEnv, r *killRow) { e.endAfterEnter(t, *r) }
 // ptrUnusableSocket seeds a row with no recorded socket whose resolved
 // socket directory is unusable.
 func ptrUnusableSocket(t *testing.T, e *killEnv) killRow {
+	e.ownSocketDir(t)
 	r := e.seedRow(t, killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithNoLaunchToken()}})
 	if err := os.Chmod(filepath.Dir(e.defaultSocket), 0o755); err != nil {
 		t.Fatalf("chmod: %v", err)
@@ -91,20 +92,26 @@ func ptrAssertOnlyDisagrees(t *testing.T, mark int, id string, none bool) {
 
 // TestPauseTrailNoCallEvent: no return path of pause writes a call event
 // (no ad.pause.*, no ad.send_keys.called); a path with no lookup writes nothing.
+// Each case checks only its own row's records, so the cases run in parallel,
+// except the one that takes its own TMUX_TMPDIR (t.Setenv).
 func TestPauseTrailNoCallEvent(t *testing.T) {
+	// Serial: its unusable-socket-directory case sets TMUX_TMPDIR (t.Setenv); its other cases run in
+	// parallel.
 	cases := []struct {
 		name     string
 		seed     sktSeed // nil: an unknown id
 		outcome  string
 		noLookup bool
 		apiOnly  bool // Client.Pause would wait the config's 30 s
+		ownTmux  bool // the seed takes its own TMUX_TMPDIR (ptrUnusableSocket), so the case is serial
 	}{
 		{name: "unknown id", outcome: "ErrSpawnNotFound", noLookup: true},
 		{name: "ended row", seed: sktRow(killRowSpec{State: store.StateEnded, NoSession: true}), outcome: "ok", noLookup: true},
 		{name: "missing row", seed: sktRow(killRowSpec{State: store.StateMissing, NoSession: true}), outcome: "ok", noLookup: true},
 		{name: "pending row", seed: sktRow(killRowSpec{State: store.StatePending}), outcome: "ErrSpawnNotPausable", noLookup: true},
 		{name: "working row", seed: sktRow(killRowSpec{State: store.StateWorking}), outcome: "ErrSpawnNotPausable", noLookup: true},
-		{name: "unusable socket directory", seed: ptrUnusableSocket, outcome: "ErrTmuxNotAvailable", noLookup: true},
+		{name: "unusable socket directory", seed: ptrUnusableSocket, outcome: "ErrTmuxNotAvailable", noLookup: true,
+			ownTmux: true},
 		{name: "ours, row ends", seed: sktRow(killRowSpec{}, ptrEnds), outcome: "ok"},
 		{name: "ours, wait times out", seed: sktRow(killRowSpec{}), outcome: "ErrPauseTimeout", apiOnly: true},
 		{name: "leftover", seed: sktRow(killRowSpec{NoSession: true}, sktLeftover), outcome: "ErrTmuxSessionConflict"},
@@ -128,6 +135,9 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 				continue
 			}
 			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
+				if !tc.ownTmux {
+					t.Parallel()
+				}
 				e := newKillEnv(t)
 				id := "pause-unknown-" + uuid.NewString()[:8]
 				if tc.seed != nil {
@@ -149,6 +159,7 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 // TestPauseTrailClosedClient: a closed Client returns ErrClientClosed, makes
 // no tmux call and writes no trail record.
 func TestPauseTrailClosedClient(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	c, _ := e.client(t)
@@ -183,9 +194,11 @@ func ptrLineClearDisagreeCases() []keysDisagreeCase {
 // once per call (verb pause, source ad_send_keys) with what was typed as its
 // action, never with a label value or another row's id; no other record.
 func TestPauseTrailProvenanceDisagree(t *testing.T) {
+	t.Parallel()
 	for _, entry := range ptrEntries {
 		for _, tc := range append(keysDisagreeCases(), ptrLineClearDisagreeCases()...) {
 			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel() // each case checks only its own row's records
 				e := newKillEnv(t)
 				r, other := e.seedKeysDisagreeCase(t, tc)
 				mark := trailMark(t)
@@ -218,6 +231,7 @@ func ptrDisagreesAtFirstSleep(t *testing.T, id string) func() []map[string]any {
 // TestPauseTrailWrittenBeforeTheWait: the records are written before the wait
 // and are the same whether the row ends, the wait times out or the caller cancels.
 func TestPauseTrailWrittenBeforeTheWait(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	var rows []keysDisagreeCase
 	for _, tc := range keysDisagreeCases() {
 		if tc.name == "server_restarted" || tc.name == "adopted and name_changed" {
@@ -312,6 +326,7 @@ func ptrFailOpenRuns(t *testing.T, prefix string) []string {
 // TestPauseTrailFailOpen: with the trail unwritable, pause's errors, tmux
 // calls and rows equal those of a run with a working trail.
 func TestPauseTrailFailOpen(t *testing.T) {
+	t.Parallel()
 	prefix := "pause-failopen-" + uuid.NewString()[:8]
 	want := ptrFailOpenRuns(t, prefix)
 	for name, n := range map[string]int{"ours": 0, "adopted": 1, "restarted-timeout": 1, "restarted-exit-timeout": 1,
@@ -341,6 +356,7 @@ func TestPauseTrailFailOpen(t *testing.T) {
 // TestPauseTrailFailOpenChild is TestPauseTrailFailOpen's child: it runs the
 // calls with an unwritable trail and prints their lines.
 func TestPauseTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(ptrChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestPauseTrailFailOpen's child")

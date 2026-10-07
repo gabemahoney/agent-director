@@ -165,6 +165,7 @@ func fgcAssertMarked(t *testing.T, dbPath, id string, run fgcRun, want fgcWant) 
 // TestFindMissingGraceLaunchKinds: a pending row of each launch kind and recorded
 // agent process is untouched 1 s before the default grace ends, measured from its launch start, and marked 1 s after.
 func TestFindMissingGraceLaunchKinds(t *testing.T) {
+	t.Parallel()
 	kinds := []struct {
 		name, sessionID string
 		opts            func(launch time.Time) []apitest.SpawnOption
@@ -184,6 +185,7 @@ func TestFindMissingGraceLaunchKinds(t *testing.T) {
 	for _, kind := range kinds {
 		for _, ev := range fgcEvidences {
 			t.Run(kind.name+"/"+ev.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				c, _ := e.client(t)
 				launch := e.clock.Now()
@@ -202,12 +204,14 @@ func TestFindMissingGraceLaunchKinds(t *testing.T) {
 // TestFindMissingGraceConfigured: pending_grace_seconds at its safe minimum holds a
 // row 1 s before that period ends and marks it 1 s after, by its evidence; a default Client still holds it then.
 func TestFindMissingGraceConfigured(t *testing.T) {
+	t.Parallel()
 	grace := time.Duration(fgcMinGraceSeconds) * time.Second
 	if grace+time.Second >= fmGrace {
 		t.Fatalf("precondition: minimum grace %v + 1 s is not below the default %v", grace, fmGrace)
 	}
 	for _, ev := range fgcEvidences {
 		t.Run(ev.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			configured, _ := e.client(t, apitest.TmuxInt(config.TmuxPendingGraceSeconds, fgcMinGraceSeconds))
 			dflt, _ := e.client(t)
@@ -227,6 +231,7 @@ func TestFindMissingGraceConfigured(t *testing.T) {
 // TestFindMissingGraceLaunchStartValues: with the clock at started_at, a dead
 // agent's row with an absent, unreadable or out-of-range launch start is marked at once; a future one is held.
 func TestFindMissingGraceLaunchStartValues(t *testing.T) {
+	t.Parallel()
 	year10000 := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 	year0 := time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 	cases := []struct {
@@ -248,6 +253,7 @@ func TestFindMissingGraceLaunchStartValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			c, _ := e.client(t)
 			now := e.clock.Now()
@@ -291,6 +297,7 @@ func fgcReuseStopsBeforeCreate(t *testing.T, e *killEnv, r reuseRow) {
 // TestFindMissingGraceReuseAfterNeverReportedIn (AC-FM-15): a fresh spawn's or a reuse's pending row with no session
 // is held inside grace and marked tmux_absent past it; then resume is ErrNoSessionId and a reuse launches (life + 1).
 func TestFindMissingGraceReuseAfterNeverReportedIn(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		setup func(*testing.T, *killEnv, *api.Client) string
@@ -319,6 +326,7 @@ func TestFindMissingGraceReuseAfterNeverReportedIn(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			c, _ := e.client(t)
 			id := tc.setup(t, e, c)

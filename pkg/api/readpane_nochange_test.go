@@ -54,6 +54,7 @@ func rpnAssertNothingChanged(t *testing.T, e *killEnv, r killRow, before *apites
 // read makes at most one lookup, listing and capture and changes nothing;
 // once the holding session is gone, every row gives ErrTmuxCaptureFailed.
 func TestReadPaneNothingChangedPane10(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		spec     killRowSpec
@@ -97,12 +98,14 @@ func TestReadPaneNothingChangedPane10(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
+			spec := tc.spec // a copy: the parallel subtests never write a captured case
 			if tc.finished {
 				ended := e.clock.Now().Add(-e.cfg.EffectiveStoppingWindow() - time.Second)
-				tc.spec.State, tc.spec.Opts = store.StateEnded, []apitest.SpawnOption{apitest.WithEndedAt(ended)}
+				spec.State, spec.Opts = store.StateEnded, []apitest.SpawnOption{apitest.WithEndedAt(ended)}
 			}
-			r := e.seedRow(t, tc.spec)
+			r := e.seedRow(t, spec)
 			held := tc.hold(t, e, &r)
 			e.setPaneTexts(r.Socket)
 			before, sessions, mark := e.columns(t, r.ID), e.rec.Sessions(r.Socket), trailMark(t)
@@ -139,6 +142,7 @@ func TestReadPaneNothingChangedPane10(t *testing.T) {
 // TestReadPaneNoAdoptionWrite: a lost reply's adopted pane is read for the
 // call only; row_version and the identity columns are unchanged (SR-3.6).
 func TestReadPaneNoAdoptionWrite(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{NoPane: true, NoServerIdentity: true})
 	e.setPaneTexts(r.Socket)
@@ -169,6 +173,7 @@ func rpnSeedPane(t *testing.T, e *killEnv, r *killRow) {
 // reason, and on every refusal, read-pane writes no trail record and changes
 // nothing; re-issued, it gives the same answer and the same calls.
 func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
+	t.Parallel()
 	lookup := []tmux.Call{tmux.CallLookup}
 	cases := []struct {
 		name  string
@@ -216,6 +221,7 @@ func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := killRow{ID: "rpn-unknown-" + uuid.NewString()[:8]}
 			if !tc.noRow {

@@ -19,6 +19,7 @@ import (
 // refusal at once; past the window or bound the description states, the
 // retry proceeds, or gets the documented "never reported in" conflict.
 func TestAdviceFollow_C9_OptInStillStoppingOrStartingRetryLater(t *testing.T) {
+	t.Parallel()
 	// C9 ErrTmuxUnresponsive with the finished-row opt-in, own session still stopping or still starting: "...nothing was done; retry later".
 	const advice = "nothing was done; retry later"
 	cases := []struct {
@@ -75,6 +76,7 @@ func TestAdviceFollow_C9_OptInStillStoppingOrStartingRetryLater(t *testing.T) {
 // TestAdviceFollow_C10_OptInOnLiveRowDropTheOption: the refused call sends
 // nothing; the same kill without the option ends the live row's agent.
 func TestAdviceFollow_C10_OptInOnLiveRowDropTheOption(t *testing.T) {
+	t.Parallel()
 	// C10 ErrSpawnNotResumable, the opt-in on a live row: "the finished-row option applies only to an ended or missing row; no lookup was made and nothing was sent" (follow: kill again without the option).
 	for _, state := range []string{store.StateWaiting, store.StatePending} {
 		t.Run(state, func(t *testing.T) {

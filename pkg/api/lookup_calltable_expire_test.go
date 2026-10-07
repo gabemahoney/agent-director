@@ -92,8 +92,9 @@ func callTableExpire() callTableVerb {
 	stops := func(reason string) callTableCell { return kept(reason, "tmux_skipped") }
 	noAction := "expire makes no action call: its run makes only lookups"
 	v := callTableVerb{
-		name: "expire",
-		run:  runCallTableExpire,
+		name:   "expire",
+		run:    runCallTableExpire,
+		serial: "a cell checks every ad.expire.kept record written to the shared trail since its mark (assertExpired)",
 		cells: map[callTableOutcome]callTableCell{
 			ctOurs:                     kept("ours", ""),
 			ctLeftover:                 kept("leftover_running", ""),

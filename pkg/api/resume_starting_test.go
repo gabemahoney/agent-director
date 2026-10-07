@@ -49,6 +49,7 @@ func resumeStarting(t *testing.T, s startingRow, want tmux.StartingSessionOutcom
 // TestResumeStartingSessionMatrix: ended and missing rows, ended window-1 s or
 // the window ago, with a young or old own session; the window decides first (AC-RES-17).
 func TestResumeStartingSessionMatrix(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	ended := []struct {
 		name   string
 		ago    time.Duration
@@ -80,6 +81,7 @@ func TestResumeStartingSessionMatrix(t *testing.T) {
 // TestResumeStartingSessionCases: the bound past the window, a future or NULL
 // ended_at, a row with no pid, and Gone while the agent runs (AC-RES-03, AC-RES-17).
 func TestResumeStartingSessionCases(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	longAgo := defWindow + defBound
 	cases := []struct {
 		name string
@@ -125,6 +127,7 @@ func TestResumeStartingSessionCases(t *testing.T) {
 // TestResumeFutureCreationTimeCrossesBound: a session created in the future is
 // young, and stepping the virtual clock carries the same row past the bound (AC-RES-04).
 func TestResumeFutureCreationTimeCrossesBound(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	row := startingRow{state: store.StateEnded, endedAgo: defWindow + defBound, age: -time.Second}
 	r := e.seedStarting(t, row)

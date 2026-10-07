@@ -166,6 +166,7 @@ func assertResumed(t *testing.T, e *resumeEnv, rs *recordingResumeStore, snap ap
 // TestResumeGuardsRefuseWithoutMove: an unknown id, a live or pending row and a
 // row with no session id are refused with no move, no tmux call and no write.
 func TestResumeGuardsRefuseWithoutMove(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		state     string // "" = no row
@@ -206,6 +207,7 @@ func TestResumeGuardsRefuseWithoutMove(t *testing.T) {
 // TestResumeIdlessStaleTmuxSessionReturnsErrTmuxSessionConflict: an unlabelled
 // session holding the row's name refuses at the lookup; nothing else is called.
 func TestResumeIdlessStaleTmuxSessionReturnsErrTmuxSessionConflict(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
 	e.rec.StartServer(r.Identity.Socket, tmuxfix.Server{PID: resumableServerPID, Start: resumableSrvStart}).
@@ -234,6 +236,7 @@ func TestResumeIdlessStaleTmuxSessionReturnsErrTmuxSessionConflict(t *testing.T)
 // fails in the store, returns its error after the lookup alone: no create,
 // no restore, no write.
 func TestResumeMoveOutcomes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		res      api.CondResult // 0: the move fails with a store error
@@ -275,6 +278,7 @@ func TestResumeMoveOutcomes(t *testing.T) {
 // TestResumeHappyPathLaunchesAndUpdatesParent: one move (examined snapshot, a
 // new token, the create's socket, parent caller-id) and one labelled create.
 func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	e, rs := newRecordingEnv(t)
 	resumeFromCaller(t, e, "caller-id")
 	r := e.seedResumable(t, store.StateEnded)
@@ -313,6 +317,7 @@ func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
 // TestResumeFromBareShellSetsParentNull: with no caller instance id the move's
 // parent id is empty and parent_id is stored NULL.
 func TestResumeFromBareShellSetsParentNull(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
 	if _, err := rs.resume(e, r.ID); err != nil {
@@ -328,6 +333,7 @@ func TestResumeFromBareShellSetsParentNull(t *testing.T) {
 
 // TestResumeMissingStateAlsoResumes: a missing row resumes as an ended one does.
 func TestResumeMissingStateAlsoResumes(t *testing.T) {
+	t.Parallel()
 	e, rs := newRecordingEnv(t)
 	r := e.seedResumable(t, store.StateMissing)
 	if _, err := rs.resume(e, r.ID); err != nil {
@@ -339,6 +345,7 @@ func TestResumeMissingStateAlsoResumes(t *testing.T) {
 // TestResumeLaunchFailureRestoresRow: a failed create gives the move, then one
 // applied restore of the prior values with the move's version (parent kept).
 func TestResumeLaunchFailureRestoresRow(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	e, rs := newRecordingEnv(t)
 	resumeFromCaller(t, e, "caller-id")
 	r := e.seedResumable(t, store.StateEnded)

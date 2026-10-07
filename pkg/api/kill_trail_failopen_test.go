@@ -65,6 +65,7 @@ func ktrFailOpenRuns(t *testing.T, prefix string) []string {
 // TestKillTrailFailOpen: with the trail unwritable, kill's results, errors and
 // rows equal those of a run with a working trail.
 func TestKillTrailFailOpen(t *testing.T) {
+	t.Parallel()
 	prefix := "kill-failopen-" + uuid.NewString()[:8]
 	want := ktrFailOpenRuns(t, prefix)
 	for _, l := range want {
@@ -94,6 +95,7 @@ func TestKillTrailFailOpen(t *testing.T) {
 // TestKillTrailFailOpenChild is TestKillTrailFailOpen's child: it runs the
 // kills with an unwritable trail and prints their lines.
 func TestKillTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(ktrChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestKillTrailFailOpen's child")

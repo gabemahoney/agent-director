@@ -88,6 +88,7 @@ func escapedName(t *testing.T) string {
 // value-1 and value, each independent of the other, and an absent or 0
 // setting uses the default (AC-CFG-02, AC-RES-05).
 func TestStartingSessionSettings(t *testing.T) {
+	t.Parallel()
 	defB, defW := int64(config.DefaultStartingSessionSeconds), int64(config.DefaultStoppingWindowSeconds)
 	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
 	cases := []struct {
@@ -143,6 +144,7 @@ func TestStartingSessionSettings(t *testing.T) {
 // past both UnavailableError is nil, so steps 1 and 2 never build the own-id
 // conflict.
 func TestStartingSessionRefusals(t *testing.T) {
+	t.Parallel()
 	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
 	lim := loadStartingLimits(t,
 		apitest.TmuxInt(config.TmuxStartingSessionSeconds, minB), apitest.TmuxInt(config.TmuxStoppingWindowSeconds, minW))

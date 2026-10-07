@@ -109,6 +109,7 @@ func advSpawnReuseAfterFinished(t *testing.T, e heldEnv, id string, p api.SpawnP
 // TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished: A1 "the session may have been created; the row stays pending; do not retry until get shows
 // the row ended or missing", for an explicit id then "a retry with this id uses the reuse opt-in (...), since a plain spawn of the id now collides".
 func TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const rule = "the session may have been created; the row stays pending; do not retry until get shows the row ended or missing"
 	cases := []struct {
 		name, id string
@@ -180,6 +181,7 @@ func advSpawnScanRetry(t *testing.T, want error, phrase string, setup func(e hel
 
 // TestAdviceFollow_A2_ScanUnreadableRetryLater: A2 "nothing was done: nothing was written and no row was created; retry later".
 func TestAdviceFollow_A2_ScanUnreadableRetryLater(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, tc := range []struct {
 		name   string
 		script tmuxfix.Script
@@ -199,6 +201,7 @@ func TestAdviceFollow_A2_ScanUnreadableRetryLater(t *testing.T) {
 
 // TestAdviceFollow_A3_ScanLeftoverHumanEnds: A3 "ending such a session is a human's decision, see "Operator actions" in the agent-director README".
 func TestAdviceFollow_A3_ScanLeftoverHumanEnds(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const leftover = "$3"
 	advSpawnScanRetry(t, api.ErrTmuxSessionConflict,
 		`nothing was written and no row was created; ending such a session is a human's decision, see "Operator actions" in the agent-director README`,
@@ -218,6 +221,7 @@ func advSpawnFreeName(t *testing.T, e heldEnv) {
 // TestAdviceFollow_A4_HeldUnreadableReuseOnceFree: A4 "the new row was ended; a retry with this id uses the reuse opt-in reuse_finished
 // (--reuse-finished on the CLI) once the name is free, since a plain spawn of the id now collides".
 func TestAdviceFollow_A4_HeldUnreadableReuseOnceFree(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const phrase = "the new row was ended; " + advSpawnReuseOnceFree
 	holder := func(id string) tmuxfix.SeedSession { return heldSession(advSpawnHeldName, id, tmux.Label{}, false) }
 	cases := []struct {
@@ -302,6 +306,7 @@ const advSpawnGoDocRetry = "; the new row is ended (the description says if it c
 // could not be ended and stays pending"; "do not retry until get shows the row ended or missing; then a retry with this id uses the reuse opt-in
 // (...) once the name is free, since a plain spawn of the id now collides".
 func TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	adviceAssertGoDoc(t, "spawn.go", "Spawn", `Also, after "duplicate session", the re-lookup of the requested name could not be read`+advSpawnGoDocRetry)
 	for _, tc := range advSpawnUnendedRows {
 		t.Run(tc.name, func(t *testing.T) {
@@ -323,6 +328,7 @@ func TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished(t *testing.T) {
 // when it was looked up again; the new row was ended; a retry with this id uses the reuse opt-in (...) once the name is free, since a plain spawn
 // of the id now collides", an unended row's sentence and A5's wait instead; a minted id's description names the minted id.
 func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	adviceAssertGoDoc(t, "spawn.go", "Spawn", `Also, after "duplicate session", the session holding the requested name was gone by the re-lookup`+
 		advSpawnGoDocRetry)
 	rowEnded := advSpawnRow{"row ended", "the new row was ended", nil}
@@ -383,6 +389,7 @@ func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
 // TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse: A7 "ending the session is a human's decision, ..." / "a human must look, ..." and spawn's
 // "then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)".
 func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const (
 		decision = `ending the session is a human's decision, see "Operator actions" in the agent-director README`
 		look     = `a human must look, see "Operator actions" in the agent-director README`
@@ -433,6 +440,7 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 // TestAdviceFollow_A8_PendingRowReuseAfterGrace: A8 "after any other failed launch the row stays pending and an opted-in retry collides
 // until find-missing marks it missing, which happens only after the pending grace period (60 s by default)".
 func TestAdviceFollow_A8_PendingRowReuseAfterGrace(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name    string
 		scripts map[tmux.Call]tmuxfix.Script // each answers once

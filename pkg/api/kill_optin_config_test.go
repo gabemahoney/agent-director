@@ -45,6 +45,7 @@ func kocProbes(bound, window time.Duration) []kocProbe {
 // TestKillIncludeFinishedClientSettings: through api.New, the window and the
 // bound at their safe minimums decide at value-1 s and value, each leaving the other at its default.
 func TestKillIncludeFinishedClientSettings(t *testing.T) {
+	t.Parallel()
 	minB, minW := int64(config.MinStartingSessionSeconds), int64(config.MinStoppingWindowSeconds)
 	cases := []struct {
 		name          string
@@ -76,6 +77,7 @@ func TestKillIncludeFinishedClientSettings(t *testing.T) {
 // TestKillIncludeFinishedPassedDurations: api.Kill applies the bound and
 // window it is given, not the configured defaults, below and above them.
 func TestKillIncludeFinishedPassedDurations(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name          string
 		bound, window time.Duration

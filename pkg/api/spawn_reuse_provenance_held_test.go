@@ -83,8 +83,10 @@ func rupHeldCases() []rupHeldCase {
 // TestSpawnReuseProvenanceAfterDuplicateSession: the re-lookup writes, after the
 // create, each reason the old-row lookup did not, once, with the recorded name.
 func TestSpawnReuseProvenanceAfterDuplicateSession(t *testing.T) {
+	t.Parallel()
 	for _, tc := range rupHeldCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Held: true, Age: rceSettled(e)})
 			w := &hookedReuseStore{st: e.st}

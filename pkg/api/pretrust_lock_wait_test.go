@@ -32,6 +32,7 @@ func ptwHoldLock(t *testing.T, c trustConfig) {
 // pre_trust failed and still launches. The 12 s default would outlast the
 // 10 s stale limit, break the lock and report ok.
 func TestLaunchPathsUseConfiguredLockWait(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	cases := []struct {
 		name   string
 		launch func(t *testing.T, e *killEnv, c *api.Client) (preTrust string, trust trustConfig, cwd string)

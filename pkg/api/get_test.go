@@ -49,6 +49,7 @@ func openGetFixture(t *testing.T, instanceID, state string) *store.Store {
 // Also pins req-review m2: tool_input is the byte-for-byte raw JSON
 // string seeded into the DB — no parse / re-emit round trip.
 func TestGetCheckPermissionWithOpenRow(t *testing.T) {
+	t.Parallel()
 	s := openGetFixture(t, "id-g-1", store.StateCheckPermission)
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
 	const tok = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
@@ -83,6 +84,7 @@ func TestGetCheckPermissionWithOpenRow(t *testing.T) {
 // check_permission AND no open rows → PermissionRequests is an empty
 // non-nil slice. No error surfaces.
 func TestGetCheckPermissionNoRow(t *testing.T) {
+	t.Parallel()
 	s := openGetFixture(t, "id-g-2", store.StateCheckPermission)
 
 	got, err := api.Get(s, "id-g-2")
@@ -104,6 +106,7 @@ func TestGetCheckPermissionNoRow(t *testing.T) {
 // the SQL layer (decision IS NULL predicate), so this test pins the
 // end-to-end contract.
 func TestGetCheckPermissionWithDecidedRow(t *testing.T) {
+	t.Parallel()
 	s := openGetFixture(t, "id-g-3", store.StateCheckPermission)
 	const tok = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
 	openAgentRequest(t, s, "id-g-3", tok, "Bash", `{"cmd":"ls"}`, 0)
@@ -130,6 +133,7 @@ func TestGetCheckPermissionWithDecidedRow(t *testing.T) {
 // direct — the equivalent CLI-level test (5th SR-8.3 case) covers the
 // behavior via a real DB row.
 func TestGetNonCheckPermissionStateSkipsFetch(t *testing.T) {
+	t.Parallel()
 	fake := &recordingGetStore{
 		spawn: store.Spawn{
 			ClaudeInstanceID: "id-g-4",
@@ -155,6 +159,7 @@ func TestGetNonCheckPermissionStateSkipsFetch(t *testing.T) {
 // from OpenPermissionRequestsForSpawn must propagate to the caller (no
 // silent swallow). This is the "any other error" branch of SR-3.1.
 func TestGetPropagatesPermissionFetchError(t *testing.T) {
+	t.Parallel()
 	wantErr := errors.New("boom")
 	fake := &recordingGetStore{
 		spawn: store.Spawn{
@@ -176,6 +181,7 @@ func TestGetPropagatesPermissionFetchError(t *testing.T) {
 // ListSessionHistory (b.v2c AC6/AC8) propagates to the caller rather than being
 // silently swallowed.
 func TestGetPropagatesSessionHistoryError(t *testing.T) {
+	t.Parallel()
 	wantErr := errors.New("history read boom")
 	fake := &recordingGetStore{
 		spawn: store.Spawn{
@@ -238,6 +244,7 @@ func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.Se
 // session history for the life of the row it read, exactly once. A non-zero
 // life proves Get passes row.LifeNumber rather than a default.
 func TestGetReadsHistoryForItsRowsLife(t *testing.T) {
+	t.Parallel()
 	fake := &recordingGetStore{
 		spawn: store.Spawn{
 			ClaudeInstanceID: "id-g-life",
@@ -266,6 +273,7 @@ func TestGetReadsHistoryForItsRowsLife(t *testing.T) {
 // PRE-FIX get had neither field; the derivation + prior_sessions surfacing is
 // what this pins.
 func TestGetTranscriptStatusAndPriorSessions(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		sessionID  string
@@ -328,6 +336,7 @@ func TestGetTranscriptStatusAndPriorSessions(t *testing.T) {
 //     result surfaces the note verbatim and a non-empty since timestamp, and
 //     the marshaled JSON carries both keys.
 func TestGetLivenessFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
 	t.Run("null_omitted", func(t *testing.T) {
 		s := openGetFixture(t, "id-live-null", store.StateWaiting)
 
@@ -424,6 +433,7 @@ func TestGetLivenessFieldsRoundTrip(t *testing.T) {
 // ever writes CURRENT_TIMESTAMP text). The surfaced pointer must be non-nil and equal
 // the raw seeded value, and the marshaled JSON must carry it byte-for-byte.
 func TestGetLivenessUnverifiedSinceUnparseablePassesThrough(t *testing.T) {
+	t.Parallel()
 	const raw = "not-a-time"
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	if _, err := apitest.SeedSpawn(dbPath, "id-live-raw", store.StateWaiting, "/tmp", "off", "", true,
@@ -468,6 +478,7 @@ func TestGetLivenessUnverifiedSinceUnparseablePassesThrough(t *testing.T) {
 //     nullable), so callers can distinguish "empty legacy row" from a missing
 //     field. resume falls back to the slug-rule path for such rows.
 func TestGetSurfacesPersistedJsonlPath(t *testing.T) {
+	t.Parallel()
 	t.Run("persisted", func(t *testing.T) {
 		const wantPath = "/home/user/.claude-custom/projects/-tmp/sess.jsonl"
 		dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -533,6 +544,7 @@ func TestGetSurfacesPersistedJsonlPath(t *testing.T) {
 // extra_env map (WithExtraEnv) must NOT surface an extra_env key anywhere in the
 // marshaled get result — neither as a struct field nor a stray JSON key.
 func TestGetOutputHasNoExtraEnv(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	if _, err := apitest.SeedSpawn(dbPath, "id-extraenv", store.StateWaiting, "/tmp", "off", "", true,
 		apitest.WithExtraEnv(map[string]string{"SECRET_TOKEN": "leak-me-not", "FOO": "bar"}),
@@ -569,6 +581,7 @@ func TestGetOutputHasNoExtraEnv(t *testing.T) {
 //   - zero_open_rows:  no open rows → non-nil empty slice, JSON encodes as []
 //   - one_closed_row:  one decided row → non-nil empty slice (decided rows invisible)
 func TestGetVerbPluralShape(t *testing.T) {
+	t.Parallel()
 	const tokA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
 	const tokB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
 

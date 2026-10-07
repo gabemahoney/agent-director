@@ -139,6 +139,7 @@ func runTickOnce(t *testing.T, c trailCase) {
 // TestFindMissingProbeEaccesEmitsExactlyOnceTick: an unreadable process is decided by its lookup: Gone marks it
 // with one tmux_absent tick and no note tick; Ours or Can't tell tick probe_eacces once, and never on a repeat.
 func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []trailCase{
 		{name: "gone", tmux: trailNoServer, reason: "tmux_absent", outcome: "gone", marked: true},
 		{name: "ours", tmux: trailSession(), reason: "probe_eacces"},
@@ -155,6 +156,7 @@ func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
 // TestFindMissingUnverifiedNoteTicksOnce: a row whose process cannot decide and whose lookup left it live gets one
 // tick naming its note on entry and none on a repeat; it stays unverified on both (SR-11.4).
 func TestFindMissingUnverifiedNoteTicksOnce(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, c := range []trailCase{
 		{name: "unreadable, not called", row: trailRow{id: "un-unreadable", ssPID: 1311}, proc: procfix.Unreadable(),
 			budget: fmBudgetSpent, reason: "probe_eacces"},
@@ -195,6 +197,7 @@ func (o *orderStore) CloseOrphanedPermissionRequests(id string) error {
 // is written after the mark and before the permission-request close, whose permission_orphan_closeout tick
 // follows; the open request is denied, and a held name gives exactly one ad.launch.name_held.
 func TestFindMissingMarkOrderTrail(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, c := range []trailCase{
 		{name: "process gone", proc: procfix.Gone(), reason: "proc_absent"},
 		{name: "lookup gone name free", proc: procfix.Unreadable(), tmux: trailNoServer, reason: "tmux_absent",

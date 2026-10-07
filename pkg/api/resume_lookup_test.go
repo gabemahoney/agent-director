@@ -197,6 +197,7 @@ var (
 // included, refuses before the lookup, with no tmux call, although a session
 // holds the recorded name.
 func TestResumeLookupAfterGuards(t *testing.T) {
+	t.Parallel()
 	held := func(t *testing.T, e *killEnv, spec killRowSpec) resumeRow {
 		r := e.seedResumableRow(t, spec)
 		e.seedHolder(t, r.killRow, holderNone)
@@ -253,6 +254,7 @@ func TestResumeLookupAfterGuards(t *testing.T) {
 // to the row's recorded socket while the row is still ended and untrusted;
 // a holder of the name on another socket is not consulted.
 func TestResumeLookupOnRecordedSocketBeforePreTrustAndMove(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	recorded := filepath.Join(filepath.Dir(e.defaultSocket), "recorded-"+uuid.NewString()[:8])
 	r := e.seedResumableRow(t, e.resumableSpec(rlkSettled(e), agentGone, apitest.WithTmuxSocket(recorded)))
@@ -275,6 +277,7 @@ func TestResumeLookupOnRecordedSocketBeforePreTrustAndMove(t *testing.T) {
 // Ours under another name while another session holds the recorded name,
 // and an Ours that resume does not adopt; each refusal writes nothing.
 func TestResumeLookupRefusals(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	conflict, unresponsive := api.ErrTmuxSessionConflict, api.ErrTmuxUnresponsive
 	fourFields := func(t *testing.T, e *killEnv, r *resumeRow) tmuxfix.SeedSession {
 		for _, sh := range tmuxfix.LabelShapes() {
@@ -350,6 +353,7 @@ func TestResumeLookupRefusals(t *testing.T) {
 // row's id and token under another name, prefix neighbours, and an
 // uncheckable or unrecorded agent with the name free launch, touching nothing.
 func TestResumeLookupProceeds(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []rlkCase{
 		{name: "name free", agent: agentGone},
 		{name: "another store's session with this row's id and token elsewhere", agent: agentGone,
@@ -368,6 +372,7 @@ func TestResumeLookupProceeds(t *testing.T) {
 // usable $ or \ name, a holder in either stored form blocks, both forms listed is
 // ambiguous, a form matching neither is not held, and the own session is found by label.
 func TestResumeLookupDollarAndBackslashNames(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, n := range tmuxfix.StoredNames() {
 		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue

@@ -47,6 +47,7 @@ func assertUntouched(t *testing.T, r store.LiveSpawnIdentity, st *fakeFindMissin
 // TestFindMissingGraceSweep: a pending row inside the grace period (measured from its launch start) is not
 // judged; past it, with no launch start, or in a non-pending state it is judged (tmux can't tell) (SR-11.2, SR-22.8).
 func TestFindMissingGraceSweep(t *testing.T) {
+	t.Parallel()
 	floor := time.Duration(config.PendingGraceFloorSeconds) * time.Second
 	cases := []struct {
 		name     string
@@ -111,6 +112,7 @@ func TestFindMissingGraceSweep(t *testing.T) {
 // TestFindMissingGraceSweepMixed: one sweep skips only the inside-grace row; marked and unverified rows are
 // judged, counts exclude the inside row, and its transcript still heals (SR-11.7).
 func TestFindMissingGraceSweepMixed(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	t.Setenv("HOME", t.TempDir())
 	const session = "boot-session-uuid"
 	transcript, err := spawn.JsonlPath("/tmp/proj", session)

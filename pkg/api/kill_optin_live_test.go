@@ -87,8 +87,10 @@ func kolAssertRefused(t *testing.T, e *killEnv, r killRow, state string, res api
 // the live-row refusal with no lookup, no process check and no write; its own
 // running session is still there.
 func TestKillIncludeFinishedRefusesLiveRow(t *testing.T) {
+	t.Parallel()
 	for _, tc := range kolLiveCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, tc.spec)
 			before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
@@ -107,6 +109,7 @@ func TestKillIncludeFinishedRefusesLiveRow(t *testing.T) {
 // TestKillIncludeFinishedClientRefusesLiveRow: Client.Kill with the opt-in
 // refuses a working row as api.Kill does.
 func TestKillIncludeFinishedClientRefusesLiveRow(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{State: store.StateWorking})
 	before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
@@ -117,6 +120,7 @@ func TestKillIncludeFinishedClientRefusesLiveRow(t *testing.T) {
 // TestKillIncludeFinishedUnknownID: an unknown id with the opt-in gets
 // ErrSpawnNotFound, and its ad.kill.called records the opt-in.
 func TestKillIncludeFinishedUnknownID(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	id := "kill-unknown-" + uuid.NewString()[:8]
 	if _, err := e.killOptIn(id); !errors.Is(err, api.ErrSpawnNotFound) {
@@ -130,11 +134,13 @@ func TestKillIncludeFinishedUnknownID(t *testing.T) {
 // (no session, agent gone) never get ErrSpawnNotResumable: lookup Gone,
 // success with kill_sent false, include_finished false.
 func TestKillIncludeFinishedNotSetOnLiveRow(t *testing.T) {
+	t.Parallel()
 	for _, tc := range kolLiveCases() {
 		if tc.unusable {
 			continue
 		}
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			spec := tc.spec
 			spec.NoSession, spec.Agent = true, agentGone
@@ -154,6 +160,7 @@ func TestKillIncludeFinishedNotSetOnLiveRow(t *testing.T) {
 // the opt-in, no session and its agent gone or not recorded makes exactly one
 // lookup (Gone, not the live-row refusal's not_run) and succeeds with kill_sent false.
 func TestKillIncludeFinishedFinishedRowNoSession(t *testing.T) {
+	t.Parallel()
 	gone := tmux.Result{Verdict: tmux.Gone}.Token()
 	agents := []struct {
 		name  string
@@ -162,6 +169,7 @@ func TestKillIncludeFinishedFinishedRowNoSession(t *testing.T) {
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
 		for _, a := range agents {
 			t.Run(state+", "+a.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r := e.seedRow(t, killRowSpec{State: state, NoSession: true, Agent: a.agent})
 				res, err := e.killOptIn(r.ID)

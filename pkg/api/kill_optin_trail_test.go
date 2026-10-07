@@ -49,6 +49,7 @@ func kotNeverReportedIn(rec map[string]any) bool {
 // an ended or missing row writes one ad.kill.called with include_finished true
 // and the lookup's token; only "never reported in" has its field combination.
 func TestKillIncludeFinishedTrailPerReturnPath(t *testing.T) {
+	t.Parallel()
 	past := func(a agentState) startingRow { return kosReportedIn("", a) }
 	gone := func(a agentState) startingRow { s := past(a); s.noSession = true; return s }
 	viewer := func(t *testing.T, e *killEnv, r *killRow) {
@@ -99,9 +100,11 @@ func TestKillIncludeFinishedTrailPerReturnPath(t *testing.T) {
 	for _, state := range kosFinished {
 		for _, tc := range cases {
 			t.Run(state+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
-				tc.row.state = state
-				r := e.seedStarting(t, tc.row).killRow
+				row := tc.row // a copy: the parallel subtests never write a captured case
+				row.state = state
+				r := e.seedStarting(t, row).killRow
 				if tc.setup != nil {
 					tc.setup(t, e, &r)
 				}
@@ -128,9 +131,11 @@ func TestKillIncludeFinishedTrailPerReturnPath(t *testing.T) {
 // TestKillIncludeFinishedTrailUnusableName: the opt-in's refusal of an ended or
 // missing row's unusable name writes one ad.kill.called, ErrInternal with nothing run, and no ad.provenance.disagree.
 func TestKillIncludeFinishedTrailUnusableName(t *testing.T) {
+	t.Parallel()
 	notRun := tmux.TokenNotRun
 	for _, state := range kosFinished {
 		t.Run(state, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{State: state, NoSession: true,
 				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(preGqeDefaultName)}})
@@ -156,6 +161,7 @@ func TestKillIncludeFinishedTrailUnusableName(t *testing.T) {
 // TestKillIncludeFinishedTrailKillSent: on one reported-in ended row, kill
 // without the opt-in sends nothing and makes no tmux call; with it, it kills.
 func TestKillIncludeFinishedTrailKillSent(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedStarting(t, kosReportedIn(store.StateEnded, agentAlive)).killRow
 	ktrDies(t, e, &r)
@@ -200,6 +206,7 @@ func kotFinished(t *testing.T, e *killEnv, s startingRow, opts ...tmuxfix.RowSes
 // each reason once with source ad_kill, name_changed on a refusal too, and no
 // adopted for an adoption-due kill; the normal case writes none.
 func TestKillIncludeFinishedTrailProvenanceDisagree(t *testing.T) {
+	t.Parallel()
 	reported := kosReportedIn("", agentAlive)
 	never := reported
 	never.noPID = true
@@ -237,6 +244,7 @@ func TestKillIncludeFinishedTrailProvenanceDisagree(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := tc.seed(t, e)
 			before := e.columns(t, r.ID)
@@ -284,6 +292,7 @@ func kotFailOpenRuns(t *testing.T) (ids, lines []string) {
 // TestKillIncludeFinishedTrailFailOpen: with the trail unwritable, opt-in
 // kills give the results, errors and rows of a run with a working trail.
 func TestKillIncludeFinishedTrailFailOpen(t *testing.T) {
+	t.Parallel()
 	ids, want := kotFailOpenRuns(t)
 	for _, id := range ids {
 		if n := len(killCalled(t, id)); n != 1 {
@@ -310,6 +319,7 @@ func TestKillIncludeFinishedTrailFailOpen(t *testing.T) {
 // TestKillIncludeFinishedTrailFailOpenChild is TestKillIncludeFinishedTrailFailOpen's
 // child: it runs the kills with an unwritable trail and prints their lines.
 func TestKillIncludeFinishedTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	if os.Getenv(kotChildEnv) == "" {
 		t.Skip("run only as TestKillIncludeFinishedTrailFailOpen's child")
 	}

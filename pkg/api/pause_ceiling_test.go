@@ -22,6 +22,7 @@ import (
 // TestPauseCeilingVirtualTime: a failed Enter whose follow-up lookup times out
 // charges 3Q + 3A in six calls; the timeouts charge less, with no follow-up.
 func TestPauseCeilingVirtualTime(t *testing.T) {
+	t.Parallel()
 	q, a, _ := ceilDefaults()
 	if got := 3*q + 3*a; got != 10500*time.Millisecond {
 		t.Fatalf("3Q + 3A at the defaults = %v; want 10.5 s without W", got)

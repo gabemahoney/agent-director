@@ -100,6 +100,7 @@ func fmbSeedRows(t *testing.T, e *killEnv, n int) (ids, sockets []string, notCal
 // each lookup answering Gone after 1 s: calls stop once the budget is spent (the call that spends it is discarded),
 // rows from there get the "not called" notes, and the run succeeds.
 func TestFindMissingBudgetStopsCalls(t *testing.T) {
+	t.Parallel()
 	const perCall = time.Second
 	for _, tc := range []struct {
 		name     string
@@ -111,6 +112,7 @@ func TestFindMissingBudgetStopsCalls(t *testing.T) {
 			fmbCfgBudgetSeconds * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: perCall})
 			calls := fmbCallsToSpend(tc.budget, perCall)
@@ -140,6 +142,7 @@ func TestFindMissingBudgetStopsCalls(t *testing.T) {
 // pipe-close wait, at the defaults) there is at most one call per socket and the run's tmux time is at most
 // B + Q + W; every row is unverified with its "not called" note and the run succeeds.
 func TestFindMissingBudgetHungSockets(t *testing.T) {
+	t.Parallel()
 	cfg := config.Tmux{}
 	hung := cfg.EffectiveQueryTimeout() + cfg.EffectivePipeCloseWait()
 	calls := fmbCallsToSpend(fmBudget, hung)
@@ -182,6 +185,7 @@ func TestFindMissingBudgetHungSockets(t *testing.T) {
 // TestFindMissingBudgetOneSocketThousandRows: SR-13.3's worst case, 1,000 rows on one socket each needing a lookup
 // and an adoption, makes exactly one lookup and one pane listing and no other tmux call.
 func TestFindMissingBudgetOneSocketThousandRows(t *testing.T) {
+	t.Parallel()
 	rows := make([]store.LiveSpawnIdentity, 1000)
 	for i := range rows {
 		rows[i] = liveRow(fmt.Sprintf("w%04d", i), fmbToken(fmt.Sprintf("%016x", i+1)))

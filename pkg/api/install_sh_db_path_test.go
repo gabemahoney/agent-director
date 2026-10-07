@@ -14,6 +14,7 @@ import (
 // HOME in dbpathfix, install.sh's [store] db_path reader names the store the
 // binary opens (config.Load, then resolveStorePath), or refuses the file.
 func TestInstallShDbPathMatchesGo(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	r := dbpathfix.NewReader(t, filepath.Join("..", "..", "skills", "install-agent-director", "install.sh"))
 	dir := t.TempDir()
 	for i, c := range dbpathfix.Cases {

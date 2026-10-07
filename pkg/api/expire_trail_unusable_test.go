@@ -63,12 +63,14 @@ func xtrUnusableCases() []xtrCase {
 // TestExpireTrailUnusableName: each unusable-name row writes exactly one
 // ad.expire.kept with its reason and recorded name, and no disagree record.
 func TestExpireTrailUnusableName(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	xtrRunCases(t, xtrUnusableCases())
 }
 
 // TestExpireTrailUnusableNameEveryRun: every fixture's row, kept on each of
 // two runs, writes its one ad.expire.kept on each.
 func TestExpireTrailUnusableNameEveryRun(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	x := newXtrWorld(t, "xtr-"+uuid.NewString()[:8])
 	for i, f := range unusableNameFixtures() {
 		x.xtuRow(t, fmt.Sprintf("u%d", i), f)

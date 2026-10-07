@@ -101,6 +101,7 @@ func seconds(d time.Duration) string {
 // TestTmuxTimeoutsApplied: a hung call reports its own class's configured
 // timeout (or the default when unset), in the CallError and its message.
 func TestTmuxTimeoutsApplied(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	cases := []struct {
 		name string
@@ -164,6 +165,7 @@ func TestTmuxTimeoutsApplied(t *testing.T) {
 // TestTmuxTimeoutsPipeCloseWait: an action call that exits 0 while a child
 // holds its pipes returns after the configured pipe-close wait (SR-2.4).
 func TestTmuxTimeoutsPipeCloseWait(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	const waitMs, actionMs = 300, 300
 	wait := time.Duration(waitMs) * time.Millisecond

@@ -102,6 +102,7 @@ const (
 // TestExpireReasons_Process pins the agent-process step: alive by the selected
 // identity keeps process_alive with no tmux call; anything else is looked up.
 func TestExpireReasons_Process(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name  string
 		ss    rsnSS
@@ -155,6 +156,7 @@ func TestExpireReasons_Process(t *testing.T) {
 // TestExpireReasons_Rows pins the outcomes beyond the call table's single
 // row: the stopping window, another store's sessions, no adoption and cost.
 func TestExpireReasons_Rows(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name   string
 		window time.Duration
@@ -252,6 +254,7 @@ func rsnOtherStoreElsewhere(token func(killRow) string) func(*testing.T, *killEn
 // TestExpireReasons_BudgetSpentIsSkipped pins not_run -> tmux_skipped: with no
 // budget, no call is made and only process_alive differs.
 func TestExpireReasons_BudgetSpentIsSkipped(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	gone := e.seedFinished(t, rsnAge, agentGone)
 	ours := e.seedFinished(t, rsnAge, agentGone)

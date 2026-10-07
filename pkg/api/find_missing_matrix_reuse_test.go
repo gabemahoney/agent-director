@@ -47,15 +47,22 @@ func mxReusedRow(t *testing.T) store.LiveSpawnIdentity {
 }
 
 // TestFindMissingPendingMatrixReuse: mxMatrix for a reuse's pending row, made by a real reuse.
-func TestFindMissingPendingMatrixReuse(t *testing.T) { mxMatrix(t, []mxKind{mxReuse}) }
+func TestFindMissingPendingMatrixReuse(t *testing.T) {
+	t.Parallel()
+	mxMatrix(t, []mxKind{mxReuse})
+}
 
 // TestFindMissingPendingMatrixReuseInsideGrace: mxInsideGrace for a reuse's pending row.
-func TestFindMissingPendingMatrixReuseInsideGrace(t *testing.T) { mxInsideGrace(t, []mxKind{mxReuse}) }
+func TestFindMissingPendingMatrixReuseInsideGrace(t *testing.T) {
+	t.Parallel()
+	mxInsideGrace(t, []mxKind{mxReuse})
+}
 
 // TestFindMissingPendingMatrixReuseEarlierLaunch (AC-FM-18): a reuse whose create timed out making nothing, past
 // grace: an earlier launch's session holding the name, whenever its clock says it was made, marks the row
 // tmux_name_held with one record; a process of an earlier launch carrying the id alone marks it tmux_absent.
 func TestFindMissingPendingMatrixReuseEarlierLaunch(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		created time.Duration // the holder's creation time from the launch start's second
@@ -68,6 +75,7 @@ func TestFindMissingPendingMatrixReuseEarlierLaunch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("Reuse/"+tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Bare: true})
 			earlier := r.Token

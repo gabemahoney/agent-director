@@ -47,6 +47,7 @@ func stoppingOwnSession(t *testing.T, e *killEnv, r resumeRow) tmuxfix.SeedSessi
 // With the session gone and the process gone, a second resume at the same
 // instant launches: the window never blocks a launch nothing still runs for.
 func TestResumeInsideStoppingWindowAfterResumedAgentEnds(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	r := e.seedResumable(t, time.Hour, agentGone)
 	window := e.cfg.EffectiveStoppingWindow()

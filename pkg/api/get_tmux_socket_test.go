@@ -96,6 +96,7 @@ func assertGetSocket(t *testing.T, c *api.Client, id, want string) {
 // TestTmuxSocketGetByRow: get shows the recorded socket in any state, and no
 // key on a row that records none.
 func TestTmuxSocketGetByRow(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	shapes := socketShapes()
 	c := newSocketClient(t, shapes)
 	for _, s := range shapes {
@@ -106,6 +107,7 @@ func TestTmuxSocketGetByRow(t *testing.T) {
 // TestTmuxSocketStatusAndListOmit: status and list carry no tmux_socket key on
 // any row, including those that record a socket.
 func TestTmuxSocketStatusAndListOmit(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	shapes := socketShapes()
 	c := newSocketClient(t, shapes)
 	lr, err := c.List(api.ListParams{})
@@ -136,6 +138,7 @@ func TestTmuxSocketStatusAndListOmit(t *testing.T) {
 // TestTmuxSocketAfterSpawn: after a spawn, get shows the socket the launch
 // resolved (TMUX unset, so the default socket under TMUX_TMPDIR).
 func TestTmuxSocketAfterSpawn(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env := newSpawnEnv(t)
 	res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir()})
 	if err != nil {

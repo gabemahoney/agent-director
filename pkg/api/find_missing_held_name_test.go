@@ -199,6 +199,7 @@ func assertMarkTick(t *testing.T, mark int, r hnRow, reason, lookup string) {
 // TestFindMissingHeldNameRecord: a row past grace whose lookup is Gone or Leftover is marked; exactly when a
 // session holds its name the tick is tmux_name_held and one record names the holder (SR-14, AC-FM-02, AC-FM-18).
 func TestFindMissingHeldNameRecord(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	const dollarName = "held$name" // its stored forms are held$name and held\$name
 	launchSec := fmNow.Unix()
 	leftover := func(created int64) func(*hnEnv, hnRow) []tmuxfix.SeedSession {
@@ -292,6 +293,7 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 // TestFindMissingHeldNamePendingGrace (AC-FM-17): a fresh or resumed pending row whose name an unlabelled session
 // holds is left alone inside grace and marked by the first sweep past it, with one record; the holder is untouched.
 func TestFindMissingHeldNamePendingGrace(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, kind := range []struct{ name, sessionID string }{{"fresh spawn", ""}, {"resumed", uuid.NewString()}} {
 		for _, earlier := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/earlier process alive %t", kind.name, earlier), func(t *testing.T) {
@@ -344,6 +346,7 @@ func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 // TestFindMissingHeldNameGuard: a mark that finds the row changed or absent, or fails in the store, lists nothing,
 // ticks nothing, and leaves one record saying so (left_changed, or still_pending with store_error).
 func TestFindMissingHeldNameGuard(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name      string
 		arrange   func(t *testing.T, e *hnEnv, r hnRow)
@@ -433,6 +436,7 @@ func hnFailOpenRuns(t *testing.T, prefix string) []string {
 // TestFindMissingHeldNameTrailFailOpen: with the trail file unwritable, held-name sweeps give the same results and
 // rows as with a working trail.
 func TestFindMissingHeldNameTrailFailOpen(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	prefix := "hn-failopen-" + uuid.NewString()[:8]
 	mark := trailLen(t)
 	want := hnFailOpenRuns(t, prefix)
@@ -463,6 +467,7 @@ func TestFindMissingHeldNameTrailFailOpen(t *testing.T) {
 // TestFindMissingHeldNameTrailFailOpenChild is TestFindMissingHeldNameTrailFailOpen's child: it makes the trail
 // file read-only, runs the sweeps and prints their lines.
 func TestFindMissingHeldNameTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(hnChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestFindMissingHeldNameTrailFailOpen's child")

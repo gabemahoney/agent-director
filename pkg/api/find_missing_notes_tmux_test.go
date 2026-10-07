@@ -144,6 +144,7 @@ func assertNoteTick(t *testing.T, before int, id, reason string) {
 // TestFindMissingTmuxNoteTickRules: each lookup-decided note, from no note, the same note and every other note,
 // is written once (never when equal) and ticks only on entry from no note or into provenance_conflict (SR-11.4).
 func TestFindMissingTmuxNoteTickRules(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, tc := range ntCases {
 		type transition struct {
 			from  string
@@ -220,6 +221,7 @@ func ntSeed(t *testing.T, opts ...apitest.SpawnOption) (*store.Store, string, st
 // provenance_conflict with one tick, repeats (duplicate or scope value) write and tick nothing, a different
 // reason overwrites without a tick, and re-entry ticks again; liveness_unverified_since keeps its first value.
 func TestFindMissingNoteConflictReentryRealStore(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	s, dbPath, r := ntSeed(t)
 	steps := []struct {
 		name  string
@@ -262,6 +264,7 @@ func TestFindMissingNoteConflictReentryRealStore(t *testing.T) {
 // TestFindMissingConflictNoteNeverOnAnotherLife (AC-FM-03): a row relaunched by its own agent or deleted
 // between its lookup and the conflict note write is left as the change left it: no note, no tick, neither list.
 func TestFindMissingConflictNoteNeverOnAnotherLife(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	changes := map[string]func(t *testing.T, s *store.Store, dbPath string){
 		"relaunch": func(t *testing.T, _ *store.Store, dbPath string) {
 			if a := apitest.ApplyAgentHook(t, dbPath, "r", "SessionStart", "sess-relaunch"); !a.Applied {
@@ -303,6 +306,7 @@ func TestFindMissingConflictNoteNeverOnAnotherLife(t *testing.T) {
 // TestFindMissingStaleNoteClearedNoTmuxCall (AC-FM-13): a row carrying any note whose process (SessionStart or
 // pane) is alive gets one clear guarded on the read snapshot, no tick, no tmux call, and is in neither list.
 func TestFindMissingStaleNoteClearedNoTmuxCall(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	by := map[string]fmRowOpt{"session start": withSessionStart(71, fmStart), "pane": withPane(72, fmStart)}
 	for _, note := range ntNotes {
 		for how, opt := range by {
@@ -331,6 +335,7 @@ func TestFindMissingStaleNoteClearedNoTmuxCall(t *testing.T) {
 // TestFindMissingStaleNoteClearedRealStore (AC-FM-13): on a real store an alive row's note and unverified time
 // are cleared at +1 version; a row without a note is not written (version delta 0). No tmux call, no tick.
 func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, note := range append([]string{""}, ntNotes...) {
 		t.Run("note "+note, func(t *testing.T) {
 			var opts []apitest.SpawnOption
@@ -363,6 +368,7 @@ func TestFindMissingStaleNoteClearedRealStore(t *testing.T) {
 // spent, get the "not called" note by their evidence (entry ticks, overwrite does not, an equal note is not
 // rewritten) and stay in unverified_ids.
 func TestFindMissingSkippedRowsKeepNotCalledNotes(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	rows := []store.LiveSpawnIdentity{
 		ntBareRow("a"),
 		ntUnknownRow("b"),

@@ -70,6 +70,7 @@ func killPendAssertTrail(t *testing.T, id string, want bool) {
 // TestKillPendingOwnSession: kill of a pending row whose own labelled session
 // exists ends its pane, then its session, by id; the row stays pending.
 func TestKillPendingOwnSession(t *testing.T) {
+	t.Parallel()
 	for _, k := range killPendKinds() {
 		t.Run(k.name, func(t *testing.T) {
 			e := newKillEnv(t)
@@ -104,6 +105,7 @@ func TestKillPendingOwnSession(t *testing.T) {
 // TestKillPendingGone: a pending row whose launch has no session finds Gone:
 // success with kill_sent false, no kill, every session and the row untouched.
 func TestKillPendingGone(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		spec  killRowSpec
@@ -166,6 +168,7 @@ func TestKillPendingGone(t *testing.T) {
 // with no launch start, or revived to waiting) beside an earlier launch's
 // session gets ErrTmuxSessionConflict naming it, and nothing is killed.
 func TestKillPendingBesideLeftover(t *testing.T) {
+	t.Parallel()
 	type leftoverCase struct {
 		name    string
 		spec    killRowSpec
@@ -187,6 +190,7 @@ func TestKillPendingBesideLeftover(t *testing.T) {
 		leftoverCase{"revived to waiting by the leftover's hooks", revived, false})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, tc.spec)
 			opts := []tmuxfix.RowSessionOption{tmuxfix.WithRowSessionLabel(r.old(), true)}

@@ -136,6 +136,7 @@ func (e *killEnv) rrcColumns(t *testing.T, id string) (cols apitest.SpawnColumns
 // TestSpawnReuseRestoreNotAppliedAfterAnotherWrite: a parent-id write or a
 // delete between the reset and the restore stands; the restore writes nothing.
 func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
+	t.Parallel()
 	writes := []struct {
 		name    string
 		write   func(e *killEnv, id, other string) error
@@ -148,6 +149,7 @@ func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 	for _, wr := range writes {
 		for _, w := range rrcWindows {
 			t.Run(wr.name+"/"+w.String(), func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
 				other := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true}).ID
@@ -186,8 +188,10 @@ func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 // TestSpawnReuseHooksBeforeRestoreIgnored (SR-22.9): the reset row records no
 // pane, so hooks naming the archived or another session id are ignored and the restore applies.
 func TestSpawnReuseHooksBeforeRestoreIgnored(t *testing.T) {
+	t.Parallel()
 	for _, w := range rrcWindows {
 		t.Run(w.String(), func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
 			ignored := store.HookApplied{Reason: store.HookReasonNoPaneRecorded}
@@ -216,6 +220,7 @@ func TestSpawnReuseHooksBeforeRestoreIgnored(t *testing.T) {
 // TestSpawnReuseRestoreStoreErrorLeavesReset (SR-5.8): a failing restore
 // leaves the reset row pending, logs one WARN line and still returns the launch error.
 func TestSpawnReuseRestoreStoreErrorLeavesReset(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
 	storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, r.ID)

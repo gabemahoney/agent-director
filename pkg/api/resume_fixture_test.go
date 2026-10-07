@@ -1,7 +1,7 @@
 package api_test
 
 // resume_fixture_test.go is the shared resume test fixture (SR-20.3, SR-20.6):
-// resumeEnv (a real store, a tmuxfix.Recorder on the test clock, a per-test
+// resumeEnv (a real store, a tmuxfix.Recorder on the test clock, TestMain's
 // TMUX_TMPDIR, a captured logger and a Client on the same store file),
 // hookedResumeStore (api.ResumeStore over the real store with injected store
 // errors and interleaving hooks) and the resumable-row factory. It holds no
@@ -160,7 +160,8 @@ func (w *hookedResumeStore) RecordLaunchIdentity(instanceID string, launchVersio
 // (over st, a real store on dbPath), rec the Recorder on clock's virtual
 // time, pc the start-time reader, logs the captured log, c a Client on the
 // same store file and clock, storeID this store's id and socket the default
-// socket under the per-test TMUX_TMPDIR, whose per-user directory exists.
+// socket under TestMain's TMUX_TMPDIR (or the test's own, ownSocketDir), whose
+// per-user directory exists.
 type resumeEnv struct {
 	dbPath  string
 	st      *store.Store
@@ -181,21 +182,15 @@ type resumeEnv struct {
 // pre-launch lookup: Q, the default query timeout.
 var resumeLookupQ = config.Tmux{}.EffectiveQueryTimeout()
 
-// newResumeEnv builds a resumeEnv over a fresh store, with TMUX unset, no
-// caller instance id and config.Default() as resume's configuration.
+// newResumeEnv builds a resumeEnv over a fresh store, with TMUX unset,
+// TestMain's TMUX_TMPDIR (useSharedTmuxTmpdir), no caller instance id and
+// config.Default() as resume's configuration. It sets no environment unless
+// its test already changed one of those variables, so its test may run in
+// parallel.
 func newResumeEnv(t *testing.T) *resumeEnv {
 	t.Helper()
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
-	tmpdir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	t.Setenv("TMUX_TMPDIR", tmpdir)
-	t.Setenv("TMUX", "")
-	os.Unsetenv("TMUX") //nolint:errcheck
-	if err := os.MkdirAll(userSocketDir(tmpdir), 0o700); err != nil {
-		t.Fatalf("mkdir socket dir: %v", err)
-	}
+	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", "")
+	tmpdir := useSharedTmuxTmpdir(t)
 
 	dir := t.TempDir()
 	e := &resumeEnv{dbPath: filepath.Join(dir, "state.db"), logs: &bytes.Buffer{}, pc: procfix.New(),
@@ -208,6 +203,7 @@ func newResumeEnv(t *testing.T) *resumeEnv {
 	if err := os.WriteFile(cfgPath, nil, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+	var err error
 	if e.c, err = api.New(api.Options{StorePath: e.dbPath, ConfigPath: cfgPath, CreateIfMissing: true,
 		Logger: e.lg, TmuxClient: e.rec}); err != nil {
 		t.Fatalf("api.New: %v", err)
@@ -223,6 +219,15 @@ func newResumeEnv(t *testing.T) *resumeEnv {
 	e.store = &hookedResumeStore{st: e.st}
 	e.storeID = e.st.StoreID()
 	return e
+}
+
+// ownSocketDir moves e's socket into t's own TMUX_TMPDIR (useOwnTmuxTmpdir),
+// for a test that keeps state beside it (test/fake-tmux's table); call it
+// before seeding. t runs serially.
+func (e *resumeEnv) ownSocketDir(t *testing.T) {
+	t.Helper()
+	e.tmpdir = useOwnTmuxTmpdir(t)
+	e.socket = filepath.Join(userSocketDir(e.tmpdir), "default")
 }
 
 // resume runs resume on id through the export_test seam with e.store, e.rec,

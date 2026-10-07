@@ -37,6 +37,7 @@ func (e *killEnv) xruSeed(t *testing.T, spec killRowSpec, id string, a agentStat
 // row, its agent gone, is kept with its reason on two runs, with no tmux call
 // and the row unchanged; the usable control is looked up and deleted.
 func TestExpireUnusableName_KeptOnTwoRuns(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, f := range append(unusableNameFixtures(), usableNameFixture()) {
 		t.Run(f.label, func(t *testing.T) {
 			e := newKillEnv(t)
@@ -94,6 +95,7 @@ func xruCases() []xruCase {
 			return r, map[string]string{ours.ID: "ours", gone.ID: ""}, []string{apitest.TestSocket}
 		}},
 		{name: "no recorded socket, ahead of a usable one in an unusable socket directory", seed: func(t *testing.T, e *killEnv, name string) (killRow, map[string]string, []string) {
+			e.ownSocketDir(t)
 			if err := os.Chmod(filepath.Dir(e.defaultSocket), 0o755); err != nil {
 				t.Fatalf("chmod socket directory: %v", err)
 			}
@@ -115,6 +117,8 @@ func xruCases() []xruCase {
 // is kept with its reason, never deleted, its agent never read and no tmux
 // call made for it; the rows beside it get what they would alone.
 func TestExpireUnusableName_AheadOfEveryCheck(t *testing.T) {
+	// Serial: it sets TMUX_TMPDIR with t.Setenv; it checks every record written to the shared trail since
+	// its mark.
 	for _, c := range xruCases() {
 		t.Run(c.name, func(t *testing.T) {
 			for _, f := range unusableNameFixtures() {

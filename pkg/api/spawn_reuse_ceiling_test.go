@@ -49,6 +49,7 @@ func (e *killEnv) rclAssertRestored(t *testing.T, r reuseRow, before writesSnaps
 // defaults; path (ii) charges 2Q + C, 8 s, and is the longer once Q is
 // raised above 2A. Each restores the row.
 func TestSpawnReuseCeilingPaths(t *testing.T) {
+	t.Parallel()
 	q, a, _ := ceilDefaults()
 	c := config.Default().Tmux.EffectiveCreateTimeout()
 	if got := q + c + 2*a; got != 10500*time.Millisecond || got > rclLimit {
@@ -76,6 +77,7 @@ func TestSpawnReuseCeilingPaths(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: tc.q})
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rceSettled(e), Held: tc.held})
@@ -109,6 +111,7 @@ func TestSpawnReuseCeilingPaths(t *testing.T) {
 // charges Q and makes no further call; a live row's refusal charges nothing
 // and makes no call.
 func TestSpawnReuseCeilingRefusalChargesOnlyLookup(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	q, _, _ := ceilDefaults()
 	cases := []struct {
 		name   string

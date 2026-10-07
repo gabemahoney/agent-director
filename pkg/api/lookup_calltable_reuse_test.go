@@ -23,6 +23,8 @@ import (
 // TestCallTableReuse runs reuse's two rows in every column, as TestCallTable
 // runs every other verb's.
 func TestCallTableReuse(t *testing.T) {
+	// Serial: its reuse cells check every record written to the shared trail since their mark, and one
+	// column sets TMUX_TMPDIR; its reuse-after-duplicate-session cells run in parallel.
 	runCallTableVerbs(t, []callTableVerb{callTableReuse(), callTableReuseHeld()})
 }
 

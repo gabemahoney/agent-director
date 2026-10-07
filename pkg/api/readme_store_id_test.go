@@ -121,6 +121,7 @@ func operatorSQLiteRC(t *testing.T, rc string) string {
 // A missing sqlite3 fails inside the sandbox (its image installs sqlite3, so a
 // skip there would hide a broken image) and skips only outside it.
 func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("sqlite3"); err != nil {
 		if os.Getenv(sandboxguard.EnvVar) != "" {
 			t.Fatalf("sqlite3 not on PATH inside the sandbox (%s is set): the sandbox image must install it: %v", sandboxguard.EnvVar, err)

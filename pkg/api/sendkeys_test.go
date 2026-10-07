@@ -40,6 +40,7 @@ func skDeliver(t *testing.T, e *killEnv, r killRow, text string) {
 // TestSendKeysText: CR bytes are stripped, LF is kept, and one Enter
 // submits. Empty text (Enter only) is TestSendKeysEmptyTextPressesEnterOnly's.
 func TestSendKeysText(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, text, want string }{
 		{"single line", "hello", "hello"},
 		{"multi-line keeps LF", "line one\nline two", "line one\nline two"},
@@ -59,6 +60,7 @@ func TestSendKeysText(t *testing.T) {
 
 // TestSendKeysSpawnNotFound: an unknown id is ErrSpawnNotFound with no tmux call.
 func TestSendKeysSpawnNotFound(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	e.seedRow(t, killRowSpec{})
 	_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: "absent", Text: "hi"})
@@ -81,6 +83,7 @@ const (
 // TestSendKeysGuards: the state and relay guards refuse before any tmux call
 // though the row's own session is up; a row they pass gets the keys by pane id.
 func TestSendKeysGuards(t *testing.T) {
+	t.Parallel()
 	type guardCase struct {
 		name  string
 		state string
@@ -113,6 +116,7 @@ func TestSendKeysGuards(t *testing.T) {
 	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay != skRelayOff})
 			if tc.relay == skRelayHeld || tc.relay == skRelayReleased {
@@ -143,6 +147,7 @@ func TestSendKeysGuards(t *testing.T) {
 // TestSendKeysGuardStoreReadError: a failed relay-guard read on a relay-on
 // check_permission row fails the send with that error and no tmux call.
 func TestSendKeysGuardStoreReadError(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})
 	storeErr := errors.New("permission_requests read exploded")
@@ -161,6 +166,7 @@ func TestSendKeysGuardStoreReadError(t *testing.T) {
 // TestSendKeysRenamedSession: the renamed session's agent pane gets the keys
 // by id; a session now holding the recorded name never does.
 func TestSendKeysRenamedSession(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		holder func(r killRow) *tmuxfix.SeedSession
@@ -190,6 +196,7 @@ func TestSendKeysRenamedSession(t *testing.T) {
 // TestSendKeysNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
 // error and never sends to a prefix-, name- or 8-character-id-sharing neighbour.
 func TestSendKeysNeighbours(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		xID, yID     string
@@ -219,11 +226,13 @@ func TestSendKeysNeighbours(t *testing.T) {
 // TestSendKeysStoredNames (AC-LKP-09): a row whose recorded name holds $ or \
 // is found by its label under tmux's stored form and sent to by pane id.
 func TestSendKeysStoredNames(t *testing.T) {
+	t.Parallel()
 	for _, n := range tmuxfix.StoredNames() {
 		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
 			if r.Session.Name != n.Stored {
@@ -237,6 +246,7 @@ func TestSendKeysStoredNames(t *testing.T) {
 // TestSendKeysUnusableName (SR-3.2, FR1 C7(k)): after the state and relay
 // guards, an unusable recorded name is ErrInternal; their refusals keep their answer.
 func TestSendKeysUnusableName(t *testing.T) {
+	t.Parallel()
 	state := func(s string) func(*killEnv) killRowSpec {
 		return func(*killEnv) killRowSpec { return killRowSpec{State: s} }
 	}
@@ -293,6 +303,7 @@ func TestSendKeysUnusableName(t *testing.T) {
 // TestSendKeysRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
 // another server, every call names the row's recorded socket.
 func TestSendKeysRecordedSocket(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	// No commas: TMUX's socket field ends at one.

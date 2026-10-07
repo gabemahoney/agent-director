@@ -85,6 +85,7 @@ func rrAssertRestored(t *testing.T, e *killEnv, r reuseRow, want apitest.SpawnCo
 // TestSpawnReuseRestoreAfterEachLaunchFailure: each non-timeout launch failure, on an ended and a missing
 // row, returns its error with the restore's sentence and restores the row byte for byte; a second reuse launches.
 func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
+	t.Parallel()
 	lookup, create, label, kill := tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
 	createFailed := func(*killEnv, reuseRow) apitest.DescCase {
 		return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{})
@@ -121,6 +122,7 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 	for _, tr := range triggers {
 		for _, prior := range []string{store.StateEnded, store.StateMissing} {
 			t.Run(tr.name+"/"+prior, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r := e.seedReusable(t, agentGone, reuseRowSpec{State: prior, Age: time.Hour})
 				tr.arrange(e, r)
@@ -153,6 +155,7 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 // TestSpawnReuseRestoreEndedAtAndParent: a NULL ended_at is restored as the failure time in the store's
 // layout; a parent deleted after the reset is restored as a NULL parent_id; the restore applies in both.
 func TestSpawnReuseRestoreEndedAtAndParent(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		endedAt      reuseEndedAt
@@ -163,6 +166,7 @@ func TestSpawnReuseRestoreEndedAtAndParent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, EndedAt: tc.endedAt})
 			rs := &hookedReuseStore{st: e.st}
@@ -199,6 +203,7 @@ func TestSpawnReuseRestoreEndedAtAndParent(t *testing.T) {
 // TestSpawnReuseFailedThenResumeAsBefore (AC-REUSE-07): after a failed reuse of a never-messaged row,
 // resume refuses with the same ErrJsonlNeverWritten and get shows never_written, the archive kept.
 func TestSpawnReuseFailedThenResumeAsBefore(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour, Bare: true,
 		Opts: []apitest.SpawnOption{apitest.WithJsonlPath("")}})
@@ -236,6 +241,7 @@ func TestSpawnReuseFailedThenResumeAsBefore(t *testing.T) {
 // TestSpawnReuseFailedThenExpired (AC-REUSE-07): a row restored by a failed reuse keeps its
 // ended_at, so expire removes it once that is past the retention window.
 func TestSpawnReuseFailedThenExpired(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	retention := time.Duration(config.Default().Defaults.ExpireRetentionDays) * 24 * time.Hour
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: retention + time.Hour})

@@ -177,8 +177,10 @@ func (w *rpvStore) MoveToPending(id string, examined api.RowSnapshot, startedAt 
 // written once per call with every SR-14 field and no label content, before
 // the move and any ad.resume.* line; the normal cases and adoption write none.
 func TestResumeProvenanceDisagree(t *testing.T) {
+	t.Parallel()
 	for _, tc := range rpvCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r, other := e.seedRPVCase(t, tc, "")
 			s := &rpvStore{hookedResumeStore: &hookedResumeStore{st: e.st}, t: t, atMove: -1}
@@ -272,6 +274,7 @@ func rpvFailOpenRuns(t *testing.T, prefix string) []string {
 // TestResumeProvenanceFailOpen: with the trail unwritable, resume's results,
 // errors and rows equal those of a run with a working trail.
 func TestResumeProvenanceFailOpen(t *testing.T) {
+	t.Parallel()
 	prefix := "resume-failopen-" + uuid.NewString()[:8]
 	want := rpvFailOpenRuns(t, prefix)
 	if n := len(resumeDisagrees(t, prefix+"-2")); n != 1 {
@@ -298,6 +301,7 @@ func TestResumeProvenanceFailOpen(t *testing.T) {
 // TestResumeProvenanceFailOpenChild is TestResumeProvenanceFailOpen's child:
 // it runs the resumes with an unwritable trail and prints their lines.
 func TestResumeProvenanceFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(rpvChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestResumeProvenanceFailOpen's child")
@@ -385,8 +389,10 @@ func rpvHeldCases() []rpvHeldCase {
 // session" writes each reason the pre-launch lookup did not, once, after the
 // create, with every SR-14 field and no label content; never adopted.
 func TestResumeProvenanceAfterDuplicateSession(t *testing.T) {
+	t.Parallel()
 	for _, tc := range rpvHeldCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedHeldResumable(t, rceSettled(e), agentGone)
 			s := &hookedResumeStore{st: e.st}

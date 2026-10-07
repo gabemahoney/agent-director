@@ -329,18 +329,21 @@ func xtrRunCases(t *testing.T, cases []xtrCase) {
 // its reason and four fields; a deleted row and one another caller removed
 // write none.
 func TestExpireTrailKept(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	xtrRunCases(t, xtrKeptCases())
 }
 
 // TestExpireTrailProvenanceDisagree: each reason writes one record per row,
 // action deleted, the kept reason or left_changed; a row without one writes none.
 func TestExpireTrailProvenanceDisagree(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	xtrRunCases(t, xtrDisagreeCases())
 }
 
 // TestExpireTrailEveryRun: a row still kept gets its records again on each
 // run, through api.Expire and through Client.Expire alike.
 func TestExpireTrailEveryRun(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	x := newXtrWorld(t, "xtr-"+uuid.NewString()[:8])
 	ktrRenamed(t, x.e, x.row(t, "a", agentGone, "ours", disagreeWant{reason: "name_changed", server: "match",
 		verdict: "ours", action: "ours", current: "renamed-kill", ours: true}))
@@ -392,6 +395,7 @@ func xtrFailOpenRuns(t *testing.T, prefix string) (lines []string, kept, disagre
 // TestExpireTrailFailOpen: with the trail unwritable, every case gives the same
 // result, log lines, tmux calls and rows as with a working trail.
 func TestExpireTrailFailOpen(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	prefix := "xtr-failopen"
 	mark := trailMark(t)
 	want, kept, disagree := xtrFailOpenRuns(t, prefix)
@@ -422,6 +426,7 @@ func TestExpireTrailFailOpen(t *testing.T) {
 // TestExpireTrailFailOpenChild is TestExpireTrailFailOpen's child: it runs the
 // cases with an unwritable trail and prints their lines.
 func TestExpireTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(xtrChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestExpireTrailFailOpen's child")

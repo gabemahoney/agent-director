@@ -64,6 +64,7 @@ func ktrRebind(_ *testing.T, e *killEnv, r *killRow) {
 // TestKillTrailCalledPerReturnPath: every return path of Kill writes exactly
 // one ad.kill.called for the id with the path's field values.
 func TestKillTrailCalledPerReturnPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		noRow bool
@@ -135,6 +136,7 @@ func TestKillTrailCalledPerReturnPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := killRow{ID: "kill-unknown-" + uuid.NewString()[:8]}
 			if !tc.noRow {
@@ -225,6 +227,7 @@ func ktrJSON(t *testing.T, v any) string {
 // TestKillTrailClosedClient: Client.Kill writes one ad.kill.called; on a
 // closed Client it returns ErrClientClosed and writes nothing.
 func TestKillTrailClosedClient(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	ktrDies(t, e, &r)
@@ -266,6 +269,7 @@ func ktrRenamed(t *testing.T, e *killEnv, r *killRow) {
 // with its fields, never with a label value or another row's id; the normal
 // Ours case writes none.
 func TestKillTrailProvenanceDisagree(t *testing.T) {
+	t.Parallel()
 	restarted := disagreeWant{reason: "server_restarted", server: "restarted", verdict: "ours", action: "kill_sent", ours: true}
 	adopted := disagreeWant{reason: "adopted", server: "unknown", verdict: "ours", action: "kill_sent", ours: true}
 	cases := []struct {
@@ -301,6 +305,7 @@ func TestKillTrailProvenanceDisagree(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, tc.spec)
 			if tc.setup != nil {

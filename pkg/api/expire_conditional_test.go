@@ -66,6 +66,7 @@ func assertRowGone(t *testing.T, e *killEnv, id string) {
 // TestExpireConditionalDelete: a write after examination keeps the row
 // changed_since_examined (or, if it removed it, puts it in neither list); an unchanged row still goes.
 func TestExpireConditionalDelete(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name         string
 		state        string // the row's finished state when examined
@@ -155,6 +156,7 @@ func TestExpireConditionalDelete(t *testing.T) {
 // TestExpireConditionalDeleteReuseReset (AC-EXP-04): a finished row that a real reuse resets as expire's lookup of it
 // returns is kept changed_since_examined, not deleted; it stays pending in its new life, and a later run skips it.
 func TestExpireConditionalDeleteReuseReset(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, prior := range []string{store.StateEnded, store.StateMissing} {
 		t.Run("Reuse/"+prior, func(t *testing.T) {
 			e := newKillEnv(t)

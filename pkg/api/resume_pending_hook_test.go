@@ -35,6 +35,7 @@ func pendSessionStart(t *testing.T, e *resumeEnv, id, transcript string) {
 // from another process is ignored; the resumed agent's (the new pane's) makes
 // the row waiting with no launch start, prior_state pending.
 func TestResumeSessionStartAfterMoveTurnsRowWaiting(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateMissing)
 	if _, err := e.resume(r.ID); err != nil {
@@ -76,6 +77,7 @@ func TestResumeSessionStartAfterMoveTurnsRowWaiting(t *testing.T) {
 // hook and a SessionStart carrying the row's id before the restore are both
 // ignored (no_pane_recorded) and the restore applies.
 func TestResumeHooksBeforeRestoreIgnored(t *testing.T) {
+	t.Parallel()
 	for _, onCreate := range []bool{true, false} {
 		t.Run(map[bool]string{true: "on the failing create", false: "after the move"}[onCreate], func(t *testing.T) {
 			e := newResumeEnv(t)

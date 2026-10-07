@@ -28,6 +28,7 @@ func withTempHome(t *testing.T) string {
 }
 
 func TestMakeTemplateWritesReadableTOML(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	home := withTempHome(t)
 
 	res, err := api.MakeTemplate(api.MakeTemplateParams{
@@ -100,6 +101,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 }
 
 func TestMakeTemplateRejectsUnsafeNames(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	for _, name := range []string{"", ".", "..", ".hidden", "foo/bar", `foo\bar`, "foo..bar", "../escape"} {
 		t.Run(name, func(t *testing.T) {
@@ -112,6 +114,7 @@ func TestMakeTemplateRejectsUnsafeNames(t *testing.T) {
 }
 
 func TestMakeTemplateRejectsOverwrite(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	first := api.MakeTemplateParams{Name: "dev", CWD: "/tmp"}
 	if _, err := api.MakeTemplate(first); err != nil {
@@ -124,6 +127,7 @@ func TestMakeTemplateRejectsOverwrite(t *testing.T) {
 }
 
 func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	// MakeTemplate + LoadTemplate are the two halves of the disk
 	// contract. A round-trip pin guarantees a write+read pair stays
 	// equivalent — any future encoder change that loses information
@@ -172,6 +176,7 @@ func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
 }
 
 func TestMakeTemplateLeavesNoHalfWrittenFileOnEncoderFailure(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	// Atomicity is hard to test in isolation because os.Rename is
 	// effectively single-syscall on local filesystems. The closest
 	// approximation: prove no temp-file orphan or partial file remains
@@ -262,6 +267,7 @@ func envelopeJSONStrippingPath(t *testing.T, res api.MakeTemplateResult) []byte 
 }
 
 func TestMakeTemplate_OverwriteTrue_ReplacesExisting(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	const name = "overw1"
 	seedTemplateFile(t, name)
@@ -303,6 +309,7 @@ func TestMakeTemplate_OverwriteTrue_ReplacesExisting(t *testing.T) {
 }
 
 func TestMakeTemplate_OverwriteFalse_StillErrorsOnCollision(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	cases := []struct {
 		label  string
 		params api.MakeTemplateParams
@@ -361,6 +368,7 @@ func TestMakeTemplate_OverwriteFalse_StillErrorsOnCollision(t *testing.T) {
 }
 
 func TestMakeTemplate_OverwriteTrue_CreatesWhenAbsent(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	var absentEnv, replaceEnv []byte
 
 	t.Run("create when absent", func(t *testing.T) {
@@ -417,6 +425,7 @@ func TestMakeTemplate_OverwriteTrue_CreatesWhenAbsent(t *testing.T) {
 // Constants mirror the Epic 2 Docker testplan case
 // `overwrite-4-concurrent-atomicity` (N=4 writers, iterations=3).
 func TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	const (
 		name       = "concur"

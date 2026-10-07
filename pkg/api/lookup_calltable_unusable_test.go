@@ -51,7 +51,7 @@ func callTableUnusableColumns() []callTableColumn {
 			spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(u.fixture.raw)}}}
 		if u.noSocket {
 			col.spec.Opts = append(col.spec.Opts, apitest.WithTmuxSocket(""))
-			col.world = callTableUnusableSocketDir
+			col.world, col.ownTmuxTmpdir = callTableUnusableSocketDir, true
 		}
 		cols = append(cols, col)
 	}
@@ -59,8 +59,15 @@ func callTableUnusableColumns() []callTableColumn {
 }
 
 // callTableUnusableSocketDir makes the default socket's directory unusable
-// (group- and world-readable), so resolving the socket would refuse.
-func callTableUnusableSocketDir(t *testing.T, e *killEnv, _ *killRow) {
+// (group- and world-readable), so resolving the socket would refuse. The
+// directory is the cell's own (ownSocketDir), so its cell runs serially
+// (callTableColumn.ownTmuxTmpdir).
+func callTableUnusableSocketDir(t *testing.T, e *killEnv, r *killRow) {
+	shared := e.defaultSocket
+	e.ownSocketDir(t)
+	if r.Socket == shared {
+		r.Socket = e.defaultSocket
+	}
 	if err := os.Chmod(filepath.Dir(e.defaultSocket), 0o755); err != nil {
 		t.Fatalf("chmod socket directory: %v", err)
 	}

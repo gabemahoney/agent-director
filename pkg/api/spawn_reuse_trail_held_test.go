@@ -80,6 +80,7 @@ func (e *killEnv) rutAssertNameHeld(t *testing.T, run rutHeldRun, w rhtWant, row
 // TestSpawnReuseTrailNameHeldPerOutcome: one ad.launch.name_held (launch reuse) per
 // re-lookup outcome, every field, after reused and one applied reuse_restored.
 func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
+	t.Parallel()
 	conflict, unresponsive, unavailable := api.ErrTmuxSessionConflict, api.ErrTmuxUnresponsive, api.ErrTmuxNotAvailable
 	held := func(lookup string, sentinel error, carries, current any) rhtWant {
 		return rhtWant{lookup: lookup, sentinel: sentinel, holder: true, carries: carries, current: current}
@@ -127,6 +128,7 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			age := rceSettled(e)
 			if tc.age != nil {
@@ -147,6 +149,7 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 // TestSpawnReuseTrailNameHeldRowResult: row_result and store_error follow the
 // restore, as reuse_restored's applied and restore_error do.
 func TestSpawnReuseTrailNameHeldRowResult(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		arrange   func(t *testing.T, e *killEnv, r reuseRow, w *hookedReuseStore) // before arrangeHeld
@@ -177,6 +180,7 @@ func TestSpawnReuseTrailNameHeldRowResult(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Held: true, Age: rceSettled(e)})
 			w := &hookedReuseStore{st: e.st}

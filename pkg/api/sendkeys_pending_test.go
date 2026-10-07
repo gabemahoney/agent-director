@@ -79,10 +79,16 @@ func skpAssertReadPane(t *testing.T, e *killEnv, r killRow, pane string) {
 }
 
 // TestSendKeysPendingDelivered: skpDelivered for a fresh spawn's and a resumed row's launch.
-func TestSendKeysPendingDelivered(t *testing.T) { skpDelivered(t, pendingKinds()) }
+func TestSendKeysPendingDelivered(t *testing.T) {
+	t.Parallel()
+	skpDelivered(t, pendingKinds())
+}
 
 // TestSendKeysPendingReuseDelivered (AC-PANE-08): skpDelivered for a reuse's launch, read-pane included.
-func TestSendKeysPendingReuseDelivered(t *testing.T) { skpDelivered(t, []pendingKind{pendingReused}) }
+func TestSendKeysPendingReuseDelivered(t *testing.T) {
+	t.Parallel()
+	skpDelivered(t, []pendingKind{pendingReused})
+}
 
 // skpDelivered: a pending launch of each of kinds gets the text and Enter in its own pane by id, whatever
 // the clock did; a lost reply's adoption is written once. For a reuse, read-pane returns that pane too.
@@ -179,10 +185,16 @@ type skpRefusal struct {
 }
 
 // TestSendKeysPendingRefused: skpRefused for a fresh spawn's and a resumed row's launch.
-func TestSendKeysPendingRefused(t *testing.T) { skpRefused(t, pendingKinds()) }
+func TestSendKeysPendingRefused(t *testing.T) {
+	t.Parallel()
+	skpRefused(t, pendingKinds())
+}
 
 // TestSendKeysPendingReuseRefused (AC-PANE-08): skpRefused for a reuse's launch.
-func TestSendKeysPendingReuseRefused(t *testing.T) { skpRefused(t, []pendingKind{pendingReused}) }
+func TestSendKeysPendingReuseRefused(t *testing.T) {
+	t.Parallel()
+	skpRefused(t, []pendingKind{pendingReused})
+}
 
 // skpRefused: for each of kinds, leftover, different server, conflicting labels, an unadoptable
 // lost reply and another store's sessions send nothing, whatever the clock did.
@@ -298,6 +310,7 @@ func skpRefused(t *testing.T, kinds []pendingKind) {
 // TestSendKeysPendingNoLaunchIdentity: no usable launch start or token, under any
 // recorded name, is refused before the lookup with no tmux call (a reuse records both).
 func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
+	t.Parallel()
 	identities := []struct {
 		name string
 		opt  apitest.SpawnOption
@@ -322,6 +335,7 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 		for _, id := range identities {
 			for _, n := range names {
 				t.Run(k.String()+"/"+id.name+"/"+n.name, func(t *testing.T) {
+					t.Parallel()
 					e := newKillEnv(t)
 					spec := e.pendingSpec(k, pendingOurs, append([]apitest.SpawnOption{id.opt}, n.opts...)...)
 					spec.NoSession = true
@@ -343,10 +357,14 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 }
 
 // TestSendKeysPendingRowChangesBeforeSend: skpRowChanges for a fresh spawn's and a resumed row's launch.
-func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) { skpRowChanges(t, pendingKinds()) }
+func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
+	t.Parallel()
+	skpRowChanges(t, pendingKinds())
+}
 
 // TestSendKeysPendingReuseRowChangesBeforeSend: skpRowChanges for a reuse's launch.
 func TestSendKeysPendingReuseRowChangesBeforeSend(t *testing.T) {
+	t.Parallel()
 	skpRowChanges(t, []pendingKind{pendingReused})
 }
 
@@ -395,6 +413,7 @@ func skpRowChanges(t *testing.T, kinds []pendingKind) {
 // TestSendKeysPendingReuseWithoutAllowPending (AC-PANE-08): without allow_pending a reuse's pending row,
 // its session up or its reply lost, is ErrSpawnNotInteractive with no tmux call and the row unchanged.
 func TestSendKeysPendingReuseWithoutAllowPending(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		shape pendingShape

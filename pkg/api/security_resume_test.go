@@ -27,9 +27,9 @@ import (
 // refusals, and the held name after "duplicate session", whose one create the
 // harness checks as a launch's (launch), though it acts on target's own id.
 var securityResumeVerbs = []securityVerb{
-	{verb: "resume", call: securityResumeCall, cases: securityResumeCases},
+	{verb: "resume", call: securityResumeCall, cases: securityResumeCases, serial: securityMovesHome},
 	{verb: "resume, duplicate session", event: "ad.launch.name_held", launch: true, call: securityResumeHeldCall,
-		record: rsSecHeldRecord, cases: securityResumeHeldCases},
+		record: rsSecHeldRecord, cases: securityResumeHeldCases, serial: securityMovesHome},
 }
 
 // securityResumeCall resumes the subject through the Client, its transcript

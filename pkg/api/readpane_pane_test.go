@@ -98,6 +98,7 @@ func rppOtherPane(e *killEnv) tmuxfix.SeedPane { return tmuxfix.SeedPane{PID: e.
 // TestReadPaneAgentPane: the agent's pane is read once by its id wherever it
 // now is; a missing or respawned pane is the pane-not-found conflict, unread.
 func TestReadPaneAgentPane(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		spec  killRowSpec
@@ -145,6 +146,7 @@ func TestReadPaneAgentPane(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, tc.spec)
 			rppCheck(t, e, r, tc.setup(t, e, &r))
@@ -155,6 +157,7 @@ func TestReadPaneAgentPane(t *testing.T) {
 // TestReadPaneLostReply: a row recording no pane reads the one pane carrying
 // its token, never a teammate's, with no write; re-issued, the same calls.
 func TestReadPaneLostReply(t *testing.T) {
+	t.Parallel()
 	lost := killRowSpec{NoPane: true, NoServerIdentity: true}
 	seeded := func(t *testing.T, _ *killEnv, r *killRow) rppWant {
 		return rppCaptured(labelledPane(t, r.Session, r.Token))
@@ -186,6 +189,7 @@ func TestReadPaneLostReply(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, tc.spec)
 			first := rppCheck(t, e, r, tc.setup(t, e, &r))
@@ -204,6 +208,7 @@ func rppFinished(e *killEnv) killRowSpec {
 // TestReadPaneLeftover: a lone leftover's pane carrying its label's token is
 // read on a pending, live or finished row; none such, or two leftovers, refuse.
 func TestReadPaneLeftover(t *testing.T) {
+	t.Parallel()
 	lone := func(t *testing.T, e *killEnv, r *killRow) rppWant {
 		e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
 		return rppCaptured(labelledPane(t, r.Session, tmuxfix.OtherToken))
@@ -242,6 +247,7 @@ func TestReadPaneLeftover(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			spec := killRowSpec{NoSession: true}
 			if tc.spec != nil {
@@ -256,6 +262,7 @@ func TestReadPaneLeftover(t *testing.T) {
 // TestReadPaneOtherStore: another store's session naming the row's id is
 // never read nor counted as a leftover (SR-3.4, AC-LKP-20).
 func TestReadPaneOtherStore(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		token    func(r killRow) string // the other store's label token
@@ -270,6 +277,7 @@ func TestReadPaneOtherStore(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{NoSession: true})
 			e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.otherStore(tc.token(r)), true))

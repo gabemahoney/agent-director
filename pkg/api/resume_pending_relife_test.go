@@ -8,7 +8,6 @@ package api_test
 // resume_pending_hook_test.go.
 
 import (
-	"os"
 	"slices"
 	"testing"
 
@@ -32,7 +31,7 @@ func relifeSessionEnd(t *testing.T, e *resumeEnv, id string) {
 // relifeResumeAs resumes id as a caller whose parent is parent.
 func relifeResumeAs(t *testing.T, e *resumeEnv, id, parent string) {
 	t.Helper()
-	os.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent) //nolint:errcheck // newResumeEnv's t.Setenv restores it
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
 	if _, err := e.resume(id); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -46,6 +45,7 @@ func relifeResumeAs(t *testing.T, e *resumeEnv, id, parent string) {
 // pre-launch lookup finds nothing in the way and writes no disagree record.
 // Both hooks come from the resumed agent, the pane resume recorded (SR-22.9).
 func TestResumeAgainAfterResumedAgentsLifeEnds(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
 	firstParent, secondParent := pendParent(t, e), pendParent(t, e)

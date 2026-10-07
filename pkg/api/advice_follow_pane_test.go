@@ -81,6 +81,7 @@ func advPanePause(t *testing.T, e *killEnv, r killRow) (func() error, func(*test
 // done; retry later" after an unreadable lookup or pane listing; the same
 // call re-issued is refused alike while tmux fails, then does its work.
 func TestAdviceFollow_E1_PaneVerbLookupUnreadableRetryLater(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	failures := []struct {
 		name   string
 		call   tmux.Call
@@ -113,6 +114,7 @@ func TestAdviceFollow_E1_PaneVerbLookupUnreadableRetryLater(t *testing.T) {
 // TestAdviceFollow_E4_ReadPaneCaptureFailedRetryLater: E4 "nothing was done;
 // retry later" after a failed capture; read-pane re-issued reads the pane once tmux answers.
 func TestAdviceFollow_E4_ReadPaneCaptureFailedRetryLater(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		script tmuxfix.Script
@@ -211,6 +213,7 @@ func advPaneKeysRefused(t *testing.T, f advPaneKeysFailure) (*killEnv, killRow, 
 // empty text, otherwise the same send-keys" after the text call timed out;
 // followed literally, the agent has the text submitted once.
 func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) {
+	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
 	timeout := tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}
 	for _, f := range []advPaneKeysFailure{
@@ -245,6 +248,7 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) 
 // when the timed-out Enter had submitted it (Enter on an empty input submits
 // nothing).
 func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits(t *testing.T) {
+	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
 	failures := append(advPaneEnterFailures(advSendKeysEnterTimeout, advSendKeysNotSubmitted),
 		advPaneEnterSubmitted("the text", advSendKeysEnterTimeout))
@@ -268,6 +272,7 @@ func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits(t *testing.T) {
 // else /exit submitted once, the input line cleared before it is typed
 // (b.9o4).
 func TestAdviceFollow_E5_PauseKeysFailedRetryLater(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	timeout := tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}
 	failures := append([]advPaneKeysFailure{
 		{name: "the line clear timed out before reaching the pane, a draft typed", call: tmux.CallSendKey,
@@ -328,6 +333,7 @@ func advRelayGuardReleased(t *testing.T, e *killEnv, r killRow) (createdAt, rele
 // after every request's delivery window elapses"; send-keys is refused
 // unchanged until then, and re-issued at that instant or later it delivers.
 func TestAdviceFollow_E6_SendKeysRelayGuardReleases(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		after time.Duration // past the stated release
@@ -374,6 +380,7 @@ func TestAdviceFollow_E6_SendKeysRelayGuardReleases(t *testing.T) {
 // instant (at once if it has passed) is delivered. Decide's earliest refusal,
 // window - 1 s (SR-4.2, SR-4.4), is TestDecideDeliverabilityBoundary's.
 func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
+	t.Parallel()
 	adviceAssertManifest(t, "decide", "", "ErrRelayFallenBack (answer at the pane)")
 	cases := []struct {
 		name string
@@ -419,6 +426,7 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 // retried pause must leave the row ended. The wait's deadline is real time,
 // so a 0 s timeout makes the first wait time out at its first poll.
 func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
+	t.Parallel()
 	adviceAssertGoDoc(t, "errors.go", "ErrPauseTimeout", "The caller's recourse is to retry the pause; the agent may still be running.")
 	cases := []struct {
 		name   string
@@ -467,6 +475,7 @@ func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
 // "state=pending" refusal, followed by the allow_pending text ("When true,
 // also allows a pending row"); re-issued with it, the keys reach the launch's pane.
 func TestAdviceFollow_E9_SendKeysPendingAllowPending(t *testing.T) {
+	t.Parallel()
 	adviceAssertManifest(t, "send-keys", "allow_pending", "When true, also allows a pending row")
 	e := newKillEnv(t)
 	r := e.seedPending(t, pendingFresh, pendingOurs)

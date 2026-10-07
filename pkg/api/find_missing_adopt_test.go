@@ -135,6 +135,7 @@ func assertWrote(t *testing.T, st *fakeFindMissingStore, before int, id string, 
 // TestFindMissingAdoptLostReplyJudgesAdoptedPane: a lost reply's Ours row adopts the server and its token pane
 // (one listing), records adopted once, and is judged by that pane's process, guarded on the adoption's snapshot.
 func TestFindMissingAdoptLostReplyJudgesAdoptedPane(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name, note string // note: the note the row carries
 		proc       procfix.Process
@@ -172,6 +173,7 @@ func TestFindMissingAdoptLostReplyJudgesAdoptedPane(t *testing.T) {
 // TestFindMissingAdoptListingDecides: with no single token pane only the server identity is adopted (none when
 // recorded); no token pane counts as Gone (tmux_absent, lookup_outcome ours), two leave the row unverified.
 func TestFindMissingAdoptListingDecides(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	two := func(r store.LiveSpawnIdentity) []tmuxfix.SeedPane {
 		return []tmuxfix.SeedPane{tokenPane(r, fmAdoptPane, fmAdoptPID, 0), tokenPane(r, "%8", fmAdoptPID+1, 1)}
 	}
@@ -239,6 +241,7 @@ func findMissingActionOf(ids []string) string {
 
 // TestFindMissingAdoptSharedTokenPaneIsOne: a token pane a grouped session also lists counts as one pane, adopted.
 func TestFindMissingAdoptSharedTokenPaneIsOne(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	r := liveRow("r")
 	rec := lostReplyRec(r, tokenPane(r, fmAdoptPane, fmAdoptPID, 0)).
 		SeedSessions(apitest.TestSocket, tmuxfix.SeedSession{Name: "viewer", Panes: []tmuxfix.SeedPane{{ID: fmAdoptPane, Shared: true}}})
@@ -254,6 +257,7 @@ func TestFindMissingAdoptSharedTokenPaneIsOne(t *testing.T) {
 // TestFindMissingAdoptUnlistedStopsSocket: a failed or skipped pane listing adopts nothing and records no adopted;
 // the row is noted process_not_seen_session_present on the read snapshot and later rows of the socket not called.
 func TestFindMissingAdoptUnlistedStopsSocket(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	q := config.Tmux{}.EffectiveQueryTimeout()
 	cases := []struct {
 		name   string
@@ -292,6 +296,7 @@ func TestFindMissingAdoptUnlistedStopsSocket(t *testing.T) {
 // TestFindMissingAdoptOneListingPerSocket: however many lost-reply rows adopt on a socket, the run takes one
 // lookup and one pane listing there, and each row records its own adoption and adopted once.
 func TestFindMissingAdoptOneListingPerSocket(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	sockB := apitest.TestSocket + "-b"
 	a1, a2 := liveRow("a1"), liveRow("a2", withToken(tmuxfix.OtherToken))
 	b1 := liveRow("b1", func(r *store.LiveSpawnIdentity) { r.Identity.Socket = sockB })
@@ -322,6 +327,7 @@ func TestFindMissingAdoptOneListingPerSocket(t *testing.T) {
 // TestFindMissingAdoptOnlyWhenDue: a full identity reading unreadable adopts nothing; a recorded pane missing only
 // its server adopts the server with no listing; a lost reply whose lookup is Gone adopts nothing.
 func TestFindMissingAdoptOnlyWhenDue(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name    string
 		opts    []fmRowOpt
@@ -372,6 +378,7 @@ var fmAdoptOutcomes = []struct {
 // TestFindMissingAdoptRefused: an adoption that finds the row changed or absent, or fails (logged), ends the row:
 // no verdict write, tick or adopted record, neither list; the sweep still marks a later dead row.
 func TestFindMissingAdoptRefused(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, out := range fmAdoptOutcomes {
 		t.Run(out.name, func(t *testing.T) {
 			r := liveRow("r")
@@ -405,6 +412,7 @@ func TestFindMissingAdoptRefused(t *testing.T) {
 // TestFindMissingVerdictAfterAdoptionRefused: an applied adoption's mark, note or clear (and a plain Gone mark),
 // guarded on its snapshot, refused or failing: neither list, no tick, no close; the disagree action says so.
 func TestFindMissingVerdictAfterAdoptionRefused(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	restarted := tmuxfix.Server{PID: fmServer.PID + 1, Start: fmServer.Start + 1, ProcStart: fmStart}
 	verdicts := []struct {
 		name, op, reason string

@@ -64,6 +64,7 @@ var noteRows = []struct {
 // TestFindMissingNoteFirstWriteTicks: a row with no note gets one guarded note write and one tick with that
 // note's token, prior_state/new_state null, and is in unverified_ids.
 func TestFindMissingNoteFirstWriteTicks(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, tc := range noteRows {
 		t.Run(tc.name, func(t *testing.T) {
 			r := tc.row()
@@ -92,6 +93,7 @@ func TestFindMissingNoteFirstWriteTicks(t *testing.T) {
 // TestFindMissingNoteEqualNoWrite: a row already carrying the reason's note gets no write and no tick, and is
 // still in unverified_ids.
 func TestFindMissingNoteEqualNoWrite(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, tc := range noteRows {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{tc.row(withNote(tc.note))}}
@@ -111,6 +113,7 @@ func TestFindMissingNoteEqualNoWrite(t *testing.T) {
 // TestFindMissingNoteOverwriteNoTick: a different note (provenance_conflict included) is overwritten with the
 // reason's note by one guarded write, with no tick; the row is in unverified_ids.
 func TestFindMissingNoteOverwriteNoTick(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, seeded := range []string{"tmux_server_changed", "provenance_conflict"} {
 		for _, tc := range noteRows {
 			t.Run(seeded+" to "+tc.note, func(t *testing.T) {
@@ -133,6 +136,7 @@ func TestFindMissingNoteOverwriteNoTick(t *testing.T) {
 // TestFindMissingAliveClearsEveryNote: a verified-alive row carrying any note gets one guarded clear, no tick,
 // and is in neither list.
 func TestFindMissingAliveClearsEveryNote(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	notes := []string{"probe_eacces", "process_not_seen_tmux_unchecked", "tmux_server_changed", "provenance_conflict"}
 	for _, note := range notes {
 		t.Run(note, func(t *testing.T) {
@@ -176,6 +180,7 @@ func guardedWritesChecker() *procfix.Checker {
 // TestFindMissingRefusedWriteNotListed: a mark, note write or clear that finds the row changed or absent gets
 // no tick, no permission-request close, no log line, and leaves the row in neither list.
 func TestFindMissingRefusedWriteNotListed(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, w := range guardedWrites {
 		for name, res := range map[string]store.CondResult{"changed": store.CondChanged, "absent": store.CondAbsent} {
 			t.Run(w.op+" "+name, func(t *testing.T) {
@@ -203,6 +208,7 @@ func TestFindMissingRefusedWriteNotListed(t *testing.T) {
 // TestFindMissingStoreErrorLoggedAndContinues: a store error on a mark, note write or clear is logged, the row
 // gets no tick or close and is in neither list, the sweep succeeds and a later dead row is still marked.
 func TestFindMissingStoreErrorLoggedAndContinues(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	storeErr := errors.New("disk I/O error")
 	for _, w := range guardedWrites {
 		t.Run(w.op, func(t *testing.T) {
@@ -232,6 +238,7 @@ func TestFindMissingStoreErrorLoggedAndContinues(t *testing.T) {
 // TestFindMissingEachWriteGuardedOnItsOwnSnapshot: in one sweep the mark, note write and clear each carry
 // exactly the snapshot the live-row read returned for that row.
 func TestFindMissingEachWriteGuardedOnItsOwnSnapshot(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	var rows []store.LiveSpawnIdentity
 	for i, w := range guardedWrites {
 		r := w.row(w.op)
@@ -321,6 +328,7 @@ func sweepReal(t *testing.T, s api.FindMissingStore, pc *procfix.Checker) (api.F
 // TestFindMissingNoteOverwriteKeepsFirstUnverifiedSince: on a real store an overwritten note keeps
 // liveness_unverified_since as first stored, advances row_version by one and ticks nothing.
 func TestFindMissingNoteOverwriteKeepsFirstUnverifiedSince(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	s, dbPath := seedPaneRow(t, apitest.WithLivenessNote("tmux_server_changed"),
 		apitest.WithLivenessUnverifiedSince("2026-09-01 10:00:00"))
 	was := readRow(t, dbPath)
@@ -345,6 +353,7 @@ func TestFindMissingNoteOverwriteKeepsFirstUnverifiedSince(t *testing.T) {
 // TestFindMissingAliveRealStore: a verified-alive row with no note is not written (row_version unchanged); one
 // with a note has note and unverified time cleared at +1 version. Neither ticks nor is listed.
 func TestFindMissingAliveRealStore(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name  string
 		opts  []apitest.SpawnOption
@@ -393,6 +402,7 @@ func (s interleavedStore) ListLiveSpawnIdentities() ([]store.LiveSpawnIdentity, 
 // TestFindMissingChangedBetweenReadAndWrite (AC-FM-07/08, process path): a row relaunched, reused, deleted or
 // written by its own agent's hook between the read and the guarded write is not marked, noted or cleared.
 func TestFindMissingChangedBetweenReadAndWrite(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	writes := []struct {
 		op   string
 		proc procfix.Process

@@ -50,6 +50,7 @@ func operatorActions(t *testing.T, d mdDoc) mdHeading {
 // of agent-director-admin's kill-finished, in the README lies inside "Operator
 // actions", which names one of them and the opt-in's key facts.
 func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	h := operatorActions(t, d)
 	from, to := sectionLines(d, h)
@@ -80,6 +81,7 @@ func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
 // README names the opt-in, bar the architecture doc's ad.kill.called trail field
 // and docs/admin-reference.md, the admin binary's own reference (b.vqr).
 func TestREADMEOptInAbsentFromOtherDocs(t *testing.T) {
+	t.Parallel()
 	paths, err := filepath.Glob(filepath.Join(mdRepoRoot, "docs", "*.md"))
 	if err != nil {
 		t.Fatalf("glob docs: %v", err)

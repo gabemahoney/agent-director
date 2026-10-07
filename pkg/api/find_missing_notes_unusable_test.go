@@ -63,6 +63,7 @@ func assertOneNote(t *testing.T, st *fakeFindMissingStore, id, note string, snap
 // TestFindMissingUnusableNameNoteEntryTick: each fixture name, evidence unknown or none recorded, gets its note in
 // one guarded write and one entry tick with that token, is unverified, and makes no tmux call.
 func TestFindMissingUnusableNameNoteEntryTick(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, f := range unusableNameFixtures() {
 		for _, ev := range noteRows {
 			t.Run(f.label+"/"+ev.name, func(t *testing.T) {
@@ -88,6 +89,7 @@ func TestFindMissingUnusableNameNoteEntryTick(t *testing.T) {
 // TestFindMissingUnusableNameFaultPrecedence: a name with a control character and a character tmux rewrites
 // gets the control-character note (SR-3.2's order).
 func TestFindMissingUnusableNameFaultPrecedence(t *testing.T) {
+	t.Parallel()
 	control := unusableNameTokenOf(tmux.UnusableControl).note
 	for name, raw := range map[string]string{"colon and ESC": "ad:\x1b", "invalid UTF-8 and DEL": "bad\xff\x7f"} {
 		t.Run(name, func(t *testing.T) {
@@ -129,6 +131,7 @@ func fmuPathCases() []fmuPathCase {
 // TestFindMissingUnusableNameAheadOfPathNotes: in each world that gives a usable row a tmux-path note, the same
 // row with an unusable name gets its own note instead, and no tmux call is made for it.
 func TestFindMissingUnusableNameAheadOfPathNotes(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, w := range fmuPathCases() {
 		for _, f := range append(fmuReps(), usableNameFixture()) {
 			t.Run(w.name+"/"+f.label, func(t *testing.T) {
@@ -159,6 +162,7 @@ func TestFindMissingUnusableNameAheadOfPathNotes(t *testing.T) {
 // TestFindMissingUnusableNameNoteOverwrite: the same note is not rewritten and does not tick; any other note
 // (a tmux-path note, provenance_conflict or another unusable-name note) is overwritten with no tick.
 func TestFindMissingUnusableNameNoteOverwrite(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	froms := append([]string{}, ntNotes...)
 	for _, tok := range unusableNameTokens() {
 		froms = append(froms, tok.note)
@@ -190,6 +194,7 @@ func TestFindMissingUnusableNameNoteOverwrite(t *testing.T) {
 // TestFindMissingUnusableNameNoteRealStore: on a real store, entry writes the note and its first unverified time
 // with one tick; an overwrite keeps that time; the same note leaves the row untouched; none makes a tmux call.
 func TestFindMissingUnusableNameNoteRealStore(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	const since = "2026-09-01 10:00:00"
 	for _, f := range fmuReps() {
 		cases := []struct {
@@ -234,6 +239,7 @@ func TestFindMissingUnusableNameNoteRealStore(t *testing.T) {
 // TestFindMissingUnusableNameNoteClearedWhenAlive: a row carrying its unusable-name note whose process is now
 // verified alive gets one guarded clear, no tick, no tmux call, and is in neither list.
 func TestFindMissingUnusableNameNoteClearedWhenAlive(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, f := range fmuReps() {
 		t.Run(f.label, func(t *testing.T) {
 			pc := procfix.New()
@@ -257,6 +263,7 @@ func TestFindMissingUnusableNameNoteClearedWhenAlive(t *testing.T) {
 // TestFindMissingUnusableNameNoteRefusedOrFailed: a note write that finds the row changed or absent, or fails in
 // the store, ticks nothing and lists the row nowhere; a failure is logged, and a later dead row is still marked.
 func TestFindMissingUnusableNameNoteRefusedOrFailed(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	storeErr := errors.New("disk I/O error")
 	answers := map[string]fmAnswer{"changed": {res: store.CondChanged}, "absent": {res: store.CondAbsent},
 		"store error": {err: storeErr}}
@@ -283,6 +290,7 @@ func TestFindMissingUnusableNameNoteRefusedOrFailed(t *testing.T) {
 // TestFindMissingUnusableNameChangedBetweenReadAndWrite: on a real store, a row relaunched or deleted between the
 // read and the guarded note write gets no note and no tick and is in neither list.
 func TestFindMissingUnusableNameChangedBetweenReadAndWrite(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	changes := map[string]func(t *testing.T, s *store.Store, dbPath string){
 		"relaunch": func(t *testing.T, _ *store.Store, dbPath string) {
 			if a := apitest.ApplyAgentHook(t, dbPath, "r", "SessionStart", "sess-relaunch"); !a.Applied {

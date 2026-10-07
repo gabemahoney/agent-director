@@ -164,6 +164,7 @@ func acDoc19Items() []acDocItem {
 // TestReadmeOperatorActionsACDOC19Items checks both AC-DOC-19 items appear
 // once each, in order after the pending-row item, with their content.
 func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	prev := operatorActionsItem(t, d, pendingItemTitle)
 	for _, it := range acDoc19Items() {
@@ -225,6 +226,7 @@ func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 // TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible checks no manifest
 // text, Go source or package README names either AC-DOC-19 item.
 func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
+	t.Parallel()
 	fold := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 	knownSeen := false
 	check := func(source, text string) {
@@ -251,6 +253,7 @@ func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 // TestReadmeOperatorActionsStoreIDCommand checks "This store's id" gives the
 // read-only sqlite3 lookup, once, with its facts.
 func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	h := operatorActionsItem(t, d, storeIDItemTitle)
 	cmds := storeIDItemCommands(t, d)
@@ -270,6 +273,7 @@ func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 // TestReadmeOperatorActionsStoreIDPointers checks each item that needs this
 // store's id links to "This store's id" beside the trail record's store_id.
 func TestReadmeOperatorActionsStoreIDPointers(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	link := fmt.Sprintf("[%s](#%s)", storeIDItemTitle, mdAnchor(storeIDItemTitle))
 	for _, c := range []struct {

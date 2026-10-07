@@ -58,6 +58,7 @@ var (
 // type: a value of one can be assigned directly to the other and all fields
 // are preserved across the round-trip.
 func TestSpawnAliasRoundTrip(t *testing.T) {
+	t.Parallel()
 	orig := store.Spawn{
 		ClaudeInstanceID: "alias-test-id",
 		State:            store.StateWaiting,
@@ -87,6 +88,7 @@ func TestSpawnAliasRoundTrip(t *testing.T) {
 // TestPermissionRowAliasRoundTrip proves api.PermissionRow ↔ store.PermissionRow
 // interop: direct assignment works in both directions without conversion.
 func TestPermissionRowAliasRoundTrip(t *testing.T) {
+	t.Parallel()
 	orig := store.PermissionRow{
 		ClaudeInstanceID: "perm-alias-id",
 		ToolName:         "Bash",
@@ -116,6 +118,7 @@ func TestPermissionRowAliasRoundTrip(t *testing.T) {
 // TestListFiltersAliasRoundTrip proves api.ListFilters ↔ store.ListFilters
 // interop: direct assignment works and field values are preserved.
 func TestListFiltersAliasRoundTrip(t *testing.T) {
+	t.Parallel()
 	orig := store.ListFilters{
 		State:  []string{store.StateWaiting, store.StateWorking},
 		Parent: "parent-id",
@@ -147,6 +150,7 @@ func TestListFiltersAliasRoundTrip(t *testing.T) {
 // TestExpireCandidateAliasRoundTrip proves api.ExpireCandidate is store.ExpireCandidate
 // itself: assignment works both ways and every field, Identity and Snapshot included, survives.
 func TestExpireCandidateAliasRoundTrip(t *testing.T) {
+	t.Parallel()
 	if a, s := reflect.TypeFor[api.ExpireCandidate](), reflect.TypeFor[store.ExpireCandidate](); a != s {
 		t.Fatalf("api.ExpireCandidate is %s.%s; want the alias of store.ExpireCandidate", a.PkgPath(), a.Name())
 	}
@@ -182,6 +186,7 @@ func TestExpireCandidateAliasRoundTrip(t *testing.T) {
 // TestTmuxAliasesAreIdentical checks each F.3 Tmux* alias and api.ProcChecker is the
 // internal/tmux type itself, not a new defined type (so errors.As and assignment interoperate).
 func TestTmuxAliasesAreIdentical(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		api, orig reflect.Type
@@ -209,6 +214,7 @@ func TestTmuxAliasesAreIdentical(t *testing.T) {
 // TestTmuxSentinelAliases checks each pkg/api tmux sentinel is the internal/tmux
 // sentinel itself, so a wrapped one matches it under errors.Is and classifies to its name.
 func TestTmuxSentinelAliases(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		api, orig error
@@ -305,6 +311,7 @@ func parseExportedConsts(t *testing.T, dir string) map[string]constDecl {
 // TestTmuxConstantsRedeclared checks every exported internal/tmux Call*, Fail*
 // and Label* constant has a pkg/api twin declared as Tmux<Name> = tmux.<Name>.
 func TestTmuxConstantsRedeclared(t *testing.T) {
+	t.Parallel()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")

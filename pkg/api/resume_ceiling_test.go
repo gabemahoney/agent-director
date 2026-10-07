@@ -21,6 +21,7 @@ import (
 // TestResumeCeilingVirtualTime: path (i) (lookup, create whose label fails,
 // label by id, kill by id) charges Q + C + 2A, 10.5 s at the defaults.
 func TestResumeCeilingVirtualTime(t *testing.T) {
+	t.Parallel()
 	q, a, _ := ceilDefaults()
 	c := config.Default().Tmux.EffectiveCreateTimeout()
 	want := q + c + 2*a
@@ -47,6 +48,7 @@ func TestResumeCeilingVirtualTime(t *testing.T) {
 // TestResumeCeilingRefusalChargesOnlyLookup: a refusal at the pre-launch
 // lookup charges Q and makes no further call.
 func TestResumeCeilingRefusalChargesOnlyLookup(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	q, _, _ := ceilDefaults()
 	cases := []struct {
 		name  string
@@ -98,6 +100,7 @@ func TestResumeCeilingRefusalChargesOnlyLookup(t *testing.T) {
 // "duplicate session", re-lookup) charges 2Q + C, 8 s at the defaults, and
 // with Q raised above 2A more than path (i)'s Q + C + 2A at the same settings.
 func TestResumeCeilingDuplicateSession(t *testing.T) {
+	t.Parallel()
 	q, a, _ := ceilDefaults()
 	c := config.Default().Tmux.EffectiveCreateTimeout()
 	if got := 2*q + c; got != 8*time.Second {

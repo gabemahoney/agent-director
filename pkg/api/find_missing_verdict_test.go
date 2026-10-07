@@ -14,6 +14,7 @@ import (
 // TestFindMissingStartTimeVerdict: the recorded process's start-time answer decides the row: dead marks it,
 // alive clears only a carried note, unreadable with a lookup that cannot tell notes it probe_eacces.
 func TestFindMissingStartTimeVerdict(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		proc       procfix.Process
@@ -76,6 +77,7 @@ func unknownRow(id string, pid int, opts ...fmRowOpt) store.LiveSpawnIdentity {
 // TestFindMissingCheckerUnknownIsolatesRow: unreadable rows take one lookup on their socket and are never marked
 // unless it is Gone, while a dead sibling in the same sweep is still marked and closed.
 func TestFindMissingCheckerUnknownIsolatesRow(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, lk := range fmUnknownLookups {
 		t.Run(lk.name, func(t *testing.T) {
 			pc := procfix.New()
@@ -117,6 +119,7 @@ func TestFindMissingCheckerUnknownIsolatesRow(t *testing.T) {
 // TestFindMissingUnknownRepeatStillUnverified: an unreadable row already noted probe_eacces gets no write on a
 // repeat sweep and stays unverified when its lookup is Ours or Can't tell; Gone marks it.
 func TestFindMissingUnknownRepeatStillUnverified(t *testing.T) {
+	t.Parallel()
 	for _, lk := range fmUnknownLookups {
 		t.Run(lk.name, func(t *testing.T) {
 			pc := procfix.New()
@@ -143,6 +146,7 @@ func TestFindMissingUnknownRepeatStillUnverified(t *testing.T) {
 // TestFindMissingPartialIdentityPidOnlyFallsBack: a pid-only identity (no start time) reading gone is marked
 // proc_absent; reading alive proves nothing, so its lookup decides: Gone marks it tmux_absent.
 func TestFindMissingPartialIdentityPidOnlyFallsBack(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name     string
 		identity fmRowOpt
@@ -174,6 +178,7 @@ func TestFindMissingPartialIdentityPidOnlyFallsBack(t *testing.T) {
 // TestFindMissingPartialIdentityStarttimeOnlyFallsBack: a start time with no pid records no process, so the
 // reader is not called and the lookup decides: Gone marks the row tmux_absent.
 func TestFindMissingPartialIdentityStarttimeOnlyFallsBack(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for name, identity := range map[string]fmRowOpt{
 		"sessionstart": withSessionStart(0, fmStart),
 		"pane":         withPane(0, fmStart),

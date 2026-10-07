@@ -309,6 +309,15 @@ make sandbox CMD="…"     # run an arbitrary command in the container + mounts
 make test-install-sh-advice  # install.sh's literal-follow tests alone (test-sandbox runs them too)
 ```
 
+Every `go test` the Makefile runs (`test`, `test-sandbox`, `err-coherence`,
+`release-smoke`) passes `-timeout $(GO_TEST_TIMEOUT)`, 30m by default, instead
+of Go's 10-minute default. That limit is a budget for a whole package. On the
+loaded shared dev host the largest packages came near or past 10 minutes with
+no test hung, so a run failed for no reason (b.yo5). 30m is about three times
+the slowest package seen, so only a real hang trips it. On a slower machine,
+raise it: `make test-sandbox GO_TEST_TIMEOUT=60m`. A one-off `make sandbox
+CMD="go test …"` does not get it; pass `-timeout` yourself.
+
 The literal-follow tests for error advice skip the ones whose advice is known
 not to work as written; `AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` runs them
 (docs/test-writing-guide.md "Literal-follow tests for error advice").

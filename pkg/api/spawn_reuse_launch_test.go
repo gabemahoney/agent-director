@@ -81,6 +81,7 @@ func rlAssertNewLife(t *testing.T, r reuseRow, cols apitest.SpawnColumns, tok st
 // TestSpawnReuseCreatesLabelledSessionOnRowSocket: the lookup and one create on the row's recorded
 // socket (not the resolved one), the new name, token, id and store id; then the identity write.
 func TestSpawnReuseCreatesLabelledSessionOnRowSocket(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, state string
 		newName     bool
@@ -145,6 +146,7 @@ func TestSpawnReuseCreatesLabelledSessionOnRowSocket(t *testing.T) {
 // TestSpawnReuseIdentityWrite: the identity write records the reply's server and pane only while
 // the row is still this launch's; another versioned write first leaves it writing nothing, a hook first is ignored.
 func TestSpawnReuseIdentityWrite(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		setup    func(t *testing.T, e *killEnv, r reuseRow) (parent any)
@@ -208,6 +210,7 @@ func TestSpawnReuseIdentityWrite(t *testing.T) {
 // TestSpawnReuseLaunchTimeoutAndLostReply: a timed-out or non-zero unparseable create is ErrTmuxUnresponsive
 // ("the row was reset") with no restore; exit 0 unparseable succeeds; each leaves the session labelled for send-keys to adopt.
 func TestSpawnReuseLaunchTimeoutAndLostReply(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		script       tmuxfix.Script
@@ -222,6 +225,7 @@ func TestSpawnReuseLaunchTimeoutAndLostReply(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour})
 			rlNewPanesAlive(e)
@@ -268,6 +272,7 @@ func TestSpawnReuseLaunchTimeoutAndLostReply(t *testing.T) {
 // TestSpawnReuseLabelStep: a failed chained label is relabelled by id and the reuse succeeds; when the
 // relabel fails too, the session is killed by id, ErrTmuxSessionCreate says so, and the restore runs.
 func TestSpawnReuseLabelStep(t *testing.T) {
+	t.Parallel()
 	lookup, create, label, kill := tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
 	cases := []struct {
 		name                string
@@ -280,6 +285,7 @@ func TestSpawnReuseLabelStep(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour})
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, create)
@@ -350,6 +356,7 @@ func (e *killEnv) rlSession(socket, id string) (tmuxfix.SeedSession, bool) {
 // TestSpawnReuseFromInsideAnotherSession: with TMUX naming another session's pane, reuse still
 // creates on the row's socket, labels its new session, and leaves the other session's labels as they were.
 func TestSpawnReuseFromInsideAnotherSession(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_PANE with t.Setenv.
 	for name, onRowServer := range map[string]bool{"TMUX names the row server": true, "TMUX names another server": false} {
 		t.Run(name, func(t *testing.T) {
 			e := newKillEnv(t)

@@ -84,6 +84,7 @@ func pendRowNullOr(s string) any {
 // the create's socket and the caller's parent, keeps the session columns, and
 // emits once.
 func TestResumeMoveToPendingColumns(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	cases := []struct {
 		name, state string
 		parent      bool
@@ -186,6 +187,7 @@ func TestResumeMoveToPendingColumns(t *testing.T) {
 // show pending with the resume's move time (after its lookup) as the launch
 // start; get keeps the session id and prior_sessions.
 func TestResumePendingVisibleOnEverySurface(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded, apitest.WithStartedAt(pendStartedAt))
 	want := time.UnixMilli(e.moveStart().UnixMilli()).UTC()
@@ -235,9 +237,9 @@ type pendRefusal struct {
 func pendRefuse(t *testing.T, e *resumeEnv, id, callerParent string) pendRefusal {
 	t.Helper()
 	prev := os.Getenv("AGENT_DIRECTOR_INSTANCE_ID")
-	// Restored on return; newResumeEnv's t.Setenv restores it at cleanup too.
-	os.Setenv("AGENT_DIRECTOR_INSTANCE_ID", callerParent) //nolint:errcheck
-	defer os.Setenv("AGENT_DIRECTOR_INSTANCE_ID", prev)   //nolint:errcheck
+	// Restored on return, and at cleanup by t.Setenv (which keeps t serial).
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", callerParent)
+	defer t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", prev)
 	r := pendRefusal{before: e.columns(t, id)}
 	calls, moved := pendCalls(e.rec), pendMoved(t, id)
 	_, r.err = e.resume(id)
@@ -250,6 +252,8 @@ func pendRefuse(t *testing.T, e *resumeEnv, id, callerParent string) pendRefusal
 // launch-in-progress refusal (with the reuse-opt-in step for a row with no
 // session id, b.uey), makes no tmux call and writes nothing.
 func TestResumeRefusesLaunchInProgress(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks the shared trail by literal row
+	// ids other find-missing tests reuse.
 	// seededNoStart seeds a pending row whose launch_started_at is raw: nil
 	// (NULL) or an int64 outside years 0 to 9999, which reads as absent (SR-5.5).
 	seededNoStart := func(raw any) func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
@@ -354,6 +358,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 // TestResumeRowDeletedBeforeMove: a row deleted between examination and move
 // gives ErrSpawnNotFound, with no create and no move event.
 func TestResumeRowDeletedBeforeMove(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
 	e.store.afterGet(func() {
@@ -378,6 +383,7 @@ func TestResumeRowDeletedBeforeMove(t *testing.T) {
 // TestResumeFromArchivedHistoryMovesStoredRow: a resume that falls back to an
 // archived session still applies its move, keeping the stored session id.
 func TestResumeFromArchivedHistoryMovesStoredRow(t *testing.T) {
+	t.Parallel()
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
 	if err := os.Remove(r.JSONLPath); err != nil {

@@ -94,6 +94,8 @@ func (e *killEnv) assertReused(t *testing.T, r reuseRow, life any, calls int, er
 // TestSpawnReuseAfterHeldNameEndWrite (AC-SPN-07, AC-SPN-09): after a plain spawn's held-name end write,
 // reuse is refused while the holder runs, writing nothing, and succeeds once the name is free.
 func TestSpawnReuseAfterHeldNameEndWrite(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks every record written to the
+	// shared trail since its mark.
 	cases := []struct {
 		name   string
 		holder holderKind
@@ -143,6 +145,7 @@ func TestSpawnReuseAfterHeldNameEndWrite(t *testing.T) {
 // TestSpawnReusePendingBesideLeftover (AC-SPN-07, AC-FM-18): a pending row whose launch stopped before its create
 // collides; once find-missing marks it missing past grace, reuse is refused while the leftover runs, then succeeds.
 func TestSpawnReusePendingBesideLeftover(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newKillEnv(t)
 	r := reuseRow{resumeRow: e.seedOnServer(t, killRowSpec{State: store.StatePending, NoPane: true, NoServerIdentity: true,
 		NoSession: true, Opts: []apitest.SpawnOption{apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli())}}, e.seedRow)}

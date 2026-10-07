@@ -114,6 +114,7 @@ func rutAssertRestored(t *testing.T, mark int, id string, applied bool, launchEr
 // TestSpawnReuseTrailReused: an applied reuse writes exactly one ad.spawn.reused,
 // every field, once the create on the reset row returns.
 func TestSpawnReuseTrailReused(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		a     agentState
@@ -129,6 +130,7 @@ func TestSpawnReuseTrailReused(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, tc.a, tc.spec)
 			if tc.setup != nil {
@@ -169,6 +171,7 @@ func TestSpawnReuseTrailReused(t *testing.T) {
 // TestSpawnReuseTrailRestored: each failed launch but a timeout writes one
 // ad.spawn.reuse_restored after ad.spawn.reused, its fields following the restore.
 func TestSpawnReuseTrailRestored(t *testing.T) {
+	t.Parallel()
 	create := func(s tmuxfix.Script) func(*testing.T, *killEnv, reuseRow, *hookedReuseStore) {
 		return func(_ *testing.T, e *killEnv, r reuseRow, _ *hookedReuseStore) {
 			e.rec.Script(r.Socket, s, tmux.CallCreate)
@@ -215,6 +218,7 @@ func TestSpawnReuseTrailRestored(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{})
 			w := &hookedReuseStore{st: e.st}
@@ -260,6 +264,7 @@ func rutRenamed(r reuseRow) resumeRow {
 // TestSpawnReuseTrailOtherPaths: refusals, an unapplied reset and store failures
 // write no reuse event; a success or launch timeout writes reused alone.
 func TestSpawnReuseTrailOtherPaths(t *testing.T) {
+	t.Parallel()
 	inject := func(k storefix.WriteFailureKind) func(*testing.T, *killEnv, *reuseRow, *hookedReuseStore) {
 		return func(t *testing.T, e *killEnv, r *reuseRow, _ *hookedReuseStore) {
 			storefix.InjectWriteFailure(t, e.dbPath, k, r.ID)
@@ -310,6 +315,7 @@ func TestSpawnReuseTrailOtherPaths(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{})
 			w := &hookedReuseStore{st: e.st}
@@ -395,6 +401,7 @@ func rutFailOpenRuns(t *testing.T) []string {
 // TestSpawnReuseTrailFailOpen: with the trail unwritable, reuse's results,
 // errors and rows equal those of a run with a working trail.
 func TestSpawnReuseTrailFailOpen(t *testing.T) {
+	t.Parallel()
 	want := rutFailOpenRuns(t)
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSpawnReuseTrailFailOpenChild$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
@@ -417,6 +424,7 @@ func TestSpawnReuseTrailFailOpen(t *testing.T) {
 // TestSpawnReuseTrailFailOpenChild is TestSpawnReuseTrailFailOpen's child: it
 // runs the reuses with a 0500 .agent-director and prints their lines.
 func TestSpawnReuseTrailFailOpenChild(t *testing.T) {
+	t.Parallel()
 	if os.Getenv(rutChildEnv) == "" {
 		t.Skip("run only as TestSpawnReuseTrailFailOpen's child")
 	}

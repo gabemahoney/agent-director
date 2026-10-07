@@ -76,6 +76,7 @@ func exrHoldName(t *testing.T, e *killEnv, r *killRow, own bool) {
 // TestExpireMalformedRows (SR-5.5, AC-EXP-12): in every world a malformed row
 // gets its well-formed twin's outcome, in one run that errs and logs nothing.
 func TestExpireMalformedRows(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	kinds := []struct {
 		name    string
 		ident   func(*store.LaunchIdentity)
@@ -149,6 +150,7 @@ func exrAssertKeptOurs(t *testing.T, e *killEnv, r killRow, mark int, res api.Ex
 // TestExpireStoredNames (AC-LKP-09): a row whose recorded name holds $ or \,
 // its own session running under tmux's stored form, is kept ours.
 func TestExpireStoredNames(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, n := range tmuxfix.StoredNames() {
 		// A '.' or ':' name is one tmux rewrites: Epic 19's reason, not this.
 		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") {
@@ -168,6 +170,8 @@ func TestExpireStoredNames(t *testing.T) {
 // TestExpireLocaleName (SR-2.2, AC-LKP-08's unit half): a row whose name and
 // id hold ü, its session running, is kept ours under LC_ALL=C and no locale.
 func TestExpireLocaleName(t *testing.T) {
+	// Serial: it sets the locale variables with t.Setenv; it checks every record written to the shared
+	// trail since its mark.
 	forms := tmuxfix.LocaleForms()
 	name, id := forms[0].Exact, forms[1].Exact
 	for _, loc := range []struct{ name, lcAll string }{{"LC_ALL=C", "C"}, {"no locale variables", ""}} {

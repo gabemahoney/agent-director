@@ -72,6 +72,8 @@ func (s *rrsScene) loser(t *testing.T, before writesSnapshot, calls int) {
 // create runs and the loser writes nothing (parent id included): a losing
 // reuse gets ErrInstanceIdCollision, a losing resume ErrSpawnNotResumable.
 func TestSpawnReuseAgainstResume(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with os.Setenv around a call; it checks every record
+	// written to the shared trail since its mark.
 	cases := []struct {
 		name      string
 		reuseWins bool

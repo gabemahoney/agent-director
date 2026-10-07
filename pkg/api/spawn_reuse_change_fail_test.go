@@ -39,6 +39,7 @@ func (e *killEnv) rchgAfterLookup(socket string, fn func()) {
 // and a permission-request deletion failure are ErrInternal, the archive's
 // with its own wording, with no create, no ad.spawn.reused and nothing written.
 func TestSpawnReuseStoreFailureIsInternal(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name string
 		kind storefix.WriteFailureKind
@@ -70,6 +71,7 @@ func TestSpawnReuseStoreFailureIsInternal(t *testing.T) {
 // the lookup, or another versioned write just before the reset, makes the
 // reset find the row changed: ErrInstanceIdCollision, no create, nothing written.
 func TestSpawnReuseLostRaceAtReset(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, e *killEnv, r reuseRow, w *hookedReuseStore, write func(func()))
@@ -124,6 +126,7 @@ func TestSpawnReuseLostRaceAtReset(t *testing.T) {
 // ErrInstanceIdCollision with no create, no row, history or request written
 // back, and no ad.spawn.reused.
 func TestSpawnReuseRowRemovedAtReset(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{})
 	sessions := e.rec.Sessions(r.Socket)
@@ -158,6 +161,7 @@ func TestSpawnReuseRowRemovedAtReset(t *testing.T) {
 // TestSpawnReuseForeignHookIgnored: a hook from another process carrying the
 // row's id after the lookup is not applied (pid_mismatch), and the reuse proceeds.
 func TestSpawnReuseForeignHookIgnored(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{})
 	var hook store.HookApplied

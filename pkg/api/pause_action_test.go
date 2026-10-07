@@ -97,6 +97,7 @@ func pfCheck(t *testing.T, e *killEnv, r killRow, want pfWant) {
 // TestPauseAgentPane: /exit goes once to the agent's pane id wherever it now
 // is; a missing or respawned pane is the pane-not-found conflict, unsent.
 func TestPauseAgentPane(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	recorded := func(_ *testing.T, _ *killEnv, r *killRow) pfWant { return pfWant{pane: r.Spawn.Identity.PaneID} }
 	cases := []struct {
 		name  string
@@ -154,6 +155,7 @@ func TestPauseAgentPane(t *testing.T) {
 // TestPauseLostReplyPane: a row recording no pane gets /exit in the one pane
 // carrying its token, at any index; none or two is the lost-reply conflict.
 func TestPauseLostReplyPane(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	cases := []struct {
 		name  string
 		spec  killRowSpec
@@ -191,6 +193,7 @@ func TestPauseLostReplyPane(t *testing.T) {
 // TestPauseListingFails: a pane listing that times out or is unrecognised is
 // ErrTmuxUnresponsive naming the listing; one finding the server exited is Gone. Unsent.
 func TestPauseListingFails(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	const firstLine = "list-panes: unexpected reply"
 	listing := func(s tmuxfix.Script) func(*killEnv, killRow) {
 		return func(e *killEnv, r killRow) { e.rec.Script(r.Socket, s, tmux.CallListPanes) }
@@ -252,6 +255,7 @@ func pfAssertTyped(t *testing.T, e *killEnv, r killRow, action tmux.Call) {
 // ErrTmuxUnresponsive naming the call, the keys may have been delivered,
 // retry later; no follow-up lookup, no later keys call, no wait.
 func TestPauseActionTimeout(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	for _, a := range pauseActions {
 		t.Run(string(a.call), func(t *testing.T) {
 			e := newKillEnv(t)
@@ -277,6 +281,7 @@ func TestPauseActionTimeout(t *testing.T) {
 // /exit call is, naming the key send (b.9o4); after Enter, /exit may be typed
 // but not submitted. No wait.
 func TestPauseActionFailureFollowUp(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	gone := func(r killRow, action tmux.Call) apitest.DescCase {
 		return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PanePause, InstanceID: r.ID, Name: r.Name,
 			FailedCall: action})
@@ -354,6 +359,8 @@ func TestPauseActionFailureFollowUp(t *testing.T) {
 // adopted only when applied; never when it adds nothing or pause refuses
 // first; the write's outcome never changes where /exit goes (SR-3.6).
 func TestPauseAdoptionWrite(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs); it redirects
+	// the process-wide standard logger (log.SetOutput).
 	lost := killRowSpec{NoPane: true, NoServerIdentity: true}
 	tokenPane := func(t *testing.T, r killRow) string { return labelledPane(t, r.Session, r.Token) }
 	recorded := func(_ *testing.T, r killRow) string { return r.Spawn.Identity.PaneID }

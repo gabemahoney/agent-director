@@ -176,6 +176,7 @@ func assertLaunchJSON(t *testing.T, v any, want string) {
 // TestLaunchStartedAtByVerbAndRow: each verb shows the launch start only on a
 // readable pending row, exactly to the millisecond in UTC, and never errors.
 func TestLaunchStartedAtByVerbAndRow(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	shapes := launchShapes()
 	c := newLaunchClient(t, shapes)
 	for _, v := range launchVerbs {
@@ -193,6 +194,7 @@ func TestLaunchStartedAtByVerbAndRow(t *testing.T) {
 // result encodes as JSON, even with out-of-range rows among them, and only the
 // readable pending rows carry the field, each with its own value.
 func TestLaunchStartedAtListMixedRows(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	shapes := launchShapes()
 	c := newLaunchClient(t, shapes)
 	res, err := c.List(api.ListParams{})
@@ -223,6 +225,7 @@ func TestLaunchStartedAtListMixedRows(t *testing.T) {
 // TestLaunchStartedAtStatusMalformedLabels: Status decodes no structured
 // column, so a pending row with unparsable labels still shows its launch start.
 func TestLaunchStartedAtStatusMalformedLabels(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	shape := launchShape{"pending bad labels", store.StatePending, []apitest.SpawnOption{
 		apitest.WithRawLabels("{not json"), apitest.WithLaunchStartedAt(launchFracMillis)}, launchFracMillis, launchFracJSON}
 	c := newLaunchClient(t, []launchShape{shape})
@@ -245,6 +248,7 @@ var (
 // TestLaunchStartedAtStatusNarrowRead: api.Status shows the launch start with
 // the real store, none with a GetSpawnState-only store, and keeps not-found.
 func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	id, err := apitest.SeedSpawn(dbPath, "narrow-pending", store.StatePending, "", "", "", true,
 		apitest.WithLaunchStartedAt(launchFracMillis))
@@ -283,6 +287,7 @@ func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
 // TestLaunchStartedAtAfterSpawn: a spawn at a fixed clock with a millisecond
 // fraction shows that instant through Status, Get and List --state pending.
 func TestLaunchStartedAtAfterSpawn(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env := newSpawnEnv(t)
 	want := env.clock.Now()
 	const wantJSON = "2026-09-29T12:00:00.123Z"

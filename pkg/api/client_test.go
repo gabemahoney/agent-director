@@ -51,6 +51,7 @@ func stampUserVersion(t *testing.T, path string, v int) {
 
 // TestErrClientClosedSentinel verifies the exported sentinel is non-nil.
 func TestErrClientClosedSentinel(t *testing.T) {
+	t.Parallel()
 	if api.ErrClientClosed == nil {
 		t.Fatal("api.ErrClientClosed must not be nil")
 	}
@@ -61,6 +62,7 @@ func TestErrClientClosedSentinel(t *testing.T) {
 // TestNewDefaultsMissingStoreNoCreate: default paths, missing store,
 // CreateIfMissing=false → ErrStoreNotInitialized; no file side effects (H1).
 func TestNewDefaultsMissingStoreNoCreate(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -83,6 +85,7 @@ func TestNewDefaultsMissingStoreNoCreate(t *testing.T) {
 // TestNewDefaultsMissingStoreWithCreate: CreateIfMissing=true creates the
 // store file and parent dir (CLI parity path).
 func TestNewDefaultsMissingStoreWithCreate(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -106,6 +109,7 @@ func TestNewDefaultsMissingStoreWithCreate(t *testing.T) {
 // TestNewDefaultsPreexistingStore: default paths, pre-seeded valid store →
 // success.
 func TestNewDefaultsPreexistingStore(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -125,6 +129,7 @@ func TestNewDefaultsPreexistingStore(t *testing.T) {
 // TestStorePathFromConfig: H2 invariant — cfg.Store.DbPath is used when
 // Options.StorePath is empty.
 func TestStorePathFromConfig(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	cfgPath := filepath.Join(home, "cfg.toml")
 	elsewhere := filepath.Join(home, "elsewhere.db")
@@ -144,6 +149,7 @@ func TestStorePathFromConfig(t *testing.T) {
 // TestStorePathOptionsWins: H2 invariant — Options.StorePath wins over
 // cfg.Store.DbPath. The cfg db_path is never opened.
 func TestStorePathOptionsWins(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	cfgPath := filepath.Join(home, "cfg.toml")
 	elsewhere := filepath.Join(home, "elsewhere.db")
@@ -173,6 +179,7 @@ func TestStorePathOptionsWins(t *testing.T) {
 // expanded correctly. api.expandTilde uses os.UserHomeDir() which honours
 // $HOME — consistent with shell convention and internal/config.
 func TestTildeExpansion(t *testing.T) {
+	t.Parallel()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skipf("cannot resolve home dir: %v", err)
@@ -210,6 +217,7 @@ func TestTildeExpansion(t *testing.T) {
 // TestExpandTildeHonorsHOMEEnv asserts that expandTilde resolves "~/" using
 // $HOME, not the passwd-database entry — catching the os/user.Current() regression.
 func TestExpandTildeHonorsHOMEEnv(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	tmpdir := t.TempDir()
 	t.Setenv("HOME", tmpdir)
 
@@ -228,6 +236,7 @@ func TestExpandTildeHonorsHOMEEnv(t *testing.T) {
 // TestDoubleClose verifies that calling Close() twice returns nil both times
 // and does not panic.
 func TestDoubleClose(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	apitest.SeedStore(t, filepath.Join(home, ".agent-director", "state.db"))
@@ -249,6 +258,7 @@ func TestDoubleClose(t *testing.T) {
 // TestConcurrentClose stress-tests the closed-flag mutex: N goroutines all
 // call Close() concurrently. Run with -race; no panic, no torn reads.
 func TestConcurrentClose(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	const n = 8
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -277,6 +287,7 @@ func TestConcurrentClose(t *testing.T) {
 // TestSchemaMismatch verifies that a store with a tampered user_version
 // surfaces store.ErrSchemaMismatch through errors.Is.
 func TestSchemaMismatch(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	dbPath := filepath.Join(home, "state.db")
 	cfgPath := filepath.Join(home, "cfg.toml")
@@ -305,6 +316,7 @@ func TestSchemaMismatch(t *testing.T) {
 // removed) and api.New succeeds, so the refusal is the value's, not the
 // file's.
 func TestNewRefusedTmuxConfig(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	cases := []struct {
 		name string
 		// refused is the [tmux] setting api.New must refuse.

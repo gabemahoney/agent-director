@@ -53,6 +53,7 @@ func rpAssertRefused(t *testing.T, e *killEnv, res api.ReadPaneResult, err, want
 // TestReadPaneParameters: n_lines (0 is the default, no cap) and ansi (stripped
 // with glyphs kept, or raw) reach the one capture of the agent's pane by id.
 func TestReadPaneParameters(t *testing.T) {
+	t.Parallel()
 	const raw = "\x1b[31m❯\x1b[0m what is 2+2?\n\x1b[1m4\x1b[0m\n🐝 Brewed for 1s\n"
 	const stripped = "❯ what is 2+2?\n4\n🐝 Brewed for 1s\n"
 	cases := []struct {
@@ -88,6 +89,7 @@ func TestReadPaneParameters(t *testing.T) {
 
 // TestReadPaneDefaultLinesIs25 pins the SRD §12 default.
 func TestReadPaneDefaultLinesIs25(t *testing.T) {
+	t.Parallel()
 	if api.DefaultReadPaneLines != 25 {
 		t.Fatalf("DefaultReadPaneLines = %d; want 25", api.DefaultReadPaneLines)
 	}
@@ -95,6 +97,7 @@ func TestReadPaneDefaultLinesIs25(t *testing.T) {
 
 // TestReadPaneSpawnNotFound: an unknown id is ErrSpawnNotFound with no tmux call.
 func TestReadPaneSpawnNotFound(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	e.seedRow(t, killRowSpec{})
 	_, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
@@ -107,6 +110,7 @@ func TestReadPaneSpawnNotFound(t *testing.T) {
 // TestReadPaneNoStateGuard: a pending, live or finished row's agent pane is
 // read by pane id, whatever allow_pending says (SR-7.1).
 func TestReadPaneNoStateGuard(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{store.StatePending, store.StateWaiting, store.StateEnded, store.StateMissing} {
 		for _, allow := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s allow_pending=%v", state, allow), func(t *testing.T) {
@@ -123,6 +127,7 @@ func TestReadPaneNoStateGuard(t *testing.T) {
 // TestReadPaneUnusableName (SR-3.2, AC-LKP-10): in every state, a recorded
 // name that cannot be used is ErrInternal quoting it, with no tmux call and the row unchanged.
 func TestReadPaneUnusableName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ state, fixture string }{
 		{store.StatePending, "pre-b.gqe default name"},
 		{store.StateWaiting, "empty"},
@@ -153,6 +158,7 @@ func TestReadPaneUnusableName(t *testing.T) {
 // TestReadPaneUnusableNameUnknownID: an unknown id stays ErrSpawnNotFound
 // beside a row whose recorded name cannot be used, with no tmux call.
 func TestReadPaneUnusableNameUnknownID(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	e.seedUnusableRow(t, killRowSpec{}, unusableFixture(t, "pre-b.gqe default name"))
 	_, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
@@ -163,6 +169,7 @@ func TestReadPaneUnusableNameUnknownID(t *testing.T) {
 // TestReadPaneRenamedSession: the renamed session's agent pane is read by id;
 // a session now holding the recorded name is never captured.
 func TestReadPaneRenamedSession(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		holder func(r killRow) *tmuxfix.SeedSession
@@ -194,6 +201,7 @@ func TestReadPaneRenamedSession(t *testing.T) {
 // TestReadPaneNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
 // error and never reads a prefix-, name- or 8-character-id-sharing neighbour.
 func TestReadPaneNeighbours(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		xID, yID     string
@@ -221,11 +229,13 @@ func TestReadPaneNeighbours(t *testing.T) {
 // TestReadPaneStoredNames (AC-LKP-09): a row whose recorded name holds $ or
 // \ is found by its label under tmux's stored form and read by pane id.
 func TestReadPaneStoredNames(t *testing.T) {
+	t.Parallel()
 	for _, n := range tmuxfix.StoredNames() {
 		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
 			if r.Session.Name != n.Stored {
@@ -241,6 +251,7 @@ func TestReadPaneStoredNames(t *testing.T) {
 // TestReadPaneRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
 // another server, every call names the row's recorded socket.
 func TestReadPaneRecordedSocket(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv.
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	// No commas: TMUX's socket field ends at one.
@@ -263,6 +274,7 @@ func TestReadPaneRecordedSocket(t *testing.T) {
 // TestReadPaneSessionReplaced (AC-LKP-06): a session replaced after the lookup
 // or listing never has its panes captured; the result follows SR-7.2 / SR-7.3.
 func TestReadPaneSessionReplaced(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		after    tmux.Call
@@ -316,6 +328,7 @@ func TestReadPaneSessionReplaced(t *testing.T) {
 // TestReadPaneListingFails (AC-PANE-03): a failed pane listing gives
 // ErrTmuxUnresponsive or ErrTmuxNotAvailable, and nothing is captured.
 func TestReadPaneListingFails(t *testing.T) {
+	t.Parallel()
 	const firstLine = "list-panes: unexpected reply"
 	cases := []struct {
 		name   string

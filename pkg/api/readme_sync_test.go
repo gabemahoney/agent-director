@@ -27,6 +27,7 @@ import (
 // When the test fails, update both the labeled region and the README block
 // together so they stay in sync.
 func TestREADMEExamplesStayInSync(t *testing.T) {
+	t.Parallel()
 	readmeBlocks, err := readmeGoBlocks("README.md")
 	if err != nil {
 		t.Fatalf("parse README: %v", err)

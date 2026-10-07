@@ -91,6 +91,7 @@ func assertLaunchSentinel(t *testing.T, err, want error) {
 // TestSpawnRecordsLaunchAndIdentity: one create on the resolved socket labels the
 // session; the row holds the launch start, token, socket and identity at version 1.
 func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const serverPID = 4242
 	alive := procfix.Alive(procstarttimefix.DarwinProcStarttime)
 	cases := []struct {
@@ -177,6 +178,8 @@ func isLookupOn(argv []string, socket string) bool {
 // TestSpawnCreateArgvCarriesChainedLabels: the one create invocation chains the
 // @ad_owner and @ad_pane steps on =<name>: and launches an argv of 2+ elements.
 func TestSpawnCreateArgvCarriesChainedLabels(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR, test/fake-tmux's log variable
+	// with t.Setenv.
 	env := buildSpawnEnv(t, faketmuxfix.Binary(t))
 	logPath := filepath.Join(env.home, "fake-tmux.log")
 	t.Setenv(faketmuxfix.EnvLog, logPath)
@@ -207,6 +210,7 @@ func TestSpawnCreateArgvCarriesChainedLabels(t *testing.T) {
 // TestSpawnRecordsResolvedSocket: the create and the row use the socket tmux
 // would resolve from TMUX and TMUX_TMPDIR (SR-3.3; AC-LKP-19).
 func TestSpawnRecordsResolvedSocket(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	realDir := func(t *testing.T) string {
 		d, err := filepath.EvalSymlinks(t.TempDir())
 		if err != nil {
@@ -266,6 +270,7 @@ func TestSpawnRecordsResolvedSocket(t *testing.T) {
 // TestSpawnRefusesUnusableSocketDir: an unsafe per-user directory or a regular-file
 // TMUX_TMPDIR is ErrTmuxNotAvailable with tmux's reason, no row and no tmux call.
 func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, base string) tmux.SocketDirError
@@ -316,6 +321,7 @@ func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
 // SessionStart first waits for the identity write, bounded by the pending
 // grace (SR-13.4), and that wait is tested in internal/hook.
 func TestSpawnHookBeforeIdentityWriteIsIgnored(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env := newSpawnEnv(t)
 	var got store.HookApplied
 	env.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, _ error) {
@@ -340,6 +346,7 @@ func TestSpawnHookBeforeIdentityWriteIsIgnored(t *testing.T) {
 // TestSpawnIdentityWriteStoreErrorWarnsOnce: a failed identity write gives one
 // WARN line and leaves the result and the pending row unchanged.
 func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env := newSpawnEnv(t)
 	id := "identfail-" + uuid.NewString()[:8]
 	storefix.InjectWriteFailure(t, env.dbPath, storefix.WriteFailLaunchIdentity, id)
@@ -362,6 +369,7 @@ func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
 // ErrTmuxNotAvailable, other failures ErrTmuxSessionCreate ("duplicate session"
 // is spawn_held_test.go's).
 func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	createFailed := func(_ spawnEnv, name string) apitest.DescCase {
 		return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: name})
 	}

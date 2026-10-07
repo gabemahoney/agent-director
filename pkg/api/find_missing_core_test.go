@@ -16,6 +16,7 @@ import (
 // TestFindMissingNoChangesWhenAllAlive: rows whose recorded process (SessionStart or pane) is alive with its
 // recorded start time and carry no note get no write, no tmux call and are in neither list.
 func TestFindMissingNoChangesWhenAllAlive(t *testing.T) {
+	t.Parallel()
 	pc := procfix.New()
 	pc.Set(201, procfix.Alive(fmStart))
 	pc.Set(202, procfix.Alive(fmStart))
@@ -39,6 +40,7 @@ func TestFindMissingNoChangesWhenAllAlive(t *testing.T) {
 // TestFindMissingTransitionsUnprobeableRows: rows whose recorded agent process is dead are marked proc_absent;
 // rows whose process cannot be checked take one lookup on their socket and, Gone, are marked tmux_absent.
 func TestFindMissingTransitionsUnprobeableRows(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	pc := procfix.New()
 	pc.Set(302, procfix.Alive(fmStart))
 	pc.Set(303, procfix.Zombie())
@@ -67,6 +69,7 @@ func TestFindMissingTransitionsUnprobeableRows(t *testing.T) {
 // TestFindMissingNullPidFallbackGuardFree: after a reboot every recorded process is gone and every such row is
 // marked with no refusal; a row with no identity is marked tmux_absent when its lookup is Gone.
 func TestFindMissingNullPidFallbackGuardFree(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	pc := procfix.New() // empty table: every pid answers gone
 	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
 		liveRow("a", withSessionStart(401, fmStart)),
@@ -87,6 +90,7 @@ func TestFindMissingNullPidFallbackGuardFree(t *testing.T) {
 // TestFindMissingZeroLiveRowsIsNoopSuccess: no live rows is a no-op: no reader or tmux call, no write, no log
 // line, empty non-nil lists.
 func TestFindMissingZeroLiveRowsIsNoopSuccess(t *testing.T) {
+	t.Parallel()
 	pc := procfix.New()
 	st := &fakeFindMissingStore{}
 	lg := &recordingLogger{}
@@ -106,6 +110,7 @@ func TestFindMissingZeroLiveRowsIsNoopSuccess(t *testing.T) {
 // TestFindMissingPendingRowIsScanned: pending rows past their grace period are judged (SR-11.2): a gone launch
 // pane process is marked proc_absent, a row with no identity whose lookup is Gone tmux_absent.
 func TestFindMissingPendingRowIsScanned(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	launch := fmNow.Add(-fmGrace - time.Second).UnixMilli()
 	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
 		liveRow("p-1", withLaunch(store.StatePending, launch), withPane(501, fmStart)),
@@ -121,6 +126,7 @@ func TestFindMissingPendingRowIsScanned(t *testing.T) {
 
 // TestFindMissingResultIDsSorted: ids come back sorted whatever the read order.
 func TestFindMissingResultIDsSorted(t *testing.T) {
+	t.Parallel()
 	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
 		liveRow("z", withSessionStart(601, fmStart)),
 		liveRow("a", withSessionStart(602, fmStart)),
@@ -133,6 +139,7 @@ func TestFindMissingResultIDsSorted(t *testing.T) {
 
 // TestFindMissingUnverifiedIDsNeverNull: unverified_ids is non-nil when empty and sorted when populated.
 func TestFindMissingUnverifiedIDsNeverNull(t *testing.T) {
+	t.Parallel()
 	pc := procfix.New()
 	pc.Set(700, procfix.Alive(fmStart))
 	res := mustFindMissing(t, &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
@@ -167,6 +174,7 @@ var fmMarkPaths = []struct {
 // TestFindMissingMarkingOrderPinned: a noted dead row gets exactly the guarded mark (liveness clear folded in),
 // then its tick, then the permission-request close, on both paths; a separate clear fails.
 func TestFindMissingMarkingOrderPinned(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, p := range fmMarkPaths {
 		t.Run(p.name, func(t *testing.T) {
 			pc := procfix.New()
@@ -199,6 +207,7 @@ func TestFindMissingMarkingOrderPinned(t *testing.T) {
 // TestFindMissingAlreadyTerminalRowMarkOnly: a mark, on either path, that finds the row changed or absent writes
 // nothing more: no close, not counted, in neither list.
 func TestFindMissingAlreadyTerminalRowMarkOnly(t *testing.T) {
+	t.Parallel()
 	for _, p := range fmMarkPaths {
 		for name, res := range map[string]store.CondResult{"changed": store.CondChanged, "absent": store.CondAbsent} {
 			t.Run(p.name+"/"+name, func(t *testing.T) {
@@ -221,6 +230,7 @@ func TestFindMissingAlreadyTerminalRowMarkOnly(t *testing.T) {
 
 // TestFindMissingListErrorAborts: a live-row read error fails the sweep before any reader or tmux call.
 func TestFindMissingListErrorAborts(t *testing.T) {
+	t.Parallel()
 	pc := procfix.New()
 	rec := tmuxfix.NewRecorder()
 	if _, err := runFindMissing(&fakeFindMissingStore{listErr: errSentinel}, pc, fmSweep{tmux: rec}); err == nil {

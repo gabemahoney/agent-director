@@ -13,6 +13,7 @@ import (
 // TestFindMissingHealsProvisionalTranscript: a provisional row (NULL jsonl_path) whose transcript has since
 // appeared is healed with the path recomposed under a usable CLAUDE_CONFIG_DIR, else ~/.claude (b.v2c AC3/AC4, b.nje).
 func TestFindMissingHealsProvisionalTranscript(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	cases := []struct {
 		name      string
 		configDir string
@@ -58,6 +59,7 @@ func TestFindMissingHealsProvisionalTranscript(t *testing.T) {
 // TestFindMissingSkipsProvisionalWhenTranscriptStillAbsent: a provisional row whose transcript has not appeared
 // stays provisional.
 func TestFindMissingSkipsProvisionalWhenTranscriptStillAbsent(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	t.Setenv("HOME", t.TempDir())
 	st := &fakeFindMissingStore{provisional: []store.ProvisionalTranscript{
 		{ClaudeInstanceID: "prov-absent-1", ClaudeSessionID: "no-file-uuid", CWD: "/tmp/proj"},

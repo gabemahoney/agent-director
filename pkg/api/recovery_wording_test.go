@@ -30,6 +30,7 @@ var recoveryWordingSites = []string{
 // TestRecoveryWordingScan: no manifest text, non-test Go source (the helper's
 // own pkg/api/apitest excepted) or package README carries a forbidden form.
 func TestRecoveryWordingScan(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	scan := func(source, text string) {
 		seen[source] = true
@@ -54,6 +55,7 @@ func TestRecoveryWordingScan(t *testing.T) {
 // TestRecoveryTSREADMERows pins the TypeScript README's ErrNoSessionId and
 // ErrJsonlMissing rows (SR-18.4) and its ErrInstanceIdCollision row (SR-18.9).
 func TestRecoveryTSREADMERows(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTSREADME)
 	for name, c := range map[string]apitest.DescCase{
 		"ErrNoSessionId":         apitest.DescReuseRecourse(apitest.RecourseTSREADME),

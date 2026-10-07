@@ -19,6 +19,7 @@ import (
 // TestSendKeysCeilingVirtualTime: a failed Enter whose follow-up finds Ours
 // charges 3Q + 2A in five calls; the timeouts charge less, with no follow-up.
 func TestSendKeysCeilingVirtualTime(t *testing.T) {
+	t.Parallel()
 	q, a, _ := ceilDefaults()
 	if got := 3*q + 2*a; got != 8500*time.Millisecond {
 		t.Fatalf("3Q + 2A at the defaults = %v; SR-13.2 says 8.5 s", got)

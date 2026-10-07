@@ -3,7 +3,7 @@ package api_test
 // kill_fixture_test.go is the shared kill test fixture (SR-20.2, SR-20.3,
 // SR-20.6): killEnv (a real store behind the killStore wrapper, a
 // tmuxfix.Recorder on a virtual clock, the procfix process-checker fake, the
-// internal/config [tmux] defaults and a per-test TMUX_TMPDIR), process and
+// internal/config [tmux] defaults and TestMain's TMUX_TMPDIR), process and
 // server call hooks, the trail readers and the call assertion; the live-row
 // factory is kill_fixture_rows_test.go. It holds no tests. HOME is left as
 // TestMain set it, so the trail readers see kill's. Later verb Epics
@@ -104,20 +104,14 @@ type killEnv struct {
 	rows, nextPID int
 }
 
-// newKillEnv builds a killEnv over a fresh store, with TMUX unset and a
-// per-test TMUX_TMPDIR whose per-user socket directory exists.
+// newKillEnv builds a killEnv over a fresh store, with TMUX unset and
+// TestMain's TMUX_TMPDIR (apiTmuxTmpdir), whose per-user socket directory
+// exists. It sets no environment, so its test may run in parallel; the
+// default socket's directory is shared with the binary's other tests, so a
+// test that changes it on disk takes its own first (ownSocketDir).
 func newKillEnv(t *testing.T) *killEnv {
 	t.Helper()
-	tmpdir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	t.Setenv("TMUX_TMPDIR", tmpdir)
-	t.Setenv("TMUX", "")
-	os.Unsetenv("TMUX") //nolint:errcheck
-	if err := os.MkdirAll(userSocketDir(tmpdir), 0o700); err != nil {
-		t.Fatalf("mkdir socket dir: %v", err)
-	}
+	tmpdir := useSharedTmuxTmpdir(t)
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	if _, err := apitest.InitStore(dbPath); err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -137,6 +131,71 @@ func newKillEnv(t *testing.T) *killEnv {
 		rec: tmuxfix.NewRecorder().WithVirtualTime(clock, tmux.Timeouts{}), cfg: config.Default().Tmux,
 		sleep: clock.Advance, storeID: storeID, defaultSocket: filepath.Join(userSocketDir(tmpdir), "default"),
 		nextPID: apitest.TestPanePID + 10}
+}
+
+// setenvIfChanged sets key to value for the rest of t with t.Setenv, which
+// makes t serial, but only when os.Getenv(key) does not already return value:
+// a test that needs no more than TestMain's environment then sets nothing and
+// may run in parallel.
+func setenvIfChanged(t *testing.T, key, value string) {
+	t.Helper()
+	if os.Getenv(key) != value {
+		t.Setenv(key, value)
+	}
+}
+
+// unsetenvIfSet makes key unset for the rest of t, restored at cleanup by
+// t.Setenv, which makes t serial; when key is not set, as TestMain leaves
+// TMUX and AGENT_DIRECTOR_INSTANCE_ID, it sets nothing.
+func unsetenvIfSet(t *testing.T, key string) {
+	t.Helper()
+	if _, set := os.LookupEnv(key); set {
+		t.Setenv(key, "")
+		os.Unsetenv(key) //nolint:errcheck // t.Setenv restores it
+	}
+}
+
+// useSharedTmuxTmpdir returns apiTmuxTmpdir, TestMain's TMUX_TMPDIR, after
+// making sure t sees it with TMUX unset and its per-user socket directory
+// present. Only a test that already changed either variable has them put back
+// (t.Setenv, so that test is serial, as its own t.Setenv already made it);
+// otherwise nothing is set and t may run in parallel.
+func useSharedTmuxTmpdir(t *testing.T) string {
+	t.Helper()
+	setenvIfChanged(t, "TMUX_TMPDIR", apiTmuxTmpdir)
+	unsetenvIfSet(t, "TMUX")
+	if err := os.MkdirAll(userSocketDir(apiTmuxTmpdir), 0o700); err != nil {
+		t.Fatalf("mkdir socket dir: %v", err)
+	}
+	return apiTmuxTmpdir
+}
+
+// useOwnTmuxTmpdir gives t its own TMUX_TMPDIR, with TMUX unset and its
+// per-user socket directory made, and returns it: for a test that removes
+// the default socket's directory or opens its permissions, which the shared
+// apiTmuxTmpdir must never see. It uses t.Setenv, so t runs serially.
+func useOwnTmuxTmpdir(t *testing.T) string {
+	t.Helper()
+	tmpdir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	t.Setenv("TMUX_TMPDIR", tmpdir)
+	t.Setenv("TMUX", "")
+	os.Unsetenv("TMUX") //nolint:errcheck // t.Setenv restores it
+	if err := os.MkdirAll(userSocketDir(tmpdir), 0o700); err != nil {
+		t.Fatalf("mkdir socket dir: %v", err)
+	}
+	return tmpdir
+}
+
+// ownSocketDir moves e's default socket into t's own TMUX_TMPDIR
+// (useOwnTmuxTmpdir), for a test that changes its directory on disk; call it
+// before seeding a row that records or resolves the default socket. t runs
+// serially.
+func (e *killEnv) ownSocketDir(t *testing.T) {
+	t.Helper()
+	e.defaultSocket = filepath.Join(userSocketDir(useOwnTmuxTmpdir(t)), "default")
 }
 
 // kill runs the exported api.Kill on id with e.store, e.rec, e.pc, e.cfg's

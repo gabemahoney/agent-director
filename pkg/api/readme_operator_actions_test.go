@@ -240,6 +240,7 @@ func operatorActionsItem(t *testing.T, d mdDoc, title string) mdHeading {
 // TestReadmeOperatorActionsUnusableNameSteps checks the unusable-name
 // procedure gives SR-18.17's five steps in order, each with its content.
 func TestReadmeOperatorActionsUnusableNameSteps(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	from, to := sectionLines(d, operatorActionsItem(t, d, unusableNameItemTitle))
 	checkSteps(t, d, unusableNameItemTitle, numberedSteps(d.lines[from:to], from), unusableNameSteps())
@@ -284,6 +285,7 @@ func checkSteps(t *testing.T, d mdDoc, item string, steps []procStep, want []ste
 // TestReadmeOperatorActionsTargetsByID checks every tmux -t target in
 // "Operator actions" is a session-id or pane-id placeholder, never a name.
 func TestReadmeOperatorActionsTargetsByID(t *testing.T) {
+	t.Parallel()
 	d := readMD(t, mdTopREADME)
 	from, to := sectionLines(d, operatorActions(t, d))
 	cmds := tmuxCommands(d.lines[from:to], from)

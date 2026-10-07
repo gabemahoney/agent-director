@@ -20,6 +20,7 @@ import (
 // TestKillParamsHasOnlyClaudeInstanceID: KillParams has exactly one field,
 // ClaudeInstanceID; the finished-row opt-in is not part of pkg/api.
 func TestKillParamsHasOnlyClaudeInstanceID(t *testing.T) {
+	t.Parallel()
 	typ := reflect.TypeOf(api.KillParams{})
 	var fields []string
 	for i := 0; i < typ.NumField(); i++ {
@@ -32,6 +33,7 @@ func TestKillParamsHasOnlyClaudeInstanceID(t *testing.T) {
 
 // TestPublicAPIHasNoDelete: neither *Client nor the package exports Delete.
 func TestPublicAPIHasNoDelete(t *testing.T) {
+	t.Parallel()
 	if _, ok := reflect.TypeOf(&api.Client{}).MethodByName("Delete"); ok {
 		t.Error("pkg/api.Client exports Delete; delete is an agent-director-admin verb only")
 	}

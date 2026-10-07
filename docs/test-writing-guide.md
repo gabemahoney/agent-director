@@ -141,7 +141,10 @@ Any test that exercises a verb which creates a tmux session (e.g. `resume`) must
 use a UUID-suffixed instance id — e.g. `` `id-resume-${crypto.randomUUID().slice(0, 8)}` `` — rather than a fixed string like `id-resume-1`.
 Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: a leaked session labelled for that fixed id then makes later runs refuse with `ErrTmuxSessionConflict`. If the leak is in the same store, `resume`'s pre-launch lookup and a plain spawn's label scan both refuse with "left over from an earlier life". If the run uses a fresh test HOME (so another store's id), the session reads as "another agent-director store": `resume` refuses at its pre-launch lookup, and a plain spawn hits it only after "duplicate session".
 
-### Parallel mode is pinned off
+### Parallel mode is pinned off (bun)
+
+This is about the bun suite. Go tests in `pkg/api` run in parallel; see
+"pkg/api tests: parallel or serial" below.
 
 The `/release` skill invokes `bun test --parallel=1` as the coverage gate because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
 
@@ -182,6 +185,72 @@ Why this matters (SR-19.2): re-implementing seeding inline tends to drift
 from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by their own tests AND by every consumer,
 so any schema break is caught early.
+
+## pkg/api tests: parallel or serial
+
+Every top-level test in `pkg/api` starts with `t.Parallel()` or, as the first
+line of its body, a `// Serial: <reason>.` comment that says why it cannot run
+in parallel. `TestEveryTestDeclaresParallelOrSerial`
+(`pkg/api/parallel_declared_test.go`) fails any test that has neither (b.yo5).
+
+**Default to parallel.** A parallel test owns everything it touches: its own
+store in `t.TempDir()`, its own tmux fake (a `tmuxfix.Recorder`, as
+`newKillEnv` and `newResumeEnv` build), its own clock and random row ids
+(`uuid.NewString()`). It reads the trail only for its own ids. It uses the
+environment `TestMain` sets and changes none of it.
+
+**Stay serial when the test:**
+
+- sets the environment: `t.Setenv` of `HOME`, `TMUX`, `TMUX_TMPDIR`,
+  `AGENT_DIRECTOR_INSTANCE_ID`, `CLAUDE_CONFIG_DIR`, the locale variables and
+  so on, or `os.Setenv`. The environment is process-wide. `t.Setenv` panics in
+  a parallel test; `os.Setenv` does not, so nothing catches that mistake.
+- checks every trail record (or every record of one event) written since a
+  mark, such as `assertWroteNothing` and its wrappers, `assertExpired`, or a
+  scan for a forbidden value. Records that a parallel test writes in the
+  meantime would show up in the check.
+- checks the trail by fixed row ids that other tests also use, such as the
+  find-missing trail tests' `dg-1`.
+- changes other process-wide state: `api.SetPauseTestKnobs` (through
+  `fastPausePolls` or `endAtFirstWait`), `log.SetOutput`, or the working
+  directory (`cwdfix.Temp`).
+- removes the default socket's directory, changes its mode, or uses
+  `test/fake-tmux`, which keeps its table beside the socket. Such a test takes
+  its own `TMUX_TMPDIR` before seeding, with `e.ownSocketDir(t)` on either
+  fixture or `useOwnTmuxTmpdir(t)`. Both call `t.Setenv`, so the test is
+  serial. Never change `TestMain`'s shared directory.
+
+The reason names which of these applies, e.g. `// Serial: it sets HOME with
+t.Setenv.` or `// Serial: it checks every record written to the shared trail
+since its mark.` Go starts the parallel top-level tests only after every
+serial one has finished, so a serial test never overlaps a parallel one.
+
+**Tables with a few serial cells.** Keep the top-level test serial and call
+`t.Parallel()` inside each cell that qualifies. The serial cells run in the
+parent's body. The parallel cells start together after it returns. The
+comment ends by saying which cells run in parallel. Examples:
+`TestCallTable` (a verb's `callTableVerb.serial` or a column's
+`callTableColumn.ownTmuxTmpdir` keeps its cells serial) and
+`TestSecuritySecretAndOtherRowID` (`securityVerb.serial`).
+
+**Parallel subtests share what they capture.** A parallel subtest must not
+write to its table entry or to any variable it shares with sibling subtests,
+such as an outer loop's `tc`. Copy it into a local first (`spec := tc.spec`)
+and change the copy; otherwise `-race` reports a data race.
+
+**What `TestMain` sets.** `HOME` (fixing the trail file), `TMUX` unset,
+`AGENT_DIRECTOR_INSTANCE_ID` unset, and one `TMUX_TMPDIR` for the whole test
+binary (`apiTmuxTmpdir`, with its per-user socket directory at mode 0700).
+`newKillEnv` and `newResumeEnv` use these values and set nothing, so their
+tests can run in parallel. A fixture that needs one of these values in place
+uses `setenvIfChanged` or `unsetenvIfSet`. They call `t.Setenv` only when the
+current value differs, which happens only in a test that is already serial.
+
+**The trail reader.** `readAPITrailLines` keeps the lines it has parsed and
+reads only the lines appended since its last call, under a lock that parallel
+tests share. The returned lines are shared, so do not modify them. No test
+may truncate, replace or remove the trail file. If one does, the reader fails
+the test.
 
 ## Literal-follow tests for error advice
 

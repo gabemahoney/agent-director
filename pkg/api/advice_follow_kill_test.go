@@ -59,6 +59,7 @@ func advKillFollow(t *testing.T, e *killEnv, r killRow, want error, advice strin
 // TestAdviceFollow_C1_AgentOutlivesExitWaitRetryKillLater: the retry is
 // refused while the agent runs and succeeds once it has exited.
 func TestAdviceFollow_C1_AgentOutlivesExitWaitRetryKillLater(t *testing.T) {
+	t.Parallel()
 	// C1 ErrTmuxKillFailed, agent still running after the exit wait: "retry kill later; never delete this row".
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
@@ -74,6 +75,7 @@ func TestAdviceFollow_C1_AgentOutlivesExitWaitRetryKillLater(t *testing.T) {
 // TestAdviceFollow_C2_SurvivorRetrySucceedsAsDocumented: decision-0930b Q4's
 // residual: a retried kill succeeds while the named non-agent survivor runs.
 func TestAdviceFollow_C2_SurvivorRetrySucceedsAsDocumented(t *testing.T) {
+	t.Parallel()
 	// C2 ErrTmuxKillFailed naming another pane process: "retry kill later"; manifest: "a retried kill checks only the agent process. A retry's success means only that the agent is gone; the named process needs a human".
 	adviceAssertManifest(t, "kill", "", "a retried kill checks only the agent process. "+
 		"A retry's success means only that the agent is gone; the named process needs a human")
@@ -104,6 +106,7 @@ func TestAdviceFollow_C2_SurvivorRetrySucceedsAsDocumented(t *testing.T) {
 // TestAdviceFollow_C3_UncheckableSessionStillThereRetryKillLater: the same
 // refusal while tmux's kills do not take effect; success once they do.
 func TestAdviceFollow_C3_UncheckableSessionStillThereRetryKillLater(t *testing.T) {
+	t.Parallel()
 	// C3 ErrTmuxKillFailed, process uncheckable and its labelled session still there: "retry kill later; never delete this row".
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{Agent: agentUnreadable})
@@ -121,6 +124,7 @@ func TestAdviceFollow_C3_UncheckableSessionStillThereRetryKillLater(t *testing.T
 // TestAdviceFollow_C4_NoPaneRetryKillLater: the same refusal, no kill sent,
 // while the agent runs; success once it has exited.
 func TestAdviceFollow_C4_NoPaneRetryKillLater(t *testing.T) {
+	t.Parallel()
 	// C4 ErrTmuxKillFailed, no session or pane of this launch while the agent runs: "a human can find and look at the process, see "Operator actions"...; retry kill later; never delete this row".
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{NoSession: true})
@@ -140,6 +144,7 @@ func TestAdviceFollow_C4_NoPaneRetryKillLater(t *testing.T) {
 // TestAdviceFollow_C5_UnresponsiveBeforeKillRetryLater: the same refusal
 // while tmux cannot be read; the later kill proceeds once it can.
 func TestAdviceFollow_C5_UnresponsiveBeforeKillRetryLater(t *testing.T) {
+	t.Parallel()
 	// C5 ErrTmuxUnresponsive before any kill was sent: "nothing was done; retry later".
 	const advice = "nothing was done; retry later"
 	cases := []struct {
@@ -172,6 +177,7 @@ func TestAdviceFollow_C5_UnresponsiveBeforeKillRetryLater(t *testing.T) {
 // TestAdviceFollow_C6_FollowUpUnreadableRetryLater: after a sent kill whose
 // follow-up could not answer, the retry is safe and ends the agent.
 func TestAdviceFollow_C6_FollowUpUnreadableRetryLater(t *testing.T) {
+	t.Parallel()
 	// C6 ErrTmuxUnresponsive, the follow-up lookup after a sent kill unreadable: "the kill was sent and may or may not have taken effect; retry later".
 	cases := []struct {
 		name string
@@ -216,6 +222,7 @@ func TestAdviceFollow_C6_FollowUpUnreadableRetryLater(t *testing.T) {
 // TestAdviceFollow_C8_RowFinishesWhileKillWaits: the row ends during the
 // wait while the agent outlives it; the retried kill is a finished-row no-op.
 func TestAdviceFollow_C8_RowFinishesWhileKillWaits(t *testing.T) {
+	t.Parallel()
 	// C8 kill manifest: "If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op."
 	adviceAssertManifest(t, "kill", "", "If the row finishes while kill waits and the agent outlives the wait, "+
 		"kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op.")

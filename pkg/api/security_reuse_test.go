@@ -25,18 +25,21 @@ import (
 
 // TestSecurityReuse checks SR-15 for reuse's rows, as
 // TestSecuritySecretAndOtherRowID does for every other verb's.
-func TestSecurityReuse(t *testing.T) { runSecurityVerbs(t, securityReuseVerbs) }
+func TestSecurityReuse(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME with t.Setenv.
+	runSecurityVerbs(t, securityReuseVerbs)
+}
 
 // securityReuseVerbs are reuse's rows: the refusals before anything changes
 // (no call event), a successful reuse (ad.spawn.reused) and the held name
 // after "duplicate session" (ad.launch.name_held); the harness checks a
 // launched row's one create as a launch's, though it acts on target's own id.
 var securityReuseVerbs = []securityVerb{
-	{verb: "spawn Reuse", call: securityReuseCall, cases: securityReuseCases},
+	{verb: "spawn Reuse", call: securityReuseCall, cases: securityReuseCases, serial: securityMovesHome},
 	{verb: "spawn Reuse, launched", event: "ad.spawn.reused", launch: true, call: securityReuseLaunchCall,
-		cases: securityReuseLaunchCases},
+		cases: securityReuseLaunchCases, serial: securityMovesHome},
 	{verb: "spawn Reuse, duplicate session", event: "ad.launch.name_held", launch: true, call: securityReuseHeldCall,
-		record: rsSecHeldRecord, cases: securityReuseHeldCases},
+		record: rsSecHeldRecord, cases: securityReuseHeldCases, serial: securityMovesHome},
 }
 
 // securityReuseCall reuses target, requesting its recorded name, from a fresh

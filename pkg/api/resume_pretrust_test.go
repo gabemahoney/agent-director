@@ -77,6 +77,7 @@ func rptAssertLaunched(t *testing.T, e *resumeEnv, id, session string, creates i
 // archived-session path behaves the same. A relative CLAUDE_CONFIG_DIR fails
 // pre-trust and resume finds the transcript under ~/.claude (b.nje).
 func TestResumePreTrustBeforeMove(t *testing.T) {
+	// Serial: it changes the working directory and PWD (cwdfix.Temp).
 	rotted := []apitest.SpawnOption{apitest.WithJsonlPath(filepath.Join(t.TempDir(), "gone", "rotted.jsonl"))}
 	cases := []struct {
 		name         string
@@ -127,6 +128,7 @@ func TestResumePreTrustBeforeMove(t *testing.T) {
 // TestResumePreTrustHomeWithoutConfigDir: a row with no CLAUDE_CONFIG_DIR gets
 // its entry in $HOME/.claude.json and reports ok (a per-test HOME; not parallel).
 func TestResumePreTrustHomeWithoutConfigDir(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	e := newResumeEnv(t)
@@ -145,6 +147,7 @@ func TestResumePreTrustHomeWithoutConfigDir(t *testing.T) {
 // restore, no_pre_trust is kept, and the retry pre-trusts again for an allowed
 // row (ok) and still writes nothing for an opted-out one (skipped).
 func TestResumePreTrustRetryAfterRestoredFailure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		opts         []apitest.SpawnOption
@@ -186,6 +189,7 @@ func TestResumePreTrustRetryAfterRestoredFailure(t *testing.T) {
 // TestResumePreTrustRefusedBeforeMoveWritesNothing: every refusal before the
 // move leaves an allowed row's .claude.json unchanged and creates nothing.
 func TestResumePreTrustRefusedBeforeMoveWritesNothing(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, wantName string
 		seed           func(t *testing.T, e *resumeEnv, env apitest.SpawnOption) string

@@ -48,6 +48,7 @@ func rusName(name string) []apitest.SpawnOption {
 // TestSpawnReuseUnusableName: an ended or missing row with each unusable name,
 // reused under the default or a new name, gets its ErrInternal with no tmux call and nothing written.
 func TestSpawnReuseUnusableName(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, state := range finishedStates {
 		for _, row := range rusRows() {
 			for _, named := range []bool{false, true} {
@@ -95,6 +96,7 @@ func TestSpawnReuseUnusableName(t *testing.T) {
 // at the pre-check with no tmux call and nothing written, the trust file
 // included (b.hjs).
 func TestSpawnReuseUnusableNameCollides(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
 		state string
 		reuse bool

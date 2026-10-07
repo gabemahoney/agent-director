@@ -24,9 +24,11 @@ func (e *killEnv) kouRow(t *testing.T, state, name string) killRow {
 // TestKillIncludeFinishedUnusableName: each unusable name on an ended and a
 // missing row gets its ErrInternal with no tmux call or process check, nothing sent or changed.
 func TestKillIncludeFinishedUnusableName(t *testing.T) {
+	t.Parallel()
 	for _, state := range kftStates {
 		for _, f := range unusableNameFixtures() {
 			t.Run(state+", "+f.label, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				r := resumeRow{killRow: e.kouRow(t, state, f.raw)}
 				before := e.kftSnap(t, r)
@@ -48,8 +50,10 @@ func TestKillIncludeFinishedUnusableName(t *testing.T) {
 // TestKillUnusableNameMissingWithoutOptIn: each unusable name on a missing row
 // without the opt-in is a no-op success with no tmux call.
 func TestKillUnusableNameMissingWithoutOptIn(t *testing.T) {
+	t.Parallel()
 	for _, f := range unusableNameFixtures() {
 		t.Run(f.label, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.kouRow(t, store.StateMissing, f.raw)
 			before := e.columns(t, r.ID)
@@ -70,6 +74,7 @@ func TestKillUnusableNameMissingWithoutOptIn(t *testing.T) {
 // TestKillIncludeFinishedUnusableNamePending: a pending row recording the
 // pre-b.gqe default name gets the live-row refusal, not ErrInternal.
 func TestKillIncludeFinishedUnusableNamePending(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.kouRow(t, store.StatePending, preGqeDefaultName)
 	before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)

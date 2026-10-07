@@ -148,6 +148,7 @@ func seqCharged(e *killEnv, calls []tmux.Call) time.Duration {
 // TestKillSequenceEndsAgentPane: the agent's pane is killed by id before the
 // session by id, wherever the window is shared; success once every process is gone.
 func TestKillSequenceEndsAgentPane(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		spec   killRowSpec
@@ -174,6 +175,7 @@ func TestKillSequenceEndsAgentPane(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, c.spec)
 			if c.setup != nil {
@@ -214,6 +216,7 @@ func TestKillSequenceEndsAgentPane(t *testing.T) {
 // TestKillSequenceCheckDecides: a survivor, a missing or respawned agent pane,
 // failed kills and a session replaced or removed mid-call leave it to the check.
 func TestKillSequenceCheckDecides(t *testing.T) {
+	t.Parallel()
 	both, session := apitest.KillSent{Pane: true, Session: true}, apitest.KillSent{Session: true}
 	agentGoneAfter := func(call tmux.Call) func(*testing.T, *killEnv, *killRow) {
 		return func(_ *testing.T, e *killEnv, r *killRow) { e.setAfterCall(call, procfix.Gone(), r.AgentPID) }
@@ -272,6 +275,7 @@ func TestKillSequenceCheckDecides(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, c.spec)
 			c.setup(t, e, &r)
@@ -319,6 +323,7 @@ func seqAssertReplacementUntouched(t *testing.T, e *killEnv, r killRow) {
 // @ad_pane carries the row's token is adopted (never a teammate's, never by
 // index), written once; a refused or failed write leaves the kill unchanged.
 func TestKillSequenceAdoptsLostReply(t *testing.T) {
+	t.Parallel()
 	lost := killRowSpec{NoPane: true, NoServerIdentity: true}
 	cases := []struct {
 		name    string
@@ -349,6 +354,7 @@ func TestKillSequenceAdoptsLostReply(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			spec := c.spec
 			spec.NoSession = c.panes != nil
@@ -387,6 +393,7 @@ func TestKillSequenceAdoptsLostReply(t *testing.T) {
 // TestKillSequenceNameHeldElsewhere: a session holding the row's name with no
 // valid label, or another row's, is never touched (AC-KILL-07).
 func TestKillSequenceNameHeldElsewhere(t *testing.T) {
+	t.Parallel()
 	holders := []struct {
 		name string
 		seed func(t *testing.T, e *killEnv, r *killRow) (sessionID, otherID string)
@@ -412,6 +419,7 @@ func TestKillSequenceNameHeldElsewhere(t *testing.T) {
 					desc: func(_ *killEnv, r killRow) apitest.DescCase { return apitest.DescKillNoPane(r.ID, r.Name, r.AgentPID) }}
 			}
 			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				agent := agentGone
 				if alive {
@@ -419,10 +427,11 @@ func TestKillSequenceNameHeldElsewhere(t *testing.T) {
 				}
 				r := e.seedRow(t, killRowSpec{NoSession: true, Agent: agent})
 				holder, other := h.seed(t, e, &r)
+				want := out // a copy: the parallel subtests never write a captured outcome
 				if other != "" {
-					out.forbid = []string{other}
+					want.forbid = []string{other}
 				}
-				seqKill(t, e, r, out)
+				seqKill(t, e, r, want)
 				if !seqHas(e, r.Socket, holder) {
 					t.Errorf("holder session %s is gone; want it untouched", holder)
 				}
@@ -434,6 +443,7 @@ func TestKillSequenceNameHeldElsewhere(t *testing.T) {
 // TestKillSequenceUsesRowSocket: every call names the row's recorded socket
 // whatever the caller's TMUX; with none recorded, the caller-resolved one, creating nothing.
 func TestKillSequenceUsesRowSocket(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name     string
 		recorded bool // the row records apitest.TestSocket
@@ -447,6 +457,7 @@ func TestKillSequenceUsesRowSocket(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			e.ownSocketDir(t) // the last case removes the per-user directory
 			elsewhere := filepath.Join(t.TempDir(), "elsewhere")
 			spec := killRowSpec{}
 			if !c.recorded {

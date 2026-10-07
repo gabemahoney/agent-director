@@ -153,6 +153,7 @@ func advResumePendings() []advResumePending {
 // and resume a row with a session id, or (none, b.uey) spawn the id with the reuse opt-in.
 // B1: "... since its launch start; nothing was written" / "... since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI); nothing was written"
 func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
+	t.Parallel()
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeLaunchInProgressDoc)
 	adviceAssertGoDoc(t, "errors.go", "ErrSpawnNotResumable", advResumeLaunchNoSessionErrDoc)
 	for _, o := range advResumePendings() {
@@ -198,6 +199,8 @@ func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 // TestAdviceFollow_B2_KillOrPauseThenResume: pause a live row, or kill it and run find-missing, then resume it.
 // B2 (Go doc of Resume): "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
 func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs); it checks every
+	// record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeLiveDoc)
 	cases := []struct {
 		name string
@@ -253,6 +256,7 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 // TestAdviceFollow_B3_LostRaceGetThenAct: the losing resume wrote and launched nothing; get, then act on the state.
 // B3: "the row changed after resume examined it and nothing was written; nothing was launched" / "was removed after resume examined it; nothing was written and nothing was launched"
 func TestAdviceFollow_B3_LostRaceGetThenAct(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		race   func(t *testing.T, e *killEnv, id, other string) // lands between the resume's read and its move
@@ -345,6 +349,7 @@ func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error) {
 // TestAdviceFollow_B4_NoSessionIdSpawnWithReuse: resume refuses a row with no session id; spawn the id with reuse.
 // B4 (Go doc of ErrNoSessionId): "the caller's recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
 func TestAdviceFollow_B4_NoSessionIdSpawnWithReuse(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "errors.go", "ErrNoSessionId", "the caller's "+advResumeReuseRecourse)
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), NoSessionID: true})
@@ -354,6 +359,7 @@ func TestAdviceFollow_B4_NoSessionIdSpawnWithReuse(t *testing.T) {
 // TestAdviceFollow_B5_JsonlMissingSpawnWithReuse: resume refuses a row whose transcript is gone; spawn the id with reuse.
 // B5 (Go doc of ErrJsonlMissing): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
 func TestAdviceFollow_B5_JsonlMissingSpawnWithReuse(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "errors.go", "ErrJsonlMissing", "the "+advResumeReuseRecourse)
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
@@ -366,6 +372,7 @@ func TestAdviceFollow_B5_JsonlMissingSpawnWithReuse(t *testing.T) {
 // TestAdviceFollow_B6_JsonlNeverWrittenSpawnWithReuse: resume refuses a row that never wrote a transcript; spawn with reuse.
 // B6 (Go doc of ErrJsonlNeverWritten): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
 func TestAdviceFollow_B6_JsonlNeverWrittenSpawnWithReuse(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "errors.go", "ErrJsonlNeverWritten", "the "+advResumeReuseRecourse)
 	e := newKillEnv(t)
 	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Bare: true,

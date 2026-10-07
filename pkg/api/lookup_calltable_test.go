@@ -62,12 +62,15 @@ const (
 
 // callTableColumn is one outcome: the row seeded (spec), the world built
 // around it, and actionFailure, which (when set) fails every call of the
-// verb's first action on an Ours lookup.
+// verb's first action on an Ours lookup. ownTmuxTmpdir marks a world that
+// changes the default socket's directory on disk in its own TMUX_TMPDIR
+// (killEnv.ownSocketDir), so its cells set the environment and run serially.
 type callTableColumn struct {
 	outcome       callTableOutcome
 	spec          killRowSpec
 	world         func(t *testing.T, e *killEnv, r *killRow)
 	actionFailure tmux.Failure
+	ownTmuxTmpdir bool
 }
 
 // callTableScript scripts s on every lookup of r's socket.
@@ -197,7 +200,8 @@ type callTableCell struct {
 // sent an action; firstAction is the call the action-failure columns fail;
 // actions are its action calls, none of which a nothing-sent cell records.
 // run, when set, replaces the seeded-row run for a verb that builds its own
-// world and row check (runCallTableSpawn).
+// world and row check (runCallTableSpawn). serial, when set, says why the
+// verb's cells cannot run in parallel; the others do.
 type callTableVerb struct {
 	name        string
 	invoke      func(t *testing.T, e *killEnv, r killRow) (sent bool, err error)
@@ -205,6 +209,7 @@ type callTableVerb struct {
 	actions     []tmux.Call
 	cells       map[callTableOutcome]callTableCell
 	run         func(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell)
+	serial      string
 }
 
 // callTableVerbs is every verb's row; a later verb appends its adapter and
@@ -218,10 +223,18 @@ func callTableVerbs() []callTableVerb {
 // TestCallTable runs every verb in every column: error name through the
 // one-name helper, action sent, recorded calls, description, row unchanged
 // (or the verb's own row check); a not-applicable cell is skipped with its reason.
-func TestCallTable(t *testing.T) { runCallTableVerbs(t, callTableVerbs()) }
+func TestCallTable(t *testing.T) {
+	// Serial: its spawn cells set HOME and TMUX_TMPDIR (t.Setenv), its expire and resume cells check every
+	// record written to the shared trail since their mark, and one column sets TMUX_TMPDIR; its other
+	// cells run in parallel.
+	runCallTableVerbs(t, callTableVerbs())
+}
 
 // runCallTableVerbs runs each of verbs in every column (TestCallTable;
-// reuse's rows: TestCallTableReuse, lookup_calltable_reuse_test.go).
+// reuse's rows: TestCallTableReuse, lookup_calltable_reuse_test.go). Each
+// cell builds its own store, tmux fake and clock, so the cells run in
+// parallel, except those of a serial verb or an ownTmuxTmpdir column; the
+// caller stays serial so those may set the environment.
 func runCallTableVerbs(t *testing.T, verbs []callTableVerb) {
 	cols := callTableColumns()
 	for _, v := range verbs {
@@ -232,6 +245,9 @@ func runCallTableVerbs(t *testing.T, verbs []callTableVerb) {
 		}
 		for _, col := range cols {
 			t.Run(v.name+"/"+string(col.outcome), func(t *testing.T) {
+				if v.serial == "" && !col.ownTmuxTmpdir {
+					t.Parallel()
+				}
 				cell, ok := v.cells[col.outcome]
 				if !ok {
 					t.Fatalf("%s has no cell for column %q", v.name, col.outcome)

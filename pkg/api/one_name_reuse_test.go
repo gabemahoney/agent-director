@@ -24,6 +24,7 @@ import (
 // TestOneNameReuseReturnedErrors: every error reuse returns matches exactly
 // one catalogued sentinel, and each ErrInternal none (as TestOneNameReturnedErrors).
 func TestOneNameReuseReturnedErrors(t *testing.T) {
+	t.Parallel()
 	for _, row := range slices.Concat(oneNameReuseRows(), oneNameReuseHeldRows()) {
 		t.Run(row.name, func(t *testing.T) { assertOneName(t, row.run(t), row.want) })
 	}

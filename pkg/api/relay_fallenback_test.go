@@ -30,6 +30,7 @@ func seedRelayRow(t *testing.T, e *killEnv, tokens ...string) killRow {
 // a relay-on row whose open request fell out of its window refuses Decide
 // with ErrRelayFallenBack, and a later SendKeys delivers into the agent's pane.
 func TestRelayFallenBackIncidentRegression(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA, 2*relayGuardWindow)
@@ -49,6 +50,7 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 // TestSendKeysGuardMultiRowDeliverability pins the per-row guard over several
 // open rows (SR-7.3): it holds while any row is in-window, releases once all aged out.
 func TestSendKeysGuardMultiRowDeliverability(t *testing.T) {
+	t.Parallel()
 	tokens := []string{storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC}
 	cases := []struct {
 		name          string
@@ -89,6 +91,7 @@ func TestSendKeysGuardMultiRowDeliverability(t *testing.T) {
 // TestSendKeysGuardHoldsForDecidedInWindowRow pins SR-4.2: a sole permission
 // row decided but still in its window keeps the guard shut; no tmux call.
 func TestSendKeysGuardHoldsForDecidedInWindowRow(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 	if updated, err := e.st.DecidePermissionRequest(r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !updated {
@@ -105,6 +108,7 @@ func TestSendKeysGuardHoldsForDecidedInWindowRow(t *testing.T) {
 // TestSendKeysGuardReleasesForDecidedAgedRow pins SR-4.2's "whether or not a
 // decision was recorded": a sole decided row aged past window + margin releases the guard.
 func TestSendKeysGuardReleasesForDecidedAgedRow(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 	if updated, err := e.st.DecidePermissionRequest(r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !updated {
@@ -125,6 +129,7 @@ func TestSendKeysGuardReleasesForDecidedAgedRow(t *testing.T) {
 // TestSendKeysGuardRefusesZeroRows pins the zero-rows rule: a relay-on
 // check_permission row with no permission request (mid-insert) still refuses.
 func TestSendKeysGuardRefusesZeroRows(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e)
 

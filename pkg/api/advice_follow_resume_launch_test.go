@@ -46,6 +46,7 @@ func advResumeConditionEnds(t *testing.T, e *killEnv, r resumeRow) {
 // TestAdviceFollow_B7_PreLaunchRetryLater: wait past the window and the bound, re-issue; it launches, else the documented refusal.
 // B7: "nothing was done; retry later"
 func TestAdviceFollow_B7_PreLaunchRetryLater(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	stopping := func(session bool) func(*testing.T, *killEnv) resumeRow {
 		return func(t *testing.T, e *killEnv) resumeRow {
 			r := e.seedResumable(t, 0, agentAlive)
@@ -132,6 +133,7 @@ func TestAdviceFollow_B7_PreLaunchRetryLater(t *testing.T) {
 // TestAdviceFollow_B8_LaunchTimeoutWaitForGet: no retry while get shows pending; find-missing past grace, then resume.
 // B8: "the session may have been created; the row stays pending; do not retry until get shows the row ended or missing"
 func TestAdviceFollow_B8_LaunchTimeoutWaitForGet(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		script tmuxfix.Script
@@ -197,6 +199,7 @@ func advResumeRestores(prior string) []advResumeRestore {
 // TestAdviceFollow_B9_RestoreSentenceNextStep: per restore sentence after a failed launch, get, then act on the state.
 // B9: "the row was restored to its prior state, <state>" / "the row changed after resume moved it to pending and was left as it is" / "the row was removed after resume moved it to pending, so nothing was restored" / "the row could not be restored and stays pending"
 func TestAdviceFollow_B9_RestoreSentenceNextStep(t *testing.T) {
+	t.Parallel()
 	triggers := []struct {
 		name    string
 		failure tmux.Failure
@@ -209,6 +212,7 @@ func TestAdviceFollow_B9_RestoreSentenceNextStep(t *testing.T) {
 	for _, tr := range triggers {
 		for _, rs := range advResumeRestores(tr.prior) {
 			t.Run(tr.name+"/"+rs.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				c, _ := e.client(t)
 				other := adviceOtherRow(t, e)
@@ -237,6 +241,7 @@ func TestAdviceFollow_B9_RestoreSentenceNextStep(t *testing.T) {
 // B10: "<restore sentence>; retry later" / "...; do not retry until get shows the row ended or missing" /
 // "...; there is no row left to resume; later, a spawn of the id starts afresh"
 func TestAdviceFollow_B10_HeldRetryLater(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeHeldRetryDoc)
 	for _, h := range adviceHeldFollows() {
 		for _, rs := range advResumeRestores(store.StateEnded) {

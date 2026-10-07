@@ -13,6 +13,7 @@ import (
 // Tests run from the package directory (pkg/api/), so relative links are
 // resolved from there.
 func TestREADMELinksResolve(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("README.md")
 	if err != nil {
 		t.Fatalf("could not read README.md: %v", err)

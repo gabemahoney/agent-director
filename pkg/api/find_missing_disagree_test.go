@@ -244,6 +244,7 @@ func assertDisagree(t *testing.T, recs []map[string]any, r store.LiveSpawnIdenti
 // TestFindMissingDisagreeReasons: each reason the lookup, its adoption or its listing gives writes exactly one record
 // per row, with the fields of the observation behind it and the row's settled action.
 func TestFindMissingDisagreeReasons(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, c := range dgCases() {
 		t.Run(c.name, func(t *testing.T) {
 			before := trailLen(t)
@@ -256,6 +257,7 @@ func TestFindMissingDisagreeReasons(t *testing.T) {
 // TestFindMissingDisagreeSharedSocketPerSweep: rows sharing one socket's lookup each get their own record, and a
 // second sweep writes one more per row.
 func TestFindMissingDisagreeSharedSocketPerSweep(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	var (
 		rows     []store.LiveSpawnIdentity
 		sessions []tmuxfix.SeedSession
@@ -281,6 +283,7 @@ func TestFindMissingDisagreeSharedSocketPerSweep(t *testing.T) {
 // TestFindMissingDisagreeNoneWhenNormal: Ours under the recorded name on the recorded server writes no record, for
 // unknown evidence and for none recorded.
 func TestFindMissingDisagreeNoneWhenNormal(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	rows := []store.LiveSpawnIdentity{
 		liveRow("dg-normal-unknown", dgUnknownPane(), withServer()),
 		liveRow("dg-normal-none", withServer(), func(r *store.LiveSpawnIdentity) { r.Identity.PaneID = "%1" }),
@@ -321,6 +324,7 @@ func dgFailOpenRuns(t *testing.T, prefix string) []string {
 // TestFindMissingDisagreeFailOpen: with the trail unwritable, every disagree case gives the same result lists,
 // writes and log lines as with a working trail.
 func TestFindMissingDisagreeFailOpen(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	prefix := "dg-failopen"
 	before := trailLen(t)
 	want := dgFailOpenRuns(t, prefix)
@@ -351,6 +355,7 @@ func TestFindMissingDisagreeFailOpen(t *testing.T) {
 // TestFindMissingDisagreeFailOpenChild is TestFindMissingDisagreeFailOpen's child: it sweeps with an unwritable
 // trail and prints the lines.
 func TestFindMissingDisagreeFailOpenChild(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv(dgChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestFindMissingDisagreeFailOpen's child")

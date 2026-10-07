@@ -25,6 +25,7 @@ import (
 // value whose guard cutoff wrapped and released the send-keys guard at once;
 // 9223372037 wrapped the relay and pause windows themselves.
 func TestNewRefusesTimeoutConfig(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		keys    apitest.ConfigKeys
 		refusal apitest.ConfigRefusal
@@ -61,6 +62,7 @@ func TestNewRefusesTimeoutConfig(t *testing.T) {
 // on a relay-on row whose request is two default windows old delivers under the
 // default relay window and is refused, typing nothing, under the largest one.
 func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		relay   int64
 		deliver bool
@@ -103,6 +105,7 @@ func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
 // timeout_seconds = 0 (the default) or the largest value Load accepts,
 // Client.Pause waits, so an agent that ends at the wait's first sleep pauses cleanly.
 func TestClientPauseTimeoutConfigWaitsForEnd(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	for _, n := range []int64{0, config.MaxPauseTimeoutSeconds} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			e := newKillEnv(t)

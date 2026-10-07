@@ -215,12 +215,14 @@ func rhdSpoilRestore(t *testing.T, e *killEnv, id, other string, outcome apitest
 // TestResumeHeldRetryFollowsRestore (b.gu6): an ErrTmuxUnresponsive after "duplicate session" (unreadable,
 // ambiguous, still stopping or starting) whose restore did not apply ends with the retry sentence its result picks.
 func TestResumeHeldRetryFollowsRestore(t *testing.T) {
+	t.Parallel()
 	for _, tc := range rhdCases() {
 		if tc.want != api.ErrTmuxUnresponsive {
 			continue
 		}
 		for _, o := range rhdNotApplied {
 			t.Run(tc.name+"/"+o.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
 				other := adviceOtherRow(t, e)
 				age := rlkSettled(e)
@@ -228,10 +230,12 @@ func TestResumeHeldRetryFollowsRestore(t *testing.T) {
 					age = e.cfg.EffectiveStoppingWindow() / 2
 				}
 				r := e.seedHeldResumable(t, age, agentGone)
+				// A copy: tc is shared with the sibling parallel subtests of each restore outcome.
+				spec := tc.spec
 				if tc.old {
-					tc.spec.Created = rlkSettled(e)
+					spec.Created = rlkSettled(e)
 				}
-				sc := e.arrangeHeld(t, r, tc.spec)
+				sc := e.arrangeHeld(t, r, spec)
 				w := &hookedResumeStore{st: e.st}
 				rhdSpoilRestore(t, e, r.ID, other, o.outcome, func() { w.failRestore(nil) })
 
@@ -251,6 +255,7 @@ func TestResumeHeldRetryFollowsRestore(t *testing.T) {
 // TestResumeHeldRelookupOutcomes: per re-lookup outcome and prior state, one
 // classified error with the applied restore sentence, the row restored, the holder untouched.
 func TestResumeHeldRelookupOutcomes(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	for _, tc := range rhdCases() {
 		for _, prior := range []string{store.StateEnded, store.StateMissing} {
 			t.Run(tc.name+"/"+prior, func(t *testing.T) { rhdRun(t, tc, prior) })
@@ -261,6 +266,7 @@ func TestResumeHeldRelookupOutcomes(t *testing.T) {
 // TestResumeHeldReissue (AC-RES-12, AC-PANE-10): after the restored refusal a
 // re-issue is refused before its move while the holder runs; once it is gone one launches.
 func TestResumeHeldReissue(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []struct {
 		name string
 		spec heldSpec

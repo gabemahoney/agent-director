@@ -248,6 +248,7 @@ func adviceLeftovers(n, end int) func(*testing.T, *killEnv, killRow) func() {
 // list tmux_session_name (--tmux-session-name on the CLI) shows whether a row
 // uses a session name".
 func TestAdviceFollow_HO1_ConflictingLabelsClears(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	var cases []adviceConflictCase
 	for _, v := range []adviceConflictVerb{adviceConflictResume, adviceConflictReuse, adviceConflictKill,
 		adviceConflictSendKeys, adviceConflictRead, adviceConflictPause} {
@@ -265,6 +266,7 @@ func TestAdviceFollow_HO1_ConflictingLabelsClears(t *testing.T) {
 // human must look, see "Operator actions" in the agent-director README"; also
 // the holders with no pointer ("... must not be ended"), which C22 retries alike.
 func TestAdviceFollow_HO3_NameHolderClears(t *testing.T) {
+	t.Parallel()
 	holders := []struct {
 		name, phrase string
 		kind         holderKind
@@ -287,6 +289,7 @@ func TestAdviceFollow_HO3_NameHolderClears(t *testing.T) {
 // earlier life" ... "ending such a session is a human's decision, see
 // "Operator actions" in the agent-director README".
 func TestAdviceFollow_HO5_PreLaunchLeftoverClears(t *testing.T) {
+	t.Parallel()
 	var cases []adviceConflictCase
 	for _, v := range []adviceConflictVerb{adviceConflictResume, adviceConflictReuse} {
 		cases = append(cases, adviceConflictCase{name: "leftover", verb: v, words: "left over from an earlier life",
@@ -299,6 +302,7 @@ func TestAdviceFollow_HO5_PreLaunchLeftoverClears(t *testing.T) {
 // ... "no kill was sent; ending such a session is a human's decision, see
 // "Operator actions" in the agent-director README".
 func TestAdviceFollow_HO7_KillLeftoverClears(t *testing.T) {
+	t.Parallel()
 	adviceConflictClears(t, []adviceConflictCase{{name: "leftover", verb: adviceConflictKill, noOwn: true,
 		words: "not this launch's session", phrase: "no kill was sent; " + adviceEndLeftover, place: adviceLeftovers(1, 1)}})
 }
@@ -308,6 +312,7 @@ func TestAdviceFollow_HO7_KillLeftoverClears(t *testing.T) {
 // Once it is ended, send-keys and pause give their gone error (the README's
 // next step is find-missing); read-pane, refused for several leftovers, reads the one left.
 func TestAdviceFollow_HO11_PaneLeftoverClears(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	gone := func(t *testing.T, e *killEnv, err error) {
 		adviceAssertAdvice(t, err, api.ErrTmuxSendKeys, "the row's session is not there")
 		e.assertNothingSent(t)

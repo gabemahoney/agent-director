@@ -42,6 +42,7 @@ func killAssertOutcome(t *testing.T, id string, before int, outcome string) {
 // TestKillNonLookupRows covers SR-6.1's rows decided before any tmux call: an
 // unknown id, finished rows, and a live row whose recorded name is unusable.
 func TestKillNonLookupRows(t *testing.T) {
+	t.Parallel()
 	dotted := apitest.RewrittenChars{Dot: true}
 	cases := []struct {
 		name string
@@ -117,7 +118,9 @@ func killControlOnly(name string) apitest.DescCase {
 // TestKillUnusableSocketDirectory: a row with no recorded socket whose
 // resolved socket directory is unusable gives ErrTmuxNotAvailable, no tmux call.
 func TestKillUnusableSocketDirectory(t *testing.T) {
+	// Serial: it sets TMUX_TMPDIR with t.Setenv.
 	e := newKillEnv(t)
+	e.ownSocketDir(t) // its permissions are opened below
 	r := e.seedRow(t, killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithNoLaunchToken()}})
 	before := e.columns(t, r.ID)
 	dir := filepath.Dir(e.defaultSocket)
@@ -139,6 +142,7 @@ func TestKillUnusableSocketDirectory(t *testing.T) {
 // TestKillSwallowsTmuxFailure (SR-20.6, inverted): failed kills whose
 // follow-up lookup still finds the session give ErrTmuxKillFailed; Gone is success.
 func TestKillSwallowsTmuxFailure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		failure tmux.Failure
@@ -180,6 +184,7 @@ func TestKillSwallowsTmuxFailure(t *testing.T) {
 // TestKillSwallowedTmuxFailureLogsAtWARN (SR-20.6, inverted): Client.Kill
 // writes no log line on success, a refusal or ErrTmuxKillFailed; the trail records each.
 func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, e *killEnv) (killRow, *apitest.DescCase)
@@ -205,6 +210,7 @@ func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r, desc := tc.setup(t, e)
 			c, logs := e.client(t)
@@ -231,6 +237,7 @@ func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
 // TestKillIsIdempotentAcrossRepeatedCalls (SR-20.6): once the session is
 // gone, repeated kills of the live row succeed with no kill sent.
 func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	e.seedBystander(t, r.Socket)
@@ -254,6 +261,7 @@ func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
 // TestKillLiveRowInvokesTmux (SR-20.6): a live Ours row's kills target the
 // agent's pane id and the labelled session's id on the row's socket.
 func TestKillLiveRowInvokesTmux(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	e.setAfterCall(tmux.CallKillSession, procfix.Gone(), r.AgentPID)
@@ -282,6 +290,7 @@ func TestKillLiveRowInvokesTmux(t *testing.T) {
 // TestKillClient: Client.Kill with the Recorder as Options.TmuxClient kills a
 // live Ours row (kill_sent true); a closed Client returns ErrClientClosed.
 func TestKillClient(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
@@ -331,6 +340,7 @@ func killAssertAgentRuns(t *testing.T, e *killEnv, r killRow) {
 // AC-KILL-15): the agent's own SessionStart landing after kill's row read
 // changes nothing: "never reported in", no listing and no kill.
 func TestKillIncludeFinishedSessionStartAfterLookupSendsNoKill(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := killRaceRow(t, e)
 	e.sessionStartAfter(t, tmux.CallLookup, r.killRow, r.Spawn.ClaudeSessionID)
@@ -357,6 +367,7 @@ func TestKillIncludeFinishedSessionStartAfterLookupSendsNoKill(t *testing.T) {
 // the agent's own SessionStart before kill's read makes the row live, so the
 // opt-in gets the live-row refusal with no tmux call; the agent runs on.
 func TestKillIncludeFinishedSessionStartBeforeReadRefusesLiveRow(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	r := killRaceRow(t, e)
 	if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", r.Spawn.ClaudeSessionID); !a.Applied {

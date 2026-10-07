@@ -10,7 +10,6 @@ package api_test
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -209,6 +208,8 @@ func (e *killEnv) rchgAssertLikeFresh(t *testing.T, id string, p api.SpawnParams
 // reuses: the reset's values, the socket rule, the parent from the
 // environment, no permission requests, children kept, and a fresh spawn's result.
 func TestSpawnReuseAppliedRow(t *testing.T) {
+	// Serial: its parent cases set AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; its other cases run in
+	// parallel.
 	cases := []struct {
 		name, state, socket string // socket: "own" (the caller's too), "other" or "none" recorded
 		parent              bool
@@ -220,6 +221,9 @@ func TestSpawnReuseAppliedRow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if !tc.parent {
+				t.Parallel()
+			}
 			e := newKillEnv(t)
 			spec, socket := reuseRowSpec{State: tc.state, Child: true}, e.defaultSocket
 			switch tc.socket {
@@ -236,7 +240,7 @@ func TestSpawnReuseAppliedRow(t *testing.T) {
 			}
 			p := rchgParams(t, r, q)
 			if !tc.parent {
-				os.Unsetenv("AGENT_DIRECTOR_INSTANCE_ID") //nolint:errcheck // reuseParams' t.Setenv restores it
+				unsetenvIfSet(t, "AGENT_DIRECTOR_INSTANCE_ID")
 			}
 
 			run := e.rchgReuse(t, r, p)
@@ -276,6 +280,7 @@ func (e *killEnv) rchgSeedArchived(t *testing.T, otherPath bool) reuseRow {
 // already archived session id, same or other path, gets no duplicate and no
 // ErrInternal; malformed labels, args and env reuse (AC-REUSE-02, 03, 09).
 func TestSpawnReuseArchiveCases(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		seed func(t *testing.T, e *killEnv) reuseRow
@@ -294,6 +299,7 @@ func TestSpawnReuseArchiveCases(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newKillEnv(t)
 			r := tc.seed(t, e)
 			p := rchgParams(t, r, rchgRequest(t))

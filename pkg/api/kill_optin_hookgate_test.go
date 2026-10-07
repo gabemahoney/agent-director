@@ -31,6 +31,7 @@ func kogAssertAlive(t *testing.T, e *killEnv, pid int, what string) {
 // SessionEnd, Stop and PermissionRequest change nothing, so the opt-in refuses
 // the working row; after the agent's own SessionEnd it kills only its session.
 func TestKillIncludeFinishedRenamedLeftoverHooks(t *testing.T) {
+	t.Parallel()
 	e := newKillEnv(t)
 	s1, s0 := "sess-"+uuid.NewString()[:8], "sess-"+uuid.NewString()[:8]
 	r := e.seedRow(t, killRowSpec{State: store.StateWorking, SessionID: s1})

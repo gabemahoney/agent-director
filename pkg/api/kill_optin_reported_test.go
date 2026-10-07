@@ -16,6 +16,7 @@ import (
 // TestKillIncludeFinishedReportedIn: each reported-in condition at its
 // boundary, after the window and the bound; only a recorded pid with a session created before ended_at is killed.
 func TestKillIncludeFinishedReportedIn(t *testing.T) {
+	t.Parallel()
 	longAgo := defWindow + defBound
 	cases := []struct {
 		name string

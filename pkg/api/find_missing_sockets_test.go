@@ -138,6 +138,7 @@ func fskAssertDisagree(t *testing.T, before int, id, socket, server, verdict str
 // TestFindMissingSocketsOneLookupPerSocket: rows needing a lookup take exactly one call per socket, each naming
 // that socket; rows the process decides take none.
 func TestFindMissingSocketsOneLookupPerSocket(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	third := "/tmp/fsk-third/default"
 	cases := []struct {
 		name  string
@@ -175,6 +176,7 @@ func TestFindMissingSocketsOneLookupPerSocket(t *testing.T) {
 // TestFindMissingSocketsStopRulePerSocket: a hung, unavailable or permission-denied socket (lookup or adoption
 // listing) takes one call and one query timeout; its later rows are not called while the other socket's are judged.
 func TestFindMissingSocketsStopRulePerSocket(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name    string
 		failure tmux.Failure
@@ -216,6 +218,7 @@ func TestFindMissingSocketsStopRulePerSocket(t *testing.T) {
 // TestFindMissingSocketsAnswersThatStopNothing: a different server or a provenance_conflict leaves its row
 // unverified, and the socket's later rows are still judged from the one lookup.
 func TestFindMissingSocketsAnswersThatStopNothing(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	cases := []struct {
 		name string
 		rec  func() *tmuxfix.Recorder
@@ -250,6 +253,7 @@ func TestFindMissingSocketsAnswersThatStopNothing(t *testing.T) {
 // the recorded socket marks the row while the recorded server process is gone, else notes tmux_server_changed;
 // only a listing, empty or not, logs server_restarted (b.47f).
 func TestFindMissingSocketsRecordedServerCheck(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	replies := []struct {
 		name     string
 		rec      func() *tmuxfix.Recorder
@@ -298,6 +302,8 @@ func TestFindMissingSocketsRecordedServerCheck(t *testing.T) {
 // TestFindMissingSocketsNoSocketRule: rows with a recorded socket are looked up there whatever the caller's
 // environment; a pre-release row uses the caller's socket, resolved creating nothing, or makes no call when refused.
 func TestFindMissingSocketsNoSocketRule(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv; it checks the shared trail by literal row ids other
+	// find-missing tests reuse.
 	t.Run("caller's TMUX names another server", func(t *testing.T) {
 		caller := filepath.Join(t.TempDir(), "caller")
 		t.Setenv("TMUX", caller+",4242,0")
@@ -360,6 +366,7 @@ func fskUnusable(id string, f unusableNameFixture, opts ...fmRowOpt) store.LiveS
 // TestFindMissingSocketsUnusableNameBesideUsableRows: an unusable-name row read before, between or after two
 // usable rows of its socket is noted with no call; the socket's one lookup still judges the usable rows.
 func TestFindMissingSocketsUnusableNameBesideUsableRows(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, f := range fmuReps() {
 		for _, uid := range []string{"a-u", "h-u", "z-u"} {
 			t.Run(f.label+"/"+uid, func(t *testing.T) {
@@ -379,6 +386,7 @@ func TestFindMissingSocketsUnusableNameBesideUsableRows(t *testing.T) {
 // TestFindMissingSocketsUnusableNameAloneTakesNoCall: an unusable-name row alone on its socket, or a sweep whose
 // every row needing tmux has an unusable name, makes no call on that socket and spends no tmux time.
 func TestFindMissingSocketsUnusableNameAloneTakesNoCall(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	f := fmuReps()[2]
 	cases := []struct {
 		name  string
@@ -409,6 +417,7 @@ func TestFindMissingSocketsUnusableNameAloneTakesNoCall(t *testing.T) {
 // TestFindMissingSocketsUnusableNameChargesNoBudget: with a budget for one call, unusable-name rows on two sockets
 // read first leave it whole, so a later usable row on a third socket is still looked up and marked.
 func TestFindMissingSocketsUnusableNameChargesNoBudget(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	third := "/tmp/fsk-third/default"
 	for _, f := range fmuReps() {
 		t.Run(f.label, func(t *testing.T) {
@@ -430,6 +439,8 @@ func TestFindMissingSocketsUnusableNameChargesNoBudget(t *testing.T) {
 // TestFindMissingSocketsUnusableNameNoSocket: an unusable-name row recording no socket resolves none and makes no
 // call; a later usable no-socket row is still resolved and looked up (or refused) as the first one.
 func TestFindMissingSocketsUnusableNameNoSocket(t *testing.T) {
+	// Serial: it sets TMUX, TMUX_TMPDIR with t.Setenv; it checks the shared trail by literal row ids other
+	// find-missing tests reuse.
 	f := fmuReps()[1]
 	t.Run("caller's socket", func(t *testing.T) {
 		caller := filepath.Join(t.TempDir(), "caller")

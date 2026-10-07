@@ -17,6 +17,7 @@ import (
 // submitted once; with allow_pending a pending row's launch pane gets the
 // Enter too, its empty input submitting nothing.
 func TestSendKeysEmptyTextPressesEnterOnly(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		seed         func(t *testing.T, e *killEnv) killRow

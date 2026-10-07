@@ -122,6 +122,7 @@ func (e heldEnv) assertEndedRow(t *testing.T, id string, endedAt time.Time) stri
 // TestSpawnHeldRelookupOutcomes: per re-lookup outcome the row is ended
 // before the re-lookup, the one classified error says so, and the holder is untouched.
 func TestSpawnHeldRelookupOutcomes(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const name = "held-name"
 	other := "other-" + uuid.NewString()[:8]
 	noLabel := func(_ heldEnv, _ string) []tmuxfix.SeedSession {
@@ -262,6 +263,7 @@ func TestSpawnHeldRelookupOutcomes(t *testing.T) {
 // TestSpawnHeldCeiling: the held-name path charges the scan, create and
 // re-lookup (minted id: create and re-lookup) and stays within SR-13.2's path (ii).
 func TestSpawnHeldCeiling(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const name = "held-ceiling"
 	cases := []struct {
 		name      string

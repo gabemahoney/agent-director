@@ -13,6 +13,7 @@ import (
 // which Expire would read as "every finished row", and junk are refused, and
 // so is a day count above 106751, which would wrap the window (b.sgw).
 func TestParseOlderThan(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want time.Duration

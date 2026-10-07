@@ -32,6 +32,7 @@ func rlvAssertLife(t *testing.T, e *killEnv, id string, life int64) {
 // candidate and listed within its life; after a second reuse only the latest
 // life's entries are, and a session re-archived there moves to that life.
 func TestSpawnReuseLivesRotationsAndTwoReuses(t *testing.T) {
+	t.Parallel()
 	e := newReuseEnv(t)
 	r0 := e.seedReusable(t, agentGone, reuseRowSpec{})
 	rlfEarlierOnDisk(t, r0)
@@ -101,6 +102,7 @@ func rlvFailedReuse(t *testing.T, e *killEnv) (r0, r reuseRow, before api.SpawnR
 // restored reuse, get and resume see the pre-reuse life exactly as before,
 // and nothing of the earlier life or the failed attempt's.
 func TestSpawnReuseLivesFailedReuseKeepsLife(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name          string
 		removeCurrent bool // the current session's transcript is gone, so resume falls back to history
@@ -145,6 +147,7 @@ func TestSpawnReuseLivesFailedReuseKeepsLife(t *testing.T) {
 // seeded as migrated, its life-0 history holding its current session id, is
 // reused and the new life sees none of that history.
 func TestSpawnReuseLivesHistoryHoldsCurrentID(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
 	e := newReuseEnv(t)
 	sid, older := rlfNewSession(), rlfNewSession()
 	cur, old := apitest.SessionHistorySeed{SessionID: sid, JSONLPath: filepath.Join(t.TempDir(), "cur.jsonl")},

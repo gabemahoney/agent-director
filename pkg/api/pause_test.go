@@ -68,6 +68,7 @@ func pauSleeps(t *testing.T, interval time.Duration, sleep bool, at func(n int))
 // TestPauseGuards: an unknown id, a finished row and a non-waiting row are
 // answered before any tmux call though the row's own session is up; the row is unchanged.
 func TestPauseGuards(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		seed func(t *testing.T, e *killEnv) killRow
@@ -107,6 +108,7 @@ func TestPauseGuards(t *testing.T) {
 // TestPauseUnusableName (SR-3.2, AC-LKP-11): an unusable recorded name is
 // ErrInternal on a waiting row only, with no tmux call and no wait; other states keep their answer.
 func TestPauseUnusableName(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	cases := []struct {
 		state, fixture string
 		want           string // "": no-op success
@@ -158,6 +160,7 @@ func pauSeedState(state string) func(t *testing.T, e *killEnv) killRow {
 // TestPauseDelivers: on Ours, one lookup and one listing, then C-u, /exit
 // and Enter to the agent's pane by id; the row ended by its agent is success.
 func TestPauseDelivers(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	cases := []struct {
 		name      string
 		teammates int
@@ -192,6 +195,7 @@ func TestPauseDelivers(t *testing.T) {
 // as a key before typing /exit, so a line left typed (a failed /exit, a
 // draft) is cleared and the agent gets /exit alone, submitted once.
 func TestPauseClearsInputLineFirst(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	for _, tc := range []struct{ name, typed string }{
 		{"an unsubmitted /exit typed", exitText},
 		{"a draft typed", "/mcp reconnect github"},
@@ -217,6 +221,7 @@ func TestPauseClearsInputLineFirst(t *testing.T) {
 // TestPauseWait: after /exit the wait polls at the interval until the row
 // ends, stops on a cancelled context and returns a failed state read.
 func TestPauseWait(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	const interval = 50 * time.Millisecond
 	cases := []struct {
 		name      string
@@ -271,6 +276,7 @@ func TestPauseWait(t *testing.T) {
 // TestPauseTimeout: a row that stays waiting gives ErrPauseTimeout at the
 // real-clock deadline, the last sleep cut short so none passes it.
 func TestPauseTimeout(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	const interval = 600 * time.Millisecond
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
@@ -301,6 +307,7 @@ func TestPauseTimeout(t *testing.T) {
 // TestPauseRenamedSession: the renamed session's agent pane gets /exit by
 // id; a session now holding the recorded name never does.
 func TestPauseRenamedSession(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	cases := []struct {
 		name   string
 		holder func(r killRow) *tmuxfix.SeedSession
@@ -330,6 +337,7 @@ func TestPauseRenamedSession(t *testing.T) {
 // TestPauseNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
 // error, never sends to a prefix-, name- or 8-character-id-sharing neighbour, and never waits.
 func TestPauseNeighbours(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		xID, yID     string
@@ -361,6 +369,7 @@ func TestPauseNeighbours(t *testing.T) {
 // TestPauseStoredNames (AC-LKP-09): a row whose recorded name holds $ or \
 // is found by its label under tmux's stored form and gets /exit by pane id.
 func TestPauseStoredNames(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	for _, n := range tmuxfix.StoredNames() {
 		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue
@@ -379,6 +388,8 @@ func TestPauseStoredNames(t *testing.T) {
 // TestPauseRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
 // another server, every call names the row's recorded socket.
 func TestPauseRecordedSocket(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs); it sets TMUX,
+	// TMUX_TMPDIR with t.Setenv.
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
 	// No commas: TMUX's socket field ends at one.
@@ -406,6 +417,7 @@ func pauOtherStore(t *testing.T, e *killEnv, r killRow, token string) {
 // TestPauseOtherStore (SR-3.4, AC-LKP-20): another store's session naming the
 // row's id is never Ours or Leftover: alone it is Gone; beside this store's session it changes nothing.
 func TestPauseOtherStore(t *testing.T) {
+	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
 	tokens := []struct {
 		name  string
 		token func(r killRow) string

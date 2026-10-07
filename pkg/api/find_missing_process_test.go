@@ -119,12 +119,16 @@ func fpAssertNoDisagree(t *testing.T, mark int, id string) {
 }
 
 // TestFindMissingProcessSelectionVerdict: each agent-process selection crossed with each reader answer, on a
-// live row and on pending rows past grace: only the selected process is read and decides the row.
+// live row and on pending rows past grace: only the selected process is read and decides the row. The cells
+// sweep their own fake stores and run in parallel: the one trail check, that no cell writes a disagree record
+// for the shared id fp-row, holds whatever the others write.
 func TestFindMissingProcessSelectionVerdict(t *testing.T) {
+	t.Parallel()
 	for _, life := range fpLives {
 		for _, sel := range fpSelections {
 			for _, ans := range fpAnswers {
 				t.Run(life.name+"/"+sel.name+"/"+ans.name, func(t *testing.T) {
+					t.Parallel()
 					pc := procfix.New()
 					pc.Set(sel.selected, ans.proc)
 					if sel.other != 0 {
@@ -154,6 +158,7 @@ func TestFindMissingProcessSelectionVerdict(t *testing.T) {
 // TestFindMissingChildOrLeakedIDNeverKeepsRow: a live process carrying the row's id in its environment (a child
 // of the dead agent, an unrelated process) never keeps the row alive; no environment is read.
 func TestFindMissingChildOrLeakedIDNeverKeepsRow(t *testing.T) {
+	t.Parallel()
 	const agent, child, unrelated = 1201, 1202, 1203
 	cases := []struct {
 		name     string
@@ -191,6 +196,7 @@ func TestFindMissingChildOrLeakedIDNeverKeepsRow(t *testing.T) {
 // TestFindMissingLiveProcessWithoutIDKeepsRow: a recorded process alive with its start time keeps the row live
 // whatever its environment holds; the removed environment tiebreaker would have marked it.
 func TestFindMissingLiveProcessWithoutIDKeepsRow(t *testing.T) {
+	t.Parallel()
 	const agent = 1301
 	for name, env := range map[string]map[string]string{
 		"no environment":             nil,
@@ -215,6 +221,7 @@ func TestFindMissingLiveProcessWithoutIDKeepsRow(t *testing.T) {
 // TestFindMissingMixedProcessSweep: one sweep over alive, dead, unreadable, mismatched and unrecorded rows lists
 // only the dead rows in ids and reads each selected process exactly once, never an unselected one; tmux can't tell.
 func TestFindMissingMixedProcessSweep(t *testing.T) {
+	t.Parallel()
 	pc := procfix.New()
 	for pid, p := range map[int]procfix.Process{
 		1401: procfix.Alive(fmStart), 1402: procfix.Gone(), 1403: procfix.Alive(fmOtherStart),
@@ -247,6 +254,7 @@ func TestFindMissingMixedProcessSweep(t *testing.T) {
 // TestFindMissingProcessMarkOnStore: on a real store, a dead agent's row is marked missing with its launch start
 // and liveness columns cleared, while live rows, pending included, keep every column.
 func TestFindMissingProcessMarkOnStore(t *testing.T) {
+	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	seed := func(id, state, sessionID string, opts ...apitest.SpawnOption) {
 		t.Helper()

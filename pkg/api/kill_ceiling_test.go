@@ -34,6 +34,7 @@ func ceilSleeps(e *killEnv) *time.Duration {
 // TestKillCeilingVirtualTime: path (i) charges 2Q + 2A + E and path (ii)
 // 3Q + 2A, never both, at the defaults and with Q raised above 2A.
 func TestKillCeilingVirtualTime(t *testing.T) {
+	t.Parallel()
 	q, a, ex := ceilDefaults()
 	if got := 2*q + 2*a + ex; got != 12*time.Second {
 		t.Fatalf("2Q + 2A + E at the defaults = %v; SR-13.2 says 12 s", got)
@@ -103,6 +104,7 @@ func TestKillCeilingVirtualTime(t *testing.T) {
 // TestKillIncludeFinishedCeilingVirtualTime: with the opt-in, an ended or
 // missing row's reported-in session past both is charged 2Q + 2A + E on path (i), 3Q + 2A on path (ii), never both.
 func TestKillIncludeFinishedCeilingVirtualTime(t *testing.T) {
+	t.Parallel()
 	q, a, ex := ceilDefaults()
 	kills := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession}
 	paths := []struct {
@@ -144,6 +146,7 @@ func TestKillIncludeFinishedCeilingVirtualTime(t *testing.T) {
 // TestKillCeilingExitWaitSetting: kill_exit_wait_ms 300 from a config file
 // through api.New bounds the wait (SR-20.6; AC-CFG-02).
 func TestKillCeilingExitWaitSetting(t *testing.T) {
+	t.Parallel()
 	const exitWaitMs = 300
 	exitWait := exitWaitMs * time.Millisecond
 	q, a, _ := ceilDefaults()

@@ -156,7 +156,8 @@ func callTableResume() callTableVerb {
 	})
 	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{name: "resume", run: runCallTableResume, firstAction: tmux.CallCreate,
-		actions: []tmux.Call{tmux.CallCreate}, cells: cells}
+		actions: []tmux.Call{tmux.CallCreate}, cells: cells,
+		serial: "a refused cell checks every record written to the shared trail since its mark (assertWroteNothing)"}
 }
 
 // callTableHeldResume is a "resume after duplicate session" cell: spec for
