@@ -328,6 +328,103 @@ func TestTmuxGraceRuleAccepts(t *testing.T) {
 	}
 }
 
+// asWritten names a [tmux] key as TmuxKey.Name does, in lowercase.
+func asWritten(name string) string { return name }
+
+// spelledTable writes settings one per line under header, each key named by spell.
+func spelledTable(header string, spell func(name string) string) func([]tmuxSetting) string {
+	return func(settings []tmuxSetting) string {
+		var b strings.Builder
+		b.WriteString(header)
+		for _, s := range settings {
+			fmt.Fprintf(&b, "%s = %d\n", spell(s.key.Name()), s.value)
+		}
+		return b.String()
+	}
+}
+
+// tmuxSpellings write a [tmux] table under a letter case or form other than
+// "[tmux]" with lowercase keys, which the decoder still reads as [tmux] (b.g7h).
+var tmuxSpellings = []struct {
+	name      string
+	twoTables bool // puts the first setting in a table of its own, so needs two settings or more
+	write     func([]tmuxSetting) string
+}{
+	{"title_case_table", false, spelledTable("[Tmux]\n", asWritten)},
+	{"upper_case_keys", false, spelledTable("[tmux]\n", strings.ToUpper)},
+	// ſ (U+017F) equals s under strings.EqualFold, as the decoder matches, but not under strings.ToLower.
+	{"long_s_keys_quoted", false, spelledTable("[TMUX]\n", func(n string) string {
+		return `"` + strings.ReplaceAll(n, "s", "ſ") + `"`
+	})},
+	{"dotted_keys", false, spelledTable("", func(n string) string { return "Tmux." + strings.ToUpper(n) })},
+	{"inline_table", false, func(settings []tmuxSetting) string {
+		var kv []string
+		for _, s := range settings {
+			kv = append(kv, fmt.Sprintf("%s = %d", strings.ToUpper(s.key.Name()), s.value))
+		}
+		return "TMUX = { " + strings.Join(kv, ", ") + " }\n"
+	}},
+	// Two tables setting different keys load (b.p8n); the grace minimum must read [Tmux]'s create timeout.
+	{"first_key_in_title_case_table", true, func(settings []tmuxSetting) string {
+		return spelledTable("[Tmux]\n", asWritten)(settings[:1]) + spelledTable("[tmux]\n", asWritten)(settings[1:])
+	}},
+}
+
+// TestTmuxCheckedUnderAnySpelling is the b.g7h regression: each tmuxSpellings
+// file is refused with its lowercase file's description, or loads its values.
+func TestTmuxCheckedUnderAnySpelling(t *testing.T) {
+	grace, create := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs
+	type spellingCase struct {
+		name     string
+		settings []tmuxSetting
+		refused  bool
+	}
+	var cases []spellingCase
+	for _, tc := range tmuxKeyTable {
+		if tc.minimum == 0 {
+			cases = append(cases, spellingCase{tc.key.Name() + "_negative", []tmuxSetting{{tc.key, -1}}, true})
+			continue
+		}
+		cases = append(cases,
+			spellingCase{tc.key.Name() + "_below_minimum", []tmuxSetting{{tc.key, tc.minimum - 1}}, true},
+			spellingCase{tc.key.Name() + "_at_minimum", []tmuxSetting{{tc.key, tc.minimum}}, false})
+	}
+	// A spelt create timeout raises the grace minimum to 81 s, above the 60 s default.
+	cases = append(cases,
+		spellingCase{"create_raised_grace_missing", []tmuxSetting{{create, advPaneRaisedCreate}}, true},
+		spellingCase{"create_raised_grace_below", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, advPaneRaisedMinimum - 1}}, true},
+		spellingCase{"create_raised_grace_at_minimum", []tmuxSetting{{create, advPaneRaisedCreate}, {grace, advPaneRaisedMinimum}}, false})
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var want string
+			if c.refused {
+				want = refusalDescription(t, tmuxConfigFile(t, c.settings...))
+			}
+			for _, sp := range tmuxSpellings {
+				if sp.twoTables && len(c.settings) < 2 {
+					continue
+				}
+				t.Run(sp.name, func(t *testing.T) {
+					path := makeConfigFile(t, sp.write(c.settings))
+					if c.refused {
+						if got := loadConfigError(t, path).Err.Error(); got != want {
+							t.Errorf("description = %q\nwant lowercase's %q", got, want)
+						}
+						return
+					}
+					tm := loadTmux(t, path)
+					for _, s := range c.settings {
+						if got := tm.Value(s.key); got != s.value {
+							t.Errorf("%s = %d, want the file's %d", s.key.Name(), got, s.value)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestPendingGraceMinimumSeconds covers the grace rule directly and through
 // Tmux.Minimum: floor, rounding up, non-positive as default, no overflow.
 func TestPendingGraceMinimumSeconds(t *testing.T) {

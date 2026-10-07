@@ -446,13 +446,16 @@ type tmuxRefusal struct {
 }
 
 // tmuxRefusals applies the SR-4.1 refusal rules to the [tmux] table decoded
-// into t, whose metadata meta says which keys the file sets. It returns every
-// refused key in table order, or nil when every value loads; Load's validate
-// words the refusal from them. Values are never changed.
+// into t, whose metadata meta says which keys the file sets. A key counts as
+// set under any letter case of its table and its own name, as the decoder
+// reads it ([Tmux], STOPPING_WINDOW_SECONDS; isDefined, b.g7h), and its
+// description names it in lowercase however the file spells it. It returns
+// every refused key in table order, or nil when every value loads; Load's
+// validate words the refusal from them. Values are never changed.
 func tmuxRefusals(t Tmux, meta toml.MetaData) []tmuxRefusal {
 	configured := t
 	for _, k := range TmuxKeys() {
-		if !meta.IsDefined("tmux", k.Name()) {
+		if !isDefined(meta, "tmux", k.Name()) {
 			*tmuxKeyDefs[k].field(&configured) = 0
 		}
 	}

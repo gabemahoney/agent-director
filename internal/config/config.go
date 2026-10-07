@@ -382,7 +382,9 @@ func (e *ConfigError) Unwrap() error {
 // and a positive value below its key's safe minimum (for the pending grace
 // period, the default too when its key is missing or 0 and the default is
 // below the derived minimum), are refused, never raised to the minimum or
-// replaced by the default. It validates
+// replaced by the default. A key is checked whatever the letter case of its
+// name and its table's ([Tmux] STOPPING_WINDOW_SECONDS, b.g7h), as the decoder
+// reads it in any. It validates
 // [defaults] expire_retention_days the same way (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds too (b.8q2), and [pre_trust]
 // lock_wait_seconds (b.kr4): a negative value and one above the key's maximum
@@ -456,11 +458,7 @@ func caseVariantRefusal(meta toml.MetaData) error {
 		if t := meta.Type(k...); undecoded[k.String()] || t == "Hash" || t == "ArrayHash" {
 			continue
 		}
-		folded := make(toml.Key, len(k))
-		for i, part := range k {
-			folded[i] = foldCase(part)
-		}
-		f := folded.String()
+		f := foldKey(k)
 		if names[f] == nil {
 			order = append(order, f)
 		}
@@ -493,6 +491,34 @@ func foldCase(name string) string {
 		}
 		return least
 	}, name)
+}
+
+// foldKey returns key k, each of its names folded by foldCase, as a string:
+// two keys give the same string exactly when they have as many names and each
+// pair of names is equal under strings.EqualFold, as the decoder matches them.
+func foldKey(k toml.Key) string {
+	folded := make(toml.Key, len(k))
+	for i, part := range k {
+		folded[i] = foldCase(part)
+	}
+	return folded.String()
+}
+
+// isDefined reports whether the file whose metadata is meta sets key, given as
+// for meta.IsDefined (the table's name, then the key's own), matching each
+// name regardless of letter case as the decoder does (foldKey): [Tmux]
+// STOPPING_WINDOW_SECONDS sets [tmux] stopping_window_seconds. meta.IsDefined
+// compares names exactly, so it misses a key the decoder still read into its
+// field (b.g7h); every "is this key set" check in this package asks isDefined
+// instead.
+func isDefined(meta toml.MetaData, key ...string) bool {
+	want := foldKey(key)
+	for _, k := range meta.Keys() {
+		if foldKey(k) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // keyName names key k as caseVariantRefusal lists it, as written in the file:
