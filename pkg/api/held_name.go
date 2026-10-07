@@ -61,7 +61,8 @@ const (
 // errors, each following the row sentence: Unanswered for the
 // ErrTmuxUnresponsive errors (the re-lookup could not answer, or more than
 // one session matched the name, or, with an examined row, its own session
-// appears to still be stopping or starting), "" meaning "retry later" for the
+// appears to still be stopping or starting, or this id's own abandoned launch
+// appears to still be starting), "" meaning "retry later" for the
 // Can't tell and the starting-session refusals and none for the ambiguous
 // holder; Vanished for the ErrTmuxSessionCreate of
 // a holder that vanished before the re-lookup, "" meaning none (set, the
@@ -100,9 +101,10 @@ type heldNameHolder struct {
 // given to heldNameOutcome by a verb whose row existed before its create
 // (resume after "duplicate session", SR-8.5; reuse, SR-10.4): the
 // starting-session rule's facts as examined (Name is the recorded name, the
-// holder name and the name every description quotes; EndedAt, RecordsPID and
-// RecordsSessionID are the pre-move values, never a re-read; Consequence is
-// ignored, as heldNameOutcome sets it to the row sentence), the effective
+// holder name and the name every description quotes; EndedAt, RecordsPID,
+// RecordsSessionID and NoLaunchSessionRecorded are the pre-move values, never
+// a re-read; Consequence is ignored, as heldNameOutcome sets it to the row
+// sentence), the effective
 // bound and window (startingSessionLimitsOf) and Now, the verb's instant read
 // once after the re-lookup returned.
 type heldExaminedRow struct {
@@ -178,8 +180,14 @@ type heldExaminedRow struct {
 //     class, whatever the verdict: an old label gets resume's Leftover
 //     wording (preLaunchLeftoverError, quoting name with the holder's tmux
 //     id, the row sentence in place of "nothing was written"), never the
-//     spawn-only sentence; a current label (the row's own session for the
-//     examined token) gets the starting-session rule with the holder's
+//     spawn-only sentence, or, when the examined row's latest launch records
+//     no session of its own (NoLaunchSessionRecorded), the abandoned-launch
+//     refusal (abandonedLaunchError, b.1n6: "appears to still be starting",
+//     tmux.ErrTmuxUnresponsive ending with retry.Unanswered, "retry later"
+//     when it is not set, while the holder is younger than the bound, else
+//     its tmux.ErrTmuxSessionConflict, with no retry clause), with the row
+//     sentence as its consequence; a current label (the row's own session
+//     for the examined token) gets the starting-session rule with the holder's
 //     creation time, stopping window first (checkStartingSession(...).
 //     refusal() with the row sentence as Consequence and retry.Unanswered as
 //     Retry): "appears to still be stopping" or "appears to still be
@@ -222,6 +230,12 @@ func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence stri
 		case tmux.ClassOld:
 			held := *res.Holder
 			held.Name = name
+			if examined.NoLaunchSessionRecorded {
+				row := examined.startingSessionRow
+				row.Consequence = rowSentence
+				row.Retry = retry.Unanswered
+				return holder, abandonedLaunchError(examined.Limits, examined.Now, row, []tmux.Session{held})
+			}
 			return holder, preLaunchLeftoverError(instanceID, []tmux.Session{held}, rowSentence)
 		case tmux.ClassCurrent:
 			row := examined.startingSessionRow

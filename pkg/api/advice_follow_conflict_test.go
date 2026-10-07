@@ -1,7 +1,7 @@
 package api_test
 
 // advice_follow_conflict_test.go (b.fji, the bee's ErrTmuxSessionConflict
-// CONFLICT cases; inventory HO1, HO3, HO5, HO7, HO11): each conflict a
+// CONFLICT cases; inventory HO1, HO3, HO5, HO7, HO11; HO12, b.1n6): each conflict a
 // lookup of resume, reuse, kill or a pane verb gives is re-issued while its
 // condition holds (the same refusal, nothing written or sent) and once a
 // human, or the holder's own exit, has cleared it (the call then does its
@@ -36,9 +36,10 @@ const (
 )
 
 // adviceConflictVerb is a verb a conflict refuses: start seeds its row (a
-// finished row for resume and reuse; a waiting row for kill and the pane
-// verbs, with noOwn no session of its current launch and its agent gone)
-// and returns it with the call and the check that the call did its work.
+// finished row for resume and reuse, with noOwn no session of its latest
+// launch recorded; a waiting row for kill and the pane verbs, with noOwn no
+// session of its current launch and its agent gone) and returns it with the
+// call and the check that the call did its work.
 type adviceConflictVerb struct {
 	name  string
 	start func(t *testing.T, e *killEnv, noOwn bool) (r killRow, call func() error, worked func(*testing.T))
@@ -105,8 +106,10 @@ func adviceConflictClears(t *testing.T, cases []adviceConflictCase) {
 
 // adviceConflictResume is resume of a finished row whose agent is gone; it
 // worked when it launched (one create, the row pending).
-var adviceConflictResume = adviceConflictVerb{"resume", func(t *testing.T, e *killEnv, _ bool) (killRow, func() error, func(*testing.T)) {
-	r := e.seedResumable(t, rlkSettled(e), agentGone)
+var adviceConflictResume = adviceConflictVerb{"resume", func(t *testing.T, e *killEnv, noOwn bool) (killRow, func() error, func(*testing.T)) {
+	spec := e.resumableSpec(rlkSettled(e), agentGone)
+	spec.NoServerIdentity, spec.NoPane = noOwn, noOwn
+	r := e.seedResumableRow(t, spec)
 	return r.killRow, func() error { _, err := e.resume(r.ID); return err }, func(t *testing.T) {
 		if n, st := len(e.rec.SocketCallsOf(tmux.CallCreate)), e.columns(t, r.ID).State; n != 1 || st != store.StatePending {
 			t.Errorf("after the resume: %d creates, state %v; want 1, pending", n, st)
@@ -117,8 +120,12 @@ var adviceConflictResume = adviceConflictVerb{"resume", func(t *testing.T, e *ki
 // adviceConflictReuse is spawn with the reuse opt-in of a finished row
 // (adviceReuseSettled) under its recorded name; it worked when it launched
 // the next life (assertReused).
-var adviceConflictReuse = adviceConflictVerb{"reuse", func(t *testing.T, e *killEnv, _ bool) (killRow, func() error, func(*testing.T)) {
-	r := adviceReuseSettled(t, e)
+var adviceConflictReuse = adviceConflictVerb{"reuse", func(t *testing.T, e *killEnv, noOwn bool) (killRow, func() error, func(*testing.T)) {
+	spec := reuseRowSpec{Age: rlkSettled(e), Bare: true}
+	if noOwn {
+		spec.Opts = rulNoLaunchSession(e)
+	}
+	r := e.seedReusable(t, agentGone, spec)
 	p := reuseParams(t, r, reuseRequest{})
 	calls := 0
 	return r.killRow, func() error {
@@ -243,6 +250,13 @@ func adviceLeftovers(n, end int) func(*testing.T, *killEnv, killRow) func() {
 	}
 }
 
+// adviceAbandonedLaunch seeds a session of an earlier launch of r past the starting-session bound (seedLeftover);
+// it ends, by a human or by its own exit.
+func adviceAbandonedLaunch(t *testing.T, e *killEnv, r killRow) func() {
+	s := e.seedLeftover(t, r, newToken(), rlkSettled(e))
+	return func() { adviceEndSession(t, e.rec, r.Socket, s.ID) }
+}
+
 // TestAdviceFollow_HO1_ConflictingLabelsClears: HO1 "conflicting labels" ...
 // "a human must look, see "Operator actions" in the agent-director README;
 // list tmux_session_name (--tmux-session-name on the CLI) shows whether a row
@@ -294,6 +308,18 @@ func TestAdviceFollow_HO5_PreLaunchLeftoverClears(t *testing.T) {
 	for _, v := range []adviceConflictVerb{adviceConflictResume, adviceConflictReuse} {
 		cases = append(cases, adviceConflictCase{name: "leftover", verb: v, words: "left over from an earlier life",
 			phrase: adviceEndLeftover, place: adviceLeftovers(1, 1)})
+	}
+	adviceConflictClears(t, cases)
+}
+
+// TestAdviceFollow_HO12_AbandonedLaunchClears: HO12 "this id's own abandoned launch" ... "ending it is a human's
+// decision, see "Operator actions" in the agent-director README, after which the refused call can be re-issued" (b.1n6).
+func TestAdviceFollow_HO12_AbandonedLaunchClears(t *testing.T) {
+	t.Parallel()
+	var cases []adviceConflictCase
+	for _, v := range []adviceConflictVerb{adviceConflictResume, adviceConflictReuse} {
+		cases = append(cases, adviceConflictCase{name: "abandoned launch", verb: v, noOwn: true,
+			words: "this id's own abandoned launch", phrase: adviceAbandonedHuman, place: adviceAbandonedLaunch})
 	}
 	adviceConflictClears(t, cases)
 }

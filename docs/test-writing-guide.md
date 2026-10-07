@@ -139,7 +139,7 @@ def test_create_record_uses_utf8(mock_open):
 
 Any test that exercises a verb which creates a tmux session (e.g. `resume`) must
 use a UUID-suffixed instance id — e.g. `` `id-resume-${crypto.randomUUID().slice(0, 8)}` `` — rather than a fixed string like `id-resume-1`.
-Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: a leaked session labelled for that fixed id then makes later runs refuse with `ErrTmuxSessionConflict`. If the leak is in the same store, `resume`'s pre-launch lookup and a plain spawn's label scan both refuse with "left over from an earlier life". If the run uses a fresh test HOME (so another store's id), the session reads as "another agent-director store": `resume` refuses at its pre-launch lookup, and a plain spawn hits it only after "duplicate session".
+Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: a leaked session labelled for that fixed id then makes later runs refuse. If the leak is in the same store, a plain spawn's label scan refuses with `ErrTmuxSessionConflict` "left over from an earlier life", and `resume` of a finished row seeded by `apitest.SeedSpawn` (a launch token, no tmux server or pane) refuses with "this id's own abandoned launch": `ErrTmuxUnresponsive` while the leak is younger than `starting_session_seconds` (default 300 s), otherwise `ErrTmuxSessionConflict`. If the run uses a fresh test HOME (so another store's id), the session reads as `ErrTmuxSessionConflict` "another agent-director store": `resume` refuses at its pre-launch lookup, and a plain spawn hits it only after "duplicate session".
 
 ### Parallel mode is pinned off (bun)
 

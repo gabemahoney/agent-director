@@ -144,6 +144,9 @@
 //     never by "this row's own id" alone), of resume's pre-launch check
 //     (descriptions_resume_lookup.go: DescPreLaunchLeftover, its Leftover
 //     refusal, worded as the plain-spawn scan's but for a row that exists;
+//     DescAbandonedLaunch, parameterised by AbandonedLaunch, that Leftover
+//     met while the row's latest launch records no session (b.1n6), at
+//     resume's and reuse's lookups and after "duplicate session";
 //     its other refusals reuse the starting-session and Can't tell cases
 //     unchanged), of the
 //     lookup's shared Can't tell cases (descriptions_lookup.go), or of the

@@ -274,7 +274,10 @@ func hasControlChar(id string) bool {
 //     free. With the reuse opt-in: at the lookup, before anything is
 //     changed, the row's own session or agent appears to still be stopping
 //     (the row ended less than the stopping window ago) or still starting
-//     (younger than the starting-session bound), tmux's answer could not be
+//     (younger than the starting-session bound), this id's own abandoned
+//     launch (a session of an earlier launch of this id while the row's
+//     latest launch records no session of its own) appears to still be
+//     starting, tmux's answer could not be
 //     read, or more than one session's
 //     name matches the requested name; retry later. After "duplicate
 //     session", the same cases at the re-lookup, then the row is restored:
@@ -296,15 +299,16 @@ func hasControlChar(id string) bool {
 //     error names the blocking session. With the reuse opt-in, at the lookup
 //     before anything is changed: a session left over from an earlier life
 //     of this id, this row's own old session past the stopping window and
-//     the starting-session bound ("this row's own id"), conflicting labels,
+//     the starting-session bound ("this row's own id"), this id's own
+//     abandoned launch past the starting-session bound, conflicting labels,
 //     or the requested name held by another row's session, another
 //     agent-director store's session or one with no valid instance id; after
 //     "duplicate session", the same cases for the session holding the
 //     requested name, then the row is restored. For a leftover, this row's
-//     own old session, conflicting labels or a session with no valid
-//     instance id, a human must look (README "Operator actions"); another
-//     row's or another agent-director store's session is another agent and
-//     must not be ended.
+//     own old session, this id's own abandoned launch, conflicting labels or
+//     a session with no valid instance id, a human must look (README
+//     "Operator actions"); another row's or another agent-director store's
+//     session is another agent and must not be ended.
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed, or it
 //     sets an unknown key, one key under names differing only in letter

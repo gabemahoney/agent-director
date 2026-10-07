@@ -108,7 +108,14 @@ var ErrTmuxUnresponsive = errors.New("tmux: unresponsive")
 // the agent's pane was not found, or on a Leftover session; resume and
 // reuse for a session holding the name that is left over, is the row's own
 // old session, or carries another row's, another store's or no valid label
-// (SR-1.2, SR-3.10). It wraps no other sentinel (SR-1.5).
+// (SR-1.2, SR-3.10). resume's pre-launch check and reuse's old-row lookup
+// also return it, before anything is written, when the lookup is Leftover
+// ("left over from an earlier life"), and both there and at their re-lookup
+// after "duplicate session" when a session of an earlier launch of the
+// row's id, met while the row's latest launch records no session of its
+// own, has run for at least the starting-session bound ("this id's own
+// abandoned launch"; younger, it is ErrTmuxUnresponsive; b.1n6). It wraps no
+// other sentinel (SR-1.5).
 var ErrTmuxSessionConflict = errors.New("tmux: session conflict")
 
 // ErrTmuxKillFailed is class UNAVAILABLE, returned by kill only, and means

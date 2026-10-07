@@ -331,22 +331,30 @@ func TestResumeMoveNotApplied(t *testing.T) {
 		afterLookup bool                                        // the race runs as this call's lookup returns, else after its read
 		want        string
 		desc        apitest.DescCase
+		noSession   bool // the row records a launch token but no session of that launch
 	}{
 		// Another write after the read loses the move the same way: advice_follow_resume_test.go's B3.
 		// The winner's session is up at this call's lookup, a leftover, so its one re-read finds the row changed.
-		{"a competing resume moved it before the lookup", competing, false, "ErrSpawnNotResumable", lostRace},
-		{"a competing resume moved it after the lookup", competing, true, "ErrSpawnNotResumable", lostRace},
+		{"a competing resume moved it before the lookup", competing, false, "ErrSpawnNotResumable", lostRace, false},
+		// b.1n6: the winner's young session is then this id's own abandoned launch, refused through the same re-read.
+		{"a competing resume moved it before the lookup, no session recorded", competing, false, "ErrSpawnNotResumable",
+			lostRace, true},
+		{"a competing resume moved it after the lookup", competing, true, "ErrSpawnNotResumable", lostRace, false},
 		{"the row removed", func(t *testing.T, e *resumeEnv, id string) {
 			if err := e.st.DeleteSpawn(id); err != nil {
 				t.Errorf("DeleteSpawn: %v", err)
 			}
-		}, false, "ErrSpawnNotFound", apitest.DescCase{Name: "ErrSpawnNotFound, removed before the move"}},
-		{"store error", nil, false, "ErrInternal", apitest.DescResumeMoveStoreError()},
+		}, false, "ErrSpawnNotFound", apitest.DescCase{Name: "ErrSpawnNotFound, removed before the move"}, false},
+		{"store error", nil, false, "ErrInternal", apitest.DescResumeMoveStoreError(), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			r := e.seedResumable(t, store.StateEnded)
+			var opts []apitest.SpawnOption
+			if tc.noSession {
+				opts = append(opts, apitest.WithLaunchIdentity(store.LaunchIdentity{Token: newToken(), Socket: e.socket}))
+			}
+			r := e.seedResumable(t, store.StateEnded, opts...)
 			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", pendParent(t, e))
 			raced, present, raceLines := r.Before, true, 0
 			var during [2]int // the race's own tmux calls, as indexes into SocketCalls
@@ -376,7 +384,7 @@ func TestResumeMoveNotApplied(t *testing.T) {
 
 			assertOneName(t, err, tc.want)
 			var forbid []string
-			for _, s := range []any{r.Identity.Token, e.storeID, e.store.moveToken, raced.LaunchToken} {
+			for _, s := range []any{r.Before.LaunchToken, e.storeID, e.store.moveToken, raced.LaunchToken} {
 				if s, _ := s.(string); s != "" {
 					forbid = append(forbid, s)
 				}

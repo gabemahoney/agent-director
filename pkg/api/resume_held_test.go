@@ -23,16 +23,31 @@ import (
 
 // rhdCase is one "duplicate session" resume: the arrangement, whether the row
 // ended inside the stopping window and the placed sessions are past the
-// bound, the error, whether its description names the holder's $N, and its
-// ad.launch.name_held fields (rec; a zero lookup leaves the record unchecked).
+// bound, whether the row records no session of its latest launch (no server
+// or pane identity), the error, whether its description names the holder's
+// $N, and its ad.launch.name_held fields (rec; a zero lookup leaves the record
+// unchecked).
 type rhdCase struct {
 	name          string
 	spec          heldSpec
 	stopping, old bool
+	noSession     bool
 	want          error
 	named         bool
 	desc          func(e *killEnv, sc *heldScene, p apitest.HeldName) apitest.DescCase
 	rec           rhtWant
+}
+
+// seed seeds tc's resumable row in state prior (ended age before heldInstant).
+func (tc rhdCase) seed(t *testing.T, e *killEnv, prior string) resumeRow {
+	t.Helper()
+	age := rlkSettled(e)
+	if tc.stopping {
+		age = e.cfg.EffectiveStoppingWindow() / 2
+	}
+	spec := e.heldResumableSpec(age, agentGone)
+	spec.State, spec.NoServerIdentity, spec.NoPane = prior, tc.noSession, tc.noSession
+	return e.seedResumableRow(t, spec)
 }
 
 // rhdRun resumes a row of prior state whose create meets tc's arrangement and
@@ -43,13 +58,7 @@ func rhdRun(t *testing.T, tc rhdCase, prior string) {
 	e := newKillEnv(t)
 	parent := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true}).ID
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
-	age := rlkSettled(e)
-	if tc.stopping {
-		age = e.cfg.EffectiveStoppingWindow() / 2
-	}
-	spec := e.heldResumableSpec(age, agentGone)
-	spec.State = prior
-	r := e.seedResumableRow(t, spec)
+	r := tc.seed(t, e, prior)
 	if tc.old {
 		tc.spec.Created = rlkSettled(e)
 	}
@@ -135,6 +144,12 @@ var (
 		return func(e *killEnv, sc *heldScene, p apitest.HeldName) apitest.DescCase { return c(e, sc).AfterHeldName(p) }
 	}
 	rhdDifferentServer = rhdOver(func(_ *killEnv, sc *heldScene) apitest.DescCase { return apitest.DescDifferentServer(sc.r.ID) })
+	rhdAbandoned       = func(past bool) func(*killEnv, *heldScene, apitest.HeldName) apitest.DescCase {
+		return rhdOver(func(e *killEnv, sc *heldScene) apitest.DescCase {
+			return apitest.DescAbandonedLaunch(apitest.AbandonedLaunch{InstanceID: sc.r.ID, Sessions: rhdHolders(sc),
+				Bound: e.cfg.EffectiveStartingSession(), PastBound: past, SessionID: true})
+		})
+	}
 )
 
 // rhtHeld and rhtNone are a record's fields with a holder identified (nil: null) or none.
@@ -204,6 +219,11 @@ func rhdCases() []rhdCase {
 			named: true, desc: rhdLeftover},
 		{name: "ours renamed, foreign holder", spec: heldSpec{Holder: holderForeign, OursRenamed: "renamed-held"},
 			want: conflict, named: true, desc: rhdDifferentID},
+		// The row records no session of its latest launch: an old holder is this id's own abandoned launch (b.1n6).
+		{name: "old label, no session recorded, young holder", spec: heldSpec{Holder: holderOld}, noSession: true,
+			want: unresponsive, named: true, desc: rhdAbandoned(false), rec: rhtHeld("leftover", true, false)},
+		{name: "old label, no session recorded, holder past the bound", spec: heldSpec{Holder: holderOld}, noSession: true,
+			old: true, want: conflict, named: true, desc: rhdAbandoned(true), rec: rhtHeld("leftover", true, false)},
 	}
 }
 
@@ -272,11 +292,7 @@ func TestResumeHeldRetryFollowsRestore(t *testing.T) {
 				t.Parallel()
 				e := newKillEnv(t)
 				other := adviceOtherRow(t, e)
-				age := rlkSettled(e)
-				if tc.stopping {
-					age = e.cfg.EffectiveStoppingWindow() / 2
-				}
-				r := e.seedHeldResumable(t, age, agentGone)
+				r := tc.seed(t, e, store.StateEnded)
 				// A copy: tc is shared with the sibling parallel subtests of each restore outcome.
 				spec := tc.spec
 				if tc.old {

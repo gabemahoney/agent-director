@@ -122,7 +122,19 @@ var (
 	rulNoValidID = func(_ *killEnv, _ reuseRow, name string, s tmuxfix.SeedSession) apitest.DescCase {
 		return apitest.DescHeldNoValidID(rulHeld(name, s))
 	}
+	rulAbandoned = func(past bool) func(*killEnv, reuseRow, string, tmuxfix.SeedSession) apitest.DescCase {
+		return func(e *killEnv, r reuseRow, _ string, s tmuxfix.SeedSession) apitest.DescCase {
+			return apitest.DescAbandonedLaunch(apitest.AbandonedLaunch{InstanceID: r.ID,
+				Sessions: []apitest.DescSession{{Name: s.Name, ID: s.ID}}, Bound: e.cfg.EffectiveStartingSession(),
+				PastBound: past, SessionID: true})
+		}
+	}
 )
+
+// rulNoLaunchSession records a launch token but no session of that launch (no server or pane identity).
+func rulNoLaunchSession(e *killEnv) []apitest.SpawnOption {
+	return []apitest.SpawnOption{apitest.WithLaunchIdentity(store.LaunchIdentity{Token: newToken(), Socket: e.defaultSocket})}
+}
 
 // rulCantTell is one case per call-site table column whose shared cell
 // refuses at the lookup (Can't tell, tmux unavailable): the column's world,
@@ -159,9 +171,6 @@ func TestSpawnReuseLookupOutcomes(t *testing.T) {
 	elsewhere := func(t *testing.T, e *killEnv, r *reuseRow, k holderKind) tmuxfix.SeedSession {
 		return e.seedHolder(t, r.killRow.withName("elsewhere-"+uuid.NewString()[:8]), k)
 	}
-	noIdentity := func(e *killEnv) []apitest.SpawnOption {
-		return []apitest.SpawnOption{apitest.WithLaunchIdentity(store.LaunchIdentity{Token: newToken(), Socket: e.defaultSocket})}
-	}
 	cases := []rulCase{
 		{name: "ours, old session: own id", agent: agentGone, seed: rulOwn(settled), want: conflict, desc: rulOwnOld(false)},
 		{name: "ours, young session: still starting", agent: agentGone, want: unresponsive,
@@ -169,7 +178,7 @@ func TestSpawnReuseLookupOutcomes(t *testing.T) {
 			desc: func(e *killEnv, r reuseRow, _ string, _ tmuxfix.SeedSession) apitest.DescCase {
 				return apitest.DescStillStarting(rlkStarting(e, r.resumeRow, false))
 			}},
-		{name: "ours with no recorded identity is not adopted", agent: agentGone, opts: noIdentity,
+		{name: "ours with no recorded identity is not adopted", agent: agentGone, opts: rulNoLaunchSession,
 			seed: rulOwn(settled), want: conflict, desc: rulOwnOld(false)},
 		{name: "leftover under the recorded name", agent: agentGone, seed: rulHolder(holderOld), want: conflict, desc: rulLeftover},
 		{name: "leftover under the requested name", agent: agentGone, requested: rulNewName, seed: rulHolder(holderOld),
@@ -196,6 +205,13 @@ func TestSpawnReuseLookupOutcomes(t *testing.T) {
 			}},
 		{name: "AC-REUSE-06: unlabelled session under the recorded name", agent: agentGone, seed: rulHolder(holderNone),
 			want: conflict, desc: rulNoValidID},
+		// b.1n6: with no session of the row's latest launch recorded, a leftover is this id's own abandoned launch.
+		{name: "no session recorded, leftover young: abandoned launch still starting", agent: agentGone,
+			opts: rulNoLaunchSession, seed: rulHolder(holderOld), want: unresponsive, desc: rulAbandoned(false)},
+		{name: "no session recorded, leftover past the bound: abandoned launch", agent: agentGone, opts: rulNoLaunchSession,
+			seed: func(t *testing.T, e *killEnv, r *reuseRow, _ string) tmuxfix.SeedSession {
+				return e.seedLeftover(t, r.killRow, newToken(), settled(e))
+			}, want: conflict, desc: rulAbandoned(true)},
 	}
 	for _, tc := range append(cases, rulCantTell()...) {
 		for _, state := range finishedStates {
@@ -230,7 +246,8 @@ func TestSpawnReuseSocketRefused(t *testing.T) {
 }
 
 // TestSpawnReuseLookupLeftoverLostRace (SR-10.5): a Leftover after a competing write changed or removed the
-// row is the lost race, decided by the one re-read; an unchanged row's Leftover refusal is TestSpawnReuseLookupOutcomes'.
+// row is the lost race, decided by the one re-read, also when the row records no session of its latest launch, so
+// the young leftover is this id's own abandoned launch (b.1n6); an unchanged row's refusal is TestSpawnReuseLookupOutcomes'.
 func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []struct {
@@ -241,44 +258,53 @@ func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 		{name: "row changed", compete: func(e *killEnv, id string) error { return e.st.SetParentID(id, "") }},
 		{name: "row removed", compete: func(e *killEnv, id string) error { return e.st.DeleteSpawn(id) }, removed: true},
 	} {
-		for _, state := range finishedStates {
-			t.Run(tc.name+"/"+state, func(t *testing.T) {
-				e := newKillEnv(t)
-				r := e.seedReusable(t, agentGone, reuseRowSpec{State: state, Age: rlkSettled(e)})
-				s := e.seedHolder(t, r.killRow, holderOld)
-				rs := &hookedReuseStore{st: e.st}
-				before := e.snapshotReuse(t, r)
-				rs.afterRead(func() {
-					if err := tc.compete(e, r.ID); err != nil {
-						t.Fatalf("competing write: %v", err)
+		for _, row := range []struct {
+			name string
+			opts func(*killEnv) []apitest.SpawnOption
+		}{{"leftover", nil}, {"no session recorded, young abandoned session", rulNoLaunchSession}} {
+			for _, state := range finishedStates {
+				t.Run(tc.name+"/"+row.name+"/"+state, func(t *testing.T) {
+					e := newKillEnv(t)
+					spec := reuseRowSpec{State: state, Age: rlkSettled(e)}
+					if row.opts != nil {
+						spec.Opts = row.opts(e)
 					}
+					r := e.seedReusable(t, agentGone, spec)
+					s := e.seedHolder(t, r.killRow, holderOld)
+					rs := &hookedReuseStore{st: e.st}
+					before := e.snapshotReuse(t, r)
+					rs.afterRead(func() {
+						if err := tc.compete(e, r.ID); err != nil {
+							t.Fatalf("competing write: %v", err)
+						}
+						if !tc.removed {
+							before = e.snapshotReuse(t, r) // the competitor's row is what must stay
+						}
+					})
+
+					_, _, err := e.reuseWith(t, rs, reuseParams(t, r, reuseRequest{}))
+
+					if n := rs.readCount(); n != 2 {
+						t.Errorf("ReadForReuse calls = %d; want 2 (the pre-check and the one re-read)", n)
+					}
+					e.rulAssertOneLookup(t, r, before)
+					assertOneName(t, err, "ErrInstanceIdCollision")
+					apitest.AssertDescription(t, err.Error(), apitest.DescReuseLostRace(r.ID), r.Token, s.Label.Token)
 					if !tc.removed {
-						before = e.snapshotReuse(t, r) // the competitor's row is what must stay
+						e.assertWroteNothing(t, before)
+						return
+					}
+					if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ID); err == nil {
+						t.Errorf("row %s exists after the reuse; want it still removed", r.ID)
+					}
+					r.Trust.check(t, "", false, "after the lost race")
+					for _, l := range readAPITrailLines(t)[before.mark:] {
+						if l["event"] != "ad.provenance.disagree" {
+							t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["claude_instance_id"])
+						}
 					}
 				})
-
-				_, _, err := e.reuseWith(t, rs, reuseParams(t, r, reuseRequest{}))
-
-				if n := rs.readCount(); n != 2 {
-					t.Errorf("ReadForReuse calls = %d; want 2 (the pre-check and the one re-read)", n)
-				}
-				e.rulAssertOneLookup(t, r, before)
-				assertOneName(t, err, "ErrInstanceIdCollision")
-				apitest.AssertDescription(t, err.Error(), apitest.DescReuseLostRace(r.ID), r.Token, s.Label.Token)
-				if !tc.removed {
-					e.assertWroteNothing(t, before)
-					return
-				}
-				if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ID); err == nil {
-					t.Errorf("row %s exists after the reuse; want it still removed", r.ID)
-				}
-				r.Trust.check(t, "", false, "after the lost race")
-				for _, l := range readAPITrailLines(t)[before.mark:] {
-					if l["event"] != "ad.provenance.disagree" {
-						t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["claude_instance_id"])
-					}
-				}
-			})
+			}
 		}
 	}
 }

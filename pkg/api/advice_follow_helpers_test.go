@@ -3,8 +3,9 @@ package api_test
 // advice_follow_helpers_test.go holds the helpers b.fji's literal-follow
 // tests (advice_follow_*_test.go) share: the advice checks (an error's
 // description, a Go doc comment, a manifest text), the wait the pending-row
-// advice prescribes, the "duplicate session" arrangements B10 and A12 follow,
-// a one-shot hook on a tmux call and small seeds.
+// advice prescribes, the "duplicate session" arrangements B10 and A12 follow
+// and the retries past an abandoned launch they then make (b.1n6), a
+// one-shot hook on a tmux call and small seeds.
 
 import (
 	"context"
@@ -20,6 +21,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -160,6 +162,33 @@ func adviceHeldFollows() []adviceHeldFollow {
 		{"", "no answer within", heldSpec{Holder: holderNone, Relookup: tmuxfix.Script{Failure: tmux.FailTimeout}}, false, false},
 		{"still starting, the session goes/", "appears to still be starting", starting, true, false},
 		{"still starting, the session keeps running/", "appears to still be starting", starting, true, true},
+	}
+}
+
+// adviceAbandonedHuman is the next step the abandoned-launch conflict gives (b.1n6).
+const adviceAbandonedHuman = `ending it is a human's decision, see "Operator actions" in the agent-director README, ` +
+	"after which the refused call can be re-issued"
+
+// adviceAbandonedRetry follows "retry later" on this id's own abandoned launch that keeps running (b.1n6): call is refused
+// ErrTmuxUnresponsive while young, then the conflict past the bound, neither writing anything since snapshot (taken before each).
+func adviceAbandonedRetry(t *testing.T, e *killEnv, p apitest.AbandonedLaunch, call func() error,
+	snapshot func() writesSnapshot, forbid ...string) {
+	t.Helper()
+	for _, past := range []bool{false, true} {
+		if past {
+			e.clock.Advance(rlkSettled(e))
+		}
+		before := snapshot()
+
+		err := call()
+
+		if p.PastBound = past; past {
+			adviceAssertAdvice(t, err, api.ErrTmuxSessionConflict, adviceAbandonedHuman)
+		} else {
+			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, "nothing was done; retry later")
+		}
+		apitest.AssertDescription(t, err.Error(), apitest.DescAbandonedLaunch(p), forbid...)
+		e.assertWroteNothing(t, before)
 	}
 }
 

@@ -145,8 +145,11 @@ func spawnReuse(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (SpawnResult,
 //     from the snapshot (neither skips the window); the configured bound and
 //     window; the Client clock. Ours, or Gone while the agent process runs,
 //     go through the starting-session rule; Leftover is "left over from an
-//     earlier life"; Can't tell its error. Another store's label is never
-//     Ours or Leftover. Gone otherwise is the new-name pre-check (SR-10.8) on
+//     earlier life", or, when the row's latest launch records no session of
+//     its own, this id's own abandoned launch by the rule's age step
+//     (abandonedLaunchError; b.1n6); Can't tell its error. Another store's
+//     label is never Ours or Leftover. Gone otherwise is the new-name
+//     pre-check (SR-10.8) on
 //     the same listing, quoting the requested name: no holder proceeds; an
 //     old, foreign, other-store or no valid label is its conflict; more than
 //     one matching entry is ErrTmuxUnresponsive. No second tmux call.
@@ -155,7 +158,8 @@ func spawnReuse(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (SpawnResult,
 //     write, on a refusal as on proceed (verb spawn, source ad_spawn, the
 //     recorded name, the socket, the session concerned, the server value, the
 //     verdict, action refused or proceeded, the caller identity). Fail-open.
-//  6. A Leftover refusal alone re-reads the row once (reuseLostRace): when it
+//  6. A refusal of a Leftover lookup alone (an abandoned launch's included)
+//     re-reads the row once (reuseLostRace): when it
 //     was removed or no longer holds the examined snapshot (a competing
 //     reuse's reset or resume's move came first), the lost-race
 //     ErrInstanceIdCollision is returned instead (SR-10.5).

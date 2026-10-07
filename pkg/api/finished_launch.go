@@ -265,12 +265,14 @@ func (l finishedLaunch) restore(launchErr func(restored restoreResult) error) (r
 //     restore event, whose launch_error names the error below);
 //  3. builds the error with heldNameOutcome, judged against the examined row
 //     (heldExaminedRow: req's name to quote, the examined ended_at, pid and
-//     session-id presence, the configured bound and window, the clock
-//     reading of step 1), with the restore's sentence as the row sentence
-//     and the restore's retry sentence (restoreResult.Retry) as the retry
-//     sentence of every ErrTmuxUnresponsive (an unanswered re-lookup, an
-//     ambiguous holder, the row's own session still stopping or starting;
-//     none for a vanished holder, heldRetrySentences). It ends with "retry
+//     session-id presence, whether its latest launch recorded a session, the
+//     configured bound and window, the clock reading of step 1), with the
+//     restore's sentence as the row sentence and the restore's retry
+//     sentence (restoreResult.Retry) as the retry sentence of every
+//     ErrTmuxUnresponsive (an unanswered re-lookup, an ambiguous holder, the
+//     row's own session still stopping or starting, this id's own abandoned
+//     launch still starting; none for a vanished holder, heldRetrySentences).
+//     It ends with "retry
 //     later", as the pre-launch refusals do (SR-18.1), only when the
 //     restore applied; when the row stays pending or changed, with the
 //     launch-timeout rule, since a retry is refused until get shows the row

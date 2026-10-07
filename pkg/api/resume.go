@@ -474,12 +474,15 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     the holder name, decided by decidePreLaunch: proceed, or a refusal
 //     (Can't tell by its kind; Ours, or Gone while the agent process runs, by
 //     the starting-session rule with the configured bound and window;
-//     Leftover; a name held on Gone, by the holder's class). Its
+//     Leftover, or, when the row's latest launch records no session of its
+//     own, this id's own abandoned launch by the rule's age step; a name held
+//     on Gone, by the holder's class). Its
 //     ad.provenance.disagree records, one per distinct reason, are written
 //     right after the decision, before any write, fail-open. A refusal makes
 //     no further tmux call and writes nothing else; no blocking session is
-//     touched, and nothing is adopted. A Leftover refusal alone re-reads the
-//     row once (resumeLostRace): if its snapshot changed since it was read
+//     touched, and nothing is adopted. A refusal of a Leftover lookup alone
+//     (an abandoned launch's included) re-reads the row once
+//     (resumeLostRace): if its snapshot changed since it was read
 //     (a competing resume moved it), the move's lost-race
 //     ErrSpawnNotResumable is returned instead, and if the row was removed,
 //     the move's ErrSpawnNotFound (SR-8.6).
@@ -519,7 +522,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     earlier token and recorded server identity), the restore, the holder's
 //     classified error carrying the restore's sentence (the holder class; the
 //     row's own session by the starting-session rule with the examined
-//     ended_at; ErrTmuxSessionCreate only when no session holds the name any
+//     ended_at; an old-label holder while the examined row's latest launch
+//     records no session, this id's own abandoned launch by the rule's age
+//     step; ErrTmuxSessionCreate only when no session holds the name any
 //     more), the re-lookup's disagree reasons not already written, and one
 //     ad.launch.name_held. Every other failure (tmux unavailable, a session
 //     that could not be labelled, any other launch failure) → the restore,
@@ -696,8 +701,15 @@ func launchInProgressError(row Spawn) error {
 // session left over from an earlier life, a session holding the recorded
 // name (another row's, another agent-director store's, which must not be
 // ended, or one with no valid label) and conflicting labels give
-// ErrTmuxSessionConflict. ErrTmuxSessionConflict is CONFLICT and lasts until
-// a human looks (see "Operator actions" in the agent-director README). A
+// ErrTmuxSessionConflict. When the row's latest launch records no session of
+// its own (as after a launch whose create met "duplicate session" and whose
+// restore did not apply, so the row carries that launch's token), a session
+// of an earlier launch of this id is this id's own abandoned launch, not a
+// leftover: ErrTmuxUnresponsive while it appears to still be starting
+// (younger than the starting-session bound), and past the bound
+// ErrTmuxSessionConflict naming it as this id's own abandoned launch, which
+// agent-director does not end. ErrTmuxSessionConflict is CONFLICT and lasts
+// until a human looks (see "Operator actions" in the agent-director README). A
 // tmux server other than the one the agent was launched on, or tmux that
 // cannot be run, gives ErrTmuxNotAvailable (ENVIRONMENT), and an answer that
 // cannot be read ErrTmuxUnresponsive. A refusal before the move to pending
@@ -803,7 +815,10 @@ func launchInProgressError(row Spawn) error {
 //     no valid instance id); a session is left over from an earlier life of
 //     this row; the row's own session, or its agent process still running
 //     with no session, is past the stopping window and the starting-session
-//     bound ("this row's own id"); or tmux holds conflicting labels. After
+//     bound ("this row's own id"); this id's own abandoned launch (a session
+//     of an earlier launch of this id while the row's latest launch records
+//     no session of its own) is past the starting-session bound; or tmux
+//     holds conflicting labels. After
 //     "duplicate session" at the create, the same cases for the session
 //     holding the name (its own session judged with the ended_at read before
 //     the move), followed by the restore.
@@ -815,7 +830,8 @@ func launchInProgressError(row Spawn) error {
 //   - ErrTmuxUnresponsive: UNAVAILABLE, transient. At the pre-launch lookup,
 //     before anything is written, the row's own session or agent appears to
 //     still be stopping (the row ended less than the stopping window ago) or
-//     still starting (younger than the starting-session bound), tmux's answer
+//     still starting (younger than the starting-session bound), this id's
+//     own abandoned launch appears to still be starting, tmux's answer
 //     could not be read, or more than one session's name matches the recorded
 //     name; retry later. After "duplicate session" at the create, the same
 //     cases for the re-lookup and the session holding the name, followed by

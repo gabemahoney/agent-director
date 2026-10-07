@@ -231,10 +231,14 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 	cases := []struct {
 		name string
 		age  func(e *killEnv) time.Duration // the row's ended_at age at the re-lookup
+		opts func(e *killEnv) []apitest.SpawnOption
 		spec func(e *killEnv) heldSpec
 		want rhtWant
 	}{
 		{name: "old label", spec: holderOnly(holderOld), want: held("leftover", conflict, true, false)},
+		// b.1n6: with no session of the row's latest launch recorded, the young old holder is this id's own abandoned launch.
+		{name: "old label, no session recorded", opts: rulNoLaunchSession, spec: holderOnly(holderOld),
+			want: held("leftover", unresponsive, true, false)},
 		{name: "current label, still stopping",
 			age:  func(e *killEnv) time.Duration { return e.cfg.EffectiveStoppingWindow() / 2 },
 			spec: func(e *killEnv) heldSpec { return heldSpec{Holder: holderCurrent, Created: rlkSettled(e)} },
@@ -273,7 +277,11 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 			if tc.age != nil {
 				age = tc.age(e)
 			}
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Held: true, Age: age})
+			spec := reuseRowSpec{Held: true, Age: age}
+			if tc.opts != nil {
+				spec.Opts = tc.opts(e)
+			}
+			r := e.seedReusable(t, agentGone, spec)
 
 			run := e.rutHeld(t, r, tc.spec(e), nil)
 

@@ -266,6 +266,24 @@ func TestResumeLookupRefusals(t *testing.T) {
 			want: conflict, desc: rlkOwnOld(false)},
 		{name: "ours with no recorded identity is not adopted", agent: agentGone, lostReply: true,
 			seed: rlkOwn(oldSession), want: conflict, desc: rlkOwnOld(false)},
+		// b.1n6: with no session of the row's latest launch recorded, earlier launches' sessions are this id's own
+		// abandoned launch, judged by the youngest; one recorded, or no token, keeps them leftovers (above).
+		{name: "no session recorded, earlier launches' sessions: the youngest still starting", agent: agentGone,
+			lostReply: true, want: unresponsive,
+			seed: func(t *testing.T, e *killEnv, r *resumeRow) tmuxfix.SeedSession {
+				rlkOwn(rlkLabel(earlier, r), elsewhere, oldSession)(t, e, r)
+				return rlkOwn(rlkLabel(earlier, r))(t, e, r)
+			},
+			desc: func(e *killEnv, r resumeRow, _ tmuxfix.SeedSession) apitest.DescCase {
+				var labelled []apitest.DescSession
+				for _, s := range e.rec.Sessions(r.Socket) {
+					if s.Label.InstanceID == r.ID {
+						labelled = append(labelled, apitest.DescSession{Name: s.Name, ID: s.ID})
+					}
+				}
+				return apitest.DescAbandonedLaunch(apitest.AbandonedLaunch{InstanceID: r.ID, Sessions: labelled,
+					Bound: e.cfg.EffectiveStartingSession()})
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) { rlkRun(t, tc) })
 	}

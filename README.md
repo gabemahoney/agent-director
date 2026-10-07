@@ -412,7 +412,7 @@ can be changed, but never below its safe minimum.
 
 | Key | Unit | Default | Safe minimum | What it bounds |
 |---|---|---|---|---|
-| `starting_session_seconds` | s | 300 | **60** | Starting-session bound: until a finished row's own tmux session is this old, it counts as "still starting, retry later" rather than a conflict needing a human. Claude Code reports SessionStart within seconds. |
+| `starting_session_seconds` | s | 300 | **60** | Starting-session bound: until a finished row's own tmux session, or a session of an earlier launch of its id that the row does not track ("this id's own abandoned launch"), is this old, it counts as "still starting, retry later" rather than a conflict needing a human. Claude Code reports SessionStart within seconds. |
 | `stopping_window_seconds` | s | 90 | **30** | Stopping window: how long after an agent ends it counts as "still stopping, retry later". Covers Claude Code's SessionEnd hook budget plus teardown. |
 | `pending_grace_seconds` | s | 60 | **30**, or more (see below) | Grace period: how long `find-missing` leaves a launch alone after it starts, and how long the launch's SessionStart hook waits for agent-director to record the launch (never more than 540 s). The setting has no maximum. |
 | `query_timeout_ms` | ms | 1500 | none | Each tmux lookup and pane listing. |
@@ -610,10 +610,12 @@ the class of every tmux error, is in
   `/exit` it clears the line the agent's cursor is on, so an `/exit` the
   failed `pause` left typed is not doubled.
 - A `resume` or `spawn --reuse-finished` refused because the row's own
-  session or agent "appears to still be stopping" or "starting": wait and
-  retry. Refused with "this row's own id": stop and surface the named
-  session to a human ([Operator actions](#operator-actions)); never end it
-  yourself.
+  session or agent "appears to still be stopping" or "starting", or this
+  id's own abandoned launch "appears to still be starting": wait and
+  retry. Refused with "this row's own id", or with
+  `ErrTmuxSessionConflict` "this id's own abandoned launch": stop and
+  surface the named session to a human
+  ([Operator actions](#operator-actions)); never end it yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not
   retry until `get` shows it `ended` or `missing`. Then retry a `spawn`
   with `--claude-instance-id` by adding `--reuse-finished`; without it the
@@ -881,15 +883,19 @@ again and check that the session id still shows the `session_created` you
 noted; afterwards spawn the id with `--reuse-finished`.
 
 When `resume`, or a `spawn` with `--reuse-finished`, refuses with
-`ErrTmuxSessionConflict` ("left over from an earlier life" or "no valid
-instance id"), the row stays `ended` or `missing` (after "duplicate
-session" the error says whether the row was restored). The error names the
-session and its id (`$N`); the socket is the row's `tmux_socket`. For a
-leftover, handle each session it names as in steps 2 to 4 (if it says "and
-N more", find the others with the listing of step 1). For "no valid
-instance id", look first (steps 2 and 3): it may be a person's own session;
-end it as in step 4 only if it is not wanted. Then run the refused command
-again, whichever it was:
+`ErrTmuxSessionConflict` ("left over from an earlier life", "this id's own
+abandoned launch" or "no valid instance id"), the row stays `ended` or
+`missing` (after "duplicate session" the error says whether the row was
+restored). The error names the session and its id (`$N`); the socket is the
+row's `tmux_socket`. For a leftover, handle each session it names as in
+steps 2 to 4 (if it says "and N more", find the others with the listing of
+step 1). "This id's own abandoned launch" is a session of an earlier
+launch of this id that the row does not track; `kill-finished` does not
+end it, so handle each session it names as a leftover, as in steps 2 to 4.
+For "no valid instance id", look first (steps 2 and 3): it may be a
+person's own session; end it as in step 4 only if it is not wanted. Then
+run the refused command again, whichever it was (if the error said the
+row was not restored, only once `get` shows it `ended` or `missing`):
 
 ```sh
 # if resume was refused
@@ -1029,7 +1035,11 @@ jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>")
 In the second case the leftover never reported in to the row the spawn
 ended, so `kill-finished` answers "never reported in" and sends
 no kill: end the leftover by hand by its session id, as the leftover item
-above describes.
+above describes, before spawning the id again. A `--reuse-finished` spawn
+of the id made while the leftover still runs is refused with "this id's
+own abandoned launch": `ErrTmuxUnresponsive` ("appears to still be
+starting") while the leftover is younger than the starting-session bound
+(`starting_session_seconds`), `ErrTmuxSessionConflict` after.
 
 Handle each session as a leftover (steps 2 to 4 of "A leftover, or a
 session with no valid label, or one that never reported in on a finished

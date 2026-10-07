@@ -174,6 +174,16 @@ var ErrTmuxUnresponsive = tmux.ErrTmuxUnresponsive
 // if it could not be), when the requested name is held by a session left over
 // from an earlier life of the id, by another row's session, by a session of
 // another agent-director store or by one with no valid instance id, or when
+// tmux holds conflicting labels. resume, and spawn with the reuse opt-in,
+// return it before their launch onto a finished row, and after its
+// "duplicate session" with the row restored (the description says if it was
+// not), when a session is left over from an earlier life of the id, when the
+// row's own old session (or its agent process still running with no
+// session) is past the stopping window and the starting-session bound, when
+// this id's own abandoned launch (a session of an earlier launch of the id
+// while the row's latest launch records no session of its own) is past that
+// bound, when the name is held by another row's session, a session of
+// another agent-director store or one with no valid instance id, or when
 // tmux holds conflicting labels. kill returns it, with no kill sent, when the
 // session its lookup finds is not this launch's session, or when tmux holds
 // conflicting labels for the row.

@@ -17,7 +17,9 @@ import (
 // its retry sentence as the row's Retry) use
 // it, and so do reuse (the old row's lookup and its re-lookup) and kill's
 // finished-row opt-in, which takes steps 1 and 2 (unavailableError) and
-// replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no
+// replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). Both resume
+// and reuse also run its age step on this id's own abandoned launch
+// (abandonedLaunchError, resume_lookup.go; b.1n6). It makes no
 // tmux call, no store read or write, no trail write and no log line: a
 // refusal is reported by its error alone (SR-4.3). No description names a session-ending command, another
 // row's id or a label value, and the stopping texts never say "dead" or
@@ -55,6 +57,15 @@ type startingSessionRow struct {
 	RecordsPID bool
 	// RecordsSessionID reports that the row records a session id.
 	RecordsSessionID bool
+	// NoLaunchSessionRecorded reports that the row records a launch token but
+	// no session of that launch (neither a tmux server nor a pane identity),
+	// whatever left it so (recordsNoLaunchSession): for example a move or
+	// reset whose create failed and whose restore did not apply, or a plain
+	// spawn's row ended after its create failed. A session of an earlier
+	// launch of this id met then is this id's own abandoned launch
+	// (abandonedLaunchError; b.1n6), one the row does not track, and is
+	// refused by its age, not as a leftover.
+	NoLaunchSessionRecorded bool
 	// Consequence is the sentence saying what the caller's state is, in the
 	// cantTellRefusal.Consequence style: "" means nothingWasDone (a refusal
 	// before any write). A refusal that follows writes states what was done
@@ -92,9 +103,10 @@ type startingSessionCheck struct {
 }
 
 // checkStartingSession classifies row with the starting-session rule (SR-4.2).
-// session is the lookup's Ours session, or nil for Gone while the row's agent
-// process still runs; now is the verb's injected instant, read once after the
-// lookup returned.
+// session is the lookup's Ours session, the youngest session of this id's own
+// abandoned launch (abandonedLaunchError, with row.EndedAt nil), or nil for
+// Gone while the row's agent process still runs; now is the verb's injected
+// instant, read once after the lookup returned.
 func checkStartingSession(lim startingSessionLimits, now time.Time, row startingSessionRow, session *tmux.Session) startingSessionCheck {
 	return startingSessionCheck{row: row, class: tmux.StartingSession(tmux.StartingSessionInput{
 		EndedAt:          row.EndedAt,

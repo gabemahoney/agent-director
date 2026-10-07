@@ -51,7 +51,8 @@ func (r ResumeRestore) heldRetry() string {
 // returns after "duplicate session" (p.Restore set), its case named after the
 // launch: the quoted name the create asked for, p.SessionID when set,
 // the label sentence label requires and the restore's row sentence; never
-// "nothing was done" or "nothing was written", another restore result's
+// "nothing was done" or "nothing was written", the abandoned-launch conflict's
+// re-issue clause (abandonedReissue, b.1n6), another restore result's
 // sentence, "the row stays pending", that the row stays pending or will heal
 // unless the restore failed, plain spawn's row sentences ("new row"), the
 // reuse opt-in or old-holder sentence, or a label sentence that contradicts
@@ -66,7 +67,8 @@ func (c DescCase) afterResumeHeld(p HeldName, label heldLabel) DescCase {
 	}
 	restored := p.Restore.restorePhrase()
 	c.Name += ", " + p.Restore.Launch.name() + " after duplicate session"
-	req := append(withoutPhrases(c.Require, nothingWasDone, nothingWritten, retryLater), strconv.Quote(p.Name), restored)
+	req := append(withoutPhrases(c.Require, nothingWasDone, nothingWritten, retryLater, abandonedReissue),
+		strconv.Quote(p.Name), restored)
 	if p.SessionID != "" {
 		req = append(req, p.SessionID)
 	}
@@ -74,7 +76,7 @@ func (c DescCase) afterResumeHeld(p HeldName, label heldLabel) DescCase {
 		req = append(req, s)
 	}
 	mustNot := appendMissing(append([]string(nil), c.MustNot...), nothingWasDone, nothingWritten, rowStaysPending,
-		newRow, reuseOptInName, spawnOnlyHolder, retryLater, launchRetryRule)
+		newRow, reuseOptInName, spawnOnlyHolder, retryLater, launchRetryRule, abandonedReissue)
 	mustNot = appendMissing(mustNot, heldNotPendingStatements...)
 	mustNot = appendMissing(mustNot, label.wrong()...)
 	mustNot = appendMissing(mustNot, p.Restore.otherRestorePhrases()...)

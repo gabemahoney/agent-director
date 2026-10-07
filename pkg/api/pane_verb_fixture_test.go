@@ -365,11 +365,16 @@ func (e *killEnv) seedOurs(t *testing.T, r *killRow, panes ...tmuxfix.SeedPane) 
 }
 
 // seedLeftover seeds a leftover of an earlier launch of r with token under a
-// new name: this store's label for r's id and one pane carrying token.
-func (e *killEnv) seedLeftover(t *testing.T, r killRow, token string) tmuxfix.SeedSession {
+// new name: this store's label for r's id and one pane carrying token,
+// created now or, given age, that long before e's clock reads.
+func (e *killEnv) seedLeftover(t *testing.T, r killRow, token string, age ...time.Duration) tmuxfix.SeedSession {
 	t.Helper()
 	e.ensureServer(&r)
-	return e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "leftover-" + uuid.NewString()[:8],
+	var created int64 // zero: the recorder's current second
+	if len(age) > 0 {
+		created = e.clock.Now().Add(-age[0]).Unix()
+	}
+	return e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "leftover-" + uuid.NewString()[:8], Created: created,
 		Label: tmuxfix.Valid(token, r.ID, r.StoreID), Panes: []tmuxfix.SeedPane{{AdPane: token}}})
 }
 
