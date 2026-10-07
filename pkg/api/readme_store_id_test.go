@@ -23,17 +23,14 @@ import (
 )
 
 // runnableStoreIDLine returns the one sqlite3 line of the README's "This
-// store's id" item (storeIDItemCommands). It refuses a line that is not
+// store's id" item (storeIDItemCommands), refusing a line that is not
 // read-only, since the test runs it.
 func runnableStoreIDLine(t *testing.T) string {
 	t.Helper()
 	d := readMD(t, mdTopREADME)
 	cmds := storeIDItemCommands(t, d)
-	if len(cmds) != 1 {
-		t.Fatalf("%s %q: want exactly one sqlite3 line in a code block; found %q", d.path, storeIDItemTitle, cmds)
-	}
-	if !strings.HasPrefix(cmds[0], "sqlite3 -readonly ") {
-		t.Fatalf("%s %q: refusing to run a sqlite3 line without -readonly: %s", d.path, storeIDItemTitle, cmds[0])
+	if len(cmds) != 1 || !strings.HasPrefix(cmds[0], "sqlite3 -readonly ") {
+		t.Fatalf("%s %q: want exactly one sqlite3 line, with -readonly, in a code block; found %q", d.path, storeIDItemTitle, cmds)
 	}
 	return cmds[0]
 }
@@ -51,20 +48,19 @@ func holdStoreLock(t *testing.T, path string, d time.Duration) {
 	if err != nil {
 		t.Fatalf("lock holder conn: %v", err)
 	}
+	var n int
 	for _, q := range []string{"PRAGMA locking_mode=EXCLUSIVE", "BEGIN EXCLUSIVE"} {
 		if _, err := conn.ExecContext(ctx, q); err != nil {
 			t.Fatalf("lock holder %s: %v", q, err)
 		}
 	}
-	var n int
 	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM store_meta").Scan(&n); err != nil {
 		t.Fatalf("lock holder read: %v", err)
 	}
 	released := make(chan struct{})
 	time.AfterFunc(d, func() {
 		_, _ = conn.ExecContext(ctx, "COMMIT")
-		_ = conn.Close()
-		_ = db.Close()
+		_, _ = conn.Close(), db.Close()
 		close(released)
 	})
 	t.Cleanup(func() { <-released })
@@ -84,18 +80,15 @@ func operatorSQLiteRC(t *testing.T, rc string) string {
 	// to $HOME, and an empty home would put the file in the working directory.
 	uid := strconv.Itoa(os.Getuid())
 	u, err := user.LookupId(uid)
-	if err != nil {
-		t.Fatalf("passwd entry of uid %s: %v", uid, err)
-	}
-	if u.HomeDir == "" {
-		t.Fatalf("passwd entry of uid %s has no home directory; sqlite3 reads ~/.sqliterc from it", uid)
+	if err != nil || u.HomeDir == "" {
+		t.Fatalf("passwd entry of uid %s (%+v): %v; sqlite3 reads ~/.sqliterc from its home directory", uid, u, err)
 	}
 	lock, err := os.OpenFile(filepath.Join(os.TempDir(), "agent-director-sqliterc.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("~/.sqliterc lock: %v", err)
+	if err == nil {
+		t.Cleanup(func() { lock.Close() }) // releases the lock, after the file's removal below
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
 	}
-	t.Cleanup(func() { lock.Close() }) // releases the lock, after the file's removal below
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err != nil {
 		t.Fatalf("~/.sqliterc lock: %v", err)
 	}
 	path := filepath.Join(u.HomeDir, ".sqliterc")
@@ -117,9 +110,9 @@ func operatorSQLiteRC(t *testing.T, rc string) string {
 // TestReadmeStoreIDCommandPrintsStoreID runs the README's store-id line with
 // HOME at a temp dir holding a fresh store: closed, held open, while another
 // connection briefly holds its exclusive lock (b.ady), and under an operator
-// ~/.sqliterc that turns headers on (b.hk7).
-// A missing sqlite3 fails inside the sandbox (its image installs sqlite3, so a
-// skip there would hide a broken image) and skips only outside it.
+// ~/.sqliterc that turns headers on (b.hk7). A missing sqlite3 fails inside
+// the sandbox (its image installs sqlite3, so a skip there would hide a
+// broken image) and skips only outside it.
 func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("sqlite3"); err != nil {

@@ -46,9 +46,11 @@ func operatorActions(t *testing.T, d mdDoc) mdHeading {
 	return hs[0]
 }
 
-// TestREADMEOptInOnlyInOperatorActions checks every spelling of the opt-in, and
-// of agent-director-admin's kill-finished, in the README lies inside "Operator
-// actions", which names one of them and the opt-in's key facts.
+// TestREADMEOptInOnlyInOperatorActions checks every spelling of the opt-in,
+// and of agent-director-admin's kill-finished, in the README lies inside
+// "Operator actions", which names one of them and the opt-in's key facts; and
+// that no doc under docs/ or either package README names the opt-in, bar the
+// architecture doc's ad.kill.called trail field and docs/admin-reference.md.
 func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
 	t.Parallel()
 	d := readMD(t, mdTopREADME)
@@ -56,54 +58,40 @@ func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
 	from, to := sectionLines(d, h)
 	inside := 0
 	for i, line := range d.lines {
-		if !optInRe.MatchString(line) && !adminKillVerbRe.MatchString(line) {
-			continue
-		}
-		if i >= from && i < to {
+		switch {
+		case !optInRe.MatchString(line) && !adminKillVerbRe.MatchString(line):
+		case i >= from && i < to:
 			inside++
-			continue
+		default:
+			t.Errorf("%s:%d names the opt-in outside %q: %s", d.path, i+1, apitest.OperatorActionsTitle, strings.TrimSpace(line))
 		}
-		t.Errorf("%s:%d names the opt-in outside %q: %s", d.path, i+1, apitest.OperatorActionsTitle, strings.TrimSpace(line))
 	}
 	if inside == 0 {
 		t.Errorf("%s %q never names the opt-in (include-finished or kill-finished)", d.path, apitest.OperatorActionsTitle)
 	}
-
-	body := strings.Join(strings.Fields(d.body(h)), " ")
+	body := normalised(d.body(h))
 	for _, want := range []string{"never reported in", "ErrSpawnNotResumable", "kill_sent"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s %q lacks %q, a fact of the opt-in item", d.path, apitest.OperatorActionsTitle, want)
 		}
 	}
-}
 
-// TestREADMEOptInAbsentFromOtherDocs checks no doc under docs/ or either package
-// README names the opt-in, bar the architecture doc's ad.kill.called trail field
-// and docs/admin-reference.md, the admin binary's own reference (b.vqr).
-func TestREADMEOptInAbsentFromOtherDocs(t *testing.T) {
-	t.Parallel()
 	paths, err := filepath.Glob(filepath.Join(mdRepoRoot, "docs", "*.md"))
 	if err != nil {
 		t.Fatalf("glob docs: %v", err)
 	}
-	if !slices.Contains(paths, mdArchitecture) {
-		t.Fatalf("docs glob %v misses %s; the scan is vacuous", paths, mdArchitecture)
+	if !slices.Contains(paths, mdArchitecture) || !slices.Contains(paths, mdAdminReference) {
+		t.Fatalf("docs glob %v misses %s or %s; the scan is vacuous or its exemption names no file", paths, mdArchitecture, mdAdminReference)
 	}
-	if !slices.Contains(paths, mdAdminReference) {
-		t.Fatalf("docs glob %v misses %s; the exemption below names no file", paths, mdAdminReference)
-	}
-	paths = append(paths, "README.md", filepath.Join(mdRepoRoot, "pkg", "ts-bun-client", "README.md"))
-
-	for _, path := range paths {
+	for _, path := range append(paths, "README.md", filepath.Join(mdRepoRoot, "pkg", "ts-bun-client", "README.md")) {
 		if path == mdAdminReference {
 			continue
 		}
 		for i, line := range readMD(t, path).lines {
 			for _, m := range optInRe.FindAllStringIndex(line, -1) {
-				if path == mdArchitecture && isKillTrailField(line, m) {
-					continue
+				if path != mdArchitecture || !isKillTrailField(line, m) {
+					t.Errorf("%s:%d names the opt-in outside the README's %q: %s", path, i+1, apitest.OperatorActionsTitle, snippet(line, m))
 				}
-				t.Errorf("%s:%d names the opt-in outside the README's %q: %s", path, i+1, apitest.OperatorActionsTitle, snippet(line, m))
 			}
 		}
 	}

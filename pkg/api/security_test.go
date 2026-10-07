@@ -5,16 +5,12 @@ package api_test
 // SECRET=xyz (in their create's environment and their pane processes'), and
 // neither xyz, a row's launch token (so no label value), the other row's id
 // nor another store's id may appear in the verb's result, error description,
-// client log or trail. It is a per-verb table (kill first, Epic 10; plain
-// spawn's held name, Epic 13; then, each in its security_<verb>_test.go,
-// find-missing's lookup, Epic 14; read-pane, which writes no trail event,
-// Epic 11; send-keys on a live row and on a pending row with allow_pending,
-// Epic 11; pause, which writes no call event, Epic 11; expire, Epic 15, as
-// kept rows (ad.expire.kept) and deleted rows (no record); resume, Epic 16:
-// its pre-launch refusals and its held name after "duplicate session"; reuse,
-// Epic 17, run by TestSecurityReuse).
+// client log or trail. It is a per-verb table: kill (Epic 10) and plain
+// spawn's held name (Epic 13) here, each later verb in its
+// security_<verb>_test.go.
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,33 +56,32 @@ type securityScene struct {
 }
 
 // securityCase is one arrangement of a verb: the target row's spec, who holds
-// its name, the socket's server before the planted sessions are created,
-// extra setup, the expected error (nil: success) and description, the
-// record the call writes once for the subject with field values it carries,
-// records of the subject the arrangement writes during the call, and extra
-// checks of the call's result (nil: none).
+// its name, the socket's server before the planted sessions are created
+// (nil: the target's recorded one), extra setup, the expected error (nil:
+// success) and description, whether the call writes an
+// ad.provenance.disagree record, the record written once for the subject
+// ("": the verb's event) with field values it carries, events the
+// arrangement writes for the subject during the call (the agent's own
+// hooks), and extra checks of the call's result.
 type securityCase struct {
 	name     string
 	target   killRowSpec
 	holder   securityHolder
-	server   func(e *killEnv, socket string) // nil: the target's recorded server
+	server   func(e *killEnv, socket string)
 	arrange  func(t *testing.T, s *securityScene)
 	wantErr  error
 	desc     func(s *securityScene) apitest.DescCase
-	disagree bool           // the call writes at least one ad.provenance.disagree record
-	event    string         // the record written once for the subject; "": the verb's event
-	fields   map[string]any // values that record carries (nil: not checked)
-	others   []string       // events the arrangement writes for the subject during the call (the agent's own hooks)
-	// check makes extra checks of the call's result (nil: none).
-	check func(t *testing.T, s *securityScene, res any)
+	disagree bool
+	event    string
+	fields   map[string]any
+	others   []string
+	check    func(t *testing.T, s *securityScene, res any)
 }
 
-// securityVerb is one verb under SR-15: its call through the Client on the
-// scene's subject, the trail event it writes once per call ("": none, and no
-// record for the subject but the ad.provenance.disagree records a case
-// expects; securityCheckTrail), extra checks of
-// that record against the call's texts (description, client log, result;
-// nil: none), and its arrangements. A launch verb acts on a fresh id on
+// securityVerb is one verb under SR-15: its call on the scene's subject, the
+// trail event it writes once per call ("": none, securityCheckTrail), extra
+// checks of that record against the call's texts, its cases, and why they
+// cannot run in parallel ("": they do). A launch verb acts on a fresh id on
 // target's socket, requesting target's name, and makes one create.
 type securityVerb struct {
 	verb   string
@@ -95,145 +90,119 @@ type securityVerb struct {
 	call   func(t *testing.T, c *api.Client, s *securityScene) (any, error)
 	record func(t *testing.T, s *securityScene, rec map[string]any, texts map[string]string)
 	cases  []securityCase
-	serial string // why the verb's cases cannot run in parallel ("": they do)
+	serial string
 }
 
 // securityMovesHome is the serial reason of a verb whose call points HOME at
-// a fresh directory for its launch's files (t.Setenv).
+// a fresh directory for its launch's files (secMoveHome).
 const securityMovesHome = "its call sets HOME with t.Setenv"
 
-// securityVerbs is the per-verb table; later Epics append their verbs.
-var securityVerbs = append([]securityVerb{{
-	verb:  "kill",
-	event: "ad.kill.called",
+// secMoveHome points HOME at a fresh directory holding an empty .claude.json
+// for pre-trust; the trail stays where TestMain pinned it.
+func secMoveHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write .claude.json: %v", err)
+	}
+}
+
+// securityVerbs is the per-verb table.
+var securityVerbs = slices.Concat([]securityVerb{{
+	verb: "kill", event: "ad.kill.called", cases: securityKillCases,
 	call: func(_ *testing.T, c *api.Client, s *securityScene) (any, error) {
 		return c.Kill(api.KillParams{ClaudeInstanceID: s.subject})
 	},
-	cases: securityKillCases,
 }, {
-	verb:   "spawn",
-	event:  "ad.launch.name_held",
-	launch: true,
-	serial: securityMovesHome,
+	verb: "spawn", event: "ad.launch.name_held", launch: true, serial: securityMovesHome,
+	record: securityNameHeldRecord, cases: securitySpawnCases,
 	call: func(t *testing.T, c *api.Client, s *securityScene) (any, error) {
-		home := t.TempDir() // the trail is pinned by TestMain; the launch's files go here
-		t.Setenv("HOME", home)
-		if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}"), 0o600); err != nil {
-			t.Fatalf("write .claude.json: %v", err)
-		}
+		secMoveHome(t)
 		return c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: s.subject,
 			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
 	},
-	record: securityNameHeldRecord,
-	cases:  securitySpawnCases,
 }, {
-	verb:   "find-missing",
-	event:  "ad.launch.name_held",
-	call:   securityFindMissingCall,
-	record: securityFindMissingRecord,
-	cases:  securityFindMissingCases,
+	verb: "find-missing", event: "ad.launch.name_held", call: securityFindMissingCall,
+	record: securityFindMissingRecord, cases: securityFindMissingCases,
 }, {
-	verb:  "read-pane",
-	call:  securityReadPaneCall,
-	cases: securityReadPaneCases,
+	verb: "read-pane", call: securityReadPaneCall, cases: securityReadPaneCases,
 }, {
-	verb:  "send-keys",
-	event: "ad.send_keys.called",
-	call:  securitySendKeysCall(false),
+	verb: "send-keys", event: "ad.send_keys.called", call: securitySendKeysCall(false),
 	cases: securitySendKeysCases(store.StateWaiting),
 }, {
-	verb:  "send-keys allow_pending",
-	event: "ad.send_keys.called",
-	call:  securitySendKeysCall(true),
+	verb: "send-keys allow_pending", event: "ad.send_keys.called", call: securitySendKeysCall(true),
 	cases: securitySendKeysCases(store.StatePending),
 }, {
-	verb:  "pause",
-	call:  securityPauseCall,
-	cases: securityPauseCases,
+	verb: "pause", call: securityPauseCall, cases: securityPauseCases,
 }, {
 	verb: "expire", event: expireKeptEvent, call: securityExpireCall, record: securityExpireKeptRecord,
 	cases: securityExpireKeptCases,
 }, {
 	verb: "expire, deleted rows", call: securityExpireCall, cases: securityExpireGoneCases,
-}}, securityResumeVerbs...)
+}}, securityResumeVerbs, securityReuseVerbs)
+
+// secHeldBy is c twice: the target's name held by the no-id session, then by
+// the other row's session, each described by its desc (nil: c.desc).
+func secHeldBy(c securityCase, noIDDesc, otherDesc func(*securityScene) apitest.DescCase) []securityCase {
+	noID, other := c, c
+	noID.name, noID.holder = c.name+"name held by the no-id session", securityHolderNoID
+	other.name, other.holder = c.name+"name held by the other row's session", securityHolderOther
+	if noIDDesc != nil {
+		noID.desc, other.desc = noIDDesc, otherDesc
+	}
+	return []securityCase{noID, other}
+}
+
+// secOtherStoreHolder creates another store's session, labelled for the other
+// row, holding the target's name.
+func secOtherStoreHolder(t *testing.T, s *securityScene) {
+	id := securityCreate(t, s.e, s.target.Socket, s.target.Name, s.other.Token, s.other.ID, apitest.OtherStoreID(s.e.storeID))
+	s.extraSess = tmuxfix.SeedSession{ID: id, Name: s.target.Name}
+}
+
+// secDuplicate places a second session carrying the target's current label (conflicting labels).
+func secDuplicate(t *testing.T, s *securityScene) {
+	s.extraSess = s.e.seedOther(t, s.target.Socket,
+		tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
+}
+
+// secConflict is the conflicting-labels refusal naming the target's session and s.extraSess.
+func secConflict(s *securityScene) apitest.DescCase {
+	return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
+		Sessions: []apitest.DescSession{{Name: s.target.Session.Name, ID: s.target.Session.ID},
+			{Name: s.extraSess.Name, ID: s.extraSess.ID}}})
+}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,
 // conflicting-labels and Ours paths (SR-6.1).
-var securityKillCases = []securityCase{
-	{
-		name:    "gone, name held by the no-id session",
-		target:  killRowSpec{NoSession: true},
-		holder:  securityHolderNoID,
-		wantErr: api.ErrTmuxKillFailed,
-		desc: func(s *securityScene) apitest.DescCase {
-			return apitest.DescKillNoPane(s.target.ID, s.target.Name, s.target.AgentPID)
-		},
-	},
-	{
-		name:    "gone, name held by the other row's session",
-		target:  killRowSpec{NoSession: true},
-		holder:  securityHolderOther,
-		wantErr: api.ErrTmuxKillFailed,
-		desc: func(s *securityScene) apitest.DescCase {
-			return apitest.DescKillNoPane(s.target.ID, s.target.Name, s.target.AgentPID)
-		},
-	},
-	{
-		name:   "leftover",
-		target: killRowSpec{NoSession: true},
+var securityKillCases = append(secHeldBy(securityCase{name: "gone, ", target: killRowSpec{NoSession: true},
+	wantErr: api.ErrTmuxKillFailed, desc: func(s *securityScene) apitest.DescCase {
+		return apitest.DescKillNoPane(s.target.ID, s.target.Name, s.target.AgentPID)
+	}}, nil, nil),
+	securityCase{
+		name: "leftover", target: killRowSpec{NoSession: true}, wantErr: api.ErrTmuxSessionConflict,
 		arrange: func(t *testing.T, s *securityScene) {
 			s.e.seedSession(t, &s.target, tmuxfix.WithRowSessionLabel(s.target.old(), true))
 		},
-		wantErr: api.ErrTmuxSessionConflict,
 		desc: func(s *securityScene) apitest.DescCase {
 			return apitest.DescKillLeftover([]apitest.DescSession{{Name: s.target.Session.Name, ID: s.target.Session.ID}})
 		},
 	},
-	{
-		name: "conflicting labels",
-		arrange: func(t *testing.T, s *securityScene) {
-			s.extraSess = s.e.seedOther(t, s.target.Socket,
-				tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
-		},
-		wantErr: api.ErrTmuxSessionConflict,
-		desc: func(s *securityScene) apitest.DescCase {
-			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: s.target.ID, NothingWasDone: true,
-				Sessions: []apitest.DescSession{
-					{Name: s.target.Session.Name, ID: s.target.Session.ID},
-					{Name: s.extraSess.Name, ID: s.extraSess.ID},
-				}})
-		},
-		disagree: true,
-	},
-	{
-		name: "ours, success",
-		arrange: func(t *testing.T, s *securityScene) {
-			s.e.setAfterCall(tmux.CallKillPane, procfix.Gone(), s.target.AgentPID)
-		},
-	},
-}
+	securityCase{name: "conflicting labels", arrange: secDuplicate, wantErr: api.ErrTmuxSessionConflict,
+		desc: secConflict, disagree: true},
+	securityCase{name: "ours, success", arrange: func(t *testing.T, s *securityScene) {
+		s.e.setAfterCall(tmux.CallKillPane, procfix.Gone(), s.target.AgentPID)
+	}},
+)
 
 // securitySpawnCases meet plain spawn's "duplicate session" on the requested
-// name held by another row's session, a no-id session, a leftover of the new
+// name held by a no-id session, another row's session, a leftover of the new
 // id placed after the scan (SR-20.9), and another store's session (SR-9.4).
-var securitySpawnCases = []securityCase{
-	{
-		name:    "held by the other row's session",
-		target:  killRowSpec{NoSession: true},
-		holder:  securityHolderOther,
-		wantErr: api.ErrTmuxSessionConflict,
-		desc:    func(s *securityScene) apitest.DescCase { return apitest.DescHeldDifferentID(s.held(s.otherSess)) },
-	},
-	{
-		name:    "held by the no-id session",
-		target:  killRowSpec{NoSession: true},
-		holder:  securityHolderNoID,
-		wantErr: api.ErrTmuxSessionConflict,
-		desc:    func(s *securityScene) apitest.DescCase { return apitest.DescHeldNoValidID(s.held(s.noIDSess)) },
-	},
-	{
-		name:   "held by a leftover of the new id",
-		target: killRowSpec{NoSession: true},
+var securitySpawnCases = append(secHeldBy(securityCase{target: killRowSpec{NoSession: true}, wantErr: api.ErrTmuxSessionConflict},
+	func(s *securityScene) apitest.DescCase { return apitest.DescHeldNoValidID(s.held(s.noIDSess)) },
+	func(s *securityScene) apitest.DescCase { return apitest.DescHeldDifferentID(s.held(s.otherSess)) }),
+	securityCase{
+		name: "held by a leftover of the new id", target: killRowSpec{NoSession: true},
 		arrange: func(t *testing.T, s *securityScene) {
 			pid := s.e.newPID()
 			s.e.pc.Set(pid, procfix.Alive(apitest.LinuxProcStarttime).WithEnv(securityEnv()))
@@ -249,20 +218,14 @@ var securitySpawnCases = []securityCase{
 		wantErr: api.ErrTmuxSessionConflict,
 		desc:    func(s *securityScene) apitest.DescCase { return apitest.DescHeldLeftover(s.held(s.extraSess.ID)) },
 	},
-	{
-		name:   "held by another store's session",
-		target: killRowSpec{NoSession: true},
-		arrange: func(t *testing.T, s *securityScene) {
-			id := securityCreate(t, s.e, s.target.Socket, s.target.Name, s.other.Token, s.other.ID,
-				apitest.OtherStoreID(s.e.storeID))
-			s.extraSess = tmuxfix.SeedSession{ID: id, Name: s.target.Name}
-		},
+	securityCase{
+		name: "held by another store's session", target: killRowSpec{NoSession: true}, arrange: secOtherStoreHolder,
 		wantErr: api.ErrTmuxSessionConflict,
 		desc: func(s *securityScene) apitest.DescCase {
 			return apitest.DescHeldOtherStore(s.held(s.extraSess.ID), s.e.storeID)
 		},
 	},
-}
+)
 
 // held is the held-name description parameter for target's name held by
 // sessionID, after an applied end write.
@@ -327,15 +290,9 @@ func securityCreate(t *testing.T, e *killEnv, socket, name, token, id, storeID s
 	return reply.SessionID
 }
 
-// securityForbidden are the values nothing may carry: the secret, both rows'
-// launch tokens and an earlier launch's (the leftovers'; a label's content),
-// the other row's id, another store's id and s.forbid.
-func securityForbidden(s *securityScene) []string {
-	return append([]string{securitySecret, s.target.Token, s.other.Token, tmuxfix.OtherToken, s.other.ID,
-		apitest.OtherStoreID(s.e.storeID)}, s.forbid...)
-}
-
-// securityAbsent fails when text carries a securityForbidden value.
+// securityAbsent fails when text carries a forbidden value: the secret, both
+// rows' launch tokens and an earlier launch's (a label's content), the other
+// row's id, another store's id or s.forbid.
 func securityAbsent(t *testing.T, what, text string, s *securityScene) {
 	t.Helper()
 	for _, v := range securityForbidden(s) {
@@ -345,21 +302,23 @@ func securityAbsent(t *testing.T, what, text string, s *securityScene) {
 	}
 }
 
+func securityForbidden(s *securityScene) []string {
+	return append([]string{securitySecret, s.target.Token, s.other.Token, tmuxfix.OtherToken, s.other.ID,
+		apitest.OtherStoreID(s.e.storeID)}, s.forbid...)
+}
+
 // TestSecuritySecretAndOtherRowID checks SR-15 for every verb in the table:
 // no result, description, log line or trail record carries a forbidden value.
 func TestSecuritySecretAndOtherRowID(t *testing.T) {
-	// Serial: its spawn and resume cases set HOME with t.Setenv, and its cases scan every record written to
-	// the shared trail since their mark (runSecurityVerbs); its other cases run in parallel.
+	// Serial: its spawn, resume and reuse cases set HOME (and reuse's AGENT_DIRECTOR_INSTANCE_ID) with t.Setenv,
+	// and its cases scan every record written to the shared trail since their mark; its other cases run in parallel.
 	runSecurityVerbs(t, securityVerbs)
 }
 
-// runSecurityVerbs runs every case of verbs (reuse's: TestSecurityReuse).
-// Each case builds its own scene (store, tmux fake, random ids) and counts
-// only its subject's trail records, so the cases of a verb with no serial
-// reason run in parallel; scanning other cases' records too for the
-// forbidden values only widens that check. Its caller stays serial: the scan
-// covers every record written since the case's mark, which another test
-// running meanwhile could write.
+// runSecurityVerbs runs every case of verbs, each on its own scene, in
+// parallel unless its verb gives a serial reason. Its caller stays serial:
+// each case scans every trail record written since its mark, which another
+// test running meanwhile could write.
 func runSecurityVerbs(t *testing.T, verbs []securityVerb) {
 	for _, v := range verbs {
 		for _, c := range v.cases {
@@ -391,10 +350,7 @@ func runSecurityVerbs(t *testing.T, verbs []securityVerb) {
 				if c.check != nil {
 					c.check(t, s, res)
 				}
-				event := v.event
-				if c.event != "" {
-					event = c.event
-				}
+				event := cmp.Or(c.event, v.event)
 				if rec := securityCheckTrail(t, event, s, readAPITrailLines(t)[before:], c); rec != nil {
 					for k, want := range c.fields {
 						if got, ok := rec[k]; !ok || got != want {
@@ -452,12 +408,15 @@ func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []ma
 	return called[0]
 }
 
-// securityNameHeldRecord checks an ad.launch.name_held record: this store's
-// store_id, a boolean carries_this_id, and by-hand commands for the
-// identified holder that none of texts (description, client log, result)
-// carries.
+// securityNameHeldRecord checks an ad.launch.name_held record (and skips any
+// other a case pins): this store's store_id, a boolean carries_this_id, and
+// by-hand commands for the identified holder that none of texts
+// (description, client log, result) carries.
 func securityNameHeldRecord(t *testing.T, s *securityScene, rec map[string]any, texts map[string]string) {
 	t.Helper()
+	if rec["event"] != "ad.launch.name_held" {
+		return
+	}
 	if rec["store_id"] != s.e.storeID {
 		t.Errorf("store_id = %v; want this store's %q", rec["store_id"], s.e.storeID)
 	}

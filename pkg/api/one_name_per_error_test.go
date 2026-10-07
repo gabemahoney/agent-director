@@ -1,16 +1,14 @@
 package api_test
 
 // one_name_per_error_test.go holds the SR-1.5 one-name-per-error check: the
-// shared assertOneName helper, the catalogue-wide case, and one row per
-// tmux-caused error (and reachable ErrInternal case) the verbs return today,
-// driven through api.Client (or the exported api.Kill) with tmuxfix.Recorder
-// failure kinds. The spawnEnv fixture is in spawn_test.go, resumeEnv in
-// resume_fixture_test.go, killEnv in kill_fixture_test.go. Later verb Epics
-// extend this file (a oneName<Verb>Rows added to oneNameRows, every error
-// through assertOneName) instead of writing their own one-name check; the
-// pane verbs' rows are in one_name_pane_verbs_test.go, resume's pre-launch
-// and "duplicate session" rows in one_name_resume_test.go; reuse's run under
-// TestOneNameReuseReturnedErrors (one_name_reuse_test.go).
+// shared assertOneName helper, the catalogue-wide case, and oneNameRows, one
+// row per tmux-caused error (and reachable ErrInternal case) a verb returns
+// that no other test checks by catalogue match: the call-site table
+// (lookup_calltable_*_test.go) checks every lookup outcome's error, and the
+// spawn, reuse and advice-follow tests their own (kill's past the lookup are
+// TestAdviceFollow_C1 to C6's). The pane verbs' rows are in
+// one_name_pane_verbs_test.go and kill's finished-row opt-in's in
+// one_name_kill_optin_test.go.
 
 import (
 	"errors"
@@ -19,30 +17,29 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // assertOneName checks SR-1.5 on an error a verb returned: exactly one
 // errnames.Catalog entry matches err under errors.Is, it is want, and
 // errnames.Classify names it too. A want of "" or "ErrInternal" asserts that
-// no entry matches and Classify gives ErrInternal. Failures list every
-// matching entry. Task 2 of Epic 10 (the kill call-table and rewritten kill
-// tests) and Epics 11, 13 and 16/17 must call it on every tmux-caused error
-// they return.
+// no entry matches and Classify gives ErrInternal.
 func assertOneName(t testing.TB, err error, want string) {
 	t.Helper()
+	if want == "" {
+		want = "ErrInternal"
+	}
 	if err == nil {
-		t.Fatalf("err = nil; want %s", orInternal(want))
+		t.Fatalf("err = nil; want %s", want)
 	}
 	var matched []string
 	for _, e := range errnames.Catalog {
@@ -50,66 +47,34 @@ func assertOneName(t testing.TB, err error, want string) {
 			matched = append(matched, e.Name)
 		}
 	}
-	internal := want == "" || want == "ErrInternal"
-	switch {
-	case internal && len(matched) != 0:
-		t.Errorf("err %q matches catalogued %q; want none (ErrInternal)", err, matched)
-	case !internal && (len(matched) != 1 || matched[0] != want):
-		t.Errorf("err %q matches catalogued %q; want exactly [%s]", err, matched, want)
+	if internal := want == "ErrInternal"; internal && len(matched) != 0 || !internal && !slices.Equal(matched, []string{want}) {
+		t.Errorf("err %q matches catalogued %q; want exactly [%s] (none for ErrInternal)", err, matched, want)
 	}
-	if name, _ := errnames.Classify(err); name != orInternal(want) {
-		t.Errorf("Classify(%q) = %s; want %s", err, name, orInternal(want))
+	if name, _ := errnames.Classify(err); name != want {
+		t.Errorf("Classify(%q) = %s; want %s", err, name, want)
 	}
-}
-
-// orInternal is want, or ErrInternal when want is empty.
-func orInternal(want string) string {
-	if want == "" {
-		return "ErrInternal"
-	}
-	return want
 }
 
 // TestOneNameCatalogue: each catalogued sentinel, wrapped, and each typed
-// ErrTmuxNotAvailable carrier matches its own entry and no other.
+// ErrTmuxNotAvailable carrier matches its own entry and no other, so no class
+// sentinel (ErrTmuxUnresponsive, ErrTmuxSessionConflict, ErrTmuxKillFailed)
+// wraps the send, capture, create or unavailable one.
 func TestOneNameCatalogue(t *testing.T) {
 	t.Parallel()
 	for _, e := range errnames.Catalog {
-		t.Run(e.Name, func(t *testing.T) {
-			assertOneName(t, fmt.Errorf("verb: %w", e.Err), e.Name)
-		})
+		t.Run(e.Name, func(t *testing.T) { assertOneName(t, fmt.Errorf("verb: %w", e.Err), e.Name) })
 	}
-	t.Run("SocketDeniedError", func(t *testing.T) {
-		assertOneName(t, &spawn.SocketDeniedError{Socket: "/tmp/s", Consequence: "nothing was written"}, "ErrTmuxNotAvailable")
-	})
-	t.Run("SocketDirError", func(t *testing.T) {
-		assertOneName(t, fmt.Errorf("verb: %w", &tmux.SocketDirError{Socket: "/tmp/d/s", Dir: "/tmp/d",
-			Reason: tmux.SocketDirNotCreatable}), "ErrTmuxNotAvailable")
-	})
-}
-
-// TestOneNameTmuxClasses: an ErrTmuxUnresponsive, ErrTmuxSessionConflict or
-// ErrTmuxKillFailed error wraps none of the send, capture, create or unavailable sentinels.
-func TestOneNameTmuxClasses(t *testing.T) {
-	t.Parallel()
-	classes := map[string]error{"ErrTmuxUnresponsive": api.ErrTmuxUnresponsive,
-		"ErrTmuxSessionConflict": api.ErrTmuxSessionConflict, "ErrTmuxKillFailed": api.ErrTmuxKillFailed}
-	others := map[string]error{"ErrTmuxSendKeys": api.ErrTmuxSendKeys, "ErrTmuxCaptureFailed": api.ErrTmuxCaptureFailed,
-		"ErrTmuxSessionCreate": api.ErrTmuxSessionCreate, "ErrTmuxNotAvailable": api.ErrTmuxNotAvailable}
-	for name, class := range classes {
-		for other, sentinel := range others {
-			t.Run(name+"/"+other, func(t *testing.T) {
-				if err := fmt.Errorf("verb: %w", class); errors.Is(err, sentinel) {
-					t.Errorf("%s matches %s under errors.Is", name, other)
-				}
-			})
-		}
+	for name, err := range map[string]error{
+		"SocketDeniedError": &spawn.SocketDeniedError{Socket: "/tmp/s", Consequence: "nothing was written"},
+		"SocketDirError": fmt.Errorf("verb: %w", &tmux.SocketDirError{Socket: "/tmp/d/s", Dir: "/tmp/d",
+			Reason: tmux.SocketDirNotCreatable}),
+	} {
+		t.Run(name, func(t *testing.T) { assertOneName(t, err, "ErrTmuxNotAvailable") })
 	}
 }
 
-// oneNameRow is one returned error: run drives a verb through api.Client (or
-// its export_test seam for store failures) and returns its error; want is the
-// catalogued name, or "" for ErrInternal.
+// oneNameRow is one returned error: run drives a verb and returns its error;
+// want is the catalogued name, or "" for ErrInternal.
 type oneNameRow struct {
 	name string
 	want string
@@ -118,8 +83,7 @@ type oneNameRow struct {
 
 // oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
-	return slices.Concat(oneNameSpawnRows(), oneNameHeldRows(), oneNameResumeRows(), oneNameResumeLookupRows(),
-		oneNameResumeHeldRows(), oneNameInternalRows(), oneNameKillRows(), oneNameReadPaneRows(), oneNameSendKeysRows(),
+	return slices.Concat(oneNameSpawnRows(), oneNameResumeRows(), oneNameReadPaneRows(), oneNameSendKeysRows(),
 		oneNamePauseRows())
 }
 
@@ -132,214 +96,34 @@ func TestOneNameReturnedErrors(t *testing.T) {
 	}
 }
 
-// oneNameSpawn is a row that runs Client.Spawn with a caller-supplied id
-// (so the label scan runs) after setup prepares e and p.
-func oneNameSpawn(name, want string, setup func(t *testing.T, e spawnEnv, p *api.SpawnParams)) oneNameRow {
-	return oneNameRow{name: "spawn/" + name, want: want, run: func(t *testing.T) error {
-		e := newSpawnEnv(t)
-		if err := os.WriteFile(filepath.Join(e.home, ".claude.json"), []byte("{}"), 0o600); err != nil {
-			t.Fatalf("write .claude.json: %v", err)
-		}
-		p := api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: "one-" + uuid.NewString()[:8]}
-		setup(t, e, &p)
-		_, err := e.c.Spawn(p)
-		return err
-	}}
-}
-
-// scriptSpawn scripts s on every call of kind call on e's socket.
-func scriptSpawn(call tmux.Call, s tmuxfix.Script) func(*testing.T, spawnEnv, *api.SpawnParams) {
-	return func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) { e.rec.Script(e.socket, s, call) }
-}
-
-// oneNameSpawnRows are plain spawn's tmux-caused errors: socket resolution,
-// the label scan (SR-9.3) and the create-and-label (SR-9.4).
+// oneNameSpawnRows is plain spawn's label-scan socket refused (SR-9.3): the
+// one test of a spawn with a caller-supplied id, so the scan runs, under a
+// TMUX_TMPDIR that is a regular file. The scan's Can't tell errors are
+// cantTellError's, checked by the call-site table and TestScanCantTellRefuses.
 func oneNameSpawnRows() []oneNameRow {
-	lookup, create := tmux.CallLookup, tmux.CallCreate
-	return []oneNameRow{
-		oneNameSpawn("TMUX_TMPDIR is a regular file", "ErrTmuxNotAvailable", func(t *testing.T, _ spawnEnv, _ *api.SpawnParams) {
-			f := filepath.Join(t.TempDir(), "not-a-dir")
-			if err := os.WriteFile(f, nil, 0o600); err != nil {
-				t.Fatalf("write %s: %v", f, err)
+	return []oneNameRow{{name: "spawn/TMUX_TMPDIR is a regular file", want: "ErrTmuxNotAvailable", run: func(t *testing.T) error {
+		e := newSpawnEnv(t)
+		f := filepath.Join(t.TempDir(), "not-a-dir")
+		for path, data := range map[string][]byte{filepath.Join(e.home, ".claude.json"): []byte("{}"), f: nil} {
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatalf("write %s: %v", path, err)
 			}
-			t.Setenv("TMUX_TMPDIR", f)
-		}),
-		oneNameSpawn("scan: binary unavailable", "ErrTmuxNotAvailable", scriptSpawn(lookup, tmuxfix.Script{Failure: tmux.FailUnavailable})),
-		oneNameSpawn("scan: socket permission", "ErrTmuxNotAvailable", scriptSpawn(lookup, tmuxfix.Script{Failure: tmux.FailSocketDenied})),
-		oneNameSpawn("scan: timeout", "ErrTmuxUnresponsive", scriptSpawn(lookup, tmuxfix.Script{Failure: tmux.FailTimeout})),
-		oneNameSpawn("scan: unrecognised reply", "ErrTmuxUnresponsive", scriptSpawn(lookup,
-			tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: "scan: unexpected reply", ExitStatus: 1, HadStdout: true})),
-		oneNameSpawn("scan: leftover", "ErrTmuxSessionConflict", func(t *testing.T, e spawnEnv, p *api.SpawnParams) {
-			storeID, err := apitest.ReadStoreID(e.dbPath)
-			if err != nil {
-				t.Fatalf("ReadStoreID: %v", err)
-			}
-			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: "old-life",
-				Label: tmuxfix.Valid(tmuxfix.OtherToken, p.ClaudeInstanceID, storeID)})
-		}),
-		oneNameSpawn("scan: conflicting labels", "ErrTmuxSessionConflict", func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
-			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: "bystander"})
-			e.rec.SetScope(e.socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
-		}),
-		oneNameSpawn("create: binary unavailable", "ErrTmuxNotAvailable", scriptSpawn(create, tmuxfix.Script{Failure: tmux.FailUnavailable})),
-		oneNameSpawn("create: socket permission", "ErrTmuxNotAvailable", scriptSpawn(create, tmuxfix.Script{Failure: tmux.FailSocketDenied})),
-		oneNameSpawn("create: timeout", "ErrTmuxUnresponsive", scriptSpawn(create, tmuxfix.Script{Failure: tmux.FailTimeout})),
-		oneNameSpawn("create: non-zero exit, unparseable reply", "ErrTmuxUnresponsive", scriptSpawn(create,
-			tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: true})),
-		oneNameSpawn("create: no server", "ErrTmuxSessionCreate", scriptSpawn(create, tmuxfix.Script{Failure: tmux.FailNoServer})),
-		oneNameSpawn("create: session not labelled", "ErrTmuxSessionCreate", func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
-			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, create).
-				Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1}, tmux.CallSetLabel)
-		}),
-	}
-}
-
-// oneHeldName is the requested name the held-name rows' holder already holds.
-const oneHeldName = "one-held"
-
-// oneHeldHolders returns the sessions a held-name row seeds on e's socket.
-type oneHeldHolders func(t *testing.T, e spawnEnv, p *api.SpawnParams) []tmuxfix.SeedSession
-
-// oneNameHeld is a spawn row whose create answers "duplicate session" for
-// oneHeldName: holders (when set) are seeded before the spawn, and late
-// (when set) runs as the scan's lookup returns, before the create (SR-20.9).
-func oneNameHeld(name, want string, holders oneHeldHolders, late func(t *testing.T, e spawnEnv, p *api.SpawnParams)) oneNameRow {
-	return oneNameSpawn("held: "+name, want, func(t *testing.T, e spawnEnv, p *api.SpawnParams) {
-		p.TmuxSessionName, p.TmuxSessionNameSupplied = oneHeldName, true
-		if holders != nil {
-			e.rec.SeedSessions(e.socket, holders(t, e, p)...)
 		}
-		if late == nil {
-			return
-		}
-		scanned := false
-		e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
-			if !scanned {
-				scanned = true
-				late(t, e, p)
-			}
-		})
-	})
-}
-
-// oneHeldLabelled is one holder "$4" of oneHeldName labelled with OtherToken
-// for instance id (this id when id is "") under this store's id, or another
-// store's when otherStore is set.
-func oneHeldLabelled(t *testing.T, e spawnEnv, p *api.SpawnParams, id string, otherStore bool) tmuxfix.SeedSession {
-	t.Helper()
-	storeID, err := apitest.ReadStoreID(e.dbPath)
-	if err != nil {
-		t.Fatalf("ReadStoreID: %v", err)
-	}
-	if otherStore {
-		storeID = apitest.OtherStoreID(storeID)
-	}
-	if id == "" {
-		id = p.ClaudeInstanceID
-	}
-	return tmuxfix.SeedSession{ID: "$4", Name: oneHeldName, Label: tmuxfix.Valid(tmuxfix.OtherToken, id, storeID)}
-}
-
-// oneNameHeldRows are plain spawn's errors after "duplicate session" (SR-9.4,
-// SR-3.10, SR-1.4), one per re-lookup outcome.
-func oneNameHeldRows() []oneNameRow {
-	unlabelled := func(*testing.T, spawnEnv, *api.SpawnParams) []tmuxfix.SeedSession {
-		return []tmuxfix.SeedSession{{ID: "$4", Name: oneHeldName}}
-	}
-	relookup := func(s tmuxfix.Script) func(*testing.T, spawnEnv, *api.SpawnParams) {
-		s.Times = 1
-		return func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) { e.rec.Script(e.socket, s, tmux.CallLookup) }
-	}
-	conflict := "ErrTmuxSessionConflict"
-	return []oneNameRow{
-		oneNameHeld("left over from an earlier life", conflict, nil, func(t *testing.T, e spawnEnv, p *api.SpawnParams) {
-			e.rec.SeedSessions(e.socket, oneHeldLabelled(t, e, p, "", false))
-		}),
-		oneNameHeld("a different instance id", conflict, func(t *testing.T, e spawnEnv, p *api.SpawnParams) []tmuxfix.SeedSession {
-			return []tmuxfix.SeedSession{oneHeldLabelled(t, e, p, "other-"+uuid.NewString()[:8], false)}
-		}, nil),
-		oneNameHeld("another agent-director store", conflict, func(t *testing.T, e spawnEnv, p *api.SpawnParams) []tmuxfix.SeedSession {
-			return []tmuxfix.SeedSession{oneHeldLabelled(t, e, p, "", true)}
-		}, nil),
-		oneNameHeld("no valid instance id", conflict, unlabelled, nil),
-		oneNameHeld("conflicting labels", conflict, unlabelled, func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
-			e.rec.SetScope(e.socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
-		}),
-		oneNameHeld("vanished before the re-lookup", "ErrTmuxSessionCreate", unlabelled,
-			func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
-				e.rec.RemoveSessionAfter(tmux.CallCreate, e.socket, "$4")
-			}),
-		// Plain spawn names cannot hold $ or \, so two entries with one stored name stand in.
-		oneNameHeld("more than one listing entry matches", "ErrTmuxUnresponsive",
-			func(*testing.T, spawnEnv, *api.SpawnParams) []tmuxfix.SeedSession {
-				return []tmuxfix.SeedSession{{ID: "$4", Name: oneHeldName}, {ID: "$5", Name: oneHeldName}}
-			}, nil),
-		oneNameHeld("re-lookup timeout", "ErrTmuxUnresponsive", unlabelled, relookup(tmuxfix.Script{Failure: tmux.FailTimeout})),
-		oneNameHeld("re-lookup unrecognised reply", "ErrTmuxUnresponsive", unlabelled, relookup(tmuxfix.Script{
-			Failure: tmux.FailUnrecognized, FirstLine: "held: unexpected reply", ExitStatus: 1, HadStdout: true})),
-		oneNameHeld("re-lookup binary unavailable", "ErrTmuxNotAvailable", unlabelled,
-			relookup(tmuxfix.Script{Failure: tmux.FailUnavailable})),
-		oneNameHeld("re-lookup socket permission", "ErrTmuxNotAvailable", unlabelled,
-			relookup(tmuxfix.Script{Failure: tmux.FailSocketDenied})),
-	}
-}
-
-// oneNameResume is a row that runs Client.Resume on an ended row seeded with
-// opts, after setup prepares e.
-func oneNameResume(name, want string, setup func(t *testing.T, e *resumeEnv) []apitest.SpawnOption) oneNameRow {
-	return oneNameRow{name: "resume/" + name, want: want, run: func(t *testing.T) error {
-		e := newResumeEnv(t)
-		r := e.seedResumable(t, store.StateEnded, setup(t, e)...)
-		_, err := e.c.Resume(api.ResumeParams{ClaudeInstanceID: r.ID})
+		t.Setenv("TMUX_TMPDIR", f)
+		_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: "one-" + uuid.NewString()[:8]})
 		return err
-	}}
+	}}}
 }
 
-// scriptResume scripts s on every resume create.
-func scriptResume(s tmuxfix.Script) func(*testing.T, *resumeEnv) []apitest.SpawnOption {
-	return func(_ *testing.T, e *resumeEnv) []apitest.SpawnOption {
-		e.rec.Script(tmuxfix.AnySocket, s, tmux.CallCreate)
-		return nil
-	}
-}
-
-// oneNameResumeRows are resume's tmux-caused errors at its socket and its
-// create (SR-8.1, SR-8.5); its pre-launch refusals and its errors after
-// "duplicate session" are in one_name_resume_test.go.
+// oneNameResumeRows are resume's own ErrInternal cases: a control character
+// in the id, and a failed move to pending. Its socket, create and "duplicate
+// session" errors come from the code it shares with reuse
+// (spawn.ResolveRowLaunchSocket, finishedLaunch), checked through reuse by
+// TestSpawnReuseSocketRefused, TestSpawnReuseRestoreAfterEachLaunchFailure
+// and TestSpawnReuseTrailNameHeldPerOutcome, and through resume by the
+// call-site table and the advice-follow tests.
 func oneNameResumeRows() []oneNameRow {
 	return []oneNameRow{
-		oneNameResume("recorded socket's parent vanished", "ErrTmuxNotAvailable", func(t *testing.T, _ *resumeEnv) []apitest.SpawnOption {
-			return []apitest.SpawnOption{apitest.WithTmuxSocket(filepath.Join(userSocketDir(filepath.Join(t.TempDir(), "gone")), "default"))}
-		}),
-		oneNameResume("create: binary unavailable", "ErrTmuxNotAvailable", scriptResume(tmuxfix.Script{Failure: tmux.FailUnavailable})),
-		oneNameResume("create: socket permission", "ErrTmuxNotAvailable", scriptResume(tmuxfix.Script{Failure: tmux.FailSocketDenied})),
-		oneNameResume("create: timeout", "ErrTmuxUnresponsive", scriptResume(tmuxfix.Script{Failure: tmux.FailTimeout})),
-		oneNameResume("create: non-zero exit, unparseable reply", "ErrTmuxUnresponsive",
-			scriptResume(tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: true})),
-		oneNameResume("create: no server", "ErrTmuxSessionCreate", scriptResume(tmuxfix.Script{Failure: tmux.FailNoServer})),
-		oneNameResume("create: session not labelled", "ErrTmuxSessionCreate", func(_ *testing.T, e *resumeEnv) []apitest.SpawnOption {
-			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, tmux.CallCreate).
-				Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1}, tmux.CallSetLabel)
-			return nil
-		}),
-	}
-}
-
-// oneNameInternalRows are the ErrInternal cases reachable today: spawn's
-// collision pre-check read failure, resume's control-character id and its
-// failed move to pending.
-func oneNameInternalRows() []oneNameRow {
-	preCheck := func(name string, readErr error) oneNameRow {
-		return oneNameRow{name: "spawn/pre-check read fails: " + name, run: func(t *testing.T) error {
-			e := newSpawnEnv(t)
-			_, err := api.SpawnWithCollisionReader(e.c, failingCollisionReader{err: readErr},
-				api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: "one-" + uuid.NewString()[:8]})
-			return err
-		}}
-	}
-	return []oneNameRow{
-		preCheck("plain store error", errors.New("store: live spawn lookup: disk I/O error")),
-		preCheck("wraps ErrTmuxNotAvailable", fmt.Errorf("store: live spawn lookup: %w", tmux.ErrTmuxNotAvailable)),
 		{name: "resume/control character in the id", run: func(t *testing.T) error {
 			e := newResumeEnv(t)
 			suffix := uuid.NewString()[:8]
@@ -354,21 +138,14 @@ func oneNameInternalRows() []oneNameRow {
 			_, err := e.resume(r.ID)
 			return err
 		}},
+		// Reuse of a row already live after a reuse (SR-10.3); no other test reaches it.
+		{name: "spawn Reuse/live row: pending after a reuse", want: "ErrInstanceIdCollision", run: func(t *testing.T) error {
+			e := newKillEnv(t)
+			r := e.reusePending(t, agentAlive, reuseRowSpec{Age: time.Hour}, reuseRequest{})
+			_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+			return err
+		}},
 	}
-}
-
-// oneNameKill is a row that runs api.Kill on a row seeded with spec after
-// setup (when set) prepares e and r.
-func oneNameKill(name, want string, spec killRowSpec, setup func(t *testing.T, e *killEnv, r *killRow)) oneNameRow {
-	return oneNameRow{name: "kill/" + name, want: want, run: func(t *testing.T) error {
-		e := newKillEnv(t)
-		r := e.seedRow(t, spec)
-		if setup != nil {
-			setup(t, e, &r)
-		}
-		_, err := e.kill(r.ID)
-		return err
-	}}
 }
 
 // scriptKill scripts ss in order on every call of kind call on r's socket.
@@ -377,59 +154,5 @@ func scriptKill(call tmux.Call, ss ...tmuxfix.Script) func(*testing.T, *killEnv,
 		for _, s := range ss {
 			e.rec.Script(r.Socket, s, call)
 		}
-	}
-}
-
-// oneNameKillRows are kill's returned errors (SR-6.1): the three
-// ErrTmuxKillFailed variants and a survivor alone, both Leftover and
-// conflicting labels, each ErrTmuxNotAvailable and ErrTmuxUnresponsive
-// cause, and ErrInternal for each kind of unusable recorded name.
-func oneNameKillRows() []oneNameRow {
-	lookup, unreadable := tmux.CallLookup, killRowSpec{Agent: agentUnreadable}
-	noSession := func(name string) killRowSpec {
-		return killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(name)}}
-	}
-	timeout := tmuxfix.Script{Failure: tmux.FailTimeout}
-	return []oneNameRow{
-		oneNameKill("agent outlives the exit wait", "ErrTmuxKillFailed", killRowSpec{}, nil),
-		oneNameKill("only a survivor outlives the exit wait", "ErrTmuxKillFailed", killRowSpec{Teammates: 1},
-			func(_ *testing.T, e *killEnv, r *killRow) {
-				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
-			}),
-		oneNameKill("process unreadable, labelled session still there", "ErrTmuxKillFailed", unreadable,
-			func(t *testing.T, e *killEnv, r *killRow) {
-				scriptKill(tmux.CallKillPane, timeout)(t, e, r)
-				scriptKill(tmux.CallKillSession, timeout)(t, e, r)
-			}),
-		oneNameKill("gone, process running, no pane", "ErrTmuxKillFailed", killRowSpec{NoSession: true}, nil),
-		oneNameKill("leftover", "ErrTmuxSessionConflict", killRowSpec{NoSession: true},
-			func(t *testing.T, e *killEnv, r *killRow) {
-				e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
-			}),
-		oneNameKill("conflicting labels: scope value", "ErrTmuxSessionConflict", killRowSpec{},
-			func(_ *testing.T, e *killEnv, r *killRow) {
-				e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
-			}),
-		oneNameKill("conflicting labels: duplicate label", "ErrTmuxSessionConflict", killRowSpec{},
-			func(t *testing.T, e *killEnv, r *killRow) {
-				e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "dup-" + r.ID, Label: r.current()})
-			}),
-		oneNameKill("different server", "ErrTmuxNotAvailable", killRowSpec{}, func(t *testing.T, e *killEnv, r *killRow) {
-			e.rec.RebindServer(r.Socket, tmuxfix.Server{})
-			e.syncServers()
-			e.seedBystander(t, r.Socket)
-		}),
-		oneNameKill("binary unavailable", "ErrTmuxNotAvailable", killRowSpec{},
-			scriptKill(lookup, tmuxfix.Script{Failure: tmux.FailUnavailable})),
-		oneNameKill("socket permission", "ErrTmuxNotAvailable", killRowSpec{},
-			scriptKill(lookup, tmuxfix.Script{Failure: tmux.FailSocketDenied})),
-		oneNameKill("lookup timeout", "ErrTmuxUnresponsive", killRowSpec{}, scriptKill(lookup, timeout)),
-		oneNameKill("lookup unrecognised reply", "ErrTmuxUnresponsive", killRowSpec{}, scriptKill(lookup,
-			tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: callTableFirstLine(), ExitStatus: 1})),
-		oneNameKill("follow-up unanswered after a kill", "ErrTmuxUnresponsive", unreadable,
-			scriptKill(lookup, tmuxfix.Script{Times: 1}, timeout)),
-		oneNameKill("empty recorded name", "", noSession(""), nil),
-		oneNameKill("control character in the recorded name", "", noSession("ts-\x1b"), nil),
-		oneNameKill("recorded name tmux rewrites", "", noSession("a.b"), nil),
 	}
 }

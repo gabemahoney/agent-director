@@ -4,7 +4,8 @@ package api_test
 // removal procedure for a row whose recorded name cannot be used gives its
 // five steps in order, and that every tmux command in the section targets a
 // session or pane by id (SR-18.17, SR-20.6), on readme_sections_test.go's
-// shared mdDoc parser.
+// shared mdDoc parser. Its extractors and checkSteps serve every later
+// README procedure check.
 
 import (
 	"fmt"
@@ -24,8 +25,7 @@ const unusableNameItemTitle = "A row whose recorded name cannot be used"
 var byIDTargets = []string{"'<session id>'", "'<pane id>'"}
 
 var (
-	// codeFenceRe also matches fences indented under a nested list item.
-	codeFenceRe = regexp.MustCompile("^[ \t]*(`{3,}|~{3,})")
+	codeFenceRe = regexp.MustCompile("^[ \t]*(`{3,}|~{3,})") // also under a nested list item
 	codeSpanRe  = regexp.MustCompile("`([^`]+)`")
 	shellWordRe = regexp.MustCompile(`'[^']*'|\S+`)
 	stepRe      = regexp.MustCompile(`^(\d+)\.[ \t]`)
@@ -93,17 +93,14 @@ func (c tmuxCmd) targets() []string {
 
 // hasFlag reports whether c sets flag letter f.
 func (c tmuxCmd) hasFlag(f byte) bool {
-	for _, w := range c.args {
-		if letters, _, ok := flagLetters(w); ok && strings.IndexByte(letters, f) >= 0 {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.args, func(w string) bool {
+		letters, _, ok := flagLetters(w)
+		return ok && strings.IndexByte(letters, f) >= 0
+	})
 }
 
 // tmuxCommands collects the tmux commands of lines (README lines from index
-// first on): each fenced-block line and each inline code span. Later README
-// command checks use it, never their own collector.
+// first on), in line order: each fenced-block line and each inline code span.
 func tmuxCommands(lines []string, first int) []tmuxCmd {
 	var cmds []tmuxCmd
 	var prose strings.Builder
@@ -123,8 +120,7 @@ func tmuxCommands(lines []string, first int) []tmuxCmd {
 		}
 	}
 	for _, m := range codeSpanRe.FindAllStringSubmatchIndex(prose.String(), -1) {
-		at := sort.SearchInts(starts, m[0]+1) - 1
-		if c, ok := parseTmux(prose.String()[m[2]:m[3]], nums[at]); ok {
+		if c, ok := parseTmux(prose.String()[m[2]:m[3]], nums[sort.SearchInts(starts, m[0]+1)-1]); ok {
 			cmds = append(cmds, c)
 		}
 	}
@@ -139,12 +135,10 @@ type procStep struct {
 	lines []string
 }
 
-// text is the step's text with whitespace normalised.
-func (s procStep) text() string { return strings.Join(strings.Fields(strings.Join(s.lines, " ")), " ") }
+func (s procStep) text() string { return normalised(strings.Join(s.lines, " ")) }
 
 // numberedSteps splits lines (README lines from index first on) into their
 // top-level numbered steps; the list ends at an unindented non-step line.
-// Later README procedure checks use it, never their own list splitter.
 func numberedSteps(lines []string, first int) []procStep {
 	var steps []procStep
 	inFence := false
@@ -173,23 +167,8 @@ type cmdShape struct {
 }
 
 func (s cmdShape) matches(c tmuxCmd) bool {
-	if c.sub != s.sub || s.noFlag != 0 && c.hasFlag(s.noFlag) {
-		return false
-	}
-	for _, w := range s.want {
-		if !strings.Contains(c.text, w) {
-			return false
-		}
-	}
-	return true
-}
-
-func (s cmdShape) String() string {
-	out := fmt.Sprintf("tmux %s with %q", s.sub, s.want)
-	if s.noFlag != 0 {
-		out += fmt.Sprintf(" without -%c", s.noFlag)
-	}
-	return out
+	return c.sub == s.sub && (s.noFlag == 0 || !c.hasFlag(s.noFlag)) &&
+		!slices.ContainsFunc(s.want, func(w string) bool { return !strings.Contains(c.text, w) })
 }
 
 // stepSpec is one procedure step: content it must name and the tmux commands
@@ -215,17 +194,13 @@ func unusableNameSteps() []stepSpec {
 			{sub: "show-options", want: []string{socket, byID, "-v @ad_owner"}, noFlag: 'q'},
 			{sub: "show-environment", want: []string{socket, byID, "AGENT_DIRECTOR_INSTANCE_ID"}},
 		}},
-		{"end the session by id", []string{"by name", "`=`"}, []cmdShape{
-			{sub: "kill-session", want: []string{socket, byID}},
-			listing,
-		}},
+		{"end the session by id", []string{"by name", "`=`"}, []cmdShape{{sub: "kill-session", want: []string{socket, byID}}, listing}},
 		{"remove the row", []string{"agent-director-admin delete"}, nil},
 	}
 }
 
 // operatorActionsItem returns the item heading titled title, failing the test
-// unless it is exactly one heading inside "Operator actions". Later README
-// item checks use it, never their own heading search.
+// unless it is exactly one heading inside "Operator actions".
 func operatorActionsItem(t *testing.T, d mdDoc, title string) mdHeading {
 	t.Helper()
 	oa := operatorActions(t, d)
@@ -258,25 +233,32 @@ func checkSteps(t *testing.T, d mdDoc, item string, steps []procStep, want []ste
 			if i >= len(steps) {
 				t.Fatalf("%s %q: step %d (%s) is missing", d.path, item, i+1, w.name)
 			}
-			s := steps[i]
+			s, at := steps[i], fmt.Sprintf("%s:%d: step %d (%s)", d.path, steps[i].first+1, i+1, w.name)
 			if s.num != fmt.Sprint(i+1) {
-				t.Errorf("%s:%d: step %d (%s) is numbered %s", d.path, s.first+1, i+1, w.name, s.num)
+				t.Errorf("%s is numbered %s", at, s.num)
 			}
-			text := s.text()
 			for _, p := range w.prose {
-				if !strings.Contains(text, p) {
-					t.Errorf("%s:%d: step %d (%s) lacks %q", d.path, s.first+1, i+1, w.name, p)
+				if !strings.Contains(s.text(), p) {
+					t.Errorf("%s lacks %q", at, p)
 				}
 			}
 			all := tmuxCommands(s.lines, s.first)
 			rest := all
 			for _, shape := range w.cmds {
-				at := slices.IndexFunc(rest, shape.matches)
-				if at < 0 {
-					t.Errorf("%s:%d: step %d (%s) lacks, in order, %v; its tmux commands: %q", d.path, s.first+1, i+1, w.name, shape, cmdTexts(all))
+				k := slices.IndexFunc(rest, shape.matches)
+				if k < 0 {
+					var texts []string
+					for _, c := range all {
+						texts = append(texts, c.text)
+					}
+					without := ""
+					if shape.noFlag != 0 {
+						without = " without -" + string(shape.noFlag)
+					}
+					t.Errorf("%s lacks, in order, tmux %s with %q%s; its tmux commands: %q", at, shape.sub, shape.want, without, texts)
 					break
 				}
-				rest = rest[at+1:]
+				rest = rest[k+1:]
 			}
 		})
 	}
@@ -298,7 +280,6 @@ func TestReadmeOperatorActionsTargetsByID(t *testing.T) {
 			}
 		}
 	}
-
 	// The collector must find the procedure's commands, or the check is vacuous.
 	for _, sub := range []string{"list-sessions", "show-options", "kill-session"} {
 		if !slices.ContainsFunc(cmds, func(c tmuxCmd) bool { return c.sub == sub }) {
@@ -308,13 +289,4 @@ func TestReadmeOperatorActionsTargetsByID(t *testing.T) {
 	if targeted == 0 {
 		t.Errorf("%s %q: no tmux -t target collected from %d commands", d.path, apitest.OperatorActionsTitle, len(cmds))
 	}
-}
-
-// cmdTexts is cmds' texts, for failure messages.
-func cmdTexts(cmds []tmuxCmd) []string {
-	out := make([]string, len(cmds))
-	for i, c := range cmds {
-		out[i] = c.text
-	}
-	return out
 }

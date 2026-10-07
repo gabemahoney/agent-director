@@ -2,12 +2,10 @@ package api_test
 
 // security_expire_test.go is expire's part of SR-15's per-verb table
 // (security_test.go; Epic 15): a finished target row whose agent process is
-// gone meets the planted SECRET=xyz sessions on expire's Gone paths (a planted
-// session or another store's session holding the row's name; the row is
-// deleted, no ad.expire.kept), on its Leftover, conflicting-labels and Ours
-// paths (kept, one ad.expire.kept), and on a Gone row whose delete fails in
-// the store (logged, kept store_error). Nothing it returns, logs or writes
-// carries xyz, a launch token, the other row's id or another store's id.
+// gone meets the planted SECRET=xyz sessions on expire's Gone paths (the row
+// is deleted, no ad.expire.kept), on its Leftover, conflicting-labels and
+// Ours paths (kept, one ad.expire.kept), and on a Gone row whose delete fails
+// in the store (logged, kept store_error).
 
 import (
 	"encoding/json"
@@ -16,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -46,11 +42,6 @@ func exSecTarget(noSession bool) killRowSpec {
 		Opts: []apitest.SpawnOption{apitest.WithEndedAt(killClockStart.Add(-24 * time.Hour))}}
 }
 
-// exSecKept is the ad.expire.kept fields of a row kept with reason.
-func exSecKept(reason string) map[string]any {
-	return map[string]any{"reason": reason, "source": "ad_expire"}
-}
-
 // exSecResult checks that the result deleted the target (deleted) or kept it,
 // and that the row is gone or still there to match.
 func exSecResult(deleted bool) func(*testing.T, *securityScene, any) {
@@ -74,56 +65,31 @@ func exSecResult(deleted bool) func(*testing.T, *securityScene, any) {
 // securityExpireGoneCases meet the planted sessions on expire's Gone paths: a
 // holder of each kind, and another store's session with this launch's name,
 // token and id (WD 2026-09-29 STORE). Each deletes the row and writes no record for it.
-var securityExpireGoneCases = []securityCase{
-	{
-		name:   "gone, name held by the no-id session",
-		target: exSecTarget(true),
-		holder: securityHolderNoID,
-		check:  exSecResult(true),
-	},
-	{
-		name:   "gone, name held by the other row's session",
-		target: exSecTarget(true),
-		holder: securityHolderOther,
-		check:  exSecResult(true),
-	},
-	{
-		name:   "gone, another store's session with this launch's name, token and id",
-		target: exSecTarget(true),
+var securityExpireGoneCases = append(secHeldBy(securityCase{name: "gone, ", target: exSecTarget(true), check: exSecResult(true)}, nil, nil),
+	securityCase{
+		name: "gone, another store's session with this launch's name, token and id", target: exSecTarget(true),
 		arrange: rpSecOtherStore(func(s *securityScene) string { return s.target.Name },
 			func(s *securityScene) string { return s.target.Token }),
 		check: exSecResult(true),
-	},
-}
+	})
 
 // securityExpireKeptCases meet the planted sessions on expire's Leftover,
 // conflicting-labels and Ours paths (SR-12.2): each keeps the row, with one ad.expire.kept.
 var securityExpireKeptCases = []securityCase{
 	{
-		name:   "leftover",
-		target: exSecTarget(true),
+		name: "leftover", target: exSecTarget(true),
 		arrange: func(t *testing.T, s *securityScene) {
 			s.e.seedSession(t, &s.target, tmuxfix.WithRowSessionLabel(s.target.old(), true))
 		},
-		fields: exSecKept("leftover_running"),
-		check:  exSecResult(false),
+		fields: map[string]any{"reason": "leftover_running", "source": "ad_expire"}, check: exSecResult(false),
 	},
 	{
-		name:   "conflicting labels",
-		target: exSecTarget(false),
-		arrange: func(t *testing.T, s *securityScene) {
-			s.extraSess = s.e.seedOther(t, s.target.Socket,
-				tmuxfix.SeedSession{Name: "dup-" + uuid.NewString()[:8], Label: s.target.current()})
-		},
-		disagree: true,
-		fields:   exSecKept("provenance_conflict"),
-		check:    exSecResult(false),
+		name: "conflicting labels", target: exSecTarget(false), arrange: secDuplicate, disagree: true,
+		fields: map[string]any{"reason": "provenance_conflict", "source": "ad_expire"}, check: exSecResult(false),
 	},
 	{
-		name:   "ours",
-		target: exSecTarget(false),
-		fields: exSecKept("ours"),
-		check:  exSecResult(false),
+		name: "ours", target: exSecTarget(false),
+		fields: map[string]any{"reason": "ours", "source": "ad_expire"}, check: exSecResult(false),
 	},
 }
 

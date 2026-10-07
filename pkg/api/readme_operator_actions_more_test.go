@@ -3,7 +3,7 @@ package api_test
 // readme_operator_actions_more_test.go checks the README's "Operator actions"
 // items for stopping a set of agents and an install outside the caller's
 // switch-over (AC-DOC-19, SR-18.17), and "This store's id" with the items that
-// point to it, on readme_operator_actions_test.go's helpers.
+// point to it (SR-5.4), on readme_operator_actions_test.go's helpers.
 
 import (
 	"fmt"
@@ -48,33 +48,20 @@ func storeIDItemCommands(t *testing.T, d mdDoc) []string {
 	return cmds
 }
 
-// liveAndTerminalStates splits every spawns state constant by
-// store.IsLiveState (the store's liveStates set), keeping their order.
-func liveAndTerminalStates() (live, terminal []string) {
+// liveStateForms is the two accepted ways a step names the live states: every
+// live state, or every state but the terminal ones (store.IsLiveState splits
+// the state constants).
+func liveStateForms() [][]string {
+	var live, terminal []string
 	for _, s := range []string{store.StatePending, store.StateWaiting, store.StateWorking,
 		store.StateAskUser, store.StateCheckPermission, store.StateEnded, store.StateMissing} {
 		if store.IsLiveState(s) {
-			live = append(live, s)
+			live = append(live, "`"+s+"`")
 		} else {
-			terminal = append(terminal, s)
+			terminal = append(terminal, "`"+s+"`")
 		}
 	}
-	return live, terminal
-}
-
-func backticked(ss []string) []string {
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = "`" + s + "`"
-	}
-	return out
-}
-
-// liveStateForms is the two accepted ways a step names the live states:
-// every live state, or every state but the terminal ones.
-func liveStateForms() [][]string {
-	live, terminal := liveAndTerminalStates()
-	return [][]string{backticked(live), {"any state but " + strings.Join(backticked(terminal), " and ")}}
+	return [][]string{live, {"any state but " + strings.Join(terminal, " and ")}}
 }
 
 // stepForms requires step (1 on) to hold every string of at least one form.
@@ -174,12 +161,11 @@ func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 		}
 		prev = h
 	}
-
 	for _, it := range acDoc19Items() {
 		t.Run(it.title, func(t *testing.T) {
 			from, to := sectionLines(d, operatorActionsItem(t, d, it.title))
 			lines := d.lines[from:to]
-			text := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+			text := normalised(strings.Join(lines, " "))
 			for _, p := range it.prose {
 				if !strings.Contains(text, p) {
 					t.Errorf("%s %q lacks %q", d.path, it.title, p)
@@ -193,11 +179,8 @@ func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 			}
 			for _, p := range it.procs {
 				t.Run(p.name, func(t *testing.T) {
-					at := 0
-					for at < len(lines) && !strings.HasPrefix(lines[at], p.lead) {
-						at++
-					}
-					if at == len(lines) {
+					at := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, p.lead) })
+					if at < 0 {
 						t.Fatalf("%s %q has no line starting %q", d.path, it.title, p.lead)
 					}
 					steps := numberedSteps(lines[at:], from+at)
@@ -208,13 +191,12 @@ func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 								t.Fatalf("%s %q: step %d (%s) is missing", d.path, it.title, f.step, f.name)
 							}
 							text := steps[f.step-1].text()
-							for _, form := range f.forms {
-								if !slices.ContainsFunc(form, func(s string) bool { return !strings.Contains(text, s) }) {
-									return
-								}
+							if !slices.ContainsFunc(f.forms, func(form []string) bool {
+								return !slices.ContainsFunc(form, func(s string) bool { return !strings.Contains(text, s) })
+							}) {
+								t.Errorf("%s:%d: step %d (%s) holds none of these forms in full: %q; its text: %s",
+									d.path, steps[f.step-1].first+1, f.step, f.name, f.forms, text)
 							}
-							t.Errorf("%s:%d: step %d (%s) holds none of these forms in full: %q; its text: %s",
-								d.path, steps[f.step-1].first+1, f.step, f.name, f.forms, text)
 						})
 					}
 				})
@@ -227,7 +209,7 @@ func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 // text, Go source or package README names either AC-DOC-19 item.
 func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 	t.Parallel()
-	fold := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	fold := func(s string) string { return strings.ToLower(normalised(s)) }
 	knownSeen := false
 	check := func(source, text string) {
 		text = fold(text)
@@ -243,9 +225,7 @@ func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 	for _, rel := range []string{"pkg/api/README.md", "pkg/ts-bun-client/README.md"} {
 		check(rel, strings.Join(readMD(t, filepath.Join(mdRepoRoot, rel)).lines, "\n"))
 	}
-
-	// The scanned texts point to the section itself, or the scan is vacuous.
-	if !knownSeen {
+	if !knownSeen { // the scanned texts point to the section itself, or the scan is vacuous
 		t.Errorf("no scanned text names %q; the scan missed the agent-visible texts", apitest.OperatorActionsTitle)
 	}
 }
@@ -255,13 +235,10 @@ func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 	t.Parallel()
 	d := readMD(t, mdTopREADME)
-	h := operatorActionsItem(t, d, storeIDItemTitle)
-	cmds := storeIDItemCommands(t, d)
-	if len(cmds) != 1 || strings.Join(strings.Fields(cmds[0]), " ") != storeIDCommand {
+	if cmds := storeIDItemCommands(t, d); len(cmds) != 1 || normalised(cmds[0]) != storeIDCommand {
 		t.Errorf("%s %q gives sqlite3 commands %q; want exactly %q", d.path, storeIDItemTitle, cmds, storeIDCommand)
 	}
-
-	text := strings.Join(strings.Fields(d.body(h)), " ")
+	text := normalised(d.body(operatorActionsItem(t, d, storeIDItemTitle)))
 	for _, want := range []string{"agents' user", "16 lowercase hexadecimal characters", "changes nothing",
 		"`db_path`", "prerequisite of `install.sh`", "`ad.launch.name_held`"} {
 		if !strings.Contains(text, want) {
@@ -287,12 +264,10 @@ func TestReadmeOperatorActionsStoreIDPointers(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("%s step %d", c.item, c.step), func(t *testing.T) {
 			from, to := sectionLines(d, operatorActionsItem(t, d, c.item))
-			text := strings.Join(strings.Fields(strings.Join(d.lines[from:to], " ")), " ")
-			if c.step > 0 {
-				steps := numberedSteps(d.lines[from:to], from)
-				if len(steps) < c.step {
-					t.Fatalf("%s %q has %d numbered steps; want step %d", d.path, c.item, len(steps), c.step)
-				}
+			text := normalised(strings.Join(d.lines[from:to], " "))
+			if steps := numberedSteps(d.lines[from:to], from); c.step > len(steps) {
+				t.Fatalf("%s %q has %d numbered steps; want step %d", d.path, c.item, len(steps), c.step)
+			} else if c.step > 0 {
 				text = steps[c.step-1].text()
 			}
 			for _, want := range []string{link, "`store_id`"} {

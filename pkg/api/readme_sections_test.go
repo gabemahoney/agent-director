@@ -3,9 +3,9 @@ package api_test
 // readme_sections_test.go checks the README sections that descriptions and
 // docs point to (SR-1.4, SR-18.1, SR-18.17): the "Operator actions" and
 // caller-contract headings exist exactly once, every pointer to a README
-// section by title names one, and every anchored link resolves to exactly one
-// heading. Later Epics (Epic 19's removal procedure included) add their
-// section checks here on the shared mdDoc parser.
+// section by title names one, every relative link names an existing path and
+// every anchored link resolves to exactly one heading. It holds the one
+// Markdown parser (mdDoc) every README check uses.
 
 import (
 	"fmt"
@@ -21,16 +21,13 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
-// Paths as seen from pkg/api/, where the test runs.
+// Paths as seen from pkg/api/, where the test runs, and the caller-contract
+// headings (SR-18.1): the README summary and the architecture doc's full
+// contract it links to.
 const (
-	mdRepoRoot     = "../.."
-	mdTopREADME    = "../../README.md"
-	mdArchitecture = "../../docs/architecture.md"
-)
-
-// The caller-contract headings (SR-18.1): the README summary and the
-// architecture doc's full contract it links to.
-const (
+	mdRepoRoot                 = "../.."
+	mdTopREADME                = "../../README.md"
+	mdArchitecture             = "../../docs/architecture.md"
 	callerContractTitle        = "Caller contract"
 	callerContractClassesTitle = "Caller contract: tmux refusal classes"
 )
@@ -87,20 +84,18 @@ func readMD(t testing.TB, path string) mdDoc {
 
 // titled returns the headings whose title is exactly title.
 func (d mdDoc) titled(title string) []mdHeading {
-	var out []mdHeading
-	for _, h := range d.headings {
-		if h.title == title {
-			out = append(out, h)
-		}
-	}
-	return out
+	return d.where(func(h mdHeading) bool { return h.title == title })
 }
 
 // anchored returns the headings whose GitHub anchor is anchor.
 func (d mdDoc) anchored(anchor string) []mdHeading {
+	return d.where(func(h mdHeading) bool { return mdAnchor(h.title) == anchor })
+}
+
+func (d mdDoc) where(keep func(mdHeading) bool) []mdHeading {
 	var out []mdHeading
 	for _, h := range d.headings {
-		if mdAnchor(h.title) == anchor {
+		if keep(h) {
 			out = append(out, h)
 		}
 	}
@@ -121,7 +116,7 @@ func (d mdDoc) body(h mdHeading) string {
 
 // nearMiss names a heading equal to title but for case or spacing, if any.
 func (d mdDoc) nearMiss(title string) string {
-	fold := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	fold := func(s string) string { return strings.ToLower(normalised(s)) }
 	for _, h := range d.headings {
 		if h.title != title && fold(h.title) == fold(title) {
 			return h.title
@@ -146,7 +141,8 @@ func mdAnchor(title string) string {
 }
 
 // TestREADMESectionHeadings checks each pointed-to section heading exists
-// exactly once in its file (SR-18.1, SR-18.17).
+// exactly once in its file (SR-18.1, SR-18.17), and that the first sentence of
+// "Operator actions" says automated callers must not perform its actions.
 func TestREADMESectionHeadings(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ path, title string }{
@@ -158,19 +154,8 @@ func TestREADMESectionHeadings(t *testing.T) {
 			t.Errorf("%s has %d headings titled %q; want exactly one", c.path, n, c.title)
 		}
 	}
-}
-
-// TestREADMEOperatorActionsForHumansOnly checks the section's first sentence
-// says automated callers must not perform its actions (SR-18.17).
-func TestREADMEOperatorActionsForHumansOnly(t *testing.T) {
-	t.Parallel()
 	d := readMD(t, mdTopREADME)
-	hs := d.titled(apitest.OperatorActionsTitle)
-	if len(hs) == 0 {
-		t.Fatalf("%s has no heading titled %q", d.path, apitest.OperatorActionsTitle)
-	}
-	text := strings.Join(strings.Fields(d.body(hs[0])), " ")
-	first, _, _ := strings.Cut(text, ". ")
+	first, _, _ := strings.Cut(normalised(d.body(operatorActions(t, d))), ". ")
 	for _, want := range []string{"automated callers", "must not perform"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("%s %q first sentence %q lacks %q", d.path, apitest.OperatorActionsTitle, first, want)
@@ -269,22 +254,17 @@ func TestREADMEPointersNameExistingSections(t *testing.T) {
 	d := readMD(t, mdTopREADME)
 	ptrs := collectREADMEPointers(t)
 	for _, p := range ptrs {
-		hs := d.titled(p.title)
+		hs, kind := d.titled(p.title), "section"
 		if p.byAnchor {
-			hs = d.anchored(p.title)
+			hs, kind = d.anchored(p.title), "section anchor"
 		}
-		if len(hs) == 1 {
-			continue
+		if len(hs) != 1 {
+			hint := ""
+			if near := d.nearMiss(p.title); near != "" {
+				hint = fmt.Sprintf("; differs from heading %q only in case or spacing", near)
+			}
+			t.Errorf("%s: points to README %s %q, which %s has %d times; want exactly one%s", p.source, kind, p.title, d.path, len(hs), hint)
 		}
-		hint := ""
-		if near := d.nearMiss(p.title); near != "" {
-			hint = fmt.Sprintf("; differs from heading %q only in case or spacing", near)
-		}
-		kind := "section"
-		if p.byAnchor {
-			kind = "section anchor"
-		}
-		t.Errorf("%s: points to README %s %q, which %s has %d times; want exactly one%s", p.source, kind, p.title, d.path, len(hs), hint)
 	}
 
 	// The collector must find the known pointer sites, or the check is vacuous.
@@ -308,24 +288,31 @@ func TestREADMEPointersNameExistingSections(t *testing.T) {
 	}
 }
 
-// TestREADMEAnchorLinksResolve checks every anchored Markdown link in the two
-// READMEs resolves to exactly one heading, the caller-contract links included.
+// TestREADMEAnchorLinksResolve checks every relative Markdown link in the two
+// READMEs names an existing path, and every anchored .md link resolves to
+// exactly one heading, the caller-contract links included.
 func TestREADMEAnchorLinksResolve(t *testing.T) {
 	t.Parallel()
 	type link struct{ from, to, anchor string }
 	var links []link
 	for _, from := range []string{mdTopREADME, "README.md"} {
-		d := readMD(t, from)
-		for _, m := range mdLinkRe.FindAllStringSubmatch(strings.Join(d.lines, "\n"), -1) {
-			target, anchor, ok := strings.Cut(m[2], "#")
-			if !ok || strings.Contains(target, "://") {
+		ms := mdLinkRe.FindAllStringSubmatch(strings.Join(readMD(t, from).lines, "\n"), -1)
+		if len(ms) == 0 {
+			t.Fatalf("no Markdown links found in %s; the link regex may be broken", from)
+		}
+		for _, m := range ms {
+			target, anchor, anchored := strings.Cut(m[2], "#")
+			if strings.Contains(target, "://") {
 				continue
 			}
 			to := from
 			if target != "" {
 				to = filepath.Join(filepath.Dir(from), target)
+				if _, err := os.Stat(to); err != nil {
+					t.Errorf("%s: link [%s](%s) names no existing path: %v", from, m[1], m[2], err)
+				}
 			}
-			if strings.HasSuffix(to, ".md") {
+			if anchored && strings.HasSuffix(to, ".md") {
 				links = append(links, link{from, filepath.Clean(to), anchor})
 			}
 		}

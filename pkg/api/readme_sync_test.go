@@ -1,7 +1,6 @@
 package api_test
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,253 +9,129 @@ import (
 	"testing"
 )
 
-// TestREADMEExamplesStayInSync asserts that each ExampleClient_* function's
-// labeled region (delimited by // README:start <name> / // README:end comments)
-// matches the corresponding Go code block in pkg/api/README.md.
-//
-// Structural match contract:
-//
-//   - Each ExampleClient_* function body contains exactly one
-//     // README:start <name> / // README:end pair.
-//   - The README has one Go (```go) fenced block per ### <Verb> section.
-//   - The heading name maps to the function: ### SendKeys → ExampleClient_SendKeys.
-//   - Comparison strips common leading whitespace from both sides and
-//     normalizes trailing whitespace per line; the // Output: block is excluded
-//     from the labeled region and therefore never appears in the comparison.
-//
-// When the test fails, update both the labeled region and the README block
-// together so they stay in sync.
+// TestREADMEExamplesStayInSync: each ExampleClient_<Verb> function's region
+// between "// README:start <func>" and "// README:end" (example_test.go)
+// matches the first ```go block under the "### <Verb>" heading of
+// pkg/api/README.md (normalizeCodeBlock); every block has a region and every
+// ExampleClient_ function a block. Update both together.
 func TestREADMEExamplesStayInSync(t *testing.T) {
 	t.Parallel()
-	readmeBlocks, err := readmeGoBlocks("README.md")
-	if err != nil {
-		t.Fatalf("parse README: %v", err)
+	blocks, regions := readmeGoBlocks(t, "README.md"), exampleLabeledRegions(t, "example_test.go")
+	if len(blocks) == 0 || len(regions) == 0 {
+		t.Fatalf("README.md has %d Go blocks under ### headings, example_test.go %d ExampleClient_ functions; want both (a parser is broken)",
+			len(blocks), len(regions))
 	}
-	if len(readmeBlocks) == 0 {
-		t.Fatal("no Go code blocks found under ### headings in README.md — parser may be broken")
-	}
-
-	exampleRegions, err := exampleLabeledRegions("example_test.go")
-	if err != nil {
-		t.Fatalf("parse example_test.go: %v", err)
-	}
-	if len(exampleRegions) == 0 {
-		t.Fatal("no // README:start markers found in example_test.go — labeling may be missing")
-	}
-
-	norm := normalizeCodeBlock
-
-	// Every README Go block must have a matching labeled region.
-	for fnName, readmeBlock := range readmeBlocks {
-		region, ok := exampleRegions[fnName]
+	for fn, block := range blocks {
+		region, ok := regions[fn]
 		if !ok {
-			t.Errorf("README has a Go block for %q (under ### %s) but example_test.go has no // README:start %s marker",
-				fnName, verbFromFuncName(fnName), fnName)
-			continue
-		}
-		if norm(readmeBlock) != norm(region) {
-			t.Errorf("README block for %s diverges from example_test.go labeled region:\n--- README\n%s\n+++ example_test.go\n%s",
-				fnName, norm(readmeBlock), norm(region))
+			t.Errorf("README has a Go block under ### %s but example_test.go has no // README:start %s marker",
+				strings.TrimPrefix(fn, "ExampleClient_"), fn)
+		} else if b, r := normalizeCodeBlock(block), normalizeCodeBlock(region); b != r {
+			t.Errorf("README block for %s diverges from example_test.go labeled region:\n--- README\n%s\n+++ example_test.go\n%s", fn, b, r)
 		}
 	}
-
-	// Every labeled region must have a matching README block.
-	for fnName := range exampleRegions {
-		if _, ok := readmeBlocks[fnName]; !ok {
-			t.Errorf("example_test.go has // README:start %s but README.md has no Go block under ### %s",
-				fnName, verbFromFuncName(fnName))
+	for fn := range regions {
+		if _, ok := blocks[fn]; !ok {
+			t.Errorf("example_test.go has %s but README.md has no Go block under ### %s", fn, strings.TrimPrefix(fn, "ExampleClient_"))
 		}
 	}
 }
 
-// ── README parser ─────────────────────────────────────────────────────────────
-
-// readmeGoBlocks extracts the Go fenced code blocks from the README, keyed by
-// ExampleClient_* function names derived from the preceding ### <Verb> heading.
-// Only H3 (###) headings trigger capture; H2 (##) sections are ignored.
-// Each heading resets after its first Go block so only one block per verb is
-// captured.
-func readmeGoBlocks(filename string) (map[string]string, error) {
+// readmeGoBlocks maps ExampleClient_<Verb> to the first ```go block after
+// each "### <Verb>" heading of filename (spaces dropped from the verb).
+func readmeGoBlocks(t *testing.T, filename string) map[string]string {
+	t.Helper()
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", filename, err)
+		t.Fatalf("read %s: %v", filename, err)
 	}
-
-	blocks := make(map[string]string)
-	var currentHeading string
-	inGoBlock := false
-	var blockLines []string
-
+	blocks := map[string]string{}
+	heading, in := "", false
+	var lines []string
 	for _, line := range strings.Split(string(data), "\n") {
 		switch {
 		case strings.HasPrefix(line, "### "):
-			currentHeading = strings.TrimSpace(strings.TrimPrefix(line, "### "))
-
-		case line == "```go" && currentHeading != "" && !inGoBlock:
-			inGoBlock = true
-			blockLines = nil
-
-		case line == "```" && inGoBlock:
-			inGoBlock = false
-			fnName := "ExampleClient_" + strings.ReplaceAll(currentHeading, " ", "")
-			blocks[fnName] = strings.Join(blockLines, "\n")
-			currentHeading = "" // consume heading; one Go block per verb
-
-		default:
-			if inGoBlock {
-				blockLines = append(blockLines, line)
-			}
+			heading = strings.TrimSpace(strings.TrimPrefix(line, "### "))
+		case line == "```go" && heading != "" && !in:
+			in, lines = true, nil
+		case line == "```" && in:
+			in = false
+			blocks["ExampleClient_"+strings.ReplaceAll(heading, " ", "")] = strings.Join(lines, "\n")
+			heading = "" // one block per verb
+		case in:
+			lines = append(lines, line)
 		}
 	}
-	return blocks, nil
+	return blocks
 }
 
-// ── example_test.go parser ───────────────────────────────────────────────────
-
-// exampleLabeledRegions uses go/parser to locate every ExampleClient_*
-// function in filename and extracts the raw source lines between each
-// function's // README:start <name> and // README:end comment markers.
-//
-// The AST provides structural correctness (markers must be inside a named
-// ExampleClient_* function body); the raw source bytes are used for faithful
-// text reproduction.
-func exampleLabeledRegions(filename string) (map[string]string, error) {
+// exampleLabeledRegions maps each ExampleClient_ function of filename to the
+// source lines strictly between its body's "// README:start <func>" and
+// "// README:end" comments ("" when it has no start marker).
+func exampleLabeledRegions(t *testing.T, filename string) map[string]string {
+	t.Helper()
 	src, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", filename, err)
+		t.Fatalf("read %s: %v", filename, err)
 	}
-
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", filename, err)
+		t.Fatalf("parse %s: %v", filename, err)
 	}
-
-	// srcLines is 0-indexed: srcLines[n-1] is the text of line n.
-	srcLines := strings.Split(string(src), "\n")
-
-	regions := make(map[string]string)
-
+	lines := strings.Split(string(src), "\n")
+	regions := map[string]string{}
 	for _, decl := range f.Decls {
-		fdecl, ok := decl.(*ast.FuncDecl)
-		if !ok || fdecl.Body == nil {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || !strings.HasPrefix(fd.Name.Name, "ExampleClient_") {
 			continue
 		}
-		fnName := fdecl.Name.Name
-		if !strings.HasPrefix(fnName, "ExampleClient_") {
-			continue
-		}
-
-		bodyStart := fset.Position(fdecl.Body.Lbrace).Line
-		bodyEnd := fset.Position(fdecl.Body.Rbrace).Line
-
-		var startLine, endLine int
-
+		from, to := fset.Position(fd.Body.Lbrace).Line, fset.Position(fd.Body.Rbrace).Line
+		start, end := 0, 0
 		for _, cg := range f.Comments {
 			for _, c := range cg.List {
-				cLine := fset.Position(c.Pos()).Line
-				// Only consider comments inside this function body.
-				if cLine <= bodyStart || cLine >= bodyEnd {
+				line, text := fset.Position(c.Pos()).Line, strings.TrimSpace(c.Text)
+				if line <= from || line >= to {
 					continue
 				}
-				text := strings.TrimSpace(c.Text)
-				if strings.HasPrefix(text, "// README:start ") {
-					name := strings.TrimSpace(strings.TrimPrefix(text, "// README:start "))
-					if name == fnName {
-						startLine = cLine
-					}
-				} else if text == "// README:end" && startLine > 0 {
-					endLine = cLine
+				if name, ok := strings.CutPrefix(text, "// README:start "); ok && strings.TrimSpace(name) == fd.Name.Name {
+					start = line
+				} else if text == "// README:end" && start > 0 {
+					end = line
 				}
 			}
 		}
-
-		if startLine == 0 {
-			// Missing // README:start marker — report as empty so the diff
-			// test reports a "no region" failure rather than a silent skip.
-			regions[fnName] = ""
-			continue
-		}
-		if endLine == 0 {
-			return nil, fmt.Errorf("%s: found // README:start %s on line %d but no matching // README:end in function body",
-				filename, fnName, startLine)
-		}
-
-		// Extract lines strictly between the two marker lines (exclusive).
-		// srcLines is 0-indexed; line N → srcLines[N-1].
-		if endLine > startLine+1 {
-			lines := srcLines[startLine : endLine-1] // lines after start, before end
-			regions[fnName] = strings.Join(lines, "\n")
-		} else {
-			regions[fnName] = ""
+		switch {
+		case start == 0:
+			regions[fd.Name.Name] = ""
+		case end == 0:
+			t.Fatalf("%s: // README:start %s on line %d has no // README:end in the function body", filename, fd.Name.Name, start)
+		default:
+			regions[fd.Name.Name] = strings.Join(lines[start:end-1], "\n")
 		}
 	}
-	return regions, nil
+	return regions
 }
 
-// ── normalisation helpers ─────────────────────────────────────────────────────
-
-// normalizeCodeBlock strips the common leading whitespace from every non-blank
-// line, trims trailing whitespace from each line, and drops leading/trailing
-// blank lines. Leading tabs are expanded to 4 spaces before comparison so that
-// README blocks (conventionally space-indented) and Go source (tab-indented)
-// compare equal. The result is a canonical form suitable for textual comparison
-// of code snippets regardless of their original indentation style or level.
+// normalizeCodeBlock expands leading tabs to 4 spaces, strips the common
+// leading whitespace of the non-blank lines and each line's trailing
+// whitespace, and drops trailing newlines, so a space-indented README block
+// and tab-indented Go source compare equal.
 func normalizeCodeBlock(s string) string {
-	s = strings.TrimRight(s, "\n")
-	lines := strings.Split(s, "\n")
-
-	// Expand leading tabs to 4 spaces so that space-indented and
-	// tab-indented blocks produce identical canonical forms.
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	indent := -1
 	for i, l := range lines {
-		lines[i] = expandLeadingTabs(l)
-	}
-
-	// Compute minimum leading-whitespace count across non-blank lines.
-	minIndent := -1
-	for _, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		n := len(l) - len(strings.TrimLeft(l, "\t "))
-		if minIndent < 0 || n < minIndent {
-			minIndent = n
+		tabs := len(l) - len(strings.TrimLeft(l, "\t"))
+		lines[i] = strings.Repeat("    ", tabs) + l[tabs:]
+		if n := len(lines[i]) - len(strings.TrimLeft(lines[i], "\t ")); strings.TrimSpace(lines[i]) != "" && (indent < 0 || n < indent) {
+			indent = n
 		}
 	}
-	if minIndent < 0 {
-		minIndent = 0
-	}
-
-	result := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if len(l) >= minIndent {
-			l = l[minIndent:]
+	for i, l := range lines {
+		if len(l) >= indent && indent > 0 {
+			l = l[indent:]
 		}
-		result = append(result, strings.TrimRight(l, " \t"))
+		lines[i] = strings.TrimRight(l, " \t")
 	}
-	return strings.TrimRight(strings.Join(result, "\n"), "\n")
-}
-
-// expandLeadingTabs replaces each leading tab character with 4 spaces.
-// Only leading tabs (before any non-whitespace character) are expanded;
-// tabs elsewhere in the line are left untouched.
-func expandLeadingTabs(s string) string {
-	i := 0
-	for i < len(s) && s[i] == '\t' {
-		i++
-	}
-	if i == 0 {
-		return s
-	}
-	return strings.Repeat("    ", i) + s[i:]
-}
-
-// verbFromFuncName strips the "ExampleClient_" prefix to get the verb name,
-// used in error messages.  Returns the input unchanged if the prefix is absent.
-func verbFromFuncName(fnName string) string {
-	const prefix = "ExampleClient_"
-	if strings.HasPrefix(fnName, prefix) {
-		return fnName[len(prefix):]
-	}
-	return fnName
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
