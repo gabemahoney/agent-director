@@ -26,8 +26,14 @@ const (
 	agentProcessItemTitle = "An agent process that runs with no session or pane of its launch"
 )
 
+// storeIDBusyTimeoutPlaceholder stands in storeIDCommand for the operator's
+// [store] busy_timeout_ms, which the README names instead of a literal
+// (b.c7f); the run of the line substitutes it.
+const storeIDBusyTimeoutPlaceholder = "<busy_timeout_ms>"
+
 // storeIDCommand is the documented read-only lookup of this store's id.
-const storeIDCommand = `sqlite3 -readonly -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
+const storeIDCommand = `sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ` + storeIDBusyTimeoutPlaceholder +
+	`" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
 
 // storeIDItemCommands returns the trimmed lines starting "sqlite3" in the
 // fenced blocks of the "This store's id" item. Both the command's pinned
@@ -240,7 +246,8 @@ func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 	}
 	text := normalised(d.body(operatorActionsItem(t, d, storeIDItemTitle)))
 	for _, want := range []string{"agents' user", "16 lowercase hexadecimal characters", "changes nothing",
-		"`db_path`", "prerequisite of `install.sh`", "`ad.launch.name_held`"} {
+		"`db_path`", "prerequisite of `install.sh`", "`ad.launch.name_held`",
+		"Replace `" + storeIDBusyTimeoutPlaceholder + "` with your config's `[store] busy_timeout_ms`"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%s %q lacks %q", d.path, storeIDItemTitle, want)
 		}

@@ -112,7 +112,8 @@ const hookExitCode = 0
 // and does NOT go through setupClient. This is required by SRD §3.2 fail-open:
 // hook fires must never be blocked by config or store failures. The pkg/api.Client
 // startup path is intentionally bypassed here; its store-path resolution is
-// not: both take the store from config.Store.EffectiveDbPath (b.8up).
+// not: both take the store from config.Store.EffectiveDbPath (b.8up), and its
+// busy timeout from config.Store.EffectiveBusyTimeoutMs (b.c7f).
 //
 // The function never returns an error; it logs and returns.
 func runHook() int {
@@ -165,7 +166,8 @@ func runHook() int {
 		earlyFailClosed(fmt.Sprintf("resolve store path: %v", err))
 		return hookExitCode
 	}
-	st, err := store.OpenOrInit(dbPath)
+	// With the busy timeout every verb's open uses too (b.c7f).
+	st, err := store.OpenOrInitWithBusyTimeout(dbPath, cfg.Store.EffectiveBusyTimeoutMs())
 	if err != nil {
 		earlyFailClosed(fmt.Sprintf("open store: %v", err))
 		return hookExitCode

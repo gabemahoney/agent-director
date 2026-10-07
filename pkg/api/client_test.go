@@ -130,12 +130,13 @@ func TestNewStorePath(t *testing.T) {
 	}
 }
 
-// TestNewRefusesConfig pins SR-4.1 and b.8q2 at the Go surface: a config that
-// parses but holds a refused [tmux], [relay] or [pause] value makes api.New
-// return no Client and that file's *config.ConfigError before the store is
-// opened, so even with CreateIfMissing nothing is created; the same file
-// without the value constructs a Client. 9223372036 is the relay value whose
-// guard cutoff wrapped; 9223372037 wrapped the relay and pause windows.
+// TestNewRefusesConfig pins SR-4.1, b.8q2 and b.c7f at the Go surface: a
+// config that parses but holds a refused [tmux], [relay], [pause] or [store]
+// value makes api.New return no Client and that file's *config.ConfigError
+// before the store is opened, so even with CreateIfMissing nothing is created;
+// the same file without the value constructs a Client. 9223372036 is the relay
+// value whose guard cutoff wrapped; 9223372037 wrapped the relay and pause
+// windows.
 func TestNewRefusesConfig(t *testing.T) {
 	t.Parallel()
 	type refused struct {
@@ -159,6 +160,10 @@ func TestNewRefusesConfig(t *testing.T) {
 	for _, v := range []int64{-1, 9223372037} {
 		cases[fmt.Sprintf("pause %d", v)] = refused{keys: apitest.ConfigKeys{PauseTimeoutSeconds: v},
 			refusal: &apitest.ConfigRefusal{PauseTimeout: true, Value: v}}
+	}
+	for _, v := range []int64{-1, int64(config.MaxStoreBusyTimeoutMs) + 1} {
+		cases[fmt.Sprintf("store busy timeout %d", v)] = refused{keys: apitest.ConfigKeys{StoreBusyTimeoutMs: v},
+			refusal: &apitest.ConfigRefusal{StoreBusyTimeout: true, Value: v}}
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

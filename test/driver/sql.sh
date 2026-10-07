@@ -11,9 +11,9 @@
 # removes the -wal/-shm files, or when the next opener rebuilds the WAL
 # index. A case that reads state.db right after one agent-director process
 # exits and another starts can land in that window (b.ai5: relay-3 failed
-# 1 run in 6). agent-director's own connections wait up to 10 s
-# (busy_timeout(10000) in internal/store/store.go); this helper makes the
-# case's connection wait too.
+# 1 run in 6). agent-director's own connections wait up to [store]
+# busy_timeout_ms, 10 s by default (internal/store/store.go openDB, b.c7f);
+# this helper makes the case's connection wait too.
 #
 # Usage: exactly as sqlite3; every argument and stdin pass through unchanged.
 #

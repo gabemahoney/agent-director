@@ -50,6 +50,15 @@ var matcherFields = map[hookEventName]bool{
 // no_pane_recorded, instead of being killed without a trail record. The
 // cap < timeout relation is not checked in code (internal/spawn does not
 // import internal/hook); each value is pinned in its own package's tests.
+//
+// The 60 s of headroom between the cap and this timeout assumes [store]
+// busy_timeout_ms is small (the default, 10 s): the hook's store writes
+// before and after the wait (up to four RecordSessionStartIdentity writes,
+// two on each side) each can wait up to busy_timeout_ms on a contended store,
+// and this timeout runs from the hook's start. From about 15 s per write the
+// hook can outlast the timeout and be killed without a trail record. Nothing
+// caps busy_timeout_ms against this headroom (b.c7f; see sessionStartWaitCap
+// in internal/hook).
 const sessionStartHookTimeoutSeconds = 600
 
 // synthesizeSettings builds the inline JSON passed to `claude --settings`.

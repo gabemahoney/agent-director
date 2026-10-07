@@ -67,14 +67,14 @@ in `init`. The verb registry
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. It still opens the verbs' store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook` and `newHookLogger` (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. It still opens the verbs' store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). It opens that store with `store.OpenOrInitWithBusyTimeout` and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook` and `newHookLogger` (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version`, taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h` and `version` open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`) and returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. It also declares the sentinels `ErrConfigMalformed` and `ErrStoreOpen`, which `pkg/api/errnames.Catalog` pairs with those names; `(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of either name (b.vma). `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` have no sentinel here and are not catalogued. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup or flag parser. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for the two sentinels: a cycle); direct `database/sql`. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s wait for a fallen-back request's relay hook) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; and `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause) and [Workspace-trust pre-write](#workspace-trust-pre-write)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds the two CLI-setup names `ErrConfigMalformed` and `ErrStoreOpen`, which `internal/clisetup.Open` gives before any verb runs (b.vma; see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (the sentinels `ErrConfigMalformed` and `ErrStoreOpen` only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags`; every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -119,13 +119,15 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   decoding, together with `[defaults] expire_retention_days` (see
   [`expire`](#expire)), `[relay] timeout_seconds` (see "Emitted per-hook
   relay timeout" in the spawn pipeline section), `[pause]
-  timeout_seconds` (see [`pause`](#pause)) and `[pre_trust]
+  timeout_seconds` (see [`pause`](#pause)), `[pre_trust]
   lock_wait_seconds` (see
-  [Workspace-trust pre-write](#workspace-trust-pre-write)), each of those
-  four refused when negative or above its `Max*` constant as "outside its
-  range 1 to <max> <unit>"; every refused key is described in one
-  `*config.ConfigError`, the tables in the order `[defaults]`, `[relay]`,
-  `[pause]`, `[pre_trust]`, `[tmux]`, each table's keys in table order. The description
+  [Workspace-trust pre-write](#workspace-trust-pre-write)) and `[store]
+  busy_timeout_ms` (see "Busy timeout" under
+  [`internal/store`](#internalstore)), each of those five refused when
+  negative or above its `Max*` constant as "outside its range 1 to <max>
+  <unit>"; every refused key is described in one `*config.ConfigError`,
+  the tables in the order `[defaults]`, `[relay]`, `[pause]`,
+  `[pre_trust]`, `[store]`, `[tmux]`, each table's keys in table order. The description
   opens "refused <tables> values: ", the tables with a refused key listed
   as one name, two joined by " and ", or three or more separated by ", "
   with " and " before the last (`nameList`, which also lists a key's
@@ -666,7 +668,7 @@ following symbols must appear **only** in the named exemption sites:
 
 | Symbol | Permitted in |
 | --- | --- |
-| `store.Open` / `store.OpenOrInit` | `runHook` only |
+| `store.Open` / `store.OpenOrInit`, and their `WithBusyTimeout` forms | `runHook` only |
 | `config.Load` | `runHook` and `newHookLogger` only; the Client's config load and logger bootstrap (Pin 3) are `internal/clisetup.Open`'s, which `setupClient` and `agent-director-admin` call |
 | `tmux.New` | none — `cmd/` must not construct a tmux client directly; `pkg/api.New` owns it |
 
@@ -715,6 +717,16 @@ in `config.toml` continues to hit that path without any extra flags or env
 vars. `install.sh` resolves tiers 2 and 3 on its own, in bash, to find the
 store it migrates; a drift guard holds the two resolutions together (see
 [Schema migration at install-time](#schema-migration-at-install-time)).
+
+**Busy timeout.** Whichever tier gives the path, an `Options.StorePath`
+included, `New` opens the store with the loaded config's `[store]
+busy_timeout_ms` (`config.Store.EffectiveBusyTimeoutMs`), through
+`store.OpenWithBusyTimeout`, or `store.OpenOrInitWithBusyTimeout` with
+`CreateIfMissing`, as `runHook` does (b.c7f; see "Busy timeout" under
+[`internal/store`](#internalstore)). `TestNewOpensStoreWithConfiguredBusyTimeout`
+(`pkg/api/store_busy_timeout_test.go`) pins this for an `Options.StorePath`
+and a `db_path`, and `TestHookCLIUsesConfiguredBusyTimeout`
+(`cmd/agent-director/hook_cli_test.go`) for the hook.
 
 **No usable home.** With `HOME` unset or empty, a `~/` path from any tier
 (or a `~/` `ConfigPath`) is never resolved against another home: `New`
@@ -1352,6 +1364,56 @@ the `store_meta` table (`migrateV4toV5`, b.fmk):
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
 a silent downgrade fails `Open` rather than yielding a half-broken Store.
+
+**Busy timeout (b.c7f).** The DSN also sets every connection's
+`busy_timeout` (`openDB`): on `SQLITE_BUSY` a statement retries for up to
+that many milliseconds while another connection, often another
+agent-director process, holds the lock, then fails with SQLite's
+`database is locked`. A verb then fails, and a hook logs the error and
+exits 0 with the row unchanged (fail-open). The wait is the opener's:
+`OpenWithBusyTimeout(path, ms)` and `OpenOrInitWithBusyTimeout(path, ms)`
+take it, and `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs` (10000,
+equal to `config.DefaultStoreBusyTimeoutMs`; the store imports no
+`internal/config`). The production openers, `pkg/api.New` and `runHook`,
+pass `config.Store.EffectiveBusyTimeoutMs`, the `[store] busy_timeout_ms`
+key, which a loaded config keeps from 1 to `math.MaxInt32`. SQLite turns
+the wait off for 0, a negative value and one above `math.MaxInt32`, so
+`openDB` never passes such a value on: the store opens with
+`DefaultBusyTimeoutMs` in its place (`busyTimeoutOrDefault`), whichever
+opener gave it. `install.sh` reads the same key so that its own `sqlite3`
+reads of the store wait as long (see
+[Schema migration at install-time](#schema-migration-at-install-time)).
+
+Raising `busy_timeout_ms` moves none of the fixed limits it couples with,
+and nothing caps the key against them; the coupling is stated in the
+`Store.BusyTimeoutMs` comment (`internal/config/config.go`),
+`sessionStartWaitCap`'s (`internal/hook/handler.go`) and
+`sessionStartHookTimeoutSeconds`'s (`internal/spawn/settings.go`), and
+here.
+
+- **The SessionStart hook's headroom.** On a contended store each store
+  write can wait up to `busy_timeout_ms` for the write lock. A SessionStart
+  hook makes up to four `RecordSessionStartIdentity` writes outside its
+  bounded wait (up to two in the gated write before it and up to two after
+  it, `writeSessionStart`'s retry on a snapshot change), and they must fit
+  in the 60 s between `sessionStartWaitCap` (540 s) and Claude Code's 600 s
+  hook timeout, which runs from the hook's start. At the default that is
+  at most 40 s; from about 15 s (4 × 15 s = 60 s), and from 30 s for the
+  two writes after the wait alone, Claude Code can kill the hook before it
+  writes its result or its `no_pane_recorded` (see "The cap and the hook
+  timeout" under
+  [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
+- **The TypeScript client's call timeout.** The client ends a call after
+  its `callTimeoutMs` (30 s by default) with `ErrCallTimeout`, so a verb
+  whose statements wait that long in total, one at 30 s or more or several
+  shorter ones, is cut off before SQLite gives up.
+**Must use:** code that opens the configured store passes
+`EffectiveBusyTimeoutMs` (see the `internal/config` row of the package
+table); a test fixture that opens its own connection to a store
+(`storefix`'s and `apitest`'s raw connections) takes the wait from
+`store.DefaultBusyTimeoutMs`, never a literal. `apitest.HoldWriteLock`
+holds a store's write lock on a connection of its own, as another
+process's write would, for a test of how long a store connection waits.
 
 **File-system contract.** The parent directory (`~/.agent-director/` by
 default) is created with mode 0700, and the database file is chmodded to
@@ -2626,7 +2688,11 @@ hook` entry (`sessionStartHookTimeoutSeconds`,
 spawn pipeline section). So the hook always ends its
 own wait, and writes its `no_pane_recorded`, before Claude Code could
 kill it, whatever the configured grace and whatever a clock step or a
-launch start in the future does. Cap < timeout is stated in the two
+launch start in the future does, provided its store writes outside the
+wait fit in the 60 s left. They do at the default `[store]
+busy_timeout_ms` (at most 40 s), but not from about 15 s, and nothing caps
+that key against this headroom (b.c7f; see "Busy timeout" under
+[`internal/store`](#internalstore)). Cap < timeout is stated in the two
 constants' comments and here only: the packages do not import each
 other, and each value is pinned once in its own package's tests
 (`hook.SessionStartWaitCap` through `internal/hook/export_test.go`).
@@ -4707,9 +4773,10 @@ upgrade whose binary is newer than an existing `state.db`. `install.sh`
 runs on the end-user's machine as an *administrator* action, so it is
 the one legitimate place to authorize that migration — which it does
 with a one-shot `migrate-authorized` sentinel: it reads the DB's ACTUAL
-`user_version` (via `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" … "PRAGMA user_version"`,
-through the WAL and with the store's own 10 s busy timeout, so a running
-agent-director's momentary lock delays the read instead of failing it;
+`user_version` (via `sqlite3 -batch -init /dev/null -cmd ".timeout $store_busy_timeout_ms" … "PRAGMA user_version"`,
+through the WAL and with the store's own busy timeout, `[store]
+busy_timeout_ms` (see "How long: `[store] busy_timeout_ms`" below), so a
+running agent-director's momentary lock delays the read instead of failing it;
 `-init /dev/null` keeps the operator's `~/.sqliterc` from changing the
 output, and `-batch` keeps sqlite3 from announcing that init file on a
 terminal — hence `sqlite3` is a preflight requirement), writes a
@@ -4818,6 +4885,60 @@ Drift guards and their matrix: see
 `~/.agent-director/state.db`; a change to the store-path rules on either
 side (`resolvePathField`, `EffectiveDbPath`, `resolveStorePath`,
 `sentinelPath`, or the reader) adds its cases to the `dbpathfix` matrix.
+
+**How long: `[store] busy_timeout_ms` (b.c7f).** Every `sqlite3` read of
+the store's `user_version` (`ad_user_version`) waits as long as the
+binary's own connections do (see "Busy timeout" under
+[`internal/store`](#internalstore)), and the check command `install.sh`
+prints after an unreadable or mismatched post-open read carries the same
+wait. `install.sh` reads the key
+itself in pre-flight, right after `db_path`, from the config file
+`ad_store_db_path` has just accepted, with `ad_store_busy_timeout_ms`
+(the self-contained block between the `# >>> ad_store_busy_timeout_ms`
+and `# <<< ad_store_busy_timeout_ms` lines; bash builtins only), and
+keeps the result in `$store_busy_timeout_ms`. It resolves as
+`config.Store.EffectiveBusyTimeoutMs` does: no config, no key under
+`[store]`, or 0 gives 10000 (`DefaultStoreBusyTimeoutMs`); 1 to
+2147483647 (`MaxStoreBusyTimeoutMs`) is used as written. A value
+`config.Load` refuses (negative, or above 2147483647) also gives 10000,
+for the reads before the binary loads the config only: the binary then
+refuses the file (`ErrConfigMalformed`) at step 3, or step 4 on a fresh
+install, before any migration is authorized.
+
+- **Accepted:** a `busy_timeout_ms` line under `[store]` whose value is a
+  TOML decimal integer (an optional sign, no leading zero, `_` only
+  between two digits), with an optional trailing `#` comment. Keys
+  `config.Load` does not read (`busy_timeout_ms` under another table, a
+  commented-out line) leave the default.
+- **Refused:** the key in another letter case (`BUSY_TIMEOUT_MS`, which
+  the decoder still reads), a second `busy_timeout_ms`, and any other
+  value form (quoted, `0x`/`0o`/`0b`, a leading zero, a decimal point or
+  exponent, `inf`, a boolean, an array, no value, or anything after the
+  number but a comment). Every form of setting a `[store]` key that
+  `ad_store_db_path` refuses (a dotted or quoted key, an inline table,
+  `[Store]`) never reaches this reader.
+- **A refusal** is exit 5 in pre-flight, before anything on disk changes.
+  Stderr: first line
+  `install.sh: cannot tell how long agent-director waits for a locked store database; refusing to install.`,
+  then `config  : <path>`, `line <n>  : <line>`, what to change, the form
+  the reader reads, and
+  `Nothing was installed or changed. Re-run this install after the change.`
+
+`TestInstallShBusyTimeoutMatchesGo`
+(`internal/config/install_sh_busy_timeout_test.go`) is the drift guard: it
+runs each config of its matrix through `ad_store_db_path`, then
+`ad_store_busy_timeout_ms` (both through `dbpathfix`), and through
+`config.Load`, and requires the reader to print
+`EffectiveBusyTimeoutMs`, or to refuse with the advice, or the
+`db_path` reader to refuse first; a value `config.Load` refuses must print
+the default. `test/install-sh/retry.sh` checks that an upgrade's two
+reads pass the configured `.timeout` and that 1 ms gives up on a briefly
+held lock that the default waits out (exit 5 at step 2), and
+`test/install-sh/advice_follow.sh` (J17) that each refusal's advice,
+followed, gives a file the install accepts. **Must use:** `install.sh`
+code that runs `sqlite3` on the store, or prints a command that does,
+passes `.timeout $store_busy_timeout_ms`, never a literal; a change to the
+key's rules on either side adds its cases to `busyTimeoutCases`.
 
 **The probe, and a refused config (b.7b4).** On an existing `state.db`,
 the install learns whether a migration is pending from one probe open
@@ -5784,7 +5905,7 @@ can't be opened, runHook itself writes the deny envelope before
 returning. This is the SRD §6.5 "env-var, not DB" guarantee — even a
 store-open failure on a relay-on Spawn still surfaces deny.
 
-With `HOME` unset or empty, `store.OpenOrInit` refuses the hook's `~/`
+With `HOME` unset or empty, `store.OpenOrInitWithBusyTimeout` refuses the hook's `~/`
 store path (the config's default `~/.agent-director/state.db`, left
 unexpanded; see "No usable home" under [internal/store](#internalstore),
 b.4uz), so the hook takes this path: it opens and creates no store
@@ -8033,7 +8154,9 @@ adds it here.
   2147483, `[pause] timeout_seconds` is negative or above 9223372036
   (see [`pause`](#pause)), `[pre_trust] lock_wait_seconds` is negative
   or above 9223372036 (see
-  [Workspace-trust pre-write](#workspace-trust-pre-write)), or one key is
+  [Workspace-trust pre-write](#workspace-trust-pre-write)), `[store]
+  busy_timeout_ms` is negative or above 2147483647 (see "Busy timeout"
+  under [`internal/store`](#internalstore)), or one key is
   set under names that differ only in letter case (see "One spelling per
   key" under [`[tmux]` timing settings](#tmux-timing-settings)). Every store-backed
   call fails until an operator fixes the file. A caller takes no action,
@@ -9273,8 +9396,9 @@ token="$(/opt/driver/sql.sh -readonly "$HOME/.agent-director/state.db" "SELECT .
 
 **Why:** a bare `sqlite3` waits 0 ms and fails at once with `database is
 locked` (exit 5) while an agent-director process briefly holds the
-database's exclusive locks; agent-director's own connections wait 10 s
-(details in `docs/test-writing-guide.md`, "Reading and writing a store").
+database's exclusive locks; agent-director's own connections wait up to
+`[store] busy_timeout_ms`, 10 s by default (details in
+`docs/test-writing-guide.md`, "Reading and writing a store").
 
 **Must use:** every `sqlite3` command in a testplan shell block or a driver
 script runs through `sql.sh`, for reads and writes, on `state.db` or any
@@ -10358,8 +10482,9 @@ restore. One test still does: `chdirFor` in
 ### dbpathfix: the install.sh store-path matrix (reusable test fixture)
 
 `internal/testsupport/dbpathfix` (b.2io) runs `install.sh`'s `[store]
-db_path` reader on its own and holds the one matrix of configs that the
-drift guards run through it and through Go's own store-path resolution (see
+db_path` reader, and its `[store] busy_timeout_ms` reader (b.c7f), on their
+own, and holds the one matrix of configs that the store-path drift guards
+run through the first and through Go's own store-path resolution (see
 [Schema migration at install-time](#schema-migration-at-install-time)). The
 package doc comment carries the detail.
 
@@ -10369,6 +10494,14 @@ package doc comment carries the detail.
   `Reader.Resolve(t, config, home)` runs `ad_store_db_path` under
   `bash -uo pipefail`, as `install.sh` runs it, and returns stdout, stderr
   and status; `Reader.Sentinel(t, db)` runs `ad_sentinel_path`.
+- `NewBusyTimeoutReader(t, installSh)` extracts the
+  `# >>> ad_store_busy_timeout_ms` block (b.c7f) the same way;
+  `Reader.BusyTimeout(t, config)` runs `ad_store_busy_timeout_ms`. Its
+  matrix is `busyTimeoutCases` in `TestInstallShBusyTimeoutMatchesGo`
+  (`internal/config/install_sh_busy_timeout_test.go`), which runs each
+  config through `NewReader`'s `Resolve` first, as `install.sh` does (see
+  "How long: `[store] busy_timeout_ms`" under
+  [Schema migration at install-time](#schema-migration-at-install-time)).
 - `Cases` is the matrix: each `Case` is a `config.toml` (`Form`: a file, no
   file, or a directory in its place) and what it gives (`Expect`): `Same`
   (the reader prints the path Go resolves), `ReaderRefuses` (status 1,
@@ -10389,7 +10522,9 @@ defined inside it, with bash builtins only.
 **Must use:** a test of `install.sh`'s store-path reader, or of a Go
 store-path rule it mirrors, gets the reader through `dbpathfix.NewReader`
 and adds its configs to `dbpathfix.Cases`; never a second matrix or a
-second extraction of the block.
+second extraction of the block. A test of the `busy_timeout_ms` reader
+gets it through `dbpathfix.NewBusyTimeoutReader` and adds its configs to
+`busyTimeoutCases`.
 
 ### Which tmux test double to use
 
@@ -11278,9 +11413,10 @@ refused values alike, 0 written as an explicit 0), and
 `WriteKeysConfig(t, path, keys, settings...)`,
 which writes the same and sets each non-zero field of `keys`, an
 `apitest.ConfigKeys` (`RetentionDays`, `RelayTimeoutSeconds`,
-`PauseTimeoutSeconds`, `PreTrustLockWaitSeconds`: `[defaults]
-expire_retention_days`, `[relay] timeout_seconds` and `[pause]
-timeout_seconds`, b.8q2, and `[pre_trust] lock_wait_seconds`, b.kr4),
+`PauseTimeoutSeconds`, `PreTrustLockWaitSeconds`, `StoreBusyTimeoutMs`:
+`[defaults] expire_retention_days`, `[relay] timeout_seconds` and `[pause]
+timeout_seconds`, b.8q2, `[pre_trust] lock_wait_seconds`, b.kr4, and
+`[store] busy_timeout_ms`, b.c7f),
 accepted and refused values alike; a 0 field leaves its key out, which loads as a written 0
 does. Those two are the ONLY way those tests write
 `expire_retention_days`, and `WriteKeysConfig` is how a test combines
@@ -11487,6 +11623,19 @@ values, except for a row the test inserted itself.
     last hex digit to the next one (`f` wraps to `0`); for any other input it
     returns `0000000000000000`.
 
+**Write-lock helper** (`pkg/api/apitest/writelock.go`, b.c7f):
+
+- `HoldWriteLock(t, dbPath, d) (release func())`
+  - Takes the existing store's write lock (`BEGIN IMMEDIATE`) on a
+    connection of its own, as another agent-director process's write
+    holds it, until `release` is called or `d` has passed, whichever is
+    first. A store connection that then writes waits up to its busy
+    timeout (`[store] busy_timeout_ms`) for the lock.
+  - `release` returns once the lock is released; later calls, and the
+    test's cleanup, do nothing more.
+  - Users: `TestNewOpensStoreWithConfiguredBusyTimeout` and
+    `TestHookCLIUsesConfiguredBusyTimeout`.
+
 **Row-to-Recorder session helper:**
 
 - `(*tmuxfix.Recorder).SeedRowSession(t, dbPath, instanceID, opts...) SeedSession`
@@ -11541,6 +11690,9 @@ values, except for a row the test inserted itself.
 - A label of this store ends with its id, taken from `ReadStoreID`, the
   store's `StoreID()` or an id pinned with `SeedStoreID`; another store's
   labels use `OtherStoreID`. No test writes `store_meta` any other way.
+- A Go test that needs another process's write lock held on a store, to
+  see how long a store connection waits for it, takes it with
+  `apitest.HoldWriteLock`.
 - A test that needs a seeded row's own session in the Recorder uses
   `tmuxfix.Recorder.SeedRowSession`. It never reads a row's launch token or
   spells one by hand (SR-20.2).
@@ -11581,10 +11733,10 @@ manifest pointer and the sweeps' result fields);
 `descriptions_config.go` holds `ErrConfigMalformed`'s case for a config
 file refused for its `[tmux]` values, its `[defaults]
 expire_retention_days`, its `[relay]` or `[pause]` `timeout_seconds`
-(b.8q2) or its `[pre_trust] lock_wait_seconds` (b.kr4),
-`DescConfigRefused(path, refusals...)` with one
+(b.8q2), its `[pre_trust] lock_wait_seconds` (b.kr4) or its `[store]
+busy_timeout_ms` (b.c7f), `DescConfigRefused(path, refusals...)` with one
 `ConfigRefusal{Key, Value, Minimum, Derived, Create, Pipe, Retention,
-RelayTimeout, PauseTimeout, PreTrustLockWait}` per refused value. With refusals it requires,
+RelayTimeout, PauseTimeout, PreTrustLockWait, StoreBusyTimeout}` per refused value. With refusals it requires,
 beside the path, the header "refused <tables> values: " listing the
 refused values' tables in `config.Load`'s order and form (see
 [`[tmux]` timing settings](#tmux-timing-settings)). It builds each `[tmux]`
@@ -11592,10 +11744,11 @@ refused-value phrase from the
 key's name, unit, `Value` and safe minimum (`Minimum` 0 for a negative
 value of a key without one; with `Derived`, followed by the given create
 timeout and pipe-close wait it was computed from), and, with `Retention`,
-`RelayTimeout`, `PauseTimeout` or `PreTrustLockWait` set (`Key` unused),
-that key's phrase from `Value` and its range: 1 to
+`RelayTimeout`, `PauseTimeout`, `PreTrustLockWait` or `StoreBusyTimeout`
+set (`Key` unused), that key's phrase from `Value` and its range: 1 to
 `config.MaxExpireRetentionDays`, `config.MaxRelayTimeoutSeconds`,
-`config.MaxPauseTimeoutSeconds` or `config.MaxPreTrustLockWaitSeconds`. The
+`config.MaxPauseTimeoutSeconds`, `config.MaxPreTrustLockWaitSeconds` or
+`config.MaxStoreBusyTimeoutMs`. The
 closing sentence follows `config.Load`'s rule (see
 [`[tmux]` timing settings](#tmux-timing-settings)): when a `Derived`
 refusal's `Minimum` is above its key's default, "A missing key, or 0,

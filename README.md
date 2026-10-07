@@ -345,6 +345,7 @@ lock_wait_seconds = 12   # 1 to 9223372036; 0 = use default (12)
 
 [store]
 db_path = "~/.agent-director/state.db"
+busy_timeout_ms = 10000   # 1 to 2147483647; 0 = use default (10000)
 
 [log]
 error_log_path = "~/.agent-director/errors.log"
@@ -380,9 +381,11 @@ timeout_seconds` is how long `pause` waits for the agent to exit: whole
 seconds from 1 to 9223372036. `[pre_trust] lock_wait_seconds` is how long
 `spawn` and `resume` wait to mark the folder as trusted while another
 process holds Claude Code's lock on `.claude.json`: whole seconds from 1 to
-9223372036. For each of the three, a missing key, or 0, gives the default,
-and a negative value or one above its range is refused the same way as
-`expire_retention_days`.
+9223372036. `[store] busy_timeout_ms` is how long agent-director waits for
+the store while another of its processes holds it locked, before the call
+fails: whole milliseconds from 1 to 2147483647. For each of the four, a
+missing key, or 0, gives the default, and a negative value or one above its
+range is refused the same way as `expire_retention_days`.
 
 `lock_wait_seconds` defaults to 12, just over the 10 s after which a lock
 left by a killed process counts as abandoned and is cleared. If the wait
@@ -397,9 +400,22 @@ second added to `lock_wait_seconds` adds up to a second, so above about
 `ErrCallTimeout` while the launch may still complete — raise TypeScript
 callers' `callTimeoutMs` to match.
 
-`db_path` moves the store, and `install.sh` follows it. Keep the file in
-the one-line form shown; `install.sh` refuses anything else and says
-what to fix.
+`busy_timeout_ms` defaults to 10000 (10 s). Raising it moves no other
+limit. On a busy store, each write can wait that long. A launch's
+SessionStart hook makes up to four writes besides its wait for
+agent-director to record the launch, and they must fit in the 60 s
+between that wait's 540 s limit and Claude Code's 600 s hook timeout: at
+the default they take at most 40 s, but from about 15 s Claude Code can
+kill the hook before it records the agent. And once a call's waits for
+the store add up to the TypeScript client's `callTimeoutMs` (30 s by
+default), the client ends the call with `ErrCallTimeout` — one wait of
+30 s or more is cut off before the store gives up. Raise TypeScript
+callers' `callTimeoutMs` to match. agent-director checks this key against
+neither limit.
+
+`db_path` moves the store, and `install.sh` follows it; its reads of the
+store wait up to `busy_timeout_ms` too. Keep both keys in the one-line form
+shown; `install.sh` refuses anything else and says what to fix.
 
 Env vars passed at spawn time (via `--extra-env`) are stored in
 `state.db` so `resume` can restore them. The file is owner-only (`0600`
@@ -705,12 +721,15 @@ trail record, is a store's id. Read this store's own id directly, as the
 agents' user:
 
 ```sh
-sqlite3 -readonly -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
+sqlite3 -readonly -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
 ```
 
-It prints 16 lowercase hexadecimal characters, whatever your `~/.sqliterc`
-sets, and changes nothing (if your config sets another `db_path`, use that
-file). `sqlite3` is already a prerequisite of `install.sh`. This works in a
+Replace `<busy_timeout_ms>` with your config's `[store] busy_timeout_ms`,
+or its default if unset (see [Configuration](#configuration)), so the read
+waits for a locked store as long as agent-director does. It prints 16
+lowercase hexadecimal characters, whatever your `~/.sqliterc` sets, and
+changes nothing (if your config sets another `db_path`, use that file).
+`sqlite3` is already a prerequisite of `install.sh`. This works in a
 store that has no `ad.launch.name_held` record; where one exists, its
 `store_id` is the same value. No verb changes the id. A store taken back to
 schema v4, by the downgrade recipe or by restoring a copy from before the

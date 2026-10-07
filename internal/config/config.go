@@ -20,8 +20,10 @@
 // MaxExpireRetentionDays the same way. So do [relay] timeout_seconds and
 // [pause] timeout_seconds (b.8q2), with DefaultRelayTimeoutSeconds and
 // MaxRelayTimeoutSeconds, and DefaultPauseTimeoutSeconds and
-// MaxPauseTimeoutSeconds; and [pre_trust] lock_wait_seconds (b.kr4), with
-// DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds.
+// MaxPauseTimeoutSeconds; [pre_trust] lock_wait_seconds (b.kr4), with
+// DefaultPreTrustLockWaitSeconds and MaxPreTrustLockWaitSeconds; and [store]
+// busy_timeout_ms (b.c7f), with DefaultStoreBusyTimeoutMs and
+// MaxStoreBusyTimeoutMs.
 //
 // Load also refuses a file that sets one key under names differing only in
 // letter case ([Store] and [store] both setting db_path), whose value the
@@ -273,13 +275,70 @@ func (p PreTrust) refusals() []string {
 	return nil
 }
 
-// Store holds storage backend paths.
+// Store holds the store database's settings.
 type Store struct {
 	// DbPath is the store database, as Load resolved it: the file's value
 	// when the key is set ("" for an empty db_path), otherwise
 	// DefaultDbPath. Read it only through EffectiveDbPath, which gives the
 	// default for "".
 	DbPath string `toml:"db_path"`
+	// BusyTimeoutMs is how long a store connection waits for a lock another
+	// connection holds before its statement fails (SQLite's busy timeout),
+	// in whole milliseconds: the file's value when the key is set (0
+	// included), otherwise DefaultStoreBusyTimeoutMs. Read it only through
+	// EffectiveBusyTimeoutMs, which gives the default for 0. Load refuses a
+	// negative value and one above MaxStoreBusyTimeoutMs (b.c7f).
+	//
+	// Raising it couples with fixed limits nothing adjusts to it. Each store
+	// write can wait up to this long for the lock on a contended store, and
+	// a SessionStart hook's writes outside its bounded wait (up to four) must
+	// fit in the 60 s between internal/hook's sessionStartWaitCap (540 s) and
+	// Claude Code's 600 s hook timeout: that holds at the default (at most
+	// 40 s) but not from about 15 s, when Claude Code can kill the hook. And
+	// the TS client ends a call after its callTimeoutMs (30 s by default), so
+	// a verb whose statements wait that long in total, one at 30 s or more
+	// or several shorter ones, is cut off before SQLite gives up. Nothing
+	// caps this key against either limit.
+	BusyTimeoutMs int `toml:"busy_timeout_ms"`
+}
+
+// DefaultStoreBusyTimeoutMs is the default of [store] busy_timeout_ms, in
+// whole milliseconds (10000). It is the value Default() seeds into
+// Store.BusyTimeoutMs AND the fallback EffectiveBusyTimeoutMs returns for a
+// missing or 0 key, so the two never drift.
+const DefaultStoreBusyTimeoutMs = 10000
+
+// MaxStoreBusyTimeoutMs is the largest [store] busy_timeout_ms Load accepts
+// (2147483647, math.MaxInt32): the largest busy timeout SQLite holds. SQLite
+// reads PRAGMA busy_timeout's value as a 32-bit int and takes a larger one as
+// 0, and the sqlite3 shell's .timeout truncates one to 32 bits, so a larger
+// value would turn the wait off and a locked store would fail at once
+// (b.c7f).
+const MaxStoreBusyTimeoutMs = math.MaxInt32
+
+// EffectiveBusyTimeoutMs returns the busy timeout every store connection
+// uses, in whole milliseconds (store.busy_timeout_ms): the configured value
+// when positive, otherwise DefaultStoreBusyTimeoutMs (10000). It never
+// returns 0 or a negative count, which would turn SQLite's wait for a lock
+// off. It performs no maximum check; Load refuses a value above
+// MaxStoreBusyTimeoutMs.
+func (s Store) EffectiveBusyTimeoutMs() int {
+	if s.BusyTimeoutMs > 0 {
+		return s.BusyTimeoutMs
+	}
+	return DefaultStoreBusyTimeoutMs
+}
+
+// refusals returns the description of each refused [store] value, in table
+// order, or nil when every value loads. Only busy_timeout_ms is checked: a
+// negative value and one above MaxStoreBusyTimeoutMs are refused, never
+// replaced by the default or capped; 0 gives the default (b.c7f).
+func (s Store) refusals() []string {
+	if v := s.BusyTimeoutMs; v < 0 || v > MaxStoreBusyTimeoutMs {
+		return []string{fmt.Sprintf("[store] busy_timeout_ms = %d, outside its range 1 to %d milliseconds",
+			v, MaxStoreBusyTimeoutMs)}
+	}
+	return nil
 }
 
 // DefaultDbPath is the default of [store] db_path. It is the value Default()
@@ -337,7 +396,8 @@ func Default() Config {
 			LockWaitSeconds: DefaultPreTrustLockWaitSeconds,
 		},
 		Store: Store{
-			DbPath: DefaultDbPath,
+			DbPath:        DefaultDbPath,
+			BusyTimeoutMs: DefaultStoreBusyTimeoutMs,
 		},
 		Log: Log{
 			ErrorLogPath: "~/.agent-director/errors.log",
@@ -396,10 +456,11 @@ func (e *ConfigError) Unwrap() error {
 // whatever the letter case of its name and its table's ([Tmux]
 // STOPPING_WINDOW_SECONDS, b.g7h), as the decoder reads it in any. It validates
 // [defaults] expire_retention_days the same way (b.sgw), [relay]
-// timeout_seconds and [pause] timeout_seconds too (b.8q2), and [pre_trust]
-// lock_wait_seconds (b.kr4): a negative value and one above the key's maximum
-// (MaxExpireRetentionDays, MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds,
-// MaxPreTrustLockWaitSeconds) are refused, never replaced by the default or
+// timeout_seconds and [pause] timeout_seconds too (b.8q2), [pre_trust]
+// lock_wait_seconds (b.kr4) and [store] busy_timeout_ms (b.c7f): a negative
+// value and one above the key's maximum (MaxExpireRetentionDays,
+// MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds, MaxPreTrustLockWaitSeconds,
+// MaxStoreBusyTimeoutMs) are refused, never replaced by the default or
 // capped. A refusal behaves exactly like a malformed file: Load returns a
 // *ConfigError for the file whose Err describes every refused key
 // (validate). A value that is not a TOML integer already fails the parse.
@@ -576,7 +637,7 @@ func keyName(k toml.Key) string {
 // as a list (nameList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
-// [pause], [pre_trust], [tmux] and each table in its own order, then
+// [pause], [pre_trust], [store], [tmux] and each table in its own order, then
 // missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
 // description unchanged. Values are never changed.
 //
@@ -596,6 +657,7 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[relay]", cfg.Relay.refusals()},
 		{"[pause]", cfg.Pause.refusals()},
 		{"[pre_trust]", cfg.PreTrust.refusals()},
+		{"[store]", cfg.Store.refusals()},
 		{"[tmux]", tmuxRefused},
 	} {
 		if len(t.refusals) > 0 {

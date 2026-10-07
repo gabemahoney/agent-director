@@ -82,6 +82,13 @@ export interface ClientOptions {
    *
    * Zero or negative values are rejected at Client construction time.
    * (SRD SR-6.1)
+   *
+   * Each store statement a call runs can wait up to the store's busy
+   * timeout (`[store] busy_timeout_ms`, 10 s by default) while another
+   * process holds the store locked. A call whose waits add up to this
+   * timeout, one wait at this length or more or several shorter ones, is
+   * cut off with ErrCallTimeout before SQLite gives up. Nothing adjusts this
+   * timeout to that key: raise it to match when raising the key (b.c7f).
    */
   callTimeoutMs?: number;
 }

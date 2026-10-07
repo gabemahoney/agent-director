@@ -119,7 +119,7 @@ func asText(v any) (string, bool) {
 // openRaw opens a raw connection to an existing store file with the store's
 // busy timeout.
 func openRaw(dbPath string) (*sql.DB, error) {
-	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)")
+	raw, err := sql.Open("sqlite", fmt.Sprintf("%s?_pragma=busy_timeout(%d)", dbPath, store.DefaultBusyTimeoutMs))
 	if err != nil {
 		return nil, fmt.Errorf("open raw db %q: %w", dbPath, err)
 	}

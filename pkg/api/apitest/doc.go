@@ -21,8 +21,8 @@
 //     [tmux] settings; see its doc comment for the usage rules.
 //     WriteRetentionConfig adds [defaults] expire_retention_days, and
 //     WriteKeysConfig the keys outside [tmux] with a range (ConfigKeys:
-//     that one, [relay] and [pause] timeout_seconds, and [pre_trust]
-//     lock_wait_seconds).
+//     that one, [relay] and [pause] timeout_seconds, [pre_trust]
+//     lock_wait_seconds and [store] busy_timeout_ms).
 //
 // # Schema-v5 seeding and store reads (SR-20.2, SR-20.3)
 //
@@ -56,6 +56,10 @@
 //     client or store under test opens, since an open store keeps the id it
 //     read; OtherStoreID returns a well-formed id certain to differ from a
 //     given one, for another store's labels.
+//   - HoldWriteLock holds a store's write lock on a connection of its own, as
+//     another process's write would, for a while or until released, so a test
+//     sees how long a store connection waits for it ([store]
+//     busy_timeout_ms, b.c7f).
 //
 // # Hooks through the gate (SR-22.9)
 //

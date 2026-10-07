@@ -38,7 +38,7 @@ func loadConfigError(t *testing.T, path string) *config.ConfigError {
 	}
 	def := config.Default()
 	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause || cfg.PreTrust != def.PreTrust ||
-		cfg.Tmux != def.Tmux {
+		cfg.Store.BusyTimeoutMs != def.Store.BusyTimeoutMs || cfg.Tmux != def.Tmux {
 		t.Errorf("non-path defaults drifted on error: got=%+v want=%+v", cfg, def)
 	}
 	return ce
@@ -84,7 +84,7 @@ const raisedTail = ". A missing key, or 0, gives the default, or for [tmux] pend
 // splits on it into one part per refused key, and desc ends with raisedTail
 // exactly when a refused [tmux] key states a safe minimum above its default,
 // otherwise with refusalTail, that a missing key, or 0, gives the default.
-// The refused keys outside [tmux] are b.sgw's, b.8q2's and b.kr4's.
+// The refused keys outside [tmux] are b.sgw's, b.8q2's, b.kr4's and b.c7f's.
 func checkAdvice(t *testing.T, desc string) {
 	t.Helper()
 	_, list, ok := strings.Cut(desc, " values: ")
@@ -95,7 +95,7 @@ func checkAdvice(t *testing.T, desc string) {
 	list = strings.TrimSuffix(strings.TrimSuffix(list, raisedTail), refusalTail)
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
-		"[pre_trust] lock_wait_seconds "} {
+		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms "} {
 		refused += strings.Count(list, k)
 	}
 	above := false
@@ -258,6 +258,8 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 		// validate would have checked whichever of the two values the decoder kept.
 		{"refused_value_under_one_name", "[relay]\ntimeout_seconds = -1\n\n[Relay]\ntimeout_seconds = 60\n",
 			caseVariantText("[relay] timeout_seconds and [Relay] timeout_seconds")},
+		{"busy_timeout_refused_value_under_one_name", "[store]\nBUSY_TIMEOUT_MS = -1\nbusy_timeout_ms = 2000\n",
+			caseVariantText("[store] BUSY_TIMEOUT_MS and [store] busy_timeout_ms")},
 		{"beside_refused_value", "[pause]\ntimeout_seconds = -1\n\n" + dbPathTwice,
 			caseVariantText("[Store] db_path and [store] db_path")},
 		{"two_keys_interleaved", "[Store]\ndb_path = \"/upper.db\"\n\n[relay]\ntimeout_seconds = 60\n\n" +

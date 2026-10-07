@@ -23,8 +23,8 @@ const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"
 
 // configRefusal is one refused config: the [tmux] settings and the keys
 // outside [tmux] (keys: [defaults] expire_retention_days, b.sgw; [relay] and
-// [pause] timeout_seconds, b.8q2; [pre_trust] lock_wait_seconds, b.kr4; each
-// written when non-zero) written, the values its err_description must state
+// [pause] timeout_seconds, b.8q2; [pre_trust] lock_wait_seconds, b.kr4;
+// [store] busy_timeout_ms, b.c7f; each written when non-zero) written, the values its err_description must state
 // as refused (nil: malformed type, only err_name and path are asserted) and
 // the [tmux] settings that fix the file (the keys outside [tmux] dropped).
 // A raw file is written as given instead, and refused for setting one key
@@ -40,7 +40,7 @@ type configRefusal struct {
 }
 
 // configRefusals is the one table of refused [tmux], [defaults], [relay],
-// [pause] and [pre_trust] values driving every surface check: a minimum, the
+// [pause], [pre_trust] and [store] values driving every surface check: a minimum, the
 // derived grace rule, every table at once, a malformed type and db_path set
 // under two letter cases of [store] (b.p8n). The per-key refusals are
 // internal/config's config_errors_test.go and config_timeouts_test.go.
@@ -71,11 +71,13 @@ func configRefusals() []configRefusal {
 		{
 			name: "every_table_refused",
 			keys: apitest.ConfigKeys{RetentionDays: -1, RelayTimeoutSeconds: -1,
-				PauseTimeoutSeconds: int64(config.MaxPauseTimeoutSeconds) + 1, PreTrustLockWaitSeconds: -1},
+				PauseTimeoutSeconds: int64(config.MaxPauseTimeoutSeconds) + 1, PreTrustLockWaitSeconds: -1,
+				StoreBusyTimeoutMs: int64(config.MaxStoreBusyTimeoutMs) + 1},
 			bad: []apitest.TmuxSetting{apitest.TmuxInt(kill, -1)},
 			refused: []apitest.ConfigRefusal{{Retention: true, Value: -1}, {RelayTimeout: true, Value: -1},
 				{PauseTimeout: true, Value: int64(config.MaxPauseTimeoutSeconds) + 1},
-				{PreTrustLockWait: true, Value: -1}, {Key: kill, Value: -1}},
+				{PreTrustLockWait: true, Value: -1}, {StoreBusyTimeout: true, Value: int64(config.MaxStoreBusyTimeoutMs) + 1},
+				{Key: kill, Value: -1}},
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(kill, 0)},
 		},
 		{
@@ -156,9 +158,9 @@ func assertRowUntouched(t *testing.T, h refusedHome) {
 
 // TestConfigRefusalStopsEverySurface drives each refused config, [tmux] values,
 // [defaults] expire_retention_days (b.sgw), [relay] and [pause]
-// timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4) and a key
-// set under two letter cases (b.p8n), through every surface (SR-4.1;
-// AC-CFG-03/04, loading half of AC-RES-05).
+// timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4), [store]
+// busy_timeout_ms (b.c7f) and a key set under two letter cases (b.p8n),
+// through every surface (SR-4.1; AC-CFG-03/04, loading half of AC-RES-05).
 func TestConfigRefusalStopsEverySurface(t *testing.T) {
 	surfaces := []struct {
 		name string

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J16). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J17). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -764,9 +764,22 @@ J7ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-sy
 # J7ARGV with `local -a J7ARGV=("${J7FULL[@]}")`.
 J7FULL=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink --register-mcp)
 
-# j7_installed: a new HOME in J7H with J7ARGV installed.
+# j7_config: when J7_BUSY_MS is set, J7H's config.toml sets [store]
+# busy_timeout_ms to it, the wait the reads and the check commands install.sh
+# prints use (b.c7f).
+j7_config() {
+    [[ -n "${J7_BUSY_MS:-}" ]] || return 0
+    mkdir -p "$J7H/.agent-director" && printf '[store]\nbusy_timeout_ms = %s\n' "$J7_BUSY_MS" >"$J7H/.agent-director/config.toml"
+}
+
+# j7_timeout: the busy timeout install.sh's check commands wait (.timeout):
+# J7_BUSY_MS, or the default.
+j7_timeout() { printf '%s' "${J7_BUSY_MS:-10000}"; }
+
+# j7_installed: a new HOME in J7H (with j7_config's config) with J7ARGV installed.
 j7_installed() {
     J7H="$(new_home)"
+    j7_config
     run "$J7H" "${J7ARGV[@]}"
     expect_rc 0 "first install"
 }
@@ -833,7 +846,7 @@ j7_warned() {
     local want="install.sh: warning: state.db's schema version is unreadable after the store open" db line
     db="$(printf %q "$J7H/.agent-director/state.db")"
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
-    j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout 10000\" $db \"PRAGMA user_version;\"" "$1"
+    j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\"" "$1"
     if grep -qiE 'FAILED|could not|re-run' "$ERR"; then
         bad "the warning speaks as if the install failed: $(flat "$ERR")"
     fi
@@ -862,7 +875,7 @@ j7_mismatch() {
     j7_verify_fails "$a" || return 1
     db="$(printf %q "$J7H/.agent-director/state.db")"
     expect_advice "actual user_version: $a"
-    expect_advice "The store open (agent-director list) succeeded, and a successful open leaves state.db at v$t: any authorized migration has run, and its sentinel is consumed. Yet the read after the open gives v$a: state.db changed after the open, or the read is wrong. Check its version now: sqlite3 -batch -init /dev/null -cmd \".timeout 10000\" $db \"PRAGMA user_version;\" A re-run of this install reads the version again: below v$t it brings state.db to v$t again, above v$t it stops at the store open (ErrSchemaMismatch), and at v$t it finishes the install. If a re-run fails this same way, contact the maintainers."
+    expect_advice "The store open (agent-director list) succeeded, and a successful open leaves state.db at v$t: any authorized migration has run, and its sentinel is consumed. Yet the read after the open gives v$a: state.db changed after the open, or the read is wrong. Check its version now: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\" A re-run of this install reads the version again: below v$t it brings state.db to v$t again, above v$t it stops at the store open (ErrSchemaMismatch), and at v$t it finishes the install. If a re-run fails this same way, contact the maintainers."
 }
 
 # j7_rerun_verified: re-run J7ARGV with the real sqlite3; it reads and verifies
@@ -909,10 +922,12 @@ test_J7_VersionMismatchRerun() {
 # J7: "a successful open leaves state.db at v<T>: any authorized migration has
 # run, and its sentinel is consumed. ... Check its version now:
 # <command>" (a readable user_version != target, b.wt9): run the command as
-# printed, under a plain HOME and one whose path holds shell characters.
+# printed, under a plain HOME and one whose path holds shell characters, and
+# with [store] busy_timeout_ms set, whose wait the command takes (b.c7f).
 test_J7_VersionMismatchCheckVersion() {
-    local HOME_TAG cmd
-    for HOME_TAG in "" "\$x\`y\`'q\"z."; do
+    local HOME_TAG J7_BUSY_MS spec cmd
+    for spec in "|" "\$x\`y\`'q\"z.|" "|1234"; do
+        IFS='|' read -r HOME_TAG J7_BUSY_MS <<<"$spec"
         j7_mismatch || continue
         grep -qF "authorized migration v$((SCHEMA - 1))→v$SCHEMA " "$OUT" || bad "HOME $J7H: the install authorized no migration: $(flat "$OUT")"
         if compgen -G "$(sentinel "$J7H")*" >/dev/null; then
@@ -948,15 +963,16 @@ test_J7_UnreadableBeforeOpenRerun() {
 # The install warns and carries on (b.xd9). Once the read works, the command
 # as printed prints the store's version: each case under a plain HOME, and a
 # fresh store's failed read under one whose path holds shell characters (the
-# quoting depends on neither the store nor the read's output). A current
+# quoting depends on neither the store nor the read's output), and with
+# [store] busy_timeout_ms set, whose wait the command takes (b.c7f). A current
 # store's JSON read: test_J7_NotAVersionAfterOpenRerun's re-run.
 test_J7_UnreadableAfterOpenCheckVersion() {
     local -a J7ARGV=("${J7FULL[@]}") # the steps after step 5 run too
-    local HOME_TAG spec store answer call what cmd json="[{\"user_version\":$SCHEMA}]"
-    for spec in "|fresh|" "|current|" "|fresh|$json" "\$x\`y\`'q\"z.|fresh|"; do
-        IFS='|' read -r HOME_TAG store answer <<<"$spec"
+    local HOME_TAG J7_BUSY_MS spec store answer call what cmd json="[{\"user_version\":$SCHEMA}]"
+    for spec in "|fresh||" "|current||" "|fresh|$json|" "\$x\`y\`'q\"z.|fresh||" "|fresh||1234" "|current||2500"; do
+        IFS='|' read -r HOME_TAG store answer J7_BUSY_MS <<<"$spec"
         case "$store" in
-            fresh) J7H="$(new_home)" call=1 ;; # no state.db: step 5's read is the first
+            fresh) J7H="$(new_home)" call=1; j7_config ;; # no state.db: step 5's read is the first
             current) j7_installed || continue; call=2 ;;
         esac
         what="$store store, step 5's read failed"
@@ -1463,7 +1479,8 @@ test_J12_OneHashPassNeither() {
 # fixing what the envelope names at the printed path and re-running installs,
 # migrating an older store. The syntax error is a bad value, which install.sh's
 # own [store] db_path reader passes over (b.2io), so the binary's refusal is the
-# one reached.
+# one reached; so is a [store] busy_timeout_ms the binary refuses, which
+# install.sh's own reader reads as the default (b.c7f).
 test_J13_ConfigRefusedFixAndRerun() {
     local spec store config named fix before path key gone
     local want="install.sh: agent-director refused its config file (ErrConfigMalformed)"
@@ -1472,6 +1489,8 @@ test_J13_ConfigRefusedFixAndRerun() {
         "fresh|[defaults]\nexpire_retention_days = -1|[defaults] expire_retention_days = -1|remove" \
         "older|[defaults]\nexpire_retention_days = -1|[defaults] expire_retention_days = -1|zero" \
         "current|[tmux]\nquery_timeout_ms = -5|[tmux] query_timeout_ms = -5|zero" \
+        "older|[store]\nbusy_timeout_ms = -5|[store] busy_timeout_ms = -5|zero" \
+        "fresh|[store]\nbusy_timeout_ms = 2147483648|[store] busy_timeout_ms = 2147483648|remove" \
         "older|[defaults]\nrelay_mode = off|toml: line 2 (last key|syntax"; do
         IFS='|' read -r store config named fix <<<"$spec"
         case "$store" in
@@ -1868,6 +1887,56 @@ test_J16_DefaultsKeyMoveUnderHeader() {
 defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100||[relay]\npoll_base_ms = 100\n[defaults]\nrelay_mode = "off"\ninject_help_hook = true
 Defaults = { inject_help_hook = false, relay_mode = "off" }\n[defaults]\nexpire_retention_days = 7|Defaults|[defaults]\ninject_help_hook = true\nrelay_mode = "off"\nexpire_retention_days = 7
 "defaults" = { relay_mode = "off" }||[defaults]\nrelay_mode = "off"\ninject_help_hook = true
+EOF
+}
+
+# ---- J17: [store] busy_timeout_ms install.sh cannot read (b.c7f) -------------------
+
+# J17: each reason install.sh gives for a [store] busy_timeout_ms line it cannot
+# read, word for word, naming the line, then "Nothing was installed or changed.
+# Re-run this install after the change.": the refusal changes nothing under
+# HOME; making the change the reason names and re-running installs, and
+# agent-director loads the changed config. Per row
+# <store>|<config>|<line>|<reason>|<changed config> (printf %b): <store> fresh,
+# or older (installed under the changed config, then set one version back,
+# which the re-run migrates in place).
+test_J17_BusyTimeoutRefusedFixAndRerun() {
+    local store broken line advice fixed h cfg db before
+    local want="install.sh: cannot tell how long agent-director waits for a locked store database; refusing to install."
+    while IFS='|' read -r store broken line advice fixed <&3; do
+        h="$(new_home)" cfg="$h/.agent-director/config.toml" db="$h/.agent-director/state.db"
+        mkdir -p "$h/.agent-director"
+        if [[ "$store" == older ]]; then
+            printf '%b\n' "$fixed" >"$cfg"
+            run "$h" "${J7ARGV[@]}"
+            expect_rc 0 "\"$broken\": first install" || continue
+            keep_older "$db"
+        fi
+        printf '%b\n' "$broken" >"$cfg"
+        before="$(j14_snap "$h")"
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 5 "config \"$broken\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        expect_advice "config : $cfg line $line"
+        expect_advice "$advice"
+        expect_advice "Nothing was installed or changed. Re-run this install after the change."
+        [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$broken\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+        printf '%b\n' "$fixed" >"$cfg"
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 0 "\"$broken\": re-run after the change to \"$fixed\"" || continue
+        if [[ "$store" == older ]]; then
+            expect_store "$h" "$db" "\"$broken\"" migrated
+        else
+            expect_store "$h" "$db" "\"$broken\""
+        fi
+        run "$h" "$h/.agent-director/bin/agent-director" list
+        expect_rc 0 "\"$broken\": agent-director list after the change"
+    done 3<<'EOF'
+fresh|[store]\nBUSY_TIMEOUT_MS = 2500|2 : BUSY_TIMEOUT_MS = 2500|agent-director reads this key as busy_timeout_ms: its TOML decoder matches names regardless of letter case. Write it as busy_timeout_ms.|[store]\nbusy_timeout_ms = 2500
+older|[defaults]\nrelay_mode = "off"\n[store]\nbusy_timeout_ms = 2500\nbusy_timeout_ms = 3000|5 : busy_timeout_ms = 3000|This sets busy_timeout_ms a second time. Keep one.|[defaults]\nrelay_mode = "off"\n[store]\nbusy_timeout_ms = 2500
+older|[store]\nbusy_timeout_ms = "2500"|2 : busy_timeout_ms = "2500"|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500
+fresh|[store]\nbusy_timeout_ms = 2.5e3|2 : busy_timeout_ms = 2.5e3|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500
+fresh|[store]\nbusy_timeout_ms = 0x9c4 # ms|2 : busy_timeout_ms = 0x9c4 # ms|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500 # ms
 EOF
 }
 
