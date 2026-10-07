@@ -1,451 +1,477 @@
 package store
 
+// The schema and the administrator-gated migration chain (SR-1, SR-2, SR-5,
+// SR-12): a fresh store, an authorized open from every released version,
+// refusals, step re-entry (b.93m), rollback and the consume. Fixtures:
+// migration_fixtures_test.go; v5 data, store id and downgrade cases:
+// schema_v5_test.go.
+
 import (
+	"bytes"
 	"database/sql"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
-// openTempStore opens a Store under t.TempDir and registers cleanup.
-// Returns the resolved DB path so tests can re-open it raw if they need to.
-// The canonical public form lives in internal/testsupport/storefix; this
-// copy stays here because schema_test.go is package store (white-box) and
-// cannot import a package that imports store (circular import).
+// openTempStore opens a store under t.TempDir() for the test and returns it
+// with its path (storefix.OpenTempStore's white-box twin: storefix imports store).
 func openTempStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
 	s, err := OpenOrInit(path)
 	if err != nil {
-		t.Fatalf("Open(%q) failed: %v", path, err)
+		t.Fatalf("OpenOrInit(%q): %v", path, err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s, path
 }
 
-// openRaw is a test helper that opens the same DB through database/sql
-// directly so tests can poke PRAGMAs and sqlite_master without going through
-// the Store API (which deliberately exposes no SQL surface).
-func openRaw(t *testing.T, path string) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("raw sql.Open(%q): %v", path, err)
+// columnsByName returns shape with each table's columns sorted by name, to
+// compare schemas whose columns were added in another order.
+func columnsByName(shape map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range shape {
+		if cols, ok := v.([]tableColumn); ok {
+			cols = slices.Clone(cols)
+			slices.SortFunc(cols, func(a, b tableColumn) int { return strings.Compare(a.name, b.name) })
+			v = cols
+		}
+		out[k] = v
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
+	return out
 }
 
-func TestOpenCreatesCurrentSchema(t *testing.T) {
-	s, path := openTempStore(t)
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	db := openRaw(t, path)
-	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		t.Fatalf("read user_version: %v", err)
-	}
-	if version != schemaVersion {
-		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
-	}
-}
-
-func TestOpenIsIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	for i := 0; i < 2; i++ {
-		s, err := OpenOrInit(path)
+// TestFreshStoreSchema checks a new store and a reopen of it: user_version at
+// schemaVersion, every table and index, the v3 and v5 columns, store_meta, WAL
+// and foreign keys on, no sentinel, and a 0700 parent and 0600 file that a
+// second open does not widen.
+func TestFreshStoreSchema(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent-director") // OpenOrInit creates the parent
+	path := filepath.Join(dir, "state.db")
+	for i, open := range []func(string) (*Store, error){OpenOrInit, Open} {
+		s, err := open(path)
 		if err != nil {
-			t.Fatalf("Open #%d: %v", i, err)
+			t.Fatalf("open #%d: %v", i, err)
+		}
+		var fk int
+		if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {
+			t.Errorf("open #%d: foreign_keys = %d, %v; want 1", i, fk, err)
 		}
 		if err := s.Close(); err != nil {
-			t.Fatalf("Close #%d: %v", i, err)
+			t.Fatalf("Close: %v", err)
 		}
-	}
-
-	db := openRaw(t, path)
-	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		t.Fatalf("read user_version: %v", err)
-	}
-	if version != schemaVersion {
-		t.Fatalf("user_version = %d after two opens, want %d", version, schemaVersion)
-	}
-}
-
-func TestSchemaObjectsExist(t *testing.T) {
-	s, path := openTempStore(t)
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	db := openRaw(t, path)
-
-	wantTables := []string{"spawns", "permission_requests"}
-	for _, name := range wantTables {
-		if !objectExists(t, db, "table", name) {
-			t.Errorf("table %q missing from sqlite_master", name)
-		}
-	}
-
-	wantIndexes := []string{
-		"idx_spawns_state",
-		"idx_spawns_last_seen",
-		"idx_spawns_parent",
-		"idx_permission_requests_instance_decision",
-		"idx_permission_requests_decision_decided_at",
-	}
-	for _, name := range wantIndexes {
-		if !objectExists(t, db, "index", name) {
-			t.Errorf("index %q missing from sqlite_master", name)
-		}
-	}
-}
-
-func TestPragmasApplied(t *testing.T) {
-	s, path := openTempStore(t)
-
-	// journal_mode persists in the DB header, so a fresh raw connection
-	// observes the same value the Store set.
-	rawDB := openRaw(t, path)
-	var journal string
-	if err := rawDB.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil {
-		t.Fatalf("read journal_mode: %v", err)
-	}
-	if journal != "wal" {
-		t.Errorf("journal_mode = %q, want %q", journal, "wal")
-	}
-
-	// foreign_keys is per-connection, so verify on the Store's own conn.
-	var fk int
-	if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
-		t.Fatalf("read foreign_keys: %v", err)
-	}
-	if fk != 1 {
-		t.Errorf("foreign_keys = %d, want 1", fk)
-	}
-}
-
-// TestSingleWriterSerializesExec exercises SetMaxOpenConns(1): two writes
-// back-to-back through the Store's *sql.DB must both succeed without
-// SQLite's "database is locked" error.
-func TestSingleWriterSerializesExec(t *testing.T) {
-	s, _ := openTempStore(t)
-
-	insert := `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode)
-	           VALUES (?, 'idle', '/tmp', 'sess', 'mirror')`
-	if _, err := s.db.Exec(insert, "a"); err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-	if _, err := s.db.Exec(insert, "b"); err != nil {
-		t.Fatalf("second insert: %v", err)
-	}
-}
-
-// openV1DB creates a SQLite file at path seeded with the v1 DDL fixture and
-// WAL journal mode, then closes it. The caller opens it via the Store API.
-func openV1DB(t *testing.T, path string) {
-	t.Helper()
-	v1SQL, err := os.ReadFile("testdata/schema_v1.sql")
-	if err != nil {
-		t.Fatalf("read v1 fixture: %v", err)
-	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("raw open for v1 load: %v", err)
-	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		t.Fatalf("set WAL on v1 DB: %v", err)
-	}
-	if _, err := db.Exec(string(v1SQL)); err != nil {
-		_ = db.Close()
-		t.Fatalf("apply v1 DDL: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close v1 raw DB: %v", err)
-	}
-}
-
-// columnNames returns the column names from PRAGMA table_info for the given table.
-// It fully drains and closes the result set before returning.
-func columnNames(t *testing.T, db *sql.DB, table string) []string {
-	t.Helper()
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		t.Fatalf("PRAGMA table_info(%s): %v", table, err)
-	}
-	var cols []string
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notnull int
-		var dflt sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			_ = rows.Close()
-			t.Fatalf("scan table_info(%s): %v", table, err)
-		}
-		cols = append(cols, name)
-	}
-	_ = rows.Close()
-	return cols
-}
-
-// uniqueIndexCols returns a map from unique index name to its ordered column list
-// for the given table. Drains each sub-query before opening the next.
-func uniqueIndexCols(t *testing.T, db *sql.DB, table string) map[string][]string {
-	t.Helper()
-	rows, err := db.Query("PRAGMA index_list(" + table + ")")
-	if err != nil {
-		t.Fatalf("PRAGMA index_list(%s): %v", table, err)
-	}
-	type idxEntry struct {
-		name   string
-		unique int
-	}
-	var indexes []idxEntry
-	for rows.Next() {
-		var seq int
-		var idxName string
-		var unique int
-		var origin, partial string
-		if err := rows.Scan(&seq, &idxName, &unique, &origin, &partial); err != nil {
-			_ = rows.Close()
-			t.Fatalf("scan index_list(%s): %v", table, err)
-		}
-		indexes = append(indexes, idxEntry{idxName, unique})
-	}
-	_ = rows.Close()
-
-	result := make(map[string][]string)
-	for _, idx := range indexes {
-		if idx.unique != 1 {
-			continue
-		}
-		infoRows, err := db.Query("PRAGMA index_info(" + idx.name + ")")
-		if err != nil {
-			t.Fatalf("PRAGMA index_info(%s): %v", idx.name, err)
-		}
-		var cols []string
-		for infoRows.Next() {
-			var seqno, cid int
-			var colName string
-			if err := infoRows.Scan(&seqno, &cid, &colName); err != nil {
-				_ = infoRows.Close()
-				t.Fatalf("scan index_info(%s): %v", idx.name, err)
+		for p, want := range map[string]os.FileMode{dir: 0o700, path: 0o600} {
+			info, err := os.Stat(p)
+			if err != nil {
+				t.Fatalf("stat %s: %v", p, err)
 			}
-			cols = append(cols, colName)
+			if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != want {
+				t.Errorf("open #%d: mode of %s = %o; want %o", i, p, got, want)
+			}
 		}
-		_ = infoRows.Close()
-		result[idx.name] = cols
 	}
-	return result
+	db := openRaw(t, path)
+	var journal string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != "wal" {
+		t.Errorf("journal_mode = %q, %v; want wal", journal, err)
+	}
+	if v := userVersion(t, db); v != schemaVersion {
+		t.Errorf("user_version = %d; want %d", v, schemaVersion)
+	}
+	shape := schemaShape(t, db)
+	for _, name := range []string{"table spawns", "table permission_requests", "table session_history",
+		"index idx_spawns_state", "index idx_spawns_last_seen", "index idx_spawns_parent",
+		"index idx_permission_requests_instance_decision", "index idx_permission_requests_decision_decided_at",
+		"index idx_session_history_instance"} {
+		if _, ok := shape[name]; !ok {
+			t.Errorf("%s missing", name)
+		}
+	}
+	// v2's composite UNIQUE(claude_instance_id, request_token).
+	if got := shape["index sqlite_autoindex_permission_requests_1"]; !reflect.DeepEqual(got, []string{"claude_instance_id", "request_token"}) {
+		t.Errorf("permission_requests unique index = %v; want (claude_instance_id, request_token)", got)
+	}
+	if got := shape["table store_meta"]; !reflect.DeepEqual(got, storeMetaShape) {
+		t.Errorf("store_meta = %+v; want %+v", got, storeMetaShape)
+	}
+	if got, want := tableColumnNames(t, db, "session_history"), []string{"history_id", "claude_instance_id",
+		"claude_session_id", "jsonl_path", "recorded_at", "life_number"}; !slices.Equal(got, want) {
+		t.Errorf("session_history columns = %v; want %v", got, want)
+	}
+	assertColumnSpecs(t, db, append(slices.Clone(v3ColumnSpecs), v5ColumnSpecs...))
+	assertSentinel(t, dir, false)
 }
 
-// TestSchemaV2Migration proves the v1→v2 migration CONTENT persists through the
-// full authorized chain to current. Post-v3 a v1 open chains v1→v2→v3 in one
-// open (sentinel {1,schemaVersion}); this test keeps its focus on the v2
-// artifacts (request_token column, composite UNIQUE, v2 indexes, no v1
-// backfill) and asserts they SURVIVE at the current version — the v2 step's
-// output is not clobbered by a later step. The end-to-end chain landing + v3
-// column assertions live in TestSchemaChain_V1toV3_EndToEnd.
-func TestSchemaV2Migration(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.db")
-	openV1DB(t, path)
-
-	// Under the gated model an older-than-binary open refuses unless an
-	// administrator authorization sentinel exact-matches BOTH ends. Authorize
-	// the v1→current chain (to == schemaVersion) so this test still proves the
-	// v2 migration CONTENT (column/index/no-backfill assertions below) persists
-	// at the current version rather than silent auto-migration on open.
-	writeSentinel(t, dir, 1, schemaVersion)
-
-	// Seed a spawn row + one permission_requests row into the v1 schema so the
-	// "0 rows after migration" assertion is non-vacuous: it verifies that DROP
-	// TABLE actually fired and the v1 row didn't survive into v2.
-	{
-		rawV1, err := sql.Open("sqlite", path)
-		if err != nil {
-			t.Fatalf("open raw v1 for seeding: %v", err)
-		}
-		if _, err := rawV1.Exec(
-			`INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode)
-			 VALUES ('v1-seed-id', 'working', '/tmp', 'v1-sess', 'on')`,
-		); err != nil {
-			_ = rawV1.Close()
-			t.Fatalf("insert v1 spawn row: %v", err)
-		}
-		// v1 permission_requests has no request_token column.
-		if _, err := rawV1.Exec(
-			`INSERT INTO permission_requests (claude_instance_id, tool_name, tool_input)
-			 VALUES ('v1-seed-id', 'Bash', '{"cmd":"ls"}')`,
-		); err != nil {
-			_ = rawV1.Close()
-			t.Fatalf("insert v1 permission_requests row: %v", err)
-		}
-		if err := rawV1.Close(); err != nil {
-			t.Fatalf("close raw v1: %v", err)
-		}
-	}
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open v1 DB: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	// user_version must be current post-chain (v1→…→schemaVersion in one open).
-	var version int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		t.Fatalf("read user_version: %v", err)
-	}
-	if version != schemaVersion {
-		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
-	}
-
-	// request_token column must exist.
-	cols := columnNames(t, s.db, "permission_requests")
-	foundToken := false
-	for _, c := range cols {
-		if c == "request_token" {
-			foundToken = true
-		}
-	}
-	if !foundToken {
-		t.Errorf("request_token column missing after migration; cols: %v", cols)
-	}
-
-	// Composite UNIQUE(claude_instance_id, request_token) must exist.
-	foundComposite := false
-	for _, idxCols := range uniqueIndexCols(t, s.db, "permission_requests") {
-		if len(idxCols) == 2 && idxCols[0] == "claude_instance_id" && idxCols[1] == "request_token" {
-			foundComposite = true
-		}
-	}
-	if !foundComposite {
-		t.Error("composite UNIQUE(claude_instance_id, request_token) not found after migration")
-	}
-
-	// Both supporting indexes must be present.
-	for _, idx := range []string{
-		"idx_permission_requests_instance_decision",
-		"idx_permission_requests_decision_decided_at",
-	} {
-		if !objectExists(t, s.db, "index", idx) {
-			t.Errorf("index %q missing after migration", idx)
-		}
-	}
-
-	// permission_requests must be empty — no v1 row backfill.
-	var rowCount int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM permission_requests").Scan(&rowCount); err != nil {
-		t.Fatalf("count permission_requests: %v", err)
-	}
-	if rowCount != 0 {
-		t.Errorf("permission_requests has %d rows after migration, want 0", rowCount)
-	}
-}
-
-// objectExists returns true if sqlite_master contains a row of the given
-// type and name. Centralizing the query keeps individual tests readable.
-func objectExists(t *testing.T, db *sql.DB, kind, name string) bool {
-	t.Helper()
-	var got string
-	err := db.QueryRow(
-		"SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
-		kind, name,
-	).Scan(&got)
-	if err == sql.ErrNoRows {
-		return false
-	}
-	if err != nil {
-		t.Fatalf("sqlite_master lookup %s %q: %v", kind, name, err)
-	}
-	return got == name
-}
-
-// TestNoAgentSuppliedIdentifierInSchema asserts that no agent-supplied
-// per-call identifier (tool_use_id / toolUseID / ToolUseID) appears in the
-// v2 schema or in AD production Go source.
+// TestNoAgentSuppliedIdentifierInSchema checks no agent-supplied per-call id
+// (tool_use_id) appears in the schema DDL or in production Go source.
 func TestNoAgentSuppliedIdentifierInSchema(t *testing.T) {
 	forbidden := []string{"tool_use_id", "toolUseID", "ToolUseID"}
-
-	// Schema-walk: open a fresh v2 store and inspect column names + DDL.
 	s, _ := openTempStore(t)
-
-	cols := columnNames(t, s.db, "permission_requests")
-	for _, col := range cols {
-		for _, bad := range forbidden {
-			if strings.EqualFold(col, bad) {
-				t.Errorf("schema column %q contains forbidden identifier %q", col, bad)
-			}
-		}
-	}
-
-	// Also check all DDL in sqlite_master.
-	ddlRows, err := s.db.Query("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL")
-	if err != nil {
-		t.Fatalf("query sqlite_master DDL: %v", err)
-	}
-	var ddls []string
-	for ddlRows.Next() {
-		var ddl string
-		if err := ddlRows.Scan(&ddl); err != nil {
-			_ = ddlRows.Close()
-			t.Fatalf("scan DDL: %v", err)
-		}
-		ddls = append(ddls, ddl)
-	}
-	_ = ddlRows.Close()
-	for _, ddl := range ddls {
+	for _, ddl := range queryStrings(t, s.db, "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL") {
 		for _, bad := range forbidden {
 			if strings.Contains(strings.ToLower(ddl), strings.ToLower(bad)) {
-				t.Errorf("sqlite_master DDL contains forbidden identifier %q:\n%s", bad, ddl)
+				t.Errorf("schema DDL contains %q:\n%s", bad, ddl)
 			}
 		}
 	}
-
-	// Source-walk: scan production Go files in key packages.
-	// Go tests run from the package dir (internal/store/), so the project root is ../../
-	projectRoot := filepath.Join("..", "..")
-	scanDirs := []string{
-		filepath.Join(projectRoot, "internal", "hook"),
-		filepath.Join(projectRoot, "internal", "store"),
-		filepath.Join(projectRoot, "pkg", "api"),
-		filepath.Join(projectRoot, "cmd", "agent-director"),
-	}
-
-	for _, dir := range scanDirs {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue // directory may not exist yet
-		}
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
+	for _, dir := range []string{"internal/hook", "internal/store", "pkg/api", "cmd/agent-director"} {
+		err := filepath.WalkDir(filepath.Join("..", "..", dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return err
 			}
-			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			src := string(content)
+			src, err := os.ReadFile(path)
 			for _, bad := range forbidden {
-				if strings.Contains(src, bad) {
-					t.Errorf("production file %q contains forbidden identifier %q", path, bad)
+				if strings.Contains(string(src), bad) {
+					t.Errorf("%s contains %q", path, bad)
 				}
 			}
-			return nil
+			return err
 		})
 		if err != nil {
-			t.Fatalf("walking %s: %v", dir, err)
+			t.Fatalf("walk %s: %v", dir, err)
 		}
+	}
+}
+
+// TestAuthorizedMigrationFromEveryVersion: each released version beside an
+// exact-match sentinel climbs the real chain in one open to the fresh store's
+// schema (the two-places rule), consumes the sentinel with one
+// ad.schema.migrated line, keeps a pre-existing row with the new columns'
+// defaults and one store id, and does not backfill v1's permission rows. A
+// reopen is a clean no-op, and a stale sentinel beside the current store is
+// left alone (SR-1, SR-2, SR-5.4).
+func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
+	fresh, _ := openTempStore(t)
+	want := schemaShape(t, fresh.db)
+	for from := 1; from < schemaVersion; from++ {
+		t.Run(fmt.Sprintf("v%d", from), func(t *testing.T) {
+			dir := t.TempDir()
+			path := makeVersionedDB(t, dir, from)
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode)
+					VALUES ('pre', 'working', '/tmp', 'pre-sess', 'on')`)
+				if from == 1 { // v1's permission_requests has no request_token
+					mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, tool_name, tool_input) VALUES ('pre', 'Bash', '{}')`)
+				}
+			})
+			writeSentinel(t, dir, from, schemaVersion)
+			mark := TrailMark(t)
+
+			s, err := Open(path)
+			if err != nil {
+				t.Fatalf("Open(authorized v%d): %v", from, err)
+			}
+			if got := schemaShape(t, s.db); !reflect.DeepEqual(got, want) {
+				t.Errorf("migrated schema differs from a fresh store's:\n got  %v\n want %v", got, want)
+			}
+			if v := userVersion(t, s.db); v != schemaVersion {
+				t.Errorf("user_version = %d; want %d", v, schemaVersion)
+			}
+			var requests int
+			if err := s.db.QueryRow("SELECT COUNT(*) FROM permission_requests").Scan(&requests); err != nil || requests != 0 {
+				t.Errorf("permission_requests rows = %d, %v; want 0 (no v1 backfill)", requests, err)
+			}
+			sp, err := s.GetSpawn("pre")
+			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
+				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust {
+				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults", sp, err)
+			}
+			id := s.StoreID()
+			if err := s.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			assertSentinel(t, dir, false)
+			lines := trailEventsSince(t, mark, "ad.schema.migrated")
+			if len(lines) != 1 {
+				t.Fatalf("ad.schema.migrated lines = %d; want 1", len(lines))
+			}
+			assertTrailStr(t, lines[0], "source", "ad_store_schema")
+			assertTrailStr(t, lines[0], "message", fmt.Sprintf("migrated %d→%d, consumed authorization", from, schemaVersion))
+			assertTrailInt(t, lines[0], "from", from)
+			assertTrailInt(t, lines[0], "to", schemaVersion)
+			assertV5Defaults(t, path, "pre", 0)
+			if raw := assertOneStoreID(t, path); raw != id {
+				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
+			}
+
+			for _, stale := range []bool{false, true} {
+				if stale {
+					writeSentinel(t, dir, from, schemaVersion)
+				}
+				mark := TrailMark(t)
+				if got := openStoreID(t, Open, path); got != id {
+					t.Errorf("reopen (stale sentinel %v): StoreID() = %q; want %q", stale, got, id)
+				}
+				assertSentinel(t, dir, stale)
+				for _, ev := range []string{"ad.schema.migrated", "ad.schema.authorization_delete_failed"} {
+					if n := len(trailEventsSince(t, mark, ev)); n != 0 {
+						t.Errorf("reopen (stale sentinel %v) emitted %d %s; want 0", stale, n, ev)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestMigrationRefusedWithoutSentinel: a store at each older version opened
+// with no sentinel gets ErrSchemaMigrationRequired with the SR-1.4 dead-end
+// text and no self-service breadcrumb, is left byte-identical at its version,
+// and no sentinel or authorization_mismatch line appears.
+func TestMigrationRefusedWithoutSentinel(t *testing.T) {
+	for from := 1; from < schemaVersion; from++ {
+		t.Run(fmt.Sprintf("v%d", from), func(t *testing.T) {
+			dir := t.TempDir()
+			path := makeVersionedDB(t, dir, from)
+			before, mark := snapshotDBBytes(t, path), TrailMark(t)
+			_, err := Open(path)
+			if !errors.Is(err, ErrSchemaMigrationRequired) {
+				t.Fatalf("Open err = %v; want ErrSchemaMigrationRequired", err)
+			}
+			msg := err.Error()
+			if want := fmt.Sprintf("state.db is schema v%d; this binary requires v%d. Migration must be performed "+
+				"by an administrator via the agent-director install process.", from, schemaVersion); !strings.Contains(msg, want) {
+				t.Errorf("error = %q; want it to contain %q", msg, want)
+			}
+			for _, bad := range []string{"migrate", "--", "AGENT_DIRECTOR", "~/.agent-director", "/", sentinelFilename} {
+				if strings.Contains(strings.ToLower(msg), strings.ToLower(bad)) {
+					t.Errorf("error %q leaks the self-service breadcrumb %q", msg, bad)
+				}
+			}
+			assertDBBytesUnchanged(t, path, before)
+			if v := readUserVersion(t, path); v != from {
+				t.Errorf("user_version = %d; want %d", v, from)
+			}
+			assertSentinel(t, dir, false)
+			if n := len(trailEventsSince(t, mark, "ad.schema.authorization_mismatch")); n != 0 {
+				t.Errorf("authorization_mismatch lines = %d; want 0", n)
+			}
+		})
+	}
+}
+
+// TestGateRefusesBadSentinel: a malformed sentinel, or one with a wrong from or
+// to end, refuses like a missing one, is left in place unchanged (admin
+// evidence), and emits one authorization_mismatch line reporting both ends
+// (-1 when unknown).
+func TestGateRefusesBadSentinel(t *testing.T) {
+	cases := []struct {
+		name, reason       string
+		foundFrom, foundTo int // -1: a malformed sentinel
+	}{
+		{"malformed_json", "malformed_json", -1, -1},
+		{"wrong_from", "version_mismatch", 2, schemaVersion},
+		{"wrong_to", "version_mismatch", 1, schemaVersion + 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := makeVersionedDB(t, dir, 1)
+			if tc.foundFrom < 0 {
+				writeSentinelRaw(t, dir, []byte("{not valid json"))
+			} else {
+				writeSentinel(t, dir, tc.foundFrom, tc.foundTo)
+			}
+			sentinel := filepath.Join(dir, sentinelFilename)
+			sentinelBefore, _ := os.ReadFile(sentinel)
+			before, mark := snapshotDBBytes(t, path), TrailMark(t)
+			if _, err := Open(path); !errors.Is(err, ErrSchemaMigrationRequired) {
+				t.Fatalf("Open err = %v; want ErrSchemaMigrationRequired", err)
+			}
+			assertDBBytesUnchanged(t, path, before)
+			if v := readUserVersion(t, path); v != 1 {
+				t.Errorf("user_version = %d; want 1", v)
+			}
+			if got, err := os.ReadFile(sentinel); err != nil || !bytes.Equal(got, sentinelBefore) {
+				t.Errorf("sentinel after the refusal = %q, %v; want %q left in place", got, err, sentinelBefore)
+			}
+			lines := trailEventsSince(t, mark, "ad.schema.authorization_mismatch")
+			if len(lines) != 1 {
+				t.Fatalf("authorization_mismatch lines = %d; want 1", len(lines))
+			}
+			assertTrailStr(t, lines[0], "source", "ad_store_schema")
+			assertTrailStr(t, lines[0], "reason", tc.reason)
+			for key, want := range map[string]int{"expected_from": 1, "expected_to": schemaVersion,
+				"found_from": tc.foundFrom, "found_to": tc.foundTo} {
+				assertTrailInt(t, lines[0], key, want)
+			}
+		})
+	}
+}
+
+// TestNewerThanBinaryIsSchemaMismatch: a store stamped past this binary's
+// version fails with ErrSchemaMismatch, never ErrSchemaMigrationRequired.
+func TestNewerThanBinaryIsSchemaMismatch(t *testing.T) {
+	for _, v := range []int{schemaVersion + 1, 1000} {
+		path := makeVersionedDB(t, t.TempDir(), schemaVersion)
+		stampUserVersion(t, path, v)
+		if _, err := Open(path); !errors.Is(err, ErrSchemaMismatch) || errors.Is(err, ErrSchemaMigrationRequired) {
+			t.Errorf("Open(user_version %d) err = %v; want ErrSchemaMismatch only", v, err)
+		}
+	}
+}
+
+// TestMigrationStepReentry: a step re-run over a DB it migrated wholly or in
+// part succeeds and gives the schema one run gives (b.93m); v4→v5 never adds a
+// second store id or replaces one (SR-5.4).
+func TestMigrationStepReentry(t *testing.T) {
+	const preID = "0123456789abcdef"
+	var allV5 []string
+	for _, c := range v5ColumnSpecs {
+		allV5 = append(allV5, c.key())
+	}
+	preV5 := func(keys ...string) func(*testing.T, string) {
+		return func(t *testing.T, path string) { preAddV5Columns(t, path, keys...) }
+	}
+	meta := func(id string) func(*testing.T, string) {
+		return func(t *testing.T, path string) { preAddStoreMeta(t, path, id) }
+	}
+	cases := []struct {
+		name   string
+		from   int
+		pre    func(t *testing.T, path string)
+		runs   int
+		keepID string // the store id the hop must keep; "" when it creates one
+	}{
+		{"v2→v3 run twice", 2, nil, 2, ""},
+		{"v2→v3 after pid was added", 2, func(t *testing.T, path string) {
+			withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE spawns ADD COLUMN pid INTEGER") })
+		}, 1, ""},
+		{"v3→v4 run twice", 3, nil, 2, ""},
+		{"v4→v5 run twice", 4, nil, 2, ""},
+		{"v4→v5 after the first spawns column", 4, preV5("spawns.row_version"), 1, ""},
+		{"v4→v5 after session_history.life_number", 4, preV5("session_history.life_number"), 1, ""},
+		{"v4→v5 after a mix across both tables", 4, preV5("spawns.life_number", "spawns.pane_id", "session_history.life_number"), 1, ""},
+		{"v4→v5 after all thirteen", 4, preV5(allV5...), 1, ""},
+		{"v4→v5 with store_meta holding an id", 4, meta(preID), 1, preID},
+		{"v4→v5 with store_meta empty", 4, meta(""), 1, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var want map[string]any
+			withRaw(t, makeVersionedDB(t, t.TempDir(), tc.from+1), func(db *sql.DB) { want = schemaShape(t, db) })
+			path := makeVersionedDB(t, t.TempDir(), tc.from)
+			if tc.pre != nil {
+				tc.pre(t, path)
+			}
+			step, _ := migrationStepFrom(tc.from)
+			db := openRaw(t, path)
+			id := tc.keepID
+			for run := 1; run <= tc.runs; run++ {
+				if err := step.apply(db); err != nil {
+					t.Fatalf("run %d: %v", run, err)
+				}
+				if tc.from == 4 {
+					if got := assertOneStoreID(t, path); id == "" {
+						id = got
+					} else if got != id {
+						t.Errorf("run %d: store_id = %q; want %q kept", run, got, id)
+					}
+				}
+			}
+			if v := userVersion(t, db); v != tc.from+1 {
+				t.Errorf("user_version = %d; want %d", v, tc.from+1)
+			}
+			if got := schemaShape(t, db); !reflect.DeepEqual(columnsByName(got), columnsByName(want)) {
+				t.Errorf("schema after re-entry:\n got  %v\n want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestMigrationRollback: a step failing part-way rolls back its whole hop: the
+// open fails as a migration failure (not a refusal), and the store keeps its
+// version, schema, rows and sentinel (SR-2.4, SR-5.4, SR-20.6).
+func TestMigrationRollback(t *testing.T) {
+	cases := []struct {
+		name    string
+		from    int
+		breakIt func(t *testing.T, path string)
+		wantErr string // in the open's error
+	}{
+		{"v1→v2 at a conflicting index", 1, func(t *testing.T, path string) {
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `CREATE INDEX idx_permission_requests_instance_decision ON spawns(state)`)
+			})
+		}, ""},
+		{"v4→v5 at session_history.life_number", 4, breakV5SessionHistoryHop, "session_history.life_number"},
+		{"v4→v5 at the store_id insert", 4, breakV5StoreMetaStep, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var path string
+			if tc.from == 4 {
+				path = makeV4HistoryFixture(t, t.TempDir()).path
+			} else {
+				path = makeVersionedDB(t, t.TempDir(), tc.from)
+			}
+			dir := filepath.Dir(path)
+			tc.breakIt(t, path)
+			before := dbDump(t, path)
+			writeSentinel(t, dir, tc.from, schemaVersion)
+			s, err := Open(path)
+			if err == nil {
+				_ = s.Close()
+				t.Fatal("Open succeeded; want a migration failure")
+			}
+			if errors.Is(err, ErrSchemaMigrationRequired) || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("Open err = %v; want a migration failure naming %q", err, tc.wantErr)
+			}
+			if v := readUserVersion(t, path); v != tc.from {
+				t.Errorf("user_version = %d; want %d", v, tc.from)
+			}
+			if after := dbDump(t, path); !reflect.DeepEqual(after, before) {
+				t.Errorf("the failed hop changed the store:\n before %v\n after  %v", before, after)
+			}
+			assertSentinel(t, dir, true)
+		})
+	}
+}
+
+// TestConsumeDeleteFailure_LoudButOpenSucceeds: when the committed migration's
+// sentinel cannot be deleted (a read-only directory), consumeAuthorization
+// emits one authorization_delete_failed line and no migrated line, and leaves
+// the sentinel as admin evidence. It drives the chain and the consume directly
+// to reach the seam between the commit and the delete.
+func TestConsumeDeleteFailure_LoudButOpenSucceeds(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory mode, so the delete cannot be made to fail")
+	}
+	dir := t.TempDir()
+	path := makeVersionedDB(t, dir, 1)
+	writeSentinel(t, dir, 1, schemaVersion)
+	withRaw(t, path, func(db *sql.DB) {
+		if err := runMigrationChain(db, 1); err != nil {
+			t.Fatalf("runMigrationChain: %v", err)
+		}
+	})
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	mark := TrailMark(t)
+
+	consumeAuthorization(path, 1, schemaVersion)
+
+	assertSentinel(t, dir, true)
+	failed := trailEventsSince(t, mark, "ad.schema.authorization_delete_failed")
+	if len(failed) != 1 {
+		t.Fatalf("authorization_delete_failed lines = %d; want 1", len(failed))
+	}
+	assertTrailStr(t, failed[0], "source", "ad_store_schema")
+	if _, ok := failed[0]["error"].(string); !ok {
+		t.Errorf("[error] = %v; want a string", failed[0]["error"])
+	}
+	if n := len(trailEventsSince(t, mark, "ad.schema.migrated")); n != 0 {
+		t.Errorf("ad.schema.migrated lines = %d; want 0", n)
 	}
 }

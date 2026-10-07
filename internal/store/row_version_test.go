@@ -577,26 +577,28 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 }
 
 // TestRowVersionInsertStartsAtZero checks a new row starts at version 0 with
-// the launch start, token and socket given, no identity, life 0, and the
-// caller's pre-trust choice: the insert records no_pre_trust (SR-5.1), 1 for
-// the opt-out and 0 otherwise. Of the versioned writes above, only reuse's
-// reset (the new launch's choice) and its restore (the pre-reuse value)
-// change it.
+// the launch start, token and socket given (zero as NULL), never a server or
+// pane identity, life 0, and the caller's pre-trust choice: 1 for the opt-out,
+// 0 otherwise (SR-5.1). Of the versioned writes, only reuse's reset and
+// restore change it.
 func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	cases := []struct {
 		name       string
 		noPreTrust bool
 		want       int64 // no_pre_trust as stored
+		ms         int64
+		lid        store.LaunchIdentity
 	}{
-		{"pre-trust allowed stores 0", false, 0},
-		{"pre-trust opt-out stores 1", true, 1},
+		{"pre-trust allowed stores 0", false, 0, launchStart, store.LaunchIdentity{Token: goodToken, Socket: "/tmp/rv/sock"}},
+		{"pre-trust opt-out stores 1", true, 1, launchStart, store.LaunchIdentity{Token: goodToken, Socket: "/tmp/rv/sock"}},
+		{"full identity carried, only token and socket stored", false, 0, launchStart, fullIdentity()},
+		{"zero launch values stored as NULL", false, 0, 0, store.LaunchIdentity{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			sp := store.Spawn{ClaudeInstanceID: "rv-insert", CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
-				RelayMode: "off", LaunchStartedAtMillis: launchStart, NoPreTrust: tc.noPreTrust,
-				Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/rv/sock"}}
+				RelayMode: "off", LaunchStartedAtMillis: tc.ms, NoPreTrust: tc.noPreTrust, Identity: tc.lid}
 			if err := f.s.InsertPending(sp); err != nil {
 				t.Fatalf("InsertPending: %v", err)
 			}
@@ -643,6 +645,12 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 				}
 				if got, err := f.s.EndHeldLaunch(id, c.LaunchStartedAt.(int64), rvEndedAt); err != nil || got != store.CondChanged {
 					t.Fatalf("EndHeldLaunch = %v, %v; want CondChanged, nil", got, err)
+				}
+			}},
+		{name: "EndHeldLaunch/ended row at version 0", state: "ended", opts: []apitest.SpawnOption{apitest.WithRowVersion(0)},
+			write: func(t *testing.T, f *v5Store, id string) {
+				if got, err := f.s.EndHeldLaunch(id, f.rawColumns(id).LaunchStartedAt.(int64), rvEndedAt); err != nil || got != store.CondChanged {
+					t.Fatalf("EndHeldLaunch(ended row) = %v, %v; want CondChanged, nil", got, err)
 				}
 			}},
 		{name: "EndHeldLaunch/launch start differs, row inserted afresh", state: "pending",

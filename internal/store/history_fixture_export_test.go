@@ -32,7 +32,7 @@ func MigrateV4HistoryFixture(t *testing.T) MigratedV4History {
 	if v := readUserVersion(t, f.path); v != schemaVersion {
 		t.Fatalf("MigrateV4HistoryFixture: user_version = %d; want %d", v, schemaVersion)
 	}
-	assertSentinelAbsent(t, f.dir)
+	assertSentinel(t, f.dir, false)
 
 	out := MigratedV4History{
 		Dir: f.dir, Path: f.path,

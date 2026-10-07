@@ -97,29 +97,6 @@ func SeedSpawn(t *testing.T, s *store.Store, id string) store.Spawn {
 	return seed(t, s, id, store.StateWorking)
 }
 
-// SeedKilled inserts a Spawn in StateEnded — a terminal row representing a
-// completed or killed instance. Useful for status/list examples that show
-// the full lifecycle.
-func SeedKilled(t *testing.T, s *store.Store, id string) store.Spawn {
-	t.Helper()
-	return seed(t, s, id, store.StateEnded)
-}
-
-// SeedAskUser inserts a Spawn in StateAskUser — a row blocked on human input.
-// Useful for list and status examples demonstrating the ask_user state.
-func SeedAskUser(t *testing.T, s *store.Store, id string) store.Spawn {
-	t.Helper()
-	return seed(t, s, id, store.StateAskUser)
-}
-
-// SeedLiveSpawn inserts a Spawn in StateWorking — an active, fully-booted row
-// suitable as a precondition for status, get, kill, send-keys, and read-pane.
-// It is the standard "live Spawn" fixture when any interactive Spawn will do.
-func SeedLiveSpawn(t *testing.T, s *store.Store, id string) store.Spawn {
-	t.Helper()
-	return seed(t, s, id, store.StateWorking)
-}
-
 // SeedCheckPermission inserts a Spawn in StateCheckPermission with relay_mode=on
 // and writes an open permission_requests row for it. Use this as the precondition
 // for the decide verb, which requires relay_mode=on and an undecided request.
@@ -149,18 +126,11 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	return row
 }
 
-// SeedResumable inserts a Spawn in StateEnded with claude_session_id populated
-// and writes a minimal JSONL placeholder so that the resume verb's pre-flight
-// Stat check passes. The JSONL path is derived from HOME via spawn.JsonlPath;
-// callers must ensure HOME points at a temp directory before calling this
-// (smoke tests do this in TestMain).
-//
-// The session id is recorded by a gated soft refresh and the row ended by
-// the gated ended transition, both played by the row's own agent through a
-// seed pane, removed afterwards (see seed); row_version 2. s must come from
-// OpenTempStore.
-//
-// Returns the seeded Spawn (with ClaudeSessionID and EndedAt populated).
+// SeedResumable inserts a Spawn in StateEnded with a claude_session_id
+// (recorded by the agent's gated writes through a seed pane, see seed;
+// row_version 2) and a placeholder transcript at spawn.JsonlPath under HOME,
+// which must be a temp directory, so resume's pre-flight passes. s must come
+// from OpenTempStore.
 func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	t.Helper()
 	sp := defaultSpawn(id)
@@ -193,17 +163,11 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	return row
 }
 
-// SeedClosedPermissionRequests seeds n decided (closed) permission_requests rows for
-// instanceID with deterministic decided_at values suitable for cap-eviction tests.
-// For each row i in [0, n): an open row is inserted via the gated
-// UpsertOpenPermissionRequest, played by the row's own agent (WithSeedPane),
-// immediately closed via DecidePermissionRequest (decision="deny",
-// reason=DecisionReasonOperator), then its decided_at is backdated to
-// baseTime+i*step via a raw sql.DB connection.
-//
-// The spawn row is created if it does not already exist. dbPath must be the
-// SQLite file path returned by OpenTempStore. Returns the request tokens in
-// insertion order so callers can assert on specific rows.
+// SeedClosedPermissionRequests seeds n requests for instanceID (creating its
+// row when absent) through the agent's gated insert, denies each
+// (DecisionReasonOperator), and backdates row i's decided_at to
+// baseTime+i*step through a raw connection to dbPath, for cap-eviction tests.
+// It returns the tokens in insertion order.
 func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instanceID string, n int, baseTime time.Time, step time.Duration) []string {
 	t.Helper()
 
@@ -258,29 +222,12 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 }
 
 // SeedUndeliverablePermissionRequest backdates the created_at of the open
-// permission_requests row identified by (instanceID, requestToken) to
-// now-age, so the shared time-based deliverability signal
-// (api.RelayRequestUndeliverable) reads the row as undeliverable. The row
-// must already exist and be open — seed it first via SeedCheckPermission
-// (which uses TestRequestTokenA) or SeedOpenPermissionRequests. Because the
-// backdate targets a single row by token, callers can make one row among
-// several open rows for the same spawn undeliverable while leaving the others
-// deliverable (Epic 3 mixed-deliverability, SR-7.3).
-//
-// age is chosen by the caller relative to the configured effective relay
-// timeout: pass an age greater than the window (minus the safety margin) to
-// cross the deliverability boundary. The helper deliberately does NOT hardcode
-// 86400 or restate the non-positive→default fallback rule — that lives solely
-// in config.Relay.EffectiveTimeoutSeconds.
-//
-// dbPath must be the SQLite file path returned by OpenTempStore. Backdating
-// uses a second raw sql.Open connection with a UTC-formatted UPDATE, mirroring
-// SeedClosedPermissionRequests: the store API
-// deliberately exposes no created_at mutation, so a raw connection is the only
-// way to simulate elapsed time without altering production store methods.
-//
-// After it returns, a fresh read of the row shows the backdated created_at and
-// decision still NULL.
+// request (instanceID, requestToken) to now-age through a raw connection to
+// dbPath (the store exposes no created_at write), so
+// api.RelayRequestUndeliverable reads it as undeliverable when age exceeds the
+// effective relay timeout; other open rows of the spawn stay deliverable
+// (SR-7.3). Seed the open row first (SeedCheckPermission uses
+// TestRequestTokenA, or SeedOpenPermissionRequests).
 func SeedUndeliverablePermissionRequest(t *testing.T, s *store.Store, dbPath, instanceID, requestToken string, age time.Duration) {
 	t.Helper()
 
@@ -318,12 +265,9 @@ func SeedUndeliverablePermissionRequest(t *testing.T, s *store.Store, dbPath, in
 	}
 }
 
-// SeedOpenPermissionRequests seeds N open permission_requests rows for instanceID,
-// one per token in tokens, by calling the gated UpsertOpenPermissionRequest as
-// the row's own agent (WithSeedPane; the row's pane and process identity are
-// left as they were). Intended for parallel-hook ordering, state-machine
-// retention, find-missing multi-row, and get-verb plural shape tests. s must
-// come from OpenTempStore (or be registered).
+// SeedOpenPermissionRequests inserts one open request per token for
+// instanceID through the agent's gated insert (WithSeedPane). s must come from
+// OpenTempStore (or be registered).
 func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string, tokens []string) {
 	t.Helper()
 	dbPath := StorePath(t, s, "storefix.SeedOpenPermissionRequests")
@@ -340,15 +284,9 @@ func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string,
 	}
 }
 
-// SeedAgentDirectorDir creates the ~/.agent-director/templates/ directory
-// hierarchy under homeDir and returns the templates directory path. Use it as
-// the make-template precondition when HOME is re-pointed to a temp directory
-// (e.g. in smoke TestMain). The directory is created with mode 0700.
-//
-// Note: make-template itself calls config.EnsureTemplatesDir which also creates
-// the directory lazily — this helper is only needed when you want the directory
-// to exist before the verb runs (e.g. to verify the pre-condition separately
-// from the verb under test).
+// SeedAgentDirectorDir creates homeDir's .agent-director/templates directory
+// (mode 0700) and returns it, for a test that needs it before make-template,
+// which otherwise creates it itself.
 func SeedAgentDirectorDir(t *testing.T, homeDir string) string {
 	t.Helper()
 	tmplDir := filepath.Join(homeDir, ".agent-director", "templates")

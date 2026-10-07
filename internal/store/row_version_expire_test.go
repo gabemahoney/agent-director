@@ -1,17 +1,15 @@
 package store_test
 
 // SR-5.2 versioning cases for expire's candidate read and conditional delete
-// (SR-12.1, SR-12.3), appended to row_version_test.go's no-op table; an
-// applied delete leaves no row, so its test checks only that.
+// (SR-12.1, SR-12.3), appended to row_version_test.go's no-op table. An
+// applied delete leaves no row: expire_candidates_test.go checks that.
 
 import (
-	"errors"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // rvExpireCutoff is later than any ended_at a seeded row stores.
@@ -57,21 +55,5 @@ func rvExpireNoOps() []rowVersionCase {
 					t.Fatalf("ListExpireCandidates = %v; want [%s]", got, id)
 				}
 			}},
-	}
-}
-
-// TestRowVersionExpireDeleteRemovesRow checks an applied delete of a finished
-// row leaves no row and keeps the store_id.
-func TestRowVersionExpireDeleteRemovesRow(t *testing.T) {
-	for _, st := range []string{"ended", "missing"} {
-		t.Run(st, func(t *testing.T) {
-			f := newV5Store(t)
-			id := seedCase(t, f, rowVersionCase{state: st, opts: []apitest.SpawnOption{apitest.WithEndedAt("2026-01-01 00:00:00")}})
-			rvExpireDelete("", nil, store.CondApplied)(t, f, id)
-			if _, err := apitest.ReadSpawnColumns(f.path, id); !errors.Is(err, store.ErrSpawnNotFound) {
-				t.Errorf("ReadSpawnColumns after the delete: %v; want ErrSpawnNotFound", err)
-			}
-			assertStoreIDKept(t, f)
-		})
 	}
 }

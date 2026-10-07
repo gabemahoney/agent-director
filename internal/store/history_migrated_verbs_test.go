@@ -1,10 +1,13 @@
 package store_test
 
-// AC-REUSE-25 (SR-8.7, SR-5.4): get and resume over the schema-v4 history
-// fixture, migrated through the real sentinel flow, behave as before apart
-// from the current-session rule (holds-current loses its current-id entry).
+// AC-REUSE-25 and AC-RES-20 (SR-8.7, SR-5.4, SR-22.6): get and resume over the
+// schema-v4 history fixture, migrated through the real sentinel flow, behave as
+// before apart from the current-session rule (holds-current loses its
+// current-id entry), and a migrated row carries the no_pre_trust default, so
+// its resume pre-trusts the row's directory.
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,31 +35,12 @@ func newMigratedClient(t *testing.T) migratedClient {
 	t.Helper()
 	f := store.MigrateV4HistoryFixture(t)
 	rec := tmuxfix.NewRecorder()
-	c, err := api.New(api.Options{
-		StorePath:  f.Path,
-		ConfigPath: filepath.Join(t.TempDir(), "absent", "config.toml"),
-		TmuxClient: rec,
-	})
+	c, err := api.New(api.Options{StorePath: f.Path, ConfigPath: filepath.Join(t.TempDir(), "absent", "config.toml"), TmuxClient: rec})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return migratedClient{f: f, c: c, rec: rec}
-}
-
-// sameInstant reports whether two store timestamps (SQLite text or RFC3339) are equal.
-func sameInstant(a, b string) bool {
-	parse := func(s string) (time.Time, bool) {
-		for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
-			if ts, err := time.Parse(layout, s); err == nil {
-				return ts, true
-			}
-		}
-		return time.Time{}, false
-	}
-	ta, okA := parse(a)
-	tb, okB := parse(b)
-	return okA && okB && ta.Equal(tb)
 }
 
 // fixtureRow picks one scenario row's id from the fixture.
@@ -93,43 +77,33 @@ func TestMigratedV4HistoryGet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			id := tc.row(m.f)
 			cur := m.f.CurrentSessionID[id]
-			pre := m.f.History[id]
 			var want []store.V4HistoryEntry
-			for _, e := range pre {
+			for _, e := range m.f.History[id] {
 				if cur == "" || e.SessionID != cur {
 					want = append(want, e)
 				}
 			}
-			if dropped := len(pre) - len(want); dropped != tc.dropped {
-				t.Fatalf("pre-migration history %+v holds %d entries for current %q; want %d", pre, dropped, cur, tc.dropped)
+			if dropped := len(m.f.History[id]) - len(want); dropped != tc.dropped {
+				t.Fatalf("pre-migration history holds %d entries for current %q; want %d", dropped, cur, tc.dropped)
 			}
-
 			got, err := m.c.Get(id)
 			if err != nil {
 				t.Fatalf("Get(%s): %v", id, err)
 			}
-			if got.ClaudeSessionID != cur {
-				t.Errorf("claude_session_id = %q; want pre-migration %q", got.ClaudeSessionID, cur)
+			if got.ClaudeSessionID != cur || got.TranscriptStatus != tc.wantStatus {
+				t.Errorf("claude_session_id, transcript_status = %q, %q; want %q, %q", got.ClaudeSessionID, got.TranscriptStatus, cur, tc.wantStatus)
 			}
-			if got.TranscriptStatus != tc.wantStatus {
-				t.Errorf("transcript_status = %q; want %q", got.TranscriptStatus, tc.wantStatus)
-			}
-			gotIDs := make([]string, 0, len(got.PriorSessions))
+			gotIDs := []string{}
 			for _, p := range got.PriorSessions {
 				gotIDs = append(gotIDs, p.ClaudeSessionID)
-				if cur != "" && p.ClaudeSessionID == cur {
-					t.Errorf("prior_sessions holds the current session id %q", cur)
-				}
 			}
-			if strings.Join(gotIDs, ",") != strings.Join(tc.wantIDs, ",") {
-				t.Errorf("prior_sessions ids = %v; want %v", gotIDs, tc.wantIDs)
-			}
-			if len(got.PriorSessions) != len(want) {
-				t.Fatalf("prior_sessions = %+v; want pre-migration %+v", got.PriorSessions, want)
+			if strings.Join(gotIDs, ",") != strings.Join(tc.wantIDs, ",") || len(got.PriorSessions) != len(want) {
+				t.Fatalf("prior_sessions = %+v; want ids %v from pre-migration %+v", got.PriorSessions, tc.wantIDs, want)
 			}
 			for i, p := range got.PriorSessions {
 				w := want[i]
-				if p.ClaudeSessionID != w.SessionID || p.JSONLPath != w.JSONLPath || !sameInstant(p.RecordedAt, w.RecordedAt) {
+				if recorded, err := time.Parse("2006-01-02 15:04:05", w.RecordedAt); p.ClaudeSessionID != w.SessionID ||
+					p.JSONLPath != w.JSONLPath || err != nil || !recordedAt(p.RecordedAt).Equal(recorded) {
 					t.Errorf("prior_sessions[%d] = %+v; want pre-migration %+v", i, p, w)
 				}
 			}
@@ -137,28 +111,77 @@ func TestMigratedV4HistoryGet(t *testing.T) {
 	}
 }
 
+// recordedAt parses a prior session's recorded_at (store text or RFC 3339).
+func recordedAt(s string) time.Time {
+	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
+		if ts, err := time.Parse(layout, s); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
+}
+
 // plantTranscript writes an empty transcript for sessionID at the path resume
-// recomputes for the row's cwd under the test HOME, removed at cleanup.
+// recomputes for cwd under the test HOME, removed at cleanup.
 func plantTranscript(t *testing.T, cwd, sessionID string) {
 	t.Helper()
 	p, err := spawn.JsonlPath(cwd, sessionID)
 	if err != nil {
 		t.Fatalf("JsonlPath(%s, %s): %v", cwd, sessionID, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil || os.WriteFile(p, []byte("{}\n"), 0o644) != nil {
+		t.Fatalf("plant %s: %v", p, err)
 	}
 	t.Cleanup(func() { _ = os.Remove(p) })
 }
 
+// seedHomeClaudeJSON writes body to $HOME/.claude.json, where pre-trust looks
+// for a row whose extra env sets no CLAUDE_CONFIG_DIR, and puts back what was
+// there at cleanup. HOME is TestMain's throwaway directory, never the real one.
+func seedHomeClaudeJSON(t *testing.T, body string) string {
+	t.Helper()
+	home := os.Getenv("HOME")
+	if !strings.HasPrefix(filepath.Base(home), "ad-store-home-") {
+		t.Fatalf("HOME = %q; want TestMain's throwaway ad-store-home-* directory", home)
+	}
+	p := filepath.Join(home, ".claude.json")
+	switch prev, err := os.ReadFile(p); {
+	case err == nil:
+		t.Cleanup(func() { _ = os.WriteFile(p, prev, 0o600) })
+	case errors.Is(err, os.ErrNotExist):
+		t.Cleanup(func() { _ = os.Remove(p) })
+	default:
+		t.Fatalf("read %s: %v", p, err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", p, err)
+	}
+	return p
+}
+
+// trustAccepted reports projects[cwd].hasTrustDialogAccepted in the .claude.json at p.
+func trustAccepted(t *testing.T, p, cwd string) bool {
+	t.Helper()
+	raw, err := os.ReadFile(p)
+	var doc struct {
+		Projects map[string]struct {
+			HasTrustDialogAccepted bool `json:"hasTrustDialogAccepted"`
+		} `json:"projects"`
+	}
+	if err != nil || json.Unmarshal(raw, &doc) != nil {
+		t.Fatalf("read %s: %v\n%s", p, err, raw)
+	}
+	return doc.Projects[cwd].HasTrustDialogAccepted
+}
+
 // TestMigratedV4HistoryResume: each row, on its own migrated copy, relaunches
-// the same candidate or returns the same error as before the migration.
+// the same candidate or returns the same error as before the migration; the
+// relaunched row, carrying the no_pre_trust default, reports pre_trust ok,
+// gets its directory's trust entry and moves to pending (AC-RES-20).
 func TestMigratedV4HistoryResume(t *testing.T) {
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	t.Setenv("TMUX", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	cases := []struct {
 		name       string
 		row        fixtureRow
@@ -180,7 +203,7 @@ func TestMigratedV4HistoryResume(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("TMUX_TMPDIR", t.TempDir())
 			m := newMigratedClient(t)
-			id := tc.row(m.f)
+			id, cwd := tc.row(m.f), m.f.CWD[tc.row(m.f)]
 			plant := tc.plant
 			if tc.plantAll {
 				if cur := m.f.CurrentSessionID[id]; cur != "" {
@@ -191,31 +214,34 @@ func TestMigratedV4HistoryResume(t *testing.T) {
 				}
 			}
 			for _, sid := range plant {
-				plantTranscript(t, m.f.CWD[id], sid)
+				plantTranscript(t, cwd, sid)
 			}
+			claudeJSON := seedHomeClaudeJSON(t, `{"numStartups": 3, "projects": {"/elsewhere": {"hasTrustDialogAccepted": false}}}`)
 
-			_, err := m.c.Resume(api.ResumeParams{ClaudeInstanceID: id})
+			res, err := m.c.Resume(api.ResumeParams{ClaudeInstanceID: id})
 			launches := m.rec.SocketCallsOf(tmux.CallCreate)
 			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Resume(%s) err = %v; want %v", id, err, tc.wantErr)
-				}
-				if tc.wantInMsg != "" && !strings.Contains(err.Error(), tc.wantInMsg) {
-					t.Errorf("Resume(%s) err = %q; want it to name %q", id, err, tc.wantInMsg)
-				}
-				if len(launches) != 0 {
-					t.Errorf("Resume(%s) relaunched %v; want no relaunch", id, launches)
+				if !errors.Is(err, tc.wantErr) || !strings.Contains(err.Error(), tc.wantInMsg) || len(launches) != 0 {
+					t.Fatalf("Resume(%s) = %v with %d relaunches; want %v naming %q, no relaunch", id, err, len(launches), tc.wantErr, tc.wantInMsg)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("Resume(%s): %v", id, err)
-			}
-			if len(launches) != 1 {
-				t.Fatalf("Resume(%s) made %d relaunches; want 1", id, len(launches))
+			if err != nil || len(launches) != 1 {
+				t.Fatalf("Resume(%s) = %v with %d relaunches; want 1", id, err, len(launches))
 			}
 			if cmd := launches[0].Command; len(cmd) < 3 || cmd[1] != "--resume" || cmd[2] != tc.wantResume {
 				t.Errorf("relaunch command = %v; want `claude --resume %s ...`", cmd, tc.wantResume)
+			}
+			if res.PreTrust != "ok" || !trustAccepted(t, claudeJSON, cwd) {
+				t.Errorf("pre_trust = %q, trust entry for %s written %v; want ok, true", res.PreTrust, cwd, trustAccepted(t, claudeJSON, cwd))
+			}
+			s, err := store.Open(m.f.Path)
+			if err != nil {
+				t.Fatalf("store.Open: %v", err)
+			}
+			defer s.Close()
+			if sp, err := s.GetSpawn(id); err != nil || sp.State != store.StatePending || sp.NoPreTrust {
+				t.Errorf("after resume: state %q, no_pre_trust %v, %v; want pending, the default (false)", sp.State, sp.NoPreTrust, err)
 			}
 		})
 	}
