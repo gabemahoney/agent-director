@@ -1,12 +1,9 @@
 package api_test
 
 // resume_lookup_fixture_test.go extends the kill fixture (killEnv, killRow)
-// for resume's pre-launch lookup (SR-8.2, SR-20.2, SR-20.6): resumable
-// finished rows, the instant the starting-session rule reads, the name
-// holders, the resume runners and the "wrote nothing" snapshot. It holds no
-// tests. The "wrote nothing" check is verb-neutral (writesSnapshot,
-// assertWroteNothing; reuse's in spawn_reuse_fixture_test.go). resumeEnv
-// (resume_fixture_test.go) keeps the move, restore and pending tests.
+// for resume's pre-launch lookup (SR-8.2, SR-20.2, SR-20.6): resumable rows,
+// the rule's instant, the name holders, the resume runners and the
+// verb-neutral "wrote nothing" check. It holds no tests.
 
 import (
 	"reflect"
@@ -24,19 +21,17 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// resumeRow is a resumable seeded row: the kill fixture's row, its cwd, its
-// transcript and the config directory (CLAUDE_CONFIG_DIR) whose .claude.json
-// pre-trust writes.
+// resumeRow is a resumable kill-fixture row with its cwd, transcript and
+// CLAUDE_CONFIG_DIR (whose .claude.json pre-trust writes).
 type resumeRow struct {
 	killRow
 	CWD, JSONLPath string
 	Trust          trustConfig
 }
 
-// ruleInstant is when resume's starting-session rule reads the clock if
-// resume is called next: one lookup (resumeLookupQ) after e.clock's now. It
-// first advances e.clock, at most once, so that instant is a whole second,
-// like a stored ended_at and a session's creation time.
+// ruleInstant is when the starting-session rule reads the clock if resume is
+// called next (now + resumeLookupQ), first advancing e.clock so it is a whole
+// second, like a stored ended_at.
 func (e *killEnv) ruleInstant() time.Time {
 	at := e.clock.Now().Add(resumeLookupQ)
 	if frac := at.Sub(at.Truncate(time.Second)); frac > 0 {
@@ -46,14 +41,12 @@ func (e *killEnv) ruleInstant() time.Time {
 	return at
 }
 
-// createdBefore is the seed option giving a session the creation time d
-// before ruleInstant (a negative d is in the future).
+// createdBefore gives a session the creation time d before ruleInstant.
 func (e *killEnv) createdBefore(d time.Duration) tmuxfix.RowSessionOption {
 	return tmuxfix.WithRowSessionCreated(e.ruleInstant().Add(-d).Unix())
 }
 
-// resumableSpec is an ended row that ended age before ruleInstant, its
-// agent in state a and no session seeded; opts go last.
+// resumableSpec is a row ended age before ruleInstant, agent a, no session.
 func (e *killEnv) resumableSpec(age time.Duration, a agentState, opts ...apitest.SpawnOption) killRowSpec {
 	return killRowSpec{State: store.StateEnded, Agent: a, NoSession: true,
 		Opts: append([]apitest.SpawnOption{apitest.WithEndedAt(e.ruleInstant().Add(-age))}, opts...)}
@@ -65,8 +58,7 @@ func (e *killEnv) seedResumable(t *testing.T, age time.Duration, a agentState, o
 	return e.seedResumableRow(t, e.resumableSpec(age, a, opts...))
 }
 
-// seedResumableRow seeds spec's row made resumable: a session id (when spec
-// gives none), then seedOnServer through seedRow.
+// seedResumableRow seeds spec's row with a session id through seedOnServer.
 func (e *killEnv) seedResumableRow(t *testing.T, spec killRowSpec) resumeRow {
 	t.Helper()
 	if spec.SessionID == "" {
@@ -75,13 +67,9 @@ func (e *killEnv) seedResumableRow(t *testing.T, spec killRowSpec) resumeRow {
 	return e.seedOnServer(t, spec, e.seedRow)
 }
 
-// seedOnServer seeds spec's row through seed (seedRow, or seedRawRow for rows
-// GetSpawn refuses) with a cwd (when spec gives none), a config directory
-// whose .claude.json lacks the cwd's entry, its transcript there (when it has
-// a session id), e.defaultSocket as its socket, and its recorded server
-// running there with a bystander session, so a normal lookup reads Gone with
-// no ad.provenance.disagree; spec.Opts
-// still go last.
+// seedOnServer seeds spec's row through seed (seedRow, or seedRawRow) with a
+// cwd, an untrusted config directory holding its transcript, and its server
+// on e.defaultSocket with a bystander (a normal lookup reads Gone); Opts last.
 func (e *killEnv) seedOnServer(t *testing.T, spec killRowSpec, seed func(*testing.T, killRowSpec) killRow) resumeRow {
 	t.Helper()
 	if spec.CWD == "" {
@@ -102,11 +90,8 @@ func (e *killEnv) seedOnServer(t *testing.T, spec killRowSpec, seed func(*testin
 	return r
 }
 
-// holderKind is a session seeded on a row's socket by seedHolder: one
-// holding the row's recorded name (in tmux's stored form) by its label's
-// class, or one that holds nothing. The kinds from holderCurrent on serve
-// resume's re-lookup after "duplicate session" (arrangeHeld,
-// resume_held_fixture_test.go).
+// holderKind is a session seedHolder places on a row's socket, by the class
+// of its label, holding the row's recorded name (stored form) or nothing.
 type holderKind int
 
 const (
@@ -125,10 +110,8 @@ const (
 	holderOtherStoreOldToken                    // another store's label with the row's id and an earlier token
 )
 
-// seedHolder seeds k's session on r's socket, with one new pane, and returns
-// it as stored (the first of holderAmbiguous's two; the zero session for
-// holderVanished); for holderForeign the label's instance id is the other
-// row's.
+// seedHolder seeds k's session on r's socket and returns it as stored (the
+// first of holderAmbiguous's two; none for holderVanished).
 func (e *killEnv) seedHolder(t *testing.T, r killRow, k holderKind) tmuxfix.SeedSession {
 	t.Helper()
 	placed := e.placeHolder(t, r, k, e.holderSessions(t, r, k))
@@ -139,8 +122,7 @@ func (e *killEnv) seedHolder(t *testing.T, r killRow, k holderKind) tmuxfix.Seed
 }
 
 // holderSessions is k's sessions for r, not yet seeded (holderForeign seeds
-// its other row now): under storedFormOf(r.Name) unless Elsewhere or
-// Neighbour, each valid label's one pane carrying its token.
+// its other row now); a valid label's one pane carries its token.
 func (e *killEnv) holderSessions(t *testing.T, r killRow, k holderKind) []tmuxfix.SeedSession {
 	t.Helper()
 	s := tmuxfix.SeedSession{Name: storedFormOf(r.Name), LabelSet: true}
@@ -175,9 +157,8 @@ func (e *killEnv) holderSessions(t *testing.T, r killRow, k holderKind) []tmuxfi
 	return []tmuxfix.SeedSession{s}
 }
 
-// placeHolder seeds sessions (holderSessions' for k) on r's socket, its
-// server bound when none is, sets holderConflicting's malformed global scope
-// value, and returns the sessions as stored, in seeding order.
+// placeHolder seeds sessions (holderSessions' for k) on r's socket, sets
+// holderConflicting's malformed scope value, and returns them as stored.
 func (e *killEnv) placeHolder(t *testing.T, r killRow, k holderKind, sessions []tmuxfix.SeedSession) []tmuxfix.SeedSession {
 	t.Helper()
 	e.ensureServer(&r)
@@ -203,8 +184,7 @@ func (e *killEnv) placeHolder(t *testing.T, r killRow, k holderKind, sessions []
 	return placed
 }
 
-// storedFormOf is the name tmux stores and lists for raw (the replay
-// catalogue's StoredNames), raw itself when the catalogue has no entry.
+// storedFormOf is raw's stored form in tmuxfix.StoredNames, else raw.
 func storedFormOf(raw string) string {
 	for _, n := range tmuxfix.StoredNames() {
 		if n.Raw == raw {
@@ -219,17 +199,14 @@ func (e *killEnv) resume(id string) (api.ResumeResult, error) {
 	return e.resumeWith(&hookedResumeStore{st: e.st}, id)
 }
 
-// resumeWith runs api.Resume (export_test.go) on id with s, e.rec, e.pc,
-// config.Default() with e.cfg as its [tmux], e.storeID and e.clock.Now;
-// nothing is logged.
+// resumeWith runs api.Resume on id with s and e's parts, logging nothing.
 func (e *killEnv) resumeWith(s api.ResumeStore, id string) (api.ResumeResult, error) {
 	cfg := config.Default()
 	cfg.Tmux = e.cfg
 	return api.Resume(s, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, api.ResumeParams{ClaudeInstanceID: id})
 }
 
-// resumeClient runs Client.Resume on id on a new e.client with settings
-// (the bound and window as configured); logs is the Client's captured log.
+// resumeClient runs Client.Resume on id on a new e.client with settings.
 func (e *killEnv) resumeClient(t *testing.T, id string, settings ...apitest.TmuxSetting) (res api.ResumeResult, logs string, err error) {
 	t.Helper()
 	c, buf := e.client(t, settings...)
@@ -257,10 +234,8 @@ func verbDisagrees(t *testing.T, verb, id string) []map[string]any {
 }
 
 // writesSnapshot is what a refused call of verb on row id must leave as it
-// was: the row's raw columns, its history over every life, its permission
-// requests, its children's ids (rows whose parent_id is id), the trust file
-// (trust; none when its dir is ""), the trail length, the Recorder's call
-// counts and every bound socket's sessions.
+// was: the row, its history, permission requests and children, the trust
+// file, the trail length, the call counts and every bound socket's sessions.
 type writesSnapshot struct {
 	verb, id               string
 	trust                  trustConfig
@@ -290,10 +265,8 @@ func (e *killEnv) assertResumeWroteNothing(t *testing.T, before resumeSnapshot) 
 	e.assertWroteNothing(t, before.writesSnapshot)
 }
 
-// snapshotWrites takes id's writesSnapshot for a call of verb, with trust and
-// the sessions of every bound socket and of sockets; take it just before the call.
-// A later test proving a refusal of any verb wrote nothing uses it with
-// assertWroteNothing, never its own copy.
+// snapshotWrites takes id's writesSnapshot for a call of verb (sockets' sessions
+// too) just before it; any verb's "wrote nothing" check uses it, never a copy.
 func (e *killEnv) snapshotWrites(t *testing.T, verb, id string, trust trustConfig, sockets ...string) writesSnapshot {
 	t.Helper()
 	history, err := apitest.ReadSessionHistoryAllLives(e.dbPath, id)
@@ -344,11 +317,9 @@ type wroteNothingExcept int
 // runs after its pre-trust.
 const exceptTrust wroteNothingExcept = 1
 
-// assertWroteNothing fails unless, since before was taken, the call made at
-// most one tmux call, a lookup, and changed nothing: the row (every column,
-// raw), its history, permission requests and children, the trust file
-// (unless exceptTrust), every seeded session, and the trail apart from
-// ad.provenance.disagree records.
+// assertWroteNothing fails unless, since before, the call made at most one
+// lookup and changed nothing in before (the trust file unless exceptTrust;
+// the trail but for ad.provenance.disagree records).
 func (e *killEnv) assertWroteNothing(t *testing.T, before writesSnapshot, except ...wroteNothingExcept) {
 	t.Helper()
 	id := before.id

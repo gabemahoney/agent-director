@@ -2,16 +2,15 @@ package api_test
 
 // resume_starting_test.go tests the starting-session rule at resume's
 // pre-launch check (SR-8.2, SR-4.2; AC-RES-03, AC-RES-04, AC-RES-17) on the
-// kill fixture and the shared finished row (starting_row_fixture_test.go):
-// the window before the age, the ended_at read before the move, Gone while
-// the agent runs, and every refusal writing nothing. The rule's pure
-// boundaries are internal/tmux's; the configured values are
-// resume_client_test.go's.
+// shared finished row (starting_row_fixture_test.go), and that resume reads
+// the configured bound and window. Its pure boundaries are internal/tmux's;
+// the configured values' starting_session_test.go's (AC-RES-05).
 
 import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -35,51 +34,11 @@ func (e *killEnv) assertStartingRefusal(t *testing.T, before resumeSnapshot, err
 	e.assertResumeWroteNothing(t, before)
 }
 
-// resumeStarting seeds s's row on a new kill fixture, resumes it and checks
-// the refusal is want's at the default bound and window.
-func resumeStarting(t *testing.T, s startingRow, want tmux.StartingSessionOutcome) {
-	t.Helper()
-	e := newKillEnv(t)
-	r := e.seedStarting(t, s)
-	before := e.snapshotResume(t, r)
-	_, err := e.resume(r.ID)
-	e.assertStartingRefusal(t, before, err, want, s.startingCase(r, defBound, defWindow))
-}
-
-// TestResumeStartingSessionMatrix: ended and missing rows, ended window-1 s or
-// the window ago, with a young or old own session; the window decides first (AC-RES-17).
-func TestResumeStartingSessionMatrix(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	ended := []struct {
-		name   string
-		ago    time.Duration
-		inside bool
-	}{{"ended window-1 s ago", defWindow - time.Second, true}, {"ended the window ago", defWindow, false}}
-	sessions := []struct {
-		name  string
-		age   time.Duration
-		young bool
-	}{{"session bound-1 s old", defBound - time.Second, true}, {"session the bound old", defBound, false}}
-	for _, state := range []string{store.StateEnded, store.StateMissing} {
-		for _, en := range ended {
-			for _, s := range sessions {
-				want := tmux.PastBoth
-				switch {
-				case en.inside:
-					want = tmux.StillStopping
-				case s.young:
-					want = tmux.StillStarting
-				}
-				t.Run(state+", "+en.name+", "+s.name, func(t *testing.T) {
-					resumeStarting(t, startingRow{state: state, endedAgo: en.ago, age: s.age}, want)
-				})
-			}
-		}
-	}
-}
-
-// TestResumeStartingSessionCases: the bound past the window, a future or NULL
-// ended_at, a row with no pid, and Gone while the agent runs (AC-RES-03, AC-RES-17).
+// TestResumeStartingSessionCases: inside the window the window decides,
+// whatever the session's age (AC-RES-17); outside it, or with a NULL
+// ended_at, the session's age against the bound, a session created in the
+// future being young (AC-RES-04); a future ended_at, a row with no pid, and
+// Gone while the agent runs (AC-RES-03).
 func TestResumeStartingSessionCases(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	longAgo := defWindow + defBound
@@ -88,10 +47,16 @@ func TestResumeStartingSessionCases(t *testing.T) {
 		row  startingRow
 		want tmux.StartingSessionOutcome
 	}{
+		{"inside the window, session bound-1 s old",
+			startingRow{state: store.StateEnded, endedAgo: defWindow - time.Second, age: defBound - time.Second}, tmux.StillStopping},
+		{"inside the window, session the bound old",
+			startingRow{state: store.StateMissing, endedAgo: defWindow - time.Second, age: defBound}, tmux.StillStopping},
 		{"outside the window, session bound-1 s old",
 			startingRow{state: store.StateEnded, endedAgo: longAgo, age: defBound - time.Second}, tmux.StillStarting},
 		{"outside the window, session the bound old",
 			startingRow{state: store.StateEnded, endedAgo: longAgo, age: defBound}, tmux.PastBoth},
+		{"outside the window, session created 1 s in the future",
+			startingRow{state: store.StateEnded, endedAgo: longAgo, age: -time.Second}, tmux.StillStarting},
 		{"ended_at in the future, old session",
 			startingRow{state: store.StateEnded, endedAgo: -time.Second, age: longAgo}, tmux.StillStopping},
 		{"no ended_at, session bound-1 s old",
@@ -124,29 +89,39 @@ func TestResumeStartingSessionCases(t *testing.T) {
 	}
 }
 
-// TestResumeFutureCreationTimeCrossesBound: a session created in the future is
-// young, and stepping the virtual clock carries the same row past the bound (AC-RES-04).
-func TestResumeFutureCreationTimeCrossesBound(t *testing.T) {
+// TestResumeStartingSettings: through Client.Resume each setting at its safe
+// minimum decides a row the defaults decide otherwise, and 0 gives the
+// defaults, never a 0 s window or bound (AC-RES-05, AC-CFG-02).
+func TestResumeStartingSettings(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	e := newKillEnv(t)
-	row := startingRow{state: store.StateEnded, endedAgo: defWindow + defBound, age: -time.Second}
-	r := e.seedStarting(t, row)
-	created := time.Unix(r.Session.Created, 0)
-	steps := []struct {
-		name string
-		age  time.Duration // at the rule's instant
-		want tmux.StartingSessionOutcome
+	bk, wk, longAgo := config.TmuxStartingSessionSeconds, config.TmuxStoppingWindowSeconds, defWindow+defBound
+	minB, minW := secs(config.MinStartingSessionSeconds), secs(config.MinStoppingWindowSeconds)
+	zero := []apitest.TmuxSetting{apitest.TmuxInt(bk, 0), apitest.TmuxInt(wk, 0)}
+	cases := []struct {
+		name          string
+		settings      []apitest.TmuxSetting
+		bound, window time.Duration
+		endedAgo, age time.Duration
+		want          tmux.StartingSessionOutcome
 	}{
-		{"created 1 s in the future", -time.Second, tmux.StillStarting},
-		{"bound-1 s old", defBound - time.Second, tmux.StillStarting},
-		{"the bound old", defBound, tmux.PastBoth},
+		{"window at its safe minimum, ended it ago, old session (defaults: still stopping)",
+			[]apitest.TmuxSetting{apitest.TmuxInt(wk, config.MinStoppingWindowSeconds)}, defBound, minW, minW, longAgo, tmux.PastBoth},
+		{"bound at its safe minimum, ended long ago, session it old (defaults: still starting)",
+			[]apitest.TmuxSetting{apitest.TmuxInt(bk, config.MinStartingSessionSeconds)}, minB, defWindow, longAgo, minB, tmux.PastBoth},
+		{"both 0, ended window-1 s ago, old session", zero, defBound, defWindow, defWindow - time.Second, longAgo, tmux.StillStopping},
+		{"both 0, ended long ago, session bound-1 s old", zero, defBound, defWindow, longAgo, defBound - time.Second, tmux.StillStarting},
 	}
-	for _, s := range steps {
-		t.Run(s.name, func(t *testing.T) {
-			e.clock.Advance(created.Add(s.age).Sub(e.ruleInstant()))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			row := startingRow{state: store.StateEnded, endedAgo: tc.endedAgo, age: tc.age}
+			r := e.seedStarting(t, row)
 			before := e.snapshotResume(t, r)
-			_, err := e.resume(r.ID)
-			e.assertStartingRefusal(t, before, err, s.want, row.startingCase(r, defBound, defWindow))
+			_, logs, err := e.resumeClient(t, r.ID, tc.settings...)
+			e.assertStartingRefusal(t, before, err, tc.want, row.startingCase(r, tc.bound, tc.window))
+			if logs != "" {
+				t.Errorf("Client log = %q; want none (a refusal is reported by its error alone)", logs)
+			}
 		})
 	}
 }

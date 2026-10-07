@@ -4,9 +4,8 @@ package api_test
 // starting-session rule (SR-4.2) and kill's reported-in rule (SR-6.7) on the
 // kill fixture: the default bound and window, and a finished row described
 // in seconds relative to the instant the rule reads (ruleInstant), seeded
-// with its own session. resume's tests (resume_starting_test.go,
-// resume_client_test.go) and kill's finished-row opt-in tests use it. It
-// holds no tests.
+// with its own session. resume's tests (resume_starting_test.go) and kill's
+// finished-row opt-in tests use it. It holds no tests.
 
 import (
 	"testing"

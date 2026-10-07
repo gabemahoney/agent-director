@@ -1,12 +1,10 @@
 package api_test
 
-// resume_provenance_test.go covers the ad.provenance.disagree records of
-// resume's pre-launch lookup (SR-14, SR-3.3, SR-3.4, SR-3.16; AC-LKP-18,
-// AC-LKP-19): one per reason per call, verb resume and source ad_resume,
-// written before any ad.resume.* line and before the move; none in the
-// normal case; never adopted; fail-open. It also covers the re-lookup's
-// after "duplicate session" (SR-8.5): after the create, action the restore's
-// row result, and never a reason the pre-launch lookup already wrote.
+// resume_provenance_test.go covers resume's ad.provenance.disagree records
+// (SR-14, SR-3.3, SR-3.4, SR-3.16, SR-8.5; AC-LKP-18, AC-LKP-19) at the
+// pre-launch lookup and at the re-lookup after "duplicate session", and the
+// trail's fail-open. Which scope level or server state gives a reason is
+// internal/tmux's.
 
 import (
 	"cmp"
@@ -33,11 +31,10 @@ import (
 // rpvSetup arranges the pre-launch lookup's answer for a resumable row.
 type rpvSetup func(*testing.T, *killEnv, *resumeRow)
 
-// rpvOwn seeds r's own session, created past the starting-session bound,
-// under name ("" keeps the recorded name).
+// rpvOwn seeds r's own session, past the bound, under name ("": the recorded one).
 func rpvOwn(name string) rpvSetup {
 	return func(t *testing.T, e *killEnv, r *resumeRow) {
-		opts := []tmuxfix.RowSessionOption{e.createdBefore(rceSettled(e))}
+		opts := []tmuxfix.RowSessionOption{e.createdBefore(rlkSettled(e))}
 		if name != "" {
 			opts = append(opts, tmuxfix.WithRowSessionName(name))
 		}
@@ -45,16 +42,14 @@ func rpvOwn(name string) rpvSetup {
 	}
 }
 
-// rpvRestart restarts r's server; the new one holds a bystander, so its
-// listing carries the new server's identity.
+// rpvRestart restarts r's server with a bystander, so its listing names the new server.
 func rpvRestart(t *testing.T, e *killEnv, r *resumeRow) {
 	e.rec.RestartServer(r.Socket, tmuxfix.Server{})
 	e.syncServers()
 	e.seedBystander(t, r.Socket)
 }
 
-// rpvServer replaces r's server by how (an empty new one, or none) and then
-// puts the recorded server process in the fake as p (nil: as the Recorder left it).
+// rpvServer replaces r's server by how, then sets the recorded server process to p (nil: as left).
 func rpvServer(how string, p *procfix.Process) rpvSetup {
 	return func(_ *testing.T, e *killEnv, r *resumeRow) {
 		switch how {
@@ -79,8 +74,7 @@ func rpvScope(level tmuxfix.ScopeLevel) rpvSetup {
 	}
 }
 
-// rpvCase is one pre-launch arrangement and the records one resume writes;
-// moved says whether the call reaches the move ("" leaves it unchecked).
+// rpvCase is one pre-launch arrangement, its records, and whether the call moves ("": unchecked).
 type rpvCase struct {
 	name             string
 	noServerIdentity bool
@@ -90,8 +84,7 @@ type rpvCase struct {
 	moved            string
 }
 
-// rpvCases is the reason table: every reason the pre-launch lookup meets, and
-// the arrangements that write none.
+// rpvCases is every reason the pre-launch lookup meets, and arrangements that write none.
 func rpvCases() []rpvCase {
 	alive := procfix.Alive(apitest.LinuxProcStarttime)
 	unreadable := procfix.Unreadable()
@@ -123,17 +116,11 @@ func rpvCases() []rpvCase {
 			setup: []rpvSetup{rpvServer("rebind", &unreadable), rpvBystander}, want: mismatch, moved: "no"},
 		{name: "no server reply, recorded server gone, writes none", setup: []rpvSetup{rpvServer("stop", nil)}},
 		{name: "no server reply, recorded server runs", setup: []rpvSetup{rpvServer("stop", &alive)}, want: mismatch},
-		{name: "no server reply, recorded server uncheckable", setup: []rpvSetup{rpvServer("stop", &unreadable)}, want: mismatch},
 		{name: "server_restarted, empty listing, recorded server gone", setup: []rpvSetup{rpvServer("restart", nil)}, moved: "yes",
 			want: []disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "gone", action: "proceeded"}}},
 		{name: "empty listing, recorded server runs", setup: []rpvSetup{rpvServer("rebind", nil)}, want: mismatch},
-		{name: "empty listing, recorded server uncheckable", setup: []rpvSetup{rpvServer("rebind", &unreadable)}, want: mismatch},
 		{name: "duplicate_label", setup: []rpvSetup{rpvOwn(""), dup}, want: conflict("duplicate_label"), moved: "no"},
-		{name: "scope_value global", setup: []rpvSetup{rpvOwn(""), rpvScope(tmuxfix.ScopeGlobal)},
-			want: conflict("scope_value"), moved: "no"},
-		{name: "scope_value server", setup: []rpvSetup{rpvOwn(""), rpvScope(tmuxfix.ScopeServer)},
-			want: conflict("scope_value"), moved: "no"},
-		{name: "scope_value global-window", setup: []rpvSetup{rpvOwn(""), rpvScope(tmuxfix.ScopeGlobalWindow)},
+		{name: "scope_value", setup: []rpvSetup{rpvOwn(""), rpvScope(tmuxfix.ScopeGlobal)},
 			want: conflict("scope_value"), moved: "no"},
 		{name: "name_changed", setup: []rpvSetup{rpvOwn("renamed-resume")}, want: renamed("match"), moved: "no"},
 		{name: "name_changed with no server identity, not adopted", noServerIdentity: true,
@@ -144,12 +131,11 @@ func rpvCases() []rpvCase {
 // rpvBystander seeds a bystander on r's socket, so its server answers a listing.
 func rpvBystander(t *testing.T, e *killEnv, r *resumeRow) { e.seedBystander(t, r.Socket) }
 
-// seedRPVCase seeds tc's resumable row (id when given) with another row's
-// label on its server, then runs tc's setups; it returns the row and that
-// other row's id, which no record may hold.
+// seedRPVCase seeds tc's row (id when given) beside another row's labelled
+// session, runs tc's setups, and returns the row and the other id no record may hold.
 func (e *killEnv) seedRPVCase(t *testing.T, tc rpvCase, id string) (resumeRow, string) {
 	t.Helper()
-	spec := e.resumableSpec(rceSettled(e), agentGone, tc.opts...)
+	spec := e.resumableSpec(rlkSettled(e), agentGone, tc.opts...)
 	spec.ID, spec.NoServerIdentity = id, tc.noServerIdentity
 	r := e.seedResumableRow(t, spec)
 	other := "other-" + uuid.NewString()[:8]
@@ -160,22 +146,8 @@ func (e *killEnv) seedRPVCase(t *testing.T, tc rpvCase, id string) (resumeRow, s
 	return r, other
 }
 
-// rpvStore counts id's resume disagree records when the move to pending starts.
-type rpvStore struct {
-	*hookedResumeStore
-	t      *testing.T
-	atMove int // -1 until MoveToPending is called
-}
-
-// MoveToPending counts the records written so far, then delegates.
-func (w *rpvStore) MoveToPending(id string, examined api.RowSnapshot, startedAt int64, token, socket, parent string) (api.CondResult, int64, error) {
-	w.atMove = len(resumeDisagrees(w.t, id))
-	return w.hookedResumeStore.MoveToPending(id, examined, startedAt, token, socket, parent)
-}
-
-// TestResumeProvenanceDisagree: each reason the pre-launch lookup meets is
-// written once per call with every SR-14 field and no label content, before
-// the move and any ad.resume.* line; the normal cases and adoption write none.
+// TestResumeProvenanceDisagree: each reason is written once with every SR-14 field and no label
+// content, before the move and any ad.resume.* line; the normal cases and adoption write none.
 func TestResumeProvenanceDisagree(t *testing.T) {
 	t.Parallel()
 	for _, tc := range rpvCases() {
@@ -183,7 +155,8 @@ func TestResumeProvenanceDisagree(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
 			r, other := e.seedRPVCase(t, tc, "")
-			s := &rpvStore{hookedResumeStore: &hookedResumeStore{st: e.st}, t: t, atMove: -1}
+			s, atMove := &hookedResumeStore{st: e.st}, -1 // the records written by the move (which writes none)
+			s.afterMove(func() { atMove = len(resumeDisagrees(t, r.ID)) })
 			mark := trailMark(t)
 
 			_, _ = e.resumeWith(s, r.ID)
@@ -204,9 +177,9 @@ func TestResumeProvenanceDisagree(t *testing.T) {
 				t.Errorf("adopted records = %d; want none", n)
 			}
 			switch {
-			case tc.moved == "yes" && s.atMove != len(tc.want):
-				t.Errorf("records written before the move = %d; want all %d", s.atMove, len(tc.want))
-			case tc.moved == "no" && s.atMove >= 0:
+			case tc.moved == "yes" && atMove != len(tc.want):
+				t.Errorf("records written before the move = %d; want all %d", atMove, len(tc.want))
+			case tc.moved == "no" && atMove >= 0:
 				t.Errorf("the refused resume reached the move")
 			}
 			rpvAssertDisagreeFirst(t, mark, r.ID)
@@ -214,8 +187,7 @@ func TestResumeProvenanceDisagree(t *testing.T) {
 	}
 }
 
-// rpvAssertDisagreeFirst fails when an ad.resume.* line for id written since
-// mark comes before one of its ad.provenance.disagree lines.
+// rpvAssertDisagreeFirst fails when an ad.resume.* line for id since mark precedes a disagree line.
 func rpvAssertDisagreeFirst(t *testing.T, mark int, id string) {
 	t.Helper()
 	resumeSeen := ""
@@ -233,14 +205,13 @@ func rpvAssertDisagreeFirst(t *testing.T, mark int, id string) {
 	}
 }
 
-// rpvChildEnv gates TestResumeProvenanceFailOpenChild and carries the id prefix.
-const rpvChildEnv = "AD_RESUME_PROVENANCE_FAIL_CHILD"
+// rpvChildEnv gates TestResumeTrailFailOpenChild and carries the id prefix.
+const rpvChildEnv = "AD_RESUME_TRAIL_FAIL_CHILD"
 
 // rpvLinePrefix marks the child's result lines in its output.
 const rpvLinePrefix = "RPV|"
 
-// rpvFailOpenCases are the cases the fail-open run repeats: a proceeding and
-// a refused call that each write a record, and one of each that write none.
+// rpvFailOpenCases are the pre-launch cases the fail-open run repeats.
 var rpvFailOpenCases = []string{
 	"normal gone, name free, writes none",
 	"normal ours at the recorded name writes none",
@@ -249,42 +220,66 @@ var rpvFailOpenCases = []string{
 	"name_changed",
 }
 
-// rpvFailOpenRuns resumes one row per rpvFailOpenCases entry, id prefix-<i>,
-// and returns one line per call: its result, error and the row's columns,
-// with the per-test socket and cwd paths replaced.
+// rpvFailOpenHeld are the "duplicate session" resumes it repeats, each writing one name_held.
+var rpvFailOpenHeld = []struct {
+	name        string
+	holder      holderKind
+	failRestore bool
+}{{"old", holderOld, false}, {"no-label", holderNone, false}, {"vanished", holderVanished, false},
+	{"ambiguous", holderAmbiguous, false}, {"still-pending", holderNone, true}}
+
+// rpvFailOpenRuns resumes one row per case (ids prefix-<i>, prefix-<name>)
+// and returns a line per call: its result, error and row, paths replaced.
 func rpvFailOpenRuns(t *testing.T, prefix string) []string {
 	t.Helper()
 	var lines []string
-	for _, tc := range rpvCases() {
-		i := slices.Index(rpvFailOpenCases, tc.name)
-		if i < 0 {
-			continue
-		}
-		e := newKillEnv(t)
-		r, _ := e.seedRPVCase(t, tc, prefix+"-"+strconv.Itoa(i))
-		res, err := e.resume(r.ID)
+	line := func(e *killEnv, tag string, r resumeRow, res api.ResumeResult, err error) {
 		c := e.columns(t, r.ID)
-		l := fmt.Sprintf("%d id=%s pre_trust=%s err=%v state=%v ended_at=%v row_version=%v launch_started_at=%v parent=%v socket=%v",
-			i, res.ClaudeInstanceID, res.PreTrust, err, c.State, c.EndedAt, c.RowVersion, c.LaunchStartedAt, c.ParentID, c.TmuxSocket)
+		l := fmt.Sprintf("%s id=%s pre_trust=%s err=%v state=%v ended_at=%v row_version=%v launch_started_at=%v parent=%v socket=%v",
+			tag, res.ClaudeInstanceID, res.PreTrust, err, c.State, c.EndedAt, c.RowVersion, c.LaunchStartedAt, c.ParentID, c.TmuxSocket)
 		lines = append(lines, strings.NewReplacer(r.Socket, "<socket>", r.CWD, "<cwd>").Replace(l))
+	}
+	for _, tc := range rpvCases() {
+		if i := slices.Index(rpvFailOpenCases, tc.name); i >= 0 {
+			e := newKillEnv(t)
+			r, _ := e.seedRPVCase(t, tc, prefix+"-"+strconv.Itoa(i))
+			res, err := e.resume(r.ID)
+			line(e, strconv.Itoa(i), r, res, err)
+		}
+	}
+	for _, h := range rpvFailOpenHeld {
+		e := newKillEnv(t)
+		spec := e.heldResumableSpec(rlkSettled(e), agentGone)
+		spec.ID = prefix + "-" + h.name
+		r := e.seedResumableRow(t, spec)
+		w := &hookedResumeStore{st: e.st}
+		if h.failRestore {
+			w.failRestore(nil)
+		}
+		line(e, h.name, r, api.ResumeResult{}, e.rhtResume(t, r, heldSpec{Holder: h.holder}, w, nil).err)
 	}
 	return lines
 }
 
-// TestResumeProvenanceFailOpen: with the trail unwritable, resume's results,
-// errors and rows equal those of a run with a working trail.
-func TestResumeProvenanceFailOpen(t *testing.T) {
+// TestResumeTrailFailOpen (SR-14): with the trail unwritable, resume's results, errors and rows,
+// with or without a disagree or name_held record, equal those with a working trail.
+func TestResumeTrailFailOpen(t *testing.T) {
 	t.Parallel()
-	prefix := "resume-failopen-" + uuid.NewString()[:8]
+	prefix, mark := "resume-failopen-"+uuid.NewString()[:8], trailMark(t)
 	want := rpvFailOpenRuns(t, prefix)
 	if n := len(resumeDisagrees(t, prefix+"-2")); n != 1 {
 		t.Fatalf("working trail: server_restarted records = %d; want 1", n)
 	}
+	for _, h := range rpvFailOpenHeld {
+		if n := len(ptRecords(t, mark, "ad.launch.name_held", prefix+"-"+h.name)); n != 1 {
+			t.Fatalf("working trail: ad.launch.name_held records for %s = %d; want 1", h.name, n)
+		}
+	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestResumeProvenanceFailOpenChild$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
+	cmd := exec.Command(os.Args[0], "-test.run=^TestResumeTrailFailOpenChild$", "-test.count=1", "-test.v") //nolint:gosec // the test binary itself
 	cmd.Env = append(os.Environ(), rpvChildEnv+"="+prefix)
 	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "--- PASS: TestResumeProvenanceFailOpenChild") {
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestResumeTrailFailOpenChild") {
 		t.Fatalf("child: %v\n%s", err, out)
 	}
 	var got []string
@@ -298,13 +293,12 @@ func TestResumeProvenanceFailOpen(t *testing.T) {
 	}
 }
 
-// TestResumeProvenanceFailOpenChild is TestResumeProvenanceFailOpen's child:
-// it runs the resumes with an unwritable trail and prints their lines.
-func TestResumeProvenanceFailOpenChild(t *testing.T) {
+// TestResumeTrailFailOpenChild runs the resumes with a 0500 .agent-director and prints their lines.
+func TestResumeTrailFailOpenChild(t *testing.T) {
 	t.Parallel()
 	prefix := os.Getenv(rpvChildEnv)
 	if prefix == "" {
-		t.Skip("run only as TestResumeProvenanceFailOpen's child")
+		t.Skip("run only as TestResumeTrailFailOpen's child")
 	}
 	adDir := filepath.Join(apiTrailDir, ".agent-director")
 	if err := os.MkdirAll(adDir, 0o700); err != nil {
@@ -327,9 +321,8 @@ func TestResumeProvenanceFailOpenChild(t *testing.T) {
 	}
 }
 
-// rpvHeldCase is one "duplicate session" arrangement and its disagree
-// records: pre from the pre-launch lookup, then post from the re-lookup,
-// whose tmux_session_id is session's (nil: null).
+// rpvHeldCase is one "duplicate session" arrangement and its disagree records
+// (pre-launch, then the re-lookup's naming session's id, nil: null).
 type rpvHeldCase struct {
 	name      string
 	spec      heldSpec
@@ -338,8 +331,7 @@ type rpvHeldCase struct {
 	session   func(sc *heldScene) string
 }
 
-// rpvHeldCases is the re-lookup's reason table: each reason it can meet, a
-// reason both lookups meet, the restore results as action, and none.
+// rpvHeldCases is the re-lookup's reasons, one both lookups meet, the restore results as action, and none.
 func rpvHeldCases() []rpvHeldCase {
 	holder := func(sc *heldScene) string { return sc.Holder().ID }
 	conflict := func(reason, server string) []disagreeWant {
@@ -371,10 +363,7 @@ func rpvHeldCases() []rpvHeldCase {
 			restore: func(_ *testing.T, _ *killEnv, _ resumeRow, w *hookedResumeStore) { w.failRestore(nil) }},
 		{name: "duplicate_label", spec: heldSpec{Holder: holderCurrent, OursRenamed: "dup-resume"},
 			post: conflict("duplicate_label", "match"), session: holder},
-		{name: "scope_value global", spec: scope(tmuxfix.ScopeGlobal), post: conflict("scope_value", "match"), session: holder},
-		{name: "scope_value server", spec: scope(tmuxfix.ScopeServer), post: conflict("scope_value", "match"), session: holder},
-		{name: "scope_value global-window", spec: scope(tmuxfix.ScopeGlobalWindow), post: conflict("scope_value", "match"),
-			session: holder},
+		{name: "scope_value", spec: scope(tmuxfix.ScopeGlobal), post: conflict("scope_value", "match"), session: holder},
 		{name: "name_changed", spec: heldSpec{Holder: holderForeign, OursRenamed: "renamed-resume"},
 			post: []disagreeWant{{reason: "name_changed", server: "match", verdict: "ours", action: "restored",
 				current: "renamed-resume"}},
@@ -385,16 +374,15 @@ func rpvHeldCases() []rpvHeldCase {
 	}
 }
 
-// TestResumeProvenanceAfterDuplicateSession: the re-lookup after "duplicate
-// session" writes each reason the pre-launch lookup did not, once, after the
-// create, with every SR-14 field and no label content; never adopted.
+// TestResumeProvenanceAfterDuplicateSession: the re-lookup writes each reason the pre-launch lookup
+// did not, once, after the create, with every SR-14 field and no label content; never adopted.
 func TestResumeProvenanceAfterDuplicateSession(t *testing.T) {
 	t.Parallel()
 	for _, tc := range rpvHeldCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
-			r := e.seedHeldResumable(t, rceSettled(e), agentGone)
+			r := e.seedHeldResumable(t, rlkSettled(e), agentGone)
 			s := &hookedResumeStore{st: e.st}
 			if tc.restore != nil {
 				tc.restore(t, e, r, s)

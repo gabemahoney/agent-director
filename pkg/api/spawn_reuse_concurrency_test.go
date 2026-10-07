@@ -39,7 +39,7 @@ func (e *killEnv) rcoParent(t *testing.T) string {
 // snapshot as seeded.
 func (e *killEnv) rcoSeed(t *testing.T) (reuseRow, writesSnapshot) {
 	t.Helper()
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rceSettled(e)})
+	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
 	return r, e.snapshotReuse(t, r)
 }
 

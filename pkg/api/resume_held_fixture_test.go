@@ -1,12 +1,10 @@
 package api_test
 
-// resume_held_fixture_test.go extends the kill fixture's resume helpers
-// (resume_lookup_fixture_test.go) for resume's "duplicate session" path
-// (SR-8.5, SR-13.2 path (ii), SR-20.2, SR-20.3): one arrangeHeld call makes
-// the pre-launch lookup read Gone with the name free, the create answer
-// "duplicate session", and the one re-lookup meet a chosen holder, server
-// and typed answer; plus the restored-exactly and holder-untouched checks.
-// It holds no tests.
+// resume_held_fixture_test.go extends resume_lookup_fixture_test.go for the
+// "duplicate session" path (SR-8.5, SR-13.2 path (ii), SR-20.2, SR-20.3):
+// arrangeHeld (the lookup reads Gone, the create answers "duplicate session",
+// the re-lookup meets a chosen holder, server and answer) and the
+// restored-exactly and holder-untouched checks. It holds no tests.
 
 import (
 	"reflect"
@@ -23,9 +21,8 @@ import (
 // return (SR-13.2 path (ii)): Q + C + Q at the defaults the Recorder charges.
 var resumeHeldAt = 2*resumeLookupQ + config.Tmux{}.EffectiveCreateTimeout()
 
-// heldInstant is the clock reading after the re-lookup if resume runs next,
-// advancing e.clock (under a second) to make it whole; a later ruleInstant
-// call (resumableSpec, seedResumable, createdBefore) moves the clock again.
+// heldInstant is the clock after the re-lookup if resume runs next, first
+// advancing e.clock (under a second) to make it whole.
 func (e *killEnv) heldInstant() time.Time {
 	at := e.clock.Now().Add(resumeHeldAt)
 	if frac := at.Sub(at.Truncate(time.Second)); frac > 0 {
@@ -35,8 +32,7 @@ func (e *killEnv) heldInstant() time.Time {
 	return at
 }
 
-// heldResumableSpec is resumableSpec's row with ended_at age before
-// heldInstant, the rule's reading at the re-lookup; opts still go last.
+// heldResumableSpec is resumableSpec's row ended age before heldInstant.
 func (e *killEnv) heldResumableSpec(age time.Duration, a agentState, opts ...apitest.SpawnOption) killRowSpec {
 	spec := e.resumableSpec(age, a)
 	spec.Opts = append(append(spec.Opts, apitest.WithEndedAt(e.heldInstant().Add(-age))), opts...)
@@ -61,24 +57,15 @@ const (
 // heldSpec is one "duplicate session" arrangement: the holder of the
 // recorded name and what else the re-lookup meets.
 type heldSpec struct {
-	Holder holderKind // holderSessions' kind; holderVanished: nothing holds the name
-	// Created is every placed session's age at heldInstant (negative: in the
-	// future); zero leaves the clock's second when the create returns.
-	Created time.Duration
-	// OursRenamed also places the row's own (current-label) session under
-	// this stored name: name_changed, or with holderCurrent duplicate_label.
-	OursRenamed string
-	// Scope sets the row's current label at this level, embedding the first
-	// holder's session id (scope_value).
-	Scope tmuxfix.ScopeLevel
-	// Relookup is the re-lookup's typed answer (Times forced to 1); a zero
-	// Failure answers from the table.
-	Relookup tmuxfix.Script
-	Server   heldServer
+	Holder      holderKind         // holderSessions' kind; holderVanished: nothing holds the name
+	Created     time.Duration      // every placed session's age at heldInstant; zero: created at the create
+	OursRenamed string             // also place the row's own session under this name
+	Scope       tmuxfix.ScopeLevel // set the row's current label at this level (scope_value)
+	Relookup    tmuxfix.Script     // the re-lookup's answer (Times forced to 1); zero: from the table
+	Server      heldServer
 }
 
-// heldScene is what arrangeHeld set up; Holders, Ours and Moved are filled
-// when the create returns.
+// heldScene is what arrangeHeld set up; the rest is filled as the create returns.
 type heldScene struct {
 	r       resumeRow
 	before  resumeSnapshot        // r just before the resume, taken by arrangeHeld
@@ -96,9 +83,9 @@ func (sc *heldScene) Holder() tmuxfix.SeedSession {
 	return sc.Holders[0]
 }
 
-// arrangeHeld makes r's next create answer tmux.FailDuplicate and, as it
-// returns, places spec's server, sessions, scope and re-lookup answer; call it
-// last before the resume (it aligns the clock and takes r's snapshot).
+// arrangeHeld makes r's next create answer "duplicate session" and, as it
+// returns, places spec's world; call it last before the resume (it aligns the
+// clock and takes r's snapshot).
 func (e *killEnv) arrangeHeld(t *testing.T, r resumeRow, spec heldSpec) *heldScene {
 	t.Helper()
 	sc := &heldScene{r: r}
@@ -152,8 +139,7 @@ func (e *killEnv) arrangeHeld(t *testing.T, r resumeRow, spec heldSpec) *heldSce
 	return sc
 }
 
-// assertHeldRestored fails unless sc's row is every column as before the move,
-// with the move's parent id and row_version two past (rstRestored).
+// assertHeldRestored fails unless sc's row is restored exactly (rstRestored).
 func (e *killEnv) assertHeldRestored(t *testing.T, sc *heldScene) {
 	t.Helper()
 	if !sc.Placed {
@@ -162,8 +148,8 @@ func (e *killEnv) assertHeldRestored(t *testing.T, sc *heldScene) {
 	e.assertRowUnchanged(t, sc.r.ID, rstRestored(resumableRow{Before: sc.before.cols}, sc.Moved.ParentID))
 }
 
-// assertHolderUntouched fails unless every placed session is still stored as
-// placed and, since arrangeHeld, no call but the lookups and create reached it.
+// assertHolderUntouched fails unless every placed session is as placed and no
+// call but the lookups and the create reached it.
 func (e *killEnv) assertHolderUntouched(t *testing.T, sc *heldScene) {
 	t.Helper()
 	placed := append([]tmuxfix.SeedSession(nil), sc.Holders...)
@@ -202,8 +188,7 @@ func (e *killEnv) assertHolderUntouched(t *testing.T, sc *heldScene) {
 	}
 }
 
-// removeHolders removes every placed session through Recorder.KillSessionID
-// (a recorded call charged A), so a re-issued resume finds the name free.
+// removeHolders kills every placed session by id, freeing the name.
 func (e *killEnv) removeHolders(t *testing.T, sc *heldScene) {
 	t.Helper()
 	for _, s := range append(append([]tmuxfix.SeedSession(nil), sc.Holders...), sc.Ours) {

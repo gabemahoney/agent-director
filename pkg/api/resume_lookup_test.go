@@ -1,15 +1,14 @@
 package api_test
 
-// resume_lookup_test.go covers resume's one pre-launch lookup at the verb
-// (SR-8.1 step 3, SR-8.2, SR-3.10; AC-RES-01, AC-RES-02, AC-LKP-14, AC-LKP-18,
-// AC-LKP-20): its place after the guards and before pre-trust and the move,
-// each name holder class, Leftover, prefix neighbours, $ and \ names, the
-// agent process states and no adoption. Fixture: resume_lookup_fixture_test.go.
+// resume_lookup_test.go covers resume's one pre-launch lookup (SR-8.1 step 3,
+// SR-8.2, SR-3.10, SR-13.2; AC-RES-01, AC-RES-02, AC-LKP-14, AC-LKP-18,
+// AC-LKP-20) beyond the call table's resume row: holder classes, Leftover,
+// prefix neighbours, a $ or \ name, the agent process states and no adoption;
+// a refusal charges Q alone and leaves the trust file (pre-trust follows the
+// lookup). The lookup alone before the move is TestResumeLaunch's.
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,13 +22,10 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
-// rlkCase is one resume of a seeded resumable row: the row's agent process,
-// whether it ended just now (else past the window and the bound), no launch
-// token or a lost create reply, extra seed options, the session seed returns
-// (the one the refusal names), and the refusal; want nil means the launch.
+// rlkCase is one resume of a seeded row (its agent; ended just now, else
+// settled; seed returns the session the refusal names); want nil: a launch.
 type rlkCase struct {
 	name               string
 	agent              agentState
@@ -42,8 +38,9 @@ type rlkCase struct {
 }
 
 // rlkRun seeds tc's row and sessions, resumes it, and checks the launch or
-// the refusal: its sentinel and description, one lookup on the row's socket,
-// nothing written or touched, and no adoption.
+// the refusal: its sentinel and description, one lookup on the row's socket
+// charging Q and nothing more (SR-13.2), nothing written or touched, and no
+// adoption.
 func rlkRun(t *testing.T, tc rlkCase) {
 	t.Helper()
 	e := newKillEnv(t)
@@ -61,7 +58,7 @@ func rlkRun(t *testing.T, tc rlkCase) {
 	if tc.seed != nil {
 		s = tc.seed(t, e, &r)
 	}
-	before := e.snapshotResume(t, r)
+	before, start := e.snapshotResume(t, r), e.clock.Now()
 
 	_, err := e.resume(r.ID)
 
@@ -71,6 +68,9 @@ func rlkRun(t *testing.T, tc rlkCase) {
 	}
 	if !errors.Is(err, tc.want) {
 		t.Fatalf("resume err = %v; want %v", err, tc.want)
+	}
+	if elapsed := e.clock.Now().Sub(start); elapsed != resumeLookupQ {
+		t.Errorf("virtual time = %v; want the lookup's Q = %v", elapsed, resumeLookupQ)
 	}
 	other := s.Label.InstanceID
 	if other == r.ID {
@@ -87,9 +87,8 @@ func rlkRun(t *testing.T, tc rlkCase) {
 	}
 }
 
-// rlkAssertLaunched fails unless the resume launched: one lookup on the
-// row's socket first, then one create there, the trust entry written, the
-// row pending, and every session seeded before untouched.
+// rlkAssertLaunched fails unless the resume launched: the lookup, then one create, on the row's
+// socket; the trust entry written; the row pending; every session seeded before untouched.
 func (e *killEnv) rlkAssertLaunched(t *testing.T, before resumeSnapshot, err error) {
 	t.Helper()
 	r := before.r
@@ -126,8 +125,7 @@ func (e *killEnv) rlkAssertLaunched(t *testing.T, before resumeSnapshot, err err
 	}
 }
 
-// rlkSettled is an age past both the stopping window and the
-// starting-session bound of e's [tmux] values.
+// rlkSettled is an age past both the stopping window and the starting-session bound.
 func rlkSettled(e *killEnv) time.Duration {
 	return 2 * (e.cfg.EffectiveStoppingWindow() + e.cfg.EffectiveStartingSession())
 }
@@ -162,7 +160,7 @@ func rlkOwn(opts ...func(*killEnv) tmuxfix.RowSessionOption) func(*testing.T, *k
 	}
 }
 
-// rlkLabel is the own-session option giving label (set) instead of the current one.
+// rlkLabel is the own-session option giving label instead of the current one.
 func rlkLabel(label func(resumeRow) tmux.Label, r *resumeRow) func(*killEnv) tmuxfix.RowSessionOption {
 	return func(*killEnv) tmuxfix.RowSessionOption { return tmuxfix.WithRowSessionLabel(label(*r), true) }
 }
@@ -180,9 +178,6 @@ var (
 	rlkDifferentID = func(_ *killEnv, r resumeRow, s tmuxfix.SeedSession) apitest.DescCase {
 		return apitest.DescHeldDifferentID(rlkHeld(r, s))
 	}
-	rlkOtherStore = func(e *killEnv, r resumeRow, s tmuxfix.SeedSession) apitest.DescCase {
-		return apitest.DescHeldOtherStore(rlkHeld(r, s), e.storeID)
-	}
 	rlkLeftover = func(_ *killEnv, r resumeRow, s tmuxfix.SeedSession) apitest.DescCase {
 		return apitest.DescPreLaunchLeftover(r.ID, []apitest.DescSession{{Name: s.Name, ID: s.ID}})
 	}
@@ -193,89 +188,9 @@ var (
 	}
 )
 
-// TestResumeLookupAfterGuards: every guard, the control-character id
-// included, refuses before the lookup, with no tmux call, although a session
-// holds the recorded name.
-func TestResumeLookupAfterGuards(t *testing.T) {
-	t.Parallel()
-	held := func(t *testing.T, e *killEnv, spec killRowSpec) resumeRow {
-		r := e.seedResumableRow(t, spec)
-		e.seedHolder(t, r.killRow, holderNone)
-		return r
-	}
-	live := func(state string) func(*testing.T, *killEnv) string {
-		return func(t *testing.T, e *killEnv) string {
-			return held(t, e, killRowSpec{State: state, Agent: agentGone, NoSession: true}).ID
-		}
-	}
-	cases := []struct {
-		name string
-		seed func(*testing.T, *killEnv) string
-		want error // nil: ErrInternal, which matches no sentinel
-	}{
-		{"unknown id", func(*testing.T, *killEnv) string { return "unknown-" + uuid.NewString()[:8] }, api.ErrSpawnNotFound},
-		{"live row", live(store.StateWaiting), api.ErrSpawnNotResumable},
-		{"pending row", live(store.StatePending), api.ErrSpawnNotResumable},
-		{"no session id", func(t *testing.T, e *killEnv) string {
-			r := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true})
-			e.seedHolder(t, r, holderNone)
-			return r.ID
-		}, api.ErrNoSessionId},
-		{"transcript missing", func(t *testing.T, e *killEnv) string {
-			r := held(t, e, e.resumableSpec(rlkSettled(e), agentGone))
-			if err := os.Remove(r.JSONLPath); err != nil {
-				t.Fatalf("remove transcript: %v", err)
-			}
-			return r.ID
-		}, api.ErrJsonlMissing},
-		{"control character in the id", func(t *testing.T, e *killEnv) string {
-			spec := e.resumableSpec(rlkSettled(e), agentGone)
-			spec.ID = "legacy\x1b" + uuid.NewString()[:8]
-			return held(t, e, spec).ID
-		}, nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			id := tc.seed(t, e)
-
-			_, err := e.resume(id)
-
-			if name, _ := errnames.Classify(err); (tc.want == nil && (err == nil || name != "ErrInternal")) ||
-				(tc.want != nil && !errors.Is(err, tc.want)) {
-				t.Fatalf("resume err = %v (%s); want %v", err, name, tc.want)
-			}
-			assertNoTmuxCalls(t, e.rec)
-		})
-	}
-}
-
-// TestResumeLookupOnRecordedSocketBeforePreTrustAndMove: the one lookup goes
-// to the row's recorded socket while the row is still ended and untrusted;
-// a holder of the name on another socket is not consulted.
-func TestResumeLookupOnRecordedSocketBeforePreTrustAndMove(t *testing.T) {
-	t.Parallel()
-	e := newKillEnv(t)
-	recorded := filepath.Join(filepath.Dir(e.defaultSocket), "recorded-"+uuid.NewString()[:8])
-	r := e.seedResumableRow(t, e.resumableSpec(rlkSettled(e), agentGone, apitest.WithTmuxSocket(recorded)))
-	e.seedHolder(t, killRow{Name: r.Name, Socket: e.defaultSocket}, holderNone)
-	before := e.snapshotResume(t, r)
-	e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
-		if st := e.columns(t, r.ID).State; st != store.StateEnded {
-			t.Errorf("state when the lookup returned = %v; want ended (not yet moved)", st)
-		}
-		r.Trust.check(t, r.CWD, false, "when the lookup returned")
-	})
-
-	_, err := e.resume(r.ID)
-
-	e.rlkAssertLaunched(t, before, err)
-}
-
-// TestResumeLookupRefusals: each name holder class with the agent dead,
-// Leftover under any name, the process states, a row with no launch token,
-// Ours under another name while another session holds the recorded name,
-// and an Ours that resume does not adopt; each refusal writes nothing.
+// TestResumeLookupRefusals: each refusal writes nothing, for the holder
+// classes the call table lacks, Leftover under any name, the process states,
+// no launch token, Ours renamed while another holds the name, no adoption.
 func TestResumeLookupRefusals(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	conflict, unresponsive := api.ErrTmuxSessionConflict, api.ErrTmuxUnresponsive
@@ -303,12 +218,19 @@ func TestResumeLookupRefusals(t *testing.T) {
 	}
 	young := func(*killEnv) time.Duration { return 0 }
 	oldSession := func(e *killEnv) tmuxfix.RowSessionOption { return e.createdBefore(rlkSettled(e)) }
+	// AC-LKP-14: a usable catalogued $ or \ name whose stored form differs; every such name, both
+	// forms and both listed are internal/tmux's TestLookup_HolderStoredForms and its siblings.
+	i := slices.IndexFunc(tmuxfix.StoredNames(), func(n tmuxfix.StoredName) bool {
+		return n.LabelByID && n.Raw != n.Stored && !strings.ContainsAny(n.Raw, ".:")
+	})
+	if i < 0 {
+		t.Fatal("no usable $ or \\ name with a distinct stored form in the catalogue")
+	}
+	dollar := tmuxfix.StoredNames()[i]
 	for _, tc := range []rlkCase{
+		{name: "a $ or \\ name held in its stored form", agent: agentGone, opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(dollar.Raw)},
+			seed: rlkNamed(func(resumeRow) string { return dollar.Stored }), want: conflict, desc: rlkNoValidID},
 		{name: "held by another row's session", agent: agentGone, seed: rlkHolder(holderForeign), want: conflict, desc: rlkDifferentID},
-		{name: "held by another store's session", agent: agentGone, seed: rlkHolder(holderOtherStore), want: conflict, desc: rlkOtherStore},
-		{name: "held by another store's session with this row's id and token", agent: agentGone,
-			seed: rlkHolder(holderOtherStoreOwn), want: conflict, desc: rlkOtherStore},
-		{name: "held by an unlabelled session", agent: agentGone, seed: rlkHolder(holderNone), want: conflict, desc: rlkNoValidID},
 		{name: "held by a malformed label", agent: agentGone, seed: rlkHolder(holderMalformed), want: conflict, desc: rlkNoValidID},
 		{name: "held by a four-field label", agent: agentGone, seed: fourFields, want: conflict, desc: rlkNoValidID},
 		{name: "leftover at the recorded name", agent: agentGone, want: conflict, desc: rlkLeftover,
@@ -349,9 +271,7 @@ func TestResumeLookupRefusals(t *testing.T) {
 	}
 }
 
-// TestResumeLookupProceeds: no holder, another store's session with this
-// row's id and token under another name, prefix neighbours, and an
-// uncheckable or unrecorded agent with the name free launch, touching nothing.
+// TestResumeLookupProceeds: these launch, touching nothing.
 func TestResumeLookupProceeds(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, tc := range []rlkCase{
@@ -365,48 +285,5 @@ func TestResumeLookupProceeds(t *testing.T) {
 		{name: "no agent recorded, name free", agent: agentNotRecorded},
 	} {
 		t.Run(tc.name, func(t *testing.T) { rlkRun(t, tc) })
-	}
-}
-
-// TestResumeLookupDollarAndBackslashNames (AC-LKP-14): for each catalogued
-// usable $ or \ name, a holder in either stored form blocks, both forms listed is
-// ambiguous, a form matching neither is not held, and the own session is found by label.
-func TestResumeLookupDollarAndBackslashNames(t *testing.T) {
-	// Serial: it checks every record written to the shared trail since its mark.
-	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
-			continue
-		}
-		named := func(name string) func(*testing.T, *killEnv, *resumeRow) tmuxfix.SeedSession {
-			return rlkNamed(func(resumeRow) string { return name })
-		}
-		cases := []rlkCase{
-			{name: "held in the stored form", seed: named(n.Stored), want: api.ErrTmuxSessionConflict, desc: rlkNoValidID},
-			{name: "no stored form matches", seed: named(`\` + n.Stored)},
-			{name: "own session found by its label", want: api.ErrTmuxSessionConflict, desc: rlkOwnOld(false),
-				seed: rlkOwn(func(e *killEnv) tmuxfix.RowSessionOption { return e.createdBefore(rlkSettled(e)) })},
-		}
-		if n.Raw != n.Stored {
-			cases = append(cases,
-				rlkCase{name: "held in the raw form", seed: named(n.Raw), want: api.ErrTmuxSessionConflict, desc: rlkNoValidID},
-				rlkCase{name: "listed in both forms", want: api.ErrTmuxUnresponsive,
-					seed: func(t *testing.T, e *killEnv, r *resumeRow) tmuxfix.SeedSession {
-						named(n.Raw)(t, e, r)
-						return named(n.Stored)(t, e, r)
-					},
-					desc: func(e *killEnv, r resumeRow, _ tmuxfix.SeedSession) apitest.DescCase {
-						c := apitest.DescHeldAmbiguous(apitest.HeldName{Name: r.Name, BeforeLaunch: true})
-						for _, s := range e.rec.Sessions(r.Socket) {
-							if s.Name == n.Raw || s.Name == n.Stored {
-								c.Forbid = append(c.Forbid, s.ID)
-							}
-						}
-						return c
-					}})
-		}
-		for _, tc := range cases {
-			tc.agent, tc.opts = agentGone, []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}
-			t.Run(strings.ReplaceAll(n.Raw, "/", "_")+"/"+tc.name, func(t *testing.T) { rlkRun(t, tc) })
-		}
 	}
 }

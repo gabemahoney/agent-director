@@ -480,7 +480,7 @@ func reuseStarting(t *testing.T, e *killEnv, r reuseRow, s reuseStartingRow, wan
 // starting-session rule on reuse's raw row (a NULL or unparseable ended_at is
 // none; no pid nor session id skips the window), and each setting configured
 // on its own, around the window and the bound. Rows shared with resume are
-// TestResumeStartingSessionCases', TestResumeClientStartingSettings' and
+// TestResumeStartingSessionCases', TestResumeStartingSettings' and
 // TestStartingSessionSettings'.
 func TestSpawnReuseStartingCases(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
@@ -585,7 +585,7 @@ func rupCases() []rupCase {
 // places tc's holder; it returns the row, the records' row and the other id.
 func (e *killEnv) seedRUPCase(t *testing.T, tc rupCase) (reuseRow, killRow, string) {
 	t.Helper()
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rceSettled(e)})
+	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
 	other := "other-" + uuid.NewString()[:8]
 	e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "foreign-" + uuid.NewString()[:8], Label: r.foreign(other)})
 	for _, s := range tc.setup {

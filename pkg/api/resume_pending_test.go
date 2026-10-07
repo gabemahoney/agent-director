@@ -1,239 +1,37 @@
 package api_test
 
-// resume_pending_test.go covers resume's move to pending (SR-8.3, SR-8.4,
-// SR-8.6, SR-14, SR-20.6; AC-RES-08, AC-RES-09, AC-RES-18): the move's
-// columns after the one pre-launch lookup, its visibility and the
-// launch-in-progress refusal, on the shared fixture in resume_fixture_test.go
-// against a real store. Two resumes in each order (AC-RES-11) are in
-// resume_pending_race_test.go, SessionStart after the move in
-// resume_pending_hook_test.go, and a second resume inside the stopping window
-// (AC-RES-13) in resume_pending_stopping_test.go.
+// resume_pending_test.go covers resume around a pending row (SR-8.4, SR-8.5,
+// SR-8.6, SR-4.2, SR-22.9; AC-RES-09, AC-RES-11, AC-RES-13): the
+// launch-in-progress refusal, a loser's re-read finding the row deleted, and
+// a second resume after a resumed agent's life.
 
 import (
 	"errors"
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// pendStartedAt is the started_at the move tests seed, far from the clock's
-// time, so a launch start taken from started_at shows.
-var pendStartedAt = time.Date(2026, 9, 27, 8, 0, 0, 0, time.UTC)
-
-// pendTrail returns the trail lines of event for instance id.
-func pendTrail(t *testing.T, event, id string) []map[string]any {
-	t.Helper()
-	var out []map[string]any
-	for _, l := range readAPITrailLines(t) {
-		if l["event"] == event && l["claude_instance_id"] == id {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
-// pendMoved counts id's ad.resume.moved_to_pending lines.
-func pendMoved(t *testing.T, id string) int {
-	t.Helper()
-	return len(pendTrail(t, "ad.resume.moved_to_pending", id))
-}
-
-// pendParent seeds a live row a caller can name as its parent and returns its id.
-func pendParent(t *testing.T, e *resumeEnv) string {
-	t.Helper()
-	id, err := apitest.SeedSpawn(e.dbPath, "parent-"+uuid.NewString()[:8], store.StateWaiting, t.TempDir(), "off", "", false)
-	if err != nil {
-		t.Fatalf("SeedSpawn(parent): %v", err)
-	}
-	return id
-}
-
-// pendCalls is every tmux call rec recorded, name-based and socket-taking.
-func pendCalls(rec *tmuxfix.Recorder) int { return len(rec.Calls()) + len(rec.SocketCalls()) }
-
-// pendCallKinds is the kind of each socket-taking call rec recorded, in order.
-func pendCallKinds(rec *tmuxfix.Recorder) []tmux.Call {
-	var out []tmux.Call
-	for _, c := range rec.SocketCalls() {
-		out = append(out, c.Call)
-	}
-	return out
-}
-
-// pendRowNullOr returns nil for "" and s otherwise (a column's raw NULL or text).
-func pendRowNullOr(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-// TestResumeMoveToPendingColumns: one lookup on the row's socket precedes the
-// move (SR-8.1 step 3); the move clears the old process, liveness and tmux
-// identity, records the clock's launch start (after the lookup), a new token,
-// the create's socket and the caller's parent, keeps the session columns, and
-// emits once.
-func TestResumeMoveToPendingColumns(t *testing.T) {
-	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
-	cases := []struct {
-		name, state string
-		parent      bool
-	}{
-		{"ended row, caller with a parent", store.StateEnded, true},
-		{"ended row, bare shell", store.StateEnded, false},
-		{"missing row, caller with a parent", store.StateMissing, true},
-		{"missing row, bare shell", store.StateMissing, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newResumeEnv(t)
-			r := e.seedRow(t, resumableSpec{State: tc.state, Opts: []apitest.SpawnOption{apitest.WithStartedAt(pendStartedAt)}})
-			histBefore, err := apitest.ReadSessionHistoryAllLives(e.dbPath, r.ID)
-			if err != nil {
-				t.Fatalf("ReadSessionHistoryAllLives: %v", err)
-			}
-			parent := ""
-			if tc.parent {
-				parent = pendParent(t, e)
-				t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
-			}
-			wantStart := e.moveStart().UnixMilli()
-			var moved apitest.SpawnColumns
-			var callsAtMove []tmux.Call
-			e.store.afterMove(func() { moved, callsAtMove = e.columns(t, r.ID), pendCallKinds(e.rec) })
-
-			if _, err := e.resume(r.ID); err != nil {
-				t.Fatalf("Resume: %v", err)
-			}
-			if want := []tmux.Call{tmux.CallLookup}; !slices.Equal(callsAtMove, want) || e.rec.SocketCalls()[0].Socket != e.socket {
-				t.Errorf("tmux calls before the move = %v on %q; want %v on the row's socket %q", callsAtMove, e.rec.SocketCalls()[0].Socket, want, e.socket)
-			}
-			if calls := e.rec.Calls(); len(calls) != 0 {
-				t.Errorf("name-based tmux calls = %v; want none", calls)
-			}
-			b := r.Before
-			if moved.State != store.StatePending {
-				t.Errorf("state after the move = %v; want pending", moved.State)
-			}
-			cleared := map[string]any{"pid": moved.PID, "proc_starttime": moved.ProcStarttime, "ended_at": moved.EndedAt,
-				"liveness_unverified_since": moved.LivenessUnverifiedSince, "liveness_note": moved.LivenessNote,
-				"tmux_server_pid": moved.TmuxServerPID, "tmux_server_started": moved.TmuxServerStarted,
-				"tmux_server_starttime": moved.TmuxServerStarttime, "pane_id": moved.PaneID,
-				"pane_pid": moved.PanePID, "pane_starttime": moved.PaneStarttime}
-			for col, v := range cleared {
-				if v != nil {
-					t.Errorf("%s after the move = %#v; want NULL", col, v)
-				}
-			}
-			if moved.LaunchStartedAt != wantStart || wantStart == pendStartedAt.UnixMilli() {
-				t.Errorf("launch_started_at = %#v; want the clock's %d, not started_at's %d", moved.LaunchStartedAt, wantStart, pendStartedAt.UnixMilli())
-			}
-			creates := e.rec.SocketCallsOf(tmux.CallCreate)
-			if len(creates) != 1 {
-				t.Fatalf("creates = %d; want 1", len(creates))
-			}
-			tok, _ := moved.LaunchToken.(string)
-			if !spawnTokenRE.MatchString(tok) || moved.LaunchToken == b.LaunchToken || creates[0].Token != tok {
-				t.Errorf("launch_token = %#v (before %#v, create's %q); want a new token the create labels with", moved.LaunchToken, b.LaunchToken, creates[0].Token)
-			}
-			if moved.TmuxSocket != creates[0].Socket || creates[0].Socket != e.socket {
-				t.Errorf("tmux_socket = %#v, create's socket %q; want both %q", moved.TmuxSocket, creates[0].Socket, e.socket)
-			}
-			if moved.ParentID != pendRowNullOr(parent) {
-				t.Errorf("parent_id = %#v; want %#v", moved.ParentID, pendRowNullOr(parent))
-			}
-			kept := func(c apitest.SpawnColumns) []any {
-				return []any{c.ClaudeSessionID, c.JSONLPath, c.LifeNumber, c.StartedAt, c.LastSeenAt, c.NoPreTrust,
-					c.CWD, c.TmuxSessionName, c.ClaudeArgs, c.RelayMode, c.Labels, c.ExtraEnv}
-			}
-			if !reflect.DeepEqual(kept(moved), kept(b)) {
-				t.Errorf("kept columns after the move = %#v; want %#v", kept(moved), kept(b))
-			}
-			if bv, _ := b.RowVersion.(int64); moved.RowVersion != bv+1 {
-				t.Errorf("row_version after the move = %#v; want %d", moved.RowVersion, bv+1)
-			}
-			// The identity write used the version the move returned: one more, and the new pane recorded.
-			after := e.columns(t, r.ID)
-			sess := e.rec.Sessions(e.socket)
-			if mv, _ := moved.RowVersion.(int64); after.RowVersion != mv+1 || len(sess) != 1 || after.PaneID != sess[0].Panes[0].ID {
-				t.Errorf("after the identity write: row_version %#v, pane %#v; want %#v+1 and the created pane (sessions %+v)", after.RowVersion, after.PaneID, moved.RowVersion, sess)
-			}
-			histAfter, err := apitest.ReadSessionHistoryAllLives(e.dbPath, r.ID)
-			if err != nil || !reflect.DeepEqual(histAfter, histBefore) {
-				t.Errorf("history = %+v (%v); want %+v", histAfter, err, histBefore)
-			}
-			lines := pendTrail(t, "ad.resume.moved_to_pending", r.ID)
-			if len(lines) != 1 {
-				t.Fatalf("ad.resume.moved_to_pending lines = %d; want 1", len(lines))
-			}
-			assertAPITrailStr(t, lines[0], "prior_state", tc.state)
-			assertAPITrailStr(t, lines[0], "claude_session_id", r.SessionID)
-			assertAPITrailStr(t, lines[0], "source", "ad_resume")
-		})
-	}
-}
-
-// TestResumePendingVisibleOnEverySurface: after the move, status, get and list
-// show pending with the resume's move time (after its lookup) as the launch
-// start; get keeps the session id and prior_sessions.
-func TestResumePendingVisibleOnEverySurface(t *testing.T) {
-	t.Parallel()
-	e := newResumeEnv(t)
-	r := e.seedResumable(t, store.StateEnded, apitest.WithStartedAt(pendStartedAt))
-	want := time.UnixMilli(e.moveStart().UnixMilli()).UTC()
-	if _, err := e.resume(r.ID); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	at := func(p *time.Time) string {
-		if p == nil {
-			return "<nil>"
-		}
-		return p.Format(time.RFC3339Nano)
-	}
-	st, err := e.c.Status(r.ID)
-	if err != nil || st.State != store.StatePending || st.LaunchStartedAt == nil || !st.LaunchStartedAt.Equal(want) {
-		t.Errorf("Status = {%s %s} (%v); want pending at %s", st.State, at(st.LaunchStartedAt), err, want.Format(time.RFC3339Nano))
-	}
-	g, err := e.c.Get(r.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if g.State != store.StatePending || g.LaunchStartedAt == nil || !g.LaunchStartedAt.Equal(want) || g.StartedAt.Equal(want) {
-		t.Errorf("Get = {%s launch %s started %s}; want pending at %s, not started_at", g.State, at(g.LaunchStartedAt), g.StartedAt, want.Format(time.RFC3339Nano))
-	}
-	if g.ClaudeSessionID != r.SessionID || len(g.PriorSessions) != 1 || g.PriorSessions[0].ClaudeSessionID != r.HistorySessionID {
-		t.Errorf("Get session %q, prior_sessions %+v; want %q and [%s]", g.ClaudeSessionID, g.PriorSessions, r.SessionID, r.HistorySessionID)
-	}
-	l, err := e.c.List(api.ListParams{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	i := slices.IndexFunc(l.Spawns, func(s api.ListRow) bool { return s.ClaudeInstanceID == r.ID })
-	if i < 0 || l.Spawns[i].State != store.StatePending || l.Spawns[i].LaunchStartedAt == nil || !l.Spawns[i].LaunchStartedAt.Equal(want) {
-		t.Errorf("List row %d of %+v; want %s pending at %s", i, l.Spawns, r.ID, want.Format(time.RFC3339Nano))
-	}
-}
-
-// pendRefusal is one refused resume: the row just before and after it, its
-// error and the tmux calls and move events it added.
+// pendRefusal is one refused resume: the row before and after, the error, and the calls and move events added.
 type pendRefusal struct {
 	before, after apitest.SpawnColumns
 	err           error
 	calls, moved  int
 }
 
-// pendRefuse resumes id as a caller whose parent is callerParent and records
-// what the call changed.
+// pendRefuse resumes id as a caller whose parent is callerParent and records what the call changed.
 func pendRefuse(t *testing.T, e *resumeEnv, id, callerParent string) pendRefusal {
 	t.Helper()
 	prev := os.Getenv("AGENT_DIRECTOR_INSTANCE_ID")
@@ -254,8 +52,7 @@ func pendRefuse(t *testing.T, e *resumeEnv, id, callerParent string) pendRefusal
 func TestResumeRefusesLaunchInProgress(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks the shared trail by literal row
 	// ids other find-missing tests reuse.
-	// seededNoStart seeds a pending row whose launch_started_at is raw: nil
-	// (NULL) or an int64 outside years 0 to 9999, which reads as absent (SR-5.5).
+	// seededNoStart seeds a pending row whose launch_started_at, NULL or outside years 0 to 9999, reads as absent (SR-5.5).
 	seededNoStart := func(raw any) func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
 		return func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
 			opt := apitest.WithNoLaunchStartedAt()
@@ -277,9 +74,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 	}
 	cases := []struct {
 		name string
-		// setup makes a pending row and returns its id, the refusal when it
-		// ran one itself (via pendRefuse, caller parent p; nil: refuse after
-		// setup) and the launch start in milliseconds it recorded (0: none).
+		// setup makes a pending row: its id, the refusal if it ran one (nil: refuse after) and its launch start (0: none).
 		setup func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64)
 	}{
 		{"moved by another resume, before its create", func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
@@ -355,56 +150,145 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 	}
 }
 
-// TestResumeRowDeletedBeforeMove: a row deleted between examination and move
-// gives ErrSpawnNotFound, with no create and no move event.
-func TestResumeRowDeletedBeforeMove(t *testing.T) {
-	t.Parallel()
-	e := newResumeEnv(t)
-	r := e.seedResumable(t, store.StateEnded)
-	e.store.afterGet(func() {
+// TestResumeLoserRowDeletedBeforeReRead: a leftover at the lookup, the row
+// deleted after the read: the one re-read gives ErrSpawnNotFound, not the
+// Leftover conflict, after only the lookup, and nothing is written.
+func TestResumeLoserRowDeletedBeforeReRead(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	e := newKillEnv(t)
+	r := e.seedResumable(t, time.Hour, agentGone)
+	e.seedHolder(t, r.killRow, holderOld)
+	w := &hookedResumeStore{st: e.st}
+	w.failMove(nil) // a move would return the injected store error instead
+	w.afterGet(func() {
 		if err := e.st.DeleteSpawn(r.ID); err != nil {
 			t.Fatalf("DeleteSpawn: %v", err)
 		}
 	})
-	if _, err := e.resume(r.ID); !errors.Is(err, api.ErrSpawnNotFound) {
-		t.Fatalf("Resume = %v; want ErrSpawnNotFound", err)
+	before := e.snapshotResume(t, r)
+
+	_, err := e.resumeWith(w, r.ID)
+
+	if !errors.Is(err, api.ErrSpawnNotFound) || errors.Is(err, api.ErrTmuxSessionConflict) {
+		t.Fatalf("Resume = %v; want ErrSpawnNotFound, not the Leftover conflict", err)
 	}
-	if n := len(e.rec.SocketCallsOf(tmux.CallCreate)); n != 0 {
-		t.Errorf("creates = %d; want none", n)
+	if got := e.rec.SocketCalls()[before.calls:]; len(got) != 1 || got[0].Call != tmux.CallLookup {
+		t.Errorf("tmux calls = %+v; want the one lookup", got)
 	}
-	if n := pendMoved(t, r.ID); n != 0 {
-		t.Errorf("ad.resume.moved_to_pending lines = %d; want none", n)
+	if n := len(e.rec.Calls()) - before.nameCalls; n != 0 {
+		t.Errorf("%d name-based tmux calls; want none", n)
+	}
+	if got := e.rec.Sessions(r.Socket); !reflect.DeepEqual(got, before.sessions[r.Socket]) {
+		t.Errorf("sessions on %s = %+v; want unchanged %+v", r.Socket, got, before.sessions[r.Socket])
+	}
+	r.Trust.check(t, r.CWD, false, "after the refused resume")
+	for _, l := range readAPITrailLines(t)[before.mark:] {
+		if ev, _ := l["event"].(string); strings.HasPrefix(ev, "ad.resume.") {
+			t.Errorf("trail record %s for %v; want no ad.resume.* line", ev, l["claude_instance_id"])
+		}
 	}
 	if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ID); !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Errorf("ReadSpawnColumns = %v; want the row absent", err)
+		t.Errorf("ReadSpawnColumns = %v; want the row still absent", err)
 	}
 }
 
-// TestResumeFromArchivedHistoryMovesStoredRow: a resume that falls back to an
-// archived session still applies its move, keeping the stored session id.
-func TestResumeFromArchivedHistoryMovesStoredRow(t *testing.T) {
-	t.Parallel()
-	e := newResumeEnv(t)
-	r := e.seedResumable(t, store.StateEnded)
-	if err := os.Remove(r.JSONLPath); err != nil {
-		t.Fatalf("remove transcript: %v", err)
-	}
+// TestResumeAgainAfterResumedAgentEnds (AC-RES-13; SR-8.4, SR-8.5, SR-4.2
+// step 1, SR-22.9): resume X's agent (its recorded pane) reports in with a new
+// session id and ends while its session runs. A second resume 89 s after
+// ended_at is refused as still stopping and writes nothing, with the session
+// up (Ours) and then gone but the agent running (Gone); with both gone it
+// launches the reported session: no disagree record, the move applied again.
+func TestResumeAgainAfterResumedAgentEnds(t *testing.T) {
+	// Serial: it checks every record written to the shared trail since its mark.
+	e := newKillEnv(t)
+	r := e.seedResumable(t, time.Hour, agentGone)
+	window := e.cfg.EffectiveStoppingWindow()
+
+	// (1) resume X succeeds.
 	if _, err := e.resume(r.ID); err != nil {
-		t.Fatalf("Resume: %v", err)
+		t.Fatalf("first Resume: %v", err)
+	}
+	own := rplSessionNamed(t, e.rec, r.Socket, r.Name)
+
+	// (2) Its agent reports in with a new session id, then (3) ends while the session still runs.
+	newSess := "relife-" + uuid.NewString()[:8]
+	newJSONL := apitest.SeedJsonlUnder(t, r.Trust.dir, r.CWD, newSess)
+	for _, ev := range []string{"SessionStart", "SessionEnd"} {
+		if got := apitest.ApplyAgentHook(t, e.dbPath, r.ID, ev, newSess, apitest.HookTranscript(newJSONL, true)); !got.Applied {
+			t.Fatalf("%s from the agent = %+v; want applied", ev, got)
+		}
+	}
+	ended := e.columns(t, r.ID)
+	raw, _ := ended.EndedAt.(string)
+	endedAt, err := time.Parse(heldStoreLayout, raw)
+	pid, _ := ended.PID.(int64)
+	start, _ := ended.ProcStarttime.(string)
+	if ended.State != store.StateEnded || err != nil || pid <= 0 || start == "" || ended.ClaudeSessionID != newSess {
+		t.Fatalf("after SessionEnd: {state %v, ended_at %#v (%v), pid %#v, start %#v, session %#v}; want ended with ended_at, the agent and session %s recorded",
+			ended.State, ended.EndedAt, err, ended.PID, ended.ProcStarttime, ended.ClaudeSessionID, newSess)
+	}
+	// The pre-trust entry the first resume wrote goes, so the snapshot's
+	// trust check pins that a refusal writes none.
+	r.Trust.reset(t)
+	tok, _ := ended.LaunchToken.(string)
+
+	// refused moves the clock so the rule reads 89 s after ended_at, resumes
+	// and checks the still-stopping refusal and that it wrote nothing.
+	refused := func(what string, noSession bool) {
+		t.Helper()
+		e.clock.Advance(endedAt.Add(window - time.Second).Sub(e.ruleInstant()))
+		before := e.snapshotResume(t, r)
+		_, err := e.resume(r.ID)
+		if !errors.Is(err, api.ErrTmuxUnresponsive) {
+			t.Fatalf("second Resume, %s = %v; want ErrTmuxUnresponsive (still stopping)", what, err)
+		}
+		apitest.AssertDescription(t, err.Error(), apitest.DescStillStopping(apitest.StartingSession{InstanceID: r.ID,
+			Name: r.Name, Window: window, Bound: e.cfg.EffectiveStartingSession(), NoSession: noSession}), tok, e.storeID)
+		e.assertResumeWroteNothing(t, before)
+	}
+
+	// (4) An immediate second resume, the session up.
+	refused("session up", false)
+
+	// (5) The session goes; the agent process still runs.
+	if err := e.rec.KillSessionID(r.Socket, own.ID); err != nil {
+		t.Fatalf("KillSessionID: %v", err)
+	}
+	e.pc.Set(int(pid), procfix.Alive(start))
+	refused("session gone, agent process running", true)
+
+	// (6) The agent process is gone too: the second resume launches.
+	e.pc.Set(int(pid), procfix.Gone())
+	e.clock.Advance(endedAt.Add(window - time.Second).Sub(e.ruleInstant()))
+	calls, wantStart := len(e.rec.SocketCalls()), e.ruleInstant().UnixMilli()
+	w := &hookedResumeStore{st: e.st}
+	var moved apitest.SpawnColumns
+	w.afterMove(func() { moved = e.columns(t, r.ID) })
+	if _, err := e.resumeWith(w, r.ID); err != nil {
+		t.Fatalf("second Resume, session and agent gone: %v", err)
+	}
+	if got := callKinds(e.rec)[calls:]; !slices.Equal(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+		t.Errorf("second resume's tmux calls = %v; want the lookup, then the create", got)
 	}
 	creates := e.rec.SocketCallsOf(tmux.CallCreate)
-	if len(creates) != 1 {
-		t.Fatalf("creates = %d; want 1", len(creates))
+	cmd := creates[len(creates)-1].Command
+	if i := slices.Index(cmd, "--resume"); i < 0 || i+1 >= len(cmd) || cmd[i+1] != newSess {
+		t.Errorf("argv = %q; want --resume %s (the session the resumed agent reported)", cmd, newSess)
 	}
-	if i := slices.Index(creates[0].Command, "--resume"); i < 0 || i+1 >= len(creates[0].Command) || creates[0].Command[i+1] != r.HistorySessionID {
-		t.Errorf("argv = %q; want --resume %s", creates[0].Command, r.HistorySessionID)
-	}
-	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.ClaudeSessionID != r.SessionID {
-		t.Errorf("row {state %v, session %v}; want pending, %s", cols.State, cols.ClaudeSessionID, r.SessionID)
+	newTok, _ := moved.LaunchToken.(string)
+	bv, _ := ended.RowVersion.(int64)
+	if moved.State != store.StatePending || moved.LaunchStartedAt != wantStart || moved.EndedAt != nil || newTok == tok ||
+		creates[len(creates)-1].Token != newTok || moved.RowVersion != bv+1 {
+		t.Errorf("row at the second move {%v, launch %#v, ended_at %#v, token %q, version %#v}; want pending, %d, NULL, a new token the create labels with, %d",
+			moved.State, moved.LaunchStartedAt, moved.EndedAt, newTok, moved.RowVersion, wantStart, bv+1)
 	}
 	lines := pendTrail(t, "ad.resume.moved_to_pending", r.ID)
-	if len(lines) != 1 {
-		t.Fatalf("ad.resume.moved_to_pending lines = %d; want 1", len(lines))
+	if len(lines) != 2 {
+		t.Fatalf("ad.resume.moved_to_pending lines = %d; want 2", len(lines))
 	}
-	assertAPITrailStr(t, lines[0], "claude_session_id", r.SessionID)
+	assertAPITrailStr(t, lines[1], "prior_state", store.StateEnded)
+	assertAPITrailStr(t, lines[1], "claude_session_id", newSess)
+	if recs := resumeDisagrees(t, r.ID); len(recs) != 0 {
+		t.Errorf("ad.provenance.disagree records = %v; want none (own session and server as recorded)", recs)
+	}
 }

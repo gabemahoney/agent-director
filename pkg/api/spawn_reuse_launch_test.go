@@ -437,7 +437,7 @@ func TestSpawnReuseCeilingPaths(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
 			e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: tc.q})
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rceSettled(e), Held: tc.held})
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Held: tc.held})
 			want, wantErr := tc.q+c+2*a, api.ErrTmuxSessionCreate
 			calls := []tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession}
 			if tc.held {

@@ -237,7 +237,7 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 		{name: "old label", spec: holderOnly(holderOld), want: held("leftover", conflict, true, false)},
 		{name: "current label, still stopping",
 			age:  func(e *killEnv) time.Duration { return e.cfg.EffectiveStoppingWindow() / 2 },
-			spec: func(e *killEnv) heldSpec { return heldSpec{Holder: holderCurrent, Created: rceSettled(e)} },
+			spec: func(e *killEnv) heldSpec { return heldSpec{Holder: holderCurrent, Created: rlkSettled(e)} },
 			want: held("ours", unresponsive, true, true)},
 		{name: "current label, still starting",
 			spec: func(e *killEnv) heldSpec {
@@ -245,7 +245,7 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 			},
 			want: held("ours", unresponsive, true, true)},
 		{name: "current label, this row's own id",
-			spec: func(e *killEnv) heldSpec { return heldSpec{Holder: holderCurrent, Created: rceSettled(e)} },
+			spec: func(e *killEnv) heldSpec { return heldSpec{Holder: holderCurrent, Created: rlkSettled(e)} },
 			want: held("ours", conflict, true, true)},
 		{name: "foreign label", spec: holderOnly(holderForeign), want: held("gone", conflict, false, nil)},
 		{name: "another store's label", spec: holderOnly(holderOtherStore),
@@ -269,7 +269,7 @@ func TestSpawnReuseTrailNameHeldPerOutcome(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
-			age := rceSettled(e)
+			age := rlkSettled(e)
 			if tc.age != nil {
 				age = tc.age(e)
 			}
@@ -308,7 +308,7 @@ func TestSpawnReuseProvenanceAfterDuplicateSession(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Held: true, Age: rceSettled(e)})
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Held: true, Age: rlkSettled(e)})
 			atCreate := -1
 			e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
 				if atCreate < 0 {
