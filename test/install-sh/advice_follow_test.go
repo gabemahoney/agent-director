@@ -1,5 +1,5 @@
 // Package installsh_test runs install.sh's b.fji literal-follow tests
-// (advice_follow.sh, advice inventory J1-J15) under go test, so make
+// (advice_follow.sh, advice inventory J1-J16) under go test, so make
 // test-sandbox runs them and a change to install.sh's advice turns it red.
 package installsh_test
 
@@ -55,7 +55,7 @@ func cli2TrackInputs(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_J_InstallShScript: J1-J15, each test_* in advice_follow.sh a
+// TestAdviceFollow_J_InstallShScript: J1-J16, each test_* in advice_follow.sh a
 // subtest with its own result; known-broken ones skip unless the gate is set.
 // On a host install.sh refuses, the whole test skips with the script's reason.
 func TestAdviceFollow_J_InstallShScript(t *testing.T) {

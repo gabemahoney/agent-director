@@ -85,7 +85,9 @@
 #      the migration sentinel (mktemp failed), or post-open
 #      user_version unreadable or != target when a migration was
 #      expected), or a config file
-#      whose [store] db_path install.sh cannot read (refused in
+#      whose [store] db_path install.sh cannot read, or (hooks on) one
+#      that sets defaults as a key before any header (defaults = { ... }),
+#      which the config.toml merge cannot extend (both refused in
 #      pre-flight, before anything on disk changes). state.db here is
 #      the store database agent-director opens: ~/.agent-director/state.db,
 #      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
@@ -689,6 +691,77 @@ fi
 state_db_name="state.db"
 if [[ "$state_db" != "$(ad_clean_path "${HOME}/.agent-director/state.db")" ]]; then
     state_db_name="$state_db"
+fi
+
+# --------------------------------------------------------------------
+# config.toml merge pre-check (b.whe)
+#
+# With hooks on, install.sh sets inject_help_hook = true under
+# config.toml's [defaults] header, adding that header at the end of the
+# file when there is none (the merge below, after the store steps). A
+# file that sets defaults as a key before any header (defaults = { ... },
+# an inline table, or any other value) defines that table already, and
+# TOML refuses a table defined twice, so the added header would leave a
+# file agent-director refuses (ErrConfigMalformed) after an install that
+# exits 0. With hooks on, such a file is refused here instead, before
+# anything on disk changes. ad_store_db_path has already refused every
+# other way to set defaults before any header (defaults.x = ..., a
+# quoted "defaults"), as it refuses every line that is not blank, a
+# comment, a [name] header or a bare name = value line, so a bare key
+# is the only form left. It is matched regardless of letter case, as
+# agent-director's TOML decoder matches names. With --no-hooks the file
+# is never merged and agent-director loads it, so it is not refused.
+# --------------------------------------------------------------------
+
+# ad_config_merge_check <config> — return 0 when the hooks-on config
+# merge can set inject_help_hook in <config> (or <config> is missing).
+# When <config> sets defaults as a key before any header, print why on
+# stderr, naming the line, and return 1. Call it only after
+# ad_store_db_path accepted <config>. Its body is a subshell under the C
+# locale, as that reader's is.
+ad_config_merge_check() (
+    LC_ALL=C
+    local config="$1" n=0 line key
+    local re_header='^[[:blank:]]*\['
+    local re_defaults='^[[:blank:]]*([Dd][Ee][Ff][Aa][Uu][Ll][Tt][Ss])[[:blank:]]*='
+    if [[ ! -f "$config" ]]; then
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
+        if [[ "$n" -eq 1 ]]; then
+            line="${line#$'\xef\xbb\xbf'}"
+        fi
+        line="${line%$'\r'}"
+        if [[ "$line" =~ $re_header ]]; then
+            return 0
+        fi
+        if [[ ! "$line" =~ $re_defaults ]]; then
+            continue
+        fi
+        key="${BASH_REMATCH[1]}"
+        echo "install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install." >&2
+        echo "  config  : $config" >&2
+        printf '  line %s  : %s\n' "$n" "$line" >&2
+        if [[ "$key" != defaults ]]; then
+            echo "  agent-director reads $key as defaults: its TOML decoder matches names" >&2
+            echo "  regardless of letter case." >&2
+        fi
+        echo "  This sets defaults as a key (an inline table, say) rather than under a" >&2
+        echo "  [defaults] header. With hooks on, install.sh sets inject_help_hook = true" >&2
+        echo "  under a [defaults] header and edits no table set as a key: the header it" >&2
+        echo "  would add can leave a file agent-director refuses. Remove this line, and" >&2
+        echo "  set each key it sets under the file's [defaults] header instead, adding" >&2
+        echo "  that header at the end of the file if the file has none." >&2
+        echo "  Add no header in this line's place: the lines below it, up to the next" >&2
+        echo "  header, would fall under that header too." >&2
+        echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+        exit 1
+    done <"$config"
+)
+
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
+    exit 5
 fi
 
 echo "install.sh: pre-flight OK"
@@ -1862,8 +1935,12 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
         ad_backup_keeping_mode "$CONFIG_TOML" "$backup_cfg"
         # awk merge: rewrite an existing inject_help_hook line under
         # [defaults] to =true; if [defaults] exists but lacks the key,
-        # append it inside the section; if no [defaults] section exists
-        # at all, add one at end of file. Preserves every other key
+        # append it inside the section; if the file has no [defaults]
+        # header, add one at end of file. That added header would define
+        # [defaults] a second time in a file that sets defaults as a key
+        # before any header (defaults = { ... }), a file agent-director
+        # refuses; ad_config_merge_check refused such a file in
+        # pre-flight (b.whe). Preserves every other key
         # and section verbatim. Headers are matched as TOML writes them
         # and as ad_store_db_path accepted them above (b.onv): blanks
         # before, inside and after the brackets, a trailing # comment,

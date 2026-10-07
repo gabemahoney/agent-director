@@ -111,6 +111,13 @@ test: envelope-diff-ts test-install-sh
 #     indented next header and appending no second [defaults];
 #     agent-director list then loads the config, and uninstall.sh takes the
 #     key out again (b.onv)
+#   - config.toml merge pre-check: a hooks-on install over a config that sets
+#     defaults as a key before any header (an inline table, in any letter
+#     case, also after a BOM with CRLF line ends) stops in pre-flight (exit 5),
+#     on a fresh HOME and over an installed store, before anything on disk
+#     changes; with --no-hooks the same config installs, left as it was, and
+#     agent-director list loads it; defaults in a comment, in a longer key or
+#     under another table merges as before (b.whe)
 #   - merge modes: a hooks-on re-install under umask 022 or 000 keeps the
 #     modes of the settings.json (a symlinked one too) and config.toml it
 #     merges into and gives their .bak copies the same, also over an earlier

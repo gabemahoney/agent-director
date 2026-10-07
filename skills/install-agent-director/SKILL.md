@@ -371,7 +371,11 @@ This skill runs `install.sh` from the same directory. The script:
       store the output is unchanged. A config file whose `db_path` the
       script cannot read stops the install here (exit `5`), before
       anything is installed or changed. See "Which database install.sh
-      checks" below for the accepted form and the refusal.
+      checks" below for the accepted form and the refusal. With hooks on
+      (no `--no-hooks`), a config that sets `defaults` as a key before
+      any header (`defaults = { ... }`) stops the install here too (exit
+      `5`), before anything is installed or changed, because step 6's
+      config merge cannot extend it; see step 6 below.
    5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
@@ -578,15 +582,40 @@ This skill runs `install.sh` from the same directory. The script:
    table of `~/.agent-director/config.toml`, so every Spawn also gets
    the help hook whatever its `CLAUDE_CONFIG_DIR`. An existing
    `inject_help_hook` line there is rewritten, a missing one is added
-   to the table, and a `[defaults]` table is added at the end of the
-   file only when it has none; every other line is left as written, and
-   the file is snapshotted to a timestamped `.bak` first. The
+   to the table, and a `[defaults]` header holding the key is added at
+   the end of the file when it has no `[defaults]` header; every other
+   line is left as written, and the file is snapshotted to a timestamped
+   `.bak` first. The
    `[defaults]` header is found however it is spaced: `[ defaults ]`,
    `[defaults] # comment`, an indented header, CRLF line ends and a
    UTF-8 byte-order mark are all fine (b.onv). The summary line is
    `config  : merged inject_help_hook=true into <path> (backup <path>)`,
    or `config  : created <path> with inject_help_hook=true` when there
    was no config.toml (created at mode 0600).
+
+   The merge edits no table set as a key. A config that sets `defaults`
+   as a key before any header (an inline table such as
+   `defaults = { relay_mode = "off" }`, in any letter case) already
+   defines that table, and the header the merge would add would leave a
+   file agent-director refuses. With hooks on, the install refuses such
+   a file in pre-flight (exit 5), before anything is installed or
+   changed (b.whe):
+
+       install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install.
+         config  : /home/<you>/.agent-director/config.toml
+         line 1  : defaults = { relay_mode = "off" }
+         This sets defaults as a key (an inline table, say) rather than under a
+         [defaults] header. With hooks on, install.sh sets inject_help_hook = true
+         under a [defaults] header and edits no table set as a key: the header it
+         would add can leave a file agent-director refuses. Remove this line, and
+         set each key it sets under the file's [defaults] header instead, adding
+         that header at the end of the file if the file has none.
+         Add no header in this line's place: the lines below it, up to the next
+         header, would fall under that header too.
+         Nothing was installed or changed. Re-run this install after the change.
+
+   Make that change, then re-run the install with the same flags. With
+   `--no-hooks` the file is not merged, so it is not refused.
 
    A merged `settings.json` or `config.toml` keeps the mode it had (a
    0600 file stays 0600 whatever your umask), and each `.bak` has the
@@ -865,7 +894,10 @@ say). The one change that moves the store, removing a control character
 from `db_path`, says so. A file the reader accepts but agent-director
 refuses (a bad value elsewhere in it, or a key of another table set under
 two letter cases) passes pre-flight and stops at step 3 or 4 instead; see
-"A refused config file" below.
+"A refused config file" below. The reader accepts a `defaults` key set
+before any header (`defaults = { ... }`); with hooks on, the check that
+follows it refuses that line in pre-flight (exit 5); see step 6 of "What
+this skill does" above.
 
 ### The six steps `install.sh` performs
 

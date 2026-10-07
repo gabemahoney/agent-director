@@ -66,6 +66,14 @@
 # appending no second [defaults]; agent-director list then loads the config,
 # and uninstall.sh takes the key out again.
 #
+# Merge pre-check (b.whe): a hooks-on install over a config that sets defaults
+# as a key before any header (an inline table, in any letter case, right after
+# a UTF-8 BOM or after comments and blank lines, CRLF) stops in pre-flight
+# (exit 5) before anything on disk changes, on a fresh HOME and over an
+# installed store; with --no-hooks the same config installs, left as it was,
+# and agent-director list loads it. defaults in a comment, as part of a longer
+# key or under another table merges as before.
+#
 # Merge modes (b.ojn): a hooks-on re-install under umask 022 or 000 leaves
 # settings.json (a symlinked one too) and config.toml at the modes they had,
 # their .bak copies at the same, also over an earlier run's .new and .bak
@@ -598,10 +606,12 @@ snap() {
     (cd "$H" && find . -printf '%p %y %m %s %T@\n' | sort && find . -type f -exec sha256sum {} + | sort)
 }
 
-# db_path_refused <name> <config> <line>: install.sh (hooks on, --keep-prior)
-# under H's <config> stops in pre-flight with exit 5, naming the config file
-# and its line <line>, and leaves H and TMPDIR as they were (b.2io).
-db_path_refused() {
+# preflight_refused <name> <config> <line> [<first stderr line>]: install.sh
+# (hooks on, --keep-prior) under H's <config> stops in pre-flight with exit 5,
+# that refusal (the db_path reader's when not given) first on stderr, naming
+# the config file and its line <line>, and leaves H and TMPDIR as they were
+# (b.2io, b.whe).
+preflight_refused() {
     local name="$1" before
     with_config "$2"
     before="$(snap)"
@@ -610,7 +620,7 @@ db_path_refused() {
     HOOKS=""
     report "$name-exit-code" "$RC" "5"
     report "$name-first-stderr-line" "$(head -n 1 "$ERR")" \
-        "install.sh: cannot tell which store database agent-director opens; refusing to install."
+        "${4:-install.sh: cannot tell which store database agent-director opens; refusing to install.}"
     report "$name-names-config" "$(grep -cxF "  config  : $H/.agent-director/config.toml" "$ERR")" "1"
     report "$name-names-line" "$(grep -cxF "  line $3" "$ERR")" "1"
     report "$name-no-pre-flight-ok" "$(grep -c "pre-flight OK" "$OUT")" "0"
@@ -621,11 +631,11 @@ db_path_refused() {
 # A db_path install.sh cannot read stops the install before anything on disk
 # changes: on a fresh HOME, and over an installed store (b.2io).
 new_home db-path-refused-fresh
-db_path_refused db-path-refused-fresh '[store]\ndb_path = "C:\\\\agents\\\\state.db"' '2  : db_path = "C:\\agents\\state.db"'
+preflight_refused db-path-refused-fresh '[store]\ndb_path = "C:\\\\agents\\\\state.db"' '2  : db_path = "C:\\agents\\state.db"'
 new_home db-path-refused-installed
 local_install
 report db-path-refused-installed-first-install-exit-code "$RC" "0"
-db_path_refused db-path-refused-installed '[defaults]\nrelay_mode = "off"\n[Store]\ndb_path = "/elsewhere/agents.db"' '3  : [Store]'
+preflight_refused db-path-refused-installed '[defaults]\nrelay_mode = "off"\n[Store]\ndb_path = "/elsewhere/agents.db"' '3  : [Store]'
 
 # shown <file>: <file>'s bytes on one line, as cat -A shows them (^M a CR,
 # M-oM-;M-? a UTF-8 BOM, $ a line end), its lines joined by |.
@@ -673,8 +683,44 @@ bom|\xef\xbb\xbf[defaults]\nrelay_mode = "off"|\xef\xbb\xbf[defaults]\nrelay_mod
 crlf|[ defaults ]\r\nrelay_mode = "off"\r|[ defaults ]\r\nrelay_mode = "off"\r\ninject_help_hook = true|
 exact|[defaults]\nrelay_mode = "off"|[defaults]\nrelay_mode = "off"\ninject_help_hook = true|
 no-defaults|[defaultsx]\nrelay_mode = "off"|[defaultsx]\nrelay_mode = "off"\n\n[defaults]\ninject_help_hook = true|
+defaults-key-elsewhere|# defaults = { relay_mode = "on" }\ndefaults_x = 1\n[relay]\ndefaults = 1|# defaults = { relay_mode = "on" }\ndefaults_x = 1\n[relay]\ndefaults = 1\n\n[defaults]\ninject_help_hook = true|
 EOF
 HOOKS=""
+
+# A hooks-on install over a config that sets defaults as a key before any
+# header (an inline table, in any letter case, right after a UTF-8 BOM or
+# indented after a comment and a blank line, CRLF) stops in pre-flight (exit 5)
+# and changes nothing: the [defaults] the merge would add leaves a file
+# agent-director refuses (b.whe). The refusal names the line without its BOM
+# or CR. Per case <name>|<store>|<config>|<line>: <store> fresh or installed (a
+# --no-hooks install first). The plain inline table is J16's first case in
+# advice_follow.sh.
+while IFS='|' read -r -u 3 name store config line; do
+    name="merge-refused-$name"
+    new_home "$name"
+    if [[ "$store" == installed ]]; then
+        local_install
+        report "$name-first-install-exit-code" "$RC" "0"
+    fi
+    preflight_refused "$name" "$config" "$line" \
+        "install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install."
+done 3<<'EOF'
+bom-crlf|fresh|\xef\xbb\xbfdefaults = { relay_mode = "off" }\r\n[relay]\r\npoll_base_ms = 100\r|1  : defaults = { relay_mode = "off" }
+case|installed|Defaults = { inject_help_hook = false }\n[relay]\npoll_base_ms = 100|1  : Defaults = { inject_help_hook = false }
+indented-crlf|fresh|# mine\r\n\r\n  defaults={}\r\n[relay]\r\npoll_base_ms = 100\r|3  :   defaults={}
+EOF
+
+# With --no-hooks the config is never merged and agent-director loads it, so
+# the same config installs and is left as it was (b.whe).
+new_home merge-no-hooks-inline
+with_config 'defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100'
+cfg="$H/.agent-director/config.toml"
+before="$(shown "$cfg")"
+local_install
+report merge-no-hooks-inline-exit-code "$RC" "0"
+report merge-no-hooks-inline-config "$(shown "$cfg")" "$before"
+report merge-no-hooks-inline-no-backup "$(compgen -G "$cfg.*")" ""
+report merge-no-hooks-inline-list "$(ad_list)" "0"
 
 # Stand-ins for the b.ojn re-installs: an mv that logs "<target name> <mode>"
 # of each new settings.json or config.toml it moves into place, a chmod that

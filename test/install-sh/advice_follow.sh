@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J15). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J16). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -1676,31 +1676,50 @@ fresh|<unreadable>|It is not a readable file (a directory, say, or a file withou
 EOF
 }
 
+# named_line <config>: set NAMED_N to the number of the line ERR's
+# "  line N  : " names and NAMED_LINE to that line of <config>; fails when ERR
+# names none.
+named_line() {
+    local -a lines
+    NAMED_N="$(sed -n 's/^  line \([0-9][0-9]*\)  : .*/\1/p' "$ERR")"
+    [[ "$NAMED_N" =~ ^[0-9]+$ ]] || { bad "the refusal names no line: $(flat "$ERR")"; return 1; }
+    mapfile -t lines <"$1"
+    NAMED_LINE="${lines[NAMED_N - 1]}"
+}
+
+# move_under <config> <n> <table> <line>...: take line <n> out of <config> and
+# put the <line>s right after its [<table>] header, or after a [<table>] added
+# at the end of the file when it has none.
+move_under() {
+    local cfg="$1" n="$2" table="$3" line placed=0
+    local -a lines
+    shift 3
+    mapfile -t lines <"$cfg"
+    unset 'lines[n - 1]'
+    for line in "${lines[@]}"; do
+        printf '%s\n' "$line"
+        if [[ "$placed" -eq 0 && "$line" == "[$table]" ]]; then
+            [[ "$#" -eq 0 ]] || printf '%s\n' "$@"
+            placed=1
+        fi
+    done >"$cfg"
+    [[ "$placed" -eq 1 ]] || printf '%s\n' "[$table]" "$@" >>"$cfg"
+}
+
 # j14_move_line <config>: do to <config> what ERR's "Move this line, without
 # the <a>. prefix, to under the file's [<t>] header, adding that header at the
 # end of the file if the file has none. Add no header in this line's place"
 # says, for the line ERR names: take it out, drop <a>., and put the rest right
 # after the [<t>] header, or after a [<t>] added at the end of the file.
 j14_move_line() {
-    local cfg="$1" n prefix table line moved placed=0
-    local -a lines
+    local cfg="$1" prefix table moved
     local re="Move this line, without the ([^ ]+) prefix, to under the file's \\[([^]]+)\\] header, adding that header at the end of the file if the file has none\\. Add no header in this line's place"
     [[ "$(flat "$ERR")" =~ $re ]] || { bad "no move-this-line advice: $(flat "$ERR")"; return 1; }
     prefix="${BASH_REMATCH[1]}" table="${BASH_REMATCH[2]}"
-    n="$(sed -n 's/^  line \([0-9][0-9]*\)  : .*/\1/p' "$ERR")"
-    [[ "$n" =~ ^[0-9]+$ ]] || { bad "the refusal names no line: $(flat "$ERR")"; return 1; }
-    mapfile -t lines <"$cfg"
-    line="${lines[n - 1]}" moved="${line#"$prefix"}"
-    [[ "$moved" != "$line" ]] || { bad "line $n, \"$line\", does not start with $prefix"; return 1; }
-    unset 'lines[n - 1]'
-    for line in "${lines[@]}"; do
-        printf '%s\n' "$line"
-        if [[ "$placed" -eq 0 && "$line" == "[$table]" ]]; then
-            printf '%s\n' "$moved"
-            placed=1
-        fi
-    done >"$cfg"
-    [[ "$placed" -eq 1 ]] || printf '[%s]\n%s\n' "$table" "$moved" >>"$cfg"
+    named_line "$cfg" || return 1
+    moved="${NAMED_LINE#"$prefix"}"
+    [[ "$moved" != "$NAMED_LINE" ]] || { bad "line $NAMED_N, \"$NAMED_LINE\", does not start with $prefix"; return 1; }
+    move_under "$cfg" "$NAMED_N" "$table" "$moved"
 }
 
 # J14: "Move this line, without the <a>. prefix, to under the file's [<a>]
@@ -1777,6 +1796,79 @@ test_J15_SentinelTempFailedFixAndRerun() {
         grep -qxF "  schema  : migration verified — $shown now at v$SCHEMA" "$OUT" \
             || bad "$shown: the re-run did not verify the migration: $(flat "$OUT")"
     done
+}
+
+# ---- J16: config.toml sets defaults as a key, hooks on (b.whe) --------------------
+
+# j16_move_keys <config>: do to <config> what ERR's "Remove this line, and set
+# each key it sets under the file's [defaults] header instead, adding that
+# header at the end of the file if the file has none." says, for the inline
+# table on the line ERR names: take the line out, and put each key = value it
+# holds right after the [defaults] header, or after a [defaults] added at the
+# end of the file.
+j16_move_keys() {
+    local body pair
+    local -a pairs keys=()
+    named_line "$1" || return 1
+    body="${NAMED_LINE#*\{}" && body="${body%\}*}"
+    [[ "$body" != "$NAMED_LINE" ]] || { bad "line $NAMED_N, \"$NAMED_LINE\", holds no inline table"; return 1; }
+    IFS=, read -r -a pairs <<<"$body"
+    for pair in "${pairs[@]}"; do
+        pair="${pair#"${pair%%[![:space:]]*}"}" && pair="${pair%"${pair##*[![:space:]]}"}"
+        [[ -z "$pair" ]] || keys+=("$pair")
+    done
+    move_under "$1" "$NAMED_N" defaults "${keys[@]}"
+}
+
+# J16: "Remove this line, and set each key it sets under the file's [defaults]
+# header instead, adding that header at the end of the file if the file has
+# none. Add no header in this line's place ..." With hooks on, a config setting
+# defaults as an inline table before any header, in any letter case, is refused
+# and left as it was; doing that, the re-run installs, merges
+# inject_help_hook = true into [defaults], and agent-director list loads the
+# config. A quoted "defaults" gets the db_path reader's "Write it as defaults,
+# without the quotes." first, which, followed, leads here. Per case
+# <config>|<name the case sentence gives>|<config after the re-run> (printf %b).
+test_J16_DefaultsKeyMoveUnderHeader() {
+    local -a J7ARGV=("${J7FULL[@]}") # hooks on: the config.toml merge runs
+    local h cfg config reads_as merged before
+    local want="install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install."
+    while IFS='|' read -r config reads_as merged <&3; do
+        h="$(new_home)" cfg="$h/.agent-director/config.toml"
+        mkdir -p "$h/.agent-director"
+        printf '%b\n' "$config" >"$cfg"
+        if [[ "$config" == '"defaults"'* ]]; then
+            before="$(j14_snap "$h")"
+            run "$h" "${J7ARGV[@]}"
+            expect_rc 5 "config \"$config\"" || continue
+            expect_advice "A quoted key is the same as the bare one. Write it as defaults, without the quotes."
+            [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$config\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+            named_line "$cfg" || continue
+            sed -i "${NAMED_N}s/\"defaults\"/defaults/" "$cfg"
+        fi
+        before="$(j14_snap "$h")"
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 5 "config \"$(flat "$cfg")\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$config\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        expect_advice "line 1 : $(head -n 1 "$cfg")"
+        [[ -z "$reads_as" ]] \
+            || expect_advice "agent-director reads $reads_as as defaults: its TOML decoder matches names regardless of letter case."
+        expect_advice "This sets defaults as a key (an inline table, say) rather than under a [defaults] header. With hooks on, install.sh sets inject_help_hook = true under a [defaults] header and edits no table set as a key: the header it would add can leave a file agent-director refuses. Remove this line, and set each key it sets under the file's [defaults] header instead, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too."
+        expect_advice "Nothing was installed or changed. Re-run this install after the change."
+        [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$config\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+        j16_move_keys "$cfg" || continue
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 0 "\"$config\": re-run after the move, config: $(flat "$cfg")" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+        [[ "$(<"$cfg")" == "$(printf '%b' "$merged")" ]] \
+            || bad "\"$config\": config after the re-run: $(paste -sd'|' "$cfg"); want $(printf '%b' "$merged" | paste -sd'|')"
+        run "$h" "$h/.agent-director/bin/agent-director" list
+        expect_rc 0 "\"$config\": agent-director list after the re-run"
+    done 3<<'EOF'
+defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100||[relay]\npoll_base_ms = 100\n[defaults]\nrelay_mode = "off"\ninject_help_hook = true
+Defaults = { inject_help_hook = false, relay_mode = "off" }\n[defaults]\nexpire_retention_days = 7|Defaults|[defaults]\ninject_help_hook = true\nrelay_mode = "off"\nexpire_retention_days = 7
+"defaults" = { relay_mode = "off" }||[defaults]\nrelay_mode = "off"\ninject_help_hook = true
+EOF
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"

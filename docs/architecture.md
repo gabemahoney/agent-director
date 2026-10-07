@@ -4459,6 +4459,9 @@ claude /install-agent-director (or `bash install.sh`)
   → resolve the store database from [store] db_path in
     ~/.agent-director/config.toml (a form the reader cannot read → exit
     5, nothing on disk changed)
+  → hooks on only: a config.toml that sets defaults as a key before any
+    header (defaults = { ... }) → exit 5, nothing on disk changed (see
+    "The config.toml merge" below)
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
   → find both source binaries; --binary and --admin-binary arch probes
@@ -4549,13 +4552,15 @@ guarantees only the owner's access; the exact modes install.sh gives
 sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
 `chmod`s.
 
-**The config.toml merge (b.onv).** With hooks on, install.sh sets
+**The config.toml merge (b.onv, b.whe).** With hooks on, install.sh sets
 `inject_help_hook = true` in `~/.agent-director/config.toml`'s
 `[defaults]` table (see
 [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)):
 it rewrites an existing `inject_help_hook` line there, adds the key at
 the end of the table when it is missing, and appends a `[defaults]`
-table at the end of the file only when the file has none. Every other
+header holding the key at the end of the file when the file has no
+`[defaults]` header. It edits no table set as a key (see "A `defaults`
+key before any header" below). Every other
 line is kept as written, a timestamped `.bak` is taken first, and a
 missing file is created holding just that table (0600). The `awk` merge
 runs under `LC_ALL=C` and takes a `[defaults]` header in every spacing
@@ -4572,6 +4577,38 @@ only blank lines and comments. **Must use:** the merge and its reversal
 match the `[defaults]` header with the same pattern; a change to one
 changes the other, and adds its cases to `test/install-sh/retry.sh`'s
 config-merge table.
+
+**A `defaults` key before any header (b.whe).** A file that sets
+`defaults` as a key before any header (`defaults = { relay_mode = "off" }`,
+an inline table, or any other value) defines the table already. TOML
+refuses a table defined twice, so the `[defaults]` header the merge would
+append leaves a file `config.Load` refuses after an exit-0 install. With
+hooks on, `ad_config_merge_check` refuses such a file in pre-flight, right
+after `ad_store_db_path` and before `pre-flight OK`:
+
+- **Matched:** a bare `defaults` key on a line before the first line that
+  starts with optional blanks and `[`, in any letter case (agent-director's
+  decoder matches names regardless of case), past a UTF-8 byte-order mark
+  on line 1 and a CRLF's CR, under `LC_ALL=C`. `ad_store_db_path` has
+  already refused every other way to set `defaults` before any header (a
+  dotted `defaults.x`, a quoted `"defaults"`), so a bare key is the only
+  form left. `defaults` in a comment, in a longer key (`defaults_x`) or
+  under a header is not matched.
+- **A refusal** is exit 5, before anything on disk changes. Stderr: first
+  line
+  `install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install.`,
+  then `config  : <path>`, `line <n>  : <line>`, a note when the key is
+  not spelled `defaults` that agent-director reads it as `defaults`, the
+  advice, and
+  `Nothing was installed or changed. Re-run this install after the change.`
+- **The advice:** remove the line and set each key it sets under the
+  file's `[defaults]` header, adding that header at the end of the file if
+  the file has none, never in the line's place.
+- **With `--no-hooks`** the file is never merged and agent-director loads
+  it, so it is not refused.
+
+`test/install-sh/retry.sh`'s `merge-refused-*` and `merge-no-hooks-*`
+rows and `advice_follow.sh`'s J16 pin this.
 
 **Merged files keep their mode (b.ojn).** install.sh replaces an existing
 `settings.json` or `config.toml` with `ad_replace_keeping_mode <file>
