@@ -193,8 +193,7 @@ func TestPreTrustWritesNothingUnderLostLock(t *testing.T) {
 			env, path := seedConfigDir(t)
 			warn := capturePreTrustWarn(t)
 			var theirs os.FileInfo
-			saved := preTrustBeforeCommit
-			preTrustBeforeCommit = func() {
+			onBeforeCommit(t, func() {
 				if tc.takeover == "" {
 					return
 				}
@@ -208,8 +207,7 @@ func TestPreTrustWritesNothingUnderLostLock(t *testing.T) {
 				if tc.takeover == "replace" {
 					theirs = holdLock(t, path, mine.ModTime().Add(time.Second))
 				}
-			}
-			t.Cleanup(func() { preTrustBeforeCommit = saved })
+			})
 
 			if got := PreTrust(cwd, env, false, config.PreTrust{}); got != PreTrustFailed {
 				t.Fatalf("PreTrust = %q; want failed", got)

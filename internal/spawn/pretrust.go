@@ -162,21 +162,27 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 //   - If it is set but not absolute (ConfigDirUsable) → an error before any
 //     file I/O: no file is stat'd, read or written and no lock dir is made.
 //
-// Behavior (per bugs b.f75 and b.zjm):
+// Behavior (per bugs b.f75, b.zjm and b.6rh):
 //
 //   - The read-modify-write runs under Claude Code's own lock on the file
 //     (lockConfig, configlock.go): take the lock, read the entire file
 //     under it, mutate the projects map, write the entire file via
-//     temp+rename, release the lock. Claude Code saves the same file under
-//     that lock and re-reads it under the lock before each save, so
-//     neither side's update is lost to the other, and concurrent
-//     agent-director pre-trusts of one file run one at a time. The wait
-//     for a held lock is bounded by lockWait (PreTrust passes the
+//     temp+rename (writeFileAtomic), release the lock. Claude Code saves
+//     the same file under that lock and re-reads it under the lock before
+//     each save, so neither side's update is lost to the other, and
+//     concurrent agent-director pre-trusts of one file run one at a time.
+//     The wait for a held lock is bounded by lockWait (PreTrust passes the
 //     effective pre_trust.lock_wait_seconds, b.kr4); when it runs out, or
 //     the lock cannot be taken at all, nothing is written and the error
 //     makes PreTrust report failed. The same holds when, just before the
 //     write, lock.checkHold finds the lock held too long or taken over
 //     by another process.
+//   - If the file is a symlink (a dotfile-managed link, say), the write
+//     goes through it, as Claude Code's own save does: writeFileAtomic
+//     replaces the file the link resolves to, through a chain of links,
+//     and leaves the link in place. The lock stays the literal
+//     <path>.lock of the path claudeJSONFor resolved, with no symlink
+//     resolved, matching Claude Code's lock (b.zjm).
 //   - If the file does not exist (truly-fresh Claude Code install, or a
 //     fresh CLAUDE_CONFIG_DIR), return ErrClaudeJSONMissing wrapped with
 //     the path, before taking the lock, so neither the file nor the lock
@@ -279,12 +285,20 @@ func withTrustedCwd(raw []byte, cwd, path string) ([]byte, error) {
 	return out, nil
 }
 
-// writeFileAtomic writes data to path via a temp file in the same
-// directory and os.Rename. The temp file is created with O_EXCL and a
-// random suffix so concurrent writers don't clobber each other's temp
-// files; on Linux rename(2) is atomic within a filesystem, so a reader
-// either sees the old contents or the new contents but never a torn
-// write.
+// writeFileAtomic writes data to path via a temp file and os.Rename over the
+// file atomicWriteTarget picks: when path is a symlink, the file the link
+// resolves to, so the write goes through the link and leaves the link in
+// place, as Claude Code's own save does (bug b.6rh); otherwise path itself.
+// Renaming over the link instead would replace it with a regular file and
+// leave its target stale, splitting a dotfile-managed .claude.json from its
+// copy.
+//
+// The temp file is created in the replaced file's directory, so the rename
+// stays within one filesystem even when a link points to another one. It
+// is created with O_EXCL and a random suffix so concurrent writers don't
+// clobber each other's temp files; on Linux rename(2) is atomic within a
+// filesystem, so a reader either sees the old contents or the new contents
+// but never a torn write.
 //
 // On error the temp file is removed best-effort. Mode is the
 // permissions of the temp file *before* rename — since we read+rewrite
@@ -292,8 +306,12 @@ func withTrustedCwd(raw []byte, cwd, path string) ([]byte, error) {
 // Code's own permissions on ~/.claude.json (per inspection on the
 // smoke-test VM).
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	target, err := atomicWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
+	tmp, err := os.CreateTemp(dir, filepath.Base(target)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
@@ -314,9 +332,34 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 		cleanup()
 		return fmt.Errorf("close temp: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := os.Rename(tmpPath, target); err != nil {
 		cleanup()
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
+}
+
+// atomicWriteTarget returns the file writeFileAtomic replaces to write path
+// (bug b.6rh). When path is a symlink it is the file the link resolves to
+// (filepath.EvalSymlinks): through every link of a chain, each link's target
+// taken relative to that link's directory when it is not absolute. A link
+// that does not resolve (dangling, or a loop) returns an error, so nothing
+// is written and the link is never replaced. Any other path is returned as
+// is, a path that does not exist included, so a file removed since it was
+// read is written again at path.
+func atomicWriteTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return path, nil
+	case err != nil:
+		return "", fmt.Errorf("check symlink: %w", err)
+	case info.Mode()&os.ModeSymlink == 0:
+		return path, nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
+	}
+	return target, nil
 }

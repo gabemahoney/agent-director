@@ -3847,8 +3847,27 @@ launch's extra env `CLAUDE_CONFIG_DIR`:
 For `resume` the extra env is the row's, so it targets the same file the
 row's spawn did. With a file resolved, the step sets
 `projects.<canonical cwd>.hasTrustDialogAccepted = true` and writes
-the file back atomically (temp + rename), so no reader ever sees a torn
-file.
+the file back atomically (`writeFileAtomic`: a temp file, then a rename
+over the file), so no reader ever sees a torn file. The written file
+gets mode 0600.
+
+**A symlinked `.claude.json` (b.6rh).** When the resolved file is a
+symlink (a dotfile-managed link into a dotfiles repo, say), the write
+goes through it, as Claude Code's own save does: the link stays in place
+and the file it resolves to gets the update. `atomicWriteTarget`
+(`internal/spawn/pretrust.go`) resolves the link with
+`filepath.EvalSymlinks`, through a chain of links, each relative target
+taken against its own link's directory. The temp file is made in the
+resolved file's directory, so the rename stays within one filesystem
+even when the link points to another one. Renaming over the link itself
+would replace it with a regular file and leave its target stale, so the
+operator's config and the dotfile copy would split. The lock stays on
+the link's own path (see "Config lock" below). A link that does not
+resolve is never replaced: pre-trust writes nothing and reports
+`failed`. A dangling link found before the lock reads as a missing file
+("file does not exist"); a link that stops resolving after the read
+(its target removed, or turned into a loop) fails the write with the
+reason `resolve symlink <path>: …`.
 
 **One rule for `CLAUDE_CONFIG_DIR` (b.1ba, b.nje).** Whether a
 `CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
@@ -3877,7 +3896,9 @@ The lock is Claude Code's proper-lockfile protocol, taken by
 `lockConfig` in `internal/spawn/configlock.go`:
 
 - The lock is the directory `<resolved file>.lock` (the resolved path as
-  is, plus `.lock`; no symlink is resolved), made with `mkdir`. Pre-trust
+  is, plus `.lock`; no symlink is resolved, so for a symlinked file it is
+  the link's path plus `.lock`, never its target's, though the write goes
+  to the target), made with `mkdir`. Pre-trust
   checks that the file exists before it takes the lock, so a missing file
   creates neither the file nor the lock dir.
 - An existing lock dir is held by another process (Claude Code or another
@@ -3909,7 +3930,8 @@ The lock is Claude Code's proper-lockfile protocol, taken by
   Claude Code's proper-lockfile protocol, which every taker of the lock
   must follow alike, not agent-director's choice.
 - Under the lock pre-trust reads the file, sets the one key and writes
-  the file atomically. Just before the write it makes two checks
+  the file atomically (for a symlink, the file it resolves to; see
+  above). Just before the write it makes two checks
   (`checkHold`), in this order, and writes nothing if either fails:
   - Hold time: it does not refresh the lock dir's mtime, so it writes
     only if it has held the lock for at most 5 s (`configLockMaxHold`,
