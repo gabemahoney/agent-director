@@ -147,10 +147,10 @@ export class ErrCallTimeout extends AgentDirectorError {
 /**
  * ErrUnknownErrorName — thrown when a subprocess JSON envelope contains an
  * `err_name` field that is not present in the static catalog-derived error map.
- * Either the binary is newer than this client, or the name is one the binary
- * emits but the shared catalog leaves out (for example ErrInternal or
- * ErrSchemaMismatch; cross-ref: b.cm7). Read `unknownName` for the
- * real err_name.
+ * The catalog lists every err_name the binary of this client's version emits
+ * (b.cm7), so an unknown name means the binary is a different version that
+ * emits a name this client does not know, most often a binary newer than this
+ * client. Read `unknownName` for the real err_name.
  *
  * Constructor: `new ErrUnknownErrorName(unknownName, envelope)`
  *   - `unknownName` — the unrecognised err_name string from the envelope.
@@ -390,7 +390,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (44 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (50 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -484,6 +484,18 @@ export class ErrInvalidFlags extends AgentDirectorError {}
 export class ErrConfigMalformed extends AgentDirectorError {}
 /** Mirrors ErrStoreOpen (package: clisetup) */
 export class ErrStoreOpen extends AgentDirectorError {}
+/** Mirrors ErrSchemaMismatch (package: clisetup) */
+export class ErrSchemaMismatch extends AgentDirectorError {}
+/** Mirrors ErrSchemaMigrationRequired (package: clisetup) */
+export class ErrSchemaMigrationRequired extends AgentDirectorError {}
+/** Mirrors ErrUnknownVerb (package: clisetup) */
+export class ErrUnknownVerb extends AgentDirectorError {}
+/** Mirrors ErrJSONMarshal (package: clisetup) */
+export class ErrJSONMarshal extends AgentDirectorError {}
+/** Mirrors ErrTrailWrite (package: clisetup) */
+export class ErrTrailWrite extends AgentDirectorError {}
+/** Mirrors ErrInternal (package: errnames) */
+export class ErrInternal extends AgentDirectorError {}
 
 // ---------------------------------------------------------------------------
 // errorFromEnvelope — catalog-aware factory
@@ -497,7 +509,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 44
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 50
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -555,6 +567,13 @@ const ERROR_TABLE = {
   // clisetup package
   ErrConfigMalformed,
   ErrStoreOpen,
+  ErrSchemaMismatch,
+  ErrSchemaMigrationRequired,
+  ErrUnknownVerb,
+  ErrJSONMarshal,
+  ErrTrailWrite,
+  // errnames package
+  ErrInternal,
 } as const satisfies Readonly<Record<string, ErrConstructor>>;
 
 /**

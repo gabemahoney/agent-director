@@ -34,7 +34,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (44 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (50 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -79,6 +79,12 @@ export {
   ErrInvalidFlags,
   ErrConfigMalformed,
   ErrStoreOpen,
+  ErrSchemaMismatch,
+  ErrSchemaMigrationRequired,
+  ErrUnknownVerb,
+  ErrJSONMarshal,
+  ErrTrailWrite,
+  ErrInternal,
 } from "./errors.js";
 
 // Companion types for the new discovery errors (SR-4.4).

@@ -301,20 +301,21 @@ The public typed-error surface falls into four groups. Every class named below i
 
 ### Realistic catch-site shortlist
 
-Most services only need to route on the "agent-director is sick" set. Alert on these eight:
+Most services only need to route on the "agent-director is sick" set. Alert on these eleven and let everything else propagate:
 
 - `ErrSystemInstallNotFound`
 - `ErrSystemInstallTooOld`
+- `ErrUnknownVerb`
 - `ErrSystemInstallUnreachable`
 - `ErrCallerCwdUnreachable`
 - `ErrSystemInstallDisappeared`
 - `ErrCallTimeout`
 - `ErrStoreOpen`
 - `ErrConfigMalformed`
+- `ErrSchemaMismatch`
+- `ErrSchemaMigrationRequired`
 
-Also alert on an `ErrUnknownErrorName` whose `unknownName` is `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`: the store needs an operator (see the per-call infrastructure table below). Let everything else propagate.
-
-Everything else is either **programmer error** (bad arguments — fix the call site, do not retry) or a **normal operational signal** (an expected verb outcome you branch on, like "no such spawn" or "already decided"). `ErrConsumerSignal` sits in between: it is a runtime infrastructure failure, but a routine one during shutdown, so treat it as an operational signal rather than a page.
+Almost everything else is either **programmer error** (bad arguments — fix the call site, do not retry) or a **normal operational signal** (an expected verb outcome you branch on, like "no such spawn" or "already decided"). `ErrConsumerSignal` sits in between: it is a runtime infrastructure failure, but a routine one during shutdown, so treat it as an operational signal rather than a page. `ErrUnknownErrorName` is a version error a developer fixes by upgrading this client, and `ErrInternal` and `ErrJSONMarshal` are failures of the CLI itself; see their rows below.
 
 ### 1. Library lifecycle
 
@@ -345,11 +346,11 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 |---|---|---|
 | `ErrCallTimeout` | The subprocess did not complete within the configured per-call timeout. Carries `verb`, `elapsedMs`, `timeoutMs`. | Operational — include in your "AD is sick" alert set. |
 | `ErrConsumerSignal` | The subprocess was killed by an OS signal (e.g. `SIGTERM`, `SIGINT`) before producing a result. Carries `verb`, `signal`. | Operational — routine during shutdown. |
-| `ErrUnknownErrorName` | The CLI returned an error envelope whose `err_name` this client has no class for: either the binary is newer than the client, or the name is one the binary emits but the shared catalog leaves out (for example `ErrInternal`, `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`). Carries `unknownName` (the real `err_name`) and `envelope`. | Read `unknownName`. `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`: operational — the store needs an operator and no verb ran, so alert, as for `ErrStoreOpen`. A name the binary has and this client lacks because the binary is newer: version error — upgrade the client. |
+| `ErrUnknownErrorName` | The CLI returned an error envelope whose `err_name` this client has no class for. This client has a class for every `err_name` the binary of its own version gives, so the binary is of a different version, most often a newer one. Carries `unknownName` (the real `err_name`) and `envelope`. | Version error — use the binary and the client of the same release (usually: upgrade the client). |
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 44 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, or a config or store the CLI cannot open — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 50 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -434,12 +435,23 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrInvalidFlags` | CLI flag parsing rejected the invocation, or `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f). |
 
-**CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; both are in the "AD is sick" alert set):
+**CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all four are in the "AD is sick" alert set):
 
 | Error | When it fires |
 |---|---|
 | `ErrConfigMalformed` | The CLI refused its config file, `~/.agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. Do not retry or act on any agent; alert an operator once, and never read it as an agent being dead. |
 | `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. It says nothing about any agent. |
+| `ErrSchemaMismatch` | The CLI refused to open its store: the store was written by a newer agent-director than the binary (`found user_version=<N>, want <M>`), or it has no valid store id. The description says which. Nothing was written, and every call that opens the store fails this way until an operator acts: a newer store needs the agent-director release that wrote it. Do not retry or act on any agent, and never delete the store; alert an operator. It says nothing about any agent. |
+| `ErrSchemaMigrationRequired` | The CLI refused to open its store: the store is older than the binary and must be migrated first. The description gives both schema versions. Nothing was written, and every call that opens the store fails this way until an administrator migrates the store; no call through this client can. Do not retry or act on any agent; alert an operator. It says nothing about any agent. |
+
+**CLI itself** (the CLI failed, or does not know the verb, rather than refusing the call's input or state):
+
+| Error | When it fires |
+|---|---|
+| `ErrInternal` | The CLI failed in a way it has no more specific name for: for example the store could not be read or written, or a row's recorded tmux session name cannot be used. The description says what failed and, where it matters, whether anything was changed; read it before you retry. An unusable recorded session name needs a human (see "Operator actions" in the agent-director README). It says nothing about whether an agent is alive. |
+| `ErrJSONMarshal` | The verb ran and succeeded, but the CLI could not write its JSON result, so the result is lost and whatever the call changes was changed (a `spawn` launched its agent). A bug in agent-director. Check with `get`, `status` or `list` before you repeat a call that changes something. |
+| `ErrUnknownVerb` | The binary does not know the verb this client called, so nothing ran: the binary is of a different version than this client, most often an older one that the version floor still admits. Version error — install the agent-director release that matches this client; do not retry. |
+| `ErrTrailWrite` | Only the CLI's internal `trail-emit` command gives it, when it cannot write its trail event. No method of this client runs `trail-emit`, so a call through this client does not get it. |
 
 ## Architecture
 

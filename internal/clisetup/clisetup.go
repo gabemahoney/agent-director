@@ -2,6 +2,8 @@
 // agent-director and agent-director-admin (b.vqr), so that both open the same
 // store with the same config, logger and schema checks, and parses and
 // applies the global flags (--store-path, --home, --tmux-command) both take.
+// It also declares the sentinels pkg/api/errnames.Catalog pairs with the
+// err_names the binaries give outside any verb handler.
 package clisetup
 
 import (
@@ -26,13 +28,31 @@ const (
 	errSchemaMigrationRequired = "ErrSchemaMigrationRequired"
 )
 
-// ErrConfigMalformed and ErrStoreOpen are the sentinels pkg/api/errnames.Catalog
-// pairs with the err_names of the same names (b.vma); errors.Is matches an
-// OpenError with the one its Name names (OpenError.Is). ErrSchemaMismatch and
-// ErrSchemaMigrationRequired are not catalogued and have no sentinel here.
+// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch and
+// ErrSchemaMigrationRequired are the sentinels pkg/api/errnames.Catalog pairs
+// with the err_names of the same names (b.vma, b.cm7); errors.Is matches an
+// OpenError with the one its Name names (OpenError.Is). The two schema
+// sentinels are not store.ErrSchemaMismatch and
+// store.ErrSchemaMigrationRequired, which an OpenError's cause still wraps:
+// only an OpenError matches them, so errnames.Classify still names any other
+// error that wraps a store schema sentinel ErrInternal.
 var (
-	ErrConfigMalformed = errors.New(errConfigMalformed)
-	ErrStoreOpen       = errors.New(errStoreOpen)
+	ErrConfigMalformed         = errors.New(errConfigMalformed)
+	ErrStoreOpen               = errors.New(errStoreOpen)
+	ErrSchemaMismatch          = errors.New(errSchemaMismatch)
+	ErrSchemaMigrationRequired = errors.New(errSchemaMigrationRequired)
+)
+
+// ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite are the sentinels
+// pkg/api/errnames.Catalog pairs with err_names the command binaries write
+// themselves, outside any verb handler (b.cm7): ErrUnknownVerb for a verb the
+// binary does not know, ErrJSONMarshal when the binary cannot write a verb's
+// JSON result, and ErrTrailWrite when agent-director trail-emit cannot write
+// its trail event. No error wraps them: the binaries write the names directly.
+var (
+	ErrUnknownVerb = errors.New("ErrUnknownVerb")
+	ErrJSONMarshal = errors.New("ErrJSONMarshal")
+	ErrTrailWrite  = errors.New("ErrTrailWrite")
 )
 
 // Overrides are one run's overrides of the store path and the tmux command,
@@ -58,11 +78,14 @@ func (e *OpenError) Error() string { return e.Err.Error() }
 // Unwrap returns the cause.
 func (e *OpenError) Unwrap() error { return e.Err }
 
-// Is reports whether target is the sentinel of e's Name: ErrConfigMalformed
-// or ErrStoreOpen. errors.Is goes on to the cause when it is not.
+// Is reports whether target is the sentinel of e's Name: ErrConfigMalformed,
+// ErrStoreOpen, ErrSchemaMismatch or ErrSchemaMigrationRequired. errors.Is
+// goes on to the cause when it is not.
 func (e *OpenError) Is(target error) bool {
 	return (target == ErrConfigMalformed && e.Name == errConfigMalformed) ||
-		(target == ErrStoreOpen && e.Name == errStoreOpen)
+		(target == ErrStoreOpen && e.Name == errStoreOpen) ||
+		(target == ErrSchemaMismatch && e.Name == errSchemaMismatch) ||
+		(target == ErrSchemaMigrationRequired && e.Name == errSchemaMigrationRequired)
 }
 
 // Open constructs the pkg/api.Client every store-backed CLI verb uses, and

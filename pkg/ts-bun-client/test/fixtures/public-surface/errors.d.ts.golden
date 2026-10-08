@@ -69,10 +69,10 @@ export declare class ErrCallTimeout extends AgentDirectorError {
 /**
  * ErrUnknownErrorName — thrown when a subprocess JSON envelope contains an
  * `err_name` field that is not present in the static catalog-derived error map.
- * Either the binary is newer than this client, or the name is one the binary
- * emits but the shared catalog leaves out (for example ErrInternal or
- * ErrSchemaMismatch; cross-ref: b.cm7). Read `unknownName` for the
- * real err_name.
+ * The catalog lists every err_name the binary of this client's version emits
+ * (b.cm7), so an unknown name means the binary is a different version that
+ * emits a name this client does not know, most often a binary newer than this
+ * client. Read `unknownName` for the real err_name.
  *
  * Constructor: `new ErrUnknownErrorName(unknownName, envelope)`
  *   - `unknownName` — the unrecognised err_name string from the envelope.
@@ -322,6 +322,24 @@ export declare class ErrConfigMalformed extends AgentDirectorError {
 }
 /** Mirrors ErrStoreOpen (package: clisetup) */
 export declare class ErrStoreOpen extends AgentDirectorError {
+}
+/** Mirrors ErrSchemaMismatch (package: clisetup) */
+export declare class ErrSchemaMismatch extends AgentDirectorError {
+}
+/** Mirrors ErrSchemaMigrationRequired (package: clisetup) */
+export declare class ErrSchemaMigrationRequired extends AgentDirectorError {
+}
+/** Mirrors ErrUnknownVerb (package: clisetup) */
+export declare class ErrUnknownVerb extends AgentDirectorError {
+}
+/** Mirrors ErrJSONMarshal (package: clisetup) */
+export declare class ErrJSONMarshal extends AgentDirectorError {
+}
+/** Mirrors ErrTrailWrite (package: clisetup) */
+export declare class ErrTrailWrite extends AgentDirectorError {
+}
+/** Mirrors ErrInternal (package: errnames) */
+export declare class ErrInternal extends AgentDirectorError {
 }
 /**
  * errorFromEnvelope creates a typed AgentDirectorError subclass from the
