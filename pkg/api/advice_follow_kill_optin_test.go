@@ -6,7 +6,6 @@ package api_test
 // (TestAdviceFollow_C9_AdminStillStoppingRetryLater).
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -17,45 +16,65 @@ import (
 )
 
 // TestAdviceFollow_C9_OptInStillStoppingOrStartingRetryLater: the same
-// refusal at once; past the window or bound the description states, the
-// retry proceeds, or gets the documented "never reported in" conflict.
+// refusal at once, nothing sent; past the window or bound the description
+// states, the retry proceeds, or gets the documented "never reported in" conflict.
 func TestAdviceFollow_C9_OptInStillStoppingOrStartingRetryLater(t *testing.T) {
 	t.Parallel()
-	// C9 ErrTmuxUnresponsive with the finished-row opt-in, own session still stopping or still starting: "...nothing was done; retry later".
+	// C9 ErrTmuxUnresponsive with the finished-row opt-in, own session (or this id's own abandoned launch, b.6sa) still stopping or still starting: "...nothing was done; retry later".
 	const advice = "nothing was done; retry later"
+	// c9Seed seeds a finished row in state and returns its id, its socket, the session the retry ends and that session's agent pid.
+	type c9Seed func(t *testing.T, e *killEnv, state string) (id, socket, session string, agentPID int)
+	own := func(row startingRow) c9Seed {
+		return func(t *testing.T, e *killEnv, state string) (string, string, string, int) {
+			s := row
+			s.state = state
+			r := e.seedStarting(t, s)
+			return r.ID, r.Socket, r.Session.ID, r.AgentPID
+		}
+	}
+	abandoned := func(t *testing.T, e *killEnv, state string) (string, string, string, int) {
+		r, seeded := e.seedAbandoned(t, state, kabSession{age: defBound - 10*time.Second})
+		return r.ID, r.Socket, seeded[0].ID, seeded[0].pid
+	}
 	cases := []struct {
 		name   string
-		row    startingRow
+		seed   c9Seed
 		phrase string        // what the refusal says the session appears to be doing
+		extra  string        // a further phrase the refusal carries ("": none)
 		wait   time.Duration // the limit the refusal states
 		want   error         // the retry's error; nil is the kill sequence's success
 	}{
-		{"still stopping, reported in", startingRow{endedAgo: defWindow - 10*time.Second, age: defWindow + defBound},
-			"appears to still be stopping", defWindow, nil},
-		{"still starting, reported in", startingRow{endedAgo: defWindow, age: defBound - 10*time.Second},
-			"appears to still be starting", defBound, nil},
-		{"still starting, never reported in", startingRow{endedAgo: defBound, age: defBound - 10*time.Second},
-			"appears to still be starting", defBound, api.ErrTmuxSessionConflict},
+		{"still stopping, reported in", own(startingRow{endedAgo: defWindow - 10*time.Second, age: defWindow + defBound}),
+			"appears to still be stopping", "", defWindow, nil},
+		{"still starting, reported in", own(startingRow{endedAgo: defWindow, age: defBound - 10*time.Second}),
+			"appears to still be starting", "", defBound, nil},
+		{"still starting, never reported in", own(startingRow{endedAgo: defBound, age: defBound - 10*time.Second}),
+			"appears to still be starting", "", defBound, api.ErrTmuxSessionConflict},
+		{"this id's own abandoned launch still starting", abandoned,
+			"appears to still be starting", "this id's own abandoned launch", defBound, nil},
 	}
 	for _, state := range kosFinished {
 		for _, tc := range cases {
 			t.Run(state+", "+tc.name, func(t *testing.T) {
+				t.Parallel()
 				e := newKillEnv(t)
-				row := tc.row
-				row.state = state
-				r := e.seedStarting(t, row)
-				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
-				_, first := e.killOptIn(r.ID)
+				id, socket, session, agentPID := tc.seed(t, e, state)
+				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), agentPID)
+				_, first := e.killOptIn(id)
 				adviceAssertAdvice(t, first, api.ErrTmuxUnresponsive, advice)
-				if !strings.Contains(first.Error(), tc.phrase) {
-					t.Fatalf("refusal %q; want %q", first, tc.phrase)
+				adviceAssertPhrase(t, first, tc.phrase)
+				if tc.extra != "" {
+					adviceAssertPhrase(t, first, tc.extra)
 				}
-				if _, again := e.killOptIn(r.ID); again == nil || again.Error() != first.Error() {
+				if _, again := e.killOptIn(id); again == nil || again.Error() != first.Error() {
 					t.Errorf("immediate retry = %v; want the refusal unchanged: %q", again, first)
+				}
+				if n := len(e.rec.SocketCallsOf(tmux.CallKillPane)) + len(e.rec.SocketCallsOf(tmux.CallKillSession)); n != 0 {
+					t.Errorf("%d kills by the refusals; want none", n)
 				}
 
 				e.clock.Advance(tc.wait)
-				res, err := e.killOptIn(r.ID)
+				res, err := e.killOptIn(id)
 				if tc.want != nil {
 					adviceAssertAdvice(t, err, tc.want, "never reported in")
 					if n := len(e.rec.SocketCallsOf(tmux.CallKillPane)); n != 0 {
@@ -63,10 +82,10 @@ func TestAdviceFollow_C9_OptInStillStoppingOrStartingRetryLater(t *testing.T) {
 					}
 				} else if err != nil || !res.KillSent {
 					t.Fatalf("retry past the limit = %+v, %v; want the kill sequence with kill_sent true", res, err)
-				} else if seqHas(e, r.Socket, r.Session.ID) {
-					t.Errorf("session %s still runs after the kill", r.Session.ID)
+				} else if seqHas(e, socket, session) {
+					t.Errorf("session %s still runs after the kill", session)
 				}
-				if got := e.columns(t, r.ID).State; got != state {
+				if got := e.columns(t, id).State; got != state {
 					t.Errorf("state = %v; want %v kept", got, state)
 				}
 			})

@@ -8,11 +8,11 @@ import "time"
 // pre-launch check and its re-lookup after "duplicate session", reuse (the
 // old row's lookup and the re-lookup after "duplicate session") and kill's
 // finished-row opt-in, which applies steps 1 and 2 and replaces step 3 with
-// its reported-in rule (SR-6.5, SR-6.7). resume and reuse also apply step 2
-// alone (no ended_at) to a session of an earlier launch of the row's id
-// while the row's latest launch records no session of its own: the id's own
-// abandoned launch (b.1n6). pkg/api builds the refusal errors from the
-// classification.
+// its reported-in rule (SR-6.5, SR-6.7). resume, reuse and kill's
+// finished-row opt-in also apply step 2 alone (no ended_at) to a session of
+// an earlier launch of the row's id while the row's latest launch records no
+// session of its own: the id's own abandoned launch (b.1n6, b.6sa). pkg/api
+// builds the refusal errors from the classification.
 // Like agent_process.go it takes plain values: it reads no clock (the verb
 // passes its injected current instant), no environment and no configuration
 // (the verb passes the effective bound and window, SR-4.1), and makes no tmux
@@ -92,8 +92,8 @@ type StartingSessionInput struct {
 	// window: no agent ever reported in to it.
 	RecordsSessionID bool
 	// Session is the lookup's Ours session, whose Created gives its age (for
-	// resume and reuse, also the youngest session of the row's own abandoned
-	// launch, with EndedAt nil; b.1n6);
+	// resume, reuse and kill's finished-row opt-in, also the youngest session
+	// of the row's own abandoned launch, with EndedAt nil; b.1n6, b.6sa);
 	// nil means no session of the launch was found while the row's agent
 	// process still runs (Gone with the process judged alive by the
 	// start-time reader; a process that cannot be checked never reaches the

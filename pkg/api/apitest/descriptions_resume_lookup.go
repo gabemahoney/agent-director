@@ -9,7 +9,8 @@ import (
 // cases for resume's pre-launch check (Epic 16; SR-8.2), which refuses before
 // any write: the Leftover refusal (DescPreLaunchLeftover), this id's own
 // abandoned launch met in its place (DescAbandonedLaunch, b.1n6; reuse's
-// lookup and both verbs' re-lookup too) and the overlay
+// lookup, both verbs' re-lookup and, still starting, kill's finished-row
+// opt-in too, b.6sa) and the overlay
 // that makes the held-name holder cases (DescHeldNoValidID,
 // DescHeldDifferentID, DescHeldOtherStore, DescHeldAmbiguous, and
 // DescHeldLeftover met only defensively) the pre-launch holder refusals,
@@ -93,20 +94,21 @@ const (
 // DescAbandonedLaunch is the refusal of sessions of earlier launches of the
 // id while the row's latest launch records no session of its own (b.1n6),
 // which resume and reuse give at their pre-launch lookup and, with
-// DescCase.AfterHeldName, after "duplicate session": the instance id, "this
-// id's own abandoned launch", each session named (namedSessions), that
+// DescCase.AfterHeldName, after "duplicate session"; kill's finished-row
+// opt-in gives its still-starting form (b.6sa): the instance id, "this id's
+// own abandoned launch", each session named (namedSessions), that
 // agent-director launched it for this id but the row does not track it
 // (never that the row "no longer tracks" it), and "nothing was done".
 // Younger than the bound it is ErrTmuxUnresponsive: "appears to still be
 // starting", the bound in seconds and "retry later", never a human. Past the
 // bound it is ErrTmuxSessionConflict: that it has run for at least the
-// bound, that agent-director ends no launch the row does not track, so
-// ending it is a human's decision (the "Operator actions" pointer), then the
-// re-issue clause (abandonedReissue; AfterHeldName forbids it instead); with
-// SessionID that the conversation stays resumable (otherwise never
-// "resumable"); "list tmux_session_name". Neither says "left over from an
-// earlier life", the stopping window, "may be hung", "nothing was written",
-// "dead" or "gone".
+// bound, that agent-director ends such a launch only through its operator
+// tool, so ending it is a human's decision (the "Operator actions" pointer;
+// b.6sa), then the re-issue clause (abandonedReissue; AfterHeldName forbids
+// it instead); with SessionID that the conversation stays resumable
+// (otherwise never "resumable"); "list tmux_session_name". Neither says "left
+// over from an earlier life", the stopping window, "may be hung", "nothing
+// was written", "dead" or "gone".
 func DescAbandonedLaunch(p AbandonedLaunch) DescCase {
 	named, unnamed := namedSessions(p.Sessions)
 	req := append([]string{p.InstanceID, abandonedLaunch, abandonedUntracked, nothingWasDone}, named...)
@@ -122,7 +124,7 @@ func DescAbandonedLaunch(p AbandonedLaunch) DescCase {
 		}
 	}
 	req = append(req, "for at least the starting-session bound of "+inSeconds(p.Bound),
-		"agent-director ends no launch the row does not track, so ending it is a human's decision",
+		"agent-director ends such a launch only through its operator tool, so ending it is a human's decision",
 		abandonedReissue, listSessionName)
 	mustNot = append(mustNot, stillStarting, retryLater)
 	name := "ErrTmuxSessionConflict, abandoned launch past the bound"

@@ -488,8 +488,9 @@ showing its window:
 - `PaneMany`: more than one distinct pane id carries it; the `Pane` is zero.
 
 Its callers are adoption of a lost create reply (SR-3.6, the row's token), a
-leftover's pane (SR-3.7, the leftover label's token) and the no-pane row
-check (SR-11.3). What each outcome means is the caller's. Adoption
+leftover's pane (SR-3.7, the leftover label's token, as `read-pane` and
+`kill`'s finished-row opt-in on this id's own abandoned launch use it;
+b.6sa) and the no-pane row check (SR-11.3). What each outcome means is the caller's. Adoption
 (SR-3.6) and a leftover's pane (SR-3.7) take a pane only on `PaneOne`; for
 adoption, none and more than one alike adopt no pane (the pane verbs refuse
 with "the agent's pane was not found"). In the SR-11.3 check of a row that
@@ -497,10 +498,12 @@ records no pane, `PaneNone` counts as Gone and `PaneMany` is unverified,
 never Gone. It makes no tmux call.
 
 **Must use** `tmux.PaneByToken` to find a pane by its `@ad_pane` token;
-never match `AdPane` by hand. Its user is `pkg/api`'s adoption rules
+never match `AdPane` by hand. Its users are `pkg/api`'s adoption rules
 (`findAdoption`, which `kill`, `send-keys` and `pause` reach through
 `adoptIdentity`, `find-missing` through `adoptInSweep`, and `read-pane`
-directly, for the call only, with no write).
+directly, for the call only, with no write) and `kill`'s finished-row
+opt-in on this id's own abandoned launch (`killRun.endAbandoned`), which
+takes each session's agent pane by its label's token.
 
 #### Sweep (`sweep.go`)
 
@@ -575,9 +578,10 @@ and no configuration, and makes no tmux call, write or log:
 - `StartingSession(StartingSessionInput) StartingSessionClass`. Inputs:
   `EndedAt` (the `ended_at` the verb examined before its move or reset;
   nil skips the window), `RecordsPID` and `RecordsSessionID` (neither
-  skips the window), `Session` (the Ours session; for `resume` and reuse
-  also the youngest session of this id's own abandoned launch, with
-  `EndedAt` nil; or nil for "no session, agent process running", which
+  skips the window), `Session` (the Ours session; for `resume`, reuse and
+  `kill`'s finished-row opt-in also the youngest session of this id's own
+  abandoned launch, with `EndedAt` nil; or nil for "no session, agent
+  process running", which
   skips the age step), `Now`, and the
   effective `Bound` and `Window`, used as given. Output: the outcome
   (`StillStopping`, `StillStarting` or `PastBoth`), whether the window was
@@ -617,9 +621,13 @@ and their re-lookup after "duplicate session" (`heldNameOutcome` with a
 `heldExaminedRow`, from `finishedLaunch.heldName`), both also through
 `abandonedLaunchError` (`pkg/api/resume_lookup.go`; b.1n6), which runs
 the age step alone on the youngest session of this id's own abandoned
-launch (see [The pre-launch lookup](#the-pre-launch-lookup)); and `kill`'s
-finished-row opt-in (`finishedOurs` in `pkg/api/kill_optin.go`), which
-uses `unavailableError` only, with the bound and window passed to `Kill`.
+launch through `abandonedLaunchCheck` (see
+[The pre-launch lookup](#the-pre-launch-lookup)); and `kill`'s
+finished-row opt-in (`pkg/api/kill_optin.go`), with the bound and window
+passed to `Kill`: on Ours `finishedOurs` uses `unavailableError` only, and
+on this id's own abandoned launch `killRun.abandonedLaunch` runs the same
+`abandonedLaunchCheck` and refuses only while it is still starting
+(`abandonedStartingError`; b.6sa).
 
 **Must use:** every verb that applies the starting-session rule must use
 these components: the age through `tmux.SessionAge`, the classification
@@ -650,7 +658,7 @@ the detail.
 | `error_name.go` | `errorName(err)`: the err_name the CLI would print, for trail fields (`ad.kill.called`'s and `ad.send_keys.called`'s `outcome`, `ad.resume.restored`'s and `ad.spawn.reuse_restored`'s `launch_error`, `ad.launch.name_held`'s `outcome`); `ErrInternal` for anything else. `pkg/api` cannot import `errnames`, so this is its one mapping. | A trail field that carries an err_name uses it, and a verb that gains a name extends it here. |
 | `caller_identity.go` | `callerIdentity()`: the invoking process's identity (`caller`: process name, pid, hostname, user), collected inside agent-director, never from caller-asserted params, for the trail's `caller_*` fields. `lazyCaller` (`get()`): a sweep run's caller identity, collected on first use and shared by every record of the run, so a run collects it at most once and a run that writes no record carrying it collects none; the zero value is ready, and it serves one run, not concurrently. `find-missing` and `expire` each hold one per run. | A verb's trail `caller_*` fields come from `callerIdentity`; a sweep holds one `lazyCaller` per run and calls `get()` only when a record needs it. Never collect the caller identity another way or once per row. |
 | `starting_session.go` | `startingSessionLimitsOf`, `startingSessionRow` (with its `NoLaunchSessionRecorded`, `Consequence` and `Retry`), `checkStartingSession` and the `startingSessionCheck` errors `refusal`, `unavailableError` and `ownIDConflictError`: the shared starting-session refusal over `tmux.StartingSession` (see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | Every verb that applies the starting-session rule must use them, with the age from `tmux.SessionAge`; never re-implement the stopping window, the age calculation or their refusal texts. |
-| `resume_lookup.go` | `decidePreLaunch(res, preLaunchRow, pc, lim, now) preLaunchDecision`: a finished row's pre-launch decision from one lookup, "proceed" or the one refusal (see [The pre-launch lookup](#the-pre-launch-lookup)); `preLaunchRowOf(row, name, socket)`, whose `Name` is the recorded name every refusal quotes, and `preLaunchRow.HolderName`, the name the lookup was given as its holder name, quoted by the name-holder check on Gone (`""` means `Name`: resume leaves it empty, reuse sets the requested name); `lookupTrailFacts(res, name)`: the `ad.provenance.disagree` facts of a lookup of the recorded name (its reasons plus `name_changed`); `emitLookupDisagree(call, action, pre)`: one lookup's records through `emitProvenanceDisagree`; the action values `preLaunchActionRefused` / `preLaunchActionProceeded` (`preLaunchActionOf(err)`); `leftoverLostRace(examined, again, found, err)`: the decision of the one re-read after a Leftover refusal (`CondAbsent`, `CondChanged`, or 0 when the refusal stands), which each verb maps to its own lost-race error (`resumeLostRace`, `reuseLostRace`); `preLaunchHolderError` and `preLaunchLeftoverError(instanceID, leftovers, consequence)`, the Leftover refusal worded as plain spawn's label scan; `recordsNoLaunchSession(id)`: the row records a launch token but no tmux server and no pane identity, so its latest launch never recorded a session of its own (`preLaunchRowOf` sets `startingSessionRow.NoLaunchSessionRecorded` from it); `abandonedLaunchError(lim, now, row, leftovers)`: the refusal that replaces the Leftover refusal for such a row, this id's own abandoned launch, by the starting-session rule's age step on the youngest session (b.1n6; see [The pre-launch lookup](#the-pre-launch-lookup)). | `resume`'s pre-launch lookup and reuse's old-row lookup (with its new-name pre-check) use them, and so do their re-lookups; a verb that examines a finished row before a launch routes its lookup through `decidePreLaunch`'s builders, its records through `emitLookupDisagree` and its lost-race re-read through `leftoverLostRace`, rather than its own holder, Leftover, abandoned-launch, trail-fact or race code. Whether a row's latest launch recorded a session is decided only by `recordsNoLaunchSession`. |
+| `resume_lookup.go` | `decidePreLaunch(res, preLaunchRow, pc, lim, now) preLaunchDecision`: a finished row's pre-launch decision from one lookup, "proceed" or the one refusal (see [The pre-launch lookup](#the-pre-launch-lookup)); `preLaunchRowOf(row, name, socket)`, whose `Name` is the recorded name every refusal quotes, and `preLaunchRow.HolderName`, the name the lookup was given as its holder name, quoted by the name-holder check on Gone (`""` means `Name`: resume leaves it empty, reuse sets the requested name); `lookupTrailFacts(res, name)`: the `ad.provenance.disagree` facts of a lookup of the recorded name (its reasons plus `name_changed`); `emitLookupDisagree(call, action, pre)`: one lookup's records through `emitProvenanceDisagree`; the action values `preLaunchActionRefused` / `preLaunchActionProceeded` (`preLaunchActionOf(err)`); `leftoverLostRace(examined, again, found, err)`: the decision of the one re-read after a Leftover refusal (`CondAbsent`, `CondChanged`, or 0 when the refusal stands), which each verb maps to its own lost-race error (`resumeLostRace`, `reuseLostRace`); `preLaunchHolderError` and `preLaunchLeftoverError(instanceID, leftovers, consequence)`, the Leftover refusal worded as plain spawn's label scan; `recordsNoLaunchSession(id)`: the row records a launch token but no tmux server and no pane identity, so its latest launch never recorded a session of its own (`preLaunchRowOf` sets `startingSessionRow.NoLaunchSessionRecorded` from it); `abandonedLaunchError(lim, now, row, leftovers)`: the refusal that replaces the Leftover refusal for such a row, this id's own abandoned launch, by the starting-session rule's age step on the youngest session (b.1n6; see [The pre-launch lookup](#the-pre-launch-lookup)); its parts, shared with `kill`'s finished-row opt-in (b.6sa): `abandonedLaunchCheck(lim, now, row, leftovers)` (the age step alone on the youngest session, `checkStartingSession` with no `ended_at`, so `StillStarting` or `PastBoth`), `startingSessionCheck.abandonedStartingError(leftovers)` (the still-starting `ErrTmuxUnresponsive`, "nothing was done; retry later" before any write, nil past the bound), `youngestSession(sessions)` and `abandonedLaunchSessions(leftovers)` (the sessions named, then that agent-director launched them for this id but the row does not track them). | `resume`'s pre-launch lookup and reuse's old-row lookup (with its new-name pre-check) use them, and so do their re-lookups; a verb that examines a finished row before a launch routes its lookup through `decidePreLaunch`'s builders, its records through `emitLookupDisagree` and its lost-race re-read through `leftoverLostRace`, rather than its own holder, Leftover, abandoned-launch, trail-fact or race code. Whether a row's latest launch recorded a session is decided only by `recordsNoLaunchSession`. Any verb that judges this id's own abandoned launch takes its age through `abandonedLaunchCheck` and its still-starting refusal from `abandonedStartingError`, as `kill`'s finished-row opt-in does (`killRun.abandonedLaunch`), never its own age step or wording. |
 | `finished_launch.go` | What resume and reuse share once the write that begins their launch has applied (resume's move, reuse's reset): `finishedLaunchVerb` (the verb word, trail source, restore event, `ad.launch.name_held` launch, the restore sentences' write, the timeout's row sentence, and `RemovedRetry`, the retry sentence after "duplicate session" once the restore found the row removed: resume's `resumeRemovedRetry`, reuse's "retry later"; the two values `resumeLaunchVerb` and `reuseLaunchVerb`, declared only here); `finishedLaunch`, built per call by `resumeDeps.launchOnto` / `reuseDeps.launchOnto`, with `outcome(out, req)` (the one mapping of the create's outcome: identity write, timeout, "duplicate session", restore then launch error), `restore(launchErr)` (the one restore attempt, its WARN line and the verb's restore event; `launchErr` receives the whole `restoreResult`) and `heldName(req)` (the path after "duplicate session": one re-lookup, the restore, `heldNameOutcome`, the re-lookup's disagree records, one `ad.launch.name_held`); `restoreResultOf(res, rerr, priorState, v)` (the one mapping of a restore's result, for `finishedLaunchVerb` `v`, to its row sentence, retry sentence, `row_result` and store error); `emitFinishedRowDisagree` (one lookup's records for a launch onto a finished row, always naming the recorded name). | A launch onto a row examined as finished maps its create outcome, restores and handles "duplicate session" through `finishedLaunch`, adding a `finishedLaunchVerb` value for a new verb; never a copy of the outcome mapping, the restore sentences or the held-name path. |
 | `spawn_reuse_errors.go` | The descriptions only reuse returns: `reuseLostRaceError(id)` (`ErrInstanceIdCollision`: "the row changed or was removed after this spawn examined it and nothing was changed"), `reuseChangeError(id, err)` (the one mapping from a failed reset to its two `ErrInternal` descriptions, "archiving the previous session failed" when `errors.Is(err, store.ErrReuseArchive)`, else "the reuse could not be applied", each "and nothing was changed", the store error added with `%v`), `reuseNothingChanged` and `reuseRowResetStaysPending` (the launch timeout's row sentence, "the row was reset; the row stays pending", passed to `spawn.LaunchTimeoutError`). | Reuse returns its lost race, change failures and timeout row sentence only through these; a later change to the reuse path never re-spells them or tells an archive failure apart by its text. |
 | `kill.go` | `killPollInterval` (100 ms): the pause between two readings of `kill`'s process wait, a named constant, not a setting. `Client.sleep` (`time.Sleep` in production) is the pause, set in tests through `SetSleepForTest`. | A wait that polls a process uses the injected clock and sleep, never `time.Sleep` directly. |
@@ -6409,7 +6417,7 @@ are also emitted but are not listed here.
 | `ad.spawn.reuse_restored` | `ad_spawn` | Exactly once per restore attempt after a failed reuse launch (a failure other than a timeout, "duplicate session" included), applied or not; fail-open. Carries `claude_instance_id`, `applied` (boolean: true only when the restore applied), `launch_error` (the err_name of the error the spawn returns, through `errorName`; after "duplicate session", the classified error the re-lookup gave) and `restore_error` (null, or the store error's text when the restore's write failed), and `source`. Written after `ad.spawn.reused`; after "duplicate session" it precedes the call's `ad.provenance.disagree` records and its `ad.launch.name_held`. Emitted by `finishedLaunch.restore` (`pkg/api/finished_launch.go`) with reuse's values (`reuseLaunchVerb`), on the `pkg/api` spawn path, so every surface gets it. Not an `ad.spawn.state_transition`: the restore emits none (SR-10.4, SR-10.6, SR-14) |
 | `ad.send_keys.called` | `ad_send_keys` | One per `Client.SendKeys` call past the closed check (every `agent-director send-keys` invocation), on every return path, fail-open (mirroring `ad.decide.called`); emitted by `emitSendKeysCalled` (`pkg/api/sendkeys_trail.go`). The exported `SendKeys` writes none. Carries `claude_instance_id`; `allow_pending`; `row_state` (the stored state of the row the verb read, `""` when no row was read: it tells keys typed into a launching agent's startup prompt, a `pending` row, from keys sent to a live conversation, and records the state a refusal met); `outcome` (`ok` or the err_name from `errorName`: `ErrTmuxUnresponsive`, `ErrTmuxSessionConflict`, `ErrTmuxNotAvailable`, `ErrTmuxSendKeys`, `ErrSpawnNotInteractive` (its `pending`-row triggers included), `ErrSendKeysWhileRelayed` and `ErrSpawnNotFound` by name; `ErrInternal` only for an error none of those matches, such as a relay-guard store error); the AD-collected `caller_*` identity (collected once per call); and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), `released` (guard released, the audited recovery of a fallen-back relay) or `error` (the guard's store read failed) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2, SR-7.4). Never the typed text. `pause` and `read-pane` write no call event |
 | `ad.launch.name_held` | `ad_spawn`; `ad_resume`; `ad_find_missing` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), exactly one per plain spawn whose create answered "duplicate session" (the held-name path; see [Launch identity](#launch-identity)), exactly one per `resume` whose create answered "duplicate session" (see [After "duplicate session"](#after-duplicate-session)), and exactly one per reuse whose create answered "duplicate session" (see [Reuse of a finished id](#reuse-of-a-finished-id)). Carries `source`, `claude_instance_id`, `launch` (`spawn`, `resume` or `reuse`), `tmux_session_name` (the requested name; for the scan, the first leftover's; for `resume`, the recorded name), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; true and true for a current label, which only the re-lookup of `resume` or reuse can meet (the row's own session); false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after a plain spawn's "duplicate session"; `restored`, `left_changed` or `still_pending` after a `resume`'s or a reuse's, as its restore went), `store_error` (the end write's or the restore's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. **resume** (source `ad_resume`, `launch` `resume`, written by `finishedLaunch.heldName` in `pkg/api/finished_launch.go`) writes exactly one per call whose create answered "duplicate session", after its re-lookup, its restore attempt and `ad.resume.restored`, whatever the outcome: the holder fields from the re-lookup, `tmux_socket` the launch socket, `lookup_outcome` the re-lookup's token, `outcome` the returned error's name, `row_result` the restore's (`restored`: the restore applied; `left_changed`: the row changed or was removed after the move; `still_pending`: the restore failed in the store, with `store_error`); no `leftover_count`. A refusal at `resume`'s pre-launch lookup writes none. **reuse** (source `ad_spawn`, `launch` `reuse`, written by the same `finishedLaunch.heldName`) writes exactly one per call whose create answered "duplicate session", after `ad.spawn.reused`, its re-lookup, its restore attempt and `ad.spawn.reuse_restored`, in that order, whatever the outcome, with the same fields as `resume`'s: `tmux_session_name` the requested name, `row_result` the restore's (`left_changed`: the row changed or was removed after the reset). A refusal before the reset (the old-row lookup or the new-name pre-check) writes none. **find-missing** (source `ad_find_missing`, `emitRowNameHeld` in `pkg/api/find_missing_lookup.go`) writes exactly one per row per sweep whose mark attempt had tick reason `tmux_name_held`, whatever the mark's outcome, with the same field set: `launch` and `outcome` null; `tmux_session_name` the row's recorded name; `tmux_socket` the socket the lookup used; `store_id` this store's, as for every source; the holder fields from the row's lookup (`heldHolderFacts`), so `carries_this_id` false and `current_launch` null when the holder is another store's session, and the holder fields null when more than one listing entry matches the name; `lookup_outcome` the lookup's token (`gone` or `leftover`); `row_result` `marked_missing` (the mark applied), `left_changed` (the row was changed or absent) or `still_pending` (the mark failed in the store, with `store_error`); no `leftover_count`. The sweep never touches the holding session (see [`find-missing`](#find-missing)). Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
-| `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `claude_instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed; `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in the README's "Operator actions" procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
+| `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `claude_instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed; `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session, or of the sessions of this id's own abandoned launch the operator-only opt-in ended together with those sessions' agent pane processes wherever their panes now are, still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in the README's "Operator actions" procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
 | `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_send_keys` for both keys verbs, `send-keys` and `pause`, told apart by `verb`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`, and for reuse's old-row lookup and its re-lookup after "duplicate session"; `ad_resume` for `resume`'s pre-launch lookup and its re-lookup after "duplicate session"; `ad_find_missing`; `ad_expire`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `claude_instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`; `send-keys` and `pause` write `keys_sent` (the text and Enter both went through), `text_sent` (the text call timed out, or the text went through and the Enter call failed or timed out) or `nothing_sent` (no text call, `pause`'s failed `C-u` included, or the text call failed other than by timing out); plain spawn its held-name row result `ended`, `left_changed` or `still_pending`; `resume` and reuse `refused` or `proceeded` at their pre-launch lookup, and their restore's row result `restored`, `left_changed` or `still_pending` after "duplicate session") and the `caller_*` identity. **resume** (source `ad_resume`, `verb` `resume`, written by `emitFinishedRowDisagree` in `pkg/api/finished_launch.go`, over `emitLookupDisagree`) writes each distinct reason at most once per call, on a refusal too, never `adopted` (`resume` adopts nothing). Its pre-launch lookup's records (the lookup's reasons and `name_changed`) are written right after the decision, before any write, with `action` `refused` or `proceeded`. After "duplicate session" the re-lookup's records follow `ad.resume.restored`, with every reason the pre-launch lookup already wrote skipped and `action` the restore's row result; a `name_changed` record there names the row's own session, every other reason the name's holder (else the own session). `tmux_socket` is the lookup's socket and `tmux_session_name` the recorded name. **reuse** (source `ad_spawn`, `verb` `spawn`, written by the same `emitFinishedRowDisagree` with reuse's values) follows the same rules: each distinct reason at most once per call, never `adopted`; its old-row lookup's records right after the decision, before pre-trust and the reset, with `action` `refused` or `proceeded`; after "duplicate session" the re-lookup's records after `ad.spawn.reuse_restored`, skipping reasons already written, with `action` the restore's row result. `tmux_session_name` is the row's recorded (old) name, never the requested one, and `name_changed` compares against it. **send-keys and pause** (source `ad_send_keys`, `verb` `send-keys` or `pause`, written by the shared `keysRun.emitDisagree` in `pkg/api/pane_keys.go`) collect their reasons as `kill` does: the first lookup's, `name_changed`, a failed pane listing's, `adopted` only when the adoption write applied, and the follow-up lookup's; they write none when the call made no lookup. `pause` writes its records before its wait, so the wait's outcome neither adds nor removes one. `read-pane` writes none. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup (a row whose recorded session name cannot be used included) or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live`, `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. **expire** (source `ad_expire`, `verb` `expire`, written by `expireRun.emitRow` in `pkg/api/expire_trail.go` once the row's delete attempt has settled) writes one record per distinct reason per row per run, and none for a row with no reason, a row kept for an unusable recorded name, a `process_alive` row or a row whose lookup was Skipped. Its reasons are the lookup's own and `name_changed`; it never writes `adopted`, because `expire` never adopts. `tmux_socket` is the socket the lookup used, `tmux_session_id` and `current_session_name` come from the lookup's session, `server` and `verdict` from the lookup (`not_run` when none ran), and `action` is the row's outcome: `deleted`, the row's kept reason (such as `ours` or `leftover_running`), or `left_changed` (another caller removed the row first). The caller identity is collected at most once per run (`lazyCaller`). Never a label's content or another row's id (SR-14, SR-15) |
 | `ad.expire.kept` | `ad_expire` | Exactly one per row `expire` kept, per run, written by `expireRun.emitRow` (`pkg/api/expire_trail.go`) once the row's outcome is final, `changed_since_examined` and `store_error` included; fail-open (a trail-write failure never changes the run's result). A deleted row and a row another caller removed first get none. Carries exactly `claude_instance_id`, `reason` (the kept reason: `empty_session_name`, `control_char_session_name`, `rewritten_session_name` (an unusable recorded name, checked before every other reason, with no tmux call), `process_alive`, `tmux_skipped`, `leftover_running`, `ours`, `tmux_server_changed`, `provenance_conflict`, `cant_tell`, `tmux_unavailable`, `changed_since_examined` or `store_error` as built; the list is not closed), `tmux_session_name` (the recorded name, JSON-encoded like every trail field, so a control character below 0x20 appears escaped (DEL as is) and a byte that is not valid UTF-8 appears as U+FFFD) and `source`. Never session-environment content, a label value or another row's id (SR-12.5, SR-14, SR-15) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
@@ -6756,7 +6764,7 @@ command, a label value, another row's id or a store id.
 | Gone while the recorded agent process runs (`tmux.JudgeProcess` reads it alive), whatever holds the name | The [starting-session rule](#the-starting-session-rule-as-resume-applies-it) with no session (no age step): `ErrTmuxUnresponsive` "appears to still be stopping", else `ErrTmuxSessionConflict` "this row's own id" |
 | Ours: this launch's own session, whatever its name | The [starting-session rule](#the-starting-session-rule-as-resume-applies-it) on that session: `ErrTmuxUnresponsive` "appears to still be stopping" or "appears to still be starting", else `ErrTmuxSessionConflict` "this row's own id" |
 | Leftover: sessions with an earlier launch's label of this id, whatever their names (on a row with no token, or one that recorded a session of its latest launch) | `ErrTmuxSessionConflict` "left over from an earlier life" (`preLaunchLeftoverError`, worded as plain spawn's label scan): up to three sessions by quoted name and `$N`, lowest first, then a count; "nothing was written"; ending such a session is a human's decision, with the "Operator actions" pointer |
-| Leftover while the row's latest launch records no session of its own: a launch token but no tmux server and no pane identity (`recordsNoLaunchSession`) | This id's own abandoned launch (`abandonedLaunchError`, b.1n6), by the starting-session rule's age step alone on the youngest of those sessions. Younger than the bound: `ErrTmuxUnresponsive` "this id's own abandoned launch", the sessions as for Leftover, that agent-director launched them for this id but the row does not track them (its latest launch records no session of its own), "appears to still be starting" with the bound in seconds, "nothing was done; retry later"; no human is asked to look. Otherwise `ErrTmuxSessionConflict` with the same words and sessions: it has run for at least the bound; agent-director ends no launch the row does not track, so ending it is a human's decision, with the "Operator actions" pointer, "after which the refused call can be re-issued" (only in a refusal before any write, never after "duplicate session"); "the conversation stays resumable" when the row records a session id |
+| Leftover while the row's latest launch records no session of its own: a launch token but no tmux server and no pane identity (`recordsNoLaunchSession`) | This id's own abandoned launch (`abandonedLaunchError`, b.1n6), by the starting-session rule's age step alone on the youngest of those sessions. Younger than the bound: `ErrTmuxUnresponsive` "this id's own abandoned launch", the sessions as for Leftover, that agent-director launched them for this id but the row does not track them (its latest launch records no session of its own), "appears to still be starting" with the bound in seconds, "nothing was done; retry later"; no human is asked to look. Otherwise `ErrTmuxSessionConflict` with the same words and sessions: it has run for at least the bound; agent-director ends such a launch only through its operator tool, so ending it is a human's decision, with the "Operator actions" pointer, "after which the refused call can be re-issued" (only in a refusal before any write, never after "duplicate session"); "the conversation stays resumable" when the row records a session id |
 | Gone, one session holding the name with a label of another instance id | `ErrTmuxSessionConflict` "a different instance id": another row's agent, which must not be ended; no pointer |
 | Gone, one session holding the name with another store's label | `ErrTmuxSessionConflict` "another agent-director store": that store's agent, which must not be ended; no pointer (WD 2026-09-29 STORE) |
 | Gone, one session holding the name with no valid label | `ErrTmuxSessionConflict` "no valid instance id": agent-director cannot tell whose session it is; a human must look, with the "Operator actions" pointer |
@@ -6805,9 +6813,11 @@ The rules around the table:
   an anonymous leftover: while it is younger than the bound it may exit or
   finish starting with nobody acting, so the refusal is
   `ErrTmuxUnresponsive`, never a pointer to a human. Past the bound nothing
-  ends it on its own and no verb ends it (every verb that ends a session
-  acts only on the row's current launch, and `kill-finished` answers
-  "never reported in"), so the refusal is the abandoned-launch conflict.
+  ends it on its own and no agent-facing verb ends it (every one that ends
+  a session acts only on the row's current launch); only the operator
+  tool's `kill-finished` does (b.6sa; see step 2 of [`kill`](#kill)),
+  which a human runs. So the refusal is the abandoned-launch conflict,
+  whose pointer to "Operator actions" names neither the tool nor its verb.
   The stopping window is not checked: it concerns the row's own agent,
   not a session of an earlier launch. A row with no token (from before
   this release) never qualifies, nor does one that recorded a tmux server
@@ -6979,9 +6989,9 @@ section; this section names no command for them.
   session", as the description's retry sentence says.
 - **This id's own abandoned launch, past the bound**
   (`ErrTmuxSessionConflict` "this id's own abandoned launch"): a session
-  of an earlier launch of this id that the row does not track, which
-  agent-director does not end. A human looks at it and, if it is to go,
-  ends it by hand as "Operator actions" describes, then retries
+  of an earlier launch of this id that the row does not track, which no
+  agent-facing verb ends. A human looks at it and, if it is to go, ends it
+  with the operator tool as "Operator actions" describes, then retries
   `resume` (after "duplicate session", whose description has no re-issue
   clause, only once `get` shows the row `ended` or `missing`); the
   conversation stays resumable.
@@ -8251,9 +8261,9 @@ adds it here.
   abandoned launch" ... "appears to still be starting" while it is younger
   than the starting-session bound (UNAVAILABLE: retry later; nothing was
   done), and past the bound `ErrTmuxSessionConflict` "this id's own
-  abandoned launch" (CONFLICT): agent-director ends no launch the row does
-  not track, so an automated caller stops, surfaces the named session to
-  a human and never ends it itself. Once a human has ended it ("Operator
+  abandoned launch" (CONFLICT): agent-director ends such a launch only
+  through its operator tool, which a human runs, so an automated caller
+  stops, surfaces the named session to a human and never ends it itself. Once a human has ended it ("Operator
   actions"), a call refused before any write can be re-issued, as its
   description says; after "duplicate session" the description has no
   re-issue clause and follows the restore's sentence (see
@@ -9022,7 +9032,38 @@ this is how the code gets there.
    `KillParams` has no field for it (b.vqr). With it, a live row is refused first; a
    finished row whose recorded name is unusable (as in step 3) →
    `ErrInternal` (`unusableNameError`) before the socket, no tmux call;
-   any other finished row goes on to the socket and the one lookup.
+   any other finished row goes on to the socket and the one lookup. At
+   step 5, its Ours rows add the reported-in rule (`finishedOurs`) before
+   the kill sequence. Its Leftover rows (`killRun.leftover`) depend on the row: one
+   that records a launch token but no tmux server or pane
+   (`recordsNoLaunchSession`) meets this id's own abandoned launch
+   (`killRun.abandonedLaunch`, b.6sa); any other gets "never reported in"
+   (`neverReportedInLeftoverError`), no kill sent. On the abandoned launch
+   the age step alone runs on the youngest session (`abandonedLaunchCheck`):
+   younger than the bound → `abandonedStartingError`'s
+   `ErrTmuxUnresponsive`, the same text `resume` gives, no further tmux
+   call. Past it, the kill sequence runs on every one of those sessions
+   (`killRun.endAbandoned`): one pane listing (decided as in step 5's
+   first item when it fails), then, lowest `$N` first, the pane kill of
+   each session's agent pane (the one pane whose `@ad_pane` carries that
+   session's label token, `tmux.PaneByToken`; none or several is no pane)
+   and, always, the session kill by its id. Before any kill, each
+   session's agent pane process has its start time read. The agent
+   process the check judges is the youngest session's (none with no such
+   pane, or when that start time cannot be read or the process is gone,
+   so the check makes its follow-up lookup). The listed processes are
+   every other pane process the listing shows in those sessions
+   (`sessionProcesses`), then each older session's agent pane process
+   wherever its pane now is, so one moved into another session is waited
+   for too (`appendProcesses`: each pid once, never the agent's, none
+   whose start time could not be read). The follow-up lookup does not
+   consult the listed processes: with the youngest session's agent not
+   checkable, an older agent whose pane was moved out can outlive its
+   pane kill and the call still succeed (b.myx, open). Nothing is
+   adopted and the row is never written. Such a launch never reports in (the hook gate
+   needs a recorded pane), so its label and `recordsNoLaunchSession` are
+   the whole evidence that it is this id's; a human chose to run the
+   operator tool, as for every finished-row kill.
 3. **Unusable recorded name.** A live row (`pending` included) whose
    recorded session name is empty, holds a control character, or holds a
    character tmux stores differently (`.`, `:`, invalid UTF-8) →
@@ -9057,7 +9098,7 @@ this is how the code gets there.
      5. The check (below).
    - **Leftover** → `ErrTmuxSessionConflict` ("not this launch's
      session"), naming the leftover session(s) and their tmux ids; no kill
-     sent.
+     sent. (A finished row with the opt-in: step 2.)
    - **Gone.** The agent process, judged once from the row's recorded
      identity, decides:
      - dead, none recorded, or unreadable → success, `kill_sent` false,
@@ -9095,7 +9136,12 @@ follow-up, never both. The first reading of the agent process decides:
   follow-up lookup, with no wait. The current label gone (Gone or
   Leftover) → success, `kill_sent` true. Still there (Ours) →
   `ErrTmuxKillFailed` ("the agent process cannot be checked and its
-  labelled session is still there"). Can't tell → `ErrTmuxUnresponsive` or
+  labelled session is still there"). After the kill sequence on this id's
+  own abandoned launch (step 2), the answer is judged by the sessions it
+  ended instead (`stillThere`): any of their tmux ids still listed with a
+  label of this row's id in this store, as Ours or as a leftover, →
+  `ErrTmuxKillFailed`; any other Ours, Leftover or Gone → success. Can't
+  tell → `ErrTmuxUnresponsive` or
   `ErrTmuxNotAvailable`, saying the kill was sent and may or may not have
   taken effect. If the killed session was the server's last, the recorded
   server answering with no sessions is Gone, so the follow-up succeeds
@@ -9144,7 +9190,11 @@ max(2Q + 2A + E + 4W, 3Q + 2A + 5W): **12.4 s** at the defaults on path
 (i) (lookup, pane listing, pane kill, session kill, then the exit wait),
 and 9 s on path (ii) (the same four calls, then the follow-up lookup).
 Its time waiting on tmux alone is at most 3Q + 2A + 5W (9 s); E counts in
-full.
+full. That bound is for the row's own session. The operator tool's
+`kill-finished` on this id's own abandoned launch (step 2) sends a pane
+kill and a session kill for each of its N sessions, so its bound grows by
+2A for each session beyond the first; agent-facing `kill` never takes that
+path.
 
 ### `pause`
 
@@ -12116,8 +12166,9 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     own, never phrases in a test.
   - Kill's finished-row opt-in (`descriptions_kill_optin.go`, SR-1.4,
     SR-6.5, SR-6.7). Its other refusals use `DescStillStopping`,
-    `DescStillStarting`, `DescConflictingLabels`, `DescDifferentServer`
-    and the kill cases unchanged.
+    `DescStillStarting`, `DescConflictingLabels`, `DescDifferentServer`,
+    `DescAbandonedLaunch` (this id's own abandoned launch still starting,
+    b.6sa) and the kill cases unchanged.
     - `DescKillOptInLiveRow(instanceID, state)`: `ErrSpawnNotResumable` on
       a live row (`pending` included): "the row is live", the state, "no
       lookup was made and nothing was sent"; naming `find-missing` or the
@@ -12127,7 +12178,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       `DescKillOptInNeverReportedInLeftover(instanceID, []DescSession)`:
       the two "never reported in" `ErrTmuxSessionConflict` cases (an Ours
       session past the window and the bound, stating the bound in
-      seconds; a Leftover, naming each session's quoted name and `$N`
+      seconds; a Leftover on a row `recordsNoLaunchSession` does not
+      match, naming each session's quoted name and `$N`
       up to three, lowest `$N` first, then a count, and stating no
       bound). Both require "this row's own id", "no kill was sent", the
       human's-decision sentence, the list hint ("list tmux_session_name
@@ -12500,15 +12552,18 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     PastBound, SessionID})` (b.1n6): the refusal of this id's own
     abandoned launch, which replaces the Leftover refusal while the row's
     latest launch records no session of its own, at resume's and reuse's
-    lookups and, through `AfterHeldName`, after "duplicate session". It
+    lookups and, through `AfterHeldName`, after "duplicate session"; `kill`'s
+    finished-row opt-in gives its still-starting form, without `PastBound`
+    (b.6sa). It
     requires the instance id, "this id's own abandoned launch", each
     session named, that agent-director launched it for this id but the
     row does not track it (never "no longer tracks") and "nothing was
     done". Without `PastBound` it is `ErrTmuxUnresponsive`: "appears to
     still be starting", the bound in seconds, "retry later", and no
     "human" or pointer. With it, `ErrTmuxSessionConflict`: at least the
-    bound, that agent-director ends no launch the row does not track so
-    ending it is a human's decision, the pointer, "after which the refused
+    bound, that agent-director ends such a launch only through its
+    operator tool so ending it is a human's decision, the pointer, "after
+    which the refused
     call can be re-issued" and the list hint; "the conversation stays
     resumable" only with `SessionID`. `AfterHeldName` drops the re-issue
     clause and forbids it, since no conflict after "duplicate session"
@@ -12562,11 +12617,12 @@ package doc comment (`doc.go`, "# Description helper") says the same.
 - A Go check of a starting-session refusal goes through
   `DescStillStopping`, `DescStillStarting` or `DescOwnOldSession`, one
   of resume's pre-launch Leftover through `DescPreLaunchLeftover`, and
-  one of this id's own abandoned launch (resume or reuse) through
-  `DescAbandonedLaunch`.
+  one of this id's own abandoned launch (resume, reuse, or still starting
+  at `kill`'s finished-row opt-in) through `DescAbandonedLaunch`.
 - **Must use** the `DescKillOptIn*` cases for any Go check of `kill`'s
   finished-row opt-in refusals (the live row, the two "never reported
-  in" variants); never spell their phrases in a test.
+  in" variants), and `DescAbandonedLaunch` for its still-starting
+  abandoned-launch refusal; never spell their phrases in a test.
 - **Must use** the `descriptions_unusable.go` cases for any Go check of
   an unusable recorded name's text: a verb's refusal through the
   fixture's `desc` (`unusableNameFixtures()` in `pkg/api`, which picks
@@ -12600,7 +12656,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   test spells these texts itself. In `pkg/api`, **must use** the shared
   helpers in `advice_follow_helpers_test.go` (`adviceAssertAdvice`,
   `adviceAssertPhrase`, `adviceAssertGoDoc`, `adviceAssertManifest`,
-  `adviceAwaitFinished`, `adviceOnceAfter`, …) rather than new ones. See
+  `adviceAwaitFinished`, `adviceOnceAfter`, `adviceOperatorEnds`, …)
+  rather than new ones. See
   docs/test-writing-guide.md "Literal-follow tests for error advice".
 - TypeScript tests cannot import the helper. They spell the phrases they
   check themselves.
@@ -12916,7 +12973,19 @@ each file's doc comments carry the detail.
   on `e.client`, returning the captured log). The seeded agent stays alive
   in the fake, so a case that expects the kill to succeed makes it exit
   (`e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)`);
-  otherwise the call ends in `ErrTmuxKillFailed`.
+  otherwise the call ends in `ErrTmuxKillFailed`. The opt-in on this id's
+  own abandoned launch (b.6sa) is tested in `kill_optin_abandoned_test.go`
+  (one session; several, their kill order and which agent is waited for,
+  an older session's agent pane moved into an unrelated session
+  included; a row that records its launch's server or pane, or no token,
+  which keeps "never reported in"), whose `e.seedAbandoned(t, state,
+  sessions...)` seeds a finished row that `recordsNoLaunchSession`
+  matches beside sessions of earlier launches of its id, each `age` old at
+  `ruleInstant` (a session with `moved` set has its agent pane in an
+  unrelated session). A real plain spawn's held-name row is tested in
+  `kill_optin_history_test.go`, and following the advice in
+  `TestAdviceFollow_C9_OptInStillStoppingOrStartingRetryLater` and
+  `TestAdviceFollow_HO12_AbandonedLaunchClears`.
 - **Pane-verb fixture** (`pane_verb_fixture_test.go`, no tests; SR-20.2),
   the kill fixture's extension for `read-pane`, `send-keys` and `pause`:
   - invocations: `e.readPane` / `e.readPaneClient`, `e.sendKeys` /

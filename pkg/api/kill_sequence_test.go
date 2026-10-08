@@ -660,8 +660,8 @@ func TestKillPendingGone(t *testing.T) {
 
 // TestKillPendingBesideLeftover: a live row (pending, pending with no launch
 // start, or revived to waiting) beside an earlier launch's session, under the
-// recorded name or another, gets ErrTmuxSessionConflict naming it, and
-// nothing is killed.
+// recorded name or another, young or past the starting-session bound, gets
+// ErrTmuxSessionConflict naming it, and nothing is killed.
 func TestKillPendingBesideLeftover(t *testing.T) {
 	t.Parallel()
 	revived := killPendSpec(store.StateWaiting)
@@ -669,15 +669,17 @@ func TestKillPendingBesideLeftover(t *testing.T) {
 	revived.Opts = []apitest.SpawnOption{apitest.WithPID(apitest.TestPanePID + 50),
 		apitest.WithProcStarttime(apitest.LinuxProcStarttime)}
 	cases := []struct {
-		name    string
-		spec    killRowSpec
-		renamed bool // the leftover runs under another name than the recorded one
+		name      string
+		spec      killRowSpec
+		renamed   bool // the leftover runs under another name than the recorded one
+		pastBound bool // the leftover has run past the starting-session bound (b.6sa ends it only on a finished row)
 	}{
-		{"pending, recorded name", killPendSpec(store.StatePending), false},
-		{"pending, another name", killPendSpec(store.StatePending), true},
+		{"pending, recorded name", killPendSpec(store.StatePending), false, false},
+		{"pending, another name", killPendSpec(store.StatePending), true, false},
+		{"pending, the leftover past the starting-session bound", killPendSpec(store.StatePending), false, true},
 		{"pending with no launch start and no token", killPendSpec(store.StatePending,
-			apitest.WithLaunchIdentity(store.LaunchIdentity{Socket: apitest.TestSocket}), apitest.WithNoLaunchStartedAt()), false},
-		{"revived to waiting by the leftover's hooks", revived, false},
+			apitest.WithLaunchIdentity(store.LaunchIdentity{Socket: apitest.TestSocket}), apitest.WithNoLaunchStartedAt()), false, false},
+		{"revived to waiting by the leftover's hooks", revived, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -687,6 +689,9 @@ func TestKillPendingBesideLeftover(t *testing.T) {
 			opts := []tmuxfix.RowSessionOption{tmuxfix.WithRowSessionLabel(r.old(), true)}
 			if tc.renamed {
 				opts = append(opts, tmuxfix.WithRowSessionName("left-"+uuid.NewString()[:8]))
+			}
+			if tc.pastBound {
+				opts = append(opts, e.createdBefore(rlkSettled(e)))
 			}
 			e.seedSession(t, &r, opts...)
 			before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)

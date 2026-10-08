@@ -22,7 +22,9 @@ import (
 // Leftover words (leftoverSessions). abandonedLaunchError, this id's own
 // abandoned launch met as Leftover (b.1n6), lives here too, beside the
 // Leftover refusal it replaces for a row whose latest launch records no
-// session.
+// session, with its age step (abandonedLaunchCheck) and still-starting
+// refusal (abandonedStartingError), which kill's operator-only finished-row
+// opt-in shares before it ends such a launch (b.6sa).
 
 // The ad.provenance.disagree action values a launch onto a finished row
 // writes at its pre-launch check (SR-14), shared by resume and reuse: whether
@@ -107,9 +109,15 @@ func preLaunchRowOf(row Spawn, name, socket string) preLaunchRow {
 // write did not apply. A session of an earlier launch of the id is then
 // agent-director's own launch for this id that the row does not track: the
 // one the row tracked before a move or reset, or one it never tracked (an
-// earlier row's of the id, say). A row with no token (from before this
-// release) never qualifies: every session labelled with its id is then of an
-// earlier launch whose relation to the row cannot be told.
+// earlier row's of the id, say). resume and reuse refuse such a session as
+// this id's own abandoned launch (abandonedLaunchError); kill's operator-only
+// finished-row opt-in ends it once it has outlived the starting-session bound
+// (killRun.abandonedLaunch, b.6sa). A launch the row records no session of
+// can never report in (the hook gate needs a recorded pane), so that label
+// and this predicate are the whole evidence that such a session is this id's.
+// A row with no token (from before this release) never qualifies: every
+// session labelled with its id is then of an earlier launch whose relation to
+// the row cannot be told.
 func recordsNoLaunchSession(id LaunchIdentity) bool {
 	return id.Token != "" && id.ServerPID == 0 && id.PaneID == ""
 }
@@ -327,9 +335,13 @@ const (
 	// them.
 	abandonedLaunchUntracked = "launched by agent-director for this id but not tracked by the row, whose latest launch records no session of its own"
 	// abandonedLaunchHuman is the next step once such a session has outlived
-	// the starting-session bound: no verb ends it, since every verb that ends
-	// a session acts only on the row's current launch.
-	abandonedLaunchHuman = "agent-director ends no launch the row does not track, so ending it is a human's decision, " +
+	// the starting-session bound (b.6sa): no verb an agent runs ends it, since
+	// each of them that ends a session acts only on the row's current launch;
+	// only the operator tool's finished-row kill does (killRun.abandonedLaunch),
+	// which a human runs as "Operator actions" describes. It names neither that
+	// tool nor its verb, which no text shown to agents carries (SR-6.8,
+	// SR-18.15), and no session-ending command.
+	abandonedLaunchHuman = "agent-director ends such a launch only through its operator tool, so ending it is a human's decision, " +
 		operatorActionsPointer
 	// abandonedLaunchReissue follows abandonedLaunchHuman only in a refusal
 	// before any write (the pre-launch check, startingSessionRow.Consequence
@@ -353,7 +365,10 @@ const (
 // session of an earlier row of the id holds, which the row never tracked.
 // Either way such a session is agent-director's own launch for this id that
 // the row does not track, and while it is young it will either exit or
-// finish starting with nobody acting, so no human is asked to look then.
+// finish starting with nobody acting, so no human is asked to look then. Past
+// the bound only kill's operator-only finished-row opt-in ends it
+// (killRun.abandonedLaunch, b.6sa), so the conflict points a human to the
+// operator tool through "Operator actions" (abandonedLaunchHuman).
 // resume's pre-launch check and reuse's old-row lookup (decidePreLaunch, on
 // Leftover) and their re-lookup after "duplicate session" (heldNameOutcome,
 // on an old-label holder) use it. leftovers are the sessions (each named by
@@ -364,13 +379,10 @@ const (
 // the effective bound and the verb's instant read once after the lookup.
 //
 // It runs the starting-session rule's age step alone on the youngest session
-// (checkStartingSession with no ended_at: the stopping window concerns the
-// row's own agent, not a session of an earlier launch):
+// (abandonedLaunchCheck):
 //
-//   - younger than the bound: tmux.ErrTmuxUnresponsive: the instance id;
-//     abandonedLaunchWords; the sessions; abandonedLaunchUntracked; "appears
-//     to still be starting" and the bound in seconds; the consequence and
-//     the retry sentence;
+//   - younger than the bound: abandonedStartingError's
+//     tmux.ErrTmuxUnresponsive;
 //   - otherwise: tmux.ErrTmuxSessionConflict: the instance id;
 //     abandonedLaunchWords; the sessions; abandonedLaunchUntracked; that it
 //     has run for at least the bound; the consequence; abandonedLaunchHuman,
@@ -384,18 +396,9 @@ const (
 // command, "dead" or "gone", and each error wraps exactly one sentinel. It
 // makes no call and writes nothing.
 func abandonedLaunchError(lim startingSessionLimits, now time.Time, row startingSessionRow, leftovers []tmux.Session) error {
-	youngest := slices.MaxFunc(leftovers, func(a, b tmux.Session) int { return cmp.Compare(a.Created, b.Created) })
-	unended := row
-	unended.EndedAt = nil
-	c := checkStartingSession(lim, now, unended, &youngest)
-	what := leftoverSessions(leftovers) + ", " + abandonedLaunchUntracked
-	if c.class.Outcome == tmux.StillStarting {
-		subject := "it"
-		if len(leftovers) > 1 {
-			subject = "one of them"
-		}
-		return fmt.Errorf("%w: instance %s: %s: %s; %s appears to still be starting: it has run for less than the starting-session bound of %s; %s; %s",
-			tmux.ErrTmuxUnresponsive, row.InstanceID, abandonedLaunchWords, what, subject, inSeconds(c.class.Bound), row.consequence(), row.retry())
+	c := abandonedLaunchCheck(lim, now, row, leftovers)
+	if err := c.abandonedStartingError(leftovers); err != nil {
+		return err
 	}
 	ran := "it has run"
 	if len(leftovers) > 1 {
@@ -410,6 +413,58 @@ func abandonedLaunchError(lim startingSessionLimits, now time.Time, row starting
 		resumable = "; the conversation stays resumable"
 	}
 	return fmt.Errorf("%w: instance %s: %s: %s; %s for at least the starting-session bound of %s; %s; %s%s; %s",
-		tmux.ErrTmuxSessionConflict, row.InstanceID, abandonedLaunchWords, what, ran, inSeconds(c.class.Bound), row.consequence(),
-		human, resumable, listSessionNameHint)
+		tmux.ErrTmuxSessionConflict, row.InstanceID, abandonedLaunchWords, abandonedLaunchSessions(leftovers), ran,
+		inSeconds(c.class.Bound), row.consequence(), human, resumable, listSessionNameHint)
+}
+
+// abandonedLaunchCheck is the starting-session rule's age step alone on the
+// youngest of leftovers, the sessions of this id's own abandoned launch, for
+// row as examined (b.1n6): checkStartingSession with no ended_at, since the
+// stopping window concerns the row's own agent, not a session of an earlier
+// launch, so its outcome is tmux.StillStarting or tmux.PastBoth. lim and now
+// are the effective bound and the verb's instant, read once after the
+// lookup. resume's and reuse's refusal (abandonedLaunchError) and kill's
+// operator-only finished-row opt-in (killRun.abandonedLaunch, b.6sa) share
+// it. leftovers must not be empty. It makes no call and writes nothing.
+func abandonedLaunchCheck(lim startingSessionLimits, now time.Time, row startingSessionRow, leftovers []tmux.Session) startingSessionCheck {
+	youngest := youngestSession(leftovers)
+	unended := row
+	unended.EndedAt = nil
+	return checkStartingSession(lim, now, unended, &youngest)
+}
+
+// youngestSession returns the session of sessions created last (the first of
+// them in sessions' order on a tie). sessions must not be empty.
+func youngestSession(sessions []tmux.Session) tmux.Session {
+	return slices.MaxFunc(sessions, func(a, b tmux.Session) int { return cmp.Compare(a.Created, b.Created) })
+}
+
+// abandonedLaunchSessions names the sessions of this id's own abandoned
+// launch as both abandoned-launch refusals do: leftoverSessions, then
+// abandonedLaunchUntracked.
+func abandonedLaunchSessions(leftovers []tmux.Session) string {
+	return leftoverSessions(leftovers) + ", " + abandonedLaunchUntracked
+}
+
+// abandonedStartingError is the abandoned-launch refusal while the youngest of
+// leftovers is younger than the starting-session bound (c from
+// abandonedLaunchCheck), nil past it: tmux.ErrTmuxUnresponsive with the
+// instance id; abandonedLaunchWords; the sessions (abandonedLaunchSessions);
+// "appears to still be starting" and the bound in seconds; then the row's
+// consequence and retry sentences ("nothing was done; retry later" before any
+// write). Such a session will either exit or finish starting with nobody
+// acting, so no human is asked to look. resume and reuse (abandonedLaunchError)
+// and kill's finished-row opt-in (killRun.abandonedLaunch, which sends no kill
+// then) give it alike.
+func (c startingSessionCheck) abandonedStartingError(leftovers []tmux.Session) error {
+	if c.class.Outcome != tmux.StillStarting {
+		return nil
+	}
+	subject := "it"
+	if len(leftovers) > 1 {
+		subject = "one of them"
+	}
+	return fmt.Errorf("%w: instance %s: %s: %s; %s appears to still be starting: it has run for less than the starting-session bound of %s; %s; %s",
+		tmux.ErrTmuxUnresponsive, c.row.InstanceID, abandonedLaunchWords, abandonedLaunchSessions(leftovers), subject,
+		inSeconds(c.class.Bound), c.row.consequence(), c.row.retry())
 }

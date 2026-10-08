@@ -31,9 +31,11 @@ const (
 //   - PaneMany: more than one distinct pane id carries it; the Pane is zero.
 //
 // It serves adoption (SR-3.6, the row's token), a leftover's pane (SR-3.7,
-// the leftover label's token) and the SR-11.3 decision for a row that records
-// no pane. What each outcome means is the caller's. Adoption (SR-3.6) and a
-// leftover's pane (SR-3.7) take a pane only on PaneOne; for adoption, none
+// the leftover label's token, as read-pane and kill's finished-row opt-in on
+// this id's own abandoned launch use it; b.6sa) and the SR-11.3 decision for
+// a row that records no pane. What each outcome means is the caller's.
+// Adoption (SR-3.6) and a leftover's pane (SR-3.7) take a pane only on
+// PaneOne; for adoption, none
 // and more than one alike adopt no pane (the pane verbs refuse with "the
 // agent's pane was not found"). In the SR-11.3 check of a row that records no
 // pane, PaneNone counts as Gone and PaneMany is unverified, never Gone. It

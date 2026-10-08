@@ -238,7 +238,8 @@ func TestAdviceFollow_B9_RestoreSentenceNextStep(t *testing.T) {
 // TestAdviceFollow_B10_HeldRetryLater: after "duplicate session" (re-lookup timed out, or the row's own session still
 // starting) follow the retry sentence the restore picks (b.gu6): wait and re-issue; find-missing past grace, then
 // re-issue; or, later, spawn the id. A starting session that outlives the wait is then this id's own abandoned
-// launch (b.1n6): "retry later" while it is young, past the bound a human's decision, until it goes.
+// launch (b.1n6): "retry later" while it is young, past the bound a human's decision; once the human ends it with
+// kill-finished (b.6sa), the re-issued resume launches.
 // B10: "<restore sentence>; retry later" / "...; do not retry until get shows the row ended or missing" /
 // "...; there is no row left to resume; later, a spawn of the id starts afresh"
 func TestAdviceFollow_B10_HeldRetryLater(t *testing.T) {
@@ -293,7 +294,7 @@ func TestAdviceFollow_B10_HeldRetryLater(t *testing.T) {
 						Bound: e.cfg.EffectiveStartingSession(), SessionID: true},
 						func() error { _, err := e.resume(r.ID); return err },
 						func() writesSnapshot { return e.snapshotResume(t, r).writesSnapshot }, forbid...)
-					e.removeHolders(t, sc)
+					adviceOperatorEnds(t, e, r.ID, r.Socket, sc.Holders)
 				}
 				advResumeLaunches(t, e, r.ID)
 			})

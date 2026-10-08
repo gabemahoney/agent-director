@@ -746,12 +746,15 @@ label applies this rule.
 ### A finished row's own old session
 
 `resume`, or a `spawn` with `--reuse-finished`, refuses with
-`ErrTmuxSessionConflict` ("this row's own id"): the row is `ended` or
-`missing`, but its own session still runs past the stopping window and the
-starting-session bound, or no session of it is found while its agent
-process still runs. If, after looking at it (steps 1 to 3 of the
-leftover item below), you want that session or agent gone, end it with the
-operator tool's `kill-finished`:
+`ErrTmuxSessionConflict` in two cases this item covers. "This row's own
+id": the row is `ended` or `missing`, but its own session still runs past
+the stopping window and the starting-session bound, or no session of it is
+found while its agent process still runs. "This id's own abandoned
+launch": the row's latest launch recorded no session of its own, and a
+session agent-director launched earlier for this id, which the row does not
+track, has run past the starting-session bound. If, after looking at it
+(steps 1 to 3 of the leftover item below), you want that session or agent
+gone, end it with the operator tool's `kill-finished`:
 
 ```sh
 ~/.agent-director/admin/agent-director-admin kill-finished --claude-instance-id <id>
@@ -768,8 +771,8 @@ The row's state and every other field stay unchanged, so the
 conversation stays resumable: run the refused `resume` (or the
 `spawn --reuse-finished`) again.
 
-It ends a session only if that session reported in to the row: the row
-records the agent's process id (the agent's SessionStart reached
+It ends the row's own session only if that session reported in to the
+row: the row records the agent's process id (the agent's SessionStart reached
 agent-director for the row's latest launch) and the session was created, in
 whole seconds, before the row finished. A session created in the same
 second, a row with no finish time, and an agent whose SessionStart could not
@@ -778,6 +781,24 @@ its own agent, by `find-missing`, a restore, a plain spawn's end write or a
 hand edit, never by a leftover or a nested `claude` carrying the id:
 agent-director ignores hooks that do not come from the row's own agent, so a
 working agent's row stays live and gets the live-row refusal below.
+
+This id's own abandoned launch never reports in, so that rule does not
+apply to it. When the row records a launch token but no tmux server or pane
+of that launch, `kill-finished` ends every session that carries an earlier
+launch's label of the row's id in this store, once the youngest of them has
+run for at least the starting-session bound. For each session, lowest `$N`
+first, it ends the pane that launch created (the one labelled with that
+launch), then the session by its id. It then waits for the youngest
+session's agent process, the other processes of those sessions' panes and
+each older session's agent process, even one whose pane was moved into
+another session. When the youngest session's agent process cannot be
+checked, it instead looks the sessions up once more and succeeds once none
+of them is listed, waiting for no process, so an older session's agent
+whose pane was moved into another session may still run after it
+succeeds: before running it, note that agent's pid from the pane listing
+(`list-panes -a`), and afterwards handle it as "An agent process that runs
+with no session or pane of its launch" describes. Its answers mean what they mean above, and the row is never
+changed.
 
 Every other answer sends no kill and changes nothing:
 
@@ -790,11 +811,13 @@ Every other answer sends no kill and changes nothing:
   be used".
 - `ErrTmuxUnresponsive` ("appears to still be stopping" or "appears to
   still be starting"): the row ended less than the stopping window ago, or
-  the session is younger than the starting-session bound (the configured
+  the session (for this id's own abandoned launch, its youngest session) is
+  younger than the starting-session bound (the configured
   `stopping_window_seconds` and `starting_session_seconds`). Wait and run
   it again.
 - `ErrTmuxSessionConflict` ("never reported in"): the row's own session
-  past both, or a leftover of an earlier launch (the error names its session
+  past both, or a leftover of an earlier launch other than this id's own
+  abandoned launch (the error names its session
   and its id, `$N`), that never reported in to the row. `send-keys` refuses
   a finished row, so ending the session is your decision: check its
   ownership and end it by hand by its session id, as steps 1 to 4 of
@@ -826,7 +849,8 @@ kill:
 jq -c 'select(.event == "ad.kill.called" and .claude_instance_id == "<id>") | {include_finished, kill_sent, lookup_outcome, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
 
-Only `kill-finished` ends a finished row's session: the `agent-director`
+Only `kill-finished` ends a finished row's session or this id's own
+abandoned launch: the `agent-director`
 CLI, its MCP tools and the Go and TypeScript clients have no way to, and
 their `kill` on a finished row is the no-op success. `kill-finished` exists
 on `agent-director-admin` from 0.11.0, the release that first ships the
@@ -839,7 +863,10 @@ from a plain `go build`) has it.
 Accepted risks: on a row wrongly marked `missing` (a hand edit of the
 store, or an agent-director process from before the install) it ends a
 healthy agent whose row says finished; the conversation stays resumable,
-and you chose it. The checks above fail closed, so some sessions you may
+and you chose it. On this id's own abandoned launch it ends sessions that
+never reported in, judged only by their label and age, so it may end a
+`claude` that started and is working for this id untracked: look at each
+session first. The checks above fail closed, so some sessions you may
 want gone are refused and left to you. A live row is always refused.
 `agent-director-admin` is off PATH, not locked: agents run as your user,
 so an agent that learns of it, for example from this README, could run it
@@ -857,11 +884,12 @@ leftover's pane if there is one leftover (not the agent's), and answers
 `ErrTmuxSessionConflict` if there are several. The leftover never keeps the
 row live: its hooks change nothing on the row, and `find-missing` judges
 the row by its own agent's process. On an `ended` or `missing` row,
-`agent-director-admin kill-finished` answers a leftover, or the row's own
-session that never reported in to it, with `ErrTmuxSessionConflict`
-("never reported in") and sends no kill; these steps end such a session by
-hand. A session with no valid label may be a person's own, so look before
-acting.
+`agent-director-admin kill-finished` answers a leftover (other than this
+id's own abandoned launch, which it ends; see "A finished row's own old
+session"), or the row's own session that never reported in to it, with
+`ErrTmuxSessionConflict` ("never reported in") and sends no kill; these
+steps end such a session by hand. A session with no valid label may be a
+person's own, so look before acting.
 
 1. Find the session and note its `session_created`:
 
@@ -920,10 +948,13 @@ restored). The error names the session and its id (`$N`); the socket is the
 row's `tmux_socket`. For a leftover, handle each session it names as in
 steps 2 to 4 (if it says "and N more", find the others with the listing of
 step 1). "This id's own abandoned launch" is a session of an earlier
-launch of this id that the row does not track; `kill-finished` does not
-end it, so handle each session it names as a leftover, as in steps 2 to 4.
-For "no valid instance id", look first (steps 2 and 3): it may be a
-person's own session; end it as in step 4 only if it is not wanted. Then
+launch of this id that the row does not track: look at each session it
+names (steps 2 and 3) and, if they are not wanted, end them all with
+`kill-finished` as "A finished row's own old session" describes (it
+refuses a `pending` row, so first wait until `get` shows the row `ended`
+or `missing`). For "no valid instance id", look first (steps 2 and 3): it
+may be a person's own session; end it as in step 4 only if it is not
+wanted. Then
 run the refused command again, whichever it was (if the error said the
 row was not restored, only once `get` shows it `ended` or `missing`):
 
@@ -1062,22 +1093,25 @@ reported in on a finished row"):
 jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
 
-In the second case the leftover never reported in to the row the spawn
-ended, so `kill-finished` answers "never reported in" and sends
-no kill: end the leftover by hand by its session id, as the leftover item
-above describes, before spawning the id again. A `--reuse-finished` spawn
-of the id made while the leftover still runs is refused with "this id's
-own abandoned launch": `ErrTmuxUnresponsive` ("appears to still be
-starting") while the leftover is younger than the starting-session bound
-(`starting_session_seconds`), `ErrTmuxSessionConflict` after.
+In the second case the row the spawn ended records no session of its own
+launch, so the leftover is this id's own abandoned launch. A
+`--reuse-finished` spawn of the id made while the leftover still runs is
+refused with "this id's own abandoned launch": `ErrTmuxUnresponsive`
+("appears to still be starting") while the leftover is younger than the
+starting-session bound (`starting_session_seconds`),
+`ErrTmuxSessionConflict` after. `kill-finished` answers the same way:
+"appears to still be starting", sending no kill, while the leftover is
+younger than the bound, and past it, it ends the leftover (see "A finished
+row's own old session").
 
-Handle each session as a leftover (steps 2 to 4 of "A leftover, or a
-session with no valid label, or one that never reported in on a finished
-row"; this store's id is
-the record's `store_id`, the same id [This store's id](#this-stores-id)
-prints), then spawn the id again. In the first case no row
-exists, so no reuse opt-in is needed. In the second the row is `ended`, so
-spawn with `--reuse-finished`:
+Look at each session first (steps 2 and 3 of "A leftover, or a session
+with no valid label, or one that never reported in on a finished row";
+this store's id is the record's `store_id`, the same id
+[This store's id](#this-stores-id) prints). In the first case no row
+exists: end each session by hand as in step 4 of that item, then spawn the
+id again; no reuse opt-in is needed. In the second the row is `ended`: end
+the leftover with `kill-finished` once it is past the bound (or by hand as
+in step 4), then spawn with `--reuse-finished`:
 
 ```sh
 agent-director spawn --cwd <dir> --tmux-session-name <name> --claude-instance-id <id> --reuse-finished

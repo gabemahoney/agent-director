@@ -221,7 +221,9 @@ func kftCases() []kftCase {
 			world: kftHolder(holderNone), want: kftNoPane},
 		{name: "Gone, agent running, name held by another row's session (AC-KILL-07)", row: goneRow(agentAlive, defWindow),
 			world: kftHolder(holderForeign), want: kftNoPane},
-		{name: "Leftover", row: goneRow(agentAlive, defWindow),
+		// A row that records no session of its launch reads a Leftover as this id's own abandoned launch
+		// instead (b.6sa): kill_optin_abandoned_test.go.
+		{name: "Leftover, the row records its launch's server and pane", row: goneRow(agentAlive, defWindow),
 			world: func(t *testing.T, e *killEnv, r *resumeRow) []string {
 				e.seedSession(t, &r.killRow, tmuxfix.WithRowSessionLabel(r.old(), true), e.createdBefore(defWindow+defBound))
 				return nil

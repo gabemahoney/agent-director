@@ -213,7 +213,7 @@ func (k *killRun) run() error {
 		}
 		return k.ours(res, launch)
 	case tmux.Leftover:
-		return k.leftoverRefusal(res.Leftovers)
+		return k.leftover(res.Leftovers, launch)
 	case tmux.Gone:
 		return k.gone(launch, true)
 	}
@@ -231,24 +231,29 @@ func (k *killRun) launchFor(id LaunchIdentity) tmux.Launch {
 func (k *killRun) ours(res tmux.Result, launch tmux.Launch) error {
 	panes, err := k.t.ListPanes(k.socket)
 	if err != nil {
-		lres := tmux.ListingFailure(err, k.pc, launch)
-		k.reasons = append(k.reasons, lres.Disagree...)
-		if lres.Verdict == tmux.Gone {
-			// No server at the socket any more: decided as for a Gone lookup,
-			// with no pane to find.
-			return k.gone(launch, false)
-		}
-		return k.cantTell(lres, tmux.CallListPanes, "")
+		return k.listingFailed(err, launch)
 	}
 	a := k.adopt(res, panes)
 	agent := agentProcess(k.row, a.Identity)
-	listed := sessionProcesses(k.pc, panes, res.Session.ID, agent.Identity.PID)
+	listed := sessionProcesses(k.pc, panes, agent.Identity.PID, res.Session.ID)
 	if pane, ok := agentPane(panes, a.Identity.PaneID, a.Identity.PanePID); ok {
 		k.killPane(pane.ID)
 	}
 	_ = k.t.KillSessionID(k.socket, res.Session.ID)
 	k.killSent, k.sessionKilled = true, true
-	return k.check(agent, listed, k.launchFor(a.Identity))
+	return k.check(agent, listed, k.launchFor(a.Identity), nil)
+}
+
+// listingFailed decides the kill sequence's failed pane listing, err (SR-6.1
+// step 1, SR-3.7): no server at the socket any more is decided as for a Gone
+// lookup, with no pane to find; otherwise its Can't tell error, nothing sent.
+func (k *killRun) listingFailed(err error, launch tmux.Launch) error {
+	lres := tmux.ListingFailure(err, k.pc, launch)
+	k.reasons = append(k.reasons, lres.Disagree...)
+	if lres.Verdict == tmux.Gone {
+		return k.gone(launch, false)
+	}
+	return k.cantTell(lres, tmux.CallListPanes, "")
 }
 
 // gone applies SR-6.1's Gone rows: the agent process gone, none recorded or
@@ -280,7 +285,7 @@ func (k *killRun) gone(launch tmux.Launch, listPanes bool) error {
 		return k.noPaneError()
 	}
 	k.killPane(pane.ID)
-	return k.check(agent, nil, launch)
+	return k.check(agent, nil, launch, nil)
 }
 
 // killPane sends the pane kill by id; its failure is ignored (SR-6.1).
@@ -292,12 +297,14 @@ func (k *killRun) killPane(paneID string) {
 // check is SR-6.1 step 4 after a kill was sent: the first reading of the
 // agent process decides whether it can be checked. Checkable (alive or gone):
 // the process wait over it and listed. Not (none recorded, or unreadable):
-// one follow-up lookup of launch, no wait.
-func (k *killRun) check(agent tmux.AgentProcess, listed []tmux.ProcIdentity, launch tmux.Launch) error {
+// one follow-up lookup of launch, no wait, judging the current label (ended
+// nil) or the sessions of this id's own abandoned launch the kill sequence
+// ended (ended, their tmux ids; killRun.abandonedLaunch).
+func (k *killRun) check(agent tmux.AgentProcess, listed []tmux.ProcIdentity, launch tmux.Launch, ended []string) error {
 	first := tmux.JudgeProcess(k.pc, agent.Identity)
 	k.noteCheck(agent, first)
 	if first == tmux.ProcNone || first == tmux.ProcUnknown {
-		return k.followUp(launch)
+		return k.followUp(launch, ended)
 	}
 	return k.wait(agent.Identity, first, listed)
 }
@@ -338,20 +345,41 @@ func (k *killRun) wait(agent tmux.ProcIdentity, state tmux.ProcState, listed []t
 }
 
 // followUp is the one follow-up lookup when the agent process cannot be
-// checked after a kill (SR-6.1, SR-3.11): the current label gone (Gone or
-// Leftover) is success; still there is ErrTmuxKillFailed; Can't tell is its
-// error, saying the kill may or may not have taken effect.
-func (k *killRun) followUp(launch tmux.Launch) error {
+// checked after a kill (SR-6.1, SR-3.11). An answer that shows what the kill
+// sequence ended still there (stillThere: the current label, or with ended
+// set one of those sessions) is ErrTmuxKillFailed; any other Ours, Leftover or
+// Gone is success; Can't tell is its error, saying the kill may or may not
+// have taken effect.
+func (k *killRun) followUp(launch tmux.Launch, ended []string) error {
 	res := tmux.Lookup(k.t, k.pc, launch, "")
 	k.followup = res.Token()
 	k.reasons = append(k.reasons, res.Disagree...)
 	switch res.Verdict {
-	case tmux.Gone, tmux.Leftover:
+	case tmux.Gone, tmux.Leftover, tmux.Ours:
+		if stillThere(res, ended) {
+			return k.uncheckableError()
+		}
 		return nil
-	case tmux.Ours:
-		return k.uncheckableError()
 	}
 	return k.cantTell(res, tmux.CallLookup, killSentConsequence)
+}
+
+// stillThere reports whether res, a follow-up lookup that answered, still
+// shows what the kill sequence ended. With ended empty that is the session
+// carrying the current label (Ours), so the label gone (Gone or Leftover)
+// means it ended. With ended set (this id's own abandoned launch,
+// killRun.abandonedLaunch) it is any session whose tmux id ended holds among
+// those res lists with a label of this row's id in this store, the Ours
+// session and the leftovers alike; a session another launch started since,
+// whatever its label, is not one of them.
+func stillThere(res tmux.Result, ended []string) bool {
+	if len(ended) == 0 {
+		return res.Verdict == tmux.Ours
+	}
+	if res.Verdict == tmux.Ours && slices.Contains(ended, res.Session.ID) {
+		return true
+	}
+	return slices.ContainsFunc(res.Leftovers, func(s tmux.Session) bool { return slices.Contains(ended, s.ID) })
 }
 
 // cantTell maps a Can't tell lookup or pane-listing result through the
@@ -397,16 +425,17 @@ func agentProcess(row Spawn, id LaunchIdentity) tmux.AgentProcess {
 }
 
 // sessionProcesses returns the processes of every pane the listing shows in
-// the session sessionID (linked windows included), each once by pid, with
-// its start time read now (SR-6.1 step 1; WD 2026-09-29c). The agent's pid is
-// left out, since the agent is judged by its recorded identity; a process
-// whose start time cannot be read, or that is already gone, is not waited
-// for (SR-18.12).
-func sessionProcesses(pc ProcChecker, panes []tmux.Pane, sessionID string, agentPID int) []tmux.ProcIdentity {
+// the sessions sessionIDs (linked windows included): the labelled session, or
+// every session of this id's own abandoned launch the kill sequence ends
+// (killRun.endAbandoned). Each is listed once by pid, with its start time
+// read now (SR-6.1 step 1; WD 2026-09-29c). The agent's pid is left out,
+// since the agent is judged by its own identity; a process whose start time
+// cannot be read, or that is already gone, is not waited for (SR-18.12).
+func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionIDs ...string) []tmux.ProcIdentity {
 	var out []tmux.ProcIdentity
 	seen := map[int]bool{agentPID: true}
 	for _, p := range panes {
-		if p.SessionID != sessionID || p.PID <= 0 || seen[p.PID] {
+		if !slices.Contains(sessionIDs, p.SessionID) || p.PID <= 0 || seen[p.PID] {
 			continue
 		}
 		seen[p.PID] = true

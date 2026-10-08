@@ -4,8 +4,9 @@ package api_test
 // (security_test.go) with the operator-only finished-row opt-in (SR-6.5;
 // Epic 18): an ended target meets the planted SECRET=xyz sessions on the
 // finished-row path's Gone (its name held by the no-id session or the other
-// row's session), Leftover, conflicting-labels and Ours rows, never reported
-// in and reported in. Run by TestSecurityKillOptIn.
+// row's session), Leftover (and this id's own abandoned launch, still starting
+// and ended; b.6sa), conflicting-labels and Ours rows, never reported in and
+// reported in. Run by TestSecurityKillOptIn.
 
 import (
 	"testing"
@@ -42,6 +43,20 @@ var securityKillOptInVerbs = []securityVerb{{
 // and kill_sent sent.
 func koSecFields(lookup string, sent bool) map[string]any {
 	return map[string]any{"include_finished": true, "lookup_outcome": lookup, "kill_sent": sent}
+}
+
+// koSecAbandoned seeds a session of an earlier launch of the target, which
+// records no session of its own launch (b.6sa), the session's pane process
+// its agent; with past, the clock moves past the starting-session bound and
+// the agent exits at its pane kill.
+func koSecAbandoned(past bool) func(*testing.T, *securityScene) {
+	return func(t *testing.T, s *securityScene) {
+		s.e.seedSession(t, &s.target, tmuxfix.WithRowSessionLabel(s.target.old(), true))
+		if past {
+			koPastBoth(s.e)
+			s.e.setAfterCall(tmux.CallKillPane, procfix.Gone(), s.target.AgentPID)
+		}
+	}
 }
 
 // koSecNoPane is the Gone refusal with the target's agent running and no pane of it found.
@@ -81,6 +96,29 @@ var securityKillOptInCases = []securityCase{
 				[]apitest.DescSession{{Name: s.target.Session.Name, ID: s.target.Session.ID}})
 		},
 		fields: koSecFields("leftover", false),
+	},
+	{
+		name:    "leftover, this id's own abandoned launch, still starting",
+		target:  koEnded(killRowSpec{NoSession: true, NoServerIdentity: true, NoPane: true}, time.Second),
+		arrange: koSecAbandoned(false),
+		wantErr: api.ErrTmuxUnresponsive,
+		desc: func(s *securityScene) apitest.DescCase {
+			return apitest.DescAbandonedLaunch(apitest.AbandonedLaunch{InstanceID: s.target.ID,
+				Sessions: []apitest.DescSession{{Name: s.target.Session.Name, ID: s.target.Session.ID}},
+				Bound:    s.e.cfg.EffectiveStartingSession()})
+		},
+		fields: koSecFields("leftover", false),
+	},
+	{
+		name:    "leftover, this id's own abandoned launch past the bound, ended",
+		target:  koEnded(killRowSpec{NoSession: true, NoServerIdentity: true, NoPane: true}, time.Second),
+		arrange: koSecAbandoned(true),
+		fields:  koSecFields("leftover", true),
+		check: func(t *testing.T, _ *securityScene, res any) {
+			if !res.(api.KillResult).KillSent {
+				t.Errorf("kill_sent = false; want true")
+			}
+		},
 	},
 	{
 		name:     "conflicting labels",
