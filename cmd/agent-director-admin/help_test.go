@@ -70,7 +70,8 @@ var (
 )
 
 // TestHelpOpensWithApprovalStatement: the no-verb run (global flags only
-// included), help, --help, -h and each verb's --help and -h, with or without
+// included), help, --help, -h and each verb's --help and -h (version's aliases
+// --version and -v included, b.fv2), with or without
 // global flags, exit 0 with the human-approval statement as the first line,
 // then the global flags and the usage of every verb (whole help) or the usage
 // of that verb only and the pointer to the global flags, opening no store and
@@ -94,6 +95,8 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 		{[]string{"delete", "--help"}, []string{"delete"}},
 		{[]string{"version", "--help"}, []string{"version"}},
 		{[]string{"version", "-h"}, []string{"version"}},
+		{[]string{"--version", "--help"}, []string{"version"}},
+		{[]string{"-v", "-h"}, []string{"version"}},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(append([]string{"agent-director-admin"}, tc.args...), " "), func(t *testing.T) {
@@ -134,24 +137,28 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 	}
 }
 
-// TestVersionMatchesMainBinary: agent-director-admin version prints exactly
-// what agent-director version prints for the same build, the stamp the build
-// set, and loads no config.
+// TestVersionMatchesMainBinary: agent-director-admin version and its aliases
+// --version and -v (b.fv2), global flags given or not, print exactly what
+// agent-director version prints for the same build, the stamp the build set,
+// and load no config.
 func TestVersionMatchesMainBinary(t *testing.T) {
 	home := poisonedHome(t)
-	adminOut, adminErr, adminCode := runAdmin(t, home, "version")
 	mainOut, mainErr, mainCode := runMain(t, home, "version")
-	if adminCode != 0 || adminErr != "" || mainCode != 0 || mainErr != "" {
-		t.Fatalf("version: admin exit %d stderr %q, main exit %d stderr %q; want 0 and empty", adminCode, adminErr, mainCode, mainErr)
-	}
-	if adminOut != mainOut {
-		t.Errorf("agent-director-admin version = %q; want agent-director's %q", adminOut, mainOut)
+	if mainCode != 0 || mainErr != "" {
+		t.Fatalf("agent-director version: exit %d stderr %q; want 0 and empty", mainCode, mainErr)
 	}
 	var stamp map[string]any
-	if err := json.Unmarshal([]byte(adminOut), &stamp); err != nil {
-		t.Fatalf("parse %q: %v", adminOut, err)
+	if err := json.Unmarshal([]byte(mainOut), &stamp); err != nil {
+		t.Fatalf("parse %q: %v", mainOut, err)
 	}
 	if want := map[string]any{"version": testVersion, "commit": testCommit}; !maps.Equal(stamp, want) {
 		t.Errorf("version = %v; want %v", stamp, want)
+	}
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"--home", home, "-v"}} {
+		adminOut, adminErr, adminCode := runAdmin(t, home, args...)
+		if adminCode != 0 || adminErr != "" || adminOut != mainOut {
+			t.Errorf("agent-director-admin %q: exit %d stderr %q stdout %q; want 0, empty stderr and agent-director's %q",
+				args, adminCode, adminErr, adminOut, mainOut)
+		}
 	}
 }

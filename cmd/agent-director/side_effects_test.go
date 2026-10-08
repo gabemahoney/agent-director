@@ -14,19 +14,21 @@ import (
 )
 
 // dbFreeShapes are the argv shapes run() dispatches before setupClient: none
-// may load the config or open or create the store (SR-4.1/4.2, b.8dr).
+// may load the config or open or create the store (SR-4.1/4.2, b.8dr). One
+// alias per verb, -h and -v (b.fv2); TestVerbAliases ties every alias to its verb.
 var dbFreeShapes = []struct {
 	name string
 	argv []string
 }{
 	{name: "help", argv: []string{"help"}},
-	{name: "--help", argv: []string{"--help"}},
+	{name: "-h", argv: []string{"-h"}},
 	{name: "no-args", argv: nil},
 	{name: "version", argv: []string{"version"}},
 	{name: "version --json", argv: []string{"version", "--json"}},
+	{name: "-v", argv: []string{"-v"}},
 }
 
-// TestDBFreeVerbsProduceNoStore: each DB-free shape, bare or after a global
+// TestDBFreeVerbsProduceNoStore: each DB-free shape, bare or with a global
 // flag (parsed and stripped), exits 0 with a JSON envelope and empty stderr,
 // and creates nothing under HOME or at the flag's target.
 func TestDBFreeVerbsProduceNoStore(t *testing.T) {
@@ -45,6 +47,9 @@ func TestDBFreeVerbsProduceNoStore(t *testing.T) {
 		shape{"--home before help", func(dir string) []string { return []string{"--home", dir, "help"} }},
 		shape{"--tmux-command before version", func(dir string) []string {
 			return []string{"--tmux-command", filepath.Join(dir, "tmux"), "version"}
+		}},
+		shape{"-h before --store-path", func(dir string) []string {
+			return []string{"-h", "--store-path", filepath.Join(dir, "s.db")}
 		}},
 	)
 	for _, s := range shapes {

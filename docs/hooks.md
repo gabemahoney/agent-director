@@ -36,7 +36,8 @@ verb and its payload on stdin. No hook applies, and the row stays
   or input that is not a hook payload.
 - A run with only global flags counts as a no-verb run. With `--home`,
   the record goes under that home.
-- `help`, `--help` and `version` never read stdin.
+- `help`, `version` and their aliases (`--help`, `-h`, `--version`, `-v`)
+  never read stdin.
 
 The `no_exec_form` record has the fields every `ad.hook.ignored` record
 has (see "The `ad.hook.ignored` reasons" below). Because it reads no

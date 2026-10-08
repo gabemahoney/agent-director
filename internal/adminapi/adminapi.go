@@ -149,7 +149,7 @@ var Verbs = []Verb{
 		Name:  "version",
 		Usage: "agent-director-admin version",
 		Description: "Print the build-time version stamp, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. " +
-			noStoreText + " " + errorsText,
+			"agent-director-admin --version and -v print it too. " + noStoreText + " " + errorsText,
 		Output: "{\"version\": \"...\", \"commit\": \"...\"}: the version stamp and the full git SHA the binary was built from.",
 	},
 }

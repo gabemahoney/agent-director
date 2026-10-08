@@ -4,7 +4,7 @@
 
 ## help
 
-Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks).
+Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks). CLI aliases: --help, -h.
 
 ### Parameters
 
@@ -384,7 +384,7 @@ _None._
 
 ## version
 
-Print the build-time version stamp as JSON ({version, commit}).
+Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.
 
 ### Parameters
 

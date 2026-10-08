@@ -50,16 +50,32 @@ var errDispatch = errors.New("dispatch error")
 // configPath is the canonical TOML config location.
 const configPath = clisetup.ConfigPath
 
-// handlers maps verb names to their implementations. `help` and `--help`
-// route to the same function so their stdout is byte-identical (SRD §12.3).
-// client and cfg are captured in closures so each verb sees the same
-// already-opened Client — construction is done once in run() via setupClient().
+// verbAliases maps each alias of a verb to that verb: --help and -h run help,
+// --version and -v run version (b.fv2), the flags most CLIs accept, so people
+// and scripts try them first. run() replaces an alias with its verb when it is
+// the first argument after the global flags, before any dispatch, so an alias
+// runs exactly as its verb does (same stdout, same exit code, no store); an
+// alias anywhere else is no alias. They are no verbs of their own: no manifest
+// entry and no handlers() entry names them, and help's and version's
+// manifest descriptions list them.
+var verbAliases = map[string]string{
+	"--help":    "help",
+	"-h":        "help",
+	"--version": "version",
+	"-v":        "version",
+}
+
+// handlers maps verb names to their implementations. Verb aliases (--help,
+// -h, --version, -v) are not in this table: run() has already replaced them
+// with their verbs (verbAliases). client and cfg are captured in closures so
+// each verb sees the same already-opened Client — construction is done once
+// in run() via setupClient().
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
 // by config/store failures (SRD §3.2 fail-open invariant).
 //
-// The DB-free static-data verbs `help`, `--help`, and `version` remain in this
+// The DB-free static-data verbs `help` and `version` remain in this
 // table for the unknown-verb-free lookup shape, but run() dispatches them (and
 // the no-verb case: help, or nothing for a hook payload on stdin, SR-22.9)
 // BEFORE setupClient with a zero-value Client, so on the normal path these
@@ -69,7 +85,6 @@ const configPath = clisetup.ConfigPath
 func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":           func(args []string) error { return helpHandler(client, args) },
-		"--help":         func(args []string) error { return helpHandler(client, args) },
 		"version":        func(args []string) error { return versionHandler(client, args) },
 		"spawn":          func(args []string) error { return spawnHandlerWith(client, args) },
 		"status":         func(args []string) error { return statusHandlerWith(client, args) },
@@ -373,8 +388,9 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // Startup wiring (config + store) runs on every STORE-BACKED invocation to
 // satisfy Epic 1 AC #4 (idempotent dir/file creation) and AC #5
 // (ErrSchemaMismatch surfaces). The DB-free verbs below never reach it: help,
-// --help, version, the no-verb run, and trail-emit are dispatched before
-// setupClient so they neither open nor create the store (SR-4.1/4.2).
+// version (and their aliases --help, -h, --version and -v, b.fv2), the no-verb
+// run, and trail-emit are dispatched before setupClient so they neither open
+// nor create the store (SR-4.1/4.2).
 // ErrSchemaMismatch now surfaces on a store-opening verb (e.g. `list`), not on
 // `help`.
 //
@@ -384,7 +400,11 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // carries a hook payload (read with a 1 MiB cap and a 1 s deadline), it prints
 // nothing, exits 0 and writes one ad.hook.ignored no_exec_form to the trail
 // under the (possibly --home) home, with no config load and no store
-// (noVerbHookIgnored). `help`, `--help` and `version` never read stdin.
+// (noVerbHookIgnored). `help`, `version` and their aliases never read stdin.
+//
+// A verb alias (verbAliases: --help, -h, --version, -v) as the first argument
+// after the global flags is replaced with its verb right after the global
+// flags are applied, so everything below sees only the verb (b.fv2).
 //
 // The hook verb is special-cased: it bypasses the normal store-setup-and-
 // dispatch path so every failure mode is fail-open per SRD §3.2. The
@@ -426,6 +446,14 @@ func run() int {
 		return 1
 	}
 
+	// A verb alias is honoured only as the first argument after the global
+	// flags (b.fv2). strippedArgv is ParseGlobalFlags' own copy, never os.Args.
+	if len(strippedArgv) > 0 {
+		if verb, ok := verbAliases[strippedArgv[0]]; ok {
+			strippedArgv[0] = verb
+		}
+	}
+
 	// trail-emit: DB-free verb — special-cased before setupClient so it works
 	// even when state.db is missing or corrupted (SR-A-2.3, t3.4uk.nz.j9.2k).
 	if len(strippedArgv) > 0 && strippedArgv[0] == "trail-emit" {
@@ -439,12 +467,12 @@ func run() int {
 		return 0
 	}
 
-	// help / --help / version / no verb: DB-free static-data verbs —
-	// special-cased before setupClient so they never open or create the store
-	// (SR-4.1/4.2, t3.93m.nr.om.wq). This closes the path by which the npm
-	// client's version probe rewrote the prod DB (b.8dr) and lets every
-	// SessionStart hook (`agent-director help`) fire without touching the
-	// store. Keyed off stripped argv so global flags still apply
+	// help / version / no verb: DB-free static-data verbs (their aliases are
+	// already replaced with them above) — special-cased before setupClient so
+	// they never open or create the store (SR-4.1/4.2, t3.93m.nr.om.wq).
+	// This closes the path by which the npm client's version probe rewrote the
+	// prod DB (b.8dr) and lets every SessionStart hook (`agent-director help`)
+	// fire without touching the store. Keyed off stripped argv so global flags still apply
 	// (`--home /x help` works and creates no store under /x). helpHandler ignores
 	// its client; versionHandler only calls checkClosed + pure data, so a
 	// non-nil zero-value &Client{} (closed=false) passes and stdout is
@@ -454,9 +482,7 @@ func run() int {
 	// Code that does not run exec-form hooks: then nothing on stdout, exit 0,
 	// and one trail record (SR-22.9; noVerbHookIgnored). The check runs here,
 	// after --home is applied, so the record lands under that home.
-	if len(strippedArgv) == 0 ||
-		strippedArgv[0] == "help" || strippedArgv[0] == "--help" ||
-		strippedArgv[0] == "version" {
+	if len(strippedArgv) == 0 || strippedArgv[0] == "help" || strippedArgv[0] == "version" {
 		var derr error
 		switch {
 		case len(strippedArgv) == 0:

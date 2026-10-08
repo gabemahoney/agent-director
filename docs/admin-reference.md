@@ -60,7 +60,7 @@ Plain text, opening with the human-approval statement.
 
 `agent-director-admin version`
 
-Print the build-time version stamp, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. It opens no store and loads no config. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
+Print the build-time version stamp, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. agent-director-admin --version and -v print it too. It opens no store and loads no config. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
 
 ### Flags
 

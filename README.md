@@ -444,7 +444,8 @@ can be changed, but never below its safe minimum.
   to the minimum or replaced by the default. Until the file is fixed, every store-backed verb fails
   with `ErrConfigMalformed` naming each refused key, its value and the
   values it allows; `serve` does not start; hooks record nothing and relayed
-  permission requests are denied. `help` and `version` still run. A
+  permission requests are denied. `help` and `version` (also `--help`,
+  `-h`, `--version` and `-v`) still run. A
   misspelt key is ignored, so its default stays in force.
 - **Grace period.** Separate from the bound and the stopping window. Two
   settings time a launch, and you need both. `create_timeout_ms` limits

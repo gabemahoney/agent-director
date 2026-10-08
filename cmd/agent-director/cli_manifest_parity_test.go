@@ -90,11 +90,11 @@ func TestCLIFlagsAreManifestParams(t *testing.T) {
 		t.Fatalf("the scan found no kill FlagSet registering claude-instance-id (found %v); the checks below would pass vacuously", s.flags)
 	}
 
-	cliVerbs := map[string]bool{"hook": true} // run() handles hook before dispatch
+	// run() handles hook before dispatch. Verb aliases (--help, -h, --version,
+	// -v) live in verbAliases, never in handlers, so a key here is a verb.
+	cliVerbs := map[string]bool{"hook": true}
 	for _, v := range s.dispatched {
-		if !strings.HasPrefix(v, "-") { // --help is help's alias
-			cliVerbs[v] = true
-		}
+		cliVerbs[v] = true
 	}
 	if !cliVerbs["kill"] || !cliVerbs["help"] {
 		t.Fatalf("the dispatch table scan found %v; want the CLI's verbs", s.dispatched)

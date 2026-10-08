@@ -221,7 +221,7 @@ const killDescription = "End the agent of a live row's current launch (pending i
 var Verbs = []VerbDef{
 	{
 		Name:        "help",
-		Description: "Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks).",
+		Description: "Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks). CLI aliases: --help, -h.",
 		Callable:    false,
 		HandleFree:  false,
 		Params:      []ParamDef{},
@@ -1009,7 +1009,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "version",
-		Description: "Print the build-time version stamp as JSON ({version, commit}).",
+		Description: "Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.",
 		Callable:    true,
 		HandleFree:  true,
 		Params:      []ParamDef{},

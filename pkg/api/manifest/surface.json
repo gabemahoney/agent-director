@@ -3,7 +3,7 @@
   "verbs": [
     {
       "name": "help",
-      "description": "Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks).",
+      "description": "Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks). CLI aliases: --help, -h.",
       "callable": false,
       "handle_free": false,
       "params": [],
@@ -1112,7 +1112,7 @@
     },
     {
       "name": "version",
-      "description": "Print the build-time version stamp as JSON ({version, commit}).",
+      "description": "Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.",
       "callable": true,
       "handle_free": true,
       "params": [],

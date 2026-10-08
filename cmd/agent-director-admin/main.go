@@ -10,9 +10,9 @@
 // verb's flags, opens the pkg/api Client exactly as agent-director does
 // (clisetup.Open), calls through internal/adminapi and prints the result as
 // JSON on stdout, or one {err_name, err_description} envelope on stderr with
-// exit code 1. help, --help, -h, version, the no-verb run and every verb's
-// --help or -h open no store and load no config, and every help opens with
-// adminapi.ApprovalStatement.
+// exit code 1. help, --help, -h, version, --version, -v, the no-verb run and
+// every verb's --help or -h open no store and load no config, and every help
+// opens with adminapi.ApprovalStatement.
 package main
 
 import (
@@ -60,13 +60,17 @@ var errDispatch = errors.New("dispatch error")
 
 // handlers maps each verb of adminapi.Verbs to its handler; the store-backed
 // verbs open the Client with o, the run's global-flag overrides. help's
-// aliases --help and -h print the same help.
+// aliases --help and -h print the same help, and version's aliases --version
+// and -v (b.fv2) the same version stamp; an alias is looked up only as the
+// first argument after the global flags.
 func handlers(o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":          helpHandler,
 		"--help":        helpHandler,
 		"-h":            helpHandler,
 		"version":       versionHandler,
+		"--version":     versionHandler,
+		"-v":            versionHandler,
 		"kill-finished": func(args []string) error { return killFinishedHandler(o, args) },
 		"delete":        func(args []string) error { return deleteHandler(o, args) },
 	}

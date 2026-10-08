@@ -169,6 +169,7 @@ func TestNoExecFormCLINonHookStdinPrintsHelp(t *testing.T) {
 		{name: "payload on a pipe still open at the deadline", stdin: hookPayload, holdOpen: true},
 		{name: "help verb with a payload", stdin: hookPayload, args: []string{"help"}},
 		{name: "--help with a payload", stdin: hookPayload, args: []string{"--help"}},
+		{name: "-h with a payload", stdin: hookPayload, args: []string{"-h"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

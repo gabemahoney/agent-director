@@ -9,22 +9,19 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// TestHelpVerbAndAliases: help, --help and the no-verb run exit 0 with
-// byte-identical stdout: one JSON object, no preamble, whose verbs each have a
-// name; help is listed with a description, trail-emit is and the read verb
-// trail-path is not (b.ruo), kill is and delete is not, and nothing names an
-// operator action (SR-6.8, b.vqr).
+// TestHelpVerbAndAliases: help and the no-verb run exit 0 with byte-identical
+// stdout: one JSON object, no preamble, whose verbs each have a name; help is
+// listed with a description, trail-emit is and the read verb trail-path is not
+// (b.ruo), kill is and delete is not, and nothing names an operator action
+// (SR-6.8, b.vqr). TestVerbAliases covers --help and -h.
 func TestHelpVerbAndAliases(t *testing.T) {
 	home := t.TempDir()
 	help, stderr, code := runCLIWithHome(t, home, "help")
 	if code != 0 || stderr != "" || !strings.HasPrefix(help, "{") {
 		t.Fatalf("help: exit=%d stderr=%q stdout=%.80q; want 0, empty stderr, a JSON object", code, stderr, help)
 	}
-	for _, argv := range [][]string{{"--help"}, nil} {
-		stdout, stderr, code := runCLIWithHome(t, home, argv...)
-		if code != 0 || stderr != "" || stdout != help {
-			t.Errorf("%q: exit=%d, stdout differs from help: %.200q (stderr=%q)", argv, code, stdout, stderr)
-		}
+	if stdout, stderr, code := runCLIWithHome(t, home); code != 0 || stderr != "" || stdout != help {
+		t.Errorf("no verb: exit=%d, stdout differs from help: %.200q (stderr=%q)", code, stdout, stderr)
 	}
 	if m := apitest.OperatorActionNames.FindString(help); m != "" {
 		t.Errorf("SR-6.8: help names %q; nothing the main CLI prints may name an operator action", m)
@@ -52,6 +49,51 @@ func TestHelpVerbAndAliases(t *testing.T) {
 	}
 	if listed["help"] == "" {
 		t.Error("help verb has an empty description")
+	}
+}
+
+// TestVerbAliases: --help and -h run help, --version and -v run version
+// (b.fv2) as the first argument after the global flags: the alias gives the
+// exit code, stdout and stderr of its verb with the same other args (exit 0).
+func TestVerbAliases(t *testing.T) {
+	home := t.TempDir()
+	cases := []struct {
+		name        string
+		alias, verb []string
+	}{
+		{"--help", []string{"--help"}, []string{"help"}},
+		{"-h", []string{"-h"}, []string{"help"}},
+		{"-h before --home", []string{"-h", "--home", home}, []string{"help", "--home", home}},
+		{"--version", []string{"--version"}, []string{"version"}},
+		{"-v", []string{"-v"}, []string{"version"}},
+		{"--home before -v", []string{"--home", home, "-v"}, []string{"--home", home, "version"}},
+		{"--version --json", []string{"--version", "--json"}, []string{"version", "--json"}},
+		{"-v --help", []string{"-v", "--help"}, []string{"version", "--help"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wantOut, wantErr, wantCode := runCLIWithHome(t, home, tc.verb...)
+			if wantCode != 0 || wantErr != "" || wantOut == "" {
+				t.Fatalf("%q: exit=%d stderr=%q stdout=%.200q; want 0, empty stderr and output",
+					tc.verb, wantCode, wantErr, wantOut)
+			}
+			stdout, stderr, code := runCLIWithHome(t, home, tc.alias...)
+			if code != wantCode || stderr != wantErr || stdout != wantOut {
+				t.Errorf("%q: exit=%d stderr=%q stdout=%.200q; want %q's exit=%d stderr=%q stdout=%.200q",
+					tc.alias, code, stderr, stdout, tc.verb, wantCode, wantErr, wantOut)
+			}
+		})
+	}
+}
+
+// TestVerbAliasAfterVerbIsNoAlias: an alias after a verb is that verb's
+// unknown flag, ErrInvalidFlags, not a run of help or version (b.fv2).
+func TestVerbAliasAfterVerbIsNoAlias(t *testing.T) {
+	for _, flag := range []string{"--version", "-v"} {
+		t.Run(flag, func(t *testing.T) {
+			stdout, stderr, code := runCLI(t, "list", flag)
+			assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+		})
 	}
 }
 
