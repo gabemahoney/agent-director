@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
@@ -28,26 +29,37 @@ func TestClassifyKnown(t *testing.T) {
 }
 
 // TestClassifyUnknown verifies that an unrecognized error collapses to
-// "ErrInternal" with the original error message as description.
+// "ErrInternal" with the original error message as description. That includes
+// a store schema sentinel wrapped by anything but a clisetup.OpenError (b.cm7).
 func TestClassifyUnknown(t *testing.T) {
-	err := errors.New("something completely unexpected")
-	name, desc := errnames.Classify(err)
-	if name != "ErrInternal" {
-		t.Errorf("Classify(unknown): name = %q, want %q", name, "ErrInternal")
-	}
-	if desc != err.Error() {
-		t.Errorf("Classify(unknown): description = %q, want %q", desc, err.Error())
+	for _, err := range []error{
+		errors.New("something completely unexpected"),
+		fmt.Errorf("verb: %w", store.ErrSchemaMismatch),
+		fmt.Errorf("verb: %w", store.ErrSchemaMigrationRequired),
+	} {
+		name, desc := errnames.Classify(err)
+		if name != "ErrInternal" || desc != err.Error() {
+			t.Errorf("Classify(%q) = (%q, %q), want (%q, %q)", err, name, desc, "ErrInternal", err.Error())
+		}
 	}
 }
 
-// TestClassifyOpenError: a clisetup.OpenError named ErrConfigMalformed or
-// ErrStoreOpen classifies as its Name, with its cause's text (b.vma).
+// TestClassifyOpenError: a clisetup.OpenError classifies as its Name, with its
+// cause's text, whatever store sentinel the cause wraps (b.vma, b.cm7).
 func TestClassifyOpenError(t *testing.T) {
-	for _, want := range []string{"ErrConfigMalformed", "ErrStoreOpen"} {
-		t.Run(want, func(t *testing.T) {
-			name, desc := errnames.Classify(&clisetup.OpenError{Name: want, Err: errors.New("the cause")})
-			if name != want || desc != "the cause" {
-				t.Errorf("Classify = (%q, %q), want (%q, %q)", name, desc, want, "the cause")
+	for _, tc := range []struct {
+		want  string
+		cause error
+	}{
+		{"ErrConfigMalformed", errors.New("the cause")},
+		{"ErrStoreOpen", errors.New("the cause")},
+		{"ErrSchemaMismatch", fmt.Errorf("%w: found user_version=99, want 7", store.ErrSchemaMismatch)},
+		{"ErrSchemaMigrationRequired", fmt.Errorf("%w: state.db is schema v1", store.ErrSchemaMigrationRequired)},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			name, desc := errnames.Classify(&clisetup.OpenError{Name: tc.want, Err: tc.cause})
+			if name != tc.want || desc != tc.cause.Error() {
+				t.Errorf("Classify = (%q, %q), want (%q, %q)", name, desc, tc.want, tc.cause.Error())
 			}
 		})
 	}

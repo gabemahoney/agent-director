@@ -218,5 +218,35 @@
     "name": "ErrStoreOpen",
     "package": "clisetup",
     "description": ""
+  },
+  {
+    "name": "ErrSchemaMismatch",
+    "package": "clisetup",
+    "description": ""
+  },
+  {
+    "name": "ErrSchemaMigrationRequired",
+    "package": "clisetup",
+    "description": ""
+  },
+  {
+    "name": "ErrUnknownVerb",
+    "package": "clisetup",
+    "description": ""
+  },
+  {
+    "name": "ErrJSONMarshal",
+    "package": "clisetup",
+    "description": ""
+  },
+  {
+    "name": "ErrTrailWrite",
+    "package": "clisetup",
+    "description": ""
+  },
+  {
+    "name": "ErrInternal",
+    "package": "errnames",
+    "description": ""
   }
 ]

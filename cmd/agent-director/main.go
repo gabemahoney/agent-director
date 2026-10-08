@@ -33,10 +33,10 @@ type errorEnvelope struct {
 	ErrDescription string `json:"err_description"`
 }
 
-// CLI-internal error names. These are NOT part of the SRD §13.1 API error
-// catalogue — that catalogue describes API-surface errors emitted by verbs.
-// These names signal startup/dispatch failures of the CLI itself and are
-// kept distinct from any future API error names.
+// CLI-internal error names. These signal dispatch and output failures of the
+// CLI itself, not errors a verb returns, so no verb lists them. They are in
+// pkg/api/errnames.Catalog (with internal/clisetup's sentinels, b.cm7) so
+// the TS client knows them.
 const (
 	errUnknownVerb = "ErrUnknownVerb"
 	errJSONMarshal = "ErrJSONMarshal"

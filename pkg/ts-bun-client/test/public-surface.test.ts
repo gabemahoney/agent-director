@@ -99,9 +99,11 @@ test("public-surface: golden tracks all three TRACKED files", () => {
 
 test("public-surface: Client exposes no migrate method (SR-1)", () => {
   // SR-1 negative invariant: the schema-migration gate is a Go-side,
-  // refuse-and-instruct mechanism. It has NO catalog entry, NO TS error
-  // class, and crucially NO npm-client trigger. The published Client must
-  // therefore expose nothing a caller could invoke to request a migration.
+  // refuse-and-instruct mechanism with NO npm-client trigger. The published
+  // Client must therefore expose nothing a caller could invoke to request a
+  // migration. (SR-1 also gave the refusal no catalog entry and no TS error
+  // class; b.cm7 superseded that part, so ErrSchemaMigrationRequired is a
+  // catalogued class a caller can branch on. The no-trigger part still holds.)
   //
   // This assertion walks the *runtime* prototype chain of the exported
   // Client class rather than the .d.ts goldens, so it holds independently
@@ -136,12 +138,13 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
     `Client runtime surface contains migration-shaped method(s): ${migratLike.join(", ")}`
   ).toBe(true);
 
-  // The tracked .d.ts goldens must also stay migration-free. This part is
+  // The tracked .d.ts goldens must also stay migration-free (no method, option
+  // or param), the refusal's error class (b.cm7) aside. This part is
   // golden-derived (informational), but the runtime checks above are the
   // load-bearing, regeneration-proof guarantee.
   for (const f of TRACKED) {
     const golden = fs.readFileSync(path.join(fixtureDir, `${f}.golden`), "utf-8");
-    expect(golden).not.toMatch(/migrat/i);
+    expect(golden.replaceAll("ErrSchemaMigrationRequired", "")).not.toMatch(/migrat/i);
   }
 });
 

@@ -8,25 +8,25 @@ import (
 )
 
 // TestOpenErrorIs: an OpenError matches the sentinel its Name names and no
-// other, a schema-named one matches neither, and its cause still matches (b.vma).
+// other clisetup sentinel, and its cause still matches (b.vma, b.cm7).
 func TestOpenErrorIs(t *testing.T) {
 	cause := errors.New("the cause")
-	for _, tc := range []struct {
-		name                  string
-		wantConfig, wantStore bool
-	}{
-		{"ErrConfigMalformed", true, false},
-		{"ErrStoreOpen", false, true},
-		{"ErrSchemaMismatch", false, false},
-		{"ErrSchemaMigrationRequired", false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := &clisetup.OpenError{Name: tc.name, Err: cause}
-			if got := errors.Is(err, clisetup.ErrConfigMalformed); got != tc.wantConfig {
-				t.Errorf("errors.Is(ErrConfigMalformed) = %t, want %t", got, tc.wantConfig)
-			}
-			if got := errors.Is(err, clisetup.ErrStoreOpen); got != tc.wantStore {
-				t.Errorf("errors.Is(ErrStoreOpen) = %t, want %t", got, tc.wantStore)
+	sentinels := map[string]error{
+		"ErrConfigMalformed":         clisetup.ErrConfigMalformed,
+		"ErrStoreOpen":               clisetup.ErrStoreOpen,
+		"ErrSchemaMismatch":          clisetup.ErrSchemaMismatch,
+		"ErrSchemaMigrationRequired": clisetup.ErrSchemaMigrationRequired,
+		"ErrUnknownVerb":             clisetup.ErrUnknownVerb,
+		"ErrJSONMarshal":             clisetup.ErrJSONMarshal,
+		"ErrTrailWrite":              clisetup.ErrTrailWrite,
+	}
+	for _, name := range []string{"ErrConfigMalformed", "ErrStoreOpen", "ErrSchemaMismatch", "ErrSchemaMigrationRequired"} {
+		t.Run(name, func(t *testing.T) {
+			err := &clisetup.OpenError{Name: name, Err: cause}
+			for target, sentinel := range sentinels {
+				if got, want := errors.Is(err, sentinel), target == name; got != want {
+					t.Errorf("errors.Is(%s) = %t, want %t", target, got, want)
+				}
 			}
 			if !errors.Is(err, cause) {
 				t.Error("errors.Is(cause) = false, want true")

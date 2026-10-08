@@ -21,6 +21,11 @@ type Entry struct {
 	Err  error
 }
 
+// errInternal is the sentinel Catalog pairs with ErrInternal (b.cm7). No error
+// wraps it: an error is ErrInternal because it matches no other entry
+// (Classify's fallback), never through errors.Is.
+var errInternal = errors.New("ErrInternal")
+
 // Catalog is the canonical err_name lookup table for all agent-director
 // error paths. The CLI's Classify and the MCP server's classifyDispatchError
 // consume this table — there is exactly one source of truth.
@@ -64,13 +69,6 @@ var Catalog = []Entry{
 	{Name: "ErrTmuxUnresponsive", Err: tmux.ErrTmuxUnresponsive},
 	{Name: "ErrTmuxSessionConflict", Err: tmux.ErrTmuxSessionConflict},
 	{Name: "ErrTmuxKillFailed", Err: tmux.ErrTmuxKillFailed},
-	// ErrSchemaMismatch is intentionally absent: it surfaces from store
-	// initialization (pkg/api.NewClient), not from individual verb handlers.
-	// cmd/agent-director handles it via direct errors.Is before any verb call.
-	// ErrSchemaMigrationRequired is intentionally absent for the same reason:
-	// it too surfaces only from store initialization (older-than-binary DB with
-	// no valid authorization sentinel), never from a verb handler, and
-	// cmd/agent-director maps it via direct errors.Is before any verb call.
 	{Name: "ErrSpawnNotInteractive", Err: api.ErrSpawnNotInteractive},
 	{Name: "ErrSendKeysWhileRelayed", Err: api.ErrSendKeysWhileRelayed},
 	{Name: "ErrSpawnNotPausable", Err: api.ErrSpawnNotPausable},
@@ -94,15 +92,34 @@ var Catalog = []Entry{
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
 	{Name: "ErrPermissionRequestNotFound", Err: store.ErrPermissionRequestNotFound},
 	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
-	// ErrConfigMalformed and ErrStoreOpen come from no verb handler:
-	// clisetup.Open names them when the CLI cannot open its Client, before any
-	// verb runs (the config cannot be loaded; the store cannot be opened).
-	// They are catalogued so the surfaces built from this Catalog, the TS
-	// client's error classes among them, know them (b.vma). Only a
+	// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch and
+	// ErrSchemaMigrationRequired come from no verb handler: clisetup.Open
+	// names them when the CLI cannot open its Client, before any verb runs
+	// (the config cannot be loaded; the store cannot be opened; the store's
+	// schema is newer than the binary or needs a migration). They are
+	// catalogued so the surfaces built from this Catalog, the TS client's
+	// error classes among them, know them (b.vma, b.cm7). Only a
 	// clisetup.OpenError carries their sentinels (OpenError.Is), so no verb
-	// error's name changes.
+	// error's name changes, and an error that wraps store.ErrSchemaMismatch
+	// or store.ErrSchemaMigrationRequired but is no OpenError stays
+	// ErrInternal.
 	{Name: "ErrConfigMalformed", Err: clisetup.ErrConfigMalformed},
 	{Name: "ErrStoreOpen", Err: clisetup.ErrStoreOpen},
+	{Name: "ErrSchemaMismatch", Err: clisetup.ErrSchemaMismatch},
+	{Name: "ErrSchemaMigrationRequired", Err: clisetup.ErrSchemaMigrationRequired},
+	// ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite come from no verb
+	// handler either: the command binaries write them themselves (a verb the
+	// binary does not know; a JSON result the binary cannot write; a trail
+	// event agent-director trail-emit cannot write). No error wraps their
+	// sentinels, so Classify never gives them; they are catalogued so the TS
+	// client knows them (b.cm7).
+	{Name: "ErrUnknownVerb", Err: clisetup.ErrUnknownVerb},
+	{Name: "ErrJSONMarshal", Err: clisetup.ErrJSONMarshal},
+	{Name: "ErrTrailWrite", Err: clisetup.ErrTrailWrite},
+	// ErrInternal is the name Classify gives an error that matches no other
+	// entry. No error wraps its sentinel, errInternal, so it changes no
+	// error's name; it is catalogued so the TS client knows it (b.cm7).
+	{Name: "ErrInternal", Err: errInternal},
 	// ErrUnknownTool is intentionally absent from this Catalog: it is a
 	// dispatch-level MCP error (not a verb-surface error) declared and handled
 	// directly in internal/mcp. internal/mcp.classifyDispatchError checks for
@@ -114,9 +131,10 @@ var Catalog = []Entry{
 // Classify returns the canonical err_name and err_description for an error
 // returned by a verb handler. It walks Catalog using errors.Is, returning
 // the first matching entry's Name along with err.Error() as the description.
-// Unrecognized errors collapse to "ErrInternal". Production paths do reach
-// this fallback on purpose: an error that wraps no catalogued sentinel,
-// such as spawn's failed collision pre-check store read
+// Unrecognized errors collapse to "ErrInternal", which Catalog lists with a
+// sentinel no error wraps. Production paths do reach this fallback on
+// purpose: an error that wraps no catalogued sentinel, such as spawn's
+// failed collision pre-check store read
 // (spawn.PreCheckReadError), is reported as ErrInternal. ErrInternal is
 // listed in no verb's error list; its triggers are stated in the verb's
 // description text instead.

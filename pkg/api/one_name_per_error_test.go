@@ -40,7 +40,9 @@ import (
 // assertOneName checks SR-1.5 on an error a verb returned: exactly one
 // errnames.Catalog entry matches err under errors.Is, it is want, and
 // errnames.Classify names it too. A want of "" or "ErrInternal" asserts that
-// no entry matches and Classify gives ErrInternal.
+// no entry matches and Classify gives ErrInternal; only TestOneNameCatalogue's
+// wrapped ErrInternal sentinel, which no verb error wraps, matches its own
+// entry (b.cm7).
 func assertOneName(t testing.TB, err error, want string) {
 	t.Helper()
 	if want == "" {
@@ -55,8 +57,8 @@ func assertOneName(t testing.TB, err error, want string) {
 			matched = append(matched, e.Name)
 		}
 	}
-	if internal := want == "ErrInternal"; internal && len(matched) != 0 || !internal && !slices.Equal(matched, []string{want}) {
-		t.Errorf("err %q matches catalogued %q; want exactly [%s] (none for ErrInternal)", err, matched, want)
+	if !slices.Equal(matched, []string{want}) && !(want == "ErrInternal" && len(matched) == 0) {
+		t.Errorf("err %q matches catalogued %q; want exactly [%s] (or none for ErrInternal)", err, matched, want)
 	}
 	if name, _ := errnames.Classify(err); name != want {
 		t.Errorf("Classify(%q) = %s; want %s", err, name, want)

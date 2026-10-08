@@ -1,16 +1,24 @@
 /**
- * open-errors.test.ts — b.vma: the real CLI's ErrStoreOpen and
- * ErrConfigMalformed refusals reach a TS caller as those classes, not ErrUnknownErrorName.
+ * open-errors.test.ts — b.vma, b.cm7: the real CLI's store-open, config and
+ * schema refusals reach a TS caller as their own classes, not ErrUnknownErrorName.
  */
 
 import { test, expect } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import { Client } from "../src/client.js";
-import { ErrConfigMalformed, ErrStoreOpen, ErrUnknownErrorName } from "../src/errors.js";
-import { rejection, withProcessEnv } from "./internal/helper.js";
+import {
+  type AgentDirectorError,
+  ErrConfigMalformed,
+  ErrSchemaMigrationRequired,
+  ErrSchemaMismatch,
+  ErrStoreOpen,
+  ErrUnknownErrorName,
+} from "../src/errors.js";
+import { homeStore, rejection, runHelper, withProcessEnv } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 /** What list({}) rejects with on a Client over the real CLI, given storePath (or no options). */
@@ -45,5 +53,23 @@ test("refused [pause] timeout_seconds → list() rejects with ErrConfigMalformed
     expect(err).toBeInstanceOf(ErrConfigMalformed);
     expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
     expect((err as ErrConfigMalformed).errDescription).toContain("[pause] timeout_seconds = -1");
+  });
+}, 10_000);
+
+// b.cm7's repro: a store stamped with another schema version than the binary's.
+test.each([
+  ["newer", 99, ErrSchemaMismatch, "found user_version=99"],
+  ["older", 1, ErrSchemaMigrationRequired, "state.db is schema v1"],
+] as const)("store schema %s than the binary → list() rejects with its class", async (_label, version, cls, desc) => {
+  await withTempHome(async (homeDir) => {
+    const storePath = homeStore(homeDir);
+    runHelper("seed-empty-store", { store: storePath });
+    const db = new Database(storePath);
+    db.run(`PRAGMA user_version = ${version}`);
+    db.close();
+    const err = await listRejection(storePath);
+    expect(err).toBeInstanceOf(cls);
+    expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
+    expect((err as AgentDirectorError).errDescription).toContain(desc);
   });
 }, 10_000);

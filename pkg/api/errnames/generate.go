@@ -18,7 +18,7 @@
 // - name        — the err_name string (matches Catalog[i].Name exactly).
 // - package     — short package suffix of the sentinel's origin package
 //                 (e.g. "spawn", "store", "tmux", "config", "probe", "api",
-//                 "clisetup").
+//                 "clisetup", "errnames").
 // - description — canonical message text (empty for now; downstream Epics
 //                 may fill from doc-strings later). Key is locked in schema.
 //
@@ -63,11 +63,6 @@ var packageOf = map[string]string{
 	"ErrTmuxSessionNameTooLong": "spawn",
 
 	// internal/store
-	// ErrSchemaMismatch is intentionally absent: it is a store-initialization
-	// error (not a verb error) removed from Catalog in Task 7.
-	// ErrSchemaMigrationRequired is intentionally absent for the same reason:
-	// a store-initialization error (older-than-binary DB, no valid authorization
-	// sentinel), not a verb-surface error, so it carries no catalog entry.
 	"ErrSpawnNotFound":             "store",
 	"ErrNoOpenPermissionRequest":   "store",
 	"ErrAlreadyDecided":            "store",
@@ -111,9 +106,22 @@ var packageOf = map[string]string{
 	"ErrInvalidFlags":         "api",
 	"ErrMissingRequestToken":  "api",
 
-	// internal/clisetup (b.vma): named by clisetup.Open, before any verb runs.
-	"ErrConfigMalformed": "clisetup",
-	"ErrStoreOpen":       "clisetup",
+	// internal/clisetup (b.vma, b.cm7): named by clisetup.Open, before any verb
+	// runs. The schema names' sentinels are clisetup's, not the store's:
+	// clisetup.Open names the store's schema refusals.
+	"ErrConfigMalformed":         "clisetup",
+	"ErrStoreOpen":               "clisetup",
+	"ErrSchemaMismatch":          "clisetup",
+	"ErrSchemaMigrationRequired": "clisetup",
+	// internal/clisetup (b.cm7): written by the command binaries themselves,
+	// outside any verb handler.
+	"ErrUnknownVerb": "clisetup",
+	"ErrJSONMarshal": "clisetup",
+	"ErrTrailWrite":  "clisetup",
+
+	// pkg/api/errnames (b.cm7): Classify's name for an error that matches no
+	// other Catalog entry.
+	"ErrInternal": "errnames",
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
 	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).
