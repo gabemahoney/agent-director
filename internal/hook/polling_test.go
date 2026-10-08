@@ -74,9 +74,14 @@ func setupVirtualClock(t *testing.T) (*time.Time, func()) {
 // returns its decision; an undecided one is re-read, sleeping at least the
 // 50 ms floor even with no base or jitter; an absent row, a sixth consecutive
 // read error, the timeout and a cancelled context fail closed (no decision,
-// a Why).
+// a Why). The timeout counts the window from the stored created_at, never
+// later than from Poll's start (b.z6g).
 func TestPoll(t *testing.T) {
-	undecided := store.PermissionRow{}
+	start := time.Unix(0, 0) // setupVirtualClock's origin: Poll's start
+	undecided := store.PermissionRow{CreatedAt: start}
+	createdAt := func(offset time.Duration) []store.PermissionRow {
+		return []store.PermissionRow{{CreatedAt: start.Add(offset)}}
+	}
 	cases := []struct {
 		name        string
 		rows        []store.PermissionRow
@@ -89,9 +94,10 @@ func TestPoll(t *testing.T) {
 		sleeps      int           // -1 = unchecked
 		waited      time.Duration // total virtual sleep; 0 = unchecked
 	}{
-		{name: "decided", rows: []store.PermissionRow{{Decision: "allow", DecisionReason: "ok"}},
+		{name: "decided", rows: []store.PermissionRow{{Decision: "allow", DecisionReason: "ok", CreatedAt: start}},
 			cfg: config.Relay{TimeoutSeconds: 5}, decision: "allow", reason: "ok"},
-		{name: "decided on the fourth read, floor sleeps", rows: []store.PermissionRow{undecided, undecided, undecided, {Decision: "deny", DecisionReason: "no"}},
+		{name: "decided on the fourth read, floor sleeps", rows: []store.PermissionRow{undecided, undecided, undecided,
+			{Decision: "deny", DecisionReason: "no", CreatedAt: start}},
 			cfg: config.Relay{TimeoutSeconds: 30}, decision: "deny", reason: "no", sleeps: 3},
 		{name: "row absent", rows: []store.PermissionRow{undecided}, errs: []error{sql.ErrNoRows},
 			cfg: config.Relay{TimeoutSeconds: 5}, sleeps: -1},
@@ -99,6 +105,16 @@ func TestPoll(t *testing.T) {
 			cfg: config.Relay{TimeoutSeconds: 30}, sleeps: -1},
 		{name: "timeout", rows: []store.PermissionRow{undecided}, cfg: config.Relay{TimeoutSeconds: 1},
 			why: "polling timeout exceeded", sleeps: -1, waited: time.Second},
+		// created_at keeps whole seconds, so it is up to a second before Poll's start.
+		{name: "timeout counted from created_at", rows: createdAt(-900 * time.Millisecond), cfg: config.Relay{TimeoutSeconds: 1},
+			why: "polling timeout exceeded", sleeps: -1, waited: 100 * time.Millisecond},
+		{name: "created_at after Poll's start (clock stepped back), timeout counted from the start",
+			rows: createdAt(10 * time.Second), cfg: config.Relay{TimeoutSeconds: 1},
+			why: "polling timeout exceeded", sleeps: -1, waited: time.Second},
+		// A failed read's zero row has no created_at to count from.
+		{name: "reads failing before the first success, timeout counted from the start",
+			rows: []store.PermissionRow{{}, {}, undecided}, errs: []error{errors.New("flaky db"), errors.New("flaky db"), nil},
+			cfg: config.Relay{TimeoutSeconds: 1}, why: "polling timeout exceeded", sleeps: -1, waited: time.Second},
 		{name: "context cancelled", rows: []store.PermissionRow{undecided}, cfg: config.Relay{TimeoutSeconds: 60, PollBaseMs: 5, PollJitterMs: 5},
 			cancelAfter: 3, sleeps: 3},
 	}

@@ -484,7 +484,13 @@ Each iteration:
      consecutive errors (`pollMaxReadRetries`).
    - row found, decision NULL → sleep and loop.
    - row found, decision populated → return the decision.
-2. Check the timeout deadline; if expired → return fail-closed.
+2. Check the timeout deadline; if expired → return fail-closed. The
+   deadline is `relay.timeout_seconds` counted from the row's stored
+   `created_at`, the instant `decide` and the send-keys relay guard
+   count the request's window from (b.z6g). Until a read returns the
+   row, and should `created_at` be later than the loop's start (a clock
+   stepped back), the window counted from the loop's start bounds it:
+   the deadline is the earlier of the two.
 3. Sleep `max(50ms, base + uniform(0, jitter))`. The 50ms floor is
    load-bearing: a misconfigured `relay.poll_base_ms=0,
    relay.poll_jitter_ms=0` must not pin CPU.

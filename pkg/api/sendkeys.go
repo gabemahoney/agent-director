@@ -86,15 +86,15 @@ type SendKeysResult struct{}
 //   - guardNotApplicable — the relay guard did not apply (relay_mode != on,
 //     or state != check_permission); this is the ordinary send path.
 //   - guardHeld — relay_mode=on + check_permission and at least one of the
-//     Spawn's permission-request rows holds the guard: it is still within its
-//     delivery window plus RelayKillSafetyMargin and is open, or decided
+//     Spawn's permission-request rows holds the guard: its relay hook is not
+//     yet presumed settled (relayHookSettledAt) and it is open, or decided
 //     while no other request of the Spawn has fallen back (or there are zero
 //     rows). The send was refused with ErrSendKeysWhileRelayed.
 //   - guardReleased — relay_mode=on + check_permission and no row holds the
-//     guard: every open row's window plus RelayKillSafetyMargin has elapsed,
-//     and every decided row's too unless another request of the Spawn has
-//     fallen back. The guard released and keys were delivered. This is the
-//     audited recovery of a fallen-back relay.
+//     guard: every open row's relay hook is presumed settled, and every
+//     decided row's too unless another request of the Spawn has fallen back.
+//     The guard released and keys were delivered. This is the audited
+//     recovery of a fallen-back relay.
 //   - guardError — relay_mode=on + check_permission but the store read that
 //     the guard needs (PermissionRequestsForSpawn) failed, so deliverability
 //     could not be evaluated. Distinct from guardNotApplicable so a store
@@ -168,11 +168,12 @@ type sendKeysGuard struct {
 // created_at, decided or not (SR-4.2: a row decided in-window still has a
 // live poller about to deliver it), with the one exception below. It refuses
 // while ANY row holds the guard and RELEASES only once none does; a row holds
-// until its window plus the safety margin has elapsed (window + margin — the
-// deliberate fail-late mirror of Decide's fail-early refusal at
-// window - margin; same authority, asymmetric margin, both in
-// deliverability.go). The one exception is a decided row once another
-// request of the Spawn has fallen back (the request Decide refuses with
+// until its relay hook is presumed settled, its window plus the safety margin
+// plus created_at's 1 s resolution after its created_at (relayHookSettledAt,
+// the instant Decide's wait ends — the deliberate fail-late mirror of
+// Decide's fail-early refusal at window - margin; same authority, asymmetric
+// margin, both in deliverability.go). The one exception is a decided row once
+// another request of the Spawn has fallen back (the request Decide refuses with
 // ErrRelayFallenBack): that request's open record keeps the Spawn in
 // check_permission and only a pane answer closes its dialog, so the decided
 // row no longer holds (b.ceq; see evaluateRelayGuard for the trade-off this
@@ -368,22 +369,28 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 // none with zero rows, and whether that row is decided, which selects the
 // refusal's wording (relayGuardRefusal).
 //
-// A row holds until its window plus RelayKillSafetyMargin has elapsed, open or
-// decided: an open row's verdict may still be recorded by decide and
-// delivered, and a decided row's live poller may still be about to deliver
-// its verdict. The guard releases LATE — at elapsed >= window + margin — so it
-// never frees while a live poller could still emit a decision on such a row.
+// A row holds until its relay hook is presumed settled (relayHookSettledAt:
+// its window plus RelayKillSafetyMargin plus created_at's 1 s resolution
+// after its created_at), open or decided: an open row's verdict may still be
+// recorded by decide and delivered, or its live poller may still record and
+// return its timeout deny, and a decided row's live poller may still be about
+// to deliver its verdict. The guard releases LATE — at elapsed >= window +
+// margin + resolution, when Decide's wait ends too — so it does not free
+// while a live poller could still emit a decision on such a row, but for the
+// residual race deliverability.go describes (a hook whose delivery of its
+// verdict or timeout deny outlasts that slack and whose kill comes late).
 // That is the deliberate mirror of Decide's fail-early refusal; both
-// boundaries and the shared margin live in deliverability.go (SR-4.4).
+// boundaries and the shared margin live in deliverability.go (SR-4.4). An
+// open row thus holds until it has fallen back.
 //
 // One exception (b.ceq): a decided row stops holding once another request of
 // the Spawn has fallen back (relayRequestFallenBack: still open after its
 // relay hook settled, which Decide reports as ErrRelayFallenBack). That
 // request's open record holds the Spawn in check_permission (the store holds
 // the agent's move to working while any request is open), so without the
-// exception the decided row would hold until its own window ends, delivered
-// or not, and a send-keys retried later, as its refusal advises, would be
-// refused alike for that long.
+// exception the decided row would hold until its own relay hook is presumed
+// settled, delivered or not, and a send-keys retried later, as its refusal
+// advises, would be refused alike for that long.
 //
 // The exception rests on an assumption, accepted as its trade-off: Claude
 // Code shows the oldest pending permission dialog first. The fallen-back
@@ -474,8 +481,8 @@ func namedBefore(a, b PermissionRow) bool {
 //     request holds the guard (namedBefore) and none of the Spawn's requests
 //     has fallen back (evaluateRelayGuard), so the refusal stands until the
 //     Spawn leaves check_permission (normally once the verdict is delivered),
-//     another request of the Spawn falls back, or the named request's window
-//     plus the margin elapses, whichever is first.
+//     another request of the Spawn falls back, or the named request's relay
+//     hook is presumed settled (relayHookSettledAt), whichever is first.
 //   - No token (zero request rows): it says the request is not yet recorded
 //     and to answer it with decide once get lists it.
 func relayGuardRefusal(instanceID, holding string, decided bool) error {
@@ -541,11 +548,12 @@ func isInteractiveState(state string) bool {
 //     Decide on it would return [ErrAlreadyDecided]. With zero rows the
 //     request is still being recorded, the message names none and advises
 //     Decide once Get lists it. The refusal is time-bounded: the guard
-//     releases once no request's relay hook can deliver a decision, letting
-//     the operator recover the wedged Spawn through this sanctioned surface. A
-//     request Decide has refused with [ErrRelayFallenBack] no longer holds it,
-//     and while that request stays open no decided request of the Spawn does
-//     either; only an open request still in its window can.
+//     releases once every request's relay hook is presumed to have answered
+//     or died, letting the operator recover the wedged Spawn through this
+//     sanctioned surface. A request Decide has refused with
+//     [ErrRelayFallenBack] no longer holds it, and while that request stays
+//     open no decided request of the Spawn does either; only an open request
+//     that has not fallen back can.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there.
 //   - [ErrTmuxSessionConflict]: the agent's pane was not found, a session an
 //     earlier launch left behind is there on a live row, or tmux holds

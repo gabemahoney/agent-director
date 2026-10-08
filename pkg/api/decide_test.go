@@ -166,13 +166,13 @@ func TestDecideConcurrentFirstCallWins(t *testing.T) {
 // TestDecideDeliverabilityBoundary pins, on the injected clock, that the row is
 // deliverable iff now < created_at + window - margin; a refusal records nothing
 // and is ErrRelayFallenBack only after decide waits out its relay hook, until
-// created_at + window + margin + created_at's resolution (b.pzy).
+// created_at + window + margin + created_at's resolution, the send-keys
+// guard's release (b.pzy, b.z6g).
 func TestDecideDeliverabilityBoundary(t *testing.T) {
 	t.Parallel()
 	const window = 10 * time.Second
 	edge := window - api.RelayKillSafetyMargin
-	release := window + api.RelayKillSafetyMargin
-	settled := release + api.CreatedAtResolution
+	settled := window + api.RelayKillSafetyMargin + api.CreatedAtResolution
 	cases := []struct {
 		name    string
 		age     time.Duration // now - created_at
@@ -181,7 +181,7 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 	}{
 		{"hook_settled_refused_at_once", settled, true, 0},
 		{"just_before_hook_settled_refused_after_waiting", settled - time.Nanosecond, true, time.Nanosecond},
-		{"guard_released_refused_after_waiting", release, true, api.CreatedAtResolution},
+		{"margin_past_window_refused_after_waiting", window + api.RelayKillSafetyMargin, true, api.CreatedAtResolution},
 		{"window_end_refused_after_waiting", window, true, api.RelayKillSafetyMargin + api.CreatedAtResolution},
 		{"exact_equality_refused_after_waiting", edge, true, 2*api.RelayKillSafetyMargin + api.CreatedAtResolution}, // cutoff == created_at: not strictly after
 		{"just_before_boundary_accepted", edge - time.Nanosecond, false, 0},

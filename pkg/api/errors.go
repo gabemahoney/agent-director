@@ -133,8 +133,8 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // it, so decide on it would return ErrAlreadyDecided and there is nothing left
 // to answer: the message says so and advises retrying send-keys later (b.ceq).
 // It holds the guard until the Spawn leaves check_permission (normally once
-// its verdict is delivered), its relay can no longer deliver or another of
-// the Spawn's requests falls back, whichever is first. When the Spawn has
+// its verdict is delivered), its relay hook is presumed settled or another
+// of the Spawn's requests falls back, whichever is first. When the Spawn has
 // zero request rows the request is still being recorded: the message names
 // none and advises decide once get lists it.
 //

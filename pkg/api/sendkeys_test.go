@@ -179,6 +179,10 @@ func TestSendKeysEmptyTextPressesEnterOnly(t *testing.T) {
 // small while staying well clear of the safety margin.
 const relayGuardWindow = time.Hour
 
+// relayGuardSettled is when, after its created_at, a request's relay hook is presumed settled under
+// relayGuardWindow: the guard releases on its account and decide's wait ends (b.z6g).
+const relayGuardSettled = relayGuardWindow + api.RelayKillSafetyMargin + api.CreatedAtResolution
+
 // seedRelayRow seeds a relay-on check_permission row with its own labelled
 // session and agent pane, and open permission requests for tokens (none when empty).
 func seedRelayRow(t *testing.T, e *killEnv, tokens ...string) killRow {
@@ -227,20 +231,18 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 }
 
 // TestSendKeysRelayGuard pins the per-request guard on a relay-on
-// check_permission row (SR-4.2, SR-7.3): it holds while any request is in its
-// window, decided or not, and with no request at all (mid-insert); it releases
-// once every request aged past the window (and the margin), decided or not,
-// and a decided request stops holding once another request has fallen back
-// (open past its relay hook's settling, b.ceq). A held guard refuses with no
-// tmux call, naming of the requests holding it an open one before a decided
-// one, then the oldest, then the lower request id (b.ah6); a decided one is
-// named with its own advice (b.ceq).
+// check_permission row (SR-4.2, SR-7.3): it holds until every request's relay
+// hook has settled (window, margin and created_at's resolution, b.z6g),
+// decided or not, and with no request at all (mid-insert), and a decided
+// request stops holding once another request has fallen back (b.ceq). A held
+// guard refuses with no tmux call, naming of the requests holding it an open
+// one before a decided one, then the oldest, then the lower request id
+// (b.ah6); a decided one is named with its own advice (b.ceq).
 func TestSendKeysRelayGuard(t *testing.T) {
 	t.Parallel()
 	tokens := []string{storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC}
 	past := 2 * relayGuardWindow // undeliverable, the guard released on its account
-	release := relayGuardWindow + api.RelayKillSafetyMargin
-	settled := release + api.CreatedAtResolution // a request still open then has fallen back
+	settled := relayGuardSettled // a request still open then has fallen back
 	open, recorded := advSendKeysAnswerWithDecide, advSendKeysRetryLater
 	// backdated backdates open request tokens[i] by ages[i] (0: as recorded).
 	backdated := func(ages ...time.Duration) func(*testing.T, *killEnv, killRow) time.Time {
@@ -265,13 +267,13 @@ func TestSendKeysRelayGuard(t *testing.T) {
 		}
 		return row.CreatedAt
 	}
-	decided := func(aged bool) func(*testing.T, *killEnv, killRow) time.Time {
+	// soleAt is now age after the sole request's created_at, decided first when decided.
+	soleAt := func(age time.Duration, decided bool) func(*testing.T, *killEnv, killRow) time.Time {
 		return func(t *testing.T, e *killEnv, r killRow) time.Time {
-			createdAt := decide(t, e, r, tokens[0])
-			if aged {
-				return createdAt.Add(release + time.Second)
+			if decided {
+				return decide(t, e, r, tokens[0]).Add(age)
 			}
-			return time.Now()
+			return advRequestCreatedAt(t, e, r).Add(age)
 		}
 	}
 	// besideOlder decides tokens[0] beside tokens[1] backdated by half the window
@@ -302,12 +304,17 @@ func TestSendKeysRelayGuard(t *testing.T) {
 		{"one undeliverable, the rest in window refuses", tokens, backdated(past), open(tokens[1])},
 		{"all but one undeliverable refuses", tokens, backdated(past, past), open(tokens[2])},
 		{"all undeliverable delivers", tokens, backdated(past, past, past), ""},
-		{"sole request decided, still in its window, refuses", tokens[:1], decided(false), recorded(tokens[0])},
-		{"sole request decided, aged past window and margin, delivers", tokens[:1], decided(true), ""},
+		{"sole open request, just before its relay hook settles, refuses", tokens[:1],
+			soleAt(settled-time.Nanosecond, false), open(tokens[0])},
+		{"sole open request, as its relay hook settles, delivers", tokens[:1], soleAt(settled, false), ""},
+		{"sole request decided, just before its relay hook settles, refuses", tokens[:1],
+			soleAt(settled-time.Nanosecond, true), recorded(tokens[0])},
+		{"sole request decided, as its relay hook settles, delivers", tokens[:1], soleAt(settled, true), ""},
 		{"an open request is named before an older decided one", tokens[:2],
 			func(t *testing.T, e *killEnv, r killRow) time.Time {
 				backdated(10*time.Minute)(t, e, r)
-				return decided(false)(t, e, r)
+				decide(t, e, r, tokens[0])
+				return time.Now()
 			}, open(tokens[1])},
 		{"the oldest of the open requests is named", tokens, backdated(0, 20*time.Minute, 10*time.Minute), open(tokens[1])},
 		// Seeded C first, so C has the lowest request id though its token sorts last.
@@ -317,8 +324,6 @@ func TestSendKeysRelayGuard(t *testing.T) {
 				return time.Now()
 			}, open(tokens[2])},
 		{"a decided request in its window, another fallen back, delivers", tokens[:2], besideOlder(settled, false), ""},
-		{"a decided request in its window, another released but not yet fallen back, refuses", tokens[:2],
-			besideOlder(settled-time.Nanosecond, false), recorded(tokens[0])},
 		{"a decided request in its window, another decided past its window, refuses", tokens[:2],
 			besideOlder(settled, true), recorded(tokens[0])},
 		{"an open request in its window holds beside a fallen-back one", tokens, besideOlder(settled, false), open(tokens[2])},

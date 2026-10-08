@@ -25,7 +25,7 @@ type relayPair struct {
 }
 
 // startRelayPair runs A and B from instanceID's own agent (SR-22.9) with relay
-// timeouts timeoutA and timeoutB seconds, and waits for both open rows.
+// timeouts timeoutA and timeoutB seconds, and waits for both rows, open or decided.
 func startRelayPair(t *testing.T, st *store.Store, instanceID string, timeoutA, timeoutB int) *relayPair {
 	t.Helper()
 	p := &relayPair{doneA: make(chan struct{}), doneB: make(chan struct{})}
@@ -42,7 +42,9 @@ func startRelayPair(t *testing.T, st *store.Store, instanceID string, timeoutA, 
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && (p.tokenA == "" || p.tokenB == "") {
-		rows, _ := st.OpenPermissionRequestsForSpawn(instanceID)
+		// Decided rows too: a short window counts from the whole-second created_at,
+		// so its timeout may decide the row before it is ever seen open (b.z6g).
+		rows, _ := st.PermissionRequestsForSpawn(instanceID)
 		for _, r := range rows { // by tool: concurrent inserts may tie on created_at
 			switch r.ToolName {
 			case "Bash":
@@ -54,7 +56,7 @@ func startRelayPair(t *testing.T, st *store.Store, instanceID string, timeoutA, 
 		time.Sleep(10 * time.Millisecond)
 	}
 	if p.tokenA == "" || p.tokenB == "" || p.tokenA == p.tokenB {
-		t.Fatalf("open rows: Bash token %q, Read token %q; want two distinct within 5s", p.tokenA, p.tokenB)
+		t.Fatalf("rows: Bash token %q, Read token %q; want two distinct within 5s", p.tokenA, p.tokenB)
 	}
 	return p
 }
@@ -108,8 +110,8 @@ func TestParallelHookOrdering(t *testing.T) {
 	}
 }
 
-// TestPerRowTimeoutIsolation: A's 1s relay timeout writes deny/timeout to A's
-// row only; B stays open until its own allow, which carries no reason.
+// TestPerRowTimeoutIsolation: A's 1s relay window, counted from its created_at,
+// writes deny/timeout to A's row only; B stays open until its own allow, which carries no reason.
 func TestPerRowTimeoutIsolation(t *testing.T) {
 	const id = "per-row-timeout-iso"
 	st, _ := seedAgentRow(t, id, store.StateWorking)

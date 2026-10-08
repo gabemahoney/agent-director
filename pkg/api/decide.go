@@ -46,16 +46,18 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // (RelayRequestUndeliverable), but a live relay hook may still reach its poll
 // deadline after that and deny the request, which closes the dialog and moves
 // the row to working, where a pane answer would be typed into Claude's prompt
-// as a user message (b.pzy). The hook's deadline runs from its own clock after
-// the record was inserted, while created_at keeps whole seconds only, so the
-// deny can land up to 1 s later than created_at + window suggests, besides
-// the slack RelayKillSafetyMargin covers. Decide therefore reads the record
-// last at created_at plus the window plus RelayKillSafetyMargin plus
-// created_at's storage resolution (1 s): a refusal before that instant waits
-// until it (at most twice the margin plus the resolution, 3 s) and reads the
-// request again. A request decided meanwhile, such as by the hook's timeout
-// deny, is ErrAlreadyDecided, and only a request whose record is still open
-// is ErrRelayFallenBack. Callers detect it with errors.Is.
+// as a user message (b.pzy). Decide therefore reads the record last at
+// created_at plus the window plus RelayKillSafetyMargin plus created_at's
+// storage resolution (1 s), the instant the send-keys relay guard releases
+// on the request's account: by then a live hook is presumed to have recorded
+// its timeout deny (its poll deadline is counted from the stored created_at,
+// b.z6g), and one that never reached its deadline to have been killed by
+// Claude Code, whose per-hook timeout started before the record was stored
+// (see deliverability.go). A refusal before that instant waits until it (at
+// most twice the margin plus the resolution, 3 s) and reads the request
+// again. A request decided meanwhile, such as by the hook's timeout deny, is
+// ErrAlreadyDecided, and only a request whose record is still open is
+// ErrRelayFallenBack. Callers detect it with errors.Is.
 var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
 
 // DecideStore is the narrow store surface Decide needs.

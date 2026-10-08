@@ -4103,15 +4103,20 @@ or the `DefaultRelayTimeoutSeconds` fallback of 86400 for a missing key or 0). T
 the same accessor the relay poll loop's deadline derives from
 (`internal/hook/polling.go`), as do `decide`'s window (`Client.Decide`) and the
 send-keys guard's (`Client.SendKeys`), so Claude Code's per-hook kill boundary and the
-poll deadline are always the identical value. `config.Load` refuses a
+poll deadline always use the identical window. They count it from different
+instants: Claude Code from when it starts the hook, `Poll` from the
+request's stored `created_at`, which keeps whole seconds and so can be up
+to 1 s before the hook's insert (b.z6g; see `internal/hook/polling.go` and
+"Why the guard's release is late enough" under [Permission
+relay](#permission-relay)). `config.Load` refuses a
 negative value and one above `config.MaxRelayTimeoutSeconds` (2147483,
 `math.MaxInt32 / 1000`; b.8q2): Claude Code arms a hook's timeout as a
 JavaScript timer of `timeout` × 1000 ms, and the runtime replaces a delay
 above 2^31−1 ms with 1 ms, so a larger value would have Claude Code cancel
 the relay hooks about 1 ms after they start. At that bound none of the
-window, the window plus or minus `RelayKillSafetyMargin` (the
-`pkg/api/deliverability.go` cutoffs) or the poll deadline can overflow a
-`time.Duration` or `time.Time`. Without the field Claude Code
+window, the `pkg/api/deliverability.go` cutoffs (the window less
+`RelayKillSafetyMargin`, or plus it and `createdAtResolution`) or the poll
+deadline can overflow a `time.Duration` or `time.Time`. Without the field Claude Code
 would kill the polling hook at its own 600-second default per-hook timeout —
 discarding the hook's output with no envelope, so a late decision falls open
 into the native permission flow. The `SessionStart` `agent-director hook`
@@ -4322,12 +4327,14 @@ in `pkg/api/deliverability.go` as `RelayRequestUndeliverable`) across
 measured from its own `created_at`, decided or not. The one
 deliberate difference is the **sign of the safety margin**: `decide` fails
 early (refuses at `elapsed ≥ window − margin`), the guard fails late
-(releases at `elapsed ≥ window + margin`), so the guard never frees while
-a live poller — provably alive until ~`window` — could still emit a
-decision. It refuses while any row holds the guard (a zero-row
+(releases at `elapsed ≥ window + margin + createdAtResolution`, 2 s after
+the window ends, the instant `decide`'s wait at the window's end ends
+too), so the guard does not free while a live poller could still emit a
+decision, but for the residual race described under "Why the guard's
+release is late enough" in the relay chapter. It refuses while any row holds the guard (a zero-row
 spawn also refuses — no signal, no authority to release) and **releases
-only once none does**: once every row's window plus the safety margin has
-elapsed, at which point the delivering hook is dead and send-keys becomes
+only once none does**: once every row's relay hook is presumed settled
+(`relayHookSettledAt`), at which point the delivering hook is presumed dead and send-keys becomes
 the sanctioned recovery of a fallen-back relay, except that a decided row
 stops holding earlier, once another of the spawn's requests has fallen
 back (`relayRequestFallenBack`, b.ceq; see "Send-keys interaction"
@@ -5787,7 +5794,16 @@ decide allow/deny out-of-band. Conceptually:
 - **`internal/hook/polling.go`** — `Poll` is the loop. Pure function
   taking `(ctx, store, clock, cfg.Relay, id, *rand.Rand)`. The
   clock seam lets tests inject a fast variant; the rng is per-call
-  so the jitter is deterministic in tests.
+  so the jitter is deterministic in tests. Its deadline is the relay
+  window counted from the request's stored `created_at`, the instant
+  every `pkg/api/deliverability.go` boundary is counted from (b.z6g).
+  Until a read returns the row, and should `created_at` be later than
+  `Poll`'s start (a clock stepped back), the window counted from `Poll`'s
+  start bounds it: the deadline is the earlier of the two. A deadline
+  counted from `Poll`'s own start would spend up to 1 s of the slack the
+  guard's release leaves the timeout deny (`created_at` keeps whole
+  seconds), plus however long the INSERT's commit and the trail emit
+  after it took.
 
 - **`internal/hook/permission.go`** — `runRelay` orchestrates the
   PermissionRequest relay path: UPSERT the open row, call `Poll`,
@@ -5840,37 +5856,39 @@ decide allow/deny out-of-band. Conceptually:
   deliver. `RelayGuardReleaseCutoff(now, effectiveWindow)` /
   `RelayRequestGuardReleasable(createdAt, effectiveWindow, now)` are the
   fail-late mirror used by the send-keys guard: the cutoff subtracts
-  `window + margin`, so the guard releases only at `elapsed ≥ window +
-  margin` and never frees while a live poller (provably alive until
-  ~`window`) could still emit. Both pairs live in this one file and
+  `relayGuardHold` (`window + margin + createdAtResolution`), so the guard
+  releases only at `elapsed ≥ window + 2 s`, once a live poller is
+  presumed to have emitted its timeout deny or been killed (see "Why the
+  guard's release is late enough" below). Both pairs live in this one file and
   share the one `RelayKillSafetyMargin` constant — the "single time-based
   authority" is one file, one margin, applied with the sign that makes
   each caller safe. All four are pure, time-only functions of stored row
   state, the resolved window, and an injected clock — never dialog- or
   state-derived. They make no overflow check: the window they are given
   is a loaded config's, at most `config.MaxRelayTimeoutSeconds`, at which
-  neither `window ± margin` nor the cutoff can overflow (b.8q2); a caller
+  neither `window − margin`, `relayGuardHold` nor the cutoffs can overflow
+  (b.8q2); a caller
   passing its own window keeps it within that bound. Any code needing either boundary MUST consult these
-  functions rather than re-derive it. The guard's hold, `window + margin`,
-  is stated once, in `relayGuardHold(effectiveWindow)`:
+  functions rather than re-derive it. The guard's hold, `window + margin +
+  createdAtResolution`, is stated once, in `relayGuardHold(effectiveWindow)`:
   `RelayGuardReleaseCutoff` subtracts it from `now`, and
-  `relayGuardReleaseAt(createdAt, effectiveWindow)` adds it to a
-  request's `created_at`, giving the instant from which
-  `RelayRequestGuardReleasable` holds for that request. Code needing one
-  request's release instant MUST use `relayGuardReleaseAt`, never its own
-  `window + margin` sum. `createdAtResolution` (1 s, unexported) is the
-  storage resolution of `created_at`: the column defaults to SQLite's
-  `CURRENT_TIMESTAMP`, which keeps whole seconds, while the relay hook's
-  poll deadline is its own clock, read after the INSERT, plus the window.
-  So counted from `created_at`, the hook's timeout deny can land up to 1 s
-  past `window`, on top of the slack the margin covers.
-  `relayHookSettledAt(createdAt, effectiveWindow)` is `relayGuardReleaseAt`
-  plus `createdAtResolution` (`created_at + window + 2 s`): the instant by
-  which a live relay hook is presumed to have delivered a verdict or
-  written its timeout deny, which `decide` waits for (see
-  `pkg/api/decide.go` below). Neither the deliverability nor the
-  guard-release boundary adds the resolution. Code needing that instant
-  MUST use `relayHookSettledAt`.
+  `relayHookSettledAt(createdAt, effectiveWindow)` adds it to a request's
+  `created_at` (`created_at + window + 2 s`), giving the instant by which
+  a relay hook is presumed to have delivered a verdict, recorded its
+  timeout deny or been killed. It is both the instant from which
+  `RelayRequestGuardReleasable` holds for that request and the instant
+  `decide`'s wait ends (see `pkg/api/decide.go` below), so the guard
+  releases on a request's account exactly as `decide`'s wait for it ends,
+  and the two cannot drift apart. Code needing that instant MUST use
+  `relayHookSettledAt`, never its own sum. `createdAtResolution` (1 s,
+  unexported) is the storage resolution of `created_at`: the column
+  defaults to SQLite's `CURRENT_TIMESTAMP`, which keeps whole seconds, so
+  a stored `created_at` can be up to 1 s before the relay hook's insert.
+  Claude Code arms the hook's kill (its per-hook timeout of the window)
+  when it starts the hook, before that insert, so counted from
+  `created_at` the kill can come up to 1 s past `window`, on top of the
+  kill's own lateness the margin covers. The deliverability boundary does
+  not add the resolution.
   `relayRequestFallenBack(pr, effectiveWindow, now)` is the one
   definition of a **fallen-back** request: its record is still open (no
   decision) at or after its `relayHookSettledAt`, so its relay hook is
@@ -5880,16 +5898,65 @@ decide allow/deny out-of-band. Conceptually:
   guard stops holding on a decided row's account once one of the spawn's
   requests is such a request (b.ceq; see "Send-keys interaction" below).
   Code needing to know whether a request has fallen back MUST use
-  `relayRequestFallenBack`, never its own decision-and-time test.
+  `relayRequestFallenBack`, never its own decision-and-time test. An open
+  request holds the guard until `relayHookSettledAt`, so it holds until
+  it has fallen back: for an open row, released and fallen back are the
+  same instant.
+
+  **Why the guard's release is late enough (b.z6g).** Every instant is
+  counted from the stored `created_at` (C), the whole second in which the
+  relay hook inserted the request; Claude Code started the hook before
+  that insert. A relay hook still alive at the end of the window ends in
+  one of two ways:
+
+  - At its poll deadline, C + window (`Poll` counts from `created_at`;
+    see `internal/hook/polling.go` above), it records the `timeout` deny,
+    moves the row to `working` and returns the deny, which closes the
+    dialog. The guard's release leaves that timeout path margin +
+    `createdAtResolution` (2 s) to complete in.
+  - Claude Code kills it at its per-hook timeout of the same window,
+    armed when it started the hook: by C + window + 1 s, plus however
+    late the kill comes, which the margin covers. A killed hook's output
+    is discarded, so it closes no dialog.
+
+  A request decided in its window has its verdict recorded before
+  C + window − 1 s (`decide`'s cutoff), so its hook has had more than 3 s
+  to read the verdict and return it, which closes the dialog. So at the
+  guard's release a live hook has returned its verdict or deny, or is
+  dead, except in a **residual race**: the guard can release before a
+  live hook's verdict or deny closes the dialog (and, for an open
+  request, `decide` return `ErrRelayFallenBack` before the deny does)
+  only if both (a) the hook's delivery of its verdict or timeout deny
+  (reading the verdict, or noticing the deadline, the deny write and the
+  move to `working`; then the stdout write and the exit) ends more than
+  2 s past C + window, for example because its writes each wait up to
+  `[store] busy_timeout_ms` (10 s by default) for the store's write lock,
+  an fsync stalls or the process is descheduled, and (b) Claude Code
+  kills the hook more than 1 s after its per-hook timeout. Nothing stored
+  shows a hook stuck delivering, so the race is accepted, not closed. The
+  argument also assumes the hook, the store and the `pkg/api` caller
+  share one wall clock.
+
+  Counting the poll deadline from `created_at` also means it normally
+  comes before Claude Code's kill (C is up to 1 s before the insert, and
+  the kill is counted from the hook's start, just before the insert), so
+  at the window's end a relay
+  hook usually ends the request with its in-band timeout deny, and
+  `decide` returns `ErrAlreadyDecided` (`decision_reason` `timeout`).
+  Claude Code kills the hook before its deadline only when the insert
+  came late enough after the hook's start to fall in a later whole
+  second, or when the hook stalled or died; that request falls back
+  (`ErrRelayFallenBack`).
 
   **The span between the two boundaries is agent-director's to absorb,
   not the caller's to time (b.ah6).** From `decide`'s cutoff
-  (`window − margin`) to the guard's release (`window + margin`),
+  (`window − margin`) to the guard's release (`relayHookSettledAt`,
+  `window + margin + createdAtResolution`),
   `decide` refuses while the send-keys guard still holds. Neither
   boundary moves and `send-keys` never sleeps; `decide`'s wait (see
-  `pkg/api/decide.go` below) ends at `relayHookSettledAt`, after
-  `relayGuardReleaseAt`, so by the time it returns `ErrRelayFallenBack`
-  the guard has released on that request's account. A `send-keys`
+  `pkg/api/decide.go` below) ends at `relayHookSettledAt`, the instant
+  the guard releases on that request's account, so by the time it returns
+  `ErrRelayFallenBack` the guard has released on it. A `send-keys`
   refused inside the span gets `ErrSendKeysWhileRelayed`, whose message
   names the request holding the guard and, for an open request, advises
   answering it with `decide` (see "Send-keys interaction" below for the
@@ -5925,9 +5992,12 @@ decide allow/deny out-of-band. Conceptually:
   row to `working` and normally returns deny to Claude Code, which
   closes the dialog. The send-keys guard does not apply to a `working`
   row, so a pane answer sent after that is typed into Claude's prompt as
-  a user message. Counted from `created_at`, that deny can land as late
-  as `relayHookSettledAt` (`window + margin + createdAtResolution`, 2 s
-  after the window ends; see `pkg/api/deliverability.go` above). So for
+  a user message. The hook's poll deadline is `created_at + window`, and
+  its timeout path is presumed to land the deny by `relayHookSettledAt`
+  (`window + margin + createdAtResolution`, 2 s after the window ends),
+  by when a hook that never reached its deadline is presumed killed (see
+  "Why the guard's release is late enough" under
+  `pkg/api/deliverability.go` above). So for
   an open, undeliverable row refused before that instant,
   `decideRefusal` sleeps until it and repeats the SELECT once, as of it.
   From `decide`'s boundary the wait is at most twice the margin plus the
@@ -5948,14 +6018,15 @@ decide allow/deny out-of-band. Conceptually:
     `relayRequestFallenBack` (see `pkg/api/deliverability.go` above).
     The hook is presumed dead, on
     the presumption that a live hook's timeout deny lands by
-    `relayHookSettledAt`. `decide` reads only the record, so
+    `relayHookSettledAt` (it fails only in the residual race above).
+    `decide` reads only the record, so
     it knows the request is still open, not that the dialog is on
-    screen. On this request's account the send-keys guard released at
-    `relayGuardReleaseAt`, before the wait ended, so `send-keys` is not
+    screen. On this request's account the send-keys guard releases at
+    `relayHookSettledAt`, as the wait ends, so `send-keys` is not
     refused by it for this request. While this request stays open, no
     decided request of the same spawn holds the guard either (b.ceq). A
-    later request of the same spawn still open in its window can still
-    hold it until its own window plus the margin; `send-keys` then
+    later request of the same spawn still open can still hold it until
+    it is decided or has itself fallen back; `send-keys` then
     refuses with `ErrSendKeysWhileRelayed`, naming that request and
     advising `decide` on it.
 
@@ -6060,14 +6131,18 @@ margin constant in `pkg/api/deliverability.go`; no independent second
 check and no dialog probe) — on each, measuring each row's window from its
 own `created_at`, decided or not. The margin sign is the one
 deliberate difference: `decide` fails early (`window − margin`), the guard
-fails late (`window + margin`), so the guard never frees while a live
-poller could still emit. It refuses while any row holds the guard
+fails late (`window + margin + createdAtResolution`, at
+`relayHookSettledAt`), so the guard does not free while a live poller
+could still emit, but for the residual race described under
+`pkg/api/deliverability.go` above. It refuses while any row holds the guard
 (and refuses on the zero-row transient — no signal, no authority to
 release), and **releases only when none does**. A row holds until its
-window plus the safety margin has elapsed, open or decided: an open
-row's verdict may still be recorded by `decide` and delivered, and a row
-decided in its window may still have a live poller about to deliver its
-verdict. There is one exception.
+relay hook is presumed settled (`relayHookSettledAt`), open or decided:
+an open row's verdict may still be recorded by `decide` and delivered,
+or its live poller may still record and return its timeout deny, and a
+row decided in its window may still have a live poller about to deliver
+its verdict. An open row thus holds until it has fallen back. There is
+one exception.
 
 **A decided row stops holding once another request has fallen back
 (b.ceq).** `evaluateRelayGuard` first tests every row with
@@ -6077,7 +6152,7 @@ refuses with `ErrRelayFallenBack`. If any row has fallen back, decided
 rows no longer hold. The fallen-back request's open record keeps the
 spawn in `check_permission` (the store holds the agent's move to
 `working` while any request is open), so without the exception a decided
-row would hold until its own window plus the margin, delivered or not,
+row would hold until its own `relayHookSettledAt`, delivered or not,
 and a `send-keys` retried as its refusal advises would be refused alike
 for up to the full relay window. Open rows in their windows keep
 holding, so a pane answer never overtakes a verdict `decide` can still
@@ -6121,9 +6196,10 @@ advice. The named request is in one of three cases:
   answer: `decide` on it returns `ErrAlreadyDecided`. The row holds the
   guard until the spawn leaves `check_permission` (normally once its
   relay hook delivers the verdict), another request of the spawn falls
-  back, or its window plus the margin elapses, whichever is first. With
+  back, or its relay hook is presumed settled (`relayHookSettledAt`, 2 s
+  after its window ends), whichever is first. With
   no other request fallen back, a row whose relay hook died after its
-  verdict was recorded holds until its window plus the margin: no stored
+  verdict was recorded holds until then: no stored
   signal tells a dead hook from a slow one. A `send-keys` retried after
   that is delivered.
 - **Not yet recorded** (zero rows, the mid-insert transient). `spawn <id>
@@ -6131,8 +6207,9 @@ advice. The named request is in one of three cases:
   recorded; answer it with decide once get lists it`. `decide` once
   `get` lists it.
 
-Once the guard has released, no open request's relay hook can still
-deliver, so send-keys is the sanctioned recovery of a fallen-back relay — see the
+Once the guard has released, no open request's relay hook is presumed
+able to still deliver (but for the residual race under
+`pkg/api/deliverability.go` above), so send-keys is the sanctioned recovery of a fallen-back relay — see the
 invariant below and the `ad.send_keys.called` audit event. (If the store
 read fails, the guard records `guard_evaluation="error"` — distinct from
 the ordinary-send `"not-applicable"` — and the send fails with the store
@@ -6150,13 +6227,14 @@ prompt) would be a lying ghost — buttons that go nowhere.
 
 **Sanctioned handling of the all-rows-undeliverable state.** The
 listener-gone/decision-NULL state is not a stranded dead end. Once every
-`permission_requests` row's window plus the safety margin has elapsed — the
+`permission_requests` row's relay hook is presumed settled
+(`relayHookSettledAt`, 2 s after its window ends) — the
 guard-release mirror (`RelayRequestGuardReleasable`) of the same time-based
 authority whose fail-early form (`RelayRequestUndeliverable`) makes `decide`
 refuse — the send-keys relay guard *releases* (see
 "Send-keys interaction" above), and `decide` names a refusal
-`ErrRelayFallenBack` only after the refused request's own guard has
-released (see "The wait at the window's end" under `pkg/api/decide.go`
+`ErrRelayFallenBack` only once the guard has released on the refused
+request's account (see "The wait at the window's end" under `pkg/api/decide.go`
 above). Once the
 guard releases, the operator answers Claude Code's native
 permission dialog through `send-keys` (no dedicated verb, never raw tmux), and
@@ -6173,9 +6251,15 @@ entries — see "Emitted per-hook relay timeout" in the spawn pipeline section.
 Without that field Claude Code would kill the polling hook at its 600-second
 default with no envelope — silently violating the invariant by removing the
 listener while the row stays open. With the field, the poll deadline and Claude
-Code's kill boundary are the same value, so the hook is never killed out from
-under the loop; instead the timeout path (`decision='deny'`,
-`decision_reason='timeout'`) closes the invariant in-band by writing a decision.
+Code's kill boundary use the same window, and the poll deadline, counted from
+the whole-second `created_at`, normally comes first (b.z6g), so the hook is
+normally not killed out from under the loop; instead the timeout path
+(`decision='deny'`, `decision_reason='timeout'`) closes the invariant in-band
+by writing a decision. A hook Claude Code kills before its deadline (its
+insert came late enough after its start to fall in a later whole second, or
+it stalled or died)
+leaves the row open; that request falls back, and the send-keys recovery
+above is its way out.
 The native permission dialog Claude Code shows during a relayed request is
 concurrent racing UI alongside the live `PermissionRequest` hook — not a
 fallback state and not a hook-death signal; a decision envelope arriving within
@@ -12905,7 +12989,8 @@ each file's doc comments carry the detail.
   `export_test.go` gives `api.SetSleepForTest` (the Client's sleep, for
   `kill`'s process wait and `decide`'s wait for a fallen-back request's
   relay hook), `api.KillPollInterval`, `api.CreatedAtResolution`
-  (`createdAtResolution`, which that wait adds, so no test spells it) and
+  (`createdAtResolution`, which the guard's hold and that wait add, so no
+  test spells it) and
   `api.DecideWithSleep` (`Decide` with that wait's sleep given, so a test
   advances its own clock in it and stands in for the hook).
 - **Starting-row fixture** (`starting_row_fixture_test.go`, no tests;

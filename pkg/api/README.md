@@ -251,7 +251,8 @@ Most-likely sentinel errors:
   request is not yet recorded; answer it with decide once get lists
   it`). `Decide` refused near the window's end first waits, at most 3 s, for the relay hook's timeout deny, then
   returns `ErrAlreadyDecided` or `ErrRelayFallenBack`. This guard is
-  **time-bounded**: it releases once no request's relay hook can deliver,
+  **time-bounded**: it releases once every request's relay hook is
+  presumed to have answered or died,
   letting the caller recover the wedged row through this sanctioned,
   audited surface. `Decide`'s `ErrRelayFallenBack` points here; it is
   returned only once the guard has released on that request's account.
