@@ -380,6 +380,72 @@ func TestPermissionRequestCapEviction(t *testing.T) {
 	}
 }
 
+// TestPermissionRequestCapEvictionKeepsNewestWhileOpen pins b.t6e's exemption: while spawn S has open request R, another
+// spawn's over-cap insert keeps S's newest request, past the cap if need be, until S records a later one or R closes.
+func TestPermissionRequestCapEvictionKeepsNewestWhileOpen(t *testing.T) {
+	s, path := openTempStore(t)
+	const sid = "evict-s"
+	seedSpawnForPerm(t, s, sid, "on")
+	base := time.Now().UTC().Add(-2 * time.Hour)
+	decide := func(tok string, decidedAt time.Time) { // S's request tok, its decided_at set to decidedAt unless zero
+		t.Helper()
+		if updated, err := s.DecidePermissionRequest(sid, tok, "allow", "", ""); err != nil || !updated {
+			t.Fatalf("decide %s = %v, %v", tok, updated, err)
+		}
+		if !decidedAt.IsZero() {
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
+					decidedAt.Format("2006-01-02 15:04:05"), sid, tok)
+			})
+		}
+	}
+	for _, tok := range []string{tokenA, tokenB} { // R = A, then B
+		if err := agentPermissionRequest(s, sid, tok, "Bash", `{}`, 0, ""); err != nil {
+			t.Fatalf("insert %s: %v", tok, err)
+		}
+	}
+	decide(tokenB, base.Add(-time.Hour)) // the oldest decided_at in the table
+	o := seedClosedPermRequests(t, s, path, "evict-o", 3, base, time.Minute)
+
+	steps := []struct {
+		name       string
+		before     func() // S's writes before the other spawn's insert
+		cap, total int
+		gone, kept []string
+	}{
+		{"B, S's newest, kept: the other spawn's oldest decided row goes instead", nil, 5, 5, []string{o[0]}, []string{tokenB, o[1]}},
+		{"S's later C decided: B evictable, C kept", func() {
+			if err := agentPermissionRequest(s, sid, tokenC, "Bash", `{}`, 0, ""); err != nil {
+				t.Fatalf("insert C: %v", err)
+			}
+			decide(tokenC, base.Add(-30*time.Minute))
+		}, 5, 5, []string{tokenB, o[1]}, []string{tokenC, o[2]}},
+		{"C kept one row over the cap", nil, 4, 5, []string{o[2]}, []string{tokenC}},
+		{"R decided: S's rows evictable", func() { decide(tokenA, time.Time{}) }, 4, 4, []string{tokenA, tokenC}, nil},
+	}
+	for i, st := range steps {
+		if st.before != nil {
+			st.before()
+		}
+		if err := agentPermissionRequest(s, "evict-o", fmt.Sprintf("%08x-1111-4111-a111-%012x", i, i), "Bash", `{}`, st.cap, ""); err != nil {
+			t.Fatalf("%s: other spawn's insert with cap %d: %v", st.name, st.cap, err)
+		}
+		if n := countPermRows(t, s, "1"); n != st.total {
+			t.Errorf("%s: rows = %d with cap %d; want %d", st.name, n, st.cap, st.total)
+		}
+		for _, tok := range st.gone {
+			if countPermRows(t, s, "request_token = ?", tok) != 0 {
+				t.Errorf("%s: %s kept; want it evicted", st.name, tok)
+			}
+		}
+		for _, tok := range st.kept {
+			if countPermRows(t, s, "request_token = ?", tok) != 1 {
+				t.Errorf("%s: %s evicted; want it kept", st.name, tok)
+			}
+		}
+	}
+}
+
 // TestCloseOrphanedPermissionRequests pins SR-5.4 and SR-A-2.5: after
 // find-missing's mark, every open request of the row is denied with reason
 // find_missing and emits one ad.find_missing.tick (permission_orphan_closeout);

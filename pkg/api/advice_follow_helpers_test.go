@@ -44,6 +44,14 @@ func adviceAssertAdvice(t *testing.T, err, want error, advice string) {
 	adviceAssertPhrase(t, err, advice)
 }
 
+// assertNoPaneAdvice fails when err's description advises answering at the pane (b.t6e).
+func assertNoPaneAdvice(t *testing.T, err error) {
+	t.Helper()
+	if desc := errText(err); strings.Contains(desc, "send-keys") || strings.Contains(desc, "answer at the pane") {
+		t.Errorf("description %q advises a pane answer; want none", desc)
+	}
+}
+
 // adviceAssertGoDoc fails unless the doc comment of the func, var or const
 // name declared in file (in pkg/api), its whitespace collapsed, carries advice.
 func adviceAssertGoDoc(t *testing.T, file, name, advice string) {

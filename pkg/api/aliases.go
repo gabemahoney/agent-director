@@ -86,7 +86,10 @@ const (
 var ErrSpawnNotFound = store.ErrSpawnNotFound
 
 // ErrNoOpenPermissionRequest is returned by decide when the target Spawn has
-// no outstanding permission request to resolve.
+// no outstanding permission request to resolve: the request is absent, or its
+// record is still open past its relay window but the Spawn is not shown to be
+// sitting on it alone, so its permission dialog may have closed and it is not
+// to be answered at the pane (b.t6e).
 var ErrNoOpenPermissionRequest = store.ErrNoOpenPermissionRequest
 
 // ErrAlreadyDecided is returned by decide when the outstanding permission

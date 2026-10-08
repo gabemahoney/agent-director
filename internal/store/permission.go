@@ -41,8 +41,10 @@ const (
 
 // ErrNoOpenPermissionRequest is returned by decide() when no row
 // exists in permission_requests for the given (instance_id, request_token)
-// pair. SRD §6.2: typically means the Spawn isn't currently sitting on a
-// PermissionRequest hook (or one was already decided).
+// pair, or when the row is still open past its relay window but the Spawn is
+// not shown to be sitting on it alone (pkg/api's decide, b.t6e). SRD §6.2:
+// typically means the Spawn isn't currently sitting on a PermissionRequest
+// hook (or one was already decided).
 var ErrNoOpenPermissionRequest = errors.New("ErrNoOpenPermissionRequest")
 
 // ErrAlreadyDecided is returned by decide() when a row exists but
@@ -102,7 +104,15 @@ type PermissionRow struct {
 // cap controls post-INSERT eviction of closed (decision IS NOT NULL) rows.
 // When cap > 0 and the total row count exceeds cap after the INSERT, the
 // oldest closed rows (ordered by decided_at ASC) are deleted to bring the
-// count back to cap. cap == 0 disables eviction entirely. cap < 0 is treated
+// count back to cap. One closed row per Spawn is exempt: the Spawn's newest
+// request (highest request_id) while the Spawn has an open request, which is
+// then older than it. pkg/api's decide refuses to advise a pane answer for an
+// open request once a later request of its Spawn is recorded (b.t6e, see
+// pkg/api fallenBackUnshown), so evicting every later request would erase that
+// signal; keeping the newest one keeps it for as long as the open request
+// lives, as a decision is never cleared. Like open rows, an exempt row can
+// leave the count above cap; there is at most one per Spawn with an open
+// request. cap == 0 disables eviction entirely. cap < 0 is treated
 // identically to cap == 0 (eviction disabled) — negative cap handling belongs
 // at the call site.
 //
@@ -172,11 +182,20 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGa
 		}
 		if currentCount > cap {
 			excess := currentCount - cap
+			// The NOT IN set is each Spawn's newest request (request_id is
+			// the rowid) among Spawns with an open request: the exempt rows
+			// of the doc comment above. It is one uncorrelated grouped scan
+			// of the table, evaluated once per DELETE.
 			_, err = tx.Exec(`
 				DELETE FROM permission_requests
 				 WHERE rowid IN (
 				     SELECT rowid FROM permission_requests
 				      WHERE decision IS NOT NULL
+				        AND request_id NOT IN (
+				            SELECT MAX(request_id) FROM permission_requests
+				             GROUP BY claude_instance_id
+				            HAVING SUM(decision IS NULL) > 0
+				        )
 				      ORDER BY decided_at ASC
 				      LIMIT ?
 				 )
@@ -336,6 +355,8 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 // keeps the guard shut unless another of the Spawn's requests has fallen
 // back (still open after its relay hook settled; b.ceq, see pkg/api
 // evaluateRelayGuard). This all-rows variant supplies that evaluation set.
+// pkg/api's decide reads it too, to tell whether a fallen-back request is the
+// Spawn's newest and only open one (b.t6e, see pkg/api fallenBackUnshown).
 func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error) {
 	const q = `
 		SELECT request_id, claude_instance_id, tool_name, tool_input,
@@ -389,7 +410,9 @@ func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, 
 //   - row open + undeliverable → ErrRelayFallenBack (per the shared signal);
 //     pkg/api's decideRefusal first waits out the end of the relay window for
 //     a row refused near it and reads it again, so one its relay hook denied
-//     at its timeout meanwhile becomes ErrAlreadyDecided
+//     at its timeout meanwhile becomes ErrAlreadyDecided, and one still open
+//     whose Spawn is not shown to be sitting on it alone becomes
+//     ErrNoOpenPermissionRequest (b.t6e)
 //   - no row                 → ErrNoOpenPermissionRequest
 //
 // Unlike DecidePermissionRequest, the empty-token ErrAmbiguousRequest guard is

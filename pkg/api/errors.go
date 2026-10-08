@@ -149,12 +149,15 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // after the end of the request's window — with one exception: a decided
 // request stops holding once another of the Spawn's requests has fallen back
 // (still open after its relay hook settled, which decide reports as
-// ErrRelayFallenBack): that request's open record keeps the Spawn in
-// check_permission, and only a pane answer closes its dialog.
+// ErrRelayFallenBack, or as ErrNoOpenPermissionRequest when the Spawn is not
+// shown to be sitting on it alone): that request's open record keeps the
+// Spawn in check_permission, and while its dialog is on screen only a pane
+// answer closes it.
 // For an open request decide covers the window's end: it waits it out and
-// then returns ErrAlreadyDecided for a request the hook denied, or
-// ErrRelayFallenBack for one still open, by when the guard has released on
-// that request's account. Once it has released on every request's account,
+// then returns ErrAlreadyDecided for a request the hook denied, or, for one
+// still open, ErrRelayFallenBack (ErrNoOpenPermissionRequest when the Spawn is
+// not shown to be sitting on it alone, b.t6e), by when the guard has released
+// on that request's account. Once it has released on every request's account,
 // send-keys is the sanctioned recovery surface for a Spawn wedged in
 // check_permission behind a dead relay.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")

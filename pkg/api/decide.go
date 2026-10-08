@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -30,17 +31,35 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // request's record is still open past its relay window and its relay hook can
 // no longer answer it: the hook had neither delivered a verdict nor recorded
 // its timeout deny when Decide last read the record, by when a live hook is
-// presumed to have done one or the other (see below). Decide knows only that
-// the record is open, not whether Claude Code's permission dialog is still on
-// screen. Recording a verdict would write success into a void, so the
-// record's decision stays NULL (no information is lost). The message conveys
-// "too late — answer at the pane": the recourse is to answer at the pane
-// directly, with send-keys. The message states no release time (b.ah6): by
-// the time Decide returns this error, the send-keys relay guard has already
-// released on this request's account. If send-keys still refuses with
-// ErrSendKeysWhileRelayed, another of the Spawn's requests holds it and the
-// refusal names that request; answer that one with decide, as that error
-// says.
+// presumed to have done one or the other (see below). Recording a verdict
+// would write success into a void, so the record's decision stays NULL (no
+// information is lost). The message conveys "too late — answer at the pane":
+// the recourse is to answer at the pane directly, with send-keys. The message
+// states no release time (b.ah6): by the time Decide returns this error, the
+// send-keys relay guard has already released on this request's account. If
+// send-keys still refuses with ErrSendKeysWhileRelayed, another of the Spawn's
+// requests holds it and the refusal names that request; answer that one with
+// decide, as that error says.
+//
+// Decide reads stored records, not Claude Code's screen, and a record can be
+// left open after its permission dialog closed (b.t6e): the dialog was
+// answered at the pane after the relay hook was killed, or closed by a timeout
+// deny the hook returned without recording it. A pane answer to such a
+// request is typed into Claude's prompt as a user message. So Decide returns
+// this error only while the Spawn is still shown sitting on the request
+// alone as of its last read: the Spawn is still in check_permission, no
+// request of the Spawn was recorded after this one, and no other request of
+// it is open (fallenBackUnshown). Otherwise it refuses with
+// ErrNoOpenPermissionRequest, whose message advises no pane answer. What the
+// records cannot show: while this request's record is open the store holds
+// the agent's moves to working, so a dialog closed either way looks like one
+// still on screen until a hook moves the Spawn out of check_permission (Stop,
+// AskUserQuestion) or records a later request. Nor do they show a later
+// request whose PermissionRequest hook has moved the Spawn to
+// check_permission but whose record is not yet stored: if this request's
+// record is stale and Decide reads in that gap, it returns this error, and
+// keys sent at the pane before the later request is recorded can answer that
+// request's dialog.
 //
 // Decide refuses from window - RelayKillSafetyMargin
 // (RelayRequestUndeliverable), but a live relay hook may still reach its poll
@@ -60,11 +79,16 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // ErrRelayFallenBack. Callers detect it with errors.Is.
 var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
 
-// DecideStore is the narrow store surface Decide needs.
+// DecideStore is the narrow store surface Decide needs: the row read, the
+// deliverability-guarded write, the follow-up read of the request a refusal
+// names, and the read of every permission request of the Spawn that decides
+// whether a fallen-back request is still the one the Spawn is shown sitting on
+// (b.t6e). *store.Store satisfies it.
 type DecideStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	DecidePermissionRequestIfDeliverable(instanceID, requestToken, decision, reason string, writerProcess string, cutoff time.Time) (bool, error)
 	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
+	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 }
 
 // DecideParams is the typed parameter shape for the decide verb.
@@ -121,6 +145,13 @@ type DecideResult struct{}
 //     repeats the follow-up SELECT as of it, so ErrRelayFallenBack is
 //     returned only for a row still open then; one decided meanwhile is
 //     ErrAlreadyDecided (b.pzy). No other path sleeps.
+//   - A row still open then has fallen back. It is ErrRelayFallenBack only
+//     while the Spawn is still shown sitting on it alone: decide reads the
+//     Spawn and all its requests again, and the Spawn must still be in
+//     check_permission, with no request recorded after this one and no other
+//     request open. Otherwise it is ErrNoOpenPermissionRequest, with no pane
+//     advice, since the request's dialog may have closed and a pane answer
+//     would then be typed into Claude's prompt (b.t6e).
 //   - params.Reason is currently discarded; DecisionReasonOperator is always
 //     written for deny decisions regardless of its value.
 //
@@ -189,9 +220,11 @@ func decide(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep f
 // decideRefusal sleeps until that instant (at most twice
 // RelayKillSafetyMargin plus createdAtResolution, 3 s) and repeats the SELECT
 // as of it: whatever decided the row meanwhile wins as ErrAlreadyDecided, and
-// a row still open is ErrRelayFallenBack, its hook presumed dead and its
-// send-keys guard already released, so its message states no release time
-// (b.ah6).
+// a row still open has fallen back, its hook presumed dead and its send-keys
+// guard already released. fallenBackRefusal names that one:
+// ErrRelayFallenBack, whose message states no release time (b.ah6), only
+// while the Spawn is still shown sitting on it alone, otherwise
+// ErrNoOpenPermissionRequest (b.t6e).
 func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep func(time.Duration), params DecideParams) error {
 	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
 	if err == nil && pr.Decision == "" && RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
@@ -215,16 +248,117 @@ func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, 
 	// predicate, and the wait above has brought now to or past its relay
 	// hook's settling. Re-confirm via the shared definition of a fallen-back
 	// request, the one the send_keys guard applies (no second inline time
-	// comparison), and surface the typed fallen-back error.
+	// comparison), and name the fallen-back refusal.
 	if relayRequestFallenBack(pr, effectiveWindow, now) {
-		return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys",
-			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken)
+		return fallenBackRefusal(s, params, pr)
 	}
 	// Unreachable in practice — the row exists, decision is NULL, is within the
 	// window, yet UPDATE didn't affect it. The only way to land here is a SQL
 	// driver oddity; surface as the more conservative ErrNoOpenPermissionRequest.
 	return fmt.Errorf("%w: %s (UPDATE no-op against open, deliverable row)",
 		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+}
+
+// fallenBackRefusal names decide's refusal of pr, a request decideRefusal
+// found fallen back (relayRequestFallenBack). It reads the Spawn, then every
+// one of its requests, the last read of pr included: pr removed meanwhile
+// (with its Spawn) is ErrNoOpenPermissionRequest and pr decided meanwhile is
+// ErrAlreadyDecided, as in decideRefusal. A pr still open is
+// ErrRelayFallenBack ("answer at the pane") only while the Spawn is still
+// shown sitting on it alone (fallenBackUnshown); otherwise it is
+// ErrNoOpenPermissionRequest, whose message says why, that the request's
+// permission dialog cannot be shown to be on screen, and not to answer it at
+// the pane: a pane answer to a dialog that has closed is typed into Claude's
+// prompt as a user message (b.t6e).
+func fallenBackRefusal(s DecideStore, params DecideParams, pr PermissionRow) error {
+	id := params.ClaudeInstanceID
+	sp, err := s.GetSpawn(id)
+	if errors.Is(err, store.ErrSpawnNotFound) {
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, id)
+	}
+	if err != nil {
+		return err
+	}
+	rows, err := s.PermissionRequestsForSpawn(id)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(rows, func(r PermissionRow) bool { return r.RequestID == pr.RequestID })
+	if i < 0 {
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, id)
+	}
+	if pr = rows[i]; pr.Decision != "" {
+		return alreadyDecidedError(id, pr)
+	}
+	if why := fallenBackUnshown(sp, rows, pr); why != "" {
+		return fmt.Errorf("%w: %s request %s is not shown to be awaiting an answer: its record is still open and its relay hook can no longer answer it, but %s, so its permission dialog cannot be shown to be on screen; do not answer it at the pane",
+			store.ErrNoOpenPermissionRequest, id, params.RequestToken, why)
+	}
+	return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys",
+		ErrRelayFallenBack, id, params.RequestToken)
+}
+
+// fallenBackUnshown reports why the Spawn sp is not shown to be sitting on
+// pr, an open request that has fallen back, alone; "" when it is. rows is
+// every permission request of sp, pr included, read after sp. Nothing stored
+// shows Claude Code's screen, so sp counts as sitting on pr alone only while
+// nothing stored has happened on sp since pr's relay hook moved it to
+// check_permission and recorded pr (b.t6e):
+//
+//   - sp is still in check_permission. Any other state was written after pr
+//     by a hook (Stop, AskUserQuestion, SessionStart, SessionEnd) or by a
+//     later launch, once Claude Code had moved on from pr's dialog.
+//   - No request of sp was recorded after pr (a higher request id). A later
+//     request is a later PermissionRequest hook, perhaps the agent's next one
+//     after pr's dialog closed, and sp's check_permission may be that
+//     request's, not pr's. A subagent's request recorded while pr's dialog
+//     is up looks the same, so it is refused alike. The cap eviction of
+//     decided requests never removes sp's newest request while sp has an
+//     open one (store's UpsertOpenPermissionRequestResult), so a later
+//     request stays visible here for as long as pr is open.
+//   - No other request of sp is open. Claude Code shows the oldest pending
+//     dialog first, so an older open request's dialog, if it is still up, is
+//     the one a pane answer would reach.
+//
+// What it cannot show:
+//
+//   - A stale record (b.omt). While pr is open the store holds the agent's
+//     moves to working (hook_writes.go's working hold), so a dialog answered
+//     at the pane, or closed by a timeout deny the relay hook returned
+//     without recording it, changes nothing it reads until a later hook
+//     moves sp out of check_permission or records a later request.
+//   - A stale record also fails the third check for every later fallen-back
+//     request of sp, even one whose dialog really is on screen, for as long
+//     as the stale record is open. That is a stall, not a mistyped answer:
+//     each is refused with ErrNoOpenPermissionRequest, which advises no pane
+//     answer.
+//   - A later request in the gap before it is recorded. Its
+//     PermissionRequest hook moves sp to check_permission (internal/hook's
+//     applyOrdinaryHook) before its relay records the request (runRelay's
+//     UpsertOpenPermissionRequestResult). If pr is stale, sp had left
+//     check_permission since (to waiting, say), and Decide's reads fall
+//     between the later request's state write and its record, all three
+//     checks pass and Decide returns ErrRelayFallenBack. The send-keys guard
+//     has released on pr's account and holds on the later request's only
+//     once it is recorded, so keys the caller sends before then can answer
+//     the later request's dialog. No stored field tells this apart: nothing
+//     records when sp entered check_permission or which request moved it
+//     there.
+func fallenBackUnshown(sp Spawn, rows []PermissionRow, pr PermissionRow) string {
+	if sp.State != store.StateCheckPermission {
+		return fmt.Sprintf("the spawn is in state %s", sp.State)
+	}
+	for _, r := range rows {
+		if r.RequestID > pr.RequestID {
+			return fmt.Sprintf("the spawn recorded request %s after it", r.RequestToken)
+		}
+	}
+	for _, r := range rows {
+		if r.RequestID != pr.RequestID && r.Decision == "" {
+			return fmt.Sprintf("the spawn's request %s is open too", r.RequestToken)
+		}
+	}
+	return ""
 }
 
 // alreadyDecidedError is decide's ErrAlreadyDecided for the decided row pr.
@@ -286,15 +420,21 @@ func decideOutcome(err error) string {
 //   - [ErrMissingRequestToken]: RequestToken is empty.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
-//   - [ErrNoOpenPermissionRequest]: no undecided permission request exists.
+//   - [ErrNoOpenPermissionRequest]: no undecided permission request exists,
+//     or the request's record is still open past its relay window but the
+//     Spawn is not shown to be sitting on it alone: it has left
+//     check_permission, recorded a later request, or has another request
+//     open. Its permission dialog may have closed; do not answer it at the
+//     pane.
 //   - [ErrAlreadyDecided]: a verdict is already recorded: a concurrent
 //     caller's, or the relay hook's fail-closed deny (decision_reason
 //     "timeout"), such as when the request's window ran out, which the hook
 //     normally returns to Claude Code as the request's answer.
 //   - [ErrRelayFallenBack]: the request's record is still open past its relay
-//     window and its relay hook can no longer answer it; answer at the pane
-//     instead, with SendKeys. The SendKeys relay guard has already released
-//     on this request's account; see [ErrRelayFallenBack].
+//     window, its relay hook can no longer answer it, and the Spawn is still
+//     shown sitting on it alone; answer at the pane instead, with SendKeys.
+//     The SendKeys relay guard has already released on this request's
+//     account; see [ErrRelayFallenBack].
 //   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
 //
 // A call refused between 1 s before the request's window ends and 2 s after

@@ -131,7 +131,8 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 // on the request's account, and reads the request again, so
 // ErrRelayFallenBack ("answer at the pane") is returned only for a request
 // whose row is still open once its poller is presumed no longer able to
-// answer it (b.pzy).
+// answer it (b.pzy), and then only while the Spawn is still shown sitting on
+// it alone (decide.go's fallenBackUnshown, b.t6e).
 //
 // The span is agent-director's to absorb, not the caller's to time (b.ah6):
 // no runtime caller-facing text (error messages, manifest Descriptions)
@@ -201,14 +202,16 @@ func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time
 
 // relayRequestFallenBack reports whether permission request pr has fallen back
 // at now: its record is still open (no decision) at or after its
-// relayHookSettledAt, so its relay hook is presumed dead and only a pane
-// answer can close its dialog. It is the one definition of "fallen back":
-// Decide returns ErrRelayFallenBack for exactly such a request (after its
-// wait), and the send_keys guard stops holding on account of a decided
-// request once another request of the same Spawn has fallen back (b.ceq). A
-// decided request has not fallen back. Like its siblings it is a pure
-// function of the row, the resolved effective relay window and the injected
-// now.
+// relayHookSettledAt, so its relay hook is presumed dead and, if its dialog is
+// still on screen, only a pane answer can close it. It is the one definition
+// of "fallen back": Decide returns ErrRelayFallenBack only for such a request
+// (after its wait), and only while the Spawn is still shown sitting on it
+// alone, otherwise ErrNoOpenPermissionRequest (decide.go's fallenBackUnshown,
+// b.t6e); and the send_keys guard stops holding on account of a decided
+// request once another request of the same Spawn has fallen back (b.ceq),
+// whichever of the two Decide returns for it. A decided request has not
+// fallen back. Like its siblings it is a pure function of the row, the
+// resolved effective relay window and the injected now.
 func relayRequestFallenBack(pr PermissionRow, effectiveWindow time.Duration, now time.Time) bool {
 	return pr.Decision == "" && !now.Before(relayHookSettledAt(pr.CreatedAt, effectiveWindow))
 }

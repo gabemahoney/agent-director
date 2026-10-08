@@ -540,7 +540,9 @@ one poller. Rows are INSERT-only: nothing replaces an open row, and a
 polling loop that sees `sql.ErrNoRows` (possible via `ON DELETE
 CASCADE` when the spawn row is deleted) fails closed. Closed
 (decided) rows are evicted oldest-first when the table exceeds
-`relay.permission_request_cap`.
+`relay.permission_request_cap`, except a spawn's newest request while
+that spawn has an open request (`decide` relies on it; see
+[permissions.md](permissions.md#deliver-or-refuse-contract)).
 
 ## References
 

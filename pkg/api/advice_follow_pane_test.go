@@ -1,6 +1,6 @@
 package api_test
 
-// advice_follow_pane_test.go (b.fji E1-E9): each refusal of send-keys,
+// advice_follow_pane_test.go (b.fji E1-E9, F6): each refusal of send-keys,
 // read-pane, pause and decide that says what to do next is followed
 // literally, on the kill and pane-verb fixtures (fake tmux, injected clock).
 // The agent's input box is modelled from the keys calls (paneInput,
@@ -313,13 +313,16 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLater(t *testing.T) {
 // to answer the open request it names with decide, to retry send-keys later
 // when the request it names is decided, or, with none recorded yet, to answer
 // it with decide once get lists it (E6); decide's fallen-back refusal says only
-// to answer at the pane with send-keys (E7, b.pzy). A request the relay hook
-// denied at its deadline is ErrAlreadyDecided naming that deny.
+// to answer at the pane with send-keys (E7, b.pzy), or, when the Spawn is not
+// shown sitting on that request alone, not to answer it at the pane (F6,
+// b.t6e). A request the relay hook denied at its deadline is ErrAlreadyDecided
+// naming that deny.
 const (
 	advSendKeysNoRequestYet = "is awaiting a relayed permission decision whose request is not yet recorded; " +
 		"answer it with decide once get lists it"
 	advDecideFallenBack = "fell back — too late; its record is still open and its relay hook can no longer answer it; " +
 		"answer at the pane with send-keys"
+	advDecideNotShown     = "so its permission dialog cannot be shown to be on screen; do not answer it at the pane"
 	advDecideHookTimedOut = `already decided as "deny" (decision_reason "timeout")`
 )
 
@@ -536,16 +539,17 @@ func TestAdviceFollow_E6_SendKeysNoRequestYetDecideOnceGetLists(t *testing.T) {
 }
 
 // TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard: E7's Go doc "... the refusal names that request;
-// answer that one with decide"; followed, the pane answer lands once that request's verdict is delivered.
+// answer that one with decide", for a request recorded after decide's last read (one recorded before it makes decide
+// refuse with F6, b.t6e); followed, the pane answer lands once that request's verdict is delivered.
 func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "decide.go", "ErrRelayFallenBack", "If send-keys still refuses with ErrSendKeysWhileRelayed, "+
 		"another of the Spawn's requests holds it and the refusal names that request; answer that one with decide, as that error says.")
 	tokA, tokB := storefix.TestRequestTokenA, storefix.TestRequestTokenB
 	e := newKillEnv(t)
-	r := seedRelayRow(t, e, tokA, tokB)
+	r := seedRelayRow(t, e, tokA)
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokA, 2*relayGuardWindow)
-	now := time.Now() // A is an hour past its window; B, just recorded, is in its own
+	now := time.Now() // A is an hour past its window
 	decide := func(token string) error {
 		_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { now = now.Add(d) },
 			api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: token, Decision: "allow"})
@@ -557,6 +561,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	}
 
 	advRelayAdvice(t, decide(tokA), api.ErrRelayFallenBack, advDecideFallenBack)
+	storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{tokB}) // a subagent's request, in its own window
 	advRelayAdvice(t, send(), api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(tokB))
 	e.assertNoTmuxCall(t)
 	if err := decide(tokB); err != nil {
@@ -647,6 +652,55 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 				e.assertNoTmuxCall(t)
 			})
 		}
+	}
+}
+
+// TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane: F6 "so its permission dialog cannot be shown to be on screen;
+// do not answer it at the pane". Request A's dialog was answered at the pane after its relay hook was killed, leaving
+// its record open; a caller that branches on decide's error name types nothing into Claude's prompt (b.t6e).
+func TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane(t *testing.T) {
+	t.Parallel()
+	adviceAssertManifest(t, "decide", "", "else ErrNoOpenPermissionRequest (its dialog may have closed: do not answer at the pane)")
+	tokA, tokB := storefix.TestRequestTokenA, storefix.TestRequestTokenB
+	cases := []struct {
+		name  string
+		after func(t *testing.T, e *killEnv, r killRow, now time.Time) // what the agent did after A's pane answer
+	}{
+		{"the agent's Stop", func(t *testing.T, e *killEnv, r killRow, _ time.Time) {
+			if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWaiting); err != nil {
+				t.Fatalf("agent's Stop: %v", err)
+			}
+		}},
+		// B's decided verdict no longer holds the send-keys guard once A has fallen back (b.ceq).
+		{"the agent's next request decided", func(t *testing.T, e *killEnv, r killRow, now time.Time) {
+			storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{tokB})
+			if _, err := api.Decide(e.st, relayGuardWindow, now,
+				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tokB, Decision: "allow"}); err != nil {
+				t.Fatalf("decide %s in its window: %v", tokB, err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := seedRelayRow(t, e, tokA)
+			storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokA, 2*relayGuardWindow)
+			now := time.Now() // A is an hour past its window
+			// The agent ran A's tool; its move to working is held while A's record is open.
+			if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWorking); err != nil {
+				t.Fatalf("agent's move to working: %v", err)
+			}
+			tc.after(t, e, r, now)
+
+			_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { now = now.Add(d) },
+				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tokA, Decision: "allow"})
+			if errors.Is(err, api.ErrRelayFallenBack) { // E7's advice, as a caller branching on the name follows it
+				_, _ = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+			}
+
+			advRelayAdvice(t, err, store.ErrNoOpenPermissionRequest, advDecideNotShown)
+			e.assertNoTmuxCall(t) // the advice followed: nothing typed into Claude's prompt
+		})
 	}
 }
 

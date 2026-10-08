@@ -5892,11 +5892,15 @@ decide allow/deny out-of-band. Conceptually:
   `relayRequestFallenBack(pr, effectiveWindow, now)` is the one
   definition of a **fallen-back** request: its record is still open (no
   decision) at or after its `relayHookSettledAt`, so its relay hook is
-  presumed dead and only a pane answer can close its dialog. A decided
-  request has not fallen back. `decideRefusal` returns
-  `ErrRelayFallenBack` for exactly such a request, and the send-keys
-  guard stops holding on a decided row's account once one of the spawn's
-  requests is such a request (b.ceq; see "Send-keys interaction" below).
+  presumed dead and, if its dialog is still on screen, only a pane answer
+  can close it. A decided request has not fallen back. `decideRefusal`
+  returns `ErrRelayFallenBack` only for such a request, and then only
+  while the spawn is shown to be sitting on it alone, otherwise
+  `ErrNoOpenPermissionRequest` (`fallenBackUnshown`, b.t6e; see
+  `pkg/api/decide.go` below). The send-keys guard stops holding on a
+  decided row's account once one of the spawn's requests has fallen back,
+  whichever of the two `decide` returns for it (b.ceq; see "Send-keys
+  interaction" below).
   Code needing to know whether a request has fallen back MUST use
   `relayRequestFallenBack`, never its own decision-and-time test. An open
   request holds the guard until `relayHookSettledAt`, so it holds until
@@ -5946,7 +5950,13 @@ decide allow/deny out-of-band. Conceptually:
   Claude Code kills the hook before its deadline only when the insert
   came late enough after the hook's start to fall in a later whole
   second, or when the hook stalled or died; that request falls back
-  (`ErrRelayFallenBack`).
+  (`ErrRelayFallenBack`, or `ErrNoOpenPermissionRequest` when the spawn
+  is not shown to be sitting on it alone). The deadline coming first
+  also means a slow timeout path can be cut off by the kill after its
+  deny write but before its stdout write (b.chb): the dialog stays open
+  while the record reads decided, so `decide` returns
+  `ErrAlreadyDecided` and the request stalls until a human answers at
+  the pane. That fails safe: no advice sends keys into Claude's prompt.
 
   **The span between the two boundaries is agent-director's to absorb,
   not the caller's to time (b.ah6).** From `decide`'s cutoff
@@ -5965,9 +5975,12 @@ decide allow/deny out-of-band. Conceptually:
   margin, either boundary or a release time, and new text MUST NOT
   either. `decide`'s manifest Description names the wait at the
   window's end, `ErrAlreadyDecided` for a request the relay hook denied
-  at its timeout, and "(answer at the pane)" for `ErrRelayFallenBack`,
-  with no figure; the wait's bound (at most 3 s) is documented in
-  `docs/permissions.md` and the client READMEs.
+  at its timeout, "(answer at the pane)" for `ErrRelayFallenBack` while
+  the spawn is still in `check_permission` with no other open or later
+  request, and `ErrNoOpenPermissionRequest` "(its dialog may have
+  closed: do not answer at the pane)" otherwise, with no figure; the
+  wait's bound (at most 3 s) is documented in `docs/permissions.md` and
+  the client READMEs.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
@@ -5982,9 +5995,13 @@ decide allow/deny out-of-band. Conceptually:
   disambiguates it three ways via a follow-up SELECT with pinned
   precedence: `ErrAlreadyDecided` wins for decided rows;
   `ErrRelayFallenBack` applies ONLY to open rows past the fail-early
-  cutoff (`elapsed ≥ window − margin`); otherwise
-  `ErrNoOpenPermissionRequest`. A refusal leaves `decision` as it was
-  (NULL for a fallen-back row).
+  cutoff (`elapsed ≥ window − margin`), and of those only to a request
+  the spawn is shown to be sitting on alone (see "Shown sitting on the
+  request alone" below); otherwise `ErrNoOpenPermissionRequest`. A
+  refusal leaves `decision` as it was (NULL for a fallen-back row).
+  `DecideStore` is `GetSpawn`, the guarded write, `GetPermissionRequest`
+  and `PermissionRequestsForSpawn` (the all-rows read the send-keys
+  guard also uses); `*store.Store` satisfies it.
 
   **The wait at the window's end (b.pzy).** `decide` refuses from
   `window − margin`, but a relay hook still alive then denies the
@@ -6014,21 +6031,23 @@ decide allow/deny out-of-band. Conceptually:
     machine-readable reason is `get-permission`'s `decision_reason`.
   - Gone (the spawn's row was deleted during the wait) →
     `ErrNoOpenPermissionRequest`, with no pane advice.
-  - Still open → `ErrRelayFallenBack`, confirmed through the shared
-    `relayRequestFallenBack` (see `pkg/api/deliverability.go` above).
-    The hook is presumed dead, on
+  - Still open → the request has fallen back, confirmed through the
+    shared `relayRequestFallenBack` (see `pkg/api/deliverability.go`
+    above), and `fallenBackRefusal` names the refusal (see "Shown
+    sitting on the request alone" below): `ErrRelayFallenBack` or
+    `ErrNoOpenPermissionRequest`. The hook is presumed dead, on
     the presumption that a live hook's timeout deny lands by
     `relayHookSettledAt` (it fails only in the residual race above).
-    `decide` reads only the record, so
-    it knows the request is still open, not that the dialog is on
-    screen. On this request's account the send-keys guard releases at
+    On this request's account the send-keys guard releases at
     `relayHookSettledAt`, as the wait ends, so `send-keys` is not
     refused by it for this request. While this request stays open, no
     decided request of the same spawn holds the guard either (b.ceq). A
-    later request of the same spawn still open can still hold it until
-    it is decided or has itself fallen back; `send-keys` then
-    refuses with `ErrSendKeysWhileRelayed`, naming that request and
-    advising `decide` on it.
+    request of the same spawn recorded after `decide`'s last read and
+    still open can still hold it until it is decided or has itself
+    fallen back; `send-keys` then refuses with
+    `ErrSendKeysWhileRelayed`, naming that request and advising `decide`
+    on it. (A request recorded before that read makes `decide` return
+    `ErrNoOpenPermissionRequest` instead.)
 
   So, on the same presumption, a caller that follows `ErrRelayFallenBack`
   does not type into Claude's prompt after the hook's timeout deny. The
@@ -6037,6 +6056,85 @@ decide allow/deny out-of-band. Conceptually:
   longer answer it, and to answer at the pane with `send-keys`. It
   states no release time: the guard has already released on this
   request's account.
+
+  **Shown sitting on the request alone (b.t6e).** `decide` reads stored
+  records, not Claude Code's screen, and a record can be left open after
+  its dialog closed: the dialog was answered at the pane after the relay
+  hook was killed, or closed by a timeout deny the hook returned without
+  recording it. A pane answer then is typed into Claude's prompt as a
+  user message. So `fallenBackRefusal` reads the spawn, then every one of
+  its requests through `PermissionRequestsForSpawn` (the last read of the
+  refused request included), and calls `fallenBackUnshown`, which
+  returns why the spawn is not shown to be sitting on the request alone,
+  or `""` when it is. It is, and `decide` returns `ErrRelayFallenBack`,
+  only if all hold:
+
+  - The spawn is still in `check_permission`. Any other state was written
+    after the request by a hook (Stop, AskUserQuestion, SessionStart,
+    SessionEnd) or a later launch, once Claude Code had left its dialog.
+  - No request of the spawn was recorded after it (a higher
+    `request_id`). A later request is a later PermissionRequest hook,
+    perhaps the agent's next one after this dialog closed, so
+    `check_permission` may be that request's. Cap-based GC keeps the
+    spawn's newest request while the spawn has an open one (see
+    "Cap-based GC" below), so a later request stays visible here for as
+    long as this one is open.
+  - No other request of the spawn is open. Claude Code shows the oldest
+    pending dialog first, so an older open request's dialog, if up, is
+    the one a pane answer would reach.
+
+  Otherwise `decide` returns `ErrNoOpenPermissionRequest`, whose message
+  names the reason and ends `… so its permission dialog cannot be shown
+  to be on screen; do not answer it at the pane`. A request removed
+  (with its spawn) since `decideRefusal`'s read is
+  `ErrNoOpenPermissionRequest`, and one decided since is
+  `ErrAlreadyDecided`, as in `decideRefusal`. Any refusal that advises a
+  pane answer for a fallen-back request MUST be named through
+  `fallenBackRefusal`, never from `relayRequestFallenBack` alone.
+
+  What the records cannot show, and the trade-offs accepted:
+
+  - **Known gap (b.omt).** While a request is open, the store's working
+    hold (`holdWorkingTransition` in `internal/store/hook_writes.go`)
+    writes nothing for the agent's moves to `working`. So after a pane
+    answer, or a timeout deny returned but not recorded, the spawn still
+    reads `check_permission` until a later hook moves it out (Stop,
+    AskUserQuestion) or records a later request, and `decide` still
+    returns `ErrRelayFallenBack`; keys sent then are typed into Claude's
+    prompt. Nothing closes such a stale record while its spawn lives.
+  - **A later request in the gap before it is recorded.** A
+    PermissionRequest hook moves the spawn to `check_permission`
+    (`internal/hook`'s `applyOrdinaryHook`) before `runRelay` records
+    its request (`UpsertOpenPermissionRequestResult`). If the refused
+    request is stale, the spawn has left `check_permission` since (to
+    `waiting`, say), and `fallenBackRefusal`'s reads fall between a
+    later request's state write and its record, all three checks pass
+    and `decide` returns `ErrRelayFallenBack`. The send-keys guard has
+    released on the stale request's account and holds on the later
+    request only once it is recorded, so keys sent before then can
+    answer the later request's dialog. No stored field tells this
+    apart: nothing records when the spawn entered `check_permission` or
+    which request moved it there.
+  - **Liveness.** Two cases refuse a request whose dialog really is up.
+    A subagent's request recorded while the earlier request's dialog is
+    on screen looks the same as the agent's next request, so `decide`
+    refuses the earlier one with `ErrNoOpenPermissionRequest`, and keeps
+    refusing it after the later one is decided. And a stale record (the
+    known gap above) makes every later fallen-back request of the spawn
+    fail the third check for as long as it stays open, which is the rest
+    of the spawn's life. Each is a stall instead of a possibly mistyped
+    answer: `ErrNoOpenPermissionRequest` advises no pane answer and no
+    recovery, and a human at the pane resolves it.
+  - **The send-keys guard does not take this test**, so it does not
+    enforce `decide`'s advice: once the guard releases, a `send-keys` is
+    accepted even for a request `decide` refused with
+    `ErrNoOpenPermissionRequest`, such as a stale record while a request
+    recorded after it has just been decided (see "Send-keys interaction"
+    below). Gated by the test, the guard's b.ceq exception would never
+    apply: a request that passes it is the spawn's newest, so every
+    decided request is older, past its own window and already released,
+    and the decided row the exception is for would again hold for up to
+    its full relay window.
 
 - **`pkg/api/get_permission.go`** — verb wrapper. Read-only: delegates to
   `GetPermissionRequestByToken` and projects the row onto the SR-7.4 wire
@@ -6148,8 +6246,10 @@ one exception.
 (b.ceq).** `evaluateRelayGuard` first tests every row with
 `relayRequestFallenBack` (see `pkg/api/deliverability.go` above): a row
 still open at or after its `relayHookSettledAt`, the request `decide`
-refuses with `ErrRelayFallenBack`. If any row has fallen back, decided
-rows no longer hold. The fallen-back request's open record keeps the
+refuses with `ErrRelayFallenBack`, or with `ErrNoOpenPermissionRequest`
+when the spawn is not shown to be sitting on it alone. If any row has
+fallen back, decided rows no longer hold. The fallen-back request's open
+record keeps the
 spawn in `check_permission` (the store holds the agent's move to
 `working` while any request is open), so without the exception a decided
 row would hold until its own `relayHookSettledAt`, delivered or not,
@@ -6172,6 +6272,11 @@ fallen-back row's dialog is no longer on screen (its record left open
 after the dialog closed, b.t6e): keys sent in that span can then land in
 the decided request's still-pending dialog.
 
+The exception does not take `decide`'s `fallenBackUnshown` test, so the
+guard does not enforce `decide`'s advice in that span (see the send-keys
+bullet under "Shown sitting on the request alone" in `pkg/api/decide.go`
+above).
+
 The refusal names one request and states no release point (b.ah6). A
 held `sendKeysGuard` carries that request's token in `holding` and
 whether it is decided in `holdingDecided`: among the rows still holding,
@@ -6188,7 +6293,8 @@ advice. The named request is in one of three cases:
   request <request_token>; answer it with decide`. `decide` answers it.
   Near the window's end `decide`'s wait absorbs the span between its own
   cutoff and the guard's release (see `pkg/api/deliverability.go`
-  above), then returns `ErrAlreadyDecided` or `ErrRelayFallenBack`.
+  above), then returns `ErrAlreadyDecided`, `ErrRelayFallenBack` or
+  `ErrNoOpenPermissionRequest`.
 - **Decided, verdict possibly still being delivered** (named only when
   no open row holds). `spawn <id>: the relayed permission verdict on
   request <request_token> is recorded and its relay hook may still be
@@ -6235,12 +6341,22 @@ refuse — the send-keys relay guard *releases* (see
 "Send-keys interaction" above), and `decide` names a refusal
 `ErrRelayFallenBack` only once the guard has released on the refused
 request's account (see "The wait at the window's end" under `pkg/api/decide.go`
-above). Once the
+above), and only while the spawn is shown sitting on that request alone. Once the
 guard releases, the operator answers Claude Code's native
 permission dialog through `send-keys` (no dedicated verb, never raw tmux), and
 the recovery is audited as `ad.send_keys.called` with
 `guard_evaluation=released`. So the terminal state of a fallen-back relay is a
 sanctioned, audited in-band recovery, not a lying ghost.
+
+**A record that outlives its dialog (b.t6e, b.omt).** No path closes a
+request's record left open after its dialog closed while the spawn lives
+(`find-missing` reconciles only spawns that are gone), and the store's
+working hold keeps the spawn in `check_permission` until a later hook
+moves it out or records a later request. Once that happens `decide`
+refuses the request with `ErrNoOpenPermissionRequest` and no pane
+advice; before then it cannot tell the record from a live dialog (see
+"Shown sitting on the request alone" under `pkg/api/decide.go` above,
+which also lists the gap before a later request is recorded).
 
 **What makes the invariant hold, and the window it holds within.** The
 listener half of the invariant is guaranteed only for the configured relay
@@ -6362,9 +6478,13 @@ is required. The contract is pinned by
 To bound `permission_requests` table growth, `UpsertOpenPermissionRequest`
 runs an optional DELETE step **inside the same transaction as the INSERT**.
 After inserting the new open row, if the total row count exceeds the effective
-cap, the oldest closed rows are deleted (by `decided_at ASC`) until the count
-equals the cap. Open rows (`decision IS NULL`) are never eviction candidates,
-regardless of cap value.
+cap, the oldest eligible closed rows are deleted (by `decided_at ASC`), at most
+as many as the count exceeds the cap by. Open rows (`decision IS NULL`) are
+never eviction candidates, regardless of cap value, and neither is a spawn's
+newest request while that spawn has an open request (see Selector). So the
+table may stay above the cap when too few closed rows are eligible: every open
+row is kept, plus at most one exempt decided row per spawn with an open
+request.
 
 **Trigger.** Eviction runs at every call to `UpsertOpenPermissionRequest` that
 pushes the total row count past the cap. The check is synchronous and
@@ -6372,7 +6492,14 @@ transactional — there is no background sweep. A call whose gated INSERT
 did not apply (SR-22.9) rolls back, inserting and evicting nothing.
 
 **Selector.** Only closed rows (`decision IS NOT NULL`) are eligible, ordered
-`decided_at ASC`. The oldest decided rows are removed first.
+`decided_at ASC`. The oldest decided rows are removed first. Exempt: for each
+spawn with an open request, its newest request (`MAX(request_id)`; one
+uncorrelated grouped subquery per DELETE). `decide` refuses to advise a pane
+answer for an open request once the spawn has recorded a later request (b.t6e;
+see "Shown sitting on the request alone" under `pkg/api/decide.go`); evicting
+every later request would erase that signal and turn the refusal back into
+`ErrRelayFallenBack`. Keeping the newest request keeps the signal for as long
+as the open request lives.
 
 **Cap = 0.** Eviction is disabled entirely; the DELETE step is skipped.
 This is an operator opt-in to unbounded growth — useful for audit-heavy
