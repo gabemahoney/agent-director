@@ -84,11 +84,13 @@ would be refused by the runner (see
 [Settings layers and MCP servers](#settings-layers-and-mcp-servers)): it
 is, or links to, a `.claude.json` or a `.credentials.json`, it cannot be
 read or is not JSON, a key in it looks like a credential or is a
-credential-producing setting, or an `env` object in it breaks the layer
-env rule. A missing file is skipped, but a dangling link is refused,
-because its target could appear later in the run. The runner never stages
-a dangling link. The refusal names the layer, its path and the key, never
-a value. Dry and probe mode do not run this check.
+credential-producing setting, an `env` object in it breaks the layer env
+rule, or a `headers` object in it sets a header to a value that looks like
+a URL or an authorization header. A missing file is skipped, but a
+dangling link is refused, because its target could appear later in the
+run. The runner never stages a dangling link. The refusal names the layer,
+its path and the key, never a value. Dry and probe mode do not run this
+check.
 
 Real mode also refuses, with `real-gateway-only`, a container that has
 anything at one of three paths: a file, a directory or a link, dangling or
@@ -239,7 +241,12 @@ make measure-exit-print MEASURE_MODE=measure MEASURE_ARGS="--user-settings /path
     `Authorization:`). Any of these would take the agents off the gateway.
     The value test runs inside `jq`, so values never reach the shell.
     `run.sh`'s `LAYER_REFUSED_ENV` list and the driver's `layerenv.go`
-    hold the same names and must stay in step with `realModeRefusedEnv`.
+    hold the same names and must stay in step with `realModeRefusedEnv`;
+  - a `headers` object at any depth (an MCP server's static `headers`)
+    sets any header, whatever its name, to a value that looks like a URL or
+    an authorization header, as above (`X-Auth: Bearer …`). Plain headers,
+    such as `Accept` or a tenant id, pass, and an MCP server's `url` is not
+    value-checked. The refusal names the header, never its value.
 - In real mode the driver repeats all of these refusals in its preflight,
   except the missing-`jq` one, since it does not use `jq` (see
   [Credentials](#credentials)). A container started by hand is held to
@@ -253,7 +260,9 @@ make measure-exit-print MEASURE_MODE=measure MEASURE_ARGS="--user-settings /path
 - **Warnings:** each MCP case really starts the supplied servers, about 22
   times per case, so they may contact their own services. An MCP
   configuration may hold secrets, and its copy is mounted into the
-  container.
+  container. The value tests cannot see a bare token (no `Bearer ` before
+  it) under an `env` or header name that does not look like a credential;
+  remove any such value from the copy you stage.
 
 ## Budgets
 

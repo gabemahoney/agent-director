@@ -9744,10 +9744,11 @@ This section does not repeat it.
     default, and it refuses (exit 2) a `--cases` id from another mode.
   - It refuses (exit 2) a staged layer that is or links to `.claude.json`
     or `.credentials.json`, is not JSON, or holds a credential-like key or
-    a credential-producing setting (`LAYER_CREDENTIAL_SETTINGS`), or whose
-    `env` objects break the layer env rule (`LAYER_REFUSED_ENV`; see the
-    isolation contract below). The refusal applies in print-only too,
-    and names the key, never a value.
+    a credential-producing setting (`LAYER_CREDENTIAL_SETTINGS`), whose
+    `env` objects break the layer env rule (`LAYER_REFUSED_ENV`), or whose
+    `headers` objects set a header to a value that looks like a URL or an
+    authorization header (see the isolation contract below). The refusal
+    applies in print-only too, and names the key, never a value.
   - The probe takes its candidate versions from `npm view` in a
     credential-free base-image container on the host network, or from
     `--versions` / `--versions-file`. A failed or empty listing stops the
@@ -9947,11 +9948,39 @@ This section does not repeat it.
     refuses (any `CLAUDE_CODE_USE_*`, a `realModeRefusedEnv` or
     `credentialEnv` name, `ANTHROPIC_CUSTOM_HEADERS`; case ignored) or a
     value `layerEnvValueRE` matches (a URL, a bearer token, an
-    authorization header) (`findLayerEnv`).
+    authorization header) (`findLayerEnv`);
+  - a `headers` object at any depth (an MCP server's static request
+    headers, an HTTP hook's headers) sets any header to a value
+    `layerEnvValueRE` matches (`findLayerHeader`). Only values are tested.
+    The key check above has already refused a credential-like header name,
+    but a name with no `layerCredentialKeyParts` part (`X-Auth`,
+    `Proxy-Auth`) passes it while its value still reaches the server past
+    the gateway. Values are tested, rather than every non-empty `headers`
+    map refused, by choice: a deployment's plain headers (`Accept`, a
+    tenant id) still stage. Like the env value test, it cannot see a bare
+    token with no `Bearer ` before it under such a name. Other strings,
+    such as an MCP server's `url`, are never value-checked.
+
+  `findLayerEnv` and `findLayerHeader` share `findLayerEntry`, which walks
+  a decoded document (objects at any depth, arrays included, keys in
+  sorted order) and returns the first entry of an object held under a
+  given key that a predicate refuses. `layerValueRefused` is the shared
+  value test (`layerEnvValueRE` over `layerEnvValueText`, a non-string as
+  its JSON). A new check over another object's entries uses these rather
+  than a new walk.
 - `run.sh`'s `refuse_credential_layer` makes the same layer refusals, in
   the same order, bar the dangling-link one above, when it stages a layer,
-  in print-only too (its key and value tests run inside `jq`). The driver
-  repeats them so a container started by hand is held to the same rule.
+  in print-only too (its key and value tests run inside `jq`). Its value
+  tests come from `layer_value_entries OBJ FILE`, which prints, for each
+  entry of every `OBJ` object at any depth, `url` or `-` (whether the
+  value matches the same pattern as `layerEnvValueRE`), a tab and the
+  entry's name, so no value reaches the shell. It prints in the order
+  `findLayerEntry` walks (an object's own `OBJ` entries before its keys'
+  values, keys and entries in sorted order, arrays by index), so when a
+  layer has several refused entries `run.sh` and the driver name the same
+  one. `refuse_credential_layer` runs it for `env`, then for `headers`; a
+  new per-object value check uses it too. The driver repeats every refusal
+  so a container started by hand is held to the same rule.
   Two tests keep the runner and the driver in step:
   `TestRunnerLayerRefusedEnvInStep` (`LAYER_REFUSED_ENV`, the driver's
   refused names and `realModeRefusedEnv`) and
@@ -9960,8 +9989,13 @@ This section does not repeat it.
   `layerCredentialKeyParts`, and `LAYER_CREDENTIAL_SETTINGS` against
   `layerCredentialSettings`, all both ways). The shared
   `credentialLayerCases` table runs the same refused layers through both
-  `run.sh` and the driver. `TestRunnerLayerReport` checks that `run.sh`
-  reports a dangling layer link as `MISSING` and does not stage it.
+  `run.sh` and the driver; its "the sorted first refused" header, nested
+  header and env entry cases pin that both name the same entry.
+  `TestRunnerLayerEnvAndHeaders` checks `run.sh`'s
+  env and headers refusals in print-only, and what they pass (plain headers
+  beside an MCP server's `url`, a non-object `headers`).
+  `TestRunnerLayerReport` checks that `run.sh` reports a dangling layer
+  link as `MISSING` and does not stage it.
 - Real mode also refuses three paths outright, where Claude Code reads
   them, and never opens or lists them. `checkRefusedFiles` (`layerenv.go`),
   called from `checkEnvironment` right after `checkLayerFiles`, refuses

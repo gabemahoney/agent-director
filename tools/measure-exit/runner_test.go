@@ -448,9 +448,9 @@ func TestRunnerSessionCounts(t *testing.T) {
 }
 
 // TestRunnerLayerReport: a staged layer that is, or links to, Claude Code's
-// state or credentials file, is not JSON, or holds a credential-like key or
-// credential-producing setting is refused before anything runs, naming the
-// key and never a value.
+// state or credentials file, is not JSON, holds a credential-like key or
+// credential-producing setting, or sets a header to a credential-like value
+// is refused before anything runs, naming the key and never a value.
 func TestRunnerLayerReport(t *testing.T) {
 	refused := func(t *testing.T, tc credentialLayerCase, extra ...string) {
 		r := newRunnerRig(t)
@@ -494,31 +494,41 @@ func TestRunnerLayerReport(t *testing.T) {
 	})
 }
 
-// TestRunnerLayerEnv: a staged layer whose env object (any depth) sets a
-// LAYER_REFUSED_ENV (whose names TestRunnerLayerRefusedEnvInStep pins) or
-// CLAUDE_CODE_USE_* name, or any name to a URL or an authorization header, is
-// refused in print-only, naming the key and never the value; other values and
-// URLs outside an env object pass.
-func TestRunnerLayerEnv(t *testing.T) {
+// TestRunnerLayerEnvAndHeaders: a staged layer whose env object (any depth)
+// sets a LAYER_REFUSED_ENV (whose names TestRunnerLayerRefusedEnvInStep pins)
+// or CLAUDE_CODE_USE_* name, or any name to a URL or an authorization header,
+// or whose headers object (any depth) sets any header to such a value (b.qkg),
+// is refused in print-only, naming the key and never the value; other values
+// and URLs outside those objects pass.
+func TestRunnerLayerEnvAndHeaders(t *testing.T) {
 	const secret = "layer-env-runner-sentinel-0123456789"
 	const nameText, valueText = ", which would take the agents off the gateway", " to a value that looks like a URL or an authorization header"
+	const envSets, headerSets = "an env object in it sets ", "a headers object in it sets the header "
 	env := func(name, value string) string { return `{"env": {"` + name + `": "` + value + `"}}` }
 	for _, tc := range []struct {
-		name, flag, body, key, text string // text "" passes
+		name, flag, body, want string // want "" passes
 	}{
-		{"ANTHROPIC_BASE_URL", "--user-settings", env("ANTHROPIC_BASE_URL", secret), "ANTHROPIC_BASE_URL", nameText},
-		{"ANTHROPIC_CUSTOM_HEADERS", "--managed-settings", env("ANTHROPIC_CUSTOM_HEADERS", secret), "ANTHROPIC_CUSTOM_HEADERS", nameText},
-		{"a CLAUDE_CODE_USE_ name not listed", "--project-settings", env("CLAUDE_CODE_USE_VERTEX", secret), "CLAUDE_CODE_USE_VERTEX", nameText},
-		{"a lower-case provider switch", "--local-settings", env("claude_code_use_bedrock", secret), "claude_code_use_bedrock", nameText},
-		{"a URL value", "--user-settings", env("PLAIN", "http://"+secret), "PLAIN", valueText},
-		{"a Bearer value", "--managed-settings", env("PLAIN", "Bearer "+secret), "PLAIN", valueText},
-		{"a bearer value after a tab", "--project-settings", env("PLAIN", `bearer\t`+secret), "PLAIN", valueText},
-		{"an Authorization header value", "--local-settings", env("PLAIN", "Authorization: "+secret), "PLAIN", valueText},
-		{"an MCP server env URL", "--mcp-config", `{"mcpServers": {"s": {"command": "true", "env": {"UPSTREAM": "https://` + secret + `"}}}}`, "UPSTREAM", valueText},
-		{"a plain value", "--user-settings", env("PLAIN", secret), "", ""},
-		{"a URL outside an env object", "--user-settings", `{"apiUrl": "https://` + secret + `"}`, "", ""},
-		{"a non-object env", "--user-settings", `{"env": "https://` + secret + `"}`, "", ""},
-		{"a numeric value", "--user-settings", `{"env": {"PLAIN": 5}}`, "", ""},
+		{"ANTHROPIC_BASE_URL", "--user-settings", env("ANTHROPIC_BASE_URL", secret), envSets + "ANTHROPIC_BASE_URL" + nameText},
+		{"ANTHROPIC_CUSTOM_HEADERS", "--managed-settings", env("ANTHROPIC_CUSTOM_HEADERS", secret), envSets + "ANTHROPIC_CUSTOM_HEADERS" + nameText},
+		{"a CLAUDE_CODE_USE_ name not listed", "--project-settings", env("CLAUDE_CODE_USE_VERTEX", secret), envSets + "CLAUDE_CODE_USE_VERTEX" + nameText},
+		{"a lower-case provider switch", "--local-settings", env("claude_code_use_bedrock", secret), envSets + "claude_code_use_bedrock" + nameText},
+		{"a URL value", "--user-settings", env("PLAIN", "http://"+secret), envSets + "PLAIN" + valueText},
+		{"a Bearer value", "--managed-settings", env("PLAIN", "Bearer "+secret), envSets + "PLAIN" + valueText},
+		{"a bearer value after a tab", "--project-settings", env("PLAIN", `bearer\t`+secret), envSets + "PLAIN" + valueText},
+		{"an Authorization header value", "--local-settings", env("PLAIN", "Authorization: "+secret), envSets + "PLAIN" + valueText},
+		{"an MCP server env URL", "--mcp-config", `{"mcpServers": {"s": {"command": "true", "env": {"UPSTREAM": "https://` + secret + `"}}}}`, envSets + "UPSTREAM" + valueText},
+		{"an MCP server header URL", "--mcp-config",
+			`{"mcpServers": {"api": {"type": "http", "url": "https://mcp.invalid", "headers": {"X-Upstream": "https://` + secret + `"}}}}`, headerSets + "X-Upstream" + valueText},
+		{"a hook's bearer header in an array", "--project-settings",
+			`{"hooks": {"Stop": [{"hooks": [{"type": "http", "url": "https://hook.invalid", "headers": {"X-Auth": "bearer ` + secret + `"}}]}]}}`, headerSets + "X-Auth" + valueText},
+		{"a non-string header value as JSON text", "--user-settings", `{"headers": {"X-Auth": {"v": "Authorization: ` + secret + `"}}}`, headerSets + "X-Auth" + valueText},
+		{"a plain value", "--user-settings", env("PLAIN", secret), ""},
+		{"a URL outside an env object", "--user-settings", `{"apiUrl": "https://` + secret + `"}`, ""},
+		{"a non-object env", "--user-settings", `{"env": "https://` + secret + `"}`, ""},
+		{"a numeric value", "--user-settings", `{"env": {"PLAIN": 5}}`, ""},
+		{"plain headers beside an MCP url", "--mcp-config",
+			`{"mcpServers": {"api": {"type": "http", "url": "https://` + secret + `/mcp", "headers": {"X-Tenant": "` + secret + `", "Accept": "application/json"}}}}`, ""},
+		{"a non-object headers", "--user-settings", `{"headers": "Bearer ` + secret + `"}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRunnerRig(t)
@@ -527,11 +537,11 @@ func TestRunnerLayerEnv(t *testing.T) {
 			code, out := r.run(t, nil, "measure", tc.flag, path)
 			assertAbsent(t, "output", out, secret)
 			r.assertNothingRan(t)
-			if tc.text == "" && code != 0 {
+			if tc.want == "" && code != 0 {
 				t.Fatalf("exit %d, want 0:\n%s", code, out)
 			}
-			if want := "an env object in it sets " + tc.key + tc.text; tc.text != "" && (code != 2 || !strings.Contains(out, want)) {
-				t.Fatalf("exit %d, want 2 with %q:\n%s", code, want, out)
+			if tc.want != "" && (code != 2 || !strings.Contains(out, tc.want)) {
+				t.Fatalf("exit %d, want 2 with %q:\n%s", code, tc.want, out)
 			}
 		})
 	}

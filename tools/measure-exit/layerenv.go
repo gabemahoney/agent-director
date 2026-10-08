@@ -31,8 +31,9 @@ var layerEnvRefusedNames = []string{"ANTHROPIC_CUSTOM_HEADERS"}
 // one would move the bill off the gateway.
 const layerEnvRefusedPrefix = "CLAUDE_CODE_USE_"
 
-// layerEnvValueRE matches a layer env value that looks like a URL or an
-// authorization header (any case), the same test run.sh runs in jq.
+// layerEnvValueRE matches a layer env or headers value that looks like a URL
+// or an authorization header (any case), the same test run.sh runs in jq
+// (layer_value_entries).
 var layerEnvValueRE = regexp.MustCompile(`(?i)://|\bbearer\s|authorization\s*:`)
 
 // claudeCredentialsFile is Claude Code's credentials file (its login) in
@@ -231,7 +232,9 @@ func checkLayerFiles(files []layerFile) error {
 //     setting (findCredentialKey);
 //   - an env object at any depth (the settings env, an MCP server's env)
 //     sets a name layerEnvNameRefused refuses, or sets any name to a value
-//     layerEnvValueRE matches (findLayerEnv).
+//     layerEnvValueRE matches (findLayerEnv);
+//   - a headers object at any depth (an MCP server's static headers) sets
+//     any header to a value layerEnvValueRE matches (findLayerHeader).
 //
 // Otherwise a path with nothing at all there (os.Lstat finds nothing) is no
 // layer. The refusal names the layer, its path and the key, never a value.
@@ -278,6 +281,10 @@ func checkLayerFile(f layerFile) error {
 	default:
 		return refuse(ruleRealGatewayOnly,
 			"an env object in the %s layer %s sets %s, which would take the agents off the gateway (values are never printed); real mode bills to the gateway only", f.kind, f.path, name)
+	}
+	if name, found := findLayerHeader(doc); found {
+		return refuse(ruleRealGatewayOnly,
+			"a headers object in the %s layer %s sets the header %s to a value that looks like a URL or an authorization header (values are never printed); real mode carries only the gateway credential, from the environment", f.kind, f.path, name)
 	}
 	return nil
 }
@@ -354,45 +361,79 @@ func collectKeys(v any, keys map[string]bool) {
 // false) or whose value looks like a URL or an authorization header
 // (byValue true).
 func findLayerEnv(v any) (name string, byValue, found bool) {
+	name, found = findLayerEntry(v, "env", func(k string, val any) bool {
+		return layerEnvNameRefused(k) || layerValueRefused(val)
+	})
+	return name, found && !layerEnvNameRefused(name), found
+}
+
+// findLayerHeader walks a decoded JSON document, keys in sorted order, and
+// returns the first entry of a headers object (an MCP server's static
+// request headers, at any depth) whose value looks like a URL or an
+// authorization header. Only values are tested: findCredentialKey has
+// already refused a credential-like header name, but a name holding no
+// layerCredentialKeyParts part (X-Auth, Proxy-Auth) passes that check while
+// its value still reaches the server past the gateway (b.qkg).
+//
+// Its values are value-checked, as an env object's are, rather than every
+// non-empty headers map being refused, so a deployment's plain headers (a
+// tenant id, an Accept header) still stage. Like the env value test, it
+// cannot see a bare token with no "Bearer " before it under such a name.
+// Other strings (an MCP server's url) are never value-checked.
+func findLayerHeader(v any) (name string, found bool) {
+	return findLayerEntry(v, "headers", func(_ string, val any) bool {
+		return layerValueRefused(val)
+	})
+}
+
+// findLayerEntry walks a decoded JSON document (objects at any depth, in
+// arrays too), keys in sorted order, and returns the first entry, in sorted
+// order, of an object held under the key object for which refused reports
+// true. An object's own object entry is tested before its other keys are
+// walked.
+func findLayerEntry(v any, object string, refused func(name string, value any) bool) (name string, found bool) {
 	switch t := v.(type) {
 	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		if env, ok := t["env"].(map[string]any); ok {
-			envKeys := make([]string, 0, len(env))
-			for k := range env {
-				envKeys = append(envKeys, k)
-			}
-			sort.Strings(envKeys)
-			for _, k := range envKeys {
-				if layerEnvNameRefused(k) {
-					return k, false, true
-				}
-				if layerEnvValueRE.MatchString(layerEnvValueText(env[k])) {
-					return k, true, true
+		if obj, ok := t[object].(map[string]any); ok {
+			for _, k := range sortedKeys(obj) {
+				if refused(k, obj[k]) {
+					return k, true
 				}
 			}
 		}
-		for _, k := range keys {
-			if name, byValue, found = findLayerEnv(t[k]); found {
-				return name, byValue, found
+		for _, k := range sortedKeys(t) {
+			if name, found = findLayerEntry(t[k], object, refused); found {
+				return name, true
 			}
 		}
 	case []any:
 		for _, e := range t {
-			if name, byValue, found = findLayerEnv(e); found {
-				return name, byValue, found
+			if name, found = findLayerEntry(e, object, refused); found {
+				return name, true
 			}
 		}
 	}
-	return "", false, false
+	return "", false
 }
 
-// layerEnvValueText is an env value as text: a string as it is, anything
-// else as its JSON (jq's tostring).
+// sortedKeys returns m's keys in sorted order.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// layerValueRefused reports whether a layer env or headers value looks like
+// a URL or an authorization header (layerEnvValueRE).
+func layerValueRefused(v any) bool {
+	return layerEnvValueRE.MatchString(layerEnvValueText(v))
+}
+
+// layerEnvValueText is an env or headers value as text: a string as it is,
+// anything else as its JSON (jq's tostring).
 func layerEnvValueText(v any) string {
 	if s, ok := v.(string); ok {
 		return s
