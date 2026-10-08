@@ -92,9 +92,23 @@ func DefaultPollClock() PollClock { return realPollClock{} }
 //  2. The per-iteration sleep is `max(pollFloor, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`.
 //     ctx.Done preempts the sleep (the realPollClock uses a Timer +
 //     select).
-//  3. The overall loop is capped by cfg.TimeoutSeconds. On expiry the
-//     loop returns a fail-closed deny without making one more poll
-//     (the timeout boundary is the answer the operator agreed to).
+//  3. The overall loop is capped by cfg.TimeoutSeconds, counted from the
+//     row's stored created_at (below). On expiry the loop returns a
+//     fail-closed deny without making one more poll (the timeout boundary
+//     is the answer the operator agreed to).
+//
+// The deadline is the window counted from the row's stored created_at, as
+// pkg/api counts every relay boundary of the request: decide's
+// deliverability cutoff, the send_keys relay guard's release and the end
+// of decide's wait, which both come 2 s after the window ends
+// (relayHookSettledAt, pkg/api/deliverability.go). Those boundaries
+// leave the timeout deny a fixed slack after created_at + window to land
+// in. created_at keeps whole seconds and is stored before Poll starts, so a
+// deadline counted from Poll's own start would spend up to a second of that
+// slack, plus however long the INSERT's commit and the trail emit after it
+// took (b.z6g). Until a read returns the row, and should created_at ever be
+// later than Poll's start (a clock stepped back), the window counted from
+// Poll's start bounds the deadline: it is the earlier of the two.
 //
 // The polling loop NEVER writes to permission_requests — SRD §6.2
 // invariant. Only decide() owns the decision columns.
@@ -139,6 +153,12 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 			}
 			clock.Sleep(ctx, pollFloor)
 			continue
+		}
+
+		// Count the window from the stored created_at (see above). It never
+		// changes, so every read after the first leaves the deadline as is.
+		if fromCreatedAt := row.CreatedAt.Add(timeout); fromCreatedAt.Before(deadline) {
+			deadline = fromCreatedAt
 		}
 
 		if row.Decision != "" {

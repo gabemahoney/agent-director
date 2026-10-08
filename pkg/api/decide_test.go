@@ -166,13 +166,13 @@ func TestDecideConcurrentFirstCallWins(t *testing.T) {
 // TestDecideDeliverabilityBoundary pins, on the injected clock, that the row is
 // deliverable iff now < created_at + window - margin; a refusal records nothing
 // and is ErrRelayFallenBack only after decide waits out its relay hook, until
-// created_at + window + margin + created_at's resolution (b.pzy).
+// created_at + window + margin + created_at's resolution, the send-keys
+// guard's release (b.pzy, b.z6g).
 func TestDecideDeliverabilityBoundary(t *testing.T) {
 	t.Parallel()
 	const window = 10 * time.Second
 	edge := window - api.RelayKillSafetyMargin
-	release := window + api.RelayKillSafetyMargin
-	settled := release + api.CreatedAtResolution
+	settled := window + api.RelayKillSafetyMargin + api.CreatedAtResolution
 	cases := []struct {
 		name    string
 		age     time.Duration // now - created_at
@@ -181,7 +181,7 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 	}{
 		{"hook_settled_refused_at_once", settled, true, 0},
 		{"just_before_hook_settled_refused_after_waiting", settled - time.Nanosecond, true, time.Nanosecond},
-		{"guard_released_refused_after_waiting", release, true, api.CreatedAtResolution},
+		{"margin_past_window_refused_after_waiting", window + api.RelayKillSafetyMargin, true, api.CreatedAtResolution},
 		{"window_end_refused_after_waiting", window, true, api.RelayKillSafetyMargin + api.CreatedAtResolution},
 		{"exact_equality_refused_after_waiting", edge, true, 2*api.RelayKillSafetyMargin + api.CreatedAtResolution}, // cutoff == created_at: not strictly after
 		{"just_before_boundary_accepted", edge - time.Nanosecond, false, 0},
@@ -233,24 +233,181 @@ func TestClientDecideWaitsForRelayHook(t *testing.T) {
 	}
 }
 
-// TestDecideRequestGoneDuringWait: a request removed (its spawn deleted) while
-// decide waits for its relay hook is ErrNoOpenPermissionRequest, without "answer at the pane" (b.pzy).
-func TestDecideRequestGoneDuringWait(t *testing.T) {
+// TestDecideFallenBackShownAlone: request A, open past its relay window, is ErrRelayFallenBack only while the Spawn is
+// in check_permission with no request recorded after A and no other open; otherwise ErrNoOpenPermissionRequest naming
+// why, with no pane answer advised, and A stays open (b.t6e).
+func TestDecideFallenBackShownAlone(t *testing.T) {
 	t.Parallel()
-	const window = 10 * time.Second
-	s, _ := apitest.SeedDecideFixture(t, "on")
-	apitest.SeedPermissionRow(t, s, "id-d-1")
-	slept := false
-	_, err := api.DecideWithSleep(s, window, rowA(t, s).CreatedAt.Add(window), func(time.Duration) {
-		slept = true
-		if err := s.DeleteSpawn("id-d-1"); err != nil {
-			t.Errorf("DeleteSpawn: %v", err)
-		}
-	}, api.DecideParams{ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+	tokB := storefix.TestRequestTokenB
+	cases := []struct {
+		name    string
+		other   string // request B: recorded "older" or "later" than A; "": none
+		decided bool   // B is decided
+		move    string // the agent's move after A was recorded; "": none
+		capped  bool   // another spawn then records a request with eviction cap 1
+		why     string // decide's reason for refusing A; "": ErrRelayFallenBack
+	}{
+		{"A alone", "", false, "", false, ""},
+		{"agent's Stop", "", false, store.StateWaiting, false, "the spawn is in state waiting"},
+		// Known gap (b.omt): the move is held while A is open, so a dialog closed at the pane looks still up.
+		{"agent's move to working held", "", false, store.StateWorking, false, ""},
+		{"later open request", "later", false, "", false, "the spawn recorded request " + tokB + " after it"},
+		{"later decided request", "later", true, "", false, "the spawn recorded request " + tokB + " after it"},
+		// The cap eviction keeps B, the Spawn's newest request, while A is open.
+		{"later decided request, another spawn's insert over the cap", "later", true, "", true,
+			"the spawn recorded request " + tokB + " after it"},
+		{"older open request", "older", false, "", false, "the spawn's request " + tokB + " is open too"},
+		{"older decided request", "older", true, "", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, dbPath := apitest.SeedDecideFixture(t, "on")
+			recordB := func() { openAgentRequest(t, s, "id-d-1", tokB, "Read", `{"file":"/etc/hosts"}`, 0) }
+			if tc.other == "older" {
+				recordB()
+				storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, "id-d-1", tokB, 2*relayGuardWindow)
+			}
+			apitest.SeedPermissionRow(t, s, "id-d-1")
+			storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, "id-d-1", storefix.TestRequestTokenA, 2*relayGuardWindow)
+			if tc.other == "later" {
+				recordB()
+			}
+			if tc.decided {
+				if _, err := s.DecidePermissionRequest("id-d-1", tokB, "allow", "", store.WriterProcessDecide); err != nil {
+					t.Fatalf("decide B: %v", err)
+				}
+			}
+			if tc.capped {
+				if err := s.InsertPending(store.Spawn{ClaudeInstanceID: "id-d-2", CWD: "/tmp", TmuxSessionName: "cd-d-2",
+					RelayMode: "on"}); err != nil {
+					t.Fatalf("InsertPending(id-d-2): %v", err)
+				}
+				openAgentRequest(t, s, "id-d-2", storefix.TestRequestTokenC, "Bash", `{"cmd":"echo"}`, 1)
+			}
+			if tc.move != "" {
+				if err := seedAgentState(s, dbPath, "id-d-1", tc.move); err != nil {
+					t.Fatalf("agent's move to %s: %v", tc.move, err)
+				}
+			}
 
-	assertOneSentinel(t, err, store.ErrNoOpenPermissionRequest)
-	if !slept || strings.Contains(errText(err), "answer at the pane") {
-		t.Errorf("decide slept: %v, err: %v; want it to wait, then name no pane answer", slept, err)
+			_, err := decideA(s, relayGuardWindow, time.Now(), "allow", "")
+
+			if tc.why == "" {
+				assertOneSentinel(t, err, api.ErrRelayFallenBack)
+			} else {
+				assertOneSentinel(t, err, store.ErrNoOpenPermissionRequest)
+				adviceAssertPhrase(t, err, tc.why)
+				assertNoPaneAdvice(t, err)
+			}
+			if got := rowA(t, s).Decision; got != "" {
+				t.Errorf("request A decided %q after a refusal; want it open", got)
+			}
+		})
+	}
+}
+
+// decideInterleaved is a DecideStore that runs write where a write landing among decide's reads would: right after its
+// last read of the request ("after request"), or right before or after its read of the Spawn's requests ("before
+// requests", "after requests"); at "wait" the test's sleep runs it instead.
+type decideInterleaved struct {
+	*store.Store
+	at    string
+	write func()
+}
+
+func (d decideInterleaved) GetPermissionRequest(id, token string) (store.PermissionRow, error) {
+	pr, err := d.Store.GetPermissionRequest(id, token)
+	if d.at == "after request" {
+		d.write()
+	}
+	return pr, err
+}
+
+func (d decideInterleaved) PermissionRequestsForSpawn(id string) ([]store.PermissionRow, error) {
+	if d.at == "before requests" {
+		d.write()
+	}
+	rows, err := d.Store.PermissionRequestsForSpawn(id)
+	if d.at == "after requests" {
+		d.write()
+	}
+	return rows, err
+}
+
+// TestDecideFallenBackWriteBetweenReads: request A, read open past its relay window or waited on as decide starts
+// refusing it, with a write landing among decide's reads is refused with no pane advice (b.pzy, b.t6e).
+func TestDecideFallenBackWriteBetweenReads(t *testing.T) {
+	t.Parallel()
+	deleteSpawn := func(_ *testing.T, s *store.Store, _ string) error { return s.DeleteSpawn("id-d-1") }
+	cases := []struct {
+		name   string
+		move   string // the agent's move after A was recorded, before decide; "": none
+		at     string // where write lands: a decideInterleaved point, or "wait": during decide's wait for A's relay hook
+		write  func(t *testing.T, s *store.Store, dbPath string) error
+		want   error
+		phrase string // carried by the refusal; "": none checked
+	}{
+		{"spawn deleted after the request's read", "", "after request", deleteSpawn, store.ErrNoOpenPermissionRequest, ""},
+		{"spawn deleted after the spawn's read", "", "before requests", deleteSpawn, store.ErrNoOpenPermissionRequest, ""},
+		{"request denied by its relay hook after the request's read", "", "after request",
+			func(_ *testing.T, s *store.Store, _ string) error {
+				_, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "deny",
+					store.DecisionReasonTimeout, store.WriterProcessHook)
+				return err
+			}, store.ErrAlreadyDecided, advDecideHookTimedOut},
+		// decide reads the Spawn before its requests: the other way round it would read A alone and check_permission,
+		// so ErrRelayFallenBack while B's dialog is up.
+		{"later request's hook after the requests' read, after the agent's Stop", store.StateWaiting, "after requests",
+			func(t *testing.T, s *store.Store, dbPath string) error {
+				if err := seedAgentState(s, dbPath, "id-d-1", store.StateCheckPermission); err != nil {
+					return err
+				}
+				openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0)
+				return nil
+			}, store.ErrNoOpenPermissionRequest, "the spawn is in state waiting"},
+		{"spawn deleted during the wait", "", "wait", deleteSpawn, store.ErrNoOpenPermissionRequest, ""},
+		{"agent's Stop during the wait", "", "wait", func(_ *testing.T, s *store.Store, dbPath string) error {
+			return seedAgentState(s, dbPath, "id-d-1", store.StateWaiting)
+		}, store.ErrNoOpenPermissionRequest, "the spawn is in state waiting"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, dbPath := apitest.SeedDecideFixture(t, "on")
+			apitest.SeedPermissionRow(t, s, "id-d-1")
+			now := rowA(t, s).CreatedAt.Add(relayGuardWindow - api.RelayKillSafetyMargin) // decide waits out A's relay hook
+			if tc.at != "wait" {
+				storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, "id-d-1", storefix.TestRequestTokenA, 2*relayGuardWindow)
+				now = time.Now() // A's relay hook long settled: no wait
+			}
+			if tc.move != "" {
+				if err := seedAgentState(s, dbPath, "id-d-1", tc.move); err != nil {
+					t.Fatalf("agent's move to %s: %v", tc.move, err)
+				}
+			}
+			write := func() {
+				if err := tc.write(t, s, dbPath); err != nil {
+					t.Errorf("write at %s: %v", tc.at, err)
+				}
+			}
+			slept := false
+			_, err := api.DecideWithSleep(decideInterleaved{Store: s, at: tc.at, write: write}, relayGuardWindow, now,
+				func(time.Duration) {
+					slept = true
+					if tc.at == "wait" {
+						write()
+					}
+				},
+				api.DecideParams{ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+
+			assertOneSentinel(t, err, tc.want)
+			if tc.phrase != "" {
+				adviceAssertPhrase(t, err, tc.phrase)
+			}
+			assertNoPaneAdvice(t, err)
+			if slept != (tc.at == "wait") {
+				t.Errorf("decide waited: %v; want %v", slept, tc.at == "wait")
+			}
+		})
 	}
 }
 

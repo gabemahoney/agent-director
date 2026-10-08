@@ -1,6 +1,6 @@
 package api_test
 
-// advice_follow_pane_test.go (b.fji E1-E9): each refusal of send-keys,
+// advice_follow_pane_test.go (b.fji E1-E9, F6): each refusal of send-keys,
 // read-pane, pause and decide that says what to do next is followed
 // literally, on the kill and pane-verb fixtures (fake tmux, injected clock).
 // The agent's input box is modelled from the keys calls (paneInput,
@@ -309,22 +309,32 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLater(t *testing.T) {
 	}
 }
 
-// The relay guard's advice (b.2b8, b.ah6): send-keys' refusal says only to
-// answer the request it names with decide, or, with none recorded yet, to do
-// so once get lists it (E6); decide's fallen-back refusal says only to answer
-// at the pane with send-keys (E7, b.pzy). A request the relay hook denied at
-// its deadline is ErrAlreadyDecided naming that deny.
+// The relay guard's advice (b.2b8, b.ah6, b.ceq): send-keys' refusal says only
+// to answer the open request it names with decide, to retry send-keys later
+// when the request it names is decided, or, with none recorded yet, to answer
+// it with decide once get lists it (E6); decide's fallen-back refusal says only
+// to answer at the pane with send-keys (E7, b.pzy), or, when the Spawn is not
+// shown sitting on that request alone, not to answer it at the pane (F6,
+// b.t6e). A request the relay hook denied at its deadline is ErrAlreadyDecided
+// naming that deny.
 const (
 	advSendKeysNoRequestYet = "is awaiting a relayed permission decision whose request is not yet recorded; " +
 		"answer it with decide once get lists it"
 	advDecideFallenBack = "fell back — too late; its record is still open and its relay hook can no longer answer it; " +
 		"answer at the pane with send-keys"
+	advDecideNotShown     = "so its permission dialog cannot be shown to be on screen; do not answer it at the pane"
 	advDecideHookTimedOut = `already decided as "deny" (decision_reason "timeout")`
 )
 
-// advSendKeysAnswerWithDecide is E6's advice naming token, the request holding the relay guard.
+// advSendKeysAnswerWithDecide is E6's advice naming token, the open request holding the relay guard.
 func advSendKeysAnswerWithDecide(token string) string {
 	return "is awaiting a relayed permission decision on request " + token + "; answer it with decide"
+}
+
+// advSendKeysRetryLater is E6's advice naming token, the decided request holding the relay guard (b.ceq).
+func advSendKeysRetryLater(token string) string {
+	return "the relayed permission verdict on request " + token +
+		" is recorded and its relay hook may still be delivering it; retry send-keys later"
 }
 
 // advRelayAdvice is adviceAssertAdvice for a relay refusal, which ends with its
@@ -353,106 +363,136 @@ func advRequestCreatedAt(t *testing.T, e *killEnv, r killRow) time.Time {
 	return pr.CreatedAt
 }
 
-// TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide: E6 "on request <token>; answer it with
-// decide"; decide on that token records the verdict, or is ErrRelayFallenBack and send-keys then delivers at once (b.ah6).
+// advRelayHookClock is a forward-only clock from createdAt, request A's stored created_at; with deny > 0, A's live
+// relay hook records its timeout deny, which closes the dialog, as the clock reaches createdAt + deny.
+func advRelayHookClock(t *testing.T, e *killEnv, r killRow, createdAt time.Time, deny time.Duration) (*time.Time, func(time.Time)) {
+	now, at := createdAt, createdAt.Add(deny)
+	return &now, func(to time.Time) {
+		if deny > 0 && now.Before(at) && !to.Before(at) {
+			relayHookTimeout(t, e, r.ID, storefix.TestRequestTokenA)
+		}
+		now = to
+	}
+}
+
+// TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide: E6 "on request <token>; answer it with decide"; decide on
+// that token records the verdict, is ErrAlreadyDecided by a live relay hook's late timeout deny with nothing typed
+// (b.z6g), or is ErrRelayFallenBack and send-keys then delivers at once (b.ah6).
 func TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide(t *testing.T) {
 	t.Parallel()
+	// The hook's timeout path (deny, then working) ends 1.5 s past its poll deadline, created_at + window.
+	lateDeny := relayGuardWindow + 1500*time.Millisecond
 	cases := []struct {
-		name     string
-		age      time.Duration // the request's age when send-keys is refused
-		recorded bool          // decide records the verdict; otherwise it is ErrRelayFallenBack
+		name string
+		age  time.Duration // the request's age when send-keys is refused
+		deny time.Duration // after created_at, when a live relay hook's timeout deny lands; 0: none does
+		want error         // decide's outcome; nil: the verdict recorded
 	}{
-		{"request in its window", relayGuardWindow / 2, true},
-		{"request just before decide starts refusing it", relayGuardWindow - api.RelayKillSafetyMargin - time.Nanosecond, true},
-		{"request as decide starts refusing it", relayGuardWindow - api.RelayKillSafetyMargin, false},
-		{"request just before the guard releases", relayGuardWindow + api.RelayKillSafetyMargin - time.Nanosecond, false},
+		{"request in its window", relayGuardWindow / 2, 0, nil},
+		{"request just before decide starts refusing it", relayGuardWindow - api.RelayKillSafetyMargin - time.Nanosecond, 0, nil},
+		{"request as decide starts refusing it", relayGuardWindow - api.RelayKillSafetyMargin, 0, api.ErrRelayFallenBack},
+		{"request just before its relay hook settles", relayGuardSettled - time.Nanosecond, 0, api.ErrRelayFallenBack},
+		{"request just before its live relay hook's late timeout deny", lateDeny - time.Nanosecond, lateDeny,
+			store.ErrAlreadyDecided},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
 			r := seedRelayRow(t, e, storefix.TestRequestTokenA)
-			now := advRequestCreatedAt(t, e, r).Add(tc.age)
+			createdAt := advRequestCreatedAt(t, e, r)
+			now, advance := advRelayHookClock(t, e, r, createdAt, tc.deny)
+			advance(createdAt.Add(tc.age))
 			send := func() error {
-				_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+				_, err := e.sendKeysAt(relayGuardWindow, *now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
 				return err
 			}
 			advRelayAdvice(t, send(), api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(storefix.TestRequestTokenA))
 			e.assertNoTmuxCall(t)
 
 			// The advice, literally: decide the request it names; decide's wait moves the clock.
-			_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { now = now.Add(d) },
+			_, err := api.DecideWithSleep(e.st, relayGuardWindow, *now, func(d time.Duration) { advance(now.Add(d)) },
 				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 
-			if tc.recorded {
+			switch tc.want {
+			case nil:
 				if err != nil {
 					t.Fatalf("decide: %v; want the verdict recorded for the relay hook to deliver", err)
 				}
 				if pr, err := e.st.GetPermissionRequest(r.ID, storefix.TestRequestTokenA); err != nil || pr.Decision != "allow" {
 					t.Errorf("request after decide: decision %q, %v; want allow recorded", pr.Decision, err)
 				}
-				return
+			case store.ErrAlreadyDecided:
+				// The hook's deny closed the dialog; no keys reached the pane while it was open.
+				assertOneSentinel(t, err, store.ErrAlreadyDecided)
+				adviceAssertPhrase(t, err, advDecideHookTimedOut)
+				e.assertNoTmuxCall(t)
+			default:
+				assertOneSentinel(t, err, api.ErrRelayFallenBack)
+				if err := send(); err != nil {
+					t.Fatalf("send-keys at once after decide's ErrRelayFallenBack: %v; want delivery", err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
 			}
-			assertOneSentinel(t, err, api.ErrRelayFallenBack)
-			if err := send(); err != nil {
-				t.Fatalf("send-keys at once after decide's ErrRelayFallenBack: %v; want delivery", err)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
 		})
 	}
 }
 
-// advDecideAlreadyAllowed is decide's ErrAlreadyDecided on a request a caller allowed.
-const advDecideAlreadyAllowed = `already decided as "allow"`
-
-// TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestAlreadyDecided: E6 "on request <token>; answer it with
-// decide" naming the one request, a caller's allow recorded in its window that the relay hook is still delivering
-// (the common case). Decide on that token is ErrAlreadyDecided, the allow unchanged, and send-keys is refused
-// alike until the relay hook's delivery moves the row on; with no other request open the row leaves
-// check_permission and send-keys delivers.
-func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestAlreadyDecided(t *testing.T) {
+// TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater: E6 "the relayed permission verdict on request
+// <token> is recorded and its relay hook may still be delivering it; retry send-keys later" naming the one request,
+// allowed in its window (b.ceq). send-keys retried is refused alike while the row stays check_permission, and delivers
+// once the relay hook's delivery takes the row out of it, or, the hook dead, once that hook is presumed settled (b.z6g).
+func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	e := newKillEnv(t)
-	r := seedRelayRow(t, e, tok)
-	now := advRequestCreatedAt(t, e, r).Add(relayGuardWindow / 2)
-	decide := func(decision string) error {
-		_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { now = now.Add(d) },
-			api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tok, Decision: decision})
-		return err
-	}
-	send := func() error {
-		_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
-		return err
-	}
-	if err := decide("allow"); err != nil {
-		t.Fatalf("decide in the window: %v; want the allow recorded", err)
-	}
+	for _, tc := range []struct {
+		name      string
+		delivered bool // the relay hook delivers the allow; otherwise it died after the allow was recorded
+	}{
+		{"the relay hook delivers the verdict", true},
+		{"the relay hook died before delivering the verdict", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := seedRelayRow(t, e, tok)
+			createdAt := advRequestCreatedAt(t, e, r)
+			now := createdAt.Add(relayGuardWindow / 2)
+			if _, err := api.Decide(e.st, relayGuardWindow, now,
+				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tok, Decision: "allow"}); err != nil {
+				t.Fatalf("decide in the window: %v; want the allow recorded", err)
+			}
+			send := func() error {
+				_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+				return err
+			}
 
-	first := send()
-	advRelayAdvice(t, first, api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(tok))
-	e.assertNoTmuxCall(t)
+			first := send()
+			advRelayAdvice(t, first, api.ErrSendKeysWhileRelayed, advSendKeysRetryLater(tok))
+			e.assertNoTmuxCall(t)
 
-	// The advice, literally: decide the request it names.
-	adviceAssertAdvice(t, decide("deny"), store.ErrAlreadyDecided, advDecideAlreadyAllowed)
-	if pr, err := e.st.GetPermissionRequest(r.ID, tok); err != nil || pr.Decision != "allow" {
-		t.Errorf("request after the second decide: decision %q, %v; want the first verdict, allow, unchanged", pr.Decision, err)
-	}
-	if again := send(); errText(again) != errText(first) {
-		t.Errorf("send-keys before the relay hook moves the row on: %v; want the same refusal %v", again, first)
-	}
-	e.assertNoTmuxCall(t)
+			// The advice, literally: send-keys again later. Up to its relay hook's
+			// settling the row stays check_permission.
+			now = createdAt.Add(relayGuardSettled - time.Nanosecond)
+			if again := send(); errText(again) != errText(first) {
+				t.Errorf("send-keys retried while the row stays check_permission: %v; want the same refusal %v", again, first)
+			}
+			e.assertNoTmuxCall(t)
 
-	// The relay hook delivers the allow and the agent runs the tool; no other
-	// request is open, so its move to working takes the row out of check_permission.
-	if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWorking); err != nil {
-		t.Fatalf("agent's move to working: %v", err)
+			if tc.delivered {
+				// The agent runs the tool; no other request is open, so its move to
+				// working takes the row out of check_permission.
+				if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWorking); err != nil {
+					t.Fatalf("agent's move to working: %v", err)
+				}
+			} else {
+				now = now.Add(time.Nanosecond) // the request's relay hook is presumed settled
+				pauAssertState(t, e, r.ID, store.StateCheckPermission)
+			}
+			if err := send(); err != nil {
+				t.Fatalf("send-keys retried later: %v; want delivery", err)
+			}
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
+		})
 	}
-	pauAssertState(t, e, r.ID, store.StateWorking)
-
-	if err := send(); err != nil {
-		t.Fatalf("send-keys once the row left check_permission: %v; want delivery", err)
-	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
 }
 
 // TestAdviceFollow_E6_SendKeysNoRequestYetDecideOnceGetLists: E6 "whose request is not yet recorded;
@@ -499,16 +539,17 @@ func TestAdviceFollow_E6_SendKeysNoRequestYetDecideOnceGetLists(t *testing.T) {
 }
 
 // TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard: E7's Go doc "... the refusal names that request;
-// answer that one with decide"; followed, the pane answer lands once that request's verdict is delivered.
+// answer that one with decide", for a request recorded after decide's last read (one recorded before it makes decide
+// refuse with F6, b.t6e); followed, the pane answer lands once that request's verdict is delivered.
 func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "decide.go", "ErrRelayFallenBack", "If send-keys still refuses with ErrSendKeysWhileRelayed, "+
 		"another of the Spawn's requests holds it and the refusal names that request; answer that one with decide, as that error says.")
 	tokA, tokB := storefix.TestRequestTokenA, storefix.TestRequestTokenB
 	e := newKillEnv(t)
-	r := seedRelayRow(t, e, tokA, tokB)
+	r := seedRelayRow(t, e, tokA)
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokA, 2*relayGuardWindow)
-	now := time.Now() // A is an hour past its window; B, just recorded, is in its own
+	now := time.Now() // A is an hour past its window
 	decide := func(token string) error {
 		_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { now = now.Add(d) },
 			api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: token, Decision: "allow"})
@@ -520,6 +561,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	}
 
 	advRelayAdvice(t, decide(tokA), api.ErrRelayFallenBack, advDecideFallenBack)
+	storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{tokB}) // a subagent's request, in its own window
 	advRelayAdvice(t, send(), api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(tokB))
 	e.assertNoTmuxCall(t)
 	if err := decide(tokB); err != nil {
@@ -532,10 +574,6 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	}
 	pauAssertState(t, e, r.ID, store.StateCheckPermission)
 
-	// Delete this skip when b.ceq is fixed; the rest of the test then pins the fix.
-	t.Skip("b.ceq E7: advice does not work as written: B's verdict, recorded in its window, holds the relay guard " +
-		"until B's window ends, delivered or not, while A's open record keeps the row in check_permission: " +
-		"send-keys is refused naming B, and decide on B, as that refusal advises, is ErrAlreadyDecided")
 	if err := send(); err != nil {
 		t.Fatalf("send-keys (A's answer at the pane) once B's verdict is delivered: %v; want delivery", err)
 	}
@@ -553,8 +591,7 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 	t.Parallel()
 	adviceAssertManifest(t, "decide", "", "ErrAlreadyDecided if its relay hook denied it at its timeout",
 		"otherwise ErrRelayFallenBack (answer at the pane)")
-	release := relayGuardWindow + api.RelayKillSafetyMargin // the guard's release, by the stored created_at
-	settled := release + api.CreatedAtResolution            // decide's last read of the request
+	settled := relayGuardSettled // decide's last read of the request and the guard's release
 	ages := []struct {
 		name string
 		age  time.Duration // the request's age when decide is called
@@ -562,48 +599,39 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 		{"request an hour past its window", 2 * relayGuardWindow},
 		{"request at decide's last read of it", settled},
 		{"request just before decide's last read of it", settled - time.Nanosecond},
-		{"request as the guard releases", release},
+		{"request a margin past its window", relayGuardWindow + api.RelayKillSafetyMargin},
 		{"request at the end of its window", relayGuardWindow},
 		{"request as decide starts refusing it", relayGuardWindow - api.RelayKillSafetyMargin},
 	}
 	hooks := []struct {
-		name     string
-		deadline time.Duration // after created_at, when the live relay hook denies; 0: the hook is dead
+		name string
+		deny time.Duration // after created_at, when the live relay hook's timeout deny lands; 0: the hook is dead
 	}{
 		{"relay hook dead", 0},
 		{"relay hook alive to its poll deadline", relayGuardWindow},
-		// created_at keeps whole seconds, so a hook that inserted the request
-		// late in that second, plus its slack, denies after the guard releases,
-		// up to just before decide's last read.
-		{"relay hook alive, its deadline just before decide's last read", settled - time.Nanosecond},
+		// The hook's poll deadline is created_at + window (b.z6g); its timeout
+		// path (deny, then working) may land up to just before decide's last read.
+		{"relay hook alive, its timeout deny landing just before decide's last read", settled - time.Nanosecond},
 	}
 	for _, a := range ages {
 		for _, h := range hooks {
-			hookAlive := h.deadline > 0
-			if hookAlive && a.age >= h.deadline {
+			hookAlive := h.deny > 0
+			if hookAlive && a.age >= h.deny {
 				continue // the hook denied before decide was called: TestDecideFirstCallWins's path
 			}
 			t.Run(a.name+"/"+h.name, func(t *testing.T) {
 				e := newKillEnv(t)
 				r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 				createdAt := advRequestCreatedAt(t, e, r)
-				// The clock moves forward only; a live hook denies the request
-				// once the clock reaches its poll deadline.
-				now, deadline := createdAt, createdAt.Add(h.deadline)
-				advance := func(to time.Time) {
-					if hookAlive && now.Before(deadline) && !to.Before(deadline) {
-						relayHookTimeout(t, e, r.ID, storefix.TestRequestTokenA)
-					}
-					now = to
-				}
+				now, advance := advRelayHookClock(t, e, r, createdAt, h.deny)
 				advance(createdAt.Add(a.age))
 
-				_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { advance(now.Add(d)) },
+				_, err := api.DecideWithSleep(e.st, relayGuardWindow, *now, func(d time.Duration) { advance(now.Add(d)) },
 					api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 				answered := false
 				if errors.Is(err, api.ErrRelayFallenBack) {
 					// At once: the clock stays at the instant decide returned.
-					if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"}); err != nil {
+					if _, err := e.sendKeysAt(relayGuardWindow, *now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"}); err != nil {
 						t.Fatalf("answer at the pane (send-keys) at once, %v after created_at: %v; want it accepted",
 							now.Sub(createdAt), err)
 					}
@@ -619,11 +647,60 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 				adviceAssertPhrase(t, err, advDecideHookTimedOut)
 				if answered {
 					t.Errorf("the answer was sent at the pane, but the live relay hook's timeout deny (%v after created_at) "+
-						"closes the dialog: the answer lands in Claude's prompt", h.deadline)
+						"closes the dialog: the answer lands in Claude's prompt", h.deny)
 				}
 				e.assertNoTmuxCall(t)
 			})
 		}
+	}
+}
+
+// TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane: F6 "so its permission dialog cannot be shown to be on screen;
+// do not answer it at the pane". Request A's dialog was answered at the pane after its relay hook was killed, leaving
+// its record open; a caller that branches on decide's error name types nothing into Claude's prompt (b.t6e).
+func TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane(t *testing.T) {
+	t.Parallel()
+	adviceAssertManifest(t, "decide", "", "else ErrNoOpenPermissionRequest (its dialog may have closed: do not answer at the pane)")
+	tokA, tokB := storefix.TestRequestTokenA, storefix.TestRequestTokenB
+	cases := []struct {
+		name  string
+		after func(t *testing.T, e *killEnv, r killRow, now time.Time) // what the agent did after A's pane answer
+	}{
+		{"the agent's Stop", func(t *testing.T, e *killEnv, r killRow, _ time.Time) {
+			if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWaiting); err != nil {
+				t.Fatalf("agent's Stop: %v", err)
+			}
+		}},
+		// B's decided verdict no longer holds the send-keys guard once A has fallen back (b.ceq).
+		{"the agent's next request decided", func(t *testing.T, e *killEnv, r killRow, now time.Time) {
+			storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{tokB})
+			if _, err := api.Decide(e.st, relayGuardWindow, now,
+				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tokB, Decision: "allow"}); err != nil {
+				t.Fatalf("decide %s in its window: %v", tokB, err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := seedRelayRow(t, e, tokA)
+			storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, tokA, 2*relayGuardWindow)
+			now := time.Now() // A is an hour past its window
+			// The agent ran A's tool; its move to working is held while A's record is open.
+			if err := seedAgentState(e.st, e.dbPath, r.ID, store.StateWorking); err != nil {
+				t.Fatalf("agent's move to working: %v", err)
+			}
+			tc.after(t, e, r, now)
+
+			_, err := api.DecideWithSleep(e.st, relayGuardWindow, now, func(d time.Duration) { now = now.Add(d) },
+				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tokA, Decision: "allow"})
+			if errors.Is(err, api.ErrRelayFallenBack) { // E7's advice, as a caller branching on the name follows it
+				_, _ = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+			}
+
+			advRelayAdvice(t, err, store.ErrNoOpenPermissionRequest, advDecideNotShown)
+			e.assertNoTmuxCall(t) // the advice followed: nothing typed into Claude's prompt
+		})
 	}
 }
 

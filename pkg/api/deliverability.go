@@ -80,45 +80,80 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 //     hair too early is safe — the caller simply learns the relay is unsafe.
 //
 //   - The send_keys guard must not release while the poller could still be
-//     alive and emit, so it releases LATE: at elapsed >= window + margin
-//     (RelayGuardReleaseCutoff / RelayRequestGuardReleasable). The relay
-//     poller provably lives until ~window (its poll deadline is the same
-//     window; the measured kill undershoot is only ~0.4s), so releasing at
-//     window - margin would free the guard ~1s+ while a live poller can still
-//     emit — the exact keystroke/envelope race the guard exists to prevent.
-//     Holding a hair too long is safe — the operator waits marginally longer
-//     to recover a genuinely-dead relay.
+//     alive and emit, so it releases LATE: at elapsed >= window + margin +
+//     createdAtResolution (RelayGuardReleaseCutoff /
+//     RelayRequestGuardReleasable; relayGuardHold), the instant a relay hook
+//     is presumed settled (relayHookSettledAt, below). Releasing at window -
+//     margin would free the guard while a live poller can still emit — the
+//     exact keystroke/envelope race the guard exists to prevent. Holding a
+//     hair too long is safe — the operator waits marginally longer to recover
+//     a genuinely-dead relay.
 //
 // Both boundaries live in THIS file and share the SAME RelayKillSafetyMargin
 // constant, so SR-4.4's "single time-based authority" holds: one file, one
 // margin, one place to change the boundary — just applied with the sign that
 // makes each caller fail safe.
 //
-// From Decide's boundary until createdAtResolution after the guard's (window -
-// margin to window + margin + createdAtResolution) Decide refuses but the relay
-// poller may still be alive: at its poll deadline it denies the request, which
-// closes Claude Code's permission dialog and moves the row to working, where
-// the send_keys guard no longer applies. Decide therefore does not answer a
-// refusal inside that span at once: it waits until relayHookSettledAt and
-// reads the request again, so ErrRelayFallenBack ("answer at the pane") is
-// returned only for a request whose row is still open once its poller is
-// presumed no longer able to answer it (b.pzy).
+// Why the guard's release is late enough (b.z6g). Every instant here is
+// counted from the stored created_at, which keeps whole seconds: it is the
+// second in which the relay hook inserted the request, so the insert came
+// less than createdAtResolution after it, and Claude Code started the hook
+// before the insert. A relay hook still alive at the end of the window ends
+// in one of two ways:
+//
+//   - At its poll deadline, created_at + window: internal/hook's Poll counts
+//     the window from the stored created_at too. It then records its timeout
+//     deny, moves the row to working and returns the deny to Claude Code,
+//     which closes the dialog. The guard's release leaves that timeout path
+//     margin + createdAtResolution (2 s) to complete in.
+//   - At Claude Code's kill, its per-hook timeout of the same window, armed
+//     when Claude Code started the hook: by created_at + window +
+//     createdAtResolution, plus however late the kill comes, which the margin
+//     covers. A killed hook's output is discarded, so it closes no dialog.
+//
+// A request decided in its window has its verdict recorded before
+// created_at + window - margin (Decide's boundary), so its hook has had more
+// than twice the margin plus createdAtResolution (3 s) to read the verdict
+// and return it, which closes the dialog. So at the guard's release a live
+// hook has returned its verdict or deny, or is dead, unless both its delivery
+// of its verdict or timeout deny ended more than margin + createdAtResolution
+// past created_at + window (its deny and working writes wait for the store's
+// write lock, each up to the store busy timeout, or the process stalled) and
+// Claude Code killed it more than the margin late. That residual race is not
+// closed here: nothing stored shows a hook stuck delivering.
+//
+// From Decide's boundary to the guard's release (window - margin to window +
+// margin + createdAtResolution) Decide refuses but the relay poller may still
+// be alive: at its poll deadline it denies the request, which closes Claude
+// Code's permission dialog and moves the row to working, where the send_keys
+// guard no longer applies. Decide therefore does not answer a refusal inside
+// that span at once: it waits until relayHookSettledAt, the guard's release
+// on the request's account, and reads the request again, so
+// ErrRelayFallenBack ("answer at the pane") is returned only for a request
+// whose row is still open once its poller is presumed no longer able to
+// answer it (b.pzy), and then only while the Spawn is still shown sitting on
+// it alone (decide.go's fallenBackUnshown, b.t6e).
 //
 // The span is agent-director's to absorb, not the caller's to time (b.ah6):
 // no runtime caller-facing text (error messages, manifest Descriptions)
-// states either boundary or the margin. A send_keys refused inside it is told
-// to answer the request it names with decide, and decide's wait ends after
-// the guard has released on that request's account, so a pane answer that
-// follows its ErrRelayFallenBack is not refused on that request's account.
+// states either boundary or the margin. A send_keys refused while the open
+// request holds the guard names an open request (namedBefore) and is told to
+// answer it with decide, and decide's wait ends as the guard releases on
+// that request's account, so a pane answer that follows its
+// ErrRelayFallenBack is not refused on that request's account, nor on
+// account of a decided request of the same Spawn (relayRequestFallenBack,
+// b.ceq).
 
 // RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
 // whose delivery window has provably elapsed (guard may release) from rows that
-// might still be delivered (guard must hold) at time now. A row is
+// might still be delivered (guard holds on their account, but for
+// evaluateRelayGuard's decided-row exception, b.ceq) at time now. A row is
 // guard-releasable iff its created_at is at or before this cutoff. The cutoff
-// is now less the effective relay window PLUS RelayKillSafetyMargin — i.e. the
-// created_at whose deadline plus the safety margin lands exactly at now. This
-// is the deliberate mirror of RelayDeliverabilityCutoff (which subtracts the
-// margin); see the asymmetry note above.
+// is now less relayGuardHold (the effective relay window PLUS
+// RelayKillSafetyMargin plus createdAtResolution) — i.e. the created_at whose
+// relayHookSettledAt lands exactly at now. This is the deliberate mirror of
+// RelayDeliverabilityCutoff (which subtracts the margin); see the asymmetry
+// note above.
 //
 // It shares the single-authority contract of RelayDeliverabilityCutoff: any
 // caller applying this boundary MUST obtain the cutoff here rather than
@@ -127,48 +162,58 @@ func RelayGuardReleaseCutoff(now time.Time, effectiveWindow time.Duration) time.
 	return now.Add(-relayGuardHold(effectiveWindow))
 }
 
-// relayGuardHold is how long after a request's created_at the send_keys relay
-// guard holds on that request's account: the effective relay window plus
-// RelayKillSafetyMargin. RelayGuardReleaseCutoff and relayGuardReleaseAt both
-// apply it, so the window + margin arithmetic is stated once.
+// relayGuardHold is how long after a request's created_at its relay hook may
+// still answer it (see the asymmetry note above): the effective relay window
+// plus RelayKillSafetyMargin plus createdAtResolution. The send_keys relay
+// guard holds that long on the request's account (RelayGuardReleaseCutoff),
+// and Decide waits until then before it names a refusal (relayHookSettledAt),
+// so the arithmetic is stated once and the two cannot drift apart.
 func relayGuardHold(effectiveWindow time.Duration) time.Duration {
-	return effectiveWindow + RelayKillSafetyMargin
-}
-
-// relayGuardReleaseAt returns the instant from which
-// RelayRequestGuardReleasable holds for a request created at createdAt: its
-// created_at plus the effective relay window plus RelayKillSafetyMargin.
-// relayHookSettledAt, the instant Decide waits for, is createdAtResolution
-// later, so the guard has released on the request's account by then.
-func relayGuardReleaseAt(createdAt time.Time, effectiveWindow time.Duration) time.Time {
-	return createdAt.Add(relayGuardHold(effectiveWindow))
+	return effectiveWindow + RelayKillSafetyMargin + createdAtResolution
 }
 
 // createdAtResolution is the storage resolution of a permission request's
 // created_at. The column defaults to SQLite's CURRENT_TIMESTAMP
 // (internal/store/schema.go), which keeps whole seconds only, so a stored
-// created_at can be up to this much earlier than the instant the row was
-// inserted. The relay poller does not start from the stored value: its poll
-// deadline is its own clock, read after the INSERT has committed, plus the
-// window (internal/hook's Poll). Its timeout deny can therefore land up to
-// this much later than created_at + window, besides the slack
-// RelayKillSafetyMargin covers, which the truncation must not consume.
-// relayHookSettledAt adds it; the deliverability and guard-release boundaries
-// above do not.
+// created_at can be up to this much earlier than the instant the relay hook
+// inserted the row. Claude Code arms the hook's kill, its per-hook timeout of
+// the relay window, when it starts the hook, before that insert, so counted
+// from created_at the kill can come up to this much later than created_at +
+// window, besides the kill's own lateness RelayKillSafetyMargin covers.
+// relayGuardHold adds it, so the send_keys guard and Decide's wait outlast
+// that kill; the hook's own poll deadline is counted from the stored
+// created_at (internal/hook's Poll, b.z6g), so for its timeout deny it is
+// slack. The deliverability boundary above does not add it.
 const createdAtResolution = 1 * time.Second
 
-// relayHookSettledAt returns the instant by which a live relay poller is
-// presumed to have answered a request created at createdAt if it ever will:
-// the request's guard-release instant (relayGuardReleaseAt) plus
-// createdAtResolution. A poller's timeout deny is presumed to have landed by
-// then (its deny write landing within createdAtResolution after the guard's
-// release point), so a row still open then is presumed to have no live poller
-// left to answer it. Decide waits until this instant before it names a
-// refusal it made earlier (see the asymmetry note above); from its own
-// boundary that is at most twice RelayKillSafetyMargin plus
-// createdAtResolution (3 s).
+// relayHookSettledAt returns the instant by which a relay hook is presumed to
+// have answered a request created at createdAt if it ever will: created_at
+// plus relayGuardHold. By then a hook still alive at its poll deadline is
+// presumed to have recorded its timeout deny, and a hook that never reached
+// it to have been killed by Claude Code (see the asymmetry note above), so a
+// row still open then is presumed to have no live poller left to answer it.
+// It is also the instant from which RelayRequestGuardReleasable holds for
+// the request. Decide waits until this instant before it names a refusal it
+// made earlier; from its own boundary that is at most twice
+// RelayKillSafetyMargin plus createdAtResolution (3 s).
 func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time.Time {
-	return relayGuardReleaseAt(createdAt, effectiveWindow).Add(createdAtResolution)
+	return createdAt.Add(relayGuardHold(effectiveWindow))
+}
+
+// relayRequestFallenBack reports whether permission request pr has fallen back
+// at now: its record is still open (no decision) at or after its
+// relayHookSettledAt, so its relay hook is presumed dead and, if its dialog is
+// still on screen, only a pane answer can close it. It is the one definition
+// of "fallen back": Decide returns ErrRelayFallenBack only for such a request
+// (after its wait), and only while the Spawn is still shown sitting on it
+// alone, otherwise ErrNoOpenPermissionRequest (decide.go's fallenBackUnshown,
+// b.t6e); and the send_keys guard stops holding on account of a decided
+// request once another request of the same Spawn has fallen back (b.ceq),
+// whichever of the two Decide returns for it. A decided request has not
+// fallen back. Like its siblings it is a pure function of the row, the
+// resolved effective relay window and the injected now.
+func relayRequestFallenBack(pr PermissionRow, effectiveWindow time.Duration, now time.Time) bool {
+	return pr.Decision == "" && !now.Before(relayHookSettledAt(pr.CreatedAt, effectiveWindow))
 }
 
 // RelayRequestGuardReleasable is the single authority (SR-4.4) answering, for a
@@ -176,12 +221,14 @@ func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time
 // row's account — i.e. whether the delivering poller is provably dead so a
 // pane-side keystroke can no longer race a decision write. It is the fail-late
 // mirror of RelayRequestUndeliverable: a row is guard-releasable once its
-// created_at is at or before the guard-release cutoff (now - (window + margin)).
+// created_at is at or before the guard-release cutoff (now - (window + margin
+// + createdAtResolution)), that is from its relayHookSettledAt on.
 //
 // Like its sibling this is a pure function of the row's created_at, the
 // resolved effective relay window, and the injected now; it performs no I/O.
 // The send_keys guard MUST consult this (not RelayRequestUndeliverable) so it
-// holds through the full window plus the safety margin.
+// holds through the full window plus the safety margin and created_at's
+// resolution.
 func RelayRequestGuardReleasable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
 	return !createdAt.After(RelayGuardReleaseCutoff(now, effectiveWindow))
 }

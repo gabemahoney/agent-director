@@ -51,7 +51,8 @@ func SetSleepForTest(c *Client, sleep func(time.Duration)) { c.sleep = sleep }
 var DecideWithSleep = decide
 
 // CreatedAtResolution is the storage resolution of a permission request's
-// created_at (createdAtResolution), which Decide's wait adds (b.pzy), so no test spells it.
+// created_at (createdAtResolution), which relayGuardHold adds to both the send-keys guard's release and
+// Decide's wait (b.pzy, b.z6g), so no test spells it.
 const CreatedAtResolution = createdAtResolution
 
 // KillPollInterval is kill's poll interval (killPollInterval, SR-6.1), so no test spells it.

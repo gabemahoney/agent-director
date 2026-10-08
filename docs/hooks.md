@@ -484,7 +484,13 @@ Each iteration:
      consecutive errors (`pollMaxReadRetries`).
    - row found, decision NULL → sleep and loop.
    - row found, decision populated → return the decision.
-2. Check the timeout deadline; if expired → return fail-closed.
+2. Check the timeout deadline; if expired → return fail-closed. The
+   deadline is `relay.timeout_seconds` counted from the row's stored
+   `created_at`, the instant `decide` and the send-keys relay guard
+   count the request's window from (b.z6g). Until a read returns the
+   row, and should `created_at` be later than the loop's start (a clock
+   stepped back), the window counted from the loop's start bounds it:
+   the deadline is the earlier of the two.
 3. Sleep `max(50ms, base + uniform(0, jitter))`. The 50ms floor is
    load-bearing: a misconfigured `relay.poll_base_ms=0,
    relay.poll_jitter_ms=0` must not pin CPU.
@@ -534,7 +540,9 @@ one poller. Rows are INSERT-only: nothing replaces an open row, and a
 polling loop that sees `sql.ErrNoRows` (possible via `ON DELETE
 CASCADE` when the spawn row is deleted) fails closed. Closed
 (decided) rows are evicted oldest-first when the table exceeds
-`relay.permission_request_cap`.
+`relay.permission_request_cap`, except a spawn's newest request while
+that spawn has an open request (`decide` relies on it; see
+[permissions.md](permissions.md#deliver-or-refuse-contract)).
 
 ## References
 

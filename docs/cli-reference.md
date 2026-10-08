@@ -186,7 +186,7 @@ End the agent of a live row's current launch (pending included). kill finds the 
 
 ## decide
 
-Caller's allow/deny verdict on an open PermissionRequest. One atomic write records it only while the request is open and deliverable, so the first call wins; an open request past its relay window is refused and the caller's verdict is not recorded: ErrAlreadyDecided if its relay hook denied it at its timeout (decide waits out the end of the window to see this), otherwise ErrRelayFallenBack (answer at the pane). Only for rows with relay_mode=on.
+Caller's allow/deny verdict on an open PermissionRequest. One atomic write records it only while the request is open and deliverable, so the first call wins; an open request past its relay window is refused and the caller's verdict is not recorded: ErrAlreadyDecided if its relay hook denied it at its timeout (decide waits out the end of the window to see this), otherwise ErrRelayFallenBack (answer at the pane) while the Spawn is still in check_permission with no other open or later request, else ErrNoOpenPermissionRequest (its dialog may have closed: do not answer at the pane). Only for rows with relay_mode=on.
 
 ### Parameters
 
