@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/testsupport/cwdfix"
 )
 
 // withStubClaudeJSON redirects claudeJSONPath to an absent file under
@@ -236,40 +235,9 @@ func TestPreTrustFailedWithoutConfigDir(t *testing.T) {
 	})
 }
 
-// TestPreTrustRefusesUnusableConfigDir pins b.nje: a set but non-absolute
-// CLAUDE_CONFIG_DIR fails with one line quoting it, and no file is touched, not
-// even the one the value names relative to the process cwd. Not parallel.
-func TestPreTrustRefusesUnusableConfigDir(t *testing.T) {
-	for _, v := range []string{"rel", "./rel", "~/cfg", "   ", "rel\nx"} {
-		t.Run(fmt.Sprintf("%q", v), func(t *testing.T) {
-			home := withStubClaudeJSON(t)
-			seedFile(t, home, `{"projects":{}}`)
-			dir := filepath.Join(cwdfix.Temp(t), v)
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-			path := filepath.Join(dir, ".claude.json")
-			seedFile(t, path, lockTestSeed)
-			warn := capturePreTrustWarn(t)
-
-			if got := PreTrust("/tmp/bnje-cwd", map[string]string{"CLAUDE_CONFIG_DIR": v}, false, config.PreTrust{}); got != PreTrustFailed {
-				t.Fatalf("PreTrust = %q; want failed", got)
-			}
-			if got := mustReadFile(t, path); string(got) != lockTestSeed {
-				t.Errorf("%s = %q; want byte-identical %q", path, got, lockTestSeed)
-			}
-			assertNoStray(t, dir)
-			if got := mustReadFile(t, home); string(got) != `{"projects":{}}` {
-				t.Errorf("home claude.json = %q; want untouched", got)
-			}
-			assertNoStray(t, filepath.Dir(home))
-			assertOneFailedLine(t, warn.String(), fmt.Sprintf("CLAUDE_CONFIG_DIR %q is not an absolute path", v))
-		})
-	}
-}
-
-// TestConfigDirUsable pins b.nje's one rule: only an absolute CLAUDE_CONFIG_DIR
-// is usable; claudeJSONFor targets it, takes $HOME when empty, refuses the rest.
+// TestConfigDirUsable pins b.nje's one rule: only an absolute value is usable;
+// claudeJSONFor applies it to CLAUDE_CONFIG_DIR and (b.wb4) HOME alone, taking
+// the own $HOME when empty and refusing the rest with the variable's sentinel.
 func TestConfigDirUsable(t *testing.T) {
 	home := withStubClaudeJSON(t)
 	cases := []struct {
@@ -279,19 +247,22 @@ func TestConfigDirUsable(t *testing.T) {
 		{"", false}, {"rel", false}, {"./rel", false}, {"~/x", false}, {"   ", false},
 		{"/abs", true}, {"/abs ", true},
 	}
+	refusals := map[string]error{"CLAUDE_CONFIG_DIR": errConfigDirNotAbsolute, "HOME": errHomeNotAbsolute}
 	for _, tc := range cases {
 		if got := ConfigDirUsable(tc.dir); got != tc.usable {
 			t.Errorf("ConfigDirUsable(%q) = %v; want %v", tc.dir, got, tc.usable)
 		}
-		wantPath, wantErr := filepath.Join(tc.dir, ".claude.json"), error(nil)
-		switch {
-		case tc.dir == "":
-			wantPath = home
-		case !tc.usable:
-			wantPath, wantErr = "", errConfigDirNotAbsolute
-		}
-		if path, err := claudeJSONFor(map[string]string{"CLAUDE_CONFIG_DIR": tc.dir}); path != wantPath || !errors.Is(err, wantErr) {
-			t.Errorf("claudeJSONFor(%q) = %q, %v; want %q, %v", tc.dir, path, err, wantPath, wantErr)
+		for key, refusal := range refusals {
+			wantPath, wantErr := filepath.Join(tc.dir, ".claude.json"), error(nil)
+			switch {
+			case tc.dir == "":
+				wantPath = home
+			case !tc.usable:
+				wantPath, wantErr = "", refusal
+			}
+			if path, err := claudeJSONFor(map[string]string{key: tc.dir}); path != wantPath || !errors.Is(err, wantErr) {
+				t.Errorf("claudeJSONFor(%s=%q) = %q, %v; want %q, %v", key, tc.dir, path, err, wantPath, wantErr)
+			}
 		}
 	}
 }

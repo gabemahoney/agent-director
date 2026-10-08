@@ -183,9 +183,9 @@ export interface SpawnParams {
     /**
      * Skip pre-writing the folder-trust entry for `cwd` (into
      * `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets `CLAUDE_CONFIG_DIR`,
-     * otherwise `~/.claude.json`). The choice is recorded on the row for its life,
-     * and every `resume` of that life follows it. The result then reports
-     * `pre_trust: "skipped"`. Default false.
+     * else `<HOME>/.claude.json` when it sets `HOME`, otherwise `~/.claude.json`). The
+     * choice is recorded on the row for its life, and every `resume` of that life
+     * follows it. The result then reports `pre_trust: "skipped"`. Default false.
      */
     no_pre_trust?: boolean;
     /** Explicit tmux session name. Auto-derived when absent. */
@@ -210,8 +210,10 @@ export interface SpawnResult {
      * written. `"skipped"`: pre-trust was off for this launch because the caller passed
      * `no_pre_trust`; nothing was attempted. `"failed"`: pre-trust was attempted and the
      * entry was not written (the `.claude.json` file is missing, or could not be read,
-     * parsed or written); the agent may stop at Claude Code's folder-trust prompt.
-     * A pre-trust failure never fails the spawn.
+     * parsed or written, or `extra_env` sets `CLAUDE_CONFIG_DIR`, or with no
+     * `CLAUDE_CONFIG_DIR` sets `HOME`, to a path that is not absolute); the agent may
+     * stop at Claude Code's folder-trust prompt. A pre-trust failure never fails the
+     * spawn.
      */
     pre_trust: "ok" | "skipped" | "failed";
 }
@@ -394,8 +396,10 @@ export interface ResumeResult {
      * written. `"skipped"`: pre-trust was off for this launch because the row records that
      * the spawn that began its life turned it off (`no_pre_trust`); nothing was attempted.
      * `"failed"`: pre-trust was attempted and the entry was not written (the `.claude.json`
-     * file is missing, or could not be read, parsed or written); the agent may stop at
-     * Claude Code's folder-trust prompt. A pre-trust failure never fails the resume.
+     * file is missing, or could not be read, parsed or written, or the row's `extra_env`
+     * sets `CLAUDE_CONFIG_DIR`, or with no `CLAUDE_CONFIG_DIR` sets `HOME`, to a path that
+     * is not absolute); the agent may stop at Claude Code's folder-trust prompt. A
+     * pre-trust failure never fails the resume.
      */
     pre_trust: "ok" | "skipped" | "failed";
 }

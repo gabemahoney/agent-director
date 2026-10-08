@@ -122,7 +122,7 @@
         {
           "name": "no_pre_trust",
           "type": "bool",
-          "description": "Skip pre-writing projects.\u003ccwd\u003e.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to \u003cCLAUDE_CONFIG_DIR\u003e/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row for its life, and every resume of that life follows it: no pre-trust is attempted over an opt-out. Over MCP, a serve process from before the fix (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0) silently ignores this parameter under either spelling.",
+          "description": "Skip pre-writing projects.\u003ccwd\u003e.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to \u003cCLAUDE_CONFIG_DIR\u003e/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, else \u003cHOME\u003e/.claude.json if HOME is set in extra_env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row for its life, and every resume of that life follows it: no pre-trust is attempted over an opt-out. Over MCP, a serve process from before the fix (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0) silently ignores this parameter under either spelling.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -159,7 +159,7 @@
         {
           "name": "pre_trust",
           "type": "string",
-          "description": "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
+          "description": "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written, or extra_env sets CLAUDE_CONFIG_DIR, or with no CLAUDE_CONFIG_DIR sets HOME, to a path that is not absolute); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -754,7 +754,7 @@
         {
           "name": "pre_trust",
           "type": "string",
-          "description": "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
+          "description": "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written, or the row's extra_env sets CLAUDE_CONFIG_DIR, or with no CLAUDE_CONFIG_DIR sets HOME, to a path that is not absolute); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
