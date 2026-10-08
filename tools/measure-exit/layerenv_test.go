@@ -58,6 +58,29 @@ func TestFindLayerEnv(t *testing.T) {
 	}
 }
 
+func TestFindLayerHeader(t *testing.T) {
+	tests := []struct{ name, doc, want string }{ // want "" finds nothing
+		{"an MCP server's bearer value", `{"mcpServers": {"api": {"headers": {"X-Auth": "Bearer x"}}}}`, "X-Auth"},
+		{"a hook's header in an array", `{"hooks": {"Stop": [{"hooks": [{"headers": {"X-Fwd": "https://x"}}]}]}}`, "X-Fwd"},
+		{"the sorted first refused entry", `{"headers": {"C": "https://x", "A": "plain", "B": "authorization: x"}}`, "B"},
+		{"a non-string value as JSON text", `{"headers": {"X-Auth": ["Bearer x"]}}`, "X-Auth"},
+		{"plain values", `{"headers": {"X-Tenant": "acme", "Accept": "application/json", "N": 5}}`, ""},
+		{"a non-object headers", `{"headers": "Bearer x"}`, ""},
+		{"a url and env outside a headers object", `{"mcpServers": {"api": {"url": "https://x", "env": {"U": "https://x"}}}}`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var doc any
+			if err := json.Unmarshal([]byte(tc.doc), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if name, found := findLayerHeader(doc); name != tc.want || found != (tc.want != "") {
+				t.Errorf("findLayerHeader = %q, %v; want %q", name, found, tc.want)
+			}
+		})
+	}
+}
+
 func TestRealModeLayerFiles(t *testing.T) {
 	home := t.TempDir()
 	managed := layerFile{kind: "managed", path: managedSettingsPath}
@@ -88,6 +111,24 @@ var credentialLayerCases = []credentialLayerCase{
 	{"an MCP header", "mcp", "mcp.json", "",
 		`{"mcpServers": {"api": {"type": "http", "url": "https://mcp.invalid", "headers": {"Authorization": "Bearer ` + layerSecret + `"}}}}`,
 		"credential-like key Authorization"},
+	// A bearer value under a header name holding no credential-like part,
+	// beside the MCP server's url, which is never value-checked (b.qkg).
+	{"an MCP header value under a plain name", "mcp", "mcp.json", "",
+		`{"mcpServers": {"api": {"type": "http", "url": "https://example.invalid/mcp", "headers": {"X-Auth": "Bearer sk-not-a-real-token-` + layerSecret + `"}}}}`,
+		"sets the header X-Auth to a value that looks like a URL or an authorization header"},
+	// Several refused entries: both name the sorted first, whatever the file
+	// order (b.qkg): keys sorted at every depth, an object's own entries first.
+	{"the sorted first refused header", "user", "user.json", "",
+		`{"headers": {"C": "https://` + layerSecret + `", "A": "plain", "B": "authorization: ` + layerSecret + `"}}`,
+		"sets the header B to a value"},
+	{"the sorted first refused nested header", "mcp", "mcp.json", "",
+		`{"z": {"headers": {"Z1": "https://` + layerSecret + `"}}, "mcpServers": {"b": {"headers": {"Y": "Bearer ` + layerSecret + `"}}, ` +
+			`"a": {"alt": {"headers": {"W": "https://` + layerSecret + `"}}, "headers": {"X2": "https://` + layerSecret + `", "X1": "Bearer ` + layerSecret + `"}}}}`,
+		"sets the header X1 to a value"},
+	// An env entry wins over a header, and a value over a later refused name.
+	{"the sorted first refused env entry", "project", "project.json", "",
+		`{"a": {"headers": {"H": "https://` + layerSecret + `"}}, "env": {"CLAUDE_CODE_USE_VERTEX": "1", "A": "plain", "BASE": "Bearer ` + layerSecret + `"}}`,
+		"sets BASE to a value"},
 	{"a lower-case key in an array", "project", "project.json", "", `{"hooks": {"Stop": [{"hooks": [{"type": "command", "db_passwd": "` + layerSecret + `"}]}]}}`,
 		"credential-like key db_passwd"},
 	// The sorted first key wins over a credential-producing setting too
@@ -190,6 +231,8 @@ func TestCheckLayerFiles(t *testing.T) {
 		{"credential-like words in a value", layerFile{"user", file("words.json", `{"env": {"PLAIN": "KEY TOKEN SECRET"}}`)}, nil},
 		{"near-miss setting names", layerFile{"user", file("near.json", `{"otelHeadersHelperX": "x", "myPolicyHelper": "x"}`)}, nil},
 		{"the dry run's MCP config", layerFile{"mcp", file("dry-mcp.json", dryMCPConfig)}, nil},
+		{"plain MCP headers and a url", layerFile{"mcp", file("plain-headers.json",
+			`{"mcpServers": {"api": {"type": "http", "url": "https://mcp.invalid/mcp", "headers": {"X-Tenant": "acme", "Accept": "application/json"}}}}`)}, nil},
 		{"a link chain to the state file", layerFile{"local", link("chain.json", link("mid.json", state))},
 			[]string{"local layer", "chain.json", "is (or links to) Claude Code's .claude.json"}},
 		{"a state file path with nothing there yet", layerFile{"mcp", filepath.Join(dir, "sub", ".claude.json")},

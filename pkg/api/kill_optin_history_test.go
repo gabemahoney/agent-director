@@ -3,8 +3,9 @@ package api_test
 // kill_optin_history_test.go: kill with the finished-row opt-in (SR-6.5,
 // SR-6.7, SR-20.6) on rows made by real verb history on the kill fixture: a
 // fresh spawn's row and a resumed row finished before their agent reported
-// in (AC-KILL-14), and a plain spawn's held-name row beside a leftover
-// (AC-SPN-07). A row's pid, ended_at and its session's creation decide the
+// in (AC-KILL-14), and a plain spawn's held-name row beside a leftover, this
+// id's own abandoned launch (AC-SPN-07, b.6sa; its other paths are
+// kill_optin_abandoned_test.go's). A row's pid, ended_at and its session's creation decide the
 // rest, each at its boundary, in kill_optin_reported_test.go (a failed
 // resume's restore of them is internal/store's resume_restore_test.go). Hooks
 // come from the row's own pane (SR-22.9); newReuseEnv is
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -182,17 +184,49 @@ func TestKillIncludeFinishedNeverReportedInHistory(t *testing.T) {
 	}
 }
 
-// TestKillIncludeFinishedPlainSpawnHeldName (AC-SPN-07): a plain spawn's
-// row ended by "duplicate session" from a leftover of its id placed after the
-// scan (SR-20.9) gets "never reported in" (Leftover); the leftover still runs.
+// TestKillIncludeFinishedPlainSpawnHeldName (AC-SPN-07, b.6sa): a plain
+// spawn's row ended by "duplicate session" from a leftover of its id placed
+// after the scan (SR-20.9) records no session of its launch, so the leftover
+// is this id's own abandoned launch: still starting, refused with nothing
+// sent; past the starting-session bound, its agent pane and session are
+// killed and the agent waited for, the row unchanged.
 func TestKillIncludeFinishedPlainSpawnHeldName(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	e := newKillEnv(t)
 	r, holder, err := e.plainSpawnHeld(t, holderOld, true)
 	assertOneSentinel(t, err, api.ErrTmuxSessionConflict)
-	if st := e.columns(t, r.ID).State; st != store.StateEnded {
-		t.Fatalf("row after the plain spawn: state %v; want ended", st)
+	before := e.columns(t, r.ID)
+	if before.State != store.StateEnded {
+		t.Fatalf("row after the plain spawn: state %v; want ended", before.State)
 	}
-	kohAssertRefused(t, e, r.ID, apitest.DescKillOptInNeverReportedInLeftover(r.ID,
-		[]apitest.DescSession{{Name: holder.Name, ID: holder.ID}}), "leftover")
+	agent := holder.Panes[0]
+	e.pc.Set(agent.PID, procfix.Alive(apitest.LinuxProcStarttime))
+	e.setAfterCall(tmux.CallKillPane, procfix.Gone(), agent.PID)
+	sessions, mark := e.rec.Sessions(r.Socket), len(e.rec.SocketCalls())
+
+	_, err = e.killOptIn(r.ID)
+
+	assertOneSentinel(t, err, api.ErrTmuxUnresponsive)
+	apitest.AssertDescription(t, err.Error(), apitest.DescAbandonedLaunch(apitest.AbandonedLaunch{InstanceID: r.ID,
+		Sessions: []apitest.DescSession{{Name: holder.Name, ID: holder.ID}}, Bound: e.cfg.EffectiveStartingSession()}),
+		r.Token, tmuxfix.OtherToken, e.storeID)
+	if calls := e.rec.SocketCalls()[mark:]; len(calls) != 1 || calls[0].Call != tmux.CallLookup {
+		t.Errorf("tmux calls = %+v; want one lookup", calls)
+	}
+	if got := e.rec.Sessions(r.Socket); !reflect.DeepEqual(got, sessions) {
+		t.Errorf("sessions after the refused kill = %+v; want untouched %+v", got, sessions)
+	}
+	e.clock.Advance(e.cfg.EffectiveStartingSession())
+	mark = len(e.rec.SocketCalls())
+
+	res, err := e.killOptIn(r.ID)
+
+	if err != nil || !res.KillSent {
+		t.Fatalf("kill past the bound = %+v, %v; want success with kill_sent true", res, err)
+	}
+	kohAssertKilled(t, e, mark, agent.ID, holder.ID)
+	if seqHas(e, r.Socket, holder.ID) {
+		t.Errorf("session %s still runs after the kill", holder.ID)
+	}
+	e.assertRowUnchanged(t, r.ID, before)
 }

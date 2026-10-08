@@ -710,7 +710,8 @@ func launchInProgressError(row Spawn) error {
 // leftover: ErrTmuxUnresponsive while it appears to still be starting
 // (younger than the starting-session bound), and past the bound
 // ErrTmuxSessionConflict naming it as this id's own abandoned launch, which
-// agent-director does not end. ErrTmuxSessionConflict is CONFLICT and lasts
+// agent-director ends only through its operator tool, so ending it is a
+// human's decision. ErrTmuxSessionConflict is CONFLICT and lasts
 // until a human looks (see "Operator actions" in the agent-director README). A
 // tmux server other than the one the agent was launched on, or tmux that
 // cannot be run, gives ErrTmuxNotAvailable (ENVIRONMENT), and an answer that

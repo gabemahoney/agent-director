@@ -4,8 +4,9 @@ package api_test
 // tests (advice_follow_*_test.go) share: the advice checks (an error's
 // description, a Go doc comment, a manifest text), the wait the pending-row
 // advice prescribes, the "duplicate session" arrangements B10 and A12 follow
-// and the retries past an abandoned launch they then make (b.1n6), a
-// one-shot hook on a tmux call and small seeds.
+// and the retries past an abandoned launch they then make (b.1n6) until a
+// human ends it with kill-finished (b.6sa), a one-shot hook on a tmux call
+// and small seeds.
 
 import (
 	"context"
@@ -165,9 +166,28 @@ func adviceHeldFollows() []adviceHeldFollow {
 	}
 }
 
-// adviceAbandonedHuman is the next step the abandoned-launch conflict gives (b.1n6).
+// adviceAbandonedHuman is the next step the abandoned-launch conflict gives (b.1n6): a human ends the session with the
+// operator tool's kill-finished (adviceOperatorEnds; b.6sa).
 const adviceAbandonedHuman = `ending it is a human's decision, see "Operator actions" in the agent-director README, ` +
 	"after which the refused call can be re-issued"
+
+// adviceOperatorEnds follows the abandoned-launch conflict's "Operator actions" pointer as the human does (b.6sa): the
+// operator tool's kill-finished on id (adminapi.KillFinished) succeeds with kill_sent true, every one of sessions is gone
+// from socket and the row is unchanged.
+func adviceOperatorEnds(t *testing.T, e *killEnv, id, socket string, sessions []tmuxfix.SeedSession) {
+	t.Helper()
+	before := e.columns(t, id)
+	res, _, err := e.killOptInClient(t, id)
+	if err != nil || !res.KillSent {
+		t.Fatalf("kill-finished of %s = %+v, %v; want success with kill_sent true", id, res, err)
+	}
+	for _, s := range sessions {
+		if seqHas(e, socket, s.ID) {
+			t.Errorf("session %s (%q) still runs after kill-finished", s.ID, s.Name)
+		}
+	}
+	e.assertRowUnchanged(t, id, before)
+}
 
 // adviceAbandonedRetry follows "retry later" on this id's own abandoned launch that keeps running (b.1n6): call is refused
 // ErrTmuxUnresponsive while young, then the conflict past the bound, neither writing anything since snapshot (taken before each).

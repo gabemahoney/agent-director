@@ -222,7 +222,8 @@ func TestAdviceFollow_A11_ReuseRestoreSentenceGetThenAct(t *testing.T) {
 // sentence>; do not retry until get shows the row ended or missing" (changed, stays pending; b.gu6) after reuse's "duplicate
 // session" whose re-lookup timed out or met the row's own session still starting; retried long after, or once find-missing
 // past grace shows it missing, with the name free. A starting session that outlives the wait is this id's own abandoned
-// launch (b.1n6): "retry later" while it is young, past the bound a human's decision, until it goes.
+// launch (b.1n6): "retry later" while it is young, past the bound a human's decision; once the human ends it with
+// kill-finished (b.6sa), the re-issued reuse launches.
 func TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; it checks every record written to the
 	// shared trail since its mark.
@@ -267,7 +268,7 @@ func TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater(t *testing.T) {
 						Bound: e.cfg.EffectiveStartingSession()},
 						func() error { _, _, err := e.reuse(t, s.p); return err },
 						func() writesSnapshot { return e.snapshotReuse(t, s.r) }, ruhForbid(e, s)...)
-					e.removeHolders(t, s.sc)
+					adviceOperatorEnds(t, e, s.r.ID, s.r.Socket, s.sc.Holders)
 				}
 
 				res, _, err := e.reuse(t, s.p)

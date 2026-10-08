@@ -38,8 +38,10 @@ type DeleteResult struct {
 // KillFinished is kill with the finished-row option (SR-6.5) on the client
 // c, which must be a *api.Client from api.New: on a finished row (ended or
 // missing) it ends the row's own old session, if that session reported in to
-// the row, with the kill sequence and the process wait of kill, using c's
-// configured durations; a live row (pending included) gets
+// the row, or, when the row's latest launch records no session of its own,
+// this id's own abandoned launch once it has outlived the starting-session
+// bound (b.6sa), with the kill sequence and the process wait of kill, using
+// c's configured durations; a live row (pending included) gets
 // ErrSpawnNotResumable with no lookup. Its one ad.kill.called trail record
 // carries include_finished true. A c of any other type is an error and
 // nothing runs. Set by pkg/api's init.
@@ -109,6 +111,8 @@ var Verbs = []Verb{
 		Description: "End a finished row's (ended or missing) own old session, after a human has looked at it. " +
 			"It ends the session only if it reported in to the row: the row records the agent's process id and the session was created, in whole seconds, before the row finished. " +
 			"It ends the agent's pane and the row's labelled session, waits for the agent process (or, when the process cannot be checked, looks the session up once more) and succeeds once the agent process is gone. " +
+			"It also ends this id's own abandoned launch, which resume and spawn --reuse-finished refuse: when the row records a launch token but no tmux server or pane of that launch, the sessions carrying an earlier launch's label of the row's id in this store, once the youngest has run for at least the starting-session bound; " +
+			"such a launch never reports in, so its agent process is the process of the pane that launch created, never one the row records. " +
 			"The row's state and every other field stay unchanged, so the conversation stays resumable. " +
 			"With no session of the row's current launch found, it acts as kill does on a live row. " +
 			"A live row (pending included) is refused with ErrSpawnNotResumable, with no lookup; an unknown id is ErrSpawnNotFound. " +

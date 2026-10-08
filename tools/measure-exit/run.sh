@@ -72,9 +72,11 @@
 #                             sets ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, a
 #                             CLAUDE_CODE_USE_* name or a name real mode refuses,
 #                             or sets any name to a value that looks like a URL
-#                             or an authorization header; the refusal names the
-#                             key, never a value. The driver repeats all of these
-#                             checks over the layer files in real mode, and also
+#                             or an authorization header, or when a headers
+#                             object in it (an MCP server's static headers)
+#                             sets any header to such a value; the refusal names
+#                             the key, never a value. The driver repeats all of
+#                             these checks over the layer files in real mode, and also
 #                             refuses a container holding anything at
 #                             ~/.claude/.credentials.json,
 #                             /etc/claude-code/managed-mcp.json or
@@ -265,6 +267,24 @@ layer_target() {
     esac
 }
 
+# layer_value_entries prints one line per entry of every object held under
+# the key $1 (env, headers), at any depth, in layer file $2: "url" or "-"
+# (whether its value looks like a URL or an authorization header: ://,
+# "bearer ", "authorization:", any case; the driver's layerEnvValueRE), a
+# tab, then the entry's name with tabs and line breaks made spaces. The value
+# test runs inside jq, so no value reaches the shell. It prints in the order
+# the driver's findLayerEntry walks, so the first refused line is the entry
+# the driver names: keys in sorted order (jq's keys, the byte order of Go's
+# sort.Strings), arrays in index order, and an object's own $1 entries before
+# any of its keys' values are walked (sorted_walk is jq's .. with sorted keys;
+# .. itself, like to_entries, keeps the file's key order).
+layer_value_entries() {
+    jq -r --arg obj "$1" 'def sorted_walk: ., (iterables | keys[] as $k | .[$k] | sorted_walk);
+        sorted_walk | objects | select(has($obj)) | .[$obj] | objects | to_entries | sort_by(.key)[]
+        | "\(if (.value | tostring | test("://|\\bbearer\\s|authorization\\s*:"; "i")) then "url" else "-" end)\t\(.key | gsub("[\\t\\r\\n]"; " "))"' \
+        <"$2" 2>/dev/null
+}
+
 # refuse_credential_layer refuses (exit 2) staging layer $1 from file $2
 # when it is, or resolves to, Claude Code's state file (.claude.json) or its
 # credentials file (.credentials.json), when it is not JSON, or when any key
@@ -277,8 +297,10 @@ layer_target() {
 # env, MCP server env) that sets a LAYER_REFUSED_ENV or CLAUDE_CODE_USE_*
 # name, which would take the agents off the gateway, or that sets any name
 # to a value that looks like a URL or an authorization header (://,
-# "bearer ", "authorization:", any case). The value test runs inside jq, so
-# no value reaches the shell. The refusal names the key, never a value. The
+# "bearer ", "authorization:", any case), and a layer with a headers object
+# (at any depth: an MCP server's static headers) that sets any header to
+# such a value (b.qkg). The value tests run inside jq (layer_value_entries),
+# so no value reaches the shell. The refusal names the key, never a value. The
 # driver repeats every one of these checks over the layer files in real
 # mode (layerenv.go's checkLayerFiles), for a container started by hand; the
 # file names, the key pattern and LAYER_CREDENTIAL_SETTINGS are kept in step
@@ -308,11 +330,7 @@ refuse_credential_layer() {
             fi
         done
     done <<<"$keys"
-    # One line per env entry: "url" or "-" (whether its value looks like a
-    # URL or an authorization header), a tab, then the name.
-    entries="$(jq -r '.. | objects | select(has("env")) | .env | objects | to_entries[]
-        | "\(if (.value | tostring | test("://|\\bbearer\\s|authorization\\s*:"; "i")) then "url" else "-" end)\t\(.key | gsub("[\\t\\r\\n]"; " "))"' \
-        <"$src" 2>/dev/null)" \
+    entries="$(layer_value_entries env "$src")" \
         || die 2 "refusing the $k layer $src: its env objects could not be read, so it cannot be checked (nothing was built or run)"
     while IFS=$'\t' read -r flag name; do
         refused=0
@@ -328,6 +346,17 @@ refuse_credential_layer() {
         fi
         if [[ "$flag" == url ]]; then
             die 2 "refusing the $k layer $src: an env object in it sets $name to a value that looks like a URL or an authorization header (values are never printed); remove it from the copy you stage (nothing was built or run)"
+        fi
+    done <<<"$entries"
+    # Headers objects (an MCP server's static request headers): values only,
+    # as the key test above has refused a credential-like header name. See
+    # the driver's findLayerHeader for why values are tested rather than any
+    # non-empty headers map refused (b.qkg).
+    entries="$(layer_value_entries headers "$src")" \
+        || die 2 "refusing the $k layer $src: its headers objects could not be read, so it cannot be checked (nothing was built or run)"
+    while IFS=$'\t' read -r flag name; do
+        if [[ "$flag" == url ]]; then
+            die 2 "refusing the $k layer $src: a headers object in it sets the header $name to a value that looks like a URL or an authorization header (values are never printed); remove it from the copy you stage (nothing was built or run)"
         fi
     done <<<"$entries"
 }

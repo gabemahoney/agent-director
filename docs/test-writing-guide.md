@@ -281,6 +281,11 @@ condition-clears test (`TestAdviceFollow_HO<n>_…` in
 holds, the call returns the same refusal unchanged and writes or sends nothing;
 re-issued once the condition is gone (a human cleared it, or the holder
 exited), it does its work. A caller that re-checks later relies on both.
+Where "Operator actions" gives the human an operator-tool command, the test
+clears the condition by running that command as the human would:
+`adviceOperatorEnds` runs `agent-director-admin kill-finished` (through
+`adminapi.KillFinished`) and checks that it succeeds with `kill_sent` true,
+that the named sessions are gone and that the row is unchanged.
 
 **Where they live.** `advice_follow_<area>_test.go` files in the package whose
 surface gives the advice: `pkg/api` (fake tmux and the injected clock; prefer
@@ -295,7 +300,8 @@ and `install.sh`'s in `test/install-sh/advice_follow.sh`, which
 `adviceAssertAdvice`, `adviceAssertPhrase`, `adviceAssertGoDoc` and
 `adviceAssertManifest` for the word-for-word checks, `adviceAwaitFinished` for
 the pending-row wait, `adviceOnceAfter` for a one-shot hook on a tmux call,
-and the small seeds beside them.
+`adviceOperatorEnds` for a human's `kill-finished`, and the small seeds beside
+them.
 
 **Naming.** `TestAdviceFollow_<ID>_<Short>`, e.g.
 `TestAdviceFollow_A2_ScanUnreadableRetryLater`, with a one-line comment giving

@@ -5,7 +5,8 @@ package api_test
 // lookup of resume, reuse, kill or a pane verb gives is re-issued while its
 // condition holds (the same refusal, nothing written or sent) and once a
 // human, or the holder's own exit, has cleared it (the call then does its
-// work). The downstream C22 re-check protocol relies on both. Kill and the
+// work; for HO12 the human runs kill-finished, b.6sa). The downstream C22
+// re-check protocol relies on both. Kill and the
 // pane verbs look a row up by its label only, so a session merely holding
 // its name (another row's, another store's, unlabelled) never refuses them.
 
@@ -251,10 +252,15 @@ func adviceLeftovers(n, end int) func(*testing.T, *killEnv, killRow) func() {
 }
 
 // adviceAbandonedLaunch seeds a session of an earlier launch of r past the starting-session bound (seedLeftover);
-// it ends, by a human or by its own exit.
-func adviceAbandonedLaunch(t *testing.T, e *killEnv, r killRow) func() {
-	s := e.seedLeftover(t, r, newToken(), rlkSettled(e))
-	return func() { adviceEndSession(t, e.rec, r.Socket, s.ID) }
+// it ends by its own exit, or, with operator, as "Operator actions" says: a human runs kill-finished (b.6sa).
+func adviceAbandonedLaunch(operator bool) func(*testing.T, *killEnv, killRow) func() {
+	return func(t *testing.T, e *killEnv, r killRow) func() {
+		s := e.seedLeftover(t, r, newToken(), rlkSettled(e))
+		if operator {
+			return func() { adviceOperatorEnds(t, e, r.ID, r.Socket, []tmuxfix.SeedSession{s}) }
+		}
+		return func() { adviceEndSession(t, e.rec, r.Socket, s.ID) }
+	}
 }
 
 // TestAdviceFollow_HO1_ConflictingLabelsClears: HO1 "conflicting labels" ...
@@ -313,13 +319,20 @@ func TestAdviceFollow_HO5_PreLaunchLeftoverClears(t *testing.T) {
 }
 
 // TestAdviceFollow_HO12_AbandonedLaunchClears: HO12 "this id's own abandoned launch" ... "ending it is a human's
-// decision, see "Operator actions" in the agent-director README, after which the refused call can be re-issued" (b.1n6).
+// decision, see "Operator actions" in the agent-director README, after which the refused call can be re-issued" (b.1n6);
+// the human's step is kill-finished (b.6sa).
 func TestAdviceFollow_HO12_AbandonedLaunchClears(t *testing.T) {
 	t.Parallel()
 	var cases []adviceConflictCase
 	for _, v := range []adviceConflictVerb{adviceConflictResume, adviceConflictReuse} {
-		cases = append(cases, adviceConflictCase{name: "abandoned launch", verb: v, noOwn: true,
-			words: "this id's own abandoned launch", phrase: adviceAbandonedHuman, place: adviceAbandonedLaunch})
+		for _, operator := range []bool{false, true} {
+			name := "abandoned launch, it exits"
+			if operator {
+				name = "abandoned launch, ended with kill-finished"
+			}
+			cases = append(cases, adviceConflictCase{name: name, verb: v, noOwn: true, words: "this id's own abandoned launch",
+				phrase: adviceAbandonedHuman, place: adviceAbandonedLaunch(operator)})
+		}
 	}
 	adviceConflictClears(t, cases)
 }
