@@ -364,13 +364,15 @@ Guarantees when `ErrRelayFallenBack` is returned:
   can no longer deliver a decision, the operator answers Claude Code's
   native permission dialog directly — through the sanctioned, audited
   `send-keys` recovery path, never raw tmux. That path opens on the same
-  time-based signal with the margin's sign reversed: the send-keys relay
-  guard releases 1 s *after* every one of the spawn's requests' windows
-  has elapsed. On the refused request's account it has already released
-  when `ErrRelayFallenBack` is returned, so the guard does not refuse a
-  `send-keys` that follows it on that request's account; the caller
-  never waits out the margin itself. If `send-keys` still refuses with
-  `ErrSendKeysWhileRelayed`, another of the spawn's requests holds the
+  time-based signal with the margin's sign reversed: on a request's
+  account the send-keys relay guard releases 1 s *after* that request's
+  window has elapsed. On the refused request's account it has already
+  released when `ErrRelayFallenBack` is returned, so the guard does not
+  refuse a `send-keys` that follows it on that request's account; the
+  caller never waits out the margin itself. While the refused request
+  stays open, no already-decided request of the spawn holds the guard
+  either. If `send-keys` still refuses with `ErrSendKeysWhileRelayed`,
+  another of the spawn's requests, still pending in its window, holds the
   guard; the refusal names it: answer that one with `decide`. See
   "Send-keys interaction" below.
 
@@ -408,20 +410,26 @@ keystroke would race the relay's `decide()` write and split the modal
 answer across two pane events, so the relay owns the answer and callers
 drive the modal through `decide`. The error name is the contract; its
 message (advice) names the request holding the guard, by its
-`request_token`, advises answering it with `decide`, and states no
-release time: `spawn <id> is awaiting a relayed permission decision on
-request <request_token>; answer it with decide`. When several requests
-hold the guard it names an undecided one before a decided one, then the
-oldest. The named request is either:
+`request_token`, says what to do, and states no release time. When
+several requests hold the guard it names an undecided one before a
+decided one, then the oldest. The named request is either:
 
-- **Pending**: `decide` answers it (near the window's end, after the
-  wait described in "The wait at the window's end" above).
-- **Already decided**, its verdict possibly still being delivered by its
-  relay hook: `decide` returns `ErrAlreadyDecided` and there is nothing
-  to answer. It holds the guard until the spawn leaves
-  `check_permission` or its relay can no longer deliver, whichever is
-  first; while the spawn stays in `check_permission`, that can be up to
-  the request's full relay window.
+- **Pending**: `spawn <id> is awaiting a relayed permission decision on
+  request <request_token>; answer it with decide`. `decide` answers it
+  (near the window's end, after the wait described in "The wait at the
+  window's end" above).
+- **Already decided**, named only when no pending request holds the
+  guard: `spawn <id>: the relayed permission verdict on request
+  <request_token> is recorded and its relay hook may still be delivering
+  it; retry send-keys later`. There is nothing left to answer (`decide`
+  on it returns `ErrAlreadyDecided`). It holds the guard until the spawn
+  leaves `check_permission` (normally once its relay hook has delivered
+  the verdict), another of the spawn's requests falls back (see below),
+  or its window plus the safety margin has elapsed, whichever is first.
+  A request whose relay hook died after its verdict was recorded, with
+  no other request fallen back, holds until its window plus the margin:
+  nothing stored tells a dead hook from a slow one. A `send-keys`
+  retried after that is delivered.
 
 With zero request rows the request is still being recorded, so the
 message names none: `… whose request is not yet recorded; answer it
@@ -441,22 +449,44 @@ margin`, so it never frees while a live poller could still emit a
 decision). Both fail toward safety; it is one authority applied with the
 sign that makes each caller safe. It evaluates every one of the spawn's
 `permission_requests` rows, each row's window measured from its own
-`created_at` and *regardless of the row's decision status* (a row
-decided in-window still has a live poller about to deliver it).
-Concretely:
+`created_at`, pending or decided (a row decided in-window may still
+have a live poller about to deliver it). Concretely:
 
-- **Refuse while any row might still be delivered** — the relay can
-  still deliver, so send-keys stays out of the way.
-- **Release only once every row's window plus the safety margin has
-  elapsed** (1 s after the last window ends) — at that point no poller
-  can deliver any decision, the guard would be pure denial of service,
-  and send-keys is the sanctioned recovery surface (below). The margin
-  is internal: the refusal's message does not state it. A `send-keys`
-  refused between `decide`'s cutoff (1 s before the window ends) and the
-  guard's release is told to use `decide` on the request it names; for
-  an open request `decide` waits out that span (see "The wait at the
-  window's end" above) and returns `ErrAlreadyDecided` or
-  `ErrRelayFallenBack`.
+- **Refuse while any row holds the guard.** A row holds until its
+  window plus the safety margin has elapsed, pending or decided: the
+  relay can still deliver its verdict, so send-keys stays out of the
+  way. The next bullet is the one exception.
+- **A decided row stops holding once another request has fallen back.**
+  A request has fallen back when its record is still open 2 s after its
+  window ended: `decide` refuses it with `ErrRelayFallenBack`. Its open
+  record keeps the spawn in `check_permission`, and only a pane answer
+  closes its dialog, so a decided request of the same spawn no longer
+  holds the guard; otherwise a `send-keys` retried as that request's
+  refusal advises would be refused for up to its full relay window.
+  Pending requests still in their windows keep holding, so a pane answer
+  never overtakes a verdict `decide` can still record. The trade-off:
+  the exception assumes Claude Code shows the oldest pending permission
+  dialog first, so the fallen-back request's dialog (recorded before
+  every request still in its window) is the one on screen. It gives up
+  the span between a `decide` and Claude Code acting on the decided
+  request's hook output: up to one poll sleep of its live relay hook
+  (`relay.poll_base_ms` plus jitter up to `relay.poll_jitter_ms`; see
+  "Flow" above) before the hook reads the verdict, plus the hook writing
+  its output and exiting. The assumption fails when a fallen-back
+  request's dialog is no longer on screen (its record was left open
+  after the dialog closed): keys sent in that span can then land in the
+  decided request's still-pending dialog.
+- **Release once no row holds** — every row's window plus the safety
+  margin has elapsed (1 s after the last window ends), a decided row's
+  excepted once another request has fallen back. At that point no
+  pending request's poller can deliver a decision, the guard would be
+  pure denial of service, and send-keys is the sanctioned recovery
+  surface (below). The margin is internal: the refusal's message does
+  not state it. A `send-keys` refused between `decide`'s cutoff (1 s
+  before the window ends) and the guard's release on a pending
+  request's account is told to use `decide` on that request; `decide`
+  waits out that span (see "The wait at the window's end" above) and
+  returns `ErrAlreadyDecided` or `ErrRelayFallenBack`.
 - **Zero rows keep the guard held.** With no row there is no signal and
   no authority to release; the state is a real mid-insert transient, so
   the guard refuses rather than open a race.
@@ -476,13 +506,14 @@ answer-the-dialog verb and **without ever touching raw tmux**:
    `ErrAlreadyDecided` instead, the relay hook (or another caller)
    answered the request and there is nothing to recover.
 2. The send-keys guard releases by the same time-based authority, but
-   only once every row's window plus the safety margin has elapsed —
-   1 s after the last window ends (see the asymmetric-margin note
-   above). On the refused request's account it has already released
-   when `decide` returns `ErrRelayFallenBack`, so the operator sends at
-   once. A request of the same spawn opened later may still hold it;
-   `send-keys` then refuses with `ErrSendKeysWhileRelayed` naming that
-   request, and the operator answers it with `decide`.
+   only once no row holds it — 1 s after the last pending request's
+   window ends (see the asymmetric-margin note above; while the refused
+   request stays open, decided requests no longer hold it). On the
+   refused request's account it has already released when `decide`
+   returns `ErrRelayFallenBack`, so the operator sends at once. A
+   request of the same spawn opened later and still pending may still
+   hold it; `send-keys` then refuses with `ErrSendKeysWhileRelayed`
+   naming that request, and the operator answers it with `decide`.
 3. `send-keys` answers the native permission dialog directly.
 4. The action is audited: it appears in the trail as
    `ad.send_keys.called` with `guard_evaluation=released`, so a recovery

@@ -330,10 +330,12 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 //
 // It differs from OpenPermissionRequestsForSpawn, which filters to
 // `decision IS NULL`. The send_keys relay-guard release (Epic t1.kk3.up)
-// evaluates deliverability across every row REGARDLESS of decision status
-// (SR-4.2 "whether or not a decision was recorded"): a row decided in-window
-// still has a live poller about to deliver it, so decided-in-window rows must
-// keep the guard shut. This all-rows variant supplies that evaluation set.
+// evaluates deliverability across every row, decided or not (SR-4.2
+// "whether or not a decision was recorded"): a row decided in-window may
+// still have a live poller about to deliver it, so a decided-in-window row
+// keeps the guard shut unless another of the Spawn's requests has fallen
+// back (still open after its relay hook settled; b.ceq, see pkg/api
+// evaluateRelayGuard). This all-rows variant supplies that evaluation set.
 func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error) {
 	const q = `
 		SELECT request_id, claude_instance_id, tool_name, tool_input,

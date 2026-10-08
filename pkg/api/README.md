@@ -238,17 +238,18 @@ Most-likely sentinel errors:
   check_permission` (a `pending` row needs `AllowPending`, below); nothing
   was sent.
 - `ErrSendKeysWhileRelayed`: relay_mode=on and state is `check_permission`
-  **and** at least one of the row's permission requests may still be
-  delivered by its relay hook, or the row has zero request rows; the relay
-  still owns the answer and nothing was sent. The message names the
-  request holding the guard (`… on request <request_token>; answer it
-  with decide`). If that request is pending, `Decide` answers it; if its
-  verdict is already recorded, `Decide` returns `ErrAlreadyDecided` and
-  there is nothing to answer: it holds the guard until the row leaves
-  `check_permission` or its relay can no longer deliver. With zero rows the
-  message names none (`… whose request is not yet recorded; answer it
-  with decide once get lists it`). `Decide` refused near the window's end
-  first waits, at most 3 s, for the relay hook's timeout deny, then
+  **and** at least one of the row's permission requests holds the relay
+  guard, or the row has zero request rows; the relay still owns the
+  answer and nothing was sent. The message names the
+  request holding the guard. If that request is pending, it says to
+  answer it with decide (`… on request <request_token>; answer it with
+  decide`), and `Decide` answers it. If its verdict is already recorded,
+  it says to retry later (`… the relayed permission verdict on request
+  <request_token> is recorded and its relay hook may still be delivering
+  it; retry send-keys later`); `Decide` on it would return
+  `ErrAlreadyDecided`. With zero rows the message names none (`… whose
+  request is not yet recorded; answer it with decide once get lists
+  it`). `Decide` refused near the window's end first waits, at most 3 s, for the relay hook's timeout deny, then
   returns `ErrAlreadyDecided` or `ErrRelayFallenBack`. This guard is
   **time-bounded**: it releases once no request's relay hook can deliver,
   letting the caller recover the wedged row through this sanctioned,
@@ -496,7 +497,7 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | The relay path still owns the `check_permission` answer — answer the request the message names with `Decide` (`ErrAlreadyDecided` if its verdict is already recorded) |
+| `ErrSendKeysWhileRelayed` | The relay path still owns the `check_permission` answer — answer the pending request the message names with `Decide`, or, when the message says its verdict is recorded, retry `SendKeys` later |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

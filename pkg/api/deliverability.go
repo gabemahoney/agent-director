@@ -106,14 +106,18 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 //
 // The span is agent-director's to absorb, not the caller's to time (b.ah6):
 // no runtime caller-facing text (error messages, manifest Descriptions)
-// states either boundary or the margin. A send_keys refused inside it is told
-// to answer the request it names with decide, and decide's wait ends after
-// the guard has released on that request's account, so a pane answer that
-// follows its ErrRelayFallenBack is not refused on that request's account.
+// states either boundary or the margin. A send_keys refused while the open
+// request holds the guard names an open request (namedBefore) and is told to
+// answer it with decide, and decide's wait ends after the guard has released
+// on that request's account, so a pane answer that
+// follows its ErrRelayFallenBack is not refused on that request's account,
+// nor on account of a decided request of the same Spawn
+// (relayRequestFallenBack, b.ceq).
 
 // RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
 // whose delivery window has provably elapsed (guard may release) from rows that
-// might still be delivered (guard must hold) at time now. A row is
+// might still be delivered (guard holds on their account, but for
+// evaluateRelayGuard's decided-row exception, b.ceq) at time now. A row is
 // guard-releasable iff its created_at is at or before this cutoff. The cutoff
 // is now less the effective relay window PLUS RelayKillSafetyMargin — i.e. the
 // created_at whose deadline plus the safety margin lands exactly at now. This
@@ -169,6 +173,20 @@ const createdAtResolution = 1 * time.Second
 // createdAtResolution (3 s).
 func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time.Time {
 	return relayGuardReleaseAt(createdAt, effectiveWindow).Add(createdAtResolution)
+}
+
+// relayRequestFallenBack reports whether permission request pr has fallen back
+// at now: its record is still open (no decision) at or after its
+// relayHookSettledAt, so its relay hook is presumed dead and only a pane
+// answer can close its dialog. It is the one definition of "fallen back":
+// Decide returns ErrRelayFallenBack for exactly such a request (after its
+// wait), and the send_keys guard stops holding on account of a decided
+// request once another request of the same Spawn has fallen back (b.ceq). A
+// decided request has not fallen back. Like its siblings it is a pure
+// function of the row, the resolved effective relay window and the injected
+// now.
+func relayRequestFallenBack(pr PermissionRow, effectiveWindow time.Duration, now time.Time) bool {
+	return pr.Decision == "" && !now.Before(relayHookSettledAt(pr.CreatedAt, effectiveWindow))
 }
 
 // RelayRequestGuardReleasable is the single authority (SR-4.4) answering, for a

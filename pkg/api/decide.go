@@ -210,9 +210,11 @@ func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, 
 	}
 	// Open row that the guarded UPDATE refused: the only reason a
 	// token-matched, decision-NULL row is skipped is the deliverability
-	// predicate. Re-confirm via the shared single-authority signal (no second
-	// inline time comparison) and surface the typed fallen-back error.
-	if RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
+	// predicate, and the wait above has brought now to or past its relay
+	// hook's settling. Re-confirm via the shared definition of a fallen-back
+	// request, the one the send_keys guard applies (no second inline time
+	// comparison), and surface the typed fallen-back error.
+	if relayRequestFallenBack(pr, effectiveWindow, now) {
 		return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys",
 			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken)
 	}
