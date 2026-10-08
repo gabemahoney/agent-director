@@ -28,7 +28,9 @@ type SpawnResult struct {
 	//     passed SpawnParams.NoPreTrust; nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (the .claude.json file is missing, or could not be read, parsed or
-	//     written); the agent may stop at Claude Code's folder-trust prompt.
+	//     written, or the extra env sets CLAUDE_CONFIG_DIR, or with no
+	//     CLAUDE_CONFIG_DIR sets HOME, to a path that is not absolute); the
+	//     agent may stop at Claude Code's folder-trust prompt.
 	//
 	// A pre-trust failure never fails the spawn.
 	PreTrust string `json:"pre_trust"`

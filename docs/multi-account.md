@@ -5,7 +5,8 @@ operator's default. agent-director's `extra_env` parameter is the
 single mechanism for this — no file mounts, no profile directories.
 If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, it must be an
 absolute path. The pretrust write then targets
-`<CLAUDE_CONFIG_DIR>/.claude.json` instead of `$HOME/.claude.json`, and
+`<CLAUDE_CONFIG_DIR>/.claude.json` instead of the operator's
+`~/.claude.json`, and
 `resume`, when it has to recompute a transcript's path, looks under
 `<CLAUDE_CONFIG_DIR>/projects/`. A relative, `~`-prefixed or
 whitespace-only value is not used by agent-director (Claude Code still
@@ -16,6 +17,17 @@ folder-trust prompt), and `resume` recomputes under `~/.claude`
 instead, so it does not find a transcript Claude Code wrote under the
 relative dir unless the row's recorded `jsonl_path` (or a
 `prior_sessions` entry's) still points at it.
+
+If `extra_env` sets `HOME` and not `CLAUDE_CONFIG_DIR`, Claude Code
+reads `<HOME>/.claude.json`, so the pretrust write targets that file.
+The same rule applies: a `HOME` that is not an absolute path gets no
+pretrust write and `pre_trust: failed`. A `CLAUDE_CONFIG_DIR` in
+`extra_env`, usable or not, takes precedence over `HOME`. Nothing else
+in agent-director is built for an extra-env `HOME`: the agent's
+hooks look for agent-director's store under that home, so the spawn's
+row can stay `pending`, and `resume` does not look for transcripts
+there. To give a Spawn its own Claude config, set
+`CLAUDE_CONFIG_DIR`, not `HOME`.
 
 For Claude Code's own auth reference, see:
 

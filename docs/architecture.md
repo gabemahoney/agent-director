@@ -3831,18 +3831,37 @@ write, it never lengthens the window between the launch start and the
 create.
 
 The step resolves the target `.claude.json` (`claudeJSONFor`) from the
-launch's extra env `CLAUDE_CONFIG_DIR`:
+launch's extra env, so that it is the file the launched Claude Code
+reads. Claude Code reads `<CLAUDE_CONFIG_DIR or else its home
+directory>/.claude.json` (2.1.280: `CLAUDE_CONFIG_DIR || os.homedir()`,
+and Bun's `os.homedir()` returns `$HOME` as set), and the extra env
+reaches its pane through tmux `new-session -e`, so an extra-env `HOME`
+moves the file too (b.wb4). In order:
 
-- Absent or empty: the operator's `~/.claude.json`.
-- An absolute path: `<CLAUDE_CONFIG_DIR>/.claude.json`.
-- Set but not an absolute path (relative, `~`-prefixed or
-  whitespace-only): refused (b.nje). Pre-trust reads, writes and stats
-  no file, makes no lock dir, and reports `failed` (below). Claude Code
-  resolves a relative value against its pane's cwd, while agent-director
-  would resolve it against its own caller's cwd, which differs for each
-  caller, so the entry could land in a file the agent never reads.
-  Falling back to `~/.claude.json` could also write a file the agent
-  never reads, so pre-trust does not fall back.
+1. The extra env's `CLAUDE_CONFIG_DIR` is set (non-empty): an absolute
+   path gives `<CLAUDE_CONFIG_DIR>/.claude.json`; any other value
+   (relative, `~`-prefixed or whitespace-only) is refused (b.nje). `HOME`
+   is not consulted either way.
+2. Else the extra env's `HOME` is set (non-empty): an absolute path
+   gives `<HOME>/.claude.json`; any other value is refused by the same
+   rule (b.wb4).
+3. Else (both absent or empty): the operator's `~/.claude.json`, from
+   agent-director's own `HOME`.
+
+A refused value resolves no file: pre-trust reads, writes and stats no
+file, makes no lock dir, and reports `failed` (below). Claude Code
+resolves a relative value against its pane's cwd, while agent-director
+would resolve it against its own caller's cwd, which differs for each
+caller, so the entry could land in a file the agent never reads. A
+refused value is never replaced by the next step: falling back to
+`<HOME>/.claude.json` or `~/.claude.json` could also write a file the
+agent never reads.
+
+Pre-trust following an extra-env `HOME` does not by itself make such a
+launch work: the agent's hooks resolve agent-director's config and store
+from the pane's `HOME` too, so they open that home's store, not the
+launching one, and the launching row can stay `pending` unless that
+home's config points `db_path` at the launching store (b.nas).
 
 For `resume` the extra env is the row's, so it targets the same file the
 row's spawn did. With a file resolved, the step sets
@@ -3869,17 +3888,23 @@ resolve is never replaced: pre-trust writes nothing and reports
 (its target removed, or turned into a loop) fails the write with the
 reason `resolve symlink <path>: …`.
 
-**One rule for `CLAUDE_CONFIG_DIR` (b.1ba, b.nje).** Whether a
-`CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
+**One rule for `CLAUDE_CONFIG_DIR` and `HOME` (b.1ba, b.nje, b.wb4).**
+Whether a `CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
 (`internal/spawn/pretrust.go`): only an absolute path is. Every reader
 of the value shares it: pre-trust's file resolution above, and the
 transcript paths `resume`'s fallback and `find-missing`'s heal compose
 (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
-Only the response to an unusable value differs: those read paths treat
-it as absent and look under `~/.claude`, while pre-trust, which writes,
-refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
-launch's or row's extra env decides whether to use it with
-`spawn.ConfigDirUsable`; do not write a second check.
+Only the response to an unusable `CLAUDE_CONFIG_DIR` differs: those
+read paths treat it as absent and look under `~/.claude`, while
+pre-trust, which writes, refuses it. Pre-trust applies the same rule,
+and the same refusal, to the extra env's `HOME`. The transcript paths
+do not read the extra env's `HOME` at all: with no usable `CLAUDE_CONFIG_DIR` they look under
+agent-director's own `~/.claude`, so a transcript
+Claude Code wrote under an extra-env `HOME` is found only through its
+recorded `jsonl_path` (b.s52). **Must use:** code that reads
+`CLAUDE_CONFIG_DIR` or `HOME` from a launch's or row's extra env decides
+whether to use it with `spawn.ConfigDirUsable`; do not write a second
+check.
 
 **Config lock (b.zjm).** Claude Code writes the same file, at startup
 and while it runs, and saves it under a lock: it takes the lock,
@@ -3995,9 +4020,10 @@ with the rest of that life.
 
 Pre-trust is best effort on both verbs: a failure never fails the
 launch. When the write cannot be made (the extra env's
-`CLAUDE_CONFIG_DIR` is set but not an absolute path, or the resolved
-file does not exist, as on a fresh Claude Code install or a fresh
-`CLAUDE_CONFIG_DIR`, or it cannot be read, parsed or written, or its
+`CLAUDE_CONFIG_DIR`, or with none its `HOME`, is set but not an absolute
+path, or the resolved file does not exist, as on a fresh Claude Code
+install or a fresh `CLAUDE_CONFIG_DIR` or extra-env `HOME`, or it cannot
+be read, parsed or written, or its
 lock cannot be taken, stays held by another process through the
 `lock_wait_seconds` wait, was held too long to write under, or was taken
 over by another process before the write), `PreTrust` returns `failed` and
@@ -4009,11 +4035,14 @@ gave up after waiting 12s` (the configured wait, as Go formats a
 duration) for a lock that stayed held, and `pre-trust:
 lock <path>.lock was taken over by another process, so wrote nothing`
 for a lock taken over before the write. An unusable `CLAUDE_CONFIG_DIR`
-resolves no file, so its line names none and quotes the value (Go `%q`)
-instead: `agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR
-"rel" is not an absolute path); the agent may stop at Claude Code's
-folder-trust prompt`. The launch proceeds, and the agent may wait at the
-trust dialog.
+or `HOME` resolves no file, so its line names none and gives the
+variable's name and its value quoted (Go `%q`) instead:
+`agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR "rel" is
+not an absolute path); the agent may stop at Claude Code's folder-trust
+prompt`, or `… (pre-trust: HOME "rel" is not an absolute path) …`. The
+line names no label, token or environment value other than the extra
+env's `CLAUDE_CONFIG_DIR` and `HOME`. The launch proceeds, and the agent
+may wait at the trust dialog.
 
 **The `pre_trust` result field.** Every successful `spawn` and `resume`
 result carries `pre_trust`, always exactly one of three values:
@@ -4028,9 +4057,9 @@ result carries `pre_trust`, always exactly one of three values:
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
   written, its lock held by another process included, or the extra
-  env's `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
-  was touched). The launch still proceeds, and the agent may stop at
-  Claude Code's folder-trust prompt.
+  env's `CLAUDE_CONFIG_DIR`, or with none its `HOME`, is set but not an
+  absolute path, so no file was touched). The launch still proceeds, and
+  the agent may stop at Claude Code's folder-trust prompt.
 
 A `failed` pre-trust never fails the launch; a launch that fails returns
 its error, not a result. The value is the `PreTrustOutcome` the shared
@@ -7155,12 +7184,14 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
   Reuse it whenever you need a transcript path under an explicit config
   dir — do not re-derive the layout by hand. The fallback decides
   whether to use the value by the rule pre-trust's file resolution
-  shares (see "One rule for `CLAUDE_CONFIG_DIR`" under
+  shares (see "One rule for `CLAUDE_CONFIG_DIR` and `HOME`" under
   [Workspace-trust pre-write](#workspace-trust-pre-write)); a relative
   value would resolve against the resuming process's cwd, which differs
   for each caller.
 - **`spawn.JsonlPath(cwd, sessionID)`** — a thin wrapper over
-  `JsonlPathIn` that resolves the config dir to `$HOME/.claude`. Used
+  `JsonlPathIn` that resolves the config dir to `$HOME/.claude`,
+  agent-director's own `HOME`; a `HOME` in the row's extra env is not
+  read (b.s52). Used
   for the default-config fallback (the row's `CLAUDE_CONFIG_DIR` absent,
   empty or not an absolute path). It reconstructs the default layout:
 
@@ -10638,11 +10669,13 @@ detail.
   parallel. `Temp` enforces that the way `t.Chdir` does: it sets `$PWD`
   with `t.Setenv`, which panics in a parallel test and makes a later
   `t.Parallel` call panic.
-- Users: `TestPreTrustRefusesUnusableConfigDir`
-  (`internal/spawn/pretrust_test.go`) and `seedRelativeTrustConfig`
+- Users: `TestPreTrustRefusesUnusableConfigLocation`
+  (`internal/spawn/pretrust_home_test.go`), which checks that a relative
+  `CLAUDE_CONFIG_DIR` (alone or over an absolute `HOME`) and a relative
+  extra-env `HOME` touch nothing where they would resolve from the
+  process cwd; `seedRelativeTrustConfig`
   (see [pkg/api pre-trust fixture](#pkgapi-pre-trust-fixture-package-internal-test-fixture)),
-  which check that a relative `CLAUDE_CONFIG_DIR` touches nothing where
-  it would resolve from the process cwd, and
+  which does the same for a relative `CLAUDE_CONFIG_DIR`; and
   `TestRefusedStorePathCreatesNothing`
   (`internal/store/expand_tilde_test.go`), which checks that a `~/` store
   path refused for an unset or empty `HOME`, and an empty store path,

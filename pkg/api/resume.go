@@ -132,7 +132,9 @@ type ResumeResult struct {
 	//     (SpawnParams.NoPreTrust); nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (the .claude.json file is missing, or could not be read, parsed or
-	//     written); the agent may stop at Claude Code's folder-trust prompt.
+	//     written, or the row's extra env sets CLAUDE_CONFIG_DIR, or with no
+	//     CLAUDE_CONFIG_DIR sets HOME, to a path that is not absolute); the
+	//     agent may stop at Claude Code's folder-trust prompt.
 	//
 	// A pre-trust failure never fails the resume.
 	PreTrust string `json:"pre_trust"`
@@ -731,12 +733,13 @@ func launchInProgressError(row Spawn) error {
 // ErrTmuxSessionCreate.
 //
 // Before its launch, Resume pre-trusts the row's working directory (marks it
-// trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
-// ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
-// spawn does, unless the spawn that began the row's life turned pre-trust off
-// (SpawnParams.NoPreTrust); then nothing is pre-trusted, on every resume of
-// that life, and pre_trust is skipped. A pre-trust failure never fails the
-// launch. A resume refused before its move to pending writes no trust entry.
+// trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, else of
+// the row's extra-env HOME, else ~/.claude.json) so the agent skips Claude
+// Code's folder-trust prompt, as a spawn does, unless the spawn that began
+// the row's life turned pre-trust off (SpawnParams.NoPreTrust); then nothing
+// is pre-trusted, on every resume of that life, and pre_trust is skipped. A
+// pre-trust failure never fails the launch. A resume refused before its move
+// to pending writes no trust entry.
 //
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the
