@@ -75,17 +75,27 @@ type ListRow struct {
 	// with millisecond precision. Present only on a pending row; nil (and
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
-	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
-	// left this live row unverified; it is kept while later sweeps change
-	// LivenessNote. Nil (omitted from JSON) when NULL in the store: a sweep
-	// that finds the agent process alive clears it together with
-	// LivenessNote. The store carries it as a COALESCE-scanned string
-	// ("" == NULL); List maps "" to nil per the ended_at nullable precedent.
+	// LivenessUnverifiedSince is, as SpawnRow.LivenessUnverifiedSince, the
+	// RFC3339 timestamp of the first sweep that noted this live row (left it
+	// unverified, or noted it unreported, b.kdf), kept while later sweeps
+	// change LivenessNote, unreported included. Nil (omitted from JSON) when
+	// NULL in the store: a sweep that finds the agent process alive clears it
+	// together with LivenessNote, except on a pending row it notes unreported
+	// and a pending row noted provenance_conflict, which keeps it. The store
+	// carries it as a COALESCE-scanned string ("" == NULL); List maps "" to
+	// nil per the ended_at nullable precedent.
 	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
-	// LivenessNote is the reason token of the latest sweep that left this
-	// live row unverified, as SpawnRow.LivenessNote; a later sweep
-	// overwrites it when the reason changes. Nil (omitted) when NULL in the
-	// store. Same "" == NULL mapping.
+	// LivenessNote is, as SpawnRow.LivenessNote, either the reason token of
+	// the latest sweep that left this live row unverified (overwritten when
+	// the reason changes, cleared when a sweep finds the agent process alive,
+	// except on a pending row it notes unreported and a pending row noted
+	// provenance_conflict, which keeps it) or unreported, on a pending row
+	// whose agent is alive but has not reported through any hook since its
+	// launch (b.kdf): the row stays pending, the caller reads its pane and,
+	// only having looked, sends keys with allow_pending, a later sweep that
+	// finds the agent alive keeps the note, and the agent's next hook clears
+	// it; unreported never replaces provenance_conflict. Nil (omitted) when
+	// NULL in the store. Same "" == NULL mapping.
 	LivenessNote *string `json:"liveness_note,omitempty"`
 }
 

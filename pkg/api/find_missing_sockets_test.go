@@ -85,7 +85,7 @@ func fskAssertRows(t *testing.T, st *fakeFindMissingStore, res api.FindMissingRe
 	for id, w := range want {
 		wantOps := []string{"note"}
 		if w.mark != "" {
-			ids, wantOps = append(ids, id), []string{"mark", "close"}
+			ids, wantOps = append(ids, id), []string{"mark"}
 			assertMarkReason(t, before, id, w.mark)
 		} else {
 			unverified = append(unverified, id)

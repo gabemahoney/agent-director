@@ -1,6 +1,6 @@
 package api_test
 
-// advice_follow_pane_test.go (b.fji E1-E9, F6): each refusal of send-keys,
+// advice_follow_pane_test.go (b.fji E1-E9, F6; b.kdf F7): each refusal of send-keys,
 // read-pane, pause and decide that says what to do next is followed
 // literally, on the kill and pane-verb fixtures (fake tmux, injected clock).
 // The agent's input box is modelled from the keys calls (paneInput,
@@ -700,6 +700,101 @@ func TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane(t *testing.T) {
 
 			advRelayAdvice(t, err, store.ErrNoOpenPermissionRequest, advDecideNotShown)
 			e.assertNoTmuxCall(t) // the advice followed: nothing typed into Claude's prompt
+		})
+	}
+}
+
+// decideStep is one arrangement of a decide case's store, before decide runs.
+type decideStep func(t *testing.T, s *store.Store, dbPath string)
+
+// decideSpawnEnds is a DecideStore that runs end once, right after decide's first read of the Spawn: the Spawn
+// finishes between that read and the guarded write.
+type decideSpawnEnds struct {
+	*store.Store
+	end  func()
+	done *bool
+}
+
+func (d decideSpawnEnds) GetSpawn(id string) (store.Spawn, error) {
+	sp, err := d.Store.GetSpawn(id)
+	if !*d.done {
+		*d.done = true
+		d.end()
+	}
+	return sp, err
+}
+
+// TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded: F7 "nothing was recorded; do not answer it at the pane"
+// (b.146 rule 12). A request of an ended or missing Spawn is closed: decide records nothing (request A stays as it
+// was) under an existing error name, ErrAlreadyDecided for a decided request (find-missing's deny when it marked the
+// Spawn missing), else ErrNoOpenPermissionRequest carrying F7 when the request is open; also when the Spawn
+// finishes after decide read it.
+func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
+	t.Parallel()
+	var end decideStep = func(t *testing.T, s *store.Store, dbPath string) {
+		if err := seedAgentState(s, dbPath, "id-d-1", store.StateEnded); err != nil {
+			t.Fatalf("SessionEnd: %v", err)
+		}
+	}
+	var markMissing decideStep = func(t *testing.T, s *store.Store, _ string) {
+		sp, err := s.GetSpawn("id-d-1")
+		if err != nil {
+			t.Fatalf("GetSpawn: %v", err)
+		}
+		if _, res, err := s.MarkMissingIfSameLife("id-d-1", sp.Snapshot); err != nil || res != store.CondApplied {
+			t.Fatalf("mark = %v, %v", res, err)
+		}
+	}
+	var allowA decideStep = func(t *testing.T, s *store.Store, _ string) {
+		if ok, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !ok {
+			t.Fatalf("decide A = %v, %v", ok, err)
+		}
+	}
+	var openA decideStep = func(t *testing.T, s *store.Store, _ string) { apitest.SeedPermissionRow(t, s, "id-d-1") }
+	cases := []struct {
+		name         string
+		steps        []decideStep // in order, before decide
+		race         bool         // the Spawn ends after decide's read instead
+		want         error
+		phrase       string // carried by the refusal with F7 ("": neither checked)
+		decision     string // request A's decision afterwards ("": open)
+		noRequestRow bool
+	}{
+		{name: "ended, request open", steps: []decideStep{openA, end}, want: store.ErrNoOpenPermissionRequest, phrase: "the spawn is ended"},
+		{name: "ended, request decided", steps: []decideStep{openA, allowA, end}, want: store.ErrAlreadyDecided, decision: "allow"},
+		{name: "ended, no such request", steps: []decideStep{end}, want: store.ErrNoOpenPermissionRequest, noRequestRow: true},
+		{name: "missing, request denied by the mark", steps: []decideStep{openA, markMissing}, want: store.ErrAlreadyDecided, decision: "deny"},
+		{name: "missing, request recorded after the mark", steps: []decideStep{markMissing, openA}, want: store.ErrNoOpenPermissionRequest,
+			phrase: "the spawn is missing"},
+		{name: "ended after decide read the spawn", steps: []decideStep{openA}, race: true, want: store.ErrNoOpenPermissionRequest,
+			phrase: "the spawn is ended"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, dbPath := apitest.SeedDecideFixture(t, "on")
+			for _, step := range tc.steps {
+				step(t, s, dbPath)
+			}
+			var ds api.DecideStore = s
+			if tc.race {
+				ds = decideSpawnEnds{Store: s, end: func() { end(t, s, dbPath) }, done: new(bool)}
+			}
+
+			_, err := api.Decide(ds, 24*time.Hour, time.Now(), api.DecideParams{ClaudeInstanceID: "id-d-1",
+				RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+
+			assertOneSentinel(t, err, tc.want)
+			if tc.phrase != "" {
+				adviceAssertPhrase(t, err, tc.phrase)
+				adviceAssertPhrase(t, err, "nothing was recorded; do not answer it at the pane")
+			}
+			assertNoPaneAdvice(t, err)
+			if tc.noRequestRow {
+				return
+			}
+			if got := rowA(t, s).Decision; got != tc.decision {
+				t.Errorf("request A decision = %q after decide; want %q (nothing recorded)", got, tc.decision)
+			}
 		})
 	}
 }

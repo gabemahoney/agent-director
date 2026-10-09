@@ -49,12 +49,13 @@ type ResumeStore interface {
 	// snapshot equals examined (SR-8.3). In one statement it sets state
 	// pending; clears pid, proc_starttime, ended_at and both liveness
 	// columns; writes launch_started_at (milliseconds), the new launch token,
-	// the launch's socket and the parent id ("" = NULL); sets the server and
-	// pane identity NULL; and advances row_version. It returns CondApplied
-	// with the version it produced, CondChanged when the row no longer meets
-	// the condition, CondAbsent when no row has the id (both writing
-	// nothing), or a store error (a parent id naming no row included).
-	MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string) (res CondResult, movedVersion int64, err error)
+	// the launch's socket, the parent id ("" = NULL) and the launch owner
+	// (the zero LaunchOwner = NULL; b.kdf); sets the server and pane
+	// identity NULL; and advances row_version. It returns CondApplied with
+	// the version it produced, CondChanged when the row no longer meets the
+	// condition, CondAbsent when no row has the id (both writing nothing), or
+	// a store error (a parent id naming no row included).
+	MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error)
 	// RestoreAfterFailedResume applies only if the row is pending with
 	// row_version equal to movedVersion (SR-8.5). It writes prior back, the
 	// launch identity included, sets launch_started_at NULL and advances
@@ -161,11 +162,13 @@ type resumeDeps struct {
 // and the prior values the restore writes back); disagreeWritten the
 // ad.provenance.disagree reasons the pre-launch check already wrote, so the
 // re-lookup after "duplicate session" writes no reason twice; movedVersion
-// the version the move produced. The identity write is the store's when it
-// provides one (resumeIdentityWriter); the restore is
+// the version the move produced; owner the launch owner the move recorded.
+// The identity write is the store's when it provides one
+// (resumeIdentityWriter), and so is the release of the launch's hold when
+// the move recorded an owner (ownerReleaser); the restore is
 // RestoreAfterFailedResume with movedVersion and the row's prior values
 // (resumePriorOf).
-func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion int64) finishedLaunch {
+func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion int64, owner LaunchOwner) finishedLaunch {
 	var identity spawn.IdentityWriter
 	if w, ok := d.s.(resumeIdentityWriter); ok {
 		identity = w
@@ -180,6 +183,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 		lg:       d.lg,
 		who:      d.who,
 		identity: identity,
+		release:  ownerReleaser(d.s, owner),
 		restoreWrite: func() (CondResult, error) {
 			return d.s.RestoreAfterFailedResume(row.ClaudeInstanceID, movedVersion, resumePriorOf(row))
 		},
@@ -504,9 +508,11 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     The outcome is reported as ResumeResult.PreTrust on success.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
-//     milliseconds, the token, the socket and the parent id re-derived from
+//     milliseconds, the token, the socket, the parent id re-derived from
 //     the caller's AGENT_DIRECTOR_INSTANCE_ID (spawn.ParentIDFromEnv, "" =
-//     NULL); the only parent-id write. Row changed → ErrSpawnNotResumable; row removed →
+//     NULL; the only parent-id write) and the launch owner, this process
+//     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf). Row
+//     changed → ErrSpawnNotResumable; row removed →
 //     ErrSpawnNotFound; store error → ErrInternal. Each writes nothing and
 //     launches nothing.
 //  7. The create (spawn.Relaunch), the first step after the move, with no
@@ -518,7 +524,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     session → the identity write with the move's version and token (when
 //     the store provides it), success; a lost reply → success with no
 //     identity; a timeout or a non-zero-exit unparseable reply →
-//     ErrTmuxUnresponsive, nothing written, the row stays pending.
+//     ErrTmuxUnresponsive, the row stays pending. Every path that ends with
+//     no identity write applied and no restore applied ends the launch's
+//     hold (finishedLaunch's release, b.kdf), the only other write.
 //     "duplicate session" → finishedLaunch.heldName: exactly one re-lookup of the
 //     recorded name on the launch socket for the row as examined (its id,
 //     earlier token and recorded server identity), the restore, the holder's
@@ -580,7 +588,8 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
 
 	parent := spawn.ParentIDFromEnv()
-	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent)
+	owner := spawn.CurrentLaunchOwner(d.pc)
+	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent, owner)
 	if err := resumeMoveError(id, res, err); err != nil {
 		return ResumeResult{}, err
 	}
@@ -592,7 +601,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		"claude_session_id":  row.ClaudeSessionID,
 		"source":             nameHeldSourceResume,
 	})
-	if err := d.launchOnto(row, pre.Reasons, movedVersion).outcome(out, req); err != nil {
+	if err := d.launchOnto(row, pre.Reasons, movedVersion, owner).outcome(out, req); err != nil {
 		return ResumeResult{}, err
 	}
 	return ResumeResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil

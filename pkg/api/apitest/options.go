@@ -245,6 +245,18 @@ func WithLaunchIdentity(id store.LaunchIdentity) SpawnOption {
 	}
 }
 
+// WithLaunchOwner stores o in the three schema-v6 launch-owner columns
+// (launch_owner_pid, launch_owner_starttime, launch_owner_pidns; b.kdf), each
+// zero field as NULL. Without it the row records no owner (all three NULL),
+// as SeedSpawn's insert leaves them.
+func WithLaunchOwner(o store.LaunchOwner) SpawnOption {
+	return func(so *spawnOpts) {
+		so.set("launch_owner_pid", nullIfZero(o.PID))
+		so.set("launch_owner_starttime", nullIfZero(o.Starttime))
+		so.set("launch_owner_pidns", nullIfZero(o.PIDNamespace))
+	}
+}
+
 // WithTmuxSocket stores socket as the row's recorded tmux socket in place of
 // TestSocket, keeping every other launch-identity default (token, pane). A
 // launch on the row (resume) needs the socket's directory to exist.

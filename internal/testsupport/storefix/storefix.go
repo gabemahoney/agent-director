@@ -267,16 +267,19 @@ func SeedAgentDirectorDir(t *testing.T, homeDir string) string {
 // existing writes each kind also matches.
 type WriteFailureKind = writefailfix.Kind
 
-// The four reuse kinds of SR-20.3 and the launch identity write kind
-// (SR-3.6), re-exported from writefailfix. WriteFailReuseRestore also makes a
-// plain spawn's end write after "duplicate session" (store.EndHeldLaunch,
-// SR-5.8) fail.
+// The four reuse kinds of SR-20.3, the launch identity write kind (SR-3.6)
+// and the permission decision kind (b.146 rule 12), re-exported from
+// writefailfix. WriteFailReuseRestore also makes a plain spawn's end write
+// after "duplicate session" (store.EndHeldLaunch, SR-5.8) fail;
+// WriteFailPermissionDecision makes find-missing's close, and so its whole
+// mark, fail.
 const (
 	WriteFailReuseArchive          = writefailfix.ReuseArchive
 	WriteFailReuseReset            = writefailfix.ReuseReset
 	WriteFailReusePermissionDelete = writefailfix.ReusePermissionDelete
 	WriteFailReuseRestore          = writefailfix.ReuseRestore
 	WriteFailLaunchIdentity        = writefailfix.LaunchIdentityWrite
+	WriteFailPermissionDecision    = writefailfix.PermissionDecision
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

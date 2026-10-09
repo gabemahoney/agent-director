@@ -380,6 +380,11 @@ func (w *hookedReuseStore) RecordLaunchIdentity(instanceID string, launchVersion
 	return w.st.RecordLaunchIdentity(instanceID, launchVersion, token, id)
 }
 
+// ReleaseLaunchOwner delegates, so reuse's release of its hold reaches the store (b.kdf).
+func (w *hookedReuseStore) ReleaseLaunchOwner(instanceID, token string) (api.CondResult, error) {
+	return w.st.ReleaseLaunchOwner(instanceID, token)
+}
+
 // finishedStates are the row states the reuse opt-in is about.
 var finishedStates = []string{store.StateEnded, store.StateMissing}
 

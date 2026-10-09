@@ -149,6 +149,13 @@ type Spawn struct {
 	// Identity is the eight launch-identity columns (SR-3.3 to SR-3.6, SR-5.1);
 	// Identity.Token is "" unless the stored token is well formed (SR-5.5).
 	Identity LaunchIdentity
+
+	// LaunchOwner is the schema-v6 launch owner (b.kdf): the process that
+	// began the row's current launch, while that launch holds the row.
+	// InsertPending and ResetForReuse take it from a Spawn; every read that
+	// returns a Spawn fills it, the zero value for NULL (a row from before
+	// schema v6 included).
+	LaunchOwner LaunchOwner
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -174,7 +181,10 @@ type Spawn struct {
 // server and pane identity columns (tmux_server_pid, tmux_server_started,
 // tmux_server_starttime, pane_id, pane_pid, pane_starttime) stay NULL
 // whatever sp.Identity carries: RecordLaunchIdentity writes them after the
-// create (SR-3.6). The new row starts at row_version 0 (the column default).
+// create (SR-3.6). The launch owner columns (launch_owner_pid,
+// launch_owner_starttime, launch_owner_pidns) take sp.LaunchOwner, a zero
+// value as NULL (b.kdf): the spawn records itself as the owner of the launch
+// it begins. The new row starts at row_version 0 (the column default).
 func (s *Store) InsertPending(sp Spawn) error {
 	argsJSON, err := encodeArgs(sp.ClaudeArgs)
 	if err != nil {
@@ -193,8 +203,9 @@ func (s *Store) InsertPending(sp Spawn) error {
         INSERT INTO spawns (
             claude_instance_id, parent_id, state, cwd, tmux_session_name,
             claude_args, relay_mode, labels, extra_env,
-            launch_started_at, launch_token, tmux_socket, no_pre_trust
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            launch_started_at, launch_token, tmux_socket, no_pre_trust,
+            launch_owner_pid, launch_owner_starttime, launch_owner_pidns
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -206,14 +217,16 @@ func (s *Store) InsertPending(sp Spawn) error {
 	if sp.NoPreTrust {
 		noPreTrust = 1
 	}
-	_, err = s.db.Exec(stmt,
+	args := []any{
 		sp.ClaudeInstanceID, parent, StatePending,
 		sp.CWD, sp.TmuxSessionName,
 		argsJSON, sp.RelayMode, labelsJSON, extraEnvJSON,
 		positiveInt64Arg(sp.LaunchStartedAtMillis),
 		nullableStringArg(sp.Identity.Token), nullableStringArg(sp.Identity.Socket),
 		noPreTrust,
-	)
+	}
+	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
+	_, err = s.db.Exec(stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
 		if errors.As(err, &serr) {
@@ -242,15 +255,16 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 }
 
 // spawnColumns is the one column list every read returning a Spawn selects,
-// in scanSpawn's order. The v5 columns come last so the pre-v5 columns keep
-// their indices (and their scan-error texts). ended_at is selected a second
-// time through CAST so the driver hands back the stored text instead of
-// parsing the TIMESTAMP column (SR-5.3). The list ends with lifeColumns, the
+// in scanSpawn's order. The v5 and v6 columns come last so the pre-v5 columns
+// keep their indices (and their scan-error texts). ended_at is selected a
+// second time through CAST so the driver hands back the stored text instead of
+// parsing the TIMESTAMP column (SR-5.3). The v5 part ends with lifeColumns, the
 // snapshot and launch-identity fragment the live-row read shares; its
 // started_at, claude_session_id, pid, proc_starttime and tmux_session_name
 // are the same row's values the Spawn's own fields read. The SR-5.5 columns are selected bare and decoded in
 // Go; the other v5 columns follow the v3 identity columns' rule (NULL is the
-// zero value; any other stored value scans normally).
+// zero value; any other stored value scans normally). The v6 launch-owner
+// columns (launchOwnerColumns) come last, after lifeColumns, by the same rule.
 const spawnColumns = `
         claude_instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, claude_args, relay_mode,
@@ -260,7 +274,8 @@ const spawnColumns = `
         COALESCE(liveness_unverified_since, ''),
         COALESCE(liveness_note, ''), extra_env,
         CAST(ended_at AS TEXT), launch_started_at,
-        COALESCE(life_number, 0), no_pre_trust,` + lifeColumns
+        COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
+        ` + launchOwnerColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -306,6 +321,7 @@ func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 		&endedAtText, &launchStartedAt,
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
+	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
 	err := sc.Scan(dest...)
 	if err != nil {
 		return Spawn{}, fmt.Errorf("%s: %w", errs.scan, err)
@@ -436,8 +452,9 @@ func positiveInt64Arg(n int64) any {
 }
 
 // recordLaunchIdentitySQL is RecordLaunchIdentity's one statement: the six
-// server and pane identity columns and the version advance, guarded by the
-// launch's state, version and token (SR-3.6, SR-5.3).
+// server and pane identity columns, the end of the launch's hold and the
+// version advance, guarded by the launch's state, version and token (SR-3.6,
+// SR-5.3; b.kdf).
 const recordLaunchIdentitySQL = `UPDATE spawns
     SET tmux_server_pid       = ?,
         tmux_server_started   = ?,
@@ -445,6 +462,7 @@ const recordLaunchIdentitySQL = `UPDATE spawns
         pane_id               = ?,
         pane_pid              = ?,
         pane_starttime        = ?,
+        ` + launchOwnerClear + `,
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND state = ? AND row_version = ? AND launch_token = ?`
 
@@ -455,8 +473,11 @@ const recordLaunchIdentitySQL = `UPDATE spawns
 // server's identity (tmux_server_pid, tmux_server_started,
 // tmux_server_starttime) and the agent's pane (pane_id, pane_pid,
 // pane_starttime) from id, a zero value as NULL (an unreadable start time
-// passed as "" is stored as NULL), and advances row_version by one. It never
-// writes id.Token, id.Socket, launch_started_at, state or any other column.
+// passed as "" is stored as NULL), NULLs the launch owner (launch_owner_pid,
+// launch_owner_starttime, launch_owner_pidns: it is the launch's last write,
+// so it ends the launch's hold on the row, b.kdf), and advances row_version
+// by one. It never writes id.Token, id.Socket, launch_started_at, state or any
+// other column.
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but is no longer pending with that version and
@@ -487,6 +508,47 @@ func (s *Store) RecordLaunchIdentity(instanceID string, launchVersion int64, tok
 		return CondApplied, nil
 	}
 	return s.condNotApplied(instanceID, "store: record launch identity")
+}
+
+// releaseLaunchOwnerSQL is ReleaseLaunchOwner's one statement: the launch
+// owner NULLed and the version advance, guarded by pending, the launch's
+// token and a recorded owner (b.kdf).
+const releaseLaunchOwnerSQL = `UPDATE spawns
+    SET ` + launchOwnerClear + `,
+        ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND state = ? AND launch_token = ? AND launch_owner_pid IS NOT NULL`
+
+// ReleaseLaunchOwner ends a launch's hold on its pending row (b.kdf, b.146
+// rule 11) when the launch ends without its identity write
+// (RecordLaunchIdentity, which ends the hold itself): a lost create reply, a
+// create that failed or timed out and left the row pending, an identity write
+// that did not apply or failed, or a restore that did not apply. Without it,
+// a launch run by a long-lived process (the MCP server, or a Go caller of
+// pkg/api) would hold the row for as long as that process lives, and
+// find-missing would never judge it.
+//
+// It is one conditional statement that applies only while the row is pending,
+// its launch_token equals token (so it never touches a later launch of the
+// row) and it records a launch owner. In that statement it NULLs
+// launch_owner_pid, launch_owner_starttime and launch_owner_pidns and advances
+// row_version by one (SR-5.2). It writes no other column, makes no tmux call
+// and emits no trail event.
+//
+// It returns CondApplied when the write applied; CondChanged, having written
+// nothing, when the row exists but is not pending, carries another token or
+// records no owner; CondAbsent when no row has the id. A driver error is
+// returned wrapped, with a zero CondResult. It is on the concrete *Store,
+// like RecordLaunchIdentity.
+func (s *Store) ReleaseLaunchOwner(instanceID, token string) (CondResult, error) {
+	const errPrefix = "store: release launch owner"
+	applied, err := s.execGuarded(releaseLaunchOwnerSQL, []any{instanceID, StatePending, token}, errPrefix)
+	if err != nil {
+		return 0, err
+	}
+	if applied {
+		return CondApplied, nil
+	}
+	return s.condNotApplied(instanceID, errPrefix)
 }
 
 // storeTimestampLayout is the text layout of SQLite's CURRENT_TIMESTAMP, the

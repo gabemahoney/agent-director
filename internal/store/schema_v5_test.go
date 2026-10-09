@@ -1,8 +1,9 @@
 package store
 
 // Schema v5 (b.fmk, SR-5.1, SR-5.4, SR-20.6): the v4 history fixture's rows
-// after the hop (AC-REUSE-25, AC-RES-20, AC-FM-14), the store id, and the
-// documented v5 → v4 downgrade. Fixtures: migration_fixtures_test.go.
+// after the hop (AC-REUSE-25, AC-RES-20, AC-FM-14), the store id, the
+// documented v5 → v4 downgrade, and the guide match of every downgrade
+// recipe. Fixtures: migration_fixtures_test.go.
 
 import (
 	"database/sql"
@@ -223,18 +224,19 @@ func TestStoreID_MissingOrMalformedFailsOpen(t *testing.T) {
 	}
 }
 
-// guideV5ToV4Recipe parses the guide's "#### v5 → v4" SQL block into its
-// statements and, apart, its frame (.bail on, BEGIN, COMMIT).
-func guideV5ToV4Recipe(t *testing.T) (stmts, frame []string) {
+// guideRecipe parses the first SQL block after the guide's heading (e.g.
+// "#### v5 → v4") into its statements and, apart, its frame (.bail on, BEGIN,
+// COMMIT).
+func guideRecipe(t *testing.T, heading string) (stmts, frame []string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "migration-guide.md"))
 	if err != nil {
 		t.Fatalf("read migration guide: %v", err)
 	}
-	_, section, ok := strings.Cut(string(data), "\n#### v5 → v4")
+	_, section, ok := strings.Cut(string(data), "\n"+heading)
 	_, block, ok2 := strings.Cut(section, "```sql\n")
 	if !ok || !ok2 {
-		t.Fatalf("migration guide has no \"#### v5 → v4\" sql block")
+		t.Fatalf("migration guide has no %q sql block", heading)
 	}
 	block, _, _ = strings.Cut(block, "```")
 	for _, line := range strings.Split(block, "\n") {
@@ -252,27 +254,40 @@ func guideV5ToV4Recipe(t *testing.T) (stmts, frame []string) {
 	return stmts, frame
 }
 
-// TestDowngradeRecipe_MatchesGuide: v5ToV4RecipeStatements is the guide's
-// recipe statement for statement, run in bail mode in one transaction.
+// TestDowngradeRecipe_MatchesGuide: each downgrade recipe's test copy
+// (v6ToV5RecipeStatements, v5ToV4RecipeStatements) is the guide's recipe
+// statement for statement, run in bail mode in one transaction.
 func TestDowngradeRecipe_MatchesGuide(t *testing.T) {
-	stmts, frame := guideV5ToV4Recipe(t)
-	if !slices.Equal(stmts, v5ToV4RecipeStatements) {
-		t.Errorf("guide recipe =\n  %s\nwant v5ToV4RecipeStatements =\n  %s",
-			strings.Join(stmts, "\n  "), strings.Join(v5ToV4RecipeStatements, "\n  "))
-	}
-	if want := []string{".bail on", "BEGIN;", "COMMIT;"}; !slices.Equal(frame, want) {
-		t.Errorf("guide recipe frame = %q; want %q", frame, want)
+	for _, r := range []struct {
+		heading string
+		want    []string
+	}{
+		{"#### v6 → v5", v6ToV5RecipeStatements},
+		{"#### v5 → v4", v5ToV4RecipeStatements},
+	} {
+		t.Run(r.heading, func(t *testing.T) {
+			stmts, frame := guideRecipe(t, r.heading)
+			if !slices.Equal(stmts, r.want) {
+				t.Errorf("guide recipe =\n  %s\nwant the test copy =\n  %s",
+					strings.Join(stmts, "\n  "), strings.Join(r.want, "\n  "))
+			}
+			if want := []string{".bail on", "BEGIN;", "COMMIT;"}; !slices.Equal(frame, want) {
+				t.Errorf("guide recipe frame = %q; want %q", frame, want)
+			}
+		})
 	}
 }
 
-// TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults: the recipe leaves v4
-// with no store_meta or v5 column and every v4 value of a reused row and an
-// opted-out row; an authorised re-migration gives the ordinary defaults (earlier
-// lives read as current until the next reuse; the opt-out is lost) and one new
-// store id (SR-5.4).
+// TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults: on a store taken
+// back to v5 first (the v6 → v5 recipe), the recipe leaves v4 with no
+// store_meta or v5 column and every v4 value of a reused row and an opted-out
+// row; an authorised re-migration gives the ordinary defaults (earlier lives
+// read as current until the next reuse; the opt-out is lost; no launch owner)
+// and one new store id (SR-5.4).
 func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	path, oldID := newClosedStore(t)
 	reused, optedOut := seedV5DowngradeRows(t, path)
+	applyRecipe(t, path, v6ToV5RecipeStatements)
 	cols := map[string][]string{}
 	withRaw(t, path, func(db *sql.DB) {
 		for _, table := range []string{"spawns", "session_history"} {
@@ -315,6 +330,8 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	}
 	assertV5Defaults(t, path, reused, 4)
 	assertV5Defaults(t, path, optedOut, 1) // no_pre_trust 0: the opt-out is lost
+	assertV6Defaults(t, path, reused)
+	assertV6Defaults(t, path, optedOut)
 
 	visible := func(life int64) (out []string) {
 		t.Helper()

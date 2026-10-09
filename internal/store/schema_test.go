@@ -4,7 +4,7 @@ package store
 // SR-12): a fresh store, an authorized open from every released version,
 // refusals, step re-entry (b.93m), rollback and the consume. Fixtures:
 // migration_fixtures_test.go; v5 data, store id and downgrade cases:
-// schema_v5_test.go.
+// schema_v5_test.go; v6 data and downgrade cases: schema_v6_test.go.
 
 import (
 	"bytes"
@@ -52,9 +52,9 @@ func columnsByName(shape map[string]any) map[string]any {
 }
 
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
-// schemaVersion, every table and index, the v3 and v5 columns, store_meta, WAL
-// and foreign keys on, no sentinel, and a 0700 parent and 0600 file that a
-// second open does not widen.
+// schemaVersion, every table and index, the v3, v5 and v6 columns (v6's last,
+// in order), store_meta, WAL and foreign keys on, no sentinel, and a 0700
+// parent and 0600 file that a second open does not widen.
 func TestFreshStoreSchema(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent-director") // OpenOrInit creates the parent
 	path := filepath.Join(dir, "state.db")
@@ -108,7 +108,11 @@ func TestFreshStoreSchema(t *testing.T) {
 		"claude_session_id", "jsonl_path", "recorded_at", "life_number"}; !slices.Equal(got, want) {
 		t.Errorf("session_history columns = %v; want %v", got, want)
 	}
-	assertColumnSpecs(t, db, append(slices.Clone(v3ColumnSpecs), v5ColumnSpecs...))
+	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs))
+	v6 := v6ColumnNames()
+	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(v6) || !slices.Equal(cols[len(cols)-len(v6):], v6) {
+		t.Errorf("spawns columns = %v; want the v6 columns last, in order %v", cols, v6)
+	}
 	assertSentinel(t, dir, false)
 }
 
@@ -183,7 +187,8 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			}
 			sp, err := s.GetSpawn("pre")
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
-				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust {
+				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
+				sp.LaunchOwner != (LaunchOwner{}) {
 				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults", sp, err)
 			}
 			id := s.StoreID()
@@ -200,6 +205,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertTrailInt(t, lines[0], "from", from)
 			assertTrailInt(t, lines[0], "to", schemaVersion)
 			assertV5Defaults(t, path, "pre", 0)
+			assertV6Defaults(t, path, "pre")
 			if raw := assertOneStoreID(t, path); raw != id {
 				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
 			}
@@ -321,8 +327,8 @@ func TestNewerThanBinaryIsSchemaMismatch(t *testing.T) {
 }
 
 // TestMigrationStepReentry: a step re-run over a DB it migrated wholly or in
-// part succeeds and gives the schema one run gives (b.93m); v4→v5 never adds a
-// second store id or replaces one (SR-5.4).
+// part succeeds and gives the schema one run gives (b.93m); v4→v5 and v5→v6
+// never add a second store id or replace one (SR-5.4).
 func TestMigrationStepReentry(t *testing.T) {
 	const preID = "0123456789abcdef"
 	var allV5 []string
@@ -331,6 +337,9 @@ func TestMigrationStepReentry(t *testing.T) {
 	}
 	preV5 := func(keys ...string) func(*testing.T, string) {
 		return func(t *testing.T, path string) { preAddV5Columns(t, path, keys...) }
+	}
+	preV6 := func(names ...string) func(*testing.T, string) {
+		return func(t *testing.T, path string) { preAddV6Columns(t, path, names...) }
 	}
 	meta := func(id string) func(*testing.T, string) {
 		return func(t *testing.T, path string) { preAddStoreMeta(t, path, id) }
@@ -354,6 +363,10 @@ func TestMigrationStepReentry(t *testing.T) {
 		{"v4→v5 after all thirteen", 4, preV5(allV5...), 1, ""},
 		{"v4→v5 with store_meta holding an id", 4, meta(preID), 1, preID},
 		{"v4→v5 with store_meta empty", 4, meta(""), 1, ""},
+		{"v5→v6 run twice", 5, nil, 2, ""},
+		{"v5→v6 after launch_owner_pid", 5, preV6("launch_owner_pid"), 1, ""},
+		{"v5→v6 after launch_owner_starttime alone", 5, preV6("launch_owner_starttime"), 1, ""},
+		{"v5→v6 after all three", 5, preV6(v6ColumnNames()...), 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -370,7 +383,7 @@ func TestMigrationStepReentry(t *testing.T) {
 				if err := step.apply(db); err != nil {
 					t.Fatalf("run %d: %v", run, err)
 				}
-				if tc.from == 4 {
+				if tc.from >= 4 {
 					if got := assertOneStoreID(t, path); id == "" {
 						id = got
 					} else if got != id {
@@ -405,13 +418,17 @@ func TestMigrationRollback(t *testing.T) {
 		}, ""},
 		{"v4→v5 at session_history.life_number", 4, breakV5SessionHistoryHop, "session_history.life_number"},
 		{"v4→v5 at the store_id insert", 4, breakV5StoreMetaStep, ""},
+		{"v5→v6 at launch_owner_pidns, after the first two columns", 5, breakV6PIDNSColumn, "spawns.launch_owner_pidns"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var path string
-			if tc.from == 4 {
+			switch tc.from {
+			case 4:
 				path = makeV4HistoryFixture(t, t.TempDir()).path
-			} else {
+			case 5:
+				path = makeV5Fixture(t, t.TempDir()).path
+			default:
 				path = makeVersionedDB(t, t.TempDir(), tc.from)
 			}
 			dir := filepath.Dir(path)

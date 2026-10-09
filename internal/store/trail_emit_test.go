@@ -204,7 +204,7 @@ func mustGetSpawn(t *testing.T, s *Store, id string) Spawn {
 // trailMove applies resume's move to pending on examined; it must apply.
 func trailMove(t *testing.T, s *Store, examined Spawn) int64 {
 	t.Helper()
-	res, v, err := s.MoveToPending(examined.ClaudeInstanceID, examined.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "")
+	res, v, err := s.MoveToPending(examined.ClaudeInstanceID, examined.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{})
 	if err != nil || res != CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 	}

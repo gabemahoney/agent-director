@@ -368,27 +368,41 @@ const sessionStartWaitInterval = 250 * time.Millisecond
 // identity write, measured from when it began waiting on HandleConfig.Now
 // (monotonic in production), whatever the pending grace period and whatever a
 // launch start in the future or a clock step does (SR-22.9, SR-13.4; WD
-// 2026-09-30c). It must stay below the "timeout" that internal/spawn's
+// 2026-09-30c). It stays below the "timeout" that internal/spawn's
 // synthesised settings state on the SessionStart agent-director hook entry
 // (sessionStartHookTimeoutSeconds in internal/spawn, 600 s, Claude Code's
-// default), so the hook always ends its own wait and writes its
-// no_pane_recorded before Claude Code could kill it silently: cap < timeout.
-// Nothing checks that across the two packages; each value is pinned in its
-// own package's tests.
+// default): cap < timeout. Nothing checks that across the two packages; each
+// value is pinned in its own package's tests.
 //
-// The 60 s between the cap and the timeout is the headroom for the hook's
-// store writes outside the wait, and it assumes [store] busy_timeout_ms is
-// small (the default, 10 s). The cap bounds the wait only, and Claude Code's
-// timeout runs from the hook's start, not from the wait's. On a contended
-// store each RecordSessionStartIdentity write can wait up to busy_timeout_ms
-// for the write lock, and recordSessionStart makes up to four: up to two in
-// the gated write before the wait and up to two in the one after it
-// (writeSessionStart's retry on a snapshot change). At the default that is at
-// most 40 s, inside the headroom; from about 15 s (4 x 15 s = 60 s) the
-// writes can outlast it, and from 30 s the two after the wait alone can, so
-// Claude Code can kill the hook before it writes its result or its
-// no_pane_recorded. Nothing caps busy_timeout_ms against this headroom
-// (b.c7f).
+// The cap bounds the wait only, not the hook, so it does not guarantee that
+// the hook ends itself before Claude Code kills it. Claude Code's timeout
+// runs from the hook's start, not from the wait's, and the 60 s between the
+// cap and the timeout is all the time left for the hook's store writes
+// outside the wait. On a contended store each RecordSessionStartIdentity write
+// can wait up to [store] busy_timeout_ms for the write lock, and
+// recordSessionStart makes up to four: up to two in the gated write before
+// the wait and up to two in the one after it (writeSessionStart's retry on a
+// snapshot change). At the default (10 s) that is at most 40 s; from about
+// 15 s (4 x 15 s = 60 s) the writes can outlast the headroom, and from 30 s
+// the two after the wait alone can. busy_timeout_ms is accepted up to
+// math.MaxInt32 ms and is not capped against this headroom (b.c7f, b.146), so
+// a long store wait can still get SessionStart killed before it writes its
+// result or its no_pane_recorded, with no trail record; so can any other
+// death of the hook (OOM, a crash, an overloaded host).
+//
+// Such a death leaves the row pending although its agent runs. find-missing
+// reports it (b.kdf): once the row is past its pending grace period and no
+// longer held by a live launch owner, a find-missing run that finds its pane
+// process alive writes liveness note unreported and leaves the row pending,
+// within pending_grace_seconds plus one find-missing period, provided
+// find-missing is scheduled; it marks the row missing when the agent is
+// gone. unreported means the agent is alive but no hook has reported since
+// its launch: it may sit at a Claude Code startup screen or idle at its
+// prompt, and only something that reads the pane can tell which. The caller
+// looks (read-pane) and only a caller that looked types (send-keys
+// --allow-pending). The agent's next applied hook clears the note: a
+// SessionStart that writes later still records the session identity and
+// moves the row to waiting, and a UserPromptSubmit moves it to working.
 const sessionStartWaitCap = 540 * time.Second
 
 // recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): the

@@ -1,7 +1,12 @@
 package store
 
 import (
+	"cmp"
+	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -54,53 +59,238 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
+// closeOrphanedRequestsSQL is the close MarkMissingIfSameLife folds into its
+// transaction (SR-5.4; b.146 rule 12): every open request of the row denied
+// with reason find_missing in one statement, which returns what it closed for
+// the trail.
+const closeOrphanedRequestsSQL = `UPDATE permission_requests
+    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+  WHERE claude_instance_id = ? AND decision IS NULL
+  RETURNING request_id, request_token, tool_name`
+
 // MarkMissingIfSameLife is find-missing's mark (SR-11.3, SR-11.6; Appendix
-// F.4). It is one conditional statement that applies only while the row is in
-// a live state and its row snapshot equals examined, the snapshot the sweep
-// read (or the one its adoption produced), compared on the values exactly as
-// stored through the store's one snapshot-match condition (SR-5.3). In that
-// statement it sets state to missing, ended_at and last_seen_at to
-// CURRENT_TIMESTAMP, NULLs liveness_unverified_since and liveness_note (the
-// liveness clear is folded into the mark, because a separate clear after it
-// would be refused by the version the mark just advanced, SR-11.3), NULLs
-// launch_started_at, and advances row_version by exactly one (SR-5.2). It
-// never writes life_number, no_pre_trust, launch_token, tmux_socket, the
-// server or pane identity columns or any request column, and emits no trail
-// event: the tick and the permission-request denial stay with the caller.
+// F.4), with the close of the row's open permission requests (SR-5.4) in the
+// same transaction (b.146 rule 12): both or neither.
 //
-// It returns the prior state and CondApplied when the write applied;
-// CondChanged, having written nothing, when the row exists but is terminal or
-// its snapshot differs; CondAbsent when no row has the id. The prior state is
-// returned only when applied, and is "" otherwise. A store failure is returned
-// as a wrapped error with a zero CondResult, never as a CondResult value
-// (SR-5.8).
+// The transaction is begun with BEGIN IMMEDIATE on the store's one
+// connection, so it holds the database write lock before it reads the row;
+// under contention it waits up to the store's busy timeout. Inside it:
 //
-// The prior state comes from a read of the row's state just before the
-// guarded statement (UPDATE ... RETURNING yields post-update values). That
-// read never decides whether the mark applies: the snapshot guard alone does.
-// Every write advances row_version (SR-5.2), so a mark that applied found the
-// row unchanged since the read, and the state read is the state the guarded
-// statement matched.
+//  1. It reads the row's state, the prior state the caller's tick reports. No
+//     row: CondAbsent.
+//  2. The mark: one conditional statement that applies only while the row is
+//     in a live state and its row snapshot equals examined, the snapshot the
+//     sweep read (or the one its adoption produced), compared on the values
+//     exactly as stored through the store's one snapshot-match condition
+//     (SR-5.3). In that statement it sets state to missing, ended_at and
+//     last_seen_at to CURRENT_TIMESTAMP, NULLs liveness_unverified_since and
+//     liveness_note (the liveness clear is folded into the mark, because a
+//     separate clear after it would be refused by the version the mark just
+//     advanced, SR-11.3), NULLs launch_started_at, and advances row_version by
+//     exactly one (SR-5.2). It never writes life_number, no_pre_trust,
+//     launch_token, tmux_socket, the server or pane identity columns or the
+//     launch owner. A row that exists but is terminal or holds another
+//     snapshot: CondChanged.
+//  3. The close: every open request of the row (decision NULL) gets decision
+//     deny, decision_reason find_missing and decided_at CURRENT_TIMESTAMP, in
+//     one statement, so a relay polling for the row reads a fail-closed deny
+//     rather than spinning to its own timeout.
+//
+// Any failure in the read, the mark, the close or the commit rolls the whole
+// transaction back: the row keeps its state and snapshot, and its requests
+// stay as they were. The mark never applies without the close, and the close
+// never applies without the mark.
+//
+// After the commit, and only then, it emits per closed request, in request-id
+// order, one ad.row_mutation.committed (writer find_missing) and one
+// ad.find_missing.tick with reconciliation_reason permission_orphan_closeout,
+// fail-open (SR-A-2.5, SR-A-3.2). It emits nothing for the mark itself: the
+// mark's tick stays with the caller.
+//
+// It returns the prior state and CondApplied when the transaction committed;
+// CondChanged or CondAbsent, having written nothing, otherwise. The prior
+// state is returned only when applied, and is "" otherwise. A store failure is
+// returned as a wrapped error with a zero CondResult, never as a CondResult
+// value (SR-5.8).
+//
+// The prior state read never decides whether the mark applies: the snapshot
+// guard alone does. It is taken under the write lock and every write advances
+// row_version (SR-5.2), so a mark that applied found the row unchanged since
+// the read.
 func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error) {
 	const errPrefix = "store: mark missing if same life"
-	prior, found, err := s.selectPriorState(instanceID)
+	// The pool has one connection: everything below runs on conn, never
+	// through s.db, which would wait for it.
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return "", 0, fmt.Errorf("%s: connection: %w", errPrefix, err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return "", 0, fmt.Errorf("%s: begin: %w", errPrefix, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackConn(ctx, conn)
+		}
+	}()
+
+	var prior string
+	err = conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&prior)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", CondAbsent, nil
+	case err != nil:
+		return "", 0, fmt.Errorf("%s: prior state: %w", errPrefix, err)
+	}
+
+	args := append([]any{StateMissing, instanceID}, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(examined)...)
+	r, err := conn.ExecContext(ctx, markMissingIfSameLifeSQL, args...)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	if !found {
-		return "", CondAbsent, nil
-	}
-	args := append([]any{StateMissing, instanceID}, liveStateGuardArgs()...)
-	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(markMissingIfSameLifeSQL, args, errPrefix)
+	n, err := r.RowsAffected()
 	if err != nil {
-		return "", 0, err
+		return "", 0, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n == 0 {
+		// The row exists (read above, under the write lock), so the guard
+		// refused it.
+		return "", CondChanged, nil
+	}
+
+	closed, err := closeOrphanedRequests(ctx, conn, instanceID)
+	if err != nil {
+		return "", 0, fmt.Errorf("%s: close permission requests: %w", errPrefix, err)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
+	}
+	committed = true
+
+	for _, c := range closed {
+		emitDecisionCommitted(instanceID, c.token, c.requestID, c.toolName, "deny", DecisionReasonFindMissing, WriterProcessFindMissing)
+		emitOrphanCloseoutTick(instanceID, c.token)
+	}
+	return prior, CondApplied, nil
+}
+
+// closedRequest is one permission request closeOrphanedRequests closed.
+type closedRequest struct {
+	requestID int64
+	token     string
+	toolName  string
+}
+
+// closeOrphanedRequests runs closeOrphanedRequestsSQL for instanceID on conn,
+// inside the transaction its caller holds, and returns the requests it
+// closed in request-id order. It emits nothing.
+func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID string) ([]closedRequest, error) {
+	rows, err := conn.QueryContext(ctx, closeOrphanedRequestsSQL, "deny", DecisionReasonFindMissing, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var closed []closedRequest
+	for rows.Next() {
+		var c closedRequest
+		if err := rows.Scan(&c.requestID, &c.token, &c.toolName); err != nil {
+			return nil, err
+		}
+		closed = append(closed, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(closed, func(a, b closedRequest) int { return cmp.Compare(a.requestID, b.requestID) })
+	return closed, nil
+}
+
+// The two liveness notes the store itself names (b.kdf, b.146 rule 10).
+// find-missing writes every note; the store compares these two in
+// NoteUnreportedIfSameLife.
+const (
+	// LivenessNoteUnreported is the note find-missing writes on a pending row
+	// whose agent is alive but has not reported through any hook since its
+	// launch (NoteUnreportedIfSameLife). The agent may sit at a Claude Code
+	// startup screen or idle at its prompt, which only something that reads
+	// its pane can tell apart. The row stays pending; the agent's next
+	// applied hook clears the note, as every applied hook clears the
+	// liveness columns.
+	LivenessNoteUnreported = "unreported"
+	// LivenessNoteProvenanceConflict is the note of a row whose lookup found
+	// more than one session carrying its launch's label, so which session is
+	// the row's own is in doubt. It takes precedence over
+	// LivenessNoteUnreported: unreported tells a caller to read the row's
+	// pane and type, which is no help while the row's session is in doubt.
+	LivenessNoteProvenanceConflict = "provenance_conflict"
+)
+
+// noteUnreportedIfSameLifeSQL is NoteUnreportedIfSameLife's one statement:
+// the note set, the time first flagged kept or set, and the version advance,
+// guarded by pending, a note other than provenance_conflict and the examined
+// row snapshot (b.146 rule 10; SR-5.3).
+var noteUnreportedIfSameLifeSQL = `UPDATE spawns
+    SET liveness_note             = ?,
+        liveness_unverified_since = COALESCE(liveness_unverified_since, CURRENT_TIMESTAMP),
+        ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND state = ? AND COALESCE(liveness_note, '') <> ? AND ` + snapshotMatchSQL
+
+// NoteUnreportedIfSameLife is find-missing's report of a live pending row
+// that no hook has reported (b.kdf, b.146 rule 10): a report, not a state
+// change. The sweep calls it only for a pending row past its grace period,
+// not held by a live launch owner, whose pane is recorded (or was just
+// adopted) and whose agent process is alive; the decision is the caller's,
+// and this write checks none of it beyond pending, the note precedence and
+// the snapshot.
+//
+// It is one conditional statement that applies only while the row is
+// pending, its liveness note is not LivenessNoteProvenanceConflict (which
+// unreported never overwrites), and its row snapshot equals examined, the
+// snapshot the sweep read (or the one its adoption produced), compared
+// through the store's one snapshot-match condition (SR-5.3), so a hook that
+// writes first wins. In that statement it sets liveness_note to
+// LivenessNoteUnreported; keeps liveness_unverified_since when it is set and
+// sets it to CURRENT_TIMESTAMP when it is NULL, as SetLivenessNoteIfSameLife
+// does, so it holds the time a note first flagged the row and a change of
+// note (unreported to another note and back) keeps it (every launch,
+// InsertPending, MoveToPending or ResetForReuse, starts it NULL, and every
+// applied hook, the clear and the mark NULL it); and advances row_version by
+// exactly one (SR-5.2). The state stays pending, and
+// launch_started_at (which send-keys' allow_pending needs), last_seen_at, the
+// session id, the transcript path, pid, proc_starttime, life_number,
+// no_pre_trust, launch_token, tmux_socket, the server and pane identity, the
+// launch owner and every request column are unchanged. It writes even when
+// the stored note is already unreported: skipping that write, so repeated
+// sweeps do not advance row_version, is the caller's rule. It emits no trail
+// event: ticks stay with the caller.
+//
+// The agent's next applied hook clears the note: SessionStart moves the row
+// to waiting and records its identity, and a UserPromptSubmit moves it to
+// working and records its session id when the row has none.
+//
+// It returns CondApplied when the write applied; CondChanged, having written
+// nothing, when the row exists but is not pending, carries note
+// provenance_conflict or its snapshot differs; CondAbsent when no row has
+// the id. A store failure is returned as a wrapped error with a zero
+// CondResult, never as a CondResult value (SR-5.8).
+func (s *Store) NoteUnreportedIfSameLife(instanceID string, examined RowSnapshot) (CondResult, error) {
+	const errPrefix = "store: note unreported if same life"
+	args := append([]any{
+		LivenessNoteUnreported,
+		instanceID, StatePending, LivenessNoteProvenanceConflict,
+	}, snapshotMatchArgs(examined)...)
+	applied, err := s.execGuarded(noteUnreportedIfSameLifeSQL, args, errPrefix)
+	if err != nil {
+		return 0, err
 	}
 	if applied {
-		return prior, CondApplied, nil
+		return CondApplied, nil
 	}
-	res, err = s.condNotApplied(instanceID, errPrefix)
-	return "", res, err
+	return s.condNotApplied(instanceID, errPrefix)
 }
 
 // SetLivenessNoteIfSameLife is find-missing's note write (SR-11.4, SR-11.6;

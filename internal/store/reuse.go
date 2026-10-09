@@ -74,6 +74,9 @@ type RawLife struct {
 	paneID                  rawValue
 	panePID                 rawValue
 	paneStarttime           rawValue
+	launchOwnerPID          rawValue
+	launchOwnerStarttime    rawValue
+	launchOwnerPIDNS        rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -139,6 +142,9 @@ var rawLifeColumns = []rawLifeColumn{
 	{"pane_id", func(l *RawLife) *rawValue { return &l.paneID }},
 	{"pane_pid", func(l *RawLife) *rawValue { return &l.panePID }},
 	{"pane_starttime", func(l *RawLife) *rawValue { return &l.paneStarttime }},
+	{"launch_owner_pid", func(l *RawLife) *rawValue { return &l.launchOwnerPID }},
+	{"launch_owner_starttime", func(l *RawLife) *rawValue { return &l.launchOwnerStarttime }},
+	{"launch_owner_pidns", func(l *RawLife) *rawValue { return &l.launchOwnerPIDNS }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -243,6 +249,9 @@ const resetForReuseSQL = `UPDATE spawns
         pane_id                   = NULL,
         pane_pid                  = NULL,
         pane_starttime            = NULL,
+        launch_owner_pid          = ?,
+        launch_owner_starttime    = ?,
+        launch_owner_pidns        = ?,
         life_number               = life_number + 1,
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
@@ -285,7 +294,9 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE cl
 //     claude_args, relay_mode, labels and extra_env from fresh, encoded before
 //     the transaction begins; parent_id fresh.ParentID ("" = NULL);
 //     no_pre_trust this call's fresh.NoPreTrust; launch_token and tmux_socket
-//     from fresh.Identity (zero = NULL); life_number and row_version each
+//     from fresh.Identity (zero = NULL); the three launch-owner columns from
+//     fresh.LaunchOwner (zero = NULL; the reuse records itself as the owner
+//     of the launch it begins, b.kdf); life_number and row_version each
 //     advanced by one. The store reads no clock: the caller supplies
 //     fresh.StartedAt and fresh.LaunchStartedAtMillis.
 //   - Permission requests: every request of the id, decided or not, is
@@ -373,8 +384,9 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		nullableStringArg(fresh.ParentID),
 		noPreTrust,
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
-		instanceID,
 	}
+	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
+	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
 	resetArgs = append(resetArgs, snapshotMatchArgs(examined)...)
 	r, err := q.Exec(resetForReuseSQL, resetArgs...)
@@ -437,9 +449,9 @@ var restoreAfterFailedReuseSQL = func() string {
 // claude_session_id, jsonl_path, pid, proc_starttime, started_at,
 // last_seen_at, liveness_unverified_since, liveness_note, cwd,
 // tmux_session_name, claude_args, relay_mode, labels, extra_env,
-// launch_token, tmux_socket and the six server and pane identity columns), so
-// the row returns to its pre-reuse life and that life's history is visible
-// again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
+// launch_token, tmux_socket, the six server and pane identity columns and the
+// three launch-owner columns), so the row returns to its pre-reuse life and
+// that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
 // row with that id still exists, otherwise NULL, decided in the same
 // statement, so the restore never fails on the foreign key.

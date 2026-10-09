@@ -8,6 +8,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
@@ -74,6 +75,30 @@ var reuseLaunchVerb = finishedLaunchVerb{
 	RemovedRetry:       retryLater,
 }
 
+// launchOwnerReleaser is the optional write that ends a launch's hold on its
+// pending row when the launch ends without its identity write (b.kdf;
+// spawn.ReleaseLaunchOwner). It is not part of ResumeStore or reuseStore:
+// resume and reuse find it by a type assertion on the store they are given
+// (ownerReleaser), as resume finds resumeIdentityWriter. *store.Store
+// satisfies it; a store without it ends no hold, and a wrapper must forward
+// ReleaseLaunchOwner for the release to happen.
+type launchOwnerReleaser = spawn.LaunchOwnerReleaser
+
+// Compile-time assertion that *store.Store provides the optional release, so
+// the production wiring ends every launch's hold.
+var _ launchOwnerReleaser = (*store.Store)(nil)
+
+// ownerReleaser returns s as the launch's releaser when the launch recorded
+// an owner and s provides the release (launchOwnerReleaser), and nil
+// otherwise: a launch that recorded no owner holds nothing to release.
+func ownerReleaser(s any, owner LaunchOwner) launchOwnerReleaser {
+	if owner.PID <= 0 {
+		return nil
+	}
+	r, _ := s.(launchOwnerReleaser)
+	return r
+}
+
 // resumeRemovedRetry is resume's RemovedRetry (b.gu6): a retried resume finds
 // no row (ErrSpawnNotFound), so in place of "retry later" it says what is
 // left: no row to resume, and later a spawn of the id starts afresh. "later"
@@ -86,9 +111,11 @@ const resumeRemovedRetry = "there is no row left to resume; later, a spawn of th
 // write that began it applied and the create returned: the verb's values;
 // the tmux client (its lookup, for the re-lookup after "duplicate session"),
 // start-time reader, configuration, this store's id, clock, logger (never
-// nil) and caller identity; the identity write (nil makes none); the
-// restore write, which writes the prior life back on the row at version
-// (nil error and CondApplied when it applied); row, the row as examined
+// nil) and caller identity; the identity write (nil makes none); the release
+// of the launch's hold (nil when the launch recorded no owner or the store
+// provides no release, b.kdf); the restore write, which writes the prior life
+// back on the row at version (nil error and CondApplied when it applied);
+// row, the row as examined
 // before the write and never re-read (its instance id, recorded name, state,
 // ended_at, pid and session-id presence, launch token and recorded server
 // identity); the ad.provenance.disagree reasons the pre-launch lookup already
@@ -104,6 +131,7 @@ type finishedLaunch struct {
 	lg              *log.Logger
 	who             caller
 	identity        spawn.IdentityWriter
+	release         launchOwnerReleaser
 	restoreWrite    func() (CondResult, error)
 	row             Spawn
 	disagreeWritten []string
@@ -121,7 +149,7 @@ type finishedLaunch struct {
 //   - a lost reply: success with no identity;
 //   - a timeout, or a non-zero-exit unparseable reply: ErrTmuxUnresponsive
 //     with the launch-timeout description and the verb's TimeoutConsequence,
-//     no write, the row staying pending;
+//     the row staying pending;
 //   - "duplicate session": heldName (one re-lookup, the restore, the
 //     classified error, one ad.launch.name_held);
 //   - every other outcome: the restore (l.restore), then the launch error
@@ -130,23 +158,31 @@ type finishedLaunch struct {
 //     labelled (after its kill by id, or saying it may still run) and for any
 //     other launch failure.
 //
+// A launch that ends with no identity write applied and no restore applied
+// (a lost reply, a timeout, an identity write that did not apply or failed,
+// or a restore that did not apply) ends its hold on the row with a release
+// (releaseOwner, b.kdf), which retries a failure a bounded number of times
+// and then only logs.
+//
 // Every error matches exactly one catalogued sentinel (SR-1.5).
 func (l finishedLaunch) outcome(out spawn.CreateOutcome, req spawn.CreateRequest) error {
 	switch out.Kind {
 	case spawn.CreateLabelled:
-		if l.identity != nil {
-			spawn.RecordLaunchIdentity(l.identity, l.pc, l.lg, req.InstanceID, l.version, req.Token, out.Reply)
+		if l.identity == nil || !spawn.RecordLaunchIdentity(l.identity, l.pc, l.lg, req.InstanceID, l.version, req.Token, out.Reply) {
+			l.releaseOwner(req.Token)
 		}
 		return nil
 	case spawn.CreateLostReply:
+		l.releaseOwner(req.Token)
 		return nil
 	case spawn.CreateUnresponsive:
+		l.releaseOwner(req.Token)
 		return spawn.LaunchTimeoutError(out.Cause, l.v.Verb, req.InstanceID, l.v.TimeoutConsequence)
 	case spawn.CreateDuplicate:
 		return l.heldName(req)
 	}
 
-	_, err := l.restore(func(restored restoreResult) error {
+	_, err := l.restore(req.Token, func(restored restoreResult) error {
 		switch out.Kind {
 		case spawn.CreateUnavailable:
 			return spawn.TmuxUnavailableError(out.Cause, req.Socket, restored.Sentence)
@@ -220,16 +256,21 @@ func restoreResultOf(res CondResult, rerr error, priorState string, v finishedLa
 // or was removed (nothing written); or, on a store error, that the row could
 // not be restored and stays pending, with one WARN line on the client logger
 // naming the verb and the instance id (no token, label or environment
-// value). It then emits the verb's restore event (ad.resume.restored or
-// ad.spawn.reuse_restored: claude_instance_id, applied, launch_error named
-// through errorName, restore_error, source), fail-open, and returns the
-// restore's result too, for a trail record that follows it
-// (ad.launch.name_held after "duplicate session").
-func (l finishedLaunch) restore(launchErr func(restored restoreResult) error) (restoreResult, error) {
+// value). A restore that did not apply then ends the launch's hold on the
+// row, the launch with token (releaseOwner, b.kdf). It then emits the verb's
+// restore event (ad.resume.restored or ad.spawn.reuse_restored:
+// claude_instance_id, applied, launch_error named through errorName,
+// restore_error, source), fail-open, and returns the restore's result too,
+// for a trail record that follows it (ad.launch.name_held after "duplicate
+// session").
+func (l finishedLaunch) restore(token string, launchErr func(restored restoreResult) error) (restoreResult, error) {
 	id := l.row.ClaudeInstanceID
 	res, rerr := l.restoreWrite()
 	if rerr != nil {
 		l.lg.Printf("WARN: %s: restoring instance %s to its prior state after a failed launch failed: %v", l.v.Verb, id, rerr)
+	}
+	if rerr != nil || res != CondApplied {
+		l.releaseOwner(token)
 	}
 	restored := restoreResultOf(res, rerr, l.row.State, l.v)
 	err := launchErr(restored)
@@ -302,7 +343,7 @@ func (l finishedLaunch) heldName(req spawn.CreateRequest) error {
 	}
 
 	var holder heldNameHolder
-	restored, err := l.restore(func(r restoreResult) error {
+	restored, err := l.restore(req.Token, func(r restoreResult) error {
 		var herr error
 		holder, herr = heldNameOutcome(res, req.InstanceID, req.Name, req.Socket, r.Sentence, heldRetrySentences{Unanswered: r.Retry}, &examined)
 		return herr
@@ -347,6 +388,17 @@ func (l finishedLaunch) heldName(req spawn.CreateRequest) error {
 		Caller:        l.who,
 	})
 	return err
+}
+
+// releaseOwner ends the hold of the launch with token on the row
+// (spawn.ReleaseLaunchOwner through l.release, b.kdf), when the launch
+// recorded an owner and the store provides the release; otherwise it does
+// nothing. A store error is retried a bounded number of times
+// (spawn.ReleaseLaunchOwner), then logs one WARN line on l.lg.
+func (l finishedLaunch) releaseOwner(token string) {
+	if l.release != nil {
+		spawn.ReleaseLaunchOwner(l.release, l.lg, l.row.ClaudeInstanceID, token)
+	}
 }
 
 // emitDisagree writes one of the launch's lookups' ad.provenance.disagree

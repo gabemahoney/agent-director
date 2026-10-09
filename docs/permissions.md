@@ -291,25 +291,32 @@ mode.
 ### Race-freeness of `decide`
 
 The decide verb writes the decision via a single-statement UPDATE
-guarded by both the first-call-wins `decision IS NULL` predicate and a
-`created_at > ?` deliverability predicate (the deliverability check and
-the write are one atomic statement):
+guarded by the first-call-wins `decision IS NULL` predicate, a
+`created_at > ?` deliverability predicate and a check that the request's
+spawn is not `ended` or `missing` (the checks and the write are one atomic
+statement):
 
 ```sql
 UPDATE permission_requests
    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
  WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
    AND created_at > ?
+   AND NOT EXISTS (SELECT 1 FROM spawns
+                    WHERE claude_instance_id = ? AND state IN (?, ?))  -- 'ended', 'missing'
 ```
 
 First call wins; concurrent second calls see RowsAffected==0. The
-verb then does one follow-up SELECT to disambiguate the outcome. The
-follow-up disambiguation resolves to exactly one of these three
-outcomes:
+verb then does a follow-up SELECT (and, for an open row, a read of its
+spawn) to disambiguate the outcome. The follow-up disambiguation resolves
+to exactly one of these outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Row exists with non-NULL decision → `ErrAlreadyDecided` (including a
-  request the relay hook denied at its timeout).
+  request the relay hook denied at its timeout, and one `find-missing`
+  denied when it marked the spawn `missing`).
+- Row is still open but its spawn is `ended` or `missing` →
+  `ErrNoOpenPermissionRequest` (see "A request of a finished spawn is
+  closed" below).
 - Row is still open but its relay window has elapsed →
   `ErrRelayFallenBack`, or `ErrAlreadyDecided` if the relay hook denies
   it while `decide` waits at the window's end, or
@@ -318,6 +325,33 @@ outcomes:
 
 Two orchestrators racing to decide the same prompt see distinct
 error messages and can act on them programmatically.
+
+### A request of a finished spawn is closed
+
+A request whose spawn is `ended` or `missing` is closed, decided or not:
+its agent is gone (or judged gone by `find-missing`), so no relay hook of
+it can deliver a verdict. `decide` records nothing for it and answers
+with an existing error name:
+
+- a decided request → `ErrAlreadyDecided`;
+- an open request → `ErrNoOpenPermissionRequest`, whose message says the
+  request is closed because the spawn is `ended` or `missing`, nothing was
+  recorded, and not to answer it at the pane;
+- no such request → `ErrNoOpenPermissionRequest`, as for a live spawn.
+
+`decide` checks the spawn's state when it reads the spawn, and its write
+checks it again in the same statement, so a spawn that finishes between
+the two still gets nothing recorded. `send-keys` refuses an `ended` or
+`missing` spawn before its relay guard reads any request
+(`ErrSpawnNotInteractive`).
+
+`find-missing` closes a spawn's open requests when it marks the spawn
+`missing`, in the same store transaction as the mark: both are written or
+neither is. Each open request gets `decision` `deny` with
+`decision_reason` `find_missing`, so a relay hook still polling for it
+returns a fail-closed deny, and `decide` on it then returns
+`ErrAlreadyDecided`. A spawn marked `missing` never keeps an open
+request.
 
 ### Deliver-or-refuse contract
 
@@ -449,7 +483,8 @@ release time.
 row that already carries a decision returns `ErrAlreadyDecided`
 regardless of its age — an old but already-decided request is never
 reclassified as fallen-back. So the decided/undecided taxonomy stays
-clean: decided rows → `ErrAlreadyDecided`; open-but-expired rows →
+clean: decided rows → `ErrAlreadyDecided`; open rows of an `ended` or
+`missing` spawn → `ErrNoOpenPermissionRequest`; open-but-expired rows →
 `ErrRelayFallenBack` while the spawn is shown to be sitting on that
 request alone, otherwise `ErrNoOpenPermissionRequest`; absent rows →
 `ErrNoOpenPermissionRequest`. A row the relay hook denies at its timeout

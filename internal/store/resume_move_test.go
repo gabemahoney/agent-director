@@ -72,7 +72,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 
 // move runs MoveToPending on r's examined snapshot with the test launch and parentID.
 func (f *v5Store) move(r moveRow, parentID string) (store.CondResult, int64, error) {
-	return f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, parentID)
+	return f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, parentID, store.LaunchOwner{})
 }
 
 // moveKept are the columns the move leaves exactly as stored.

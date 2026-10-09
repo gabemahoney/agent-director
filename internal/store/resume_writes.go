@@ -39,6 +39,9 @@ const moveToPendingSQL = `UPDATE spawns
         launch_token              = ?,
         tmux_socket               = ?,
         parent_id                 = ?,
+        launch_owner_pid          = ?,
+        launch_owner_starttime    = ?,
+        launch_owner_pidns        = ?,
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
 
@@ -50,11 +53,13 @@ const moveToPendingSQL = `UPDATE spawns
 // liveness_unverified_since, liveness_note and the six server and pane
 // identity columns; sets launch_started_at to launchStartedAtMillis (the
 // caller's clock; the store reads none), launch_token to token, tmux_socket to
-// socket and parent_id to parentID, each zero value written as NULL; and
-// advances row_version by one. Every other column (claude_session_id,
-// jsonl_path, life_number, no_pre_trust, started_at, last_seen_at and the
-// request fields) is unchanged, session_history and permission_requests are
-// not touched, and no trail event is emitted.
+// socket, parent_id to parentID and the three launch-owner columns to owner
+// (the resume records itself as the owner of the launch it begins, b.kdf),
+// each zero value written as NULL; and advances row_version by one. Every
+// other column
+// (claude_session_id, jsonl_path, life_number, no_pre_trust, started_at,
+// last_seen_at and the request fields) is unchanged, session_history and
+// permission_requests are not touched, and no trail event is emitted.
 //
 // It returns CondApplied with movedVersion, the version the write produced
 // (examined.RowVersion + 1), which the restore's condition takes; CondChanged
@@ -63,15 +68,16 @@ const moveToPendingSQL = `UPDATE spawns
 // 0. A store failure, a foreign-key failure on a parentID that names no row
 // included, returns a wrapped error with a zero CondResult and writes nothing
 // (SR-5.8).
-func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string) (res CondResult, movedVersion int64, err error) {
+func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
 	args := []any{
 		StatePending,
 		positiveInt64Arg(launchStartedAtMillis),
 		nullableStringArg(token), nullableStringArg(socket),
 		nullableStringArg(parentID),
-		instanceID,
 	}
+	args = append(args, launchOwnerArgs(owner)...)
+	args = append(args, instanceID)
 	args = append(args, finishedStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
 	r, err := s.db.Exec(moveToPendingSQL, args...)

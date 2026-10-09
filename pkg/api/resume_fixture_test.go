@@ -125,7 +125,7 @@ func (w *hookedResumeStore) ListSessionHistory(instanceID string, life int64) ([
 }
 
 // MoveToPending delegates unless failMove is set, then runs the afterMove hook.
-func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string) (api.CondResult, int64, error) {
+func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner api.LaunchOwner) (api.CondResult, int64, error) {
 	var (
 		res     api.CondResult
 		version int64
@@ -135,7 +135,7 @@ func (w *hookedResumeStore) MoveToPending(instanceID string, examined api.RowSna
 	w.moveToken = token
 	w.mu.Unlock()
 	if err == nil {
-		res, version, err = w.st.MoveToPending(instanceID, examined, launchStartedAtMillis, token, socket, parentID)
+		res, version, err = w.st.MoveToPending(instanceID, examined, launchStartedAtMillis, token, socket, parentID, owner)
 	}
 	if fn := w.take(&w.afterMvFn); fn != nil {
 		fn()
@@ -154,6 +154,11 @@ func (w *hookedResumeStore) RestoreAfterFailedResume(instanceID string, movedVer
 // RecordLaunchIdentity delegates, so resume's identity write reaches the store.
 func (w *hookedResumeStore) RecordLaunchIdentity(instanceID string, launchVersion int64, token string, id api.LaunchIdentity) (api.CondResult, error) {
 	return w.st.RecordLaunchIdentity(instanceID, launchVersion, token, id)
+}
+
+// ReleaseLaunchOwner delegates, so resume's release of its hold reaches the store (b.kdf).
+func (w *hookedResumeStore) ReleaseLaunchOwner(instanceID, token string) (api.CondResult, error) {
+	return w.st.ReleaseLaunchOwner(instanceID, token)
 }
 
 // resumeEnv is what a resume test drives: store, the wrapper resume gets over

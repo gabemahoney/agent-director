@@ -26,7 +26,13 @@ import (
 //     changed by another versioned write or deleted and inserted afresh; a
 //     store error leaves the row pending and gives heldRowStaysPending
 //     (still_pending) and exactly one WARN line on lg naming the instance id
-//     (never a token, label or environment value; a nil lg writes none);
+//     (never a token, label or environment value; a nil lg writes none).
+//     When the end write did not apply (changed, absent or a store error),
+//     it then ends the launch's hold on the row (spawn.ReleaseLaunchOwner on
+//     the launch's token, b.kdf), so a row left pending is not held for the
+//     life of a long-lived caller; that release applies only while the row
+//     is pending with this launch's token and an owner, and its failure only
+//     logs;
 //  2. makes exactly one tmux.Lookup on the launch socket for the new row's
 //     launch identity (instance id, token, this store's id; no server
 //     identity, since the create recorded none) with the requested name as
@@ -48,7 +54,7 @@ import (
 // It always returns an error. The end write makes no tmux call, so after the
 // insert the path adds only the one lookup to the create; it never kills,
 // captures, sends to or labels the holding session, and writes nothing else
-// to the store.
+// to the store but the release of step 1.
 func spawnHeldName(s *store.Store, t tmux.LookupClient, pc ProcChecker, now func() time.Time, lg *log.Logger, held *spawn.HeldNameError) error {
 	sentence, rowResult, storeErr := endHeldRow(s, lg, held, now())
 
@@ -102,7 +108,13 @@ func spawnHeldName(s *store.Store, t tmux.LookupClient, pc ProcChecker, now func
 // the insert's launch start and endedAt) and returns the row sentence, the
 // ad.launch.name_held row_result and the store error (nil unless the write
 // failed). A store error leaves the row pending and writes one WARN line on
-// lg naming only the instance id and the store's error (SR-5.8).
+// lg naming only the instance id and the store's error (SR-5.8). When the end
+// write did not apply, it then ends the launch's hold on the row
+// (spawn.ReleaseLaunchOwner with held's token, b.kdf): a row the end write
+// left pending would otherwise stay held for as long as this process lives,
+// and find-missing would never judge it. The release is guarded on pending,
+// the token and a recorded owner, so it changes nothing when the row moved
+// on; its own failure only logs and never changes the result.
 func endHeldRow(s *store.Store, lg *log.Logger, held *spawn.HeldNameError, endedAt time.Time) (sentence, rowResult string, storeErr error) {
 	res, err := s.EndHeldLaunch(held.InstanceID, held.LaunchStartedAtMillis, endedAt)
 	switch {
@@ -110,6 +122,7 @@ func endHeldRow(s *store.Store, lg *log.Logger, held *spawn.HeldNameError, ended
 		if lg != nil {
 			lg.Printf("WARN: spawn: ending instance %s after \"duplicate session\" failed; the row stays pending: %v", held.InstanceID, err)
 		}
+		spawn.ReleaseLaunchOwner(s, lg, held.InstanceID, held.Token)
 		return heldRowStaysPending, nameHeldRowStillPending, err
 	case res == store.CondApplied:
 		return heldRowEnded, nameHeldRowEnded, nil
@@ -117,6 +130,7 @@ func endHeldRow(s *store.Store, lg *log.Logger, held *spawn.HeldNameError, ended
 		// CondChanged or CondAbsent: the row changed after the insert (another
 		// versioned write, or deleted and inserted afresh); nothing was
 		// written.
+		spawn.ReleaseLaunchOwner(s, lg, held.InstanceID, held.Token)
 		return heldRowLeftAsIs, nameHeldRowLeftChanged, nil
 	}
 }

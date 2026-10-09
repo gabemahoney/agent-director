@@ -73,9 +73,12 @@ type gateRowState struct {
 	opts  []apitest.SpawnOption
 }
 
-// gateRowStates are the rows of the per-event tables.
+// gateRowStates are the rows of the per-event tables; a pending row find-missing
+// noted unreported (b.kdf) reports in through any hook, as a pending row does.
 var gateRowStates = []gateRowState{
 	{name: "pending", state: store.StatePending},
+	{name: "pending noted unreported", state: store.StatePending, opts: []apitest.SpawnOption{
+		apitest.WithLivenessNote("unreported"), apitest.WithLivenessUnverifiedSince("2026-10-09 10:00:00")}},
 	{name: "working", state: store.StateWorking},
 	{name: "missing before report-in", state: store.StateMissing, opts: []apitest.SpawnOption{gatePane("")}},
 }
@@ -172,7 +175,9 @@ func assertNoIgnored(t *testing.T, before int, id string) {
 }
 
 // TestHookGateOrdinaryEventAppliesFromAgent: each ordinary event (and an unknown
-// one) from the recorded pane process applies per the event table.
+// one) from the recorded pane process applies per the event table, records the
+// payload's session id on a row with none and clears any liveness note: a
+// pending row noted unreported goes to working on UserPromptSubmit (b.kdf).
 func TestHookGateOrdinaryEventAppliesFromAgent(t *testing.T) {
 	st, dbPath := storefix.OpenTempStore(t)
 	for _, rs := range gateRowStates {
@@ -201,6 +206,10 @@ func TestHookGateOrdinaryEventAppliesFromAgent(t *testing.T) {
 				}
 				if row.Identity.PaneStarttime != agent.Start {
 					t.Errorf("pane_starttime = %q; want %q (NULL recorded from the parent)", row.Identity.PaneStarttime, agent.Start)
+				}
+				// b.kdf: every applied hook clears a liveness note, unreported included.
+				if row.LivenessNote != "" || row.LivenessUnverifiedSince != "" {
+					t.Errorf("liveness note/since = %q/%q; want both cleared", row.LivenessNote, row.LivenessUnverifiedSince)
 				}
 				if stdout != "" {
 					t.Errorf("stdout = %q; want empty (state-tracking hook)", stdout)

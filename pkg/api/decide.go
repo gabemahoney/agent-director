@@ -127,8 +127,14 @@ type DecideResult struct{}
 //     no-op outside relay mode; the verb refuses rather than write
 //     a row Claude will never look at.
 //   - Invalid decision string → ErrInvalidDecision.
+//   - Spawn ended or missing → nothing is recorded: a request of a finished
+//     Spawn is closed (b.146 rule 12). A decided request is
+//     ErrAlreadyDecided; an open or absent one ErrNoOpenPermissionRequest,
+//     which advises no pane answer (finishedRowRefusal).
 //   - Single-statement UPDATE writes (decision, decision_reason, decided_at)
-//     guarded by `decision IS NULL AND request_token = ? AND created_at > cutoff`.
+//     guarded by `decision IS NULL AND request_token = ? AND created_at > cutoff`
+//     and by the Spawn not being ended or missing, so a Spawn that finishes
+//     after the read above still gets nothing recorded.
 //     The cutoff is the deliverability boundary from the shared single-authority
 //     signal (RelayDeliverabilityCutoff / RelayRequestUndeliverable), so the
 //     deliverability check and the write are one atomic statement (SR-3.4):
@@ -181,6 +187,9 @@ func decide(s DecideStore, effectiveWindow time.Duration, now time.Time, sleep f
 	if row.RelayMode != "on" {
 		return DecideResult{}, fmt.Errorf("%w: spawn %s relay_mode=%q",
 			ErrRelayModeOff, params.ClaudeInstanceID, row.RelayMode)
+	}
+	if finishedState(row.State) {
+		return DecideResult{}, finishedRowRefusal(s, params, row.State)
 	}
 
 	// Use the canonical operator reason for deny; empty string for allow.
@@ -243,20 +252,71 @@ func decideRefusal(s DecideStore, effectiveWindow time.Duration, now time.Time, 
 	if pr.Decision != "" {
 		return alreadyDecidedError(params.ClaudeInstanceID, pr)
 	}
-	// Open row that the guarded UPDATE refused: the only reason a
-	// token-matched, decision-NULL row is skipped is the deliverability
-	// predicate, and the wait above has brought now to or past its relay
-	// hook's settling. Re-confirm via the shared definition of a fallen-back
-	// request, the one the send_keys guard applies (no second inline time
-	// comparison), and name the fallen-back refusal.
+	// Open row that the guarded UPDATE refused: a token-matched,
+	// decision-NULL row is skipped by the deliverability predicate, or because
+	// its Spawn ended or went missing after decide read it (b.146 rule 12).
+	// The wait above has brought now to or past its relay hook's settling.
+	// Re-confirm via the shared definition of a fallen-back request, the one
+	// the send_keys guard applies (no second inline time comparison), and name
+	// the fallen-back refusal; fallenBackRefusal reads the Spawn again, and a
+	// finished one is not shown to be sitting on the request.
 	if relayRequestFallenBack(pr, effectiveWindow, now) {
 		return fallenBackRefusal(s, params, pr)
 	}
+	// A deliverable open row: its Spawn finished between decide's read of it
+	// and the UPDATE.
+	sp, err := s.GetSpawn(params.ClaudeInstanceID)
+	switch {
+	case errors.Is(err, store.ErrSpawnNotFound):
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+	case err != nil:
+		return err
+	case finishedState(sp.State):
+		return closedRequestError(params, sp.State)
+	}
 	// Unreachable in practice — the row exists, decision is NULL, is within the
-	// window, yet UPDATE didn't affect it. The only way to land here is a SQL
-	// driver oddity; surface as the more conservative ErrNoOpenPermissionRequest.
+	// window, its Spawn is live, yet UPDATE didn't affect it. The only way to
+	// land here is a SQL driver oddity; surface as the more conservative
+	// ErrNoOpenPermissionRequest.
 	return fmt.Errorf("%w: %s (UPDATE no-op against open, deliverable row)",
 		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+}
+
+// finishedState reports whether state is a finished row's, ended or missing:
+// the row's agent is gone, or judged gone, so a request of it is closed
+// (b.146 rule 12).
+func finishedState(state string) bool {
+	return state == store.StateEnded || state == store.StateMissing
+}
+
+// finishedRowRefusal is decide's refusal for a request of a Spawn that is
+// ended or missing (b.146 rule 12): such a request is closed, so decide
+// records nothing. It reads the request once and names the refusal with an
+// existing error name: no such request is ErrNoOpenPermissionRequest, as for
+// a live Spawn; a decided one is ErrAlreadyDecided (find-missing's mark
+// denies a missing Spawn's open requests, decision_reason find_missing); an
+// open one is ErrNoOpenPermissionRequest (closedRequestError), which advises
+// no pane answer.
+func finishedRowRefusal(s DecideStore, params DecideParams, state string) error {
+	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+	case err != nil:
+		return err
+	case pr.Decision != "":
+		return alreadyDecidedError(params.ClaudeInstanceID, pr)
+	}
+	return closedRequestError(params, state)
+}
+
+// closedRequestError is decide's ErrNoOpenPermissionRequest for an undecided
+// request whose Spawn is in state, ended or missing (b.146 rule 12): the
+// request is closed with its agent, nothing was recorded, and it is not to be
+// answered at the pane.
+func closedRequestError(params DecideParams, state string) error {
+	return fmt.Errorf("%w: %s request %s is closed: the spawn is %s, so nothing was recorded; do not answer it at the pane",
+		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID, params.RequestToken, state)
 }
 
 // fallenBackRefusal names decide's refusal of pr, a request decideRefusal
@@ -421,15 +481,18 @@ func decideOutcome(err error) string {
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
 //   - [ErrNoOpenPermissionRequest]: no undecided permission request exists,
-//     or the request's record is still open past its relay window but the
-//     Spawn is not shown to be sitting on it alone: it has left
-//     check_permission, recorded a later request, or has another request
-//     open. Its permission dialog may have closed; do not answer it at the
-//     pane.
+//     or the request's Spawn is ended or missing, which closes its requests
+//     (nothing is recorded), or the request's record is still open past its
+//     relay window but the Spawn is not shown to be sitting on it alone: it
+//     has left check_permission, recorded a later request, or has another
+//     request open. Its permission dialog may have closed; do not answer it
+//     at the pane.
 //   - [ErrAlreadyDecided]: a verdict is already recorded: a concurrent
 //     caller's, or the relay hook's fail-closed deny (decision_reason
 //     "timeout"), such as when the request's window ran out, which the hook
-//     normally returns to Claude Code as the request's answer.
+//     normally returns to Claude Code as the request's answer, or
+//     find-missing's deny when it marked the Spawn missing (decision_reason
+//     "find_missing").
 //   - [ErrRelayFallenBack]: the request's record is still open past its relay
 //     window, its relay hook can no longer answer it, and the Spawn is still
 //     shown sitting on it alone; answer at the pane instead, with SendKeys.

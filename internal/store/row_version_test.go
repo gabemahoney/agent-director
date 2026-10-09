@@ -350,7 +350,7 @@ func rvMove(t *testing.T, f *v5Store, id string, examined store.Spawn, want stor
 	if want == store.CondApplied {
 		wantV = examined.Snapshot.RowVersion + 1
 	}
-	got, v, err := f.s.MoveToPending(id, examined.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "")
+	got, v, err := f.s.MoveToPending(id, examined.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
 	if err != nil || got != want || v != wantV {
 		t.Fatalf("MoveToPending = %v, %d, %v; want %v, %d, nil", got, v, err, want, wantV)
 	}
@@ -429,14 +429,14 @@ func rvResumeNoOps() []rowVersionCase {
 		{name: "MoveToPending/parent id names no row", state: "ended",
 			write: func(t *testing.T, f *v5Store, id string) {
 				sp := rvExamine(t, f, id)
-				got, v, err := f.s.MoveToPending(id, sp.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "rv-no-such-parent")
+				got, v, err := f.s.MoveToPending(id, sp.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "rv-no-such-parent", store.LaunchOwner{})
 				if err == nil || got != 0 || v != 0 {
 					t.Fatalf("MoveToPending(bad parent) = %v, %d, %v; want 0, 0, an error", got, v, err)
 				}
 			}},
 		{name: "MoveToPending/absent row", state: "ended",
 			write: func(t *testing.T, f *v5Store, id string) {
-				got, v, err := f.s.MoveToPending("rv-absent", rvExamine(t, f, id).Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "")
+				got, v, err := f.s.MoveToPending("rv-absent", rvExamine(t, f, id).Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
 				if err != nil || got != store.CondAbsent || v != 0 {
 					t.Fatalf("MoveToPending(absent) = %v, %d, %v; want CondAbsent, 0, nil", got, v, err)
 				}
@@ -683,13 +683,6 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 			write: func(t *testing.T, f *v5Store, id string) {
 				got, err := f.s.DecidePermissionRequest(id, seedRequest(t, f, id), "allow", "", "row_version_test")
 				wantBool(t, "DecidePermissionRequest", got, err, true)
-			}},
-		{name: "CloseOrphanedPermissionRequests", state: "check_permission",
-			write: func(t *testing.T, f *v5Store, id string) {
-				seedRequest(t, f, id)
-				if err := f.s.CloseOrphanedPermissionRequests(id); err != nil {
-					t.Fatalf("CloseOrphanedPermissionRequests: %v", err)
-				}
 			}},
 	}
 	for _, hold := range hookCases("working hold path, open request", "check_permission", "working", false, false, store.UpsertNoChange) {

@@ -22,7 +22,9 @@ fired it. The README states the minimum supported Claude Code version.
 A Claude Code version older than that ignores `args` and runs the bare
 binary through `/bin/sh`, so each hook reaches agent-director with no
 verb and its payload on stdin. No hook applies, and the row stays
-`pending`. A no-verb run checks stdin for this case:
+`pending`; past its grace period `find-missing` notes it `unreported`
+(see "A SessionStart that never writes" below), and no hook clears that
+note. A no-verb run checks stdin for this case:
 
 - When stdin is not a terminal, the run reads it with a 1 MiB cap and a
   1-second deadline.
@@ -148,7 +150,9 @@ decide whether a hook applies. The hook makes no tmux call.
 
 When the `claude` on PATH is a launcher or shim that runs Claude Code as
 a child instead of exec-ing it, the pane process is the launcher, so
-every hook is refused with `pid_mismatch` and the row stays `pending`. A
+every hook is refused with `pid_mismatch` and the row stays `pending`;
+past its grace period `find-missing` finds the launcher running and notes
+the row `unreported`, and no hook clears that note. A
 hook run through a shell instead of in exec form looks the same: either
 way the pane process is the hook's grandparent, and agent-director does
 not tell the two apart.
@@ -193,11 +197,19 @@ still counts the row as inside its grace period.
 The SessionStart `agent-director hook` entry in the synthesized
 `--settings` carries `"timeout": 600`, Claude Code's current default
 for command hooks. It is stated explicitly so that a change to Claude
-Code's default cannot move the kill below the cap. The hook therefore
-always ends its own wait about 60 s before Claude Code would kill it, and
-writes its `ad.hook.ignored` record instead of being killed with no
-trail record. No other agent-director entry for SessionStart carries a
-timeout.
+Code's default cannot move the kill below the cap. No other
+agent-director entry for SessionStart carries a timeout.
+
+The cap bounds the wait, not the hook. The wait ends about 60 s before
+Claude Code would kill the hook, but Claude Code counts its 600 s from the
+hook's start, and the hook's store writes before and after the wait (up
+to four) can each wait up to `[store] busy_timeout_ms` for a busy store's
+lock. `busy_timeout_ms` is accepted up to 2147483647 ms and is not capped
+against those 60 s, so a long store wait can still get the hook killed
+before it writes its result or its `ad.hook.ignored` record, with no trail
+record. So can any other death of the hook (a crash, an out-of-memory
+kill). See "A SessionStart that never writes" below for how
+`find-missing` reports the row.
 
 While it waits, it re-reads the row every 250 ms. Each re-read is a
 read only, so it never blocks the identity write. No sleep runs past
@@ -219,12 +231,56 @@ the row as it is then, and that write decides the result:
 
 An identity written just before either bound therefore still applies.
 
-Only SessionStart waits. Claude Code sends no prompt to the agent until
-its SessionStart hooks finish, so every later hook fires after the
-wait. A subagent's or in-process teammate's SessionStart never waits
+Only SessionStart waits. It is the first hook a launch's agent fires, and
+Claude Code holds the agent's first response until its SessionStart hooks
+finish, so the hooks of that response fire after the wait. A subagent's
+or in-process teammate's SessionStart never waits
 (see below). A row with no launch start, or one already past the grace
 period, never waits. The wait makes no tmux
 call and writes nothing until its final gated write.
+
+### A SessionStart that never writes
+
+An agent whose SessionStart hook died before its write (killed at its
+timeout after a long store wait, a crash, an out-of-memory kill), or
+whose SessionStart was ignored, runs while its row stays `pending`, and
+an idle agent fires no later hook to move it. A row looks the same while
+its agent is held at a Claude Code startup screen that comes before any
+hook (folder trust, a warning, onboarding or login, an approval).
+agent-director cannot tell these apart without reading the screen.
+
+`find-missing` reports such a row and never moves it. Once the row is
+past its pending grace period, the `spawn` or `resume` that launched it
+is no longer running, its pane is recorded (or adopted by the sweep) and
+that pane's process is alive, the sweep writes the `liveness_note`
+`unreported` and leaves the row `pending`, in one write that applies only
+if no hook wrote first. So the row is noted within
+`pending_grace_seconds` plus one `find-missing` period, provided
+`find-missing` is scheduled. A dead pane process marks the row `missing`
+instead. The note keeps the row's `launch_started_at`. Its
+`liveness_unverified_since` is the time a note first flagged the row in
+this launch, kept across note changes. A later sweep that finds the agent
+alive keeps the note; a sweep that cannot check the agent process may
+replace it with an unverified note. The note never replaces a
+`provenance_conflict` note: a sweep that finds such a `pending` row's
+agent alive keeps `provenance_conflict` rather than clearing it.
+
+`unreported` means the agent is alive but no hook has reported since its
+launch: it may sit at a startup screen or idle at its prompt. To act on
+it, the caller reads the pane (`read-pane`), then types
+(`send-keys --allow-pending`); only a caller that looked should type. A
+caller that cannot judge the pane ends the launch with the live-row
+sequence of the README's "Caller contract" (`kill`, then `find-missing`)
+or hands it to a human. `send-keys` still refuses a
+`pending` row without `--allow-pending`, noted or not.
+
+The agent's next applied hook clears the note and
+`liveness_unverified_since`, as every applied hook clears both. A
+SessionStart that arrives later records the session id and identity and moves the row to
+`waiting`; a UserPromptSubmit (for example from the prompt the caller
+typed) moves it to `working` and records the session id. A
+UserPromptSubmit held because the row has open permission requests
+writes nothing, so the note stays.
 
 ### Subagents and in-process teammates
 
@@ -317,9 +373,10 @@ where the hook deliberately takes time. It can delay the hook's exit
 until the earlier of the launch start plus the effective
 `pending_grace_seconds` and 540 s after the wait began, and Claude
 Code's first response waits for SessionStart hooks to finish. The 540 s
-cap keeps the wait inside the entry's 600 s timeout. It happens only in
-the race described above; the hook still exits 0 with empty stdout
-whatever the wait's result.
+cap keeps the wait, though not the hook's store writes around it, inside
+the entry's 600 s timeout (see "SessionStart before the launch's identity
+write"). It happens only in the race described above; the hook still exits
+0 with empty stdout whatever the wait's result.
 
 The relay-mode `PermissionRequest` path is fail-*closed*: any internal
 error emits a `deny` decision envelope on stdout before the hook exits.

@@ -20,14 +20,16 @@ const (
 	fpPanePID = 1102
 )
 
-// fpOutcome is what one sweep does to a row: left live untouched, marked missing, or noted probe_eacces (the
-// sweeps here get a lookup that cannot tell, so a row the process cannot decide is noted).
+// fpOutcome is what one sweep does to a row: left live untouched, marked missing, noted probe_eacces (the
+// sweeps here get a lookup that cannot tell, so a row the process cannot decide is noted), or, for a pending row
+// whose recorded pane process is alive, noted unreported and left pending, in neither list (b.kdf).
 type fpOutcome int
 
 const (
 	fpLive fpOutcome = iota
 	fpMarked
 	fpNoted
+	fpUnreported
 )
 
 // fpPastGrace is a launch start one second past the default pending grace period at fmNow.
@@ -86,16 +88,18 @@ func fpAssertOutcome(t *testing.T, st *fakeFindMissingStore, res api.FindMissing
 	var wantOps, ids, unver []string
 	switch outcome {
 	case fpMarked:
-		wantOps, ids = []string{"mark", "close"}, []string{id}
+		wantOps, ids = []string{"mark"}, []string{id}
 	case fpNoted:
 		wantOps, unver = []string{"note"}, []string{id}
+	case fpUnreported:
+		wantOps = []string{"unreported"}
 	}
 	assertLists(t, res, ids, unver)
 	if got := st.ops(id); !equalStrings(got, wantOps) {
 		t.Errorf("writes on %s = %v; want %v (a mark folds the liveness clear in)", id, got, wantOps)
 	}
 	for _, c := range st.calls {
-		if c.op != "close" && c.snap != r.Snapshot {
+		if c.snap != r.Snapshot {
 			t.Errorf("%s guarded on %+v; want the read snapshot %+v", c.op, c.snap, r.Snapshot)
 		}
 		if c.op == "note" && c.note != "probe_eacces" {
@@ -115,9 +119,10 @@ func fpAssertNoDisagree(t *testing.T, mark int, id string) {
 }
 
 // TestFindMissingProcessSelectionVerdict: each agent-process selection crossed with each reader answer, on a
-// live row and on pending rows past grace: only the selected process is read and decides the row. The cells
-// sweep their own fake stores and run in parallel: the one trail check, that no cell writes a disagree record
-// for the shared id fp-row, holds whatever the others write.
+// live row and on pending rows past grace: only the selected process is read and decides the row; a pending row
+// it finds alive is noted unreported when it records its pane (b.kdf). The cells sweep their own fake stores and
+// run in parallel: the one trail check, that no cell writes a disagree record for the shared id fp-row, holds
+// whatever the others write.
 func TestFindMissingProcessSelectionVerdict(t *testing.T) {
 	t.Parallel()
 	for _, life := range fpLives {
@@ -139,6 +144,9 @@ func TestFindMissingProcessSelectionVerdict(t *testing.T) {
 					want := ans.full
 					if sel.pidOnly {
 						want = ans.pidOnly
+					}
+					if want == fpLive && r.State == store.StatePending && r.Identity.PanePID > 0 {
+						want = fpUnreported
 					}
 					fpAssertOutcome(t, st, res, r, want)
 					if got := pc.StartTimeCalls(); !slices.Equal(got, []int{sel.selected}) {
@@ -186,8 +194,8 @@ func TestFindMissingMixedProcessSweep(t *testing.T) {
 	res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
 	assertLists(t, res, []string{"b-reused", "c-pane-dead-ss-alive", "d-dead-unusable", "z-dead-pane"},
 		[]string{"a-pid-only-alive", "q-unreadable", "y-no-identity"})
-	if ops := st.ops("z-dead-pane"); !equalStrings(ops, []string{"mark", "close"}) {
-		t.Errorf("writes on z-dead-pane = %v; want [mark close] (no separate clear)", ops)
+	if ops := st.ops("z-dead-pane"); !equalStrings(ops, []string{"mark"}) {
+		t.Errorf("writes on z-dead-pane = %v; want [mark] (no separate clear or close)", ops)
 	}
 	if ops := st.ops("e-alive-unusable"); !equalStrings(ops, []string{"clear"}) {
 		t.Errorf("writes on e-alive-unusable = %v; want [clear] (alive wins over the unusable name)", ops)

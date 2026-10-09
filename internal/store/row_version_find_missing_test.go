@@ -1,11 +1,13 @@
 package store_test
 
-// SR-5.2 versioning cases for find-missing's three guarded writes (SR-11.3,
-// SR-11.6) and its adoption write (SR-3.6), appended to row_version_test.go's
-// applied and no-op tables.
+// SR-5.2 versioning cases for find-missing's guarded writes (SR-11.3,
+// SR-11.6), its unreported note of a live pending row (b.kdf, b.146 rule 10),
+// its adoption write (SR-3.6) and a launch's release of its hold (b.kdf, rule
+// 11), appended to row_version_test.go's applied and no-op tables.
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -34,7 +36,73 @@ var (
 		res, err := s.ClearLivenessIfSameLife(id, e)
 		return "", res, err
 	}}
+	rvUnreported = rvGuarded{"NoteUnreportedIfSameLife", func(s *store.Store, id string, e store.RowSnapshot) (string, store.CondResult, error) {
+		res, err := s.NoteUnreportedIfSameLife(id, e)
+		return "", res, err
+	}}
 )
+
+// unreportedNote seeds note unreported with a first noted time (b.kdf).
+var unreportedNote = []apitest.SpawnOption{
+	apitest.WithLivenessUnverifiedSince("2026-01-01 00:00:00"), apitest.WithLivenessNote("unreported"),
+}
+
+// conflictNote seeds note provenance_conflict, which unreported never overwrites (b.kdf).
+var conflictNote = []apitest.SpawnOption{
+	apitest.WithLivenessUnverifiedSince("2026-01-01 00:00:00"), apitest.WithLivenessNote("provenance_conflict"),
+}
+
+// rvOwner is a recorded launch owner (b.kdf).
+var rvOwner = store.LaunchOwner{PID: 4300, Starttime: apitest.LinuxProcStarttime, PIDNamespace: "pid:[4026531836]"}
+
+// withOwner seeds rvOwner as the row's launch owner.
+var withOwner = []apitest.SpawnOption{apitest.WithLaunchOwner(rvOwner)}
+
+// ownerColumns returns c's three launch-owner columns.
+func ownerColumns(c apitest.SpawnColumns) []any {
+	return []any{c.LaunchOwnerPID, c.LaunchOwnerStarttime, c.LaunchOwnerPIDNS}
+}
+
+// rvRelease returns a ReleaseLaunchOwner of target ("" = the seeded row) with
+// token, expecting want.
+func rvRelease(target, token string, want store.CondResult) func(*testing.T, *v5Store, string) {
+	return func(t *testing.T, f *v5Store, id string) {
+		if target == "" {
+			target = id
+		}
+		if got, err := f.s.ReleaseLaunchOwner(target, token); err != nil || got != want {
+			t.Fatalf("ReleaseLaunchOwner(%s) = %v, %v; want %v, nil", target, got, err, want)
+		}
+	}
+}
+
+// notedUnreported fails unless the note is unreported, the first noted time
+// set (kept when any earlier note set it) and the launch owner kept.
+func notedUnreported(t *testing.T, before, after apitest.SpawnColumns) {
+	t.Helper()
+	if after.LivenessNote != "unreported" || after.LivenessUnverifiedSince == nil {
+		t.Errorf("liveness_note, liveness_unverified_since = %#v, %#v; want unreported, set",
+			after.LivenessNote, after.LivenessUnverifiedSince)
+	}
+	if before.LivenessUnverifiedSince != nil && after.LivenessUnverifiedSince != before.LivenessUnverifiedSince {
+		t.Errorf("liveness_unverified_since %#v -> %#v; want the first noted time kept",
+			before.LivenessUnverifiedSince, after.LivenessUnverifiedSince)
+	}
+	if !reflect.DeepEqual(ownerColumns(after), ownerColumns(before)) || before.LaunchOwnerPID == nil {
+		t.Errorf("launch owner %#v -> %#v; want a recorded owner kept", ownerColumns(before), ownerColumns(after))
+	}
+}
+
+// ownerCleared fails unless the three launch-owner columns went from set to NULL.
+func ownerCleared(t *testing.T, before, after apitest.SpawnColumns) {
+	t.Helper()
+	if before.LaunchOwnerPID == nil || before.LaunchOwnerStarttime == nil || before.LaunchOwnerPIDNS == nil {
+		t.Fatal("seed left a launch-owner column NULL; the clear check would be vacuous")
+	}
+	if got := ownerColumns(after); !reflect.DeepEqual(got, []any{nil, nil, nil}) {
+		t.Errorf("launch owner = %#v; want NULL, NULL, NULL", got)
+	}
+}
 
 // write returns g's write to target ("" = the seeded row) of the seeded row's
 // snapshot read now, after mutate edits it (nil keeps it), expecting want and prior.
@@ -142,6 +210,16 @@ func rvFindMissingWrites() []rowVersionCase {
 			wantState: "pending", write: applied(rvClear, ""), check: livenessCleared},
 		{name: "ClearLivenessIfSameLife/applied, no note on live row", state: "waiting", wantState: "waiting",
 			write: applied(rvClear, "")},
+		// b.kdf: the unreported note keeps the state pending, the launch
+		// start (CSCB) and the earlier note's time; the owner is not its to write.
+		{name: "NoteUnreportedIfSameLife/applied, pending row noted probe_eacces with an owner, its time kept", state: "pending",
+			opts: append(slices.Clone(liveness), withOwner...), wantState: "pending",
+			write: applied(rvUnreported, ""), check: notedUnreported},
+		{name: "NoteUnreportedIfSameLife/applied, pending row already noted unreported", state: "pending",
+			opts: append(slices.Clone(unreportedNote), withOwner...), wantState: "pending",
+			write: applied(rvUnreported, ""), check: notedUnreported},
+		{name: "ReleaseLaunchOwner/applied, pending row with an owner", state: "pending", opts: withOwner,
+			wantState: "pending", write: rvRelease("", goodToken, store.CondApplied), check: ownerCleared},
 	}
 }
 
@@ -160,6 +238,27 @@ func rvFindMissingNoOps() []rowVersionCase {
 		{name: "AdoptIdentityIfSameLife/absent row", state: "waiting", opts: liveness,
 			write: rvAdopt("rv-absent", nil, store.CondAbsent)},
 	}
+	cases = append(cases,
+		rowVersionCase{name: "NoteUnreportedIfSameLife/stale snapshot, hook wrote first", state: "pending", opts: liveness,
+			setup: rvSoftRefresh,
+			write: rvUnreported.write("", func(s *store.RowSnapshot) { s.RowVersion-- }, store.CondChanged, "")},
+		rowVersionCase{name: "NoteUnreportedIfSameLife/pending row noted provenance_conflict", state: "pending", opts: conflictNote,
+			write: rvUnreported.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "NoteUnreportedIfSameLife/live row", state: "waiting", opts: liveness,
+			write: rvUnreported.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "NoteUnreportedIfSameLife/finished row", state: "missing", opts: liveness,
+			write: rvUnreported.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "NoteUnreportedIfSameLife/absent row", state: "pending", opts: liveness,
+			write: rvUnreported.write("rv-absent", nil, store.CondAbsent, "")},
+		rowVersionCase{name: "ReleaseLaunchOwner/another launch's token", state: "pending", opts: withOwner,
+			write: rvRelease("", rvMoveToken, store.CondChanged)},
+		rowVersionCase{name: "ReleaseLaunchOwner/row no longer pending", state: "waiting", opts: withOwner,
+			write: rvRelease("", goodToken, store.CondChanged)},
+		rowVersionCase{name: "ReleaseLaunchOwner/no owner recorded", state: "pending",
+			write: rvRelease("", goodToken, store.CondChanged)},
+		rowVersionCase{name: "ReleaseLaunchOwner/absent row", state: "pending", opts: withOwner,
+			write: rvRelease("rv-absent", goodToken, store.CondAbsent)},
+	)
 	for _, g := range []rvGuarded{rvMark, rvNote, rvClear} {
 		cases = append(cases,
 			rowVersionCase{name: g.name + "/stale snapshot, hook wrote first", state: "waiting", opts: liveness,

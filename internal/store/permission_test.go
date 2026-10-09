@@ -1,14 +1,16 @@
 package store
 
 // permission_requests (SRD §6.2, SR-2.1, SR-5.4, SR-7.4, SR-9.2, SR-11): the
-// gated insert, first-call-wins decide, the reads, cap eviction and
-// find-missing's closeout. Real on-disk stores, so FK, UNIQUE and transactions
-// are exercised end to end.
+// gated insert, first-call-wins decide, the reads, cap eviction, find-missing's
+// closeout in its mark's transaction and decide's refusal on a finished Spawn
+// (b.146 rule 12). Real on-disk stores, so FK, UNIQUE and transactions are
+// exercised end to end.
 
 import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -446,11 +448,14 @@ func TestPermissionRequestCapEvictionKeepsNewestWhileOpen(t *testing.T) {
 	}
 }
 
-// TestCloseOrphanedPermissionRequests pins SR-5.4 and SR-A-2.5: after
-// find-missing's mark, every open request of the row is denied with reason
-// find_missing and emits one ad.find_missing.tick (permission_orphan_closeout);
-// a row with none emits nothing.
-func TestCloseOrphanedPermissionRequests(t *testing.T) {
+// TestMarkMissingClosesOpenRequests pins SR-5.4, SR-A-2.5 and b.146 rule 12:
+// find-missing's mark denies every open request of its row with reason
+// find_missing in the mark's own transaction and leaves a decided request as
+// it was; after the commit it emits, per closed request in request-id order,
+// one ad.row_mutation.committed (writer find_missing) and one
+// permission_orphan_closeout tick. A row with no open request emits nothing.
+func TestMarkMissingClosesOpenRequests(t *testing.T) {
+	const decided = "dddddddd-dddd-4ddd-addd-dddddddddddd"
 	for _, tokens := range [][]string{nil, {tokenA}, {tokenA, tokenB, tokenC}} {
 		t.Run(fmt.Sprintf("%d open", len(tokens)), func(t *testing.T) {
 			s, _ := openTempStore(t)
@@ -459,18 +464,20 @@ func TestCloseOrphanedPermissionRequests(t *testing.T) {
 			if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
 				t.Fatalf("to check_permission: %v", err)
 			}
-			for _, tok := range tokens {
+			for _, tok := range append([]string{decided}, tokens...) {
 				if err := agentPermissionRequest(s, id, tok, "Bash", `{"cmd":"echo"}`, 0, ""); err != nil {
 					t.Fatalf("insert %s: %v", tok, err)
 				}
 			}
+			if ok, err := s.DecidePermissionRequest(id, decided, "allow", "", WriterProcessDecide); err != nil || !ok {
+				t.Fatalf("decide %s = %v, %v", decided, ok, err)
+			}
+			mark := TrailMark(t)
+
 			if prior, res, err := s.MarkMissingIfSameLife(id, mustGetSpawn(t, s, id).Snapshot); err != nil || res != CondApplied || prior != StateCheckPermission {
 				t.Fatalf("MarkMissingIfSameLife = %q, %v, %v; want check_permission, CondApplied", prior, res, err)
 			}
-			mark := TrailMark(t)
-			if err := s.CloseOrphanedPermissionRequests(id); err != nil {
-				t.Fatalf("CloseOrphanedPermissionRequests: %v", err)
-			}
+
 			if state, err := s.GetSpawnState(id); err != nil || state != StateMissing {
 				t.Errorf("state = %q, %v; want missing", state, err)
 			}
@@ -479,21 +486,96 @@ func TestCloseOrphanedPermissionRequests(t *testing.T) {
 					t.Errorf("%s: decision, reason = %+v, %+v; want deny, find_missing", tok, decision, reason)
 				}
 			}
+			if _, _, _, decision, reason := readPermRow(t, s, id, decided); decision.String != "allow" || reason.Valid {
+				t.Errorf("decided request = %+v, %+v; want allow, NULL kept", decision, reason)
+			}
 			if got := openTokens(t, s, id); len(got) != 0 {
 				t.Errorf("open requests = %v; want none", got)
 			}
-			ticks := trailEventsSince(t, mark, "ad.find_missing.tick")
-			if len(ticks) != len(tokens) {
-				t.Fatalf("ad.find_missing.tick lines = %d; want %d", len(ticks), len(tokens))
+			var got, want []string // event/token, in trail order
+			for _, tok := range tokens {
+				want = append(want, "ad.row_mutation.committed/"+tok, "ad.find_missing.tick/"+tok)
 			}
-			for _, tick := range ticks {
-				for key, want := range map[string]string{"reconciliation_reason": "permission_orphan_closeout",
-					"source": "ad_find_missing", "claude_instance_id": id} {
-					assertTrailStr(t, tick, key, want)
+			for _, row := range readStoreTrailLines(t)[mark:] {
+				if row["claude_instance_id"] != id {
+					continue
 				}
-				if ts, ok := tick["ts"].(string); !ok || !storeTSRe.MatchString(ts) || tick["request_token"] == nil {
-					t.Errorf("tick ts, request_token = %v, %v; want a timestamp and a token", tick["ts"], tick["request_token"])
+				got = append(got, fmt.Sprintf("%v/%v", row["event"], row["request_token"]))
+				fields := map[string]string{"source": "ad_find_missing", "reconciliation_reason": "permission_orphan_closeout"}
+				if row["event"] == "ad.row_mutation.committed" {
+					fields = map[string]string{"source": "ad_store", "writer_process": WriterProcessFindMissing,
+						"mutation_kind": "update", "decision": "deny", "decision_reason": DecisionReasonFindMissing, "tool_name": "Bash"}
 				}
+				for key, want := range fields {
+					assertTrailStr(t, row, key, want)
+				}
+				if ts, ok := row["ts"].(string); !ok || !storeTSRe.MatchString(ts) {
+					t.Errorf("%v ts = %v; want a timestamp", row["event"], row["ts"])
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("trail after the mark = %v; want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestDecideIfDeliverableRefusesFinishedSpawn pins b.146 rule 12 in decide's
+// guarded write: on an open, deliverable request of an ended or missing Spawn
+// it records nothing and emits nothing; a live Spawn's request is recorded.
+func TestDecideIfDeliverableRefusesFinishedSpawn(t *testing.T) {
+	cases := []struct {
+		name   string
+		finish func(t *testing.T, s *Store, id string) // ends the Spawn, the request still open; nil: live
+	}{
+		{"live", nil},
+		{"ended by its agent's SessionEnd", func(t *testing.T, s *Store, id string) {
+			if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			if err := agentHook(s, id, StateEnded, false, "SessionEnd"); err != nil {
+				t.Fatalf("to ended: %v", err)
+			}
+		}},
+		{"missing, the request recorded after the mark", func(t *testing.T, s *Store, id string) {
+			if _, res, err := s.MarkMissingIfSameLife(id, mustGetSpawn(t, s, id).Snapshot); err != nil || res != CondApplied {
+				t.Fatalf("mark = %v, %v", res, err)
+			}
+			if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTempStore(t)
+			const id = "deliverable-finished"
+			seedSpawnForPerm(t, s, id, "on")
+			if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
+				t.Fatalf("to check_permission: %v", err)
+			}
+			if tc.finish == nil {
+				if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+					t.Fatalf("insert: %v", err)
+				}
+			} else {
+				tc.finish(t, s, id)
+			}
+			mark := TrailMark(t)
+
+			ok, err := s.DecidePermissionRequestIfDeliverable(id, tokenA, "allow", "", WriterProcessDecide, time.Now().Add(-time.Hour))
+
+			if live := tc.finish == nil; err != nil || ok != live {
+				t.Fatalf("DecidePermissionRequestIfDeliverable = %v, %v; want %v, nil", ok, err, live)
+			}
+			if tc.finish == nil {
+				return
+			}
+			if got := openTokens(t, s, id); len(got) != 1 || got[0] != tokenA {
+				t.Errorf("open requests = %v; want [%s] kept open", got, tokenA)
+			}
+			if n := len(trailEventsSince(t, mark, "ad.row_mutation.committed")); n != 0 {
+				t.Errorf("row_mutation lines = %d; want 0", n)
 			}
 		})
 	}

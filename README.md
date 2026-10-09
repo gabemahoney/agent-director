@@ -217,7 +217,9 @@ agent-director pause --claude-instance-id "$id"
 
 A row is `pending` while its launch is in progress and its agent has not
 reported in yet (it may be loading or waiting at a startup prompt); it
-becomes `waiting` once the agent reports in.
+becomes `waiting` once the agent reports in. If the agent runs but never
+reports in, the row stays `pending` and a scheduled `find-missing` notes
+it `unreported` (see [Maintenance](#maintenance)).
 
 `spawn` marks the folder as trusted so the agent does not stop at Claude
 Code's folder-trust prompt; add `--no-pre-trust` to keep the prompt.
@@ -402,15 +404,19 @@ callers' `callTimeoutMs` to match.
 `busy_timeout_ms` defaults to 10000 (10 s). Raising it moves no other
 limit. On a busy store, each write can wait that long. A launch's
 SessionStart hook makes up to four writes besides its wait for
-agent-director to record the launch, and they must fit in the 60 s
-between that wait's 540 s limit and Claude Code's 600 s hook timeout: at
-the default they take at most 40 s, but from about 15 s Claude Code can
-kill the hook before it records the agent. And once a call's waits for
-the store add up to the TypeScript client's `callTimeoutMs` (30 s by
-default), the client ends the call with `ErrCallTimeout` — one wait of
-30 s or more is cut off before the store gives up. Raise TypeScript
-callers' `callTimeoutMs` to match. agent-director checks this key against
-neither limit.
+agent-director to record the launch, and Claude Code kills the hook 600 s
+after it starts, 60 s after that wait's 540 s limit: at the default the
+writes take at most 40 s, but from about 15 s a long store wait can get
+the hook killed before it records the agent. So can any other death of
+the hook (a crash, an out-of-memory kill). The agent then runs while its
+row stays `pending`. A scheduled `find-missing` notes such a row
+`unreported` within `pending_grace_seconds` plus one `find-missing` period
+(see [Maintenance](#maintenance)).
+And once a call's waits for the store add up to the TypeScript client's
+`callTimeoutMs` (30 s by default), the client ends the call with
+`ErrCallTimeout` — one wait of 30 s or more is cut off before the store
+gives up. Raise TypeScript callers' `callTimeoutMs` to match.
+agent-director checks this key against neither limit.
 
 `db_path` moves the store, and `install.sh` follows it; its reads of the
 store wait up to `busy_timeout_ms` too. Keep both keys in the one-line form
@@ -453,7 +459,8 @@ can be changed, but never below its safe minimum.
   `pending_grace_seconds` limits the whole launch: tmux creating the
   session, then Claude starting and checking in with agent-director.
   Until it runs out, `find-missing` leaves the launch alone; after it,
-  `find-missing` may mark the launch `missing`. So the grace period must
+  `find-missing` may mark the launch `missing` (or note it `unreported`
+  when its agent runs but has not reported in). So the grace period must
   outlast the create timeout plus a margin, or `find-missing` could give
   up on a launch that is still starting normally. agent-director
   enforces this through its minimum: 30 s, or `create_timeout_ms` +
@@ -504,7 +511,8 @@ Two verbs keep `state.db` honest. Schedule both yourself, and run them
 with the same user and tmux environment as the agents:
 
 ```sh
-# Mark live rows whose agent process is gone as `missing` — run often (e.g. every 2 min):
+# Mark live rows whose agent process is gone as `missing`, and note a running
+# agent stuck in `pending` as `unreported` — run often (e.g. every 2 min):
 agent-director find-missing
 
 # Delete finished rows older than expire_retention_days whose agent's process
@@ -513,8 +521,13 @@ agent-director expire
 ```
 
 Wire these into your platform's scheduler (launchd, systemd timer, cron,
-Task Scheduler). Without `find-missing`, dead sessions linger in `list` as
-stale `waiting`/`working` rows.
+Task Scheduler).
+
+**Recovery depends on `find-missing` being scheduled.** Nothing else
+reports a stuck or stale row: without it, a row stuck `pending` while its
+agent runs is never noted, and a row whose agent is gone stays in `list` in
+a stale live state (`waiting`, `working`, `ask_user`, `check_permission` or
+`pending`).
 
 `find-missing` judges each live row by its agent's process: a row whose
 process runs stays live, and a row whose process is gone is marked
@@ -523,12 +536,33 @@ row's recorded socket: the row is marked `missing` when tmux shows no
 session of its current launch, and otherwise left unverified; a row whose
 recorded tmux session name cannot be used is never looked up, but left
 unverified with a note of its own. A `pending`
-row is not judged until its grace period has passed. Marked rows are
+row is not judged until its grace period has passed, nor while the `spawn`
+or `resume` that launched it is still running. Marked rows are
 listed in `ids`; rows it cannot decide are listed in `unverified_ids`, and
 each carries `liveness_unverified_since` and a `liveness_note` in `list`
 and `get`. `missing` is the sweep's judgement on the evidence available to
 it, not proof that the agent has exited. A run as another user, as root or
 against another tmux server can mark live rows `missing`.
+
+Past its grace period, a `pending` row whose agent runs but has not
+reported in stays `pending` and gets the `liveness_note` `unreported`. Its
+agent is alive, but no hook has reported since its launch: it may sit at a
+Claude Code startup screen or idle at its prompt, and agent-director cannot
+tell which. Such a row is in neither `ids` nor `unverified_ids`; find it
+with `list` or `get`. To act on it, read the pane, then type:
+
+```sh
+agent-director read-pane --claude-instance-id "$id"
+agent-director send-keys --claude-instance-id "$id" --allow-pending --text "<answer or prompt>"
+```
+
+Only a caller that looked at the pane should type: keys sent without a look
+can answer a startup screen. A caller that cannot judge the pane ends the
+launch with the live-row sequence of the [caller contract](#caller-contract)
+(`kill`, then `find-missing`) or hands it to a human. `send-keys` still
+refuses a `pending` row without `--allow-pending`, noted or not. A later
+sweep that finds the agent alive keeps the note; the agent's next hook
+clears it and moves the row on.
 
 Finished rows (`ended` or `missing`) are never removed on their own: no
 `agent-director` verb removes a row you name, and only an `expire` you
@@ -645,10 +679,12 @@ the class of every tmux error, is in
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not
   retry until `get` shows it `ended` or `missing`. Then retry a `spawn`
   with `--claude-instance-id` by adding `--reuse-finished`; without it the
-  spawn collides with the finished row.
+  spawn collides with the finished row. A row noted `unreported` instead
+  has a running agent: use it or end it before you retry.
 - `pending` means a launch is in progress; `status`, `get` and `list` show
   its start (`launch_started_at`). `kill` on a `pending` row aborts a stuck
   launch.
+- To use or end a `pending` row noted `unreported`, see [Maintenance](#maintenance).
 - `ErrConfigMalformed` means agent-director cannot use its config file:
   take no action, alert once, never read it as "dead".
 - A reused id starts with no memory of its earlier lives.
@@ -1252,7 +1288,8 @@ When the reply to the call that created a launch's session was lost,
 agent-director has not recorded the agent's pane, so the agent's hooks do
 not apply to the row, which can stay `pending` although its agent works.
 Once the grace period has passed, `find-missing` adopts the agent's pane,
-and the hooks apply from then on. Each created pane carries the pane label
+notes the row `unreported` when the agent runs, and the hooks apply from
+then on. Each created pane carries the pane label
 `@ad_pane`, `<token> <pane id>`.
 
 1. Find the labelled session and read its label (steps 1 and 2 of the
@@ -1423,9 +1460,12 @@ Never delete those rows: their history is what `resume` uses.
    back the copy of `state.db` (with its `-wal` and `-shm` files) taken
    before the install and delete any `state.db-wal` or `state.db-shm` the
    copy does not include, which loses every write since the install, or run
-   the [downgrade recipe](docs/migration-guide.md#v5--v4-reverses-migratev4tov5),
-   which keeps the rows but loses the values of the columns the migration
-   added.
+   the downgrade recipes down to the previous binary's schema, newest first
+   ([v6 → v5](docs/migration-guide.md#v6--v5-reverses-migratev5tov6) for
+   0.11.x, then
+   [v5 → v4](docs/migration-guide.md#v5--v4-reverses-migratev4tov5) for an
+   older release), which keep the rows but lose the values of the columns
+   the migrations added.
 4. Start the caller's old version.
 5. Later, follow the caller's switch-over runbook from its start.
 

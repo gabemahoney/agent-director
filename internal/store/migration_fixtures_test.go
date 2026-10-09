@@ -4,8 +4,8 @@ package store
 // (they cannot import storefix, which imports store). A vN fixture has vN's
 // real physical schema: testdata/schema_v1.sql migrated through the production
 // steps (b.93m), in WAL mode so a refused open touches no bytes. The inline SQL
-// of the v4 history fixture and the v4→v5 failure arrangements lives only here
-// (SR-20.3).
+// of the v4 history fixture, the v5 fixture and the v4→v5 and v5→v6 failure
+// arrangements lives only here (SR-20.3).
 
 import (
 	"crypto/sha256"
@@ -284,6 +284,19 @@ type columnSpec struct {
 // key returns "table.column".
 func (c columnSpec) key() string { return c.table + "." + c.name }
 
+// addColumnDDL is the ALTER TABLE … ADD COLUMN statement that adds c with its
+// type, NOT NULL flag and default.
+func (c columnSpec) addColumnDDL() string {
+	ddl := "ALTER TABLE " + c.table + " ADD COLUMN " + c.name + " " + c.typ
+	if c.notNull {
+		ddl += " NOT NULL"
+	}
+	if c.dflt != "" {
+		ddl += " DEFAULT " + c.dflt
+	}
+	return ddl
+}
+
 // migratedValue is the quote() literal ADD COLUMN gives an existing row.
 func (c columnSpec) migratedValue() string {
 	if c.dflt == "" {
@@ -316,6 +329,151 @@ var v5ColumnSpecs = []columnSpec{
 	{"spawns", "pane_pid", "INTEGER", false, ""},
 	{"spawns", "pane_starttime", "TEXT", false, ""},
 	{"session_history", "life_number", "INTEGER", true, "0"},
+}
+
+// v6ColumnSpecs are the three launch-owner spawns columns the v5→v6 step adds,
+// in schema order (b.kdf).
+var v6ColumnSpecs = []columnSpec{
+	{"spawns", "launch_owner_pid", "INTEGER", false, ""},
+	{"spawns", "launch_owner_starttime", "TEXT", false, ""},
+	{"spawns", "launch_owner_pidns", "TEXT", false, ""},
+}
+
+// v6ColumnNames are v6ColumnSpecs' column names, in order.
+func v6ColumnNames() []string {
+	var names []string
+	for _, c := range v6ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// assertV6Defaults checks id's v6 columns hold their migrated default: no
+// owner (NULL).
+func assertV6Defaults(t *testing.T, path, id string) {
+	t.Helper()
+	got := readRawSpawn(t, path, id, v6ColumnNames())
+	for _, spec := range v6ColumnSpecs {
+		if v := got[spec.name]; v != spec.migratedValue() {
+			t.Errorf("%s: %s = %s; want %s", id, spec.key(), v, spec.migratedValue())
+		}
+	}
+}
+
+// assertNoV6Columns fails if any v6 column is present.
+func assertNoV6Columns(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, name := range tableColumnNames(t, db, "spawns") {
+			for _, want := range v6ColumnSpecs {
+				if strings.EqualFold(name, want.name) {
+					t.Errorf("%s present; want absent", want.key())
+				}
+			}
+		}
+	})
+}
+
+// preAddV6Columns adds the named v6 spawns columns with their definitions: a
+// v5→v6 hop that stopped part-way.
+func preAddV6Columns(t *testing.T, path string, names ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, n := range names {
+			for _, spec := range v6ColumnSpecs {
+				if spec.name == n {
+					mustExec(t, db, spec.addColumnDDL())
+				}
+			}
+		}
+	})
+}
+
+// breakV6PIDNSColumn adds LAUNCH_OWNER_PIDNS to a v5 store: SQLite column
+// names ignore case, but the hop's probe compares them exactly, so the hop
+// adds launch_owner_pid and launch_owner_starttime and then fails at
+// launch_owner_pidns, its last column, as a duplicate column.
+func breakV6PIDNSColumn(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE spawns ADD COLUMN LAUNCH_OWNER_PIDNS TEXT") })
+}
+
+// v5Fixture describes what makeV5Fixture seeded; rows holds quote() literals
+// of every v5 spawns column read before the hop.
+type v5Fixture struct {
+	dir, path string
+
+	pending, waiting, ended string
+	ids                     []string
+	spawnsCols              []string
+	rows                    map[string]map[string]string
+}
+
+// makeV5Fixture builds a genuine v5 store under dir holding a pending row in
+// the middle of a launch (launch start, token, socket, pane identity, no
+// session), a waiting row with every identity, and an ended row, closed.
+func makeV5Fixture(t *testing.T, dir string) v5Fixture {
+	t.Helper()
+	f := v5Fixture{dir: dir, path: makeVersionedDB(t, dir, 5), pending: "v5-pending", waiting: "v5-waiting", ended: "v5-ended"}
+	f.ids = []string{f.pending, f.waiting, f.ended}
+	// id, state, cwd, tmux name, relay, session, jsonl, started, ended, pid, proc
+	// start, row version, launch start, life, no_pre_trust, token, socket, server
+	// pid / started / starttime, pane id / pid / starttime, liveness since / note.
+	rows := [][]any{
+		{f.pending, "pending", "/work/pending", "ad-pending", "off", nil, nil, "2026-03-01 10:00:00", nil, nil, nil,
+			1, int64(1772359200123), 0, 0, "0123456789abcdef", "/tmp/ad-sock", 4100, 1767225600, "123", "%1", 4201, "456",
+			nil, nil},
+		{f.waiting, "waiting", "/work/waiting", "ad-waiting", "on", "sess-w", "/t/w.jsonl", "2026-03-02 10:00:00", nil, 4202, "789",
+			5, nil, 2, 1, "fedcba9876543210", "/tmp/ad-sock", 4100, 1767225600, "123", "%2", 4202, "789",
+			"2026-03-02 11:00:00", "probe_eacces"},
+		{f.ended, "ended", "/work/ended", "ad-ended", "off", "sess-e", "/t/e.jsonl", "2026-03-03 10:00:00", "2026-03-03 12:00:00",
+			nil, nil, 9, nil, 1, 0, "00112233aabbccdd", "/tmp/ad-sock", nil, nil, nil, nil, nil, nil, nil, nil},
+	}
+	withRaw(t, f.path, func(db *sql.DB) {
+		for _, r := range rows {
+			mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode,
+				claude_session_id, jsonl_path, started_at, ended_at, pid, proc_starttime, row_version, launch_started_at,
+				life_number, no_pre_trust, launch_token, tmux_socket, tmux_server_pid, tmux_server_started,
+				tmux_server_starttime, pane_id, pane_pid, pane_starttime, liveness_unverified_since, liveness_note)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r...)
+		}
+		f.spawnsCols = tableColumnNames(t, db, "spawns")
+	})
+	f.rows = map[string]map[string]string{}
+	for _, id := range f.ids {
+		f.rows[id] = readRawSpawn(t, f.path, id, f.spawnsCols)
+	}
+	return f
+}
+
+// v6ToV5RecipeStatements reverses migrateV5toV6: the three v6 columns dropped
+// in the order the hop adds them, then the version stamped back to 5. It must
+// match docs/migration-guide.md's "v6 → v5" recipe statement for statement.
+var v6ToV5RecipeStatements = []string{
+	"ALTER TABLE spawns DROP COLUMN launch_owner_pid",
+	"ALTER TABLE spawns DROP COLUMN launch_owner_starttime",
+	"ALTER TABLE spawns DROP COLUMN launch_owner_pidns",
+	"PRAGMA user_version = 5",
+}
+
+// applyRecipe runs stmts on the closed store at path in one transaction.
+func applyRecipe(t *testing.T, path string, stmts []string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		for _, stmt := range stmts {
+			if _, err := tx.Exec(stmt); err != nil {
+				_ = tx.Rollback()
+				t.Fatalf("%s: %v", stmt, err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	})
 }
 
 // v5ColumnSpecByKey looks up a v5 column by "table.column".
@@ -554,14 +712,7 @@ func preAddV5Columns(t *testing.T, path string, keys ...string) {
 			if !ok {
 				t.Fatalf("unknown v5 column %q", k)
 			}
-			ddl := "ALTER TABLE " + spec.table + " ADD COLUMN " + spec.name + " " + spec.typ
-			if spec.notNull {
-				ddl += " NOT NULL"
-			}
-			if spec.dflt != "" {
-				ddl += " DEFAULT " + spec.dflt
-			}
-			mustExec(t, db, ddl)
+			mustExec(t, db, spec.addColumnDDL())
 		}
 	})
 }
@@ -654,21 +805,7 @@ var v5ToV4RecipeStatements = []string{
 // applyV5ToV4Recipe runs the recipe on a closed v5 store in one transaction.
 func applyV5ToV4Recipe(t *testing.T, path string) {
 	t.Helper()
-	withRaw(t, path, func(db *sql.DB) {
-		tx, err := db.Begin()
-		if err != nil {
-			t.Fatalf("begin: %v", err)
-		}
-		for _, stmt := range v5ToV4RecipeStatements {
-			if _, err := tx.Exec(stmt); err != nil {
-				_ = tx.Rollback()
-				t.Fatalf("%s: %v", stmt, err)
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	})
+	applyRecipe(t, path, v5ToV4RecipeStatements)
 }
 
 // seedV5DowngradeRows seeds a closed v5 store with a row reused twice (life 2,

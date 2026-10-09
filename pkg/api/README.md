@@ -116,7 +116,12 @@ godoc). Most-likely sentinel errors:
 session-creating call timed out, here or in `Resume`: the row stays
 `pending`; do not retry until `Get` shows it `ended` or `missing`; then
 `Spawn` an explicit `ClaudeInstanceID` again with `ReuseFinished`, since
-without it the spawn collides with the id's finished row) and `ErrTmuxSessionConflict`
+without it the spawn collides with the id's finished row. When the launch
+did start, the row may instead stay `pending` with `LivenessNote`
+`unreported`, because its agent runs: use that agent (`ReadPane`, then
+`SendKeys` with `AllowPending`; only a caller that looked should type) or
+end it with `Kill` and the live-row sequence and retry once `Get` shows it
+`ended` or `missing`) and `ErrTmuxSessionConflict`
 (an explicit id with no row whose labelled session from an earlier life
 still runs, or conflicting labels; nothing is written. Also a held name:
 tmux answered "duplicate session" and the requested name is held by a
@@ -300,6 +305,16 @@ call), or when the only session found is one an earlier launch left
 behind (not this launch's session). The keys reach the agent's pane, but
 the caller cannot be sure the prompt it saw is still showing when they
 arrive.
+
+A `pending` row whose `LivenessNote` is `unreported` (written by
+`FindMissing`) has a running agent that has not reported in since its
+launch: it may show a Claude Code startup screen or sit idle at its
+prompt. Read it with `ReadPane` first and send with `AllowPending` only
+having looked; without it the row is refused like any `pending` row. A
+caller that cannot judge the pane ends the launch with `Kill` and the
+live-row sequence (see `Kill` below) or hands it to a human. A later
+`FindMissing` that finds the agent alive keeps the note; the agent's next
+hook clears it.
 
 #### Pure `SendKeys` function
 

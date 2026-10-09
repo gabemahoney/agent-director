@@ -135,10 +135,13 @@ func (r *findMissingRun) oursRow(row findMissingRow, it LiveSpawnIdentity, state
 // adoptedPaneRow judges a row that recorded no process evidence by the pane
 // its adoption found (SR-11.3, SR-11.1): the agent process is selected from
 // the row's SessionStart identity and the adopted pane identity
-// (tmux.SelectAgentProcess) and judged once (tmux.JudgeProcess). Alive: a
-// note the row carries is cleared; gone: marked missing with reason
-// proc_absent; unknown: unverified, note probe_eacces. Every write is guarded
-// on sa.Guard, the adoption write's snapshot when it applied.
+// (tmux.SelectAgentProcess) and judged once (tmux.JudgeProcess). Alive
+// (aliveRow): a pending row, its pane just adopted, stays pending and is
+// noted unreported, or keeps a provenance_conflict note (b.kdf), any other
+// row's note is cleared; gone: marked
+// missing with reason proc_absent; unknown: unverified, note probe_eacces.
+// Every write is guarded on sa.Guard, the adoption write's snapshot when it
+// applied.
 func (r *findMissingRun) adoptedPaneRow(row findMissingRow, it LiveSpawnIdentity, sa sweepAdoption) findMissingRow {
 	agent := tmux.SelectAgentProcess(
 		tmux.ProcIdentity{PID: it.PID, Starttime: it.ProcStarttime},
@@ -146,7 +149,7 @@ func (r *findMissingRun) adoptedPaneRow(row findMissingRow, it LiveSpawnIdentity
 	)
 	switch tmux.JudgeProcess(r.pc, agent.Identity) {
 	case tmux.ProcAlive:
-		return r.clearRow(row, it, sa.Guard)
+		return r.aliveRow(row, it, sa.Guard, sa.Identity)
 	case tmux.ProcGone:
 		return r.markRow(row, it, sa.Guard, reasonProcAbsent, nil)
 	case tmux.ProcUnknown:

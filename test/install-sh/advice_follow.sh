@@ -788,18 +788,32 @@ test_J5_StaleBinaryFromRelease() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
+# j6_break_hop <state.db>: make the newest migration step, v5→v6
+# (migrateV5toV6, b.kdf), fail part-way on a store stamped v5 that keeps its
+# v6 columns: launch_owner_pidns is re-added as LAUNCH_OWNER_PIDNS, a name
+# SQLite's columns treat as the same but the step's probe does not, so the
+# step's ADD COLUMN launch_owner_pidns fails as a duplicate and rolls the step
+# back. j6_repair_hop removes that cause. Both name the v5→v6 step: give them
+# the next step's failure when the schema moves on.
+j6_break_hop() {
+    [[ "$SCHEMA" == 6 ]] || { bad "j6_break_hop breaks the v5→v6 step; update it for v$SCHEMA"; return 1; }
+    "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN launch_owner_pidns;
+        ALTER TABLE spawns ADD COLUMN LAUNCH_OWNER_PIDNS TEXT;"
+}
+j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN LAUNCH_OWNER_PIDNS;"; }
+
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
-# make the store one version older with a store_meta table the migration cannot
-# write, and run J6ARGV, an upgrade with --keep-prior, into that failure;
-# leaves HOME in J6H.
+# make the store one version older with a column the migration step cannot
+# add (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
+# failure; leaves HOME in J6H.
 j6_failing_migration() {
     J6H="$(new_home)"
     run "$J6H" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
     if [[ "${1:-}" == pre-0.11.0 ]]; then j11_pre_admin "$J6H" || return 1; fi
-    "$SQLITE" "$J6H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));
-        DROP TABLE store_meta; CREATE TABLE store_meta (bogus TEXT);" || { bad "damage store"; return 1; }
+    "$SQLITE" "$J6H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));" || { bad "damage store"; return 1; }
+    j6_break_hop "$J6H/.agent-director/state.db" || { bad "damage store"; return 1; }
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run "$J6H" "${J6ARGV[@]}"
     expect_exit5 ErrStoreOpen "migration step fails" || return 1
@@ -815,12 +829,12 @@ j6_failing_migration() {
 test_J6_MigrationFailedRerunRetries() {
     j6_failing_migration || return
     run "$J6H" "${J6ARGV[@]}" # the cause still holds: the same refusal
-    expect_exit5 ErrStoreOpen "re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "re-run while the step's cause still holds" || return
     expect_advice "re-running this install will retry it."
     local could="  schema  : state.db at v$((SCHEMA - 1)); could not tell whether a migration is needed (agent-director list failed: ErrStoreOpen)"
     grep -qxF "$could" "$OUT" || bad "no \"$could\" line: $(grep -F "  schema  : " "$OUT")"
     [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)) on a failed re-run"
-    "$SQLITE" "$J6H/.agent-director/state.db" "DROP TABLE store_meta;" || { bad "repair store"; return; }
+    j6_repair_hop "$J6H/.agent-director/state.db" || { bad "repair store"; return; }
     run "$J6H" "${J6ARGV[@]}"
     expect_rc 0 "re-run once the cause is gone" || return
     [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J6H"); want v$SCHEMA"
@@ -841,7 +855,7 @@ test_J6_RerunKeepsPriorRollbackCopy() {
     cmp -s "$J11C.prior" "$BIN_OLD" || bad "first run did not snapshot the old agent-director"
     cmp -s "$J11A.prior" "$ADMIN_OLD" || bad "first run did not snapshot the old agent-director-admin"
     run "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrStoreOpen "advised re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "advised re-run while the step's cause still holds" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" "kept $J11A.prior" "$J11_SAME_PAIR"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -863,7 +877,7 @@ test_J6_RerunPreAdminUpgradeKeepsRemoveAdvice() {
     grep -qxF "  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A" "$OUT" \
         || bad "first run: no remove-it admin prior line: $(flat "$OUT")"
     run "$J6H" "${J6ARGV[@]}"
-    expect_exit5 ErrStoreOpen "advised re-run while store_meta is still bad" || return
+    expect_exit5 ErrStoreOpen "advised re-run while the step's cause still holds" || return
     j11_not_snapshotted "prior   " "kept $J11C.prior" "$J11_SAME_PAIR"
     j11_not_snapshotted "admin prior" none "$J11_SAME_PAIR" "; to roll back, remove $J11A"
     cmp -s "$J11C.prior" "$BIN_OLD" \
@@ -1270,7 +1284,7 @@ test_J7_UnreadableAfterProbeRerun() {
     local answer could="tell whether the probe (agent-director list) ran a migration. A sentinel written before this install was beside state.db, and it may have authorized one."
     for answer in "" "[{\"user_version\":$SCHEMA}]"; do
         j6_failing_migration || continue
-        "$SQLITE" "$J6H/.agent-director/state.db" "DROP TABLE store_meta;" || { bad "repair store"; continue; }
+        j6_repair_hop "$J6H/.agent-director/state.db" || { bad "repair store"; continue; }
         J7H="$J6H"
         J7ARGV=("${J6ARGV[@]}")
         j7_run 2 "$answer" # step 2's read, then step 3's after the probe

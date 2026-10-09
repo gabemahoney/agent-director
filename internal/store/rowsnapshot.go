@@ -69,6 +69,51 @@ type LaunchIdentity struct {
 	PaneStarttime   string // pane_starttime, same form as proc_starttime
 }
 
+// LaunchOwner is the process that began a row's current launch (b.kdf, b.146
+// rule 11; schema v6): the spawn, reuse or resume whose write set the row
+// pending. The write that begins a launch records it (InsertPending,
+// ResetForReuse, MoveToPending), and the launch ends its hold when it ends:
+// its identity write (RecordLaunchIdentity) clears it, and so does its
+// release (ReleaseLaunchOwner) on a path that ends without that write.
+// find-missing does not judge a pending row while its owner is provably
+// alive, so a launch that stalls past the pending grace period is neither
+// marked missing nor noted unreported under it.
+//
+// Zero values mean NULL. PID 0 means no owner is recorded: a row from before
+// schema v6, a launch whose own start time or pid namespace could not be
+// read, or a launch whose hold has ended. find-missing judges such a row by
+// its pending grace period alone. The columns are read only for a pending
+// row; on any other row they carry no meaning.
+type LaunchOwner struct {
+	PID          int    // launch_owner_pid
+	Starttime    string // launch_owner_starttime, same form as proc_starttime
+	PIDNamespace string // launch_owner_pidns, as probe.SelfPIDNamespace read it; "" = NULL
+}
+
+// launchOwnerColumns is the one column fragment a read selects to fill a
+// row's LaunchOwner, in launchOwnerDest's order: each column read NULL as its
+// zero value through COALESCE.
+const launchOwnerColumns = `COALESCE(launch_owner_pid, 0), COALESCE(launch_owner_starttime, ''),
+        COALESCE(launch_owner_pidns, '')`
+
+// launchOwnerDest returns the Scan destinations for launchOwnerColumns, in its
+// order.
+func launchOwnerDest(o *LaunchOwner) []any {
+	return []any{&o.PID, &o.Starttime, &o.PIDNamespace}
+}
+
+// launchOwnerArgs returns o as the bound arguments of the three launch-owner
+// columns, in schema order, a zero value as NULL.
+func launchOwnerArgs(o LaunchOwner) []any {
+	return []any{positiveIntArg(o.PID), nullableStringArg(o.Starttime), nullableStringArg(o.PIDNamespace)}
+}
+
+// launchOwnerClear is the SET fragment that ends a launch's hold: the three
+// launch-owner columns NULLed (RecordLaunchIdentity, ReleaseLaunchOwner).
+const launchOwnerClear = `launch_owner_pid       = NULL,
+        launch_owner_starttime = NULL,
+        launch_owner_pidns     = NULL`
+
 // lifeColumns is the one column fragment a read selects to fill a row's
 // RowSnapshot and LaunchIdentity, in lifeScan.dest's order: the snapshot's six
 // columns, each through the expression snapshotMatchSQL compares, then the

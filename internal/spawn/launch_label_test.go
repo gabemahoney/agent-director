@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -153,7 +154,9 @@ func TestLaunchLabelsDollarAndBackslashNamesByID(t *testing.T) {
 }
 
 // TestLaunchLostReplyRecordsNoIdentity: a create that exits 0 with an
-// unparseable reply succeeds with no label by id and no identity write.
+// unparseable reply succeeds with no label by id and no identity write; the
+// one start-time read is the launch owner's, this process's (b.kdf), which
+// the fake reads as gone, so no owner is recorded and none released.
 func TestLaunchLostReplyRecordsNoIdentity(t *testing.T) {
 	for _, name := range []string{"cd-plain", `a$b`} {
 		t.Run(name, func(t *testing.T) {
@@ -168,8 +171,11 @@ func TestLaunchLostReplyRecordsNoIdentity(t *testing.T) {
 				t.Errorf("row = {state %q, row_version %d, token %q, socket %q}; want pending, 0, a token, %q",
 					row.State, row.RowVersion, row.Identity.Token, row.Identity.Socket, e.socket)
 			}
-			if row.Identity.ServerPID != 0 || row.Identity.PaneID != "" || len(e.pc.StartTimeCalls()) != 0 {
-				t.Errorf("identity = %+v, start-time reads %v; want none", row.Identity, e.pc.StartTimeCalls())
+			if calls := e.pc.StartTimeCalls(); row.Identity.ServerPID != 0 || row.Identity.PaneID != "" || !slices.Equal(calls, []int{os.Getpid()}) {
+				t.Errorf("identity = %+v, start-time reads %v; want none, and only the owner's read of pid %d", row.Identity, calls, os.Getpid())
+			}
+			if row.LaunchOwner != (store.LaunchOwner{}) {
+				t.Errorf("launch owner = %+v; want none (this process reads as gone)", row.LaunchOwner)
 			}
 		})
 	}

@@ -259,8 +259,10 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     last_seen_at, and its launch start in milliseconds.
 //  7. The reset (ResetForReuse), conditional on the row still being finished
 //     with the examined snapshot: the fresh row is the composition's request
-//     fields with that reading, the new token, the prepared socket and the
-//     call's NoPreTrust. Changed or removed gives the lost-race
+//     fields with that reading, the new token, the prepared socket, the
+//     call's NoPreTrust and the launch owner, this process
+//     (spawn.CurrentLaunchOwner through the start-time reader; b.kdf).
+//     Changed or removed gives the lost-race
 //     ErrInstanceIdCollision (reuseLostRaceError); a store error gives the
 //     archive or reuse-change ErrInternal (reuseChangeError). Nothing changed
 //     and nothing is launched in any of these.
@@ -293,6 +295,8 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     this spawn reset it, or, on a store error, still pending with one WARN
 //     line) is the launch error's row sentence, and ad.spawn.reuse_restored
 //     records it. The launch error is returned whatever the restore did.
+//     Every path that ends with no identity write applied and no restore
+//     applied ends the launch's hold (finishedLaunch's release, b.kdf).
 //
 // Success does not say whether a reset happened (SR-10.7).
 func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (SpawnResult, error) {
@@ -316,6 +320,7 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	fresh.StartedAt = now
 	fresh.LaunchStartedAtMillis = now.UnixMilli()
 	fresh.Identity = LaunchIdentity{Token: token, Socket: socket}
+	fresh.LaunchOwner = spawn.CurrentLaunchOwner(d.pc)
 	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, fresh)
 	if err != nil {
 		return SpawnResult{}, reuseChangeError(id, err)
@@ -330,7 +335,7 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	req.StoreID = d.storeID
 	out := spawn.CreateAndLabel(d.t, req)
 	emitReused(id, ex, archived)
-	if err := d.launchOnto(ex, resetVersion).outcome(out, req); err != nil {
+	if err := d.launchOnto(ex, resetVersion, fresh.LaunchOwner).outcome(out, req); err != nil {
 		return SpawnResult{}, err
 	}
 	return SpawnResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil
@@ -359,11 +364,13 @@ func emitReused(instanceID string, ex reuseExamined, archivedSessionID string) {
 // shared with resume): the row as examined (reuseSpawnOf over ex.row: its
 // instance id, recorded name, state, ended_at as parsed, pid and session-id
 // presence, pre-reset launch token and server identity), the disagree
-// reasons the decision already wrote, and resetVersion, the version the reset
-// produced. The identity write is the reuse store's; the restore is
-// RestoreAfterFailedReuse with resetVersion, ex.row.Life unchanged and a
-// failure time read from the Client clock when the restore is made.
-func (d reuseDeps) launchOnto(ex reuseExamined, resetVersion int64) finishedLaunch {
+// reasons the decision already wrote, resetVersion, the version the reset
+// produced, and owner, the launch owner the reset recorded. The identity
+// write is the reuse store's, and so is the release of the launch's hold when
+// the reset recorded an owner and the store provides it (ownerReleaser); the
+// restore is RestoreAfterFailedReuse with resetVersion, ex.row.Life unchanged
+// and a failure time read from the Client clock when the restore is made.
+func (d reuseDeps) launchOnto(ex reuseExamined, resetVersion int64, owner LaunchOwner) finishedLaunch {
 	row := reuseSpawnOf(ex.pre.InstanceID, ex.row)
 	return finishedLaunch{
 		v:        reuseLaunchVerb,
@@ -375,6 +382,7 @@ func (d reuseDeps) launchOnto(ex reuseExamined, resetVersion int64) finishedLaun
 		lg:       d.lg,
 		who:      d.who,
 		identity: d.rs,
+		release:  ownerReleaser(d.rs, owner),
 		restoreWrite: func() (CondResult, error) {
 			return d.rs.RestoreAfterFailedReuse(row.ClaudeInstanceID, resetVersion, ex.row.Life, d.now())
 		},

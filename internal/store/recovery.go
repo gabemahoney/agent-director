@@ -45,6 +45,11 @@ type LiveSpawnIdentity struct {
 	// token is well formed (SR-5.5). It equals GetSpawn's Identity for the
 	// same row.
 	Identity LaunchIdentity
+	// LaunchOwner is the process that began the row's current launch, while
+	// that launch holds the row (b.kdf): the sweep does not judge a pending
+	// row whose owner is provably alive. The zero value (PID 0) records no
+	// owner. It equals GetSpawn's LaunchOwner for the same row.
+	LaunchOwner LaunchOwner
 }
 
 // ListLiveSpawnIdentities returns a LiveSpawnIdentity for every row in a
@@ -53,12 +58,13 @@ type LiveSpawnIdentity struct {
 // live in the store; each row's state and launch start let the sweep leave
 // a `pending` row inside its pending grace period untouched (SR-11.2).
 //
-// The snapshot and launch identity are read through lifeColumns, the
-// fragment every read returning a Spawn selects, so Snapshot.StartedAt is
-// the stored text the snapshot-match condition compares. launch_started_at
-// is decoded by decodeLaunchStartedAt and launch_token by decodeLaunchToken,
-// and the nullable columns read NULL as their zero value through COALESCE,
-// so no stored launch start, token or identity value fails the read; the
+// The snapshot and launch identity are read through lifeColumns, and the
+// launch owner through launchOwnerColumns, the fragments every read returning
+// a Spawn selects, so Snapshot.StartedAt is the stored text the
+// snapshot-match condition compares. launch_started_at is decoded by
+// decodeLaunchStartedAt and launch_token by decodeLaunchToken, and the
+// nullable columns read NULL as their zero value through COALESCE, so no
+// stored launch start, token, identity or owner value fails the read; the
 // structured columns (labels, claude_args, extra_env) are never read
 // (SR-5.5).
 //
@@ -72,6 +78,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 		args[i] = st
 	}
 	q := "SELECT claude_instance_id, state, launch_started_at, COALESCE(liveness_note, ''), " + lifeColumns +
+		", " + launchOwnerColumns +
 		" FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -86,6 +93,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 			life            lifeScan
 		)
 		dest := append([]any{&it.ClaudeInstanceID, &it.State, &launchStartedAt, &it.LivenessNote}, life.dest()...)
+		dest = append(dest, launchOwnerDest(&it.LaunchOwner)...)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("store: list live identities scan: %w", err)
 		}
@@ -102,41 +110,19 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 	return ids, nil
 }
 
-// CloseOrphanedPermissionRequests denies all open permission_requests rows for
-// a Spawn that has been marked missing. Each open row receives its own
-// per-row UPDATE via DecidePermissionRequest with DecisionReasonFindMissing so
-// the relay polling loop observes a fail-closed deny rather than spinning to
-// its own internal timeout. No-op if the Spawn has no open rows.
-//
-// find-missing calls this immediately after each mark that applied
-// (MarkMissingIfSameLife). Per-row errors are surfaced to the caller; the
-// caller decides whether to log-and-continue or abort the sweep.
-func (s *Store) CloseOrphanedPermissionRequests(instanceID string) error {
-	rows, err := s.OpenPermissionRequestsForSpawn(instanceID)
-	if err != nil {
-		return fmt.Errorf("store: close orphaned permission requests: %w", err)
-	}
-	for _, row := range rows {
-		ok, err := s.DecidePermissionRequest(instanceID, row.RequestToken, "deny", DecisionReasonFindMissing, WriterProcessFindMissing)
-		if err != nil {
-			return fmt.Errorf("store: close orphaned permission request (token=%s): %w", row.RequestToken, err)
-		}
-		// Emit one ad.find_missing.tick per successfully closed row (SR-A-2.5).
-		// The Epic 3 ad.row_mutation.committed event fires in DecidePermissionRequest
-		// for the same write; this event adds the reconciliation_reason layer.
-		// A trail-emit failure must not fail the store call (SR-A-3.2).
-		if ok {
-			_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
-				"claude_instance_id":    instanceID,
-				"request_token":         row.RequestToken,
-				"prior_state":           nil,
-				"new_state":             nil,
-				"reconciliation_reason": "permission_orphan_closeout",
-				"source":                "ad_find_missing",
-			})
-		}
-	}
-	return nil
+// emitOrphanCloseoutTick emits the one ad.find_missing.tick of a permission
+// request find-missing closed with its row's mark (SR-A-2.5): reconciliation
+// reason permission_orphan_closeout, carrying the request's token. A
+// trail-emit failure must not fail the store call (SR-A-3.2).
+func emitOrphanCloseoutTick(instanceID, requestToken string) {
+	_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
+		"claude_instance_id":    instanceID,
+		"request_token":         requestToken,
+		"prior_state":           nil,
+		"new_state":             nil,
+		"reconciliation_reason": "permission_orphan_closeout",
+		"source":                "ad_find_missing",
+	})
 }
 
 // DeleteSpawn removes a row by id. Returns ErrSpawnNotFound when the

@@ -170,7 +170,7 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				return err
 			}
-			res, _, err := s.MoveToPending(id, sp.Snapshot, 1700000000000, "0123456789abcdef", apitest.TestSocket, "")
+			res, _, err := s.MoveToPending(id, sp.Snapshot, 1700000000000, "0123456789abcdef", apitest.TestSocket, "", store.LaunchOwner{})
 			if err == nil && res != store.CondApplied {
 				err = fmt.Errorf("MoveToPending(%q) = %v, want CondApplied", id, res)
 			}
@@ -185,14 +185,7 @@ var proxyWrites = []proxyWrite{
 		write: func(s *store.Store, id string) error {
 			return s.DeleteSpawn(id) // cascades to the id's permission request
 		},
-		observe: func(t *testing.T, s *store.Store, _, id string) any {
-			t.Helper()
-			rows, err := s.OpenPermissionRequestsForSpawn(id)
-			if err != nil {
-				t.Fatalf("OpenPermissionRequestsForSpawn(%q): %v", id, err)
-			}
-			return rows
-		},
+		observe: observeOpenRequests,
 	},
 	{
 		name: "SessionEnd ended transition",
@@ -221,6 +214,29 @@ var proxyWrites = []proxyWrite{
 		write:   recordLaunchIdentity,
 		observe: observeColumns,
 	},
+	{
+		name: "decide an open permission request",
+		kind: storefix.WriteFailPermissionDecision,
+		seed: func(t *testing.T, s *store.Store, _, id string) { storefix.SeedCheckPermission(t, s, id) },
+		write: func(s *store.Store, id string) error {
+			ok, err := s.DecidePermissionRequest(id, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide)
+			if err == nil && !ok {
+				err = fmt.Errorf("DecidePermissionRequest(%q) not updated", id)
+			}
+			return err
+		},
+		observe: observeOpenRequests,
+	},
+}
+
+// observeOpenRequests returns the id's open permission requests.
+func observeOpenRequests(t *testing.T, s *store.Store, _, id string) any {
+	t.Helper()
+	rows, err := s.OpenPermissionRequestsForSpawn(id)
+	if err != nil {
+		t.Fatalf("OpenPermissionRequestsForSpawn(%q): %v", id, err)
+	}
+	return rows
 }
 
 // runWrite runs w on id and asserts it was blocked by the injected blockedBy

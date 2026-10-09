@@ -26,7 +26,7 @@ func expireMove(t *testing.T, e *killEnv, r killRow) (store.Spawn, int64) {
 	if err != nil {
 		t.Fatalf("GetSpawn(%s): %v", r.ID, err)
 	}
-	res, moved, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), newToken(), r.Socket, "")
+	res, moved, err := e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), newToken(), r.Socket, "", store.LaunchOwner{})
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending(%s) = %v, %v; want applied", r.ID, res, err)
 	}

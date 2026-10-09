@@ -7,9 +7,11 @@ package store_test
 // write's own applied and stale cases are in row_version_find_missing_test.go.
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -38,7 +40,9 @@ func seedFMRow(t *testing.T, f *v5Store, state string, opts ...apitest.SpawnOpti
 // TestAppliedWriteChangesOnlyItsColumns checks each applied write sets only
 // its own columns and adds 1 to row_version, every other column kept: the
 // mark on every live state (prior state returned), the note (first and
-// overwrite), the clear, the adoption and EndHeldLaunch.
+// overwrite), the clear, the adoption, EndHeldLaunch and the unreported note
+// of a pending row (b.kdf), which keeps the state, launch_started_at (CSCB),
+// last_seen_at, the launch owner, every identity and an earlier note's time.
 func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	type applied struct {
 		name, state string
@@ -49,14 +53,33 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	note := func(s *store.Store, r fmRow) (store.CondResult, error) {
 		return s.SetLivenessNoteIfSameLife(r.id, r.examined, "fm new note")
 	}
+	unreported := func(s *store.Store, r fmRow) (store.CondResult, error) {
+		return s.NoteUnreportedIfSameLife(r.id, r.examined)
+	}
+	// newSince fails unless the write set liveness_unverified_since to a CURRENT_TIMESTAMP, then expects it.
+	newSince := func(t *testing.T, w *apitest.SpawnColumns, a apitest.SpawnColumns) {
+		s, _ := a.LivenessUnverifiedSince.(string)
+		if _, err := time.Parse(time.DateTime, s); err != nil {
+			t.Errorf("liveness_unverified_since = %#v; want a CURRENT_TIMESTAMP", a.LivenessUnverifiedSince)
+		}
+		w.LivenessUnverifiedSince = a.LivenessUnverifiedSince
+	}
 	cases := []applied{
 		{"note, first", store.StateWaiting, nil, note, func(t *testing.T, w *apitest.SpawnColumns, a apitest.SpawnColumns) {
-			s, _ := a.LivenessUnverifiedSince.(string)
-			if _, err := time.Parse(time.DateTime, s); err != nil {
-				t.Errorf("liveness_unverified_since = %#v; want a CURRENT_TIMESTAMP", a.LivenessUnverifiedSince)
-			}
-			w.LivenessNote, w.LivenessUnverifiedSince = "fm new note", a.LivenessUnverifiedSince
+			newSince(t, w, a)
+			w.LivenessNote = "fm new note"
 		}},
+		{"unreported, first", store.StatePending, withOwner, unreported, func(t *testing.T, w *apitest.SpawnColumns, a apitest.SpawnColumns) {
+			newSince(t, w, a)
+			w.LivenessNote = "unreported"
+		}},
+		// The seeded probe_eacces note's time (2026-01-01 00:00:00) is kept: the time a note first flagged the row.
+		{"unreported, over another note", store.StatePending, append(slices.Clone(liveness), withOwner...), unreported,
+			func(_ *testing.T, w *apitest.SpawnColumns, _ apitest.SpawnColumns) {
+				w.LivenessNote = "unreported"
+			}},
+		{"unreported, already unreported", store.StatePending, append(slices.Clone(unreportedNote), withOwner...), unreported,
+			func(*testing.T, *apitest.SpawnColumns, apitest.SpawnColumns) {}},
 		{"note, overwrite", store.StateWaiting, liveness, note, func(_ *testing.T, w *apitest.SpawnColumns, _ apitest.SpawnColumns) {
 			w.LivenessNote = "fm new note"
 		}},
@@ -117,9 +140,10 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	}
 }
 
-// TestFindMissingIfSameLifeRefused checks each guarded write (the adoption
-// included) is refused, writing nothing, for each differing snapshot
-// component, a repeat from the same snapshot, a finished row and a deleted one.
+// TestFindMissingIfSameLifeRefused checks each guarded write (the adoption and
+// the unreported note included) is refused, writing nothing, for each
+// differing snapshot component, a repeat from the same snapshot, a finished
+// row and a deleted one.
 func TestFindMissingIfSameLifeRefused(t *testing.T) {
 	writes := map[string]func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error){
 		"mark": func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
@@ -140,7 +164,14 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 			}
 			return "", res, err
 		},
+		"unreported": func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
+			res, err := s.NoteUnreportedIfSameLife(id, snap)
+			return "", res, err
+		},
 	}
+	// liveState is the state a write's refusal cases start from: the unreported
+	// note applies only to a pending row, so its cases start there (b.kdf).
+	liveState := map[string]string{"unreported": store.StatePending}
 	cases := []struct {
 		name   string
 		state  string                   // "" = waiting
@@ -168,7 +199,7 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 			t.Run(name+"/"+tc.name, func(t *testing.T) {
 				state := tc.state
 				if state == "" {
-					state = store.StateWaiting
+					state = cmp.Or(liveState[name], store.StateWaiting)
 				}
 				r := seedFMRow(t, f, state, liveness...)
 				if tc.mutate != nil {

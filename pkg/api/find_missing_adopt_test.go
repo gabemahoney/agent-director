@@ -80,7 +80,7 @@ func TestFindMissingAdoptLostReplyJudgesAdoptedPane(t *testing.T) {
 	}{
 		{"alive clears", "process_not_seen_session_present", procfix.Alive(fmStart), fmStart,
 			[]string{"adopt", "clear"}, "", nil, nil, "left_live"},
-		{"gone marks", "", procfix.Gone(), "", []string{"adopt", "mark", "close"}, "proc_absent", []string{"r"}, nil,
+		{"gone marks", "", procfix.Gone(), "", []string{"adopt", "mark"}, "proc_absent", []string{"r"}, nil,
 			"marked_missing"},
 		{"unreadable notes", "", procfix.Unreadable(), "", []string{"adopt", "note"}, "probe_eacces", nil,
 			[]string{"r"}, "left_unverified"},
@@ -127,7 +127,7 @@ var fmAdoptOutcomes = []struct {
 }
 
 // TestFindMissingVerdictAfterAdoptionRefused: an adoption, an applied adoption's mark, note or clear, and a plain
-// Gone mark, each guarded and refused or failing: neither list, no tick, no close, no write after it; a failure
+// Gone mark, each guarded and refused or failing: neither list, no tick, no write after it; a failure
 // alone is logged, naming the row; the disagree record's action says so (an adoption that did not apply records no
 // adopted); the sweep still marks a later dead row.
 func TestFindMissingVerdictAfterAdoptionRefused(t *testing.T) {
@@ -164,7 +164,7 @@ func TestFindMissingVerdictAfterAdoptionRefused(t *testing.T) {
 				res, lg, before := sweepFrom(t, st, pc, fmSweep{tmux: v.rec(v.row)})
 				assertLists(t, res, []string{"z"}, nil)
 				if ops := st.ops("r"); len(ops) == 0 || ops[len(ops)-1] != v.op {
-					t.Errorf("writes = %v; want the %s last, with no close", ops, v.op)
+					t.Errorf("writes = %v; want the %s last", ops, v.op)
 				}
 				if ticks := ticksSince(t, before, "r"); len(ticks) != 0 {
 					t.Errorf("ticks = %v; want none", ticks)

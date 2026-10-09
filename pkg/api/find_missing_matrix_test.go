@@ -58,7 +58,7 @@ type mxWant struct {
 
 // mxMark is a mark decided by one lookup, with tick reason and lookup_outcome.
 func mxMark(reason, outcome string, held bool) mxWant {
-	return mxWant{ops: []string{"mark", "close"}, reason: reason, outcome: outcome, held: held, lookups: 1}
+	return mxWant{ops: []string{"mark"}, reason: reason, outcome: outcome, held: held, lookups: 1}
 }
 
 // mxNote is an unverified row noted note after one lookup.
@@ -75,11 +75,13 @@ type mxPane struct {
 	fixed *mxWant
 }
 
-// mxPanes: the recorded pane process alive, dead or unreadable, or no pane recorded (a lost create reply).
+// mxPanes: the recorded pane process alive (the row stays pending, noted unreported, b.kdf), dead or unreadable,
+// or no pane recorded (a lost create reply).
 var mxPanes = []mxPane{
-	{name: "pane alive", proc: procfix.Alive(fmStart), fixed: &mxWant{reads: []int{mxPanePID}}},
+	{name: "pane alive", proc: procfix.Alive(fmStart),
+		fixed: &mxWant{ops: []string{"unreported"}, reason: "unreported", reads: []int{mxPanePID}}},
 	{name: "pane dead", proc: procfix.Gone(),
-		fixed: &mxWant{ops: []string{"mark", "close"}, reason: "proc_absent", reads: []int{mxPanePID}}},
+		fixed: &mxWant{ops: []string{"mark"}, reason: "proc_absent", reads: []int{mxPanePID}}},
 	{name: "pane unreadable", proc: procfix.Unreadable()},
 	{name: "no pane", none: true},
 }
@@ -190,17 +192,18 @@ type mxListing struct {
 // mxTokenPane is a pane carrying the launch token.
 var mxTokenPane = tmuxfix.SeedPane{PID: mxAdoptPID, AdPane: tmuxfix.Token}
 
-// mxListings: build-lead decision 1 (Epic 14): one token pane is adopted and its process judged; no token pane
-// counts as Gone (tmux_absent, lookup_outcome ours); two token panes or no listing leave it unverified.
+// mxListings: build-lead decision 1 (Epic 14): one token pane is adopted and its process judged (alive: the row
+// stays pending, noted unreported, b.kdf); no token pane counts as Gone (tmux_absent, lookup_outcome ours); two
+// token panes or no listing leave it unverified.
 var mxListings = []mxListing{
 	{name: "token pane alive", panes: []tmuxfix.SeedPane{mxTokenPane}, proc: procfix.Alive(fmStart),
-		want: mxWant{ops: []string{"adopt"}}},
+		want: mxWant{ops: []string{"adopt", "unreported"}, reason: "unreported"}},
 	{name: "token pane dead", panes: []tmuxfix.SeedPane{mxTokenPane}, proc: procfix.Gone(),
-		want: mxWant{ops: []string{"adopt", "mark", "close"}, reason: "proc_absent"}},
+		want: mxWant{ops: []string{"adopt", "mark"}, reason: "proc_absent"}},
 	{name: "token pane unreadable", panes: []tmuxfix.SeedPane{mxTokenPane}, proc: procfix.Unreadable(),
 		want: mxWant{ops: []string{"adopt", "note"}, note: "probe_eacces", reason: "probe_eacces"}},
 	{name: "no token pane", panes: []tmuxfix.SeedPane{{PID: mxAdoptPID}}, proc: procfix.Alive(fmStart),
-		want: mxWant{ops: []string{"mark", "close"}, reason: "tmux_absent", outcome: "ours"}},
+		want: mxWant{ops: []string{"mark"}, reason: "tmux_absent", outcome: "ours"}},
 	{name: "two token panes", panes: []tmuxfix.SeedPane{mxTokenPane, {Index: 1, PID: mxAdoptPID + 1, AdPane: tmuxfix.Token}},
 		proc: procfix.Alive(fmStart),
 		want: mxWant{ops: []string{"note"}, note: "process_not_seen_session_present", reason: "process_not_seen_session_present"}},
@@ -338,8 +341,9 @@ func assertMxCalls(t *testing.T, rec *tmuxfix.Recorder, lookups, listings int) {
 }
 
 // TestFindMissingPendingMatrix: each pending row kind x pane identity x lookup cell past the grace period gets
-// SR-11.3's outcome, and the holding session is never touched. Each cell sweeps its own fake store and reads
-// only its own id's trail records, so the cells run in parallel.
+// SR-11.3's outcome (a live agent's row noted unreported, in neither list, b.kdf), and the holding session is never
+// touched. Each cell sweeps its own fake store and reads only its own id's trail records, so the cells run in
+// parallel.
 func TestFindMissingPendingMatrix(t *testing.T) {
 	t.Parallel()
 	for ki, k := range mxKinds {

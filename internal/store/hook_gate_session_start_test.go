@@ -280,7 +280,7 @@ func TestHookGateRaceWithNewLaunch(t *testing.T) {
 // hgMove is resume's move of id's finished row to pending on examined.
 func hgMove(t *testing.T, f *v5Store, id string, examined store.RowSnapshot) {
 	t.Helper()
-	if res, _, err := f.s.MoveToPending(id, examined, moveLaunchMillis, moveToken, moveSocket, ""); err != nil || res != store.CondApplied {
+	if res, _, err := f.s.MoveToPending(id, examined, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{}); err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 	}
 }

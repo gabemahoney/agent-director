@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// schemaDDL is the canonical schema v5 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v6 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -42,6 +42,13 @@ import (
 // (createSchema) or by the hop (migrateV4toV5), only when absent, and never
 // changed (SR-5.4). Its CREATE text is identical here and in migrateV4toV5
 // (the two-places rule), so both give the same PRAGMA table_info(store_meta).
+//
+// v6 changes vs v5 (b.kdf, b.146 rule 11): three new spawns columns, appended
+// after pane_starttime in this order — the launch owner launch_owner_pid
+// (INTEGER), launch_owner_starttime (TEXT) and launch_owner_pidns (TEXT), all
+// nullable: the process that began the row's current launch (LaunchOwner).
+// The column order and constraint text match migrateV5toV6 exactly, so a
+// fresh store and a migrated store have identical column lists.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     claude_instance_id         TEXT PRIMARY KEY,
@@ -73,7 +80,10 @@ CREATE TABLE IF NOT EXISTS spawns (
     tmux_server_starttime      TEXT,
     pane_id                    TEXT,
     pane_pid                   INTEGER,
-    pane_starttime             TEXT
+    pane_starttime             TEXT,
+    launch_owner_pid           INTEGER,
+    launch_owner_starttime     TEXT,
+    launch_owner_pidns         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -133,6 +143,7 @@ var migrationSteps = []migrationStep{
 	{from: 2, apply: migrateV2toV3},
 	{from: 3, apply: migrateV3toV4},
 	{from: 4, apply: migrateV4toV5},
+	{from: 5, apply: migrateV5toV6},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -477,6 +488,64 @@ func migrateV4toV5(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v4→v5 migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateV5toV6 upgrades a v5 database to v6 inside a single transaction
+// (b.kdf, b.146 rule 11). It adds the three launch-owner spawns columns,
+// launch_owner_pid (INTEGER), launch_owner_starttime (TEXT) and
+// launch_owner_pidns (TEXT), in that order — the same order and constraint
+// text schemaDDL uses, so fresh and migrated stores converge — and stamps
+// user_version = 6 as the last statement.
+//
+// There is no phase 3 and no backfill: ADD COLUMN gives every existing row
+// NULL in the three columns, so every row, a pending one included, records no
+// launch owner: find-missing judges it by its pending grace period alone. No
+// existing value is rewritten, and store_meta and its store id are kept.
+//
+// SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER
+// is guarded by a pragma_table_info probe and skipped when the column is
+// already present, making the hop idempotent on re-entry. Any probe or ALTER
+// failure rolls the whole hop back, leaving user_version=5 and none of the
+// new columns.
+func migrateV5toV6(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v5→v6 migration tx: %w", err)
+	}
+	v6Columns := []struct{ name, ddl string }{
+		{"launch_owner_pid", "ALTER TABLE spawns ADD COLUMN launch_owner_pid INTEGER"},
+		{"launch_owner_starttime", "ALTER TABLE spawns ADD COLUMN launch_owner_starttime TEXT"},
+		{"launch_owner_pidns", "ALTER TABLE spawns ADD COLUMN launch_owner_pidns TEXT"},
+	}
+	for _, col := range v6Columns {
+		var exists int
+		err := tx.QueryRow(
+			"SELECT 1 FROM pragma_table_info('spawns') WHERE name = ?",
+			col.name,
+		).Scan(&exists)
+		switch {
+		case err == nil:
+			// Column already present — skip to stay idempotent.
+			continue
+		case errors.Is(err, sql.ErrNoRows):
+			// Column absent — add it below.
+		default:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v5→v6 probe spawns.%s: %w", col.name, err)
+		}
+		if _, err := tx.Exec(col.ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v5→v6 add spawns.%s: %w", col.name, err)
+		}
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 6"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v5→v6 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v5→v6 migration tx: %w", err)
 	}
 	return nil
 }

@@ -302,6 +302,35 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	}
 }
 
+// TestSendKeysNotedUnreportedRow (b.kdf, CSCB): a pending row find-missing noted unreported is still a pending row
+// to send-keys: refused without allow_pending (ErrSpawnNotInteractive, no tmux call), delivered into its own pane
+// with it; neither call changes the row or its note.
+func TestSendKeysNotedUnreportedRow(t *testing.T) {
+	t.Parallel()
+	for _, allow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without allow_pending", true: "with allow_pending"}[allow], func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			r := e.seedRow(t, e.pendingSpec(pendingOurs, apitest.WithLivenessNote("unreported"),
+				apitest.WithLivenessUnverifiedSince("2026-10-09 10:00:00")))
+			cols := e.columns(t, r.ID)
+
+			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: skpText, AllowPending: allow})
+
+			if allow {
+				if err != nil {
+					t.Fatalf("SendKeys: %v", err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+			} else {
+				assertOneName(t, err, "ErrSpawnNotInteractive")
+				e.assertNoTmuxCall(t)
+			}
+			e.assertRowUnchanged(t, r.ID, cols)
+		})
+	}
+}
+
 // TestSendKeysPendingReuseWithoutAllowPending (AC-PANE-08): without allow_pending a reuse's pending row,
 // its session up or its reply lost, is ErrSpawnNotInteractive with no tmux call and the row unchanged.
 func TestSendKeysPendingReuseWithoutAllowPending(t *testing.T) {

@@ -83,19 +83,31 @@ type SpawnRow struct {
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
 	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
-	// left this live row unverified; it is kept while later sweeps change
-	// LivenessNote. Nil (and omitted from JSON) when NULL in the store — i.e.
-	// not unverified: a sweep that finds the agent process alive clears it
-	// together with LivenessNote. The store carries it as a COALESCE-scanned
-	// string ("" == NULL); Get maps "" to nil per the ended_at nullable
-	// precedent.
+	// noted this live row (left it unverified, or noted it unreported,
+	// b.kdf); it is kept while later sweeps change LivenessNote, unreported
+	// included. Nil (and omitted from JSON) when NULL in the store — i.e. no
+	// note: a sweep that finds the agent process alive clears it together
+	// with LivenessNote, except on a pending row it notes unreported and a
+	// pending row noted provenance_conflict, which keeps it. The store
+	// carries it as a COALESCE-scanned string ("" == NULL); Get maps "" to nil
+	// per the ended_at nullable precedent.
 	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
 	// LivenessNote is the reason token of the latest sweep that left this
 	// live row unverified (its agent process could not be checked and tmux
 	// did not settle it), for example process_not_seen_session_present,
 	// process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or
 	// provenance_conflict; a later sweep overwrites it when the reason
-	// changes. Nil (omitted) when NULL in the store. Same "" == NULL mapping.
+	// changes, and a sweep that finds the agent process alive clears it
+	// together with LivenessUnverifiedSince, except on a pending row it notes
+	// unreported and a pending row noted provenance_conflict, which keeps it.
+	// Or it is unreported, on a pending row past the pending grace period
+	// (b.kdf): its agent is alive, but no hook has reported since its launch,
+	// so it may sit at a Claude Code startup screen or idle at its prompt.
+	// The row stays pending; the caller reads its pane and, only having
+	// looked, sends keys with allow_pending. A later sweep that finds the
+	// agent alive keeps the note, and the agent's next hook clears it.
+	// unreported never replaces provenance_conflict. Nil (omitted) when NULL
+	// in the store. Same "" == NULL mapping.
 	LivenessNote *string `json:"liveness_note,omitempty"`
 	// PermissionRequests is the slice of open permission requests awaiting
 	// orchestrator decisions. Populated only when state is check_permission;

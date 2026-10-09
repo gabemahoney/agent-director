@@ -34,11 +34,12 @@ var claudeBinary = "claude"
 //     pre_trust.lock_wait_seconds (best effort; a failure never fails the
 //     spawn, SR-22.6).
 //  4. INSERTs step 2's row with the launch start (one read of now, in
-//     milliseconds), the token and the socket; the row carries the
-//     NoPreTrust choice step 3 used, so it records what the spawn did for its
-//     life and every resume of that life follows it (SR-22.2, SR-3.3, SR-5.2,
-//     SR-22.6). Between the insert and the create there is only in-process
-//     work (SR-13.4).
+//     milliseconds), the token, the socket and the launch owner, this
+//     process as CurrentLaunchOwner reads it through pc (b.kdf); the row
+//     carries the NoPreTrust choice step 3 used, so it records what the
+//     spawn did for its life and every resume of that life follows it
+//     (SR-22.2, SR-3.3, SR-5.2, SR-22.6). Between the insert and the create
+//     there is only in-process work (SR-13.4).
 //  5. Creates the session and labels it through CreateAndLabel, on the
 //     socket, with the token, the instance id and this store's id
 //     (s.StoreID()): one create invocation with the chained label, at most
@@ -47,22 +48,31 @@ var claudeBinary = "claude"
 //  6. After a parsed reply with the label in place, reads the server's and
 //     the pane's process start times through pc and makes one conditional
 //     identity write (RecordLaunchIdentity, the insert's version 0 and the
-//     token). A write that does not apply (a hook wrote first) records
-//     nothing; a store error gives one WARN line on lg and does not change
-//     the result (SR-3.6, SR-5.8).
+//     token), which also ends the launch's hold. A write that does not apply
+//     (another write came first) records nothing; a store error gives one
+//     WARN line on lg and does not change the result (SR-3.6, SR-5.8).
+//  7. When an owner was recorded and no identity write applied (a lost
+//     reply, an identity write that did not apply or failed, and every
+//     create failure but "duplicate session"), ends the launch's hold with
+//     ReleaseLaunchOwner on the token, which retries a store error a bounded
+//     number of times, then gives one WARN line on lg; it never changes the
+//     result.
 //
-// On every create failure the row stays pending and nothing else is
-// written; the error is plainSpawnCreateError's: ErrTmuxUnresponsive for a
-// timed-out create or a reply that does not parse with a non-zero exit (the
-// launch-timeout rule, followed for a caller-supplied id, minted unset, by
-// the opted-in retry), ErrTmuxNotAvailable for tmux unavailable,
-// ErrTmuxSessionCreate for a session that could not be labelled and every
-// other failure. "duplicate session" is not mapped to a verb error: Launch
+// On every create failure the row stays pending and nothing else is written
+// but the release of step 7; the error is plainSpawnCreateError's:
+// ErrTmuxUnresponsive for a timed-out create or a reply that does not parse
+// with a non-zero exit (the launch-timeout rule, followed for a
+// caller-supplied id, minted unset, by the opted-in retry),
+// ErrTmuxNotAvailable for tmux unavailable, ErrTmuxSessionCreate for a
+// session that could not be labelled and every other failure. "duplicate
+// session" is not mapped to a verb error: Launch
 // returns a *HeldNameError at once (no store write, file or network I/O,
 // further tmux call or log line after the create) carrying the instance id,
 // the requested name, the socket, the token and the launch start step 4
-// wrote, and the caller's held-name path ends the row, re-looks the name up
-// and classifies the holder (SR-9.4). The row is still pending at version 0
+// wrote, and the caller's held-name path ends the row (ending the launch's
+// hold itself, with ReleaseLaunchOwner, when that end write does not apply),
+// re-looks the name up and classifies the holder (SR-9.4). The row is still
+// pending at version 0
 // when Launch returns it. A reply lost with exit 0 is a success with no
 // identity recorded. On an insert collision ErrInstanceIdCollision surfaces
 // (the TOCTOU fallback of the pre-check).
@@ -98,6 +108,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	row := c.Row
 	row.LaunchStartedAtMillis = launchStart
 	row.Identity = store.LaunchIdentity{Token: token, Socket: socket}
+	row.LaunchOwner = CurrentLaunchOwner(pc)
 	if err := insertPending(s, row); err != nil {
 		return "", "", err
 	}
@@ -107,11 +118,19 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	req.Token = token
 	req.StoreID = s.StoreID()
 	out := CreateAndLabel(t, req)
+	recorded := false
+	if out.Kind == CreateLabelled {
+		recorded = RecordLaunchIdentity(s, pc, lg, r.ClaudeInstanceID, insertRowVersion, token, out.Reply)
+	}
+	// "duplicate session" is handed to the caller's held-name path, whose end
+	// write is conditional on the insert's version 0: nothing is written
+	// before it, and that path ends the hold itself when its end write does
+	// not apply.
+	if !recorded && out.Kind != CreateDuplicate && row.LaunchOwner.PID > 0 {
+		ReleaseLaunchOwner(s, lg, r.ClaudeInstanceID, token)
+	}
 	if err := plainSpawnCreateError(out, req, launchStart, minted); err != nil {
 		return "", "", err
-	}
-	if out.Kind == CreateLabelled {
-		RecordLaunchIdentity(s, pc, lg, r.ClaudeInstanceID, insertRowVersion, token, out.Reply)
 	}
 	return r.ClaudeInstanceID, preTrust, nil
 }
@@ -127,18 +146,22 @@ type IdentityWriter interface {
 }
 
 // RecordLaunchIdentity makes the one conditional identity write after a
-// labelled create (SR-3.6), shared by plain spawn and resume: the reply's
-// server pid and start_time and pane id and pid, with the server's and the
-// pane's process start times from pc (an unreadable one is recorded as none),
-// guarded on the launch's version and token: for a plain spawn the insert's
-// version 0 and its token, for resume the version its move produced and the
-// move's token. A write that does not apply (another write came first; no
-// hook can, because a row that records no pane matches no hook, SR-22.9)
-// records nothing; a store error gives one WARN line on lg naming the instance id and
-// that recording the launch identity failed, with no token, label or
-// environment value, and does not change the launch's result (SR-5.8). A nil
-// lg logs nothing.
-func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger, instanceID string, launchVersion int64, token string, reply tmux.CreateReply) {
+// labelled create (SR-3.6), shared by plain spawn, resume and reuse: the
+// reply's server pid and start_time and pane id and pid, with the server's
+// and the pane's process start times from pc (an unreadable one is recorded
+// as none), guarded on the launch's version and token: for a plain spawn the
+// insert's version 0 and its token, for resume the version its move produced
+// and the move's token, for reuse the version its reset produced and its
+// token. The write also ends the launch's hold on the row (b.kdf). A write
+// that does not apply (another write came first; no hook can, because a row
+// that records no pane matches no hook, SR-22.9) records nothing; a store
+// error gives one WARN line on lg naming the instance id and that recording
+// the launch identity failed, with no token, label or environment value, and
+// does not change the launch's result (SR-5.8). A nil lg logs nothing.
+//
+// It reports whether the write applied; the caller ends the launch's hold
+// itself (ReleaseLaunchOwner) when it did not.
+func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger, instanceID string, launchVersion int64, token string, reply tmux.CreateReply) bool {
 	id := store.LaunchIdentity{
 		ServerPID:       reply.ServerPID,
 		ServerStart:     reply.ServerStart,
@@ -147,9 +170,14 @@ func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger,
 		PanePID:         reply.PanePID,
 		PaneStarttime:   tmux.KnownStartTime(pc, reply.PanePID),
 	}
-	if _, err := w.RecordLaunchIdentity(instanceID, launchVersion, token, id); err != nil && lg != nil {
-		lg.Printf("WARN: recording the launch identity of instance %s failed: %v", instanceID, err)
+	res, err := w.RecordLaunchIdentity(instanceID, launchVersion, token, id)
+	if err != nil {
+		if lg != nil {
+			lg.Printf("WARN: recording the launch identity of instance %s failed: %v", instanceID, err)
+		}
+		return false
 	}
+	return res == store.CondApplied
 }
 
 // insertPending inserts row as the pending row: ComposeLaunch's row with the

@@ -47,6 +47,13 @@ type RowSnapshot = store.RowSnapshot
 // server identity and pane (SR-3.3 to SR-3.6); zero values mean NULL.
 type LaunchIdentity = store.LaunchIdentity
 
+// LaunchOwner is re-exported from internal/store for the same reason. It is
+// the type of api.Spawn's and api.LiveSpawnIdentity's LaunchOwner field and of
+// ResumeStore.MoveToPending's owner parameter: the process that began the
+// row's current launch, while that launch holds the row (b.kdf); zero values
+// mean NULL, and PID 0 means no owner is recorded.
+type LaunchOwner = store.LaunchOwner
+
 // ResumePrior is re-exported from internal/store for the same reason. It holds
 // what resume's move to pending clears, exactly as stored, so the restore after
 // a failed launch writes it back byte for byte (SR-8.5); zero values mean NULL.

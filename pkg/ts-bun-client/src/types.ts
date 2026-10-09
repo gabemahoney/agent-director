@@ -149,10 +149,13 @@ export interface ListRow {
   /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
   launch_started_at?: string | null;
   /**
-   * RFC3339 timestamp of the first sweep that left this live row unverified;
-   * kept while later sweeps change `liveness_note`. Cleared together with
-   * `liveness_note` when a sweep finds the agent process alive; omitted/null
-   * while not unverified.
+   * RFC3339 timestamp of the first sweep that noted this live row (left it
+   * unverified, or noted it `unreported`); kept while later sweeps change
+   * `liveness_note`, `unreported` included. Cleared together with
+   * `liveness_note` when a sweep finds the agent process alive, except on a
+   * pending row it notes `unreported` and a pending row noted
+   * `provenance_conflict`, which keeps it; omitted/null while the row has no
+   * note.
    */
   liveness_unverified_since?: string | null;
   /**
@@ -162,7 +165,15 @@ export interface ListRow {
    * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
    * or `provenance_conflict`; overwritten when the reason changes. Cleared
    * together with `liveness_unverified_since` when a sweep finds the agent
-   * process alive; omitted/null while not unverified.
+   * process alive, except on a pending row it notes `unreported` and a
+   * pending row noted `provenance_conflict`, which keeps it; omitted/null
+   * while the row has no note. Or `unreported`, on a pending row past the
+   * pending grace period: its agent is alive, but no hook has reported since
+   * its launch, so it may sit at a Claude Code startup screen or idle at its
+   * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
+   * with `allow_pending`; only a caller that looked should type. A later
+   * sweep that finds the agent alive keeps the note; the agent's next hook
+   * clears it. `unreported` never replaces `provenance_conflict`.
    */
   liveness_note?: string | null;
 }
@@ -295,10 +306,13 @@ export interface GetResult {
   /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
   launch_started_at?: string | null;
   /**
-   * RFC3339 timestamp of the first sweep that left this live row unverified;
-   * kept while later sweeps change `liveness_note`. Cleared together with
-   * `liveness_note` when a sweep finds the agent process alive; omitted/null
-   * while not unverified.
+   * RFC3339 timestamp of the first sweep that noted this live row (left it
+   * unverified, or noted it `unreported`); kept while later sweeps change
+   * `liveness_note`, `unreported` included. Cleared together with
+   * `liveness_note` when a sweep finds the agent process alive, except on a
+   * pending row it notes `unreported` and a pending row noted
+   * `provenance_conflict`, which keeps it; omitted/null while the row has no
+   * note.
    */
   liveness_unverified_since?: string | null;
   /**
@@ -308,7 +322,15 @@ export interface GetResult {
    * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
    * or `provenance_conflict`; overwritten when the reason changes. Cleared
    * together with `liveness_unverified_since` when a sweep finds the agent
-   * process alive; omitted/null while not unverified.
+   * process alive, except on a pending row it notes `unreported` and a
+   * pending row noted `provenance_conflict`, which keeps it; omitted/null
+   * while the row has no note. Or `unreported`, on a pending row past the
+   * pending grace period: its agent is alive, but no hook has reported since
+   * its launch, so it may sit at a Claude Code startup screen or idle at its
+   * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
+   * with `allow_pending`; only a caller that looked should type. A later
+   * sweep that finds the agent alive keeps the note; the agent's next hook
+   * clears it. `unreported` never replaces `provenance_conflict`.
    */
   liveness_note?: string | null;
   /** Open permission request; present only when state=check_permission with an undecided row. */
@@ -463,10 +485,12 @@ export interface FindMissingResult {
    * evidence: rows whose agent process (the SessionStart one or the recorded
    * pane's) is dead, and rows whose process could not be checked and tmux
    * found no session or pane of their current launch; a pending row only past
-   * the pending grace period. A row whose guarded write found it changed or
-   * gone, or failed, is in neither list. `missing` is the sweep's judgement
-   * on the evidence available to it, not proof that the agent has exited.
-   * Never null; [] when none.
+   * the pending grace period, and never while the spawn, reuse or resume that
+   * began its launch still runs. A row whose guarded write found it changed or
+   * gone, or failed, is in neither list, and so is a pending row the sweep
+   * notes `unreported` (its agent alive) or finds already noted so.
+   * `missing` is the sweep's judgement on the evidence available to it, not
+   * proof that the agent has exited. Never null; [] when none.
    */
   ids: string[];
   /** Number of live rows this sweep left unverified (the length of `unverified_ids`). */
@@ -477,9 +501,11 @@ export interface FindMissingResult {
    * process could not be checked and which tmux did not mark, for example
    * because their own session is present, tmux could not tell or was
    * unavailable, or tmux was not called. Never a pending row inside the
-   * pending grace period. A row whose guarded write found it changed or gone,
-   * or failed, and a row whose note was cleared, is in neither list. Never
-   * null; [] when none.
+   * pending grace period or while its launch runs. A row whose guarded write
+   * found it changed or gone, or failed, a row whose note was cleared, and a
+   * pending row noted `unreported` (its agent alive, no hook reported since
+   * its launch; find it by `liveness_note` in `get` or `list`) are in neither
+   * list. Never null; [] when none.
    */
   unverified_ids: string[];
 }

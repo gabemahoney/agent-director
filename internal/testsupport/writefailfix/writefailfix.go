@@ -64,6 +64,12 @@ const (
 	// pane writes (storefix.WithSeedPane), so install after seeding. Later
 	// adoption writes (SR-3.6) have the same shape and would also match.
 	LaunchIdentityWrite Kind = 5
+	// PermissionDecision fails a write of a decision on one of the id's open
+	// permission requests: decide's, the relay hook's timeout deny, and
+	// find-missing's close inside its mark's transaction (b.146 rule 12),
+	// which then rolls the mark back too. A delete of a request (the spawn
+	// delete cascade, the cap eviction) is not matched.
+	PermissionDecision Kind = 6
 )
 
 // String names the kind, for test failure messages.
@@ -79,6 +85,8 @@ func (k Kind) String() string {
 		return "reuse restore"
 	case LaunchIdentityWrite:
 		return "launch identity write"
+	case PermissionDecision:
+		return "permission decision"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -86,7 +94,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -185,6 +193,21 @@ END`,
                   WHERE kind = 5 AND claude_instance_id = OLD.claude_instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: launch identity write');
+END`,
+		},
+	},
+	// UPDATE OF decision fires on every decision write; OLD.decision IS NULL
+	// limits it to an open request, the only kind any decision write changes.
+	PermissionDecision: {
+		{
+			name: "ad_test_fail_permission_decision",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_permission_decision
+    BEFORE UPDATE OF decision ON permission_requests
+    WHEN OLD.decision IS NULL
+     AND EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 6 AND claude_instance_id = OLD.claude_instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: permission decision');
 END`,
 		},
 	},

@@ -397,16 +397,26 @@ func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, 
 // are one atomic statement: there is no interval in which a success is returned
 // but the relay window has already closed.
 //
+// It also writes nothing while the request's Spawn is ended or missing (b.146
+// rule 12): a request of a finished row is closed, whether or not a decision
+// is recorded on it, since its agent is gone (or judged gone) and no relay
+// hook of it can deliver a verdict. That condition is in the same statement,
+// so no finish lands between a check and the write; pkg/api's decide names
+// the refusal (ErrNoOpenPermissionRequest for an open request,
+// ErrAlreadyDecided for a decided one).
+//
 // The cutoff instant is the created_at boundary computed by the pkg/api
 // single-authority function (api.RelayDeliverabilityCutoff) and passed in — the
 // boundary + safety-margin logic is NEVER restated here (SR-4.4). A row is
 // written iff it is open, matches the token, AND its created_at is strictly
 // after cutoff.
 //
-// RowsAffected()==0 is now three-way ambiguous and the caller disambiguates via
-// a follow-up GetPermissionRequest:
+// RowsAffected()==0 is now ambiguous and the caller disambiguates via a
+// follow-up GetPermissionRequest (and, for an open row, a read of its Spawn):
 //
 //   - row decided            → ErrAlreadyDecided
+//   - row open, Spawn ended or missing → ErrNoOpenPermissionRequest (b.146
+//     rule 12)
 //   - row open + undeliverable → ErrRelayFallenBack (per the shared signal);
 //     pkg/api's decideRefusal first waits out the end of the relay window for
 //     a row refused near it and reads it again, so one its relay hook denied
@@ -428,6 +438,8 @@ func (s *Store) DecidePermissionRequestIfDeliverable(instanceID, requestToken, d
 		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
 		 WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
 		   AND created_at > ?
+		   AND NOT EXISTS (SELECT 1 FROM spawns
+		                    WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + `)
 		 RETURNING request_id, tool_name
 	`
 	var reasonArg any
@@ -444,16 +456,27 @@ func (s *Store) DecidePermissionRequestIfDeliverable(instanceID, requestToken, d
 
 	var requestID int64
 	var toolName string
-	err := s.db.QueryRow(q, decision, reasonArg, instanceID, requestToken, cutoffArg).Scan(&requestID, &toolName)
+	args := append([]any{decision, reasonArg, instanceID, requestToken, cutoffArg, instanceID}, finishedStateGuardArgs()...)
+	err := s.db.QueryRow(q, args...).Scan(&requestID, &toolName)
 	if errors.Is(err, sql.ErrNoRows) {
-		// RowsAffected == 0: already decided, undeliverable, or no row. The
-		// caller disambiguates via a follow-up GetPermissionRequest. Must NOT emit.
+		// RowsAffected == 0: already decided, undeliverable, a finished
+		// Spawn's, or no row. The caller disambiguates via follow-up reads.
+		// Must NOT emit.
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: decide permission (deliverable): %w", err)
 	}
 
+	emitDecisionCommitted(instanceID, requestToken, requestID, toolName, decision, reason, writerProcess)
+	return true, nil
+}
+
+// emitDecisionCommitted emits the ad.row_mutation.committed event of one
+// committed decision write on a permission request (SR-A-2.1): decide's, the
+// relay hook's timeout deny, and find-missing's close. reason "" is emitted
+// as null. A trail-emit failure must not fail the store call (SR-A-3.2).
+func emitDecisionCommitted(instanceID, requestToken string, requestID int64, toolName, decision, reason, writerProcess string) {
 	var decisionReasonField any
 	if reason != "" {
 		decisionReasonField = reason
@@ -469,8 +492,6 @@ func (s *Store) DecidePermissionRequestIfDeliverable(instanceID, requestToken, d
 		"mutation_kind":      "update",
 		"source":             "ad_store",
 	})
-
-	return true, nil
 }
 
 // DecidePermissionRequest is the race-free first-call-wins UPDATE per SRD §6.2.
@@ -529,22 +550,6 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 	}
 
 	// Emit row-mutation event for the successful first-call-wins update.
-	// A trail-emit failure must not fail the store call (SR-A-3.2).
-	var decisionReasonField any
-	if reason != "" {
-		decisionReasonField = reason
-	}
-	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
-		"claude_instance_id": instanceID,
-		"request_token":      requestToken,
-		"request_id":         requestID,
-		"tool_name":          toolName,
-		"decision":           decision,
-		"decision_reason":    decisionReasonField,
-		"writer_process":     writerProcess,
-		"mutation_kind":      "update",
-		"source":             "ad_store",
-	})
-
+	emitDecisionCommitted(instanceID, requestToken, requestID, toolName, decision, reason, writerProcess)
 	return true, nil
 }

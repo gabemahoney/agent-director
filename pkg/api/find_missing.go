@@ -13,22 +13,29 @@ import (
 )
 
 // FindMissingStore is the narrow store surface find-missing needs (SRD
-// Appendix F.4): the live-row read, the life-guarded mark, note write and
-// clear (SR-11.6), the life-guarded adoption write of a lost create reply's
-// identity (SR-3.6; LFR H2), the permission-request denial, the
-// provisional-transcript healing, and this store's id, which every label the
-// sweep's lookup accepts ends with. *store.Store satisfies it.
+// Appendix F.4): the live-row read, the life-guarded mark (with the denial of
+// the row's open permission requests in the same transaction), note write and
+// clear (SR-11.6), the life-guarded unreported note of a live pending row
+// (b.kdf), the life-guarded adoption write of a lost create reply's identity
+// (SR-3.6; LFR H2), the provisional-transcript healing, and this store's id,
+// which every label the sweep's lookup accepts ends with. *store.Store
+// satisfies it.
 type FindMissingStore interface {
 	// ListLiveSpawnIdentities reads every row in a live state, pending
 	// included, with its state, launch start, recorded session name,
-	// liveness note, row snapshot and launch identity (SR-11.7).
+	// liveness note, row snapshot, launch identity and launch owner (SR-11.7;
+	// b.kdf).
 	ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error)
 	// MarkMissingIfSameLife marks a live row missing in one write guarded on
 	// examined, the row snapshot the sweep read or its adoption produced, with
 	// the liveness clear and the launch-start clear folded in (SR-11.3,
-	// SR-11.6; Appendix F.4). It returns the prior state and CondApplied when
-	// it applied, CondChanged or CondAbsent (prior state "") when it did not,
-	// and a store error as an error with a zero CondResult (SR-5.8).
+	// SR-11.6; Appendix F.4), and denies the row's open permission requests
+	// (SR-5.4) in the same transaction: both or neither (b.146 rule 12), so
+	// any relay polling for the row reads a fail-closed deny and a request of
+	// a missing row is never left open. It returns the prior state and
+	// CondApplied when it applied, CondChanged or CondAbsent (prior state "")
+	// when it did not, and a store error as an error with a zero CondResult
+	// (SR-5.8), having written nothing.
 	MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error)
 	// SetLivenessNoteIfSameLife overwrites a live row's liveness note, keeping
 	// its first unverified time, in one write guarded on examined (SR-11.4,
@@ -40,6 +47,16 @@ type FindMissingStore interface {
 	// a row with no note: not writing one is the caller's rule. Results as
 	// MarkMissingIfSameLife's.
 	ClearLivenessIfSameLife(instanceID string, examined RowSnapshot) (CondResult, error)
+	// NoteUnreportedIfSameLife writes liveness note unreported on a pending
+	// row, keeping its first flagged time (liveness_unverified_since, set by
+	// whichever note came first and kept across note changes), or setting it
+	// when the row has none, in one write guarded on pending and
+	// examined, the snapshot the sweep read or its adoption produced, so a
+	// hook that writes first wins (b.kdf, b.146 rule 10). The state stays
+	// pending. It checks nothing else: whether the row is noted is the
+	// sweep's decision (aliveRow), and so is skipping a row already noted.
+	// Results as MarkMissingIfSameLife's.
+	NoteUnreportedIfSameLife(instanceID string, examined RowSnapshot) (CondResult, error)
 	// AdoptIdentityIfSameLife records the server and pane identity the
 	// sweep's adoption found for a live row whose lookup is Ours (SR-3.6),
 	// in one write guarded on a live state and examined, the snapshot the
@@ -49,11 +66,6 @@ type FindMissingStore interface {
 	// a zero snapshot, and a store error as an error with a zero CondResult
 	// (SR-5.8).
 	AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot, id LaunchIdentity) (res CondResult, now RowSnapshot, err error)
-	// CloseOrphanedPermissionRequests denies all open permission_requests rows
-	// for a Spawn that has just been marked missing, so any relay polling loop
-	// for that Spawn receives a fail-closed deny rather than spinning to its own
-	// internal timeout (SR-5.4).
-	CloseOrphanedPermissionRequests(instanceID string) error
 	// ListProvisionalTranscripts returns live rows with a session id but a NULL
 	// jsonl_path — sessions that started before their transcript was written
 	// (b.v2c AC3). find-missing recomposes and stats each, healing rows whose
@@ -109,9 +121,10 @@ type FindMissingResult struct {
 	// process or tmux evidence: rows whose agent process (the SessionStart
 	// one or the recorded pane's) is gone, and rows whose process could not
 	// be checked and whose lookup found no session or pane of their current
-	// launch; a pending row only past the pending grace period. A row whose
-	// guarded mark found it changed or absent, or failed in the store, is not
-	// listed. missing is the sweep's judgement on the evidence available to
+	// launch; a pending row only past the pending grace period, never while
+	// its launch owner holds it, and never for being noted unreported. A row
+	// whose guarded mark found it changed or absent, or failed in the store,
+	// is not listed. missing is the sweep's judgement on the evidence available to
 	// it, not proof that the agent has exited. Always non-nil — encodes as []
 	// when no rows were marked.
 	IDs []string `json:"ids"`
@@ -123,7 +136,10 @@ type FindMissingResult struct {
 	// SR-3.2), or the tmux lookup of the row's socket did not mark them (Ours,
 	// Can't tell, or not called) (SR-11.1, SR-11.3, SR-11.4). It counts rows
 	// whose note was already current. A row whose note write found it
-	// changed, or failed in the store, is not counted.
+	// changed, or failed in the store, is not counted, and neither is a
+	// pending row noted unreported (b.kdf): its agent process was checked and
+	// is alive, so it is in neither IDs nor UnverifiedIDs; get and list show
+	// its note.
 	Unverified int `json:"unverified"`
 	// UnverifiedIDs is the sorted slice of instance ids left unverified.
 	// Always non-nil — encodes as [] when no rows were unverified (same
@@ -179,6 +195,18 @@ const (
 	noteTmuxSessionNameEmpty       = "tmux_session_name_empty"
 	noteTmuxSessionNameControlChar = "tmux_session_name_control_char"
 	noteTmuxSessionNameRewritten   = "tmux_session_name_rewritten"
+	// noteUnreported is the note of a pending row past its grace period,
+	// held by no live launch owner, whose pane is recorded (or was just
+	// adopted) and whose agent process is alive, but which no hook has
+	// reported since its launch (b.kdf, b.146 rule 10; aliveRow). The agent
+	// may sit at a Claude Code startup screen or idle at its prompt; the row
+	// stays pending, and whoever looks at its pane decides what to type. A
+	// later sweep that finds the agent alive keeps it; a sweep that cannot
+	// check the process may overwrite it with an unverified note. Every note
+	// change keeps the time a note first flagged the row
+	// (liveness_unverified_since), and the agent's next hook clears both
+	// (every applied hook does). It never overwrites provenance_conflict.
+	noteUnreported = store.LivenessNoteUnreported
 )
 
 // unusableNameNote is the one mapping from the unusable-name guard's kind
@@ -213,6 +241,7 @@ const (
 const (
 	findMissingActionMarked     = nameHeldRowMarkedMissing
 	findMissingActionLeftLive   = "left_live"
+	findMissingActionUnreported = "left_unreported"
 	findMissingActionUnverified = "left_unverified"
 	findMissingActionChanged    = "left_changed"
 	findMissingActionStoreError = "store_error"
@@ -221,17 +250,19 @@ const (
 // findMissingRow is the outcome of judging one live row.
 type findMissingRow struct {
 	// write is the row's writer outcome (markMissingSameLife,
-	// writeLivenessNote or clearLivenessNote), or, for a row whose adoption
-	// write did not apply, that write's outcome (never Listed). For a mark,
-	// write.Listed puts the row in ids; for a note, in unverified_ids.
+	// writeLivenessNote, clearLivenessNote or writeUnreportedNote), or, for
+	// a row whose adoption write did not apply, that write's outcome (never
+	// Listed). For a mark, write.Listed puts the row in ids; for a note, in
+	// unverified_ids; an unreported note is never listed.
 	write findMissingWrite
 	// marked reports that write came from the mark rather than a note write
 	// or clear.
 	marked bool
 	// action is the ad.provenance.disagree action for a write that applied
 	// or was not needed (findMissingActionMarked, findMissingActionLeftLive,
-	// findMissingActionUnverified); findMissingAction turns a refused or
-	// failed write into left_changed or store_error.
+	// findMissingActionUnreported, findMissingActionUnverified);
+	// findMissingAction turns a refused or failed write into left_changed or
+	// store_error.
 	action string
 	// disagree is the row's ad.provenance.disagree reasons that came from
 	// its lookup, collected over the row's judgement and written once its
@@ -299,10 +330,27 @@ func findMissingAction(r findMissingRow) string {
 //     tmux call, no write, no event, and it is in neither result list. Such a
 //     row may be a spawn's, a reuse's or a resume's launch. A `pending` row
 //     with no readable launch start is past the grace period and judged at
-//     once (SR-22.8).
+//     once (SR-22.8). A `pending` row past its grace period whose launch
+//     still holds it is left untouched in the same way (b.kdf, b.146 rule
+//     11): its recorded launch owner is provably alive
+//     (spawn.LaunchOwnerAlive: this process's pid namespace equals the
+//     owner's, and the owner's pid is alive with its recorded start time,
+//     one start-time read). A row with no owner recorded (from before schema
+//     v6, or a launch whose hold has ended), an owner in another or
+//     unreadable pid namespace, and an owner gone or unreadable are judged as
+//     before, by the grace period alone.
 //  3. Every other row is judged by its agent process (judgeLiveRow): alive
-//     leaves it live and clears any note; dead marks it missing with reason
-//     proc_absent. Neither makes a tmux call. A child process or another
+//     leaves it live and clears any note it carries, except that a `pending`
+//     row whose pane is recorded (or was just adopted) stays pending and is
+//     noted unreported (b.kdf, b.146 rule 10; aliveRow,
+//     writeUnreportedNote): its agent runs, but no hook has reported since
+//     its launch. Such a row is in neither result list; a row already noted
+//     unreported is not written again, a note write keeps the time a note
+//     first flagged the row (liveness_unverified_since), and a
+//     row noted provenance_conflict keeps that note, which unreported never
+//     overwrites. Dead marks it missing with
+//     reason proc_absent, denying its open permission requests in the same
+//     transaction. Neither makes a tmux call. A child process or another
 //     process carrying the row's id never keeps it alive.
 //  4. A row whose process evidence is unknown or absent and whose recorded
 //     session name cannot be used (tmux.Unusable: empty, then a control
@@ -366,6 +414,11 @@ func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc 
 			// A booting launch inside its grace period (SR-11.2): not judged.
 			continue
 		}
+		if it.State == store.StatePending && spawn.LaunchOwnerAlive(pc, it.LaunchOwner) {
+			// A launch its live owner still holds (b.kdf): not judged, so a
+			// stalled spawn is neither marked nor noted under it.
+			continue
+		}
 		row := r.judgeLiveRow(it)
 		switch {
 		case !row.write.Listed:
@@ -423,8 +476,9 @@ type findMissingRun struct {
 // by tmux.JudgeProcess through pc:
 //
 //   - alive with its recorded start time: the row stays live whatever tmux
-//     shows, and a note it carries is cleared (no tick; a row with no note is
-//     not written);
+//     shows (aliveRow): a pending row whose pane is recorded is noted
+//     unreported (b.kdf), and any other row's note is cleared (no tick; a
+//     row with no note is not written);
 //   - gone (absent, a zombie, or another start time): marked missing with
 //     reason proc_absent, with no tmux call;
 //   - unknown (unreadable, or a pid-only identity reading alive) or no
@@ -440,7 +494,7 @@ func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 	)
 	switch state := tmux.JudgeProcess(r.pc, agent.Identity); state {
 	case tmux.ProcAlive:
-		return r.clearRow(findMissingRow{}, it, it.Snapshot)
+		return r.aliveRow(findMissingRow{}, it, it.Snapshot, it.Identity)
 	case tmux.ProcGone:
 		return r.markRow(findMissingRow{}, it, it.Snapshot, reasonProcAbsent, nil)
 	default: // tmux.ProcUnknown, tmux.ProcNone
@@ -449,6 +503,49 @@ func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 		}
 		return r.lookupRow(it, state)
 	}
+}
+
+// aliveRow completes row for a row whose agent process was found alive,
+// guarded on guard. ident is the launch identity the process was selected
+// from: the one the sweep read, or the one its adoption just found.
+//
+// A pending row whose ident records its pane is noted unreported
+// (unreportedRow; b.kdf, b.146 rule 10) and stays pending. The row is past
+// its grace period and not held by a live launch owner (the caller skipped it
+// otherwise), and its agent is alive, but no hook has reported since its
+// launch. The agent may sit at a Claude Code startup screen, shown before any
+// hook runs, or idle at its prompt, for example after its SessionStart hook
+// died before its write; only something that reads the pane can tell
+// these apart, so the sweep reports the row rather than moving it to waiting.
+// Such a row never reaches clearRow, so the sweep never clears its note.
+//
+// Note precedence: provenance_conflict wins over unreported. Such a pending
+// row whose note is provenance_conflict (more than one session carries its
+// launch's label, so which session is its own is in doubt) keeps that note:
+// nothing is written, no tick, in neither result list, action left_live.
+// Telling a caller to read "the" pane and type would not help while the
+// row's session is in doubt. The store write refuses that note too
+// (NoteUnreportedIfSameLife).
+//
+// Any other row gets clearRow: a pending row that records no pane stays
+// pending, judged as before b.kdf.
+func (r *findMissingRun) aliveRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, ident LaunchIdentity) findMissingRow {
+	if it.State == store.StatePending && ident.PanePID > 0 {
+		if it.LivenessNote == noteProvenanceConflict {
+			row.action = findMissingActionLeftLive
+			return row
+		}
+		return r.unreportedRow(row, it, guard)
+	}
+	return r.clearRow(row, it, guard)
+}
+
+// unreportedRow completes row with the guarded unreported note of a live
+// pending row (writeUnreportedNote), guarded on guard.
+func (r *findMissingRun) unreportedRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
+	row.write = writeUnreportedNote(r.s, it.ClaudeInstanceID, guard, it.LivenessNote, r.lg)
+	row.action = findMissingActionUnreported
+	return row
 }
 
 // clearRow completes row for a row whose agent process was found alive: the
@@ -578,7 +675,15 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // child process or other process carrying the row's id keeps the row alive.
 // A process alive with its recorded start time leaves the row live and
 // clears any liveness note; a dead one marks the row missing whatever tmux
-// shows, with no tmux call.
+// shows, with no tmux call. A `pending` row whose recorded (or just adopted)
+// pane process is alive instead stays pending with liveness note unreported:
+// the agent is alive, but no hook has reported since its launch. It may sit
+// at a Claude Code startup screen or idle at its prompt, for example after
+// its SessionStart hook died. The caller looks at the pane (ReadPane reads a
+// row in any state) and, only having looked, types (SendKeys with
+// AllowPending); the agent's next hook clears the note. A mark denies the row's open
+// permission requests in the same transaction, so a row marked missing never
+// keeps an open request.
 //
 // A row whose process cannot be checked (unreadable, a pid-only identity
 // that reads alive, or none recorded; a pid-only identity that reads gone is
@@ -624,8 +729,14 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // unset grace is larger when a raised create_timeout_ms or pipe_close_wait_ms
 // puts its derived minimum above 60 s, see config.Tmux.EffectivePendingGrace),
 // measured from its launch start, is not judged: it is left as it is and is
-// in neither result list (SR-11.2). Ages and tmux time are read from the
-// Client's clock. Intended for periodic cron use.
+// in neither result list (SR-11.2). Nor is a `pending` row past it whose
+// launch is still in progress: the spawn, reuse or resume that began it
+// records itself on the row and ends that hold when its launch ends, and the
+// row is not judged while that process is alive in this caller's pid
+// namespace. A row noted unreported is in neither result list. Ages and tmux time are
+// read from the Client's clock. Intended for periodic cron use: recovery from
+// a row stuck pending, a stale state or a gone agent depends on find-missing
+// being scheduled.
 //
 // CLI: agent-director find-missing
 //

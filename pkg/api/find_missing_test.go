@@ -28,7 +28,7 @@ import (
 type fakeFindMissingStore struct {
 	rows    []store.LiveSpawnIdentity
 	listErr error
-	// answers is keyed by op ("adopt", "mark", "note", "clear") then instance id.
+	// answers is keyed by op ("adopt", "mark", "note", "clear", "unreported") then instance id.
 	answers map[string]map[string]fmAnswer
 	calls   []storeCall
 	// adopted holds, per row, the snapshot an applied adoption returned: the guard of the row's next write.
@@ -48,7 +48,8 @@ type fmAnswer struct {
 	err error
 }
 
-// storeCall is one recorded write; op is "adopt", "mark", "note", "clear" or "close".
+// storeCall is one recorded write; op is "adopt", "mark", "note" (note: the note it wrote), "clear" or "unreported"
+// (the unreported note of a live pending row, b.kdf).
 type storeCall struct {
 	op       string
 	id       string
@@ -131,9 +132,9 @@ func (f *fakeFindMissingStore) ClearLivenessIfSameLife(id string, examined store
 	return f.result("clear", id)
 }
 
-func (f *fakeFindMissingStore) CloseOrphanedPermissionRequests(id string) error {
-	f.record(storeCall{op: "close", id: id})
-	return nil
+func (f *fakeFindMissingStore) NoteUnreportedIfSameLife(id string, examined store.RowSnapshot) (store.CondResult, error) {
+	f.record(storeCall{op: "unreported", id: id, snap: examined})
+	return f.result("unreported", id)
 }
 
 func (f *fakeFindMissingStore) ListProvisionalTranscripts() ([]store.ProvisionalTranscript, error) {
@@ -171,10 +172,7 @@ func (f *fakeFindMissingStore) assertGuards(t *testing.T) {
 	t.Helper()
 	for _, c := range f.calls {
 		want := f.guard(c.id)
-		switch c.op {
-		case "close":
-			continue
-		case "adopt":
+		if c.op == "adopt" {
 			want = f.readSnap(c.id)
 		}
 		if c.snap != want {

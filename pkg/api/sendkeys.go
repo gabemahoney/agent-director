@@ -423,6 +423,12 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 // answer for that stale record (it is ErrNoOpenPermissionRequest, the decided
 // request being recorded after it).
 //
+// A request of an ended or missing row is closed (b.146 rule 12) and never
+// holds the guard: the guard reads requests only for a row read in
+// check_permission, and sendKeysStateGuard refuses a finished row before it
+// with ErrSpawnNotInteractive. find-missing's mark denies a missing row's open
+// requests in the mark's own transaction.
+//
 // All time arithmetic lives in deliverability.go (RelayRequestGuardReleasable,
 // relayRequestFallenBack); this function performs no independent
 // elapsed-vs-timeout computation.

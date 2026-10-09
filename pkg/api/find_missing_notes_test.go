@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
@@ -17,7 +18,7 @@ import (
 // find-missing's SR-11.6 same-life guard and SR-5.8 store errors: the fake store (find_missing_test.go) scripts
 // Changed/Absent/error on the process path; a real store shows a change between read and write on both paths.
 
-// guardedWrites are the three guarded writes, each with a row and checker that lead the sweep to it.
+// guardedWrites are the four guarded writes, each with a row and checker that lead the sweep to it.
 var guardedWrites = []struct {
 	op  string
 	row func(id string) store.LiveSpawnIdentity
@@ -27,19 +28,23 @@ var guardedWrites = []struct {
 	{"clear", func(id string) store.LiveSpawnIdentity {
 		return liveRow(id, withSessionStart(53, fmStart), withNote("tmux_server_changed"))
 	}},
+	{"unreported", func(id string) store.LiveSpawnIdentity {
+		return liveRow(id, withLaunch(store.StatePending, fpPastGrace), withPane(54, fmStart))
+	}},
 }
 
-// guardedWritesChecker answers 51 gone (mark), 52 unreadable (note) and 53 alive (clear).
+// guardedWritesChecker answers 51 gone (mark), 52 unreadable (note), 53 alive (clear) and 54 alive (unreported).
 func guardedWritesChecker() *procfix.Checker {
 	pc := procfix.New()
 	pc.Set(52, procfix.Unreadable())
 	pc.Set(53, procfix.Alive(fmStart))
+	pc.Set(54, procfix.Alive(fmStart))
 	return pc
 }
 
-// TestFindMissingRefusedWriteNotListed: a mark, note write or clear that finds the row changed or absent, or
-// fails in the store, gets no tick or permission-request close and leaves the row in neither list; only a store
-// error is logged (naming the row and the error), and a later dead row is still marked.
+// TestFindMissingRefusedWriteNotListed: a mark, note write, clear or unreported note (b.kdf) that finds the row
+// changed or absent, or fails in the store, gets no tick and leaves the row in neither list; only a store error is
+// logged (naming the row and the error), and a later dead row is still marked.
 func TestFindMissingRefusedWriteNotListed(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	storeErr := errors.New("disk I/O error")
@@ -89,13 +94,23 @@ func (s interleavedStore) ListLiveSpawnIdentities() ([]store.LiveSpawnIdentity, 
 
 // TestFindMissingChangedBetweenReadAndWrite (AC-FM-03, AC-FM-07/08/09): a row relaunched, written by its own
 // agent's hook, reused (a new life, same second) or deleted between the sweep's read and its guarded write (on the
-// process path a mark, note, unusable-name note or clear; on the tmux path an adoption, note, provenance_conflict
-// note or mark) is left as the change left it: no write, tick, adopted record or log line, in neither list.
+// process path a mark, note, unusable-name note, clear or a pending row's unreported note, b.kdf, which so never
+// overwrites a newer hook write; on the tmux path an adoption, note, provenance_conflict note or mark) is left as
+// the change left it: no write, tick, adopted record or log line, in neither list.
 func TestFindMissingChangedBetweenReadAndWrite(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	paned := func(opts ...apitest.SpawnOption) rowSeed {
 		return func(t *testing.T, dbPath string, create bool, sid string) {
 			seedPaneRowAt(t, dbPath, create, sid, opts...)
+		}
+	}
+	// pendingPaned is a pending row past the default grace period at fmNow recording the pane notePanePID.
+	pendingPaned := func(t *testing.T, dbPath string, create bool, sid string) {
+		pane := apitest.WithLaunchIdentity(store.LaunchIdentity{Token: trailToken, Socket: apitest.TestSocket, PaneID: "%1",
+			PanePID: notePanePID, PaneStarttime: fmStart})
+		if _, err := apitest.SeedSpawn(dbPath, "r", store.StatePending, "/tmp", "off", sid, create, pane,
+			apitest.WithLaunchStartedAt(fmNow.Add(-fmGrace-time.Second).UnixMilli())); err != nil {
+			t.Fatalf("SeedSpawn: %v", err)
 		}
 	}
 	own := func(t *testing.T, dbPath string) *tmuxfix.Recorder {
@@ -115,6 +130,7 @@ func TestFindMissingChangedBetweenReadAndWrite(t *testing.T) {
 		{name: "note", seed: paned(apitest.WithLivenessNote("tmux_server_changed"), apitest.WithLivenessUnverifiedSince("2026-09-01 10:00:00")),
 			proc: procfix.Unreadable()},
 		{name: "clear", seed: paned(apitest.WithLivenessNote("probe_eacces")), proc: procfix.Alive(fmStart)},
+		{name: "unreported", seed: pendingPaned, proc: procfix.Alive(fmStart)},
 		{name: "unusable-name note", seed: paned(apitest.WithTmuxSessionName(fmuReps()[0].raw)), proc: procfix.Unreadable()},
 		{name: "lost reply adoption", seed: seedLostReplyAt, proc: procfix.Unreadable(), rec: own, after: tmux.CallListPanes, noPane: true},
 		{name: "ours note", seed: paned(), proc: procfix.Unreadable(), rec: own, after: tmux.CallLookup},

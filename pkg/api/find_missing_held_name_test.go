@@ -170,11 +170,13 @@ func assertSweepRecord(t *testing.T, recs []map[string]any, r hnRow, socket, sto
 	}
 }
 
-// assertMarkTick fails unless r's first tick since mark has reason and lookup_outcome lookup, and the recorded
-// name exactly when reason is tmux_name_held.
+// assertMarkTick fails unless r's first tick since mark but its requests' permission_orphan_closeout ticks has
+// reason and lookup_outcome lookup, and the recorded name exactly when reason is tmux_name_held.
 func assertMarkTick(t *testing.T, mark int, r hnRow, reason, lookup string) {
 	t.Helper()
-	ticks := ticksSince(t, mark, r.id)
+	ticks := slices.DeleteFunc(slices.Clone(ticksSince(t, mark, r.id)), func(tk map[string]any) bool {
+		return tk["reconciliation_reason"] == "permission_orphan_closeout"
+	})
 	if len(ticks) == 0 {
 		t.Fatalf("no tick for %s; want a %s mark tick", r.id, reason)
 	}
@@ -271,7 +273,8 @@ func TestFindMissingHeldNameRecord(t *testing.T) {
 
 // TestFindMissingHeldNamePendingGrace (AC-FM-17): a fresh or resumed pending row whose name an unlabelled session
 // holds is left alone inside grace (its permission request open) and marked by the first sweep past it, with one
-// record and the request denied; the holder is untouched.
+// record and the request denied in the mark's transaction, its closeout tick before the mark's (b.146 rule 12);
+// the holder is untouched.
 func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, kind := range []struct{ name, sessionID string }{{"fresh spawn", ""}, {"resumed", uuid.NewString()}} {
@@ -313,6 +316,10 @@ func TestFindMissingHeldNamePendingGrace(t *testing.T) {
 				pr, err := e.s.GetPermissionRequest(r.id, perm.RequestToken)
 				if err != nil || pr.Decision != "deny" || pr.DecisionReason != store.DecisionReasonFindMissing {
 					t.Errorf("permission request = %+v, %v; want denied by find-missing", pr, err)
+				}
+				if ticks := ticksSince(t, mark, r.id); len(ticks) != 2 || ticks[0]["reconciliation_reason"] != "permission_orphan_closeout" ||
+					ticks[0]["request_token"] != perm.RequestToken || ticks[1]["reconciliation_reason"] != "tmux_name_held" {
+					t.Errorf("ticks = %v; want the request's closeout, then the tmux_name_held mark", ticks)
 				}
 				assertMarkTick(t, mark, r, "tmux_name_held", "gone")
 				assertSweepRecord(t, ptRecords(t, mark, "ad.launch.name_held", r.id), r, apitest.TestSocket, e.storeID,

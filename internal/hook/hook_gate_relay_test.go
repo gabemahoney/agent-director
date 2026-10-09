@@ -138,7 +138,7 @@ func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 			moveErr = err
 			return
 		}
-		res, _, err := st.MoveToPending(id, sp.Snapshot, time.Now().UnixMilli(), gateLaunchToken, apitest.TestSocket, "")
+		res, _, err := st.MoveToPending(id, sp.Snapshot, time.Now().UnixMilli(), gateLaunchToken, apitest.TestSocket, "", store.LaunchOwner{})
 		if err != nil || res != store.CondApplied {
 			moveErr = err
 			if err == nil {

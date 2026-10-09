@@ -46,19 +46,24 @@ var matcherFields = map[hookEventName]bool{
 // Claude Code's current default command-hook timeout, stated explicitly so a
 // change to that default cannot move Claude Code's kill boundary under
 // internal/hook's sessionStartWaitCap (540 s after the hook begins waiting).
-// The wait always ends itself first and logs ad.hook.ignored
-// no_pane_recorded, instead of being killed without a trail record. The
-// cap < timeout relation is not checked in code (internal/spawn does not
+// The cap < timeout relation is not checked in code (internal/spawn does not
 // import internal/hook); each value is pinned in its own package's tests.
 //
-// The 60 s of headroom between the cap and this timeout assumes [store]
-// busy_timeout_ms is small (the default, 10 s): the hook's store writes
-// before and after the wait (up to four RecordSessionStartIdentity writes,
-// two on each side) each can wait up to busy_timeout_ms on a contended store,
-// and this timeout runs from the hook's start. From about 15 s per write the
-// hook can outlast the timeout and be killed without a trail record. Nothing
-// caps busy_timeout_ms against this headroom (b.c7f; see sessionStartWaitCap
-// in internal/hook).
+// The relation bounds the hook's wait for its launch's identity write, not
+// the hook: it does not guarantee that SessionStart ends itself before Claude
+// Code kills it. This timeout runs from the hook's start, and the hook's
+// store writes before and after the wait (up to four
+// RecordSessionStartIdentity writes, two on each side) each can wait up to
+// [store] busy_timeout_ms on a contended store. busy_timeout_ms is accepted
+// up to math.MaxInt32 ms and is not capped against the 60 s between the cap
+// and this timeout (b.c7f, b.146), so a long store wait can still get
+// SessionStart killed before it writes its result or its no_pane_recorded,
+// with no trail record; so can any other death of the hook. The row is then
+// left pending although its agent runs, and find-missing reports it (b.kdf):
+// within pending_grace_seconds plus one find-missing period, provided
+// find-missing is scheduled, it writes liveness note unreported and leaves
+// the row pending, for a caller that reads the pane to decide what to type
+// (see sessionStartWaitCap in internal/hook).
 const sessionStartHookTimeoutSeconds = 600
 
 // synthesizeSettings builds the inline JSON passed to `claude --settings`.

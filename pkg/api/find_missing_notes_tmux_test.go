@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -123,8 +124,9 @@ func assertNoteTick(t *testing.T, before int, id, reason string) {
 	}
 }
 
-// TestFindMissingTmuxNoteTickRules: each lookup-decided note, from no note, the same note and every other note,
-// is written once (never when equal) and ticks only on entry from no note or into provenance_conflict (SR-11.4).
+// TestFindMissingTmuxNoteTickRules: each lookup-decided note, from no note, the same note and every other note
+// (unreported, the note of a live pending row, included; b.kdf), is written once (never when equal) and ticks only
+// on entry from no note or into provenance_conflict (SR-11.4).
 func TestFindMissingTmuxNoteTickRules(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, tc := range ntCases {
@@ -134,7 +136,7 @@ func TestFindMissingTmuxNoteTickRules(t *testing.T) {
 			tick  string
 		}
 		trs := []transition{{"", true, tc.note}, {tc.note, false, ""}}
-		for _, from := range ntNotes {
+		for _, from := range append(slices.Clone(ntNotes), "unreported") {
 			if from == tc.note {
 				continue
 			}

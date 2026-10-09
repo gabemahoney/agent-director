@@ -157,13 +157,12 @@ func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
 	}
 }
 
-// orderStore is a real store that notes the trail's line count when the mark returns and when the
-// permission-request close starts.
+// orderStore is a real store that notes the trail's line count when the mark returns.
 type orderStore struct {
 	*store.Store
-	t                     *testing.T
-	afterMark, atClose    int
-	markCalls, closeCalls int
+	t         *testing.T
+	afterMark int
+	markCalls int
 }
 
 func (o *orderStore) MarkMissingIfSameLife(id string, examined store.RowSnapshot) (string, store.CondResult, error) {
@@ -173,15 +172,10 @@ func (o *orderStore) MarkMissingIfSameLife(id string, examined store.RowSnapshot
 	return prior, res, err
 }
 
-func (o *orderStore) CloseOrphanedPermissionRequests(id string) error {
-	o.closeCalls++
-	o.atClose = trailLen(o.t)
-	return o.Store.CloseOrphanedPermissionRequests(id)
-}
-
-// TestFindMissingMarkOrderTrail: on each path a row's mark tick carries its path's reason and SR-11.4 fields and
-// is written after the mark and before the permission-request close, whose permission_orphan_closeout tick
-// follows; the open request is denied, and a held name gives exactly one ad.launch.name_held.
+// TestFindMissingMarkOrderTrail: on each path a row's mark denies its open request in the mark's own transaction
+// (b.146 rule 12), whose permission_orphan_closeout tick, carrying the request's token, the store writes at the
+// commit, before the mark returns; the mark tick, with its path's reason and SR-11.4 fields, follows it. A held
+// name gives exactly one ad.launch.name_held.
 func TestFindMissingMarkOrderTrail(t *testing.T) {
 	// Serial: it checks the shared trail by literal row ids other find-missing tests reuse.
 	for _, c := range []trailCase{
@@ -197,7 +191,8 @@ func TestFindMissingMarkOrderTrail(t *testing.T) {
 			c.row, c.marked = trailRow{id: "ord-" + strings.ReplaceAll(c.name, " ", "-"), ssPID: 1501}, true
 			st, dbPath, pc, rec := c.setUp(t)
 			id := c.row.id
-			if _, err := apitest.SeedPermissionRequest(dbPath, id, "Bash"); err != nil {
+			perm, err := apitest.SeedPermissionRequest(dbPath, id, "Bash")
+			if err != nil {
 				t.Fatalf("SeedPermissionRequest: %v", err)
 			}
 			ord := &orderStore{Store: st, t: t}
@@ -208,8 +203,8 @@ func TestFindMissingMarkOrderTrail(t *testing.T) {
 				t.Fatalf("FindMissing: %v", err)
 			}
 			assertLists(t, res, []string{id}, nil)
-			if ord.markCalls != 1 || ord.closeCalls != 1 {
-				t.Fatalf("mark calls = %d, close calls = %d; want 1, 1", ord.markCalls, ord.closeCalls)
+			if ord.markCalls != 1 {
+				t.Fatalf("mark calls = %d; want 1", ord.markCalls)
 			}
 			var ticks []map[string]any
 			var at []int // trail line index of each of id's ticks
@@ -218,13 +213,14 @@ func TestFindMissingMarkOrderTrail(t *testing.T) {
 					ticks, at = append(ticks, line), append(at, i)
 				}
 			}
-			if len(ticks) != 2 || ticks[1]["reconciliation_reason"] != "permission_orphan_closeout" {
-				t.Fatalf("ticks = %v; want [%s permission_orphan_closeout]", ticks, c.reason)
+			if len(ticks) != 2 || ticks[0]["reconciliation_reason"] != "permission_orphan_closeout" ||
+				ticks[0]["request_token"] != perm.RequestToken {
+				t.Fatalf("ticks = %v; want [permission_orphan_closeout (token %s) %s]", ticks, perm.RequestToken, c.reason)
 			}
-			c.assertFirstTick(t, ticks[:1], recordedName(t, st, id))
-			if at[0] < ord.afterMark || at[0] >= ord.atClose || at[1] < ord.atClose {
-				t.Errorf("%s at line %d, closeout at %d; mark returned at %d, close began at %d: want mark, tick, close",
-					c.reason, at[0], at[1], ord.afterMark, ord.atClose)
+			c.assertFirstTick(t, ticks[1:], recordedName(t, st, id))
+			if at[0] >= ord.afterMark || at[1] < ord.afterMark {
+				t.Errorf("closeout at line %d, %s at %d; mark returned at %d: want the closeout before the mark returned, "+
+					"its tick after", at[0], c.reason, at[1], ord.afterMark)
 			}
 			if open, err := st.OpenPermissionRequestsForSpawn(id); err != nil || len(open) != 0 {
 				t.Errorf("open permission requests = %v (err %v); want none", open, err)

@@ -98,7 +98,7 @@ func ssgResumed(t *testing.T, id string) (*store.Store, string) {
 	st, dbPath := ssgSeed(t, id, store.StateEnded, ssgKept,
 		apitest.WithJsonlPath("/x/"+ssgKept+".jsonl"), apitest.WithLaunchIdentity(ssgOldPane))
 	res, moved, err := st.MoveToPending(id, mustGetSpawn(t, st, id).Snapshot, time.Now().UnixMilli(),
-		ssgNewPane.Token, ssgNewPane.Socket, "")
+		ssgNewPane.Token, ssgNewPane.Socket, "", store.LaunchOwner{})
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("MoveToPending(%q) = %v, %v; want applied", id, res, err)
 	}
@@ -115,6 +115,21 @@ func ssgMissingBeforeReport(t *testing.T, id string) (*store.Store, string) {
 	st, dbPath := ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane))
 	if prior, err := markMissingSameLife(st, id); err != nil || prior != store.StatePending {
 		t.Fatalf("mark %q missing = %q, %v; want prior pending", id, prior, err)
+	}
+	return st, dbPath
+}
+
+// ssgNotedBeforeReport is a pending row with a pane that find-missing noted
+// unreported, still pending, before its agent reported in (b.kdf: its
+// SessionStart hook seemed dead).
+func ssgNotedBeforeReport(t *testing.T, id string) (*store.Store, string) {
+	t.Helper()
+	st, dbPath := ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane))
+	if res, err := st.NoteUnreportedIfSameLife(id, mustGetSpawn(t, st, id).Snapshot); err != nil || res != store.CondApplied {
+		t.Fatalf("note %q unreported = %v, %v; want applied", id, res, err)
+	}
+	if sp := mustGetSpawn(t, st, id); sp.State != store.StatePending || sp.LivenessNote != "unreported" || sp.ClaudeSessionID != "" {
+		t.Fatalf("noted %q = state %q, note %q, session %q; want pending, unreported, none", id, sp.State, sp.LivenessNote, sp.ClaudeSessionID)
 	}
 	return st, dbPath
 }
@@ -178,8 +193,10 @@ func ssgHistory(t *testing.T, dbPath, id string) []ssgArchived {
 }
 
 // TestSessionStartGateApplied: the row's own agent's SessionStart applies for
-// every source and row state, records the new session, archives the old pair
-// and records the parent as pid/proc_starttime (SR-22.9, AC-HOOK-02).
+// every source and row state, a pending row find-missing noted unreported
+// included (b.kdf), moves it to waiting, records the new session, archives the
+// old pair, records the parent as pid/proc_starttime and clears any liveness
+// note (SR-22.9, AC-HOOK-02).
 func TestSessionStartGateApplied(t *testing.T) {
 	outgoing := []ssgArchived{{ssgOutgoing, "/x/" + ssgOutgoing + ".jsonl", 2}}
 	cases := []struct {
@@ -195,6 +212,7 @@ func TestSessionStartGateApplied(t *testing.T) {
 		}, nil},
 		{"resumed pending row, kept session id and new pane", "resume", ssgResumed, nil},
 		{"row marked missing before its agent reported in", "startup", ssgMissingBeforeReport, nil},
+		{"pending row noted unreported before its agent reported in", "startup", ssgNotedBeforeReport, nil},
 		{"live row, /clear", "clear", ssgLive(store.StateWorking), outgoing},
 		{"live row, in-session /resume", "resume", ssgLive(store.StateWaiting), outgoing},
 		{"live row, compaction", "compact", ssgLive(store.StateAskUser), outgoing},
@@ -218,6 +236,9 @@ func TestSessionStartGateApplied(t *testing.T) {
 			}
 			if row.ClaudeSessionID != sessionID || row.JSONLPath != path {
 				t.Errorf("session/path = %q/%q; want the payload's %q/%q", row.ClaudeSessionID, row.JSONLPath, sessionID, path)
+			}
+			if row.LivenessNote != "" || row.LivenessUnverifiedSince != "" {
+				t.Errorf("liveness note/since = %q/%q; want both cleared", row.LivenessNote, row.LivenessUnverifiedSince)
 			}
 			// SR-22.9: pid/proc_starttime = the hook's parent; a NULL pane start is recorded from it.
 			if row.PID != agent.PID || row.ProcStarttime != agent.Start || row.Identity.PaneStarttime != agent.Start {
