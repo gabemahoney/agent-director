@@ -17,6 +17,17 @@ A practical checklist for writing and reviewing code. Prioritize substance over 
 - **English advice is an optional extra.** Advice in a description helps humans and agents, but it is never the only way to learn the next step.
 - **Prefer behaviour that's safe to repeat over advice to follow.**
 
+See also "Core Principle: Never Depend on Claude Code's Terminal Text" below, which applies this to outcomes only Claude Code's screen can show.
+
+## Core Principle: Never Depend on Claude Code's Terminal Text
+
+**Agent Director never reads, matches or acts on the text Claude Code draws in the terminal** — prompts, menus, dialog wording, key layouts, glyphs. That text changes between Claude Code releases without notice.
+
+- **Learn Claude Code's state only from its documented interfaces:** hooks and their JSON, settings, exit codes and transcript files.
+- **When only the screen can tell what is happening, report a machine-readable outcome.** Return an error name that means "something that can look at this session must decide and send keys", and leave the looking and the typing to the caller. `read-pane` and `send-keys` carry text between the pane and the caller and never interpret it. (Formatting is not interpretation: `read-pane` removes ANSI escape codes by default, and `send-keys` removes CR bytes and adds Enter.)
+- **The caller may not be an intelligence either.** It may be code, such as a relay library or a bot server, that can no more read a screen than Agent Director can. The outcome must be something such a caller can pass unchanged up its own chain until it reaches an intelligence (an agent or a human) that can look, decide and type. Never assume the first caller is that intelligence, and never rely on English advice to carry this outcome.
+- **Tests may use fake screens; product code may not.** No product code path branches on screen text.
+
 ## 1. Dead & Obsolete Code
 
 Remove it. Don't comment it out, don't leave it "just in case."
