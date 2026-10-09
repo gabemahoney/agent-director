@@ -17,16 +17,18 @@ A practical checklist for writing and reviewing code. Prioritize substance over 
 - **English advice is an optional extra.** Advice in a description helps humans and agents, but it is never the only way to learn the next step.
 - **Prefer behaviour that's safe to repeat over advice to follow.**
 
-See also "Core Principle: Never Depend on Claude Code's Terminal Text" below, which applies this to outcomes only Claude Code's screen can show.
+See also "Core Principle: Never Hardcode Claude Code's Terminal Text" below, which applies this to outcomes only Claude Code's screen can show.
 
-## Core Principle: Never Depend on Claude Code's Terminal Text
+## Core Principle: Never Hardcode Claude Code's Terminal Text
 
-**Agent Director never reads, matches or acts on the text Claude Code draws in the terminal** — prompts, menus, dialog wording, key layouts, glyphs. That text changes between Claude Code releases without notice.
+**Agent Director's product code never hardcodes Claude Code's strings, patterns or layout** — no string, regex, layout rule, line position or glyph that encodes what Claude Code's prompts, menus, dialogs or key layouts mean. That text and layout change between Claude Code releases without notice. Reading the pane is not the problem; giving it a meaning written into the code is.
 
+- **Forbidden: knowledge of Claude Code's UI written into product code.** For example: matching "Do you want to proceed?", "Yes" or `❯`; treating the last two lines as the status bar; treating option 1 as "allow".
+- **Allowed: content-agnostic use of what Agent Director itself captured from the pane.** For example: checking whether the pane changed between capture A and capture B, byte for byte, by hash or by diff (such as refusing to send keys when the pane's hash no longer matches the one the caller read); picking strings or substrings out of an earlier capture (a whole region or just a few words) and searching the current pane for them, to see whether each is still present, has moved or has changed. That search does match text, but the text comes from Agent Director's own earlier capture, not from a Claude Code literal written into the code (as long as the piece was not chosen by a Claude Code string or layout rule). None of these encodes meaning, so none breaks when Claude Code changes its wording.
 - **Learn Claude Code's state only from its documented interfaces:** hooks and their JSON, settings, exit codes and transcript files.
 - **When only the screen can tell what is happening, report a machine-readable outcome.** Return an error name that means "something that can look at this session must decide and send keys", and leave the looking and the typing to the caller. `read-pane` and `send-keys` carry text between the pane and the caller and never interpret it. (Formatting is not interpretation: `read-pane` removes ANSI escape codes by default, and `send-keys` removes CR bytes and adds Enter.)
 - **The caller may not be an intelligence either.** It may be code, such as a relay library or a bot server, that can no more read a screen than Agent Director can. The outcome must be something such a caller can pass unchanged up its own chain until it reaches an intelligence (an agent or a human) that can look, decide and type. Never assume the first caller is that intelligence, and never rely on English advice to carry this outcome.
-- **Tests may use fake screens; product code may not.** No product code path branches on screen text.
+- **Tests may use fake screens; product code may not hardcode Claude Code's.** No product code path branches on a Claude Code string literal, pattern or layout rule.
 
 ## 1. Dead & Obsolete Code
 
