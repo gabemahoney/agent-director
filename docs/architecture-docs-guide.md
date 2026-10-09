@@ -14,6 +14,8 @@ Agent Director must support human callers, bot callers and code callers. It cann
 
 Document the machine-readable contract (error names, fields, states) as the contract. Describe advice text as supplementary.
 
+See also "Core Principle: Never Depend on Claude Code's Terminal Text" in docs/engineering-guide.md, which applies this to outcomes only Claude Code's screen can show: Agent Director never interprets that screen, and the caller may not be an intelligence either.
+
 ## Document Re-usable Components
 Any time you create a component that is meant to be re-usable, update architecture.md with a statement requiring future code authors use it. Be sure to describe what it does.
 
