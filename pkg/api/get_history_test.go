@@ -133,7 +133,7 @@ func TestGetHistoryVisible(t *testing.T) {
 			}
 			s, dbPath := seedGetHistoryRow(t, id, tc.sessionID, opts...)
 
-			got, err := api.Get(s, id)
+			got, err := api.Get(s, api.RelayView{}, id)
 			if err != nil {
 				t.Fatalf("Get: %v", err)
 			}
@@ -159,7 +159,7 @@ func TestGetHistoryHookRotationWithinLife(t *testing.T) {
 		apitest.HookTranscript("/h/s-new.jsonl", false)); !got.Applied {
 		t.Fatalf("SessionStart = %+v; want applied", got)
 	}
-	got, err := api.Get(s, id)
+	got, err := api.Get(s, api.RelayView{}, id)
 	if err != nil || got.ClaudeSessionID != "s-new" {
 		t.Fatalf("Get = %q, %v; want ClaudeSessionID s-new", got.ClaudeSessionID, err)
 	}

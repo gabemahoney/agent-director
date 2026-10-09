@@ -22,8 +22,8 @@ SQLite file; everything else is tmux.
   Bun runtime via ESM; not designed to be webpacked. See
   [`pkg/ts-bun-client/README.md`](pkg/ts-bun-client/README.md).
 - A **permission relay** (`relay_mode=on` + `decide`) so an orchestrator
-  can intercept `PreToolUse` permission prompts and answer
-  allow/deny out-of-band.
+  can intercept Claude Code's permission requests and answer
+  allow/deny out-of-band, and learn whether the answer reached the agent.
 - A **persistent session model** — pause / resume preserves the
   JSONL transcript across Claude sessions.
 - **Crash-recovery verbs** you schedule yourself — `find-missing` +
@@ -284,12 +284,48 @@ id=$(agent-director spawn --cwd "$PWD" --relay-mode=on \
 # Extract the request_token from the open permission request, then decide.
 token=$(agent-director get --claude-instance-id "$id" \
           | jq -r '.permission_requests[0].request_token')
+# A caller that must answer within 3 s passes at most 2000 (its deadline minus 1 s).
 agent-director decide --claude-instance-id "$id" \
     --request-token "$token" \
-    --decision allow --reason "tool is on the allow-list"
+    --decision allow --max-wait-ms 2000
 ```
 
-After the row is closed, retrieve the verdict by `request_token`:
+`decide` records the verdict, then waits at most 1 s for the agent's relay
+hook to confirm it took the verdict, and returns the request's `delivery`:
+
+- `delivered`: the relay hook confirmed the verdict before handing it to
+  Claude Code.
+- `not_confirmed`: no confirmation yet. Poll `get-permission` until
+  `delivery` reads `delivered` or `fallen_back`; it does by `confirm_by`.
+
+`decision` is the verdict recorded, not the outcome: read `delivery`. A
+request can read `decision` `allow` with `delivery` `fallen_back`.
+
+`decide` records no verdict when it refuses with:
+
+- `ErrRelayFallenBack`: the request's relay hook is gone and took no verdict,
+  so no answer from the relay reached the agent. It comes within seconds of
+  the hook's end (after `confirm_by` when agent-director cannot check the
+  hook's process). Only an answer at the pane can close the request; the
+  refused verdict is kept as `attempted_decision`.
+- `ErrStoreBusy`: the store stayed busy for longer than `--max-wait-ms`
+  (another agent-director process held it, or another call in the same
+  process did). Retry.
+- `ErrAlreadyDecided`: a verdict is already recorded (first `decide` wins, and
+  the relay hook records a deny of its own when its time runs out,
+  `decision_reason` `timeout`).
+- `ErrNoOpenPermissionRequest`: no open request by that token, or it is
+  closed. Do not answer it at the pane. A request is closed while its agent
+  is `ended` or `missing`, and one still awaiting an answer when
+  `find-missing` marked its agent `missing` stays closed after `resume`.
+
+`--max-wait-ms` bounds the whole call, its reads and its write, and has
+no default. Without it,
+`decide` can wait up to `[store] busy_timeout_ms` for a busy store. Once the
+verdict is recorded, `decide` never returns `ErrStoreBusy`: a bound reached
+while it waits for the confirmation returns `not_confirmed`.
+
+Follow a request by `request_token`:
 
 ```sh
 agent-director get-permission --request-token "$token"
@@ -306,9 +342,27 @@ The response is a single permission row:
   "requested_at": "2026-05-31T12:00:00Z",
   "decision": "allow",
   "decision_reason": null,
-  "decided_at": "2026-05-31T12:00:01Z"
+  "decided_at": "2026-05-31T12:00:01Z",
+  "delivery": "delivered",
+  "confirm_by": "2026-06-01T12:00:02.120Z",
+  "hook_alive": false,
+  "hook_gone_at": null,
+  "attempted_decision": null,
+  "attempted_at": null,
+  "tool_use_id": "toolu_01ABCDEF"
 }
 ```
+
+`get` and `list` carry the same delivery fields on each request in a row's
+`permission_requests`; they list only requests that still await an answer,
+never a closed one. `hook_alive` is `null` when agent-director cannot check
+the relay hook's process (for example from another pid namespace, or for a
+request recorded before you upgraded to this release); such a request
+falls back by time, at `confirm_by`. A closed request's `delivery` reads
+the same way as any other's: `delivered` only if its relay hook confirmed a
+verdict. A row can read `waiting` while a request it recorded still awaits
+an answer, so follow each request you track with `get-permission`, not only
+rows in `check_permission`.
 
 ### Templates
 
@@ -375,8 +429,8 @@ value or one above 106751 is refused, never replaced by the default or
 capped, with the same effect as a refused timing setting (see
 **Validation** under [Timing settings](#timing-settings-tmux)).
 
-`[relay] timeout_seconds` is how long a relayed permission request waits
-for `decide` before it is denied: whole seconds from 1 to 2147483 (about
+`[relay] timeout_seconds` is the relay hook's time limit: Claude Code ends
+the hook that long after it starts. Whole seconds from 1 to 2147483 (about
 24.8 days, the longest hook timeout Claude Code honours). `[pause]
 timeout_seconds` is how long `pause` waits for the agent to exit: whole
 seconds from 1 to 9223372036. `[pre_trust] lock_wait_seconds` is how long
@@ -387,6 +441,14 @@ the store while another of its processes holds it locked, before the call
 fails: whole milliseconds from 1 to 2147483647. For each of the four, a
 missing key, or 0, gives the default, and a negative value or one above its
 range is refused the same way as `expire_retention_days`.
+
+The relay hook keeps the last 3 s of its time limit for itself: it waits
+for `decide` until 3 s before Claude Code would end it, then records and
+returns a deny. So a request has `timeout_seconds` less 3 s to be decided,
+and a value of 3 or less leaves no time at all: at 3 the request is denied
+at once, and at 2 or less the hook gives no answer, so Claude Code asks in
+its own permission prompt. An agent keeps the value in force when it was
+launched (`spawn` or `resume`).
 
 `lock_wait_seconds` defaults to 12, just over the 10 s after which a lock
 left by a killed process counts as abandoned and is cleared. If the wait
@@ -417,6 +479,17 @@ And once a call's waits for the store add up to the TypeScript client's
 `ErrCallTimeout` — one wait of 30 s or more is cut off before the store
 gives up. Raise TypeScript callers' `callTimeoutMs` to match.
 agent-director checks this key against neither limit.
+
+Three waits keep their time limits whatever `busy_timeout_ms` is:
+
+| Who | Time limit | How it keeps it |
+|---|---|---|
+| `decide --max-wait-ms N` | the caller's deadline | waits for the store at most until N ms after it started (`ErrStoreBusy`, nothing recorded) |
+| the relay hook | Claude Code ending it | each write waits for the store at most until 2 s before that end; if the store stays busy, its first write gives way to a deny, and any later one to no answer, so Claude Code asks in its own permission prompt |
+| `get`, `list`, `get-permission` | the caller's | never wait for the store's write lock |
+
+`decide` without `--max-wait-ms` waits up to `busy_timeout_ms` per write,
+and the other hooks can still be killed by a long store wait, as above.
 
 `db_path` moves the store, and `install.sh` follows it; its reads of the
 store wait up to `busy_timeout_ms` too. Keep both keys in the one-line form
@@ -525,9 +598,11 @@ Task Scheduler).
 
 **Recovery depends on `find-missing` being scheduled.** Nothing else
 reports a stuck or stale row: without it, a row stuck `pending` while its
-agent runs is never noted, and a row whose agent is gone stays in `list` in
+agent runs is never noted, a relay row left in `check_permission` after its
+agent moved on stays there, and a row whose agent is gone stays in `list` in
 a stale live state (`waiting`, `working`, `ask_user`, `check_permission` or
-`pending`).
+`pending`). A relayed request's delivery needs no sweep: it is worked out
+each time the request is read.
 
 `find-missing` judges each live row by its agent's process: a row whose
 process runs stays live, and a row whose process is gone is marked
@@ -563,6 +638,16 @@ launch with the live-row sequence of the [caller contract](#caller-contract)
 refuses a `pending` row without `--allow-pending`, noted or not. A later
 sweep that finds the agent alive keeps the note; the agent's next hook
 clears it and moves the row on.
+
+A row with `relay_mode=on` stays in `check_permission` until the agent's
+next hook after its last permission request. When that hook is lost (for
+example the end of a turn after a denied request), the notification Claude
+Code sends while the agent sits idle at its prompt moves the row to
+`waiting` once none of its requests still awaits an answer. Failing that,
+`find-missing` moves the row out once none of its requests still awaits an
+answer and none of its relay hooks can still run: to `waiting` when that
+idle notification was the agent's last hook, otherwise to `working`. Such
+a row is in neither `ids` nor `unverified_ids`.
 
 Finished rows (`ended` or `missing`) are never removed on their own: no
 `agent-director` verb removes a row you name, and only an `expire` you
@@ -687,6 +772,11 @@ the class of every tmux error, is in
 - To use or end a `pending` row noted `unreported`, see [Maintenance](#maintenance).
 - `ErrConfigMalformed` means agent-director cannot use its config file:
   take no action, alert once, never read it as "dead".
+- A relayed request's `decision` is the verdict recorded, not the outcome:
+  read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
+  minus 1 s; its `ErrStoreBusy` and `ErrRelayFallenBack` record nothing (see
+  [Intercept permission prompts](#intercept-permission-prompts)).
+- `get`, `list` and `get-permission` never wait for the store's write lock.
 - A reused id starts with no memory of its earlier lives.
 - Detect features by the binary's version (`agent-director version`, the
   MCP `version` tool, or the TypeScript client's `binaryVersion`); a

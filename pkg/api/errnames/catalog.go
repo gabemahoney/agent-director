@@ -92,6 +92,7 @@ var Catalog = []Entry{
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
 	{Name: "ErrPermissionRequestNotFound", Err: store.ErrPermissionRequestNotFound},
 	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
+	{Name: "ErrStoreBusy", Err: store.ErrStoreBusy},
 	// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch and
 	// ErrSchemaMigrationRequired come from no verb handler: clisetup.Open
 	// names them when the CLI cannot open its Client, before any verb runs

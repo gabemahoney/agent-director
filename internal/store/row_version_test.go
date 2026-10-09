@@ -33,6 +33,9 @@ type rowVersionCase struct {
 	writesToken bool
 	// launchStart is the launch_started_at the write sets; 0 = cleared or kept per clears.
 	launchStart int64
+	// noLaunchStart: the setup's own hook writes cleared the seeded launch
+	// start (the relay hook's first write does), so the write must leave it NULL.
+	noLaunchStart bool
 	// lifeWrite is the life_number and no_pre_trust the write stores (reuse); nil keeps them.
 	lifeWrite map[string]any
 	// check runs further assertions on the row before and after the write; nil skips.
@@ -127,6 +130,12 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c ro
 	av, aok := after.RowVersion.(int64)
 	if !bok || !aok || av != bv+1 {
 		t.Errorf("row_version %#v -> %#v, want exactly +1", before.RowVersion, after.RowVersion)
+	}
+	if c.noLaunchStart {
+		if before.LaunchStartedAt != nil || after.LaunchStartedAt != nil {
+			t.Errorf("launch_started_at %#v -> %#v, want NULL kept", before.LaunchStartedAt, after.LaunchStartedAt)
+		}
+		return
 	}
 	if before.LaunchStartedAt == nil {
 		t.Fatal("seed left launch_started_at NULL; the launch-start check would be vacuous")
@@ -492,6 +501,7 @@ func rowVersionWrites() []rowVersionCase {
 	cases = append(cases, rvResumeWrites()...)
 	cases = append(cases, rvFindMissingWrites()...)
 	cases = append(cases, rvReuseWrites()...)
+	cases = append(cases, rvRelayWrites()...)
 	return append(cases,
 		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
 			identity: &created, write: recordLaunch(0, store.CondApplied)},

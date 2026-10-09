@@ -14,7 +14,7 @@ learned the hard way against the production database.
 All schema logic lives in `internal/store/schema.go`, with the version
 constant and typed errors in `internal/store/store.go`.
 
-**The version contract.** `schemaVersion` (`store.go`, currently `6`) is the
+**The version contract.** `schemaVersion` (`store.go`, currently `7`) is the
 version this binary writes and reads. Every opened DB carries its own version
 in SQLite's `PRAGMA user_version` (0 on a brand-new file). `ensureSchema(db,
 dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
@@ -35,7 +35,7 @@ sentinel next to the DB file; otherwise the open is refused with the typed
 (zero DB writes). See §1a for the sentinel gate and §1b for the refusal.
 
 The newer-than-binary arm is the guard rail: a DB from a *newer* binary (say
-`user_version=7` opened by a v6 binary) returns `ErrSchemaMismatch` (`store.go`)
+`user_version=8` opened by a v7 binary) returns `ErrSchemaMismatch` (`store.go`)
 rather than touching the file. Callers detect it with
 `errors.Is(err, ErrSchemaMismatch)`.
 
@@ -46,28 +46,28 @@ random bits from `crypto/rand`, written as 16 lowercase hex characters
 `createSchema` for a fresh store, or by `migrateV4toV5` for a migrated one. The
 insert is guarded (`insertStoreIDOnceSQL`, `INSERT … SELECT … WHERE NOT
 EXISTS`), so it never replaces an id that is already there. No other statement
-writes `store_meta`, no verb changes the id, and later hops (`migrateV5toV6`)
-keep it. After `ensureSchema` succeeds,
+writes `store_meta`, no verb changes the id, and later hops (`migrateV5toV6`,
+`migrateV6toV7`) keep it. After `ensureSchema` succeeds,
 `openDB` reads the id once (`readStoreID`), and `(*Store).StoreID()` returns
 it. A current-version store with no `store_meta` table, no `store_id` row, or a
 value that is not 16 lowercase hex characters fails the open with an error that
 wraps `ErrSchemaMismatch`. The error never contains the value, the DB is
 closed, and nothing is written. Only a hand edit leaves a store in that state;
-the v5 → v4 recipe (§5) stamps v4, which a v5 or v6 binary refuses with
+the v5 → v4 recipe (§5) stamps v4, which a v5, v6 or v7 binary refuses with
 `ErrSchemaMigrationRequired`.
 
 **A registry of steps, not a switch.** Version transitions are no longer
 `case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
 migrateV<N>toV<N+1>}` entry in the ordered `migrationSteps` registry
-(`schema.go`); today that registry holds five entries, `{from: 1, apply:
+(`schema.go`); today that registry holds six entries, `{from: 1, apply:
 migrateV1toV2}`, `{from: 2, apply: migrateV2toV3}`, `{from: 3, apply:
-migrateV3toV4}`, `{from: 4, apply: migrateV4toV5}`, and `{from: 5, apply:
-migrateV5toV6}`. `migrateV1toV2`, `migrateV2toV3`, `migrateV3toV4`,
-`migrateV4toV5`, and `migrateV5toV6` (`schema.go`) are the reference
-implementations of an `apply` func; `migrateV5toV6` is the most recent. To add
-the next version (v7) you write `migrateV6toV7` and append `{from: 6, apply:
-migrateV6toV7}` to `migrationSteps` — see §1a's "Adding a step" for the full
-checklist.
+migrateV3toV4}`, `{from: 4, apply: migrateV4toV5}`, `{from: 5, apply:
+migrateV5toV6}`, and `{from: 6, apply: migrateV6toV7}`. `migrateV1toV2`,
+`migrateV2toV3`, `migrateV3toV4`, `migrateV4toV5`, `migrateV5toV6`, and
+`migrateV6toV7` (`schema.go`) are the reference implementations of an `apply`
+func; `migrateV6toV7` is the most recent. To add the next version (v8) you
+write `migrateV7toV8` and append `{from: 7, apply: migrateV7toV8}` to
+`migrationSteps` — see §1a's "Adding a step" for the full checklist.
 
 **One transaction per step, stamp included.** Every `apply` func opens a single
 `db.Begin()` transaction and does *all* of its DDL/DML **and** the
@@ -90,8 +90,8 @@ the DDL is `IF NOT EXISTS` and the insert is guarded.
 `runMigrationChain(db, from)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by the current v6 binary
-runs v1→v2→v3→v4→v5→v6 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v7 binary
+runs v1→v2→v3→v4→v5→v6→v7 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -158,26 +158,36 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** To add the next version (v7, generalizing to any vN→vN+1);
-`migrateV5toV6` (b.kdf) is the most recent worked example:
+**Adding a step.** To add the next version (v8, generalizing to any vN→vN+1);
+`migrateV6toV7` (b.146 step 2) is the most recent worked example:
 
-1. Bump `schemaVersion` to `7` (`store.go`).
-2. Evolve `schemaDDL` so a fresh DB is created directly at v7 (the two-places
+1. Bump `schemaVersion` to `8` (`store.go`).
+2. Evolve `schemaDDL` so a fresh DB is created directly at v8 (the two-places
    rule — §1, §4). `schemaDDL` already includes `store_meta`, and
    `createSchema` inserts a fresh store's `store_id` in the same transaction;
-   keep both. A v6 → v7 hop must keep `store_meta` and its row: the id is
+   keep both. A v7 → v8 hop must keep `store_meta` and its row: the id is
    created once and never changed (§1).
-3. Write `migrateV6toV7(db)` following the one-transaction/validate-first
+3. Write `migrateV7toV8(db)` following the one-transaction/validate-first
    pattern (§2).
-4. Append `{from: 6, apply: migrateV6toV7}` to `migrationSteps` (`schema.go`).
+4. Append `{from: 7, apply: migrateV7toV8}` to `migrationSteps` (`schema.go`).
 5. Add the reverse recipe to §5's emergency downgrade recipes, newest first,
    with a test copy of its statements that must match it (add the heading
-   and the copy to `TestDowngradeRecipe_MatchesGuide`'s table).
+   and the copy to `TestDowngradeRecipe_MatchesGuide`'s table), and point
+   the next-older recipe at it ("on a v8 store, run the v8 → v7 recipe
+   first").
 
 That is all — do **not** add any return-after-one-hop logic. The chain engine
 walks the registry from the DB's version up to `schemaVersion` automatically, so
-appending the step is what makes both a v6→v7 upgrade and a straight-through
-v1→v7 upgrade work.
+appending the step is what makes both a v7→v8 upgrade and a straight-through
+v1→v8 upgrade work.
+
+**Later columns of the same release.** A change that ships in the same
+release as a version not yet released adds its columns to that version's hop
+and `schemaDDL`, rather than a new version: schema v7 is the one migration of
+b.146 steps 2, 2b and 2c, which ship together, and a later step of that
+release appends its columns to `v7Columns` (`schema.go`) and the same text to
+`schemaDDL`, and extends the v7 → v6 recipe (§5) and its test copy. Once a
+version has shipped, its hop never changes.
 
 ## 1b. Refusal semantics — `ErrSchemaMigrationRequired`
 
@@ -264,7 +274,22 @@ for the launch owner, the only columns v6 adds, in this order, `launch_owner_pid
 nullable and appended after `pane_starttime` with `schemaDDL`'s exact text.
 Each is guarded by a `pragma_table_info('spawns')` probe and skipped when the
 column is already there. Any probe or `ALTER` failure rolls the whole hop
-back: `user_version` stays 5 and none of the three columns exists.)
+back: `user_version` stays 5 and none of the three columns exists.
+`migrateV6toV7` (b.146 step 2) is an additive `ADD COLUMN` hop across two
+tables, driven by one list, `v7Columns` (`schema.go`), that holds each
+column's table, name and exact `schemaDDL` text: sixteen `ALTER TABLE
+permission_requests ADD COLUMN` (the relay hook's `hook_pid`,
+`hook_starttime` and `hook_pidns`; `tool_use_id`, `agent_id`,
+`delivered_at`, `settled_at`, `hook_gone_at`, `attempted_decision`,
+`attempted_at`; `pane_answer TEXT NOT NULL DEFAULT 'none'`, `pane_as` and
+the pane-answer sender's `pane_sender_pid`, `pane_sender_starttime` and
+`pane_sender_pidns`; then `closed_at` INTEGER, when find-missing's mark
+closed the request, in milliseconds since the epoch), appended after
+`created_at`, then `ALTER TABLE spawns ADD COLUMN idle_since`, appended
+after `launch_owner_pidns`. Each is guarded by a `pragma_table_info` probe
+of its own table and skipped when the column is already there. Any probe or
+`ALTER` failure rolls the whole hop back: `user_version` stays 6 and none of
+the seventeen columns exists.)
 
 **Phase 3 — data backfill/transform.** `UPDATE`/`INSERT … SELECT` to populate
 new columns or reshape rows, if the migration keeps data. Not every hop needs
@@ -290,7 +315,15 @@ no launch owner. A `pending` row is no special case: with no owner,
 `find-missing` judges it by its pending grace period alone, as it did before
 the upgrade. No existing value is rewritten: a `pending` row keeps its
 `launch_started_at` exactly as stored, and `store_meta` and its store id are
-kept.
+kept. `migrateV6toV7` has no phase 3 either: its `ADD COLUMN`s give every
+existing permission request NULL in each new column but `pane_answer`, which
+takes its default `none`, and every row NULL `idle_since`. A request with no
+`settled_at` is one recorded before v7, so readers and `decide` judge it as
+before the upgrade, by its `created_at` and the relay window. A NULL
+`closed_at` means no mark closed the request: an existing request that a
+pre-v7 mark denied keeps its `find_missing` deny, which already makes it no
+longer await an answer, so nothing needs backfilling. No existing value is
+rewritten, and `store_meta` and its store id are kept.
 
 Session history belongs to a life: each `session_history` entry carries the
 life of the id that was current when its session ran, and after the v5 hop
@@ -352,9 +385,10 @@ bytes. What they cover, step by step:
    `TestAuthorizedMigrationFromEveryVersion` seeds a row in each older
    version, writes an exact-match sentinel (`writeSentinel(t, dir, from,
    schemaVersion)`) and opens with `Open`. It asserts `user_version ==
-   schemaVersion`, the pre-existing row read with v3's, v5's and v6's columns
-   at their defaults (the `GetSpawn` field check, `assertV5Defaults` and
-   `assertV6Defaults`; a new version's columns are added by hand, below), one
+   schemaVersion`, the pre-existing row read with v3's, v5's, v6's and v7's
+   `spawns` columns at their defaults (the `GetSpawn` field check, which
+   covers v7's `idle_since`, `assertV5Defaults` and `assertV6Defaults`; a new
+   version's columns are added by hand, below), one
    store id, the sentinel
    consumed (`assertSentinel`) and one `ad.schema.migrated` line.
    `TestMigrationRefusedWithoutSentinel` opens each older version with no
@@ -381,32 +415,38 @@ bytes. What they cover, step by step:
 - **Re-entry rows** in `TestMigrationStepReentry`: `"vN→vN+1 run twice"`,
   and one row per partial state the step can be re-run over, with a helper in
   `migration_fixtures_test.go` that makes that part of the change first (as
-  `preAddV5Columns` and `preAddStoreMeta` do for v4→v5, and `preAddV6Columns`
-  for v5→v6).
+  `preAddV5Columns` and `preAddStoreMeta` do for v4→v5, `preAddV6Columns`
+  for v5→v6 and `preAddV7Columns` for v6→v7).
 - **A rollback row** in `TestMigrationRollback`: an arrangement that makes
   the hop fail part-way (as `breakV5SessionHistoryHop`,
-  `breakV5StoreMetaStep` and `breakV6PIDNSColumn` do), and the text the
-  open's error must name. The test asserts a migration failure, not a
-  refusal, and the version, schema, rows (`dbDump`) and sentinel kept. Only
-  `from == 4` and `from == 5` start with rows (`makeV4HistoryFixture`,
-  `makeV5Fixture`); every other version's `makeVersionedDB` store is empty.
-  Seed rows for your hop's from-version (extend the fixture choice at the top
-  of the subtest, as `tc.from == 4` and `tc.from == 5` do) so the `dbDump`
-  comparison covers data, not only the schema.
+  `breakV5StoreMetaStep`, `breakV6PIDNSColumn` and `breakV7IdleSinceColumn`
+  do), and the text the open's error must name. The test asserts a migration
+  failure, not a refusal, and the version, schema, rows (`dbDump`) and
+  sentinel kept. Only `from == 4`, `from == 5` and `from == 6` start with
+  rows (`makeV4HistoryFixture`, `makeV5Fixture`, `makeV6Fixture`); every
+  other version's `makeVersionedDB` store is empty. Seed rows for your hop's
+  from-version (extend the fixture choice at the top of the subtest, as
+  `tc.from == 4`, `5` and `6` do) so the `dbDump` comparison covers data, not
+  only the schema.
 - **Defaults and fresh shape**: a `v<N>ColumnSpecs` list of the columns your
   hop adds, and its `assertV<N>Defaults`, in `migration_fixtures_test.go`
   (as `v5ColumnSpecs` and `assertV5Defaults` are for v5, and
-  `v6ColumnSpecs` and `assertV6Defaults` for v6). Call
-  `assertV<N>Defaults` from `TestAuthorizedMigrationFromEveryVersion`'s
-  pre-existing-row check, beside `assertV5Defaults` and `assertV6Defaults`.
-  In `TestFreshStoreSchema`, add the specs to its `assertColumnSpecs` call
-  (today `v3ColumnSpecs`, `v5ColumnSpecs` and `v6ColumnSpecs`) and any new
-  table or index to its list of names. Neither test picks up a new version's
-  columns on its own.
-- **Data cases** in `schema_v<N>_test.go`, as `schema_v5_test.go` and
-  `schema_v6_test.go` do: the values a seeded older store's rows come out
-  with after the hop, and anything else the version adds (v5's store id, and
-  each version's downgrade recipe).
+  `v6ColumnSpecs` and `assertV6Defaults` for v6; v7's `v7ColumnSpecs` is
+  there and its `assertV7Defaults`, which also checks the new request
+  columns, is in `schema_v7_test.go`). Call `assertV<N>Defaults` from
+  `TestAuthorizedMigrationFromEveryVersion`'s pre-existing-row check, beside
+  `assertV5Defaults` and `assertV6Defaults`, unless, as for v7, its `spawns`
+  columns are checked there through `GetSpawn` and its other columns by the
+  data test. In `TestFreshStoreSchema`, add the specs to its
+  `assertColumnSpecs` call (today `v3ColumnSpecs`, `v5ColumnSpecs`,
+  `v6ColumnSpecs` and `v7ColumnSpecs`), check where the new columns sit in
+  each table (v7's: last on `spawns`, after `created_at` on
+  `permission_requests`), and add any new table or index to its list of
+  names. Neither test picks up a new version's columns on its own.
+- **Data cases** in `schema_v<N>_test.go`, as `schema_v5_test.go`,
+  `schema_v6_test.go` and `schema_v7_test.go` do: the values a seeded older
+  store's rows come out with after the hop, and anything else the version
+  adds (v5's store id, and each version's downgrade recipe).
 
 v5's data test, `TestV5MigrationKeepsV4Rows`, migrates `makeV4HistoryFixture`
 (`internal/store/migration_fixtures_test.go`). It builds a genuine v4 store on
@@ -431,6 +471,17 @@ owner (NULL in the three columns, read as the zero `LaunchOwner` by
 `find-missing` judges such a migrated row is
 `v5_migrated_find_missing_test.go`'s.
 
+v7's data test, `TestV7MigrationKeepsV6Rows`, migrates `makeV6Fixture`: a
+genuine v6 store holding a relay row in `check_permission` with an open
+request (its `created_at` long past any relay window) and a decided one.
+After the hop every v6 value of the row and both requests reads back as
+seeded, the new columns hold their defaults (`assertV7Defaults`), and the
+store id is kept. Both requests read as recorded before v7 (no settle
+instant, hook identity, ack or `tool_use_id`; `pane_answer` `none`), only the
+undecided one still awaits an answer, and `decide`'s guarded write still
+refuses it once its `created_at` is past the cutoff: a request from before
+the upgrade is judged by time, as before.
+
 **Where these tests run:** `internal/store` carries the sandbox guard
 (`sandboxguard.Require()` in its `TestMain`). Run them only in the sandbox —
 see §5.
@@ -438,10 +489,11 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** When you add v7, update
-`schemaDDL` and `schemaVersion` so a brand-new DB is created directly at v7 by
-`createSchema`, *and* write `migrateV6toV7` so an existing v6 DB is upgraded to
-the identical shape (as v6 did with `schemaDDL` and `migrateV5toV6`). The §3 step 4 `schemaShape` comparison is the
+goes wrong: **fresh databases never replay hops.** When you add v8, update
+`schemaDDL` and `schemaVersion` so a brand-new DB is created directly at v8 by
+`createSchema`, *and* write `migrateV7toV8` so an existing v7 DB is upgraded to
+the identical shape (as v7 did with `schemaDDL` and `migrateV6toV7`, whose
+`v7Columns` list carries the same column text `schemaDDL` uses). The §3 step 4 `schemaShape` comparison is the
 guard that both paths land in the same place. If you only touch the hop, fresh
 installs are stuck on the old schema; if you only touch `schemaDDL`, upgrades
 never happen.
@@ -515,13 +567,106 @@ schema inspection before letting the old binary open the file. This is a manual
 recovery step, not something the store does automatically.
 
 The recipes below go back one version each, newest first. To go back more
-than one version, run them in order from the store's version down: a v6 store
-goes to v4 by the v6 → v5 recipe, then the v5 → v4 recipe.
+than one version, run them in order from the store's version down, each one
+only once the one before it has stamped the store: a v7 store goes to v5 by
+the v7 → v6 recipe, then the v6 → v5 recipe, and to v4 by those two, then the
+v5 → v4 recipe. Each recipe assumes the store is at its own starting version
+and changes nothing a newer version added, so never skip one.
+
+#### v7 → v6 (reverses `migrateV6toV7`)
+
+Use this to roll a migrated store back so a v6 binary (the releases before
+schema v7) can open it. Order of operations:
+
+1. Stop every agent and every long-running agent-director process on the host
+   (each agent's `agent-director serve` runs inside its Claude session, so the
+   session must stop too). No process may hold the store open.
+2. Copy `state.db` together with its `-wal` and `-shm` files before you change
+   anything, so you can start over if a step fails.
+3. Run `sqlite3 --version`. The recipe needs SQLite 3.35.5 or later: 3.35.0
+   added `ALTER TABLE … DROP COLUMN`, and 3.35.5 fixed `DROP COLUMN` defects
+   that could corrupt the database file. If the version is older, stop here
+   and install a newer `sqlite3` first.
+4. Run the recipe below against the store, in bail mode:
+   `sqlite3 -bail ~/.agent-director/state.db < recipe.sql`. The recipe also
+   starts with `.bail on`, so it stops at the first error however it is run.
+5. Confirm the result (see below).
+6. Put the previous binary back. Do this only after the store is v6: the old
+   release's `install.sh` opens the store, and on a v7 store it fails with
+   `ErrSchemaMismatch`.
+7. Start the agents again on the old binary.
+
+```sql
+.bail on
+-- against the v7 state.db, e.g. ~/.agent-director/state.db
+BEGIN;
+ALTER TABLE permission_requests DROP COLUMN hook_pid;
+ALTER TABLE permission_requests DROP COLUMN hook_starttime;
+ALTER TABLE permission_requests DROP COLUMN hook_pidns;
+ALTER TABLE permission_requests DROP COLUMN tool_use_id;
+ALTER TABLE permission_requests DROP COLUMN agent_id;
+ALTER TABLE permission_requests DROP COLUMN delivered_at;
+ALTER TABLE permission_requests DROP COLUMN settled_at;
+ALTER TABLE permission_requests DROP COLUMN hook_gone_at;
+ALTER TABLE permission_requests DROP COLUMN attempted_decision;
+ALTER TABLE permission_requests DROP COLUMN attempted_at;
+ALTER TABLE permission_requests DROP COLUMN pane_answer;
+ALTER TABLE permission_requests DROP COLUMN pane_as;
+ALTER TABLE permission_requests DROP COLUMN pane_sender_pid;
+ALTER TABLE permission_requests DROP COLUMN pane_sender_starttime;
+ALTER TABLE permission_requests DROP COLUMN pane_sender_pidns;
+ALTER TABLE permission_requests DROP COLUMN closed_at;
+ALTER TABLE spawns DROP COLUMN idle_since;
+PRAGMA user_version = 6;
+COMMIT;
+```
+
+That is exactly what `migrateV6toV7` adds: sixteen columns on
+`permission_requests` and `idle_since` on `spawns`. Drop all seventeen and no
+other column or table; `store_meta` and its store id stay, so labels written
+before the rollback still read as this store's. `PRAGMA user_version = 6` is
+the last statement before `COMMIT`. `PRAGMA user_version;` should then print
+`6`, and `.schema permission_requests` and `.schema spawns` should show none
+of the seventeen columns. A v6 binary then opens the store.
+
+SQLite refuses `DROP COLUMN` on a column that is a PRIMARY KEY, has a UNIQUE
+constraint, is indexed, appears in a CHECK or foreign-key constraint, or is
+used by a generated column, trigger or view. None of the seventeen is any of
+these in the v7 DDL: each is a plain column, nullable or, for `pane_answer`,
+`NOT NULL DEFAULT 'none'`. The `permission_requests` UNIQUE constraint and
+its two indexes cover only `claude_instance_id`, `request_token`,
+`decision` and `decided_at`, and the three `spawns` indexes cover only
+`state`, `last_seen_at` and `parent_id`. So every statement in the recipe
+succeeds on a v7 store. If one fails, bail mode stops the CLI at that
+statement. `COMMIT` never runs, the open transaction is rolled back when the
+CLI exits, and the store is still v7; check the schema for a hand-added index
+or constraint before you retry. Without bail mode the CLI reports the error,
+runs the remaining statements and commits them, leaving a partial downgrade
+stamped v6. If that happens, restore the copy from step 2.
+
+The recipe deletes no row. What is lost is the values in the dropped columns:
+each permission request's relay hook identity, its ack (`delivered_at`) and
+settle instant, the facts readers and `decide` recorded on it
+(`hook_gone_at`, `attempted_decision`, `attempted_at`), its `tool_use_id` and
+`agent_id`, when find-missing's mark closed it (`closed_at`), and each row's
+`idle_since`. A v6 binary judges every request by its `created_at` and the
+relay window, as it judged its own: a request with a recorded `decision`
+reads as decided, one without as open, fallen back once its relay window has
+ended. A request the mark closed always has a `decision` (the mark denies an
+undecided one), so it reads as decided. With every agent stopped (step 1) no
+relay hook is left to deliver one.
+
+**If the store is later migrated to v7 again**, the hop gives every request
+NULL in the new columns and `pane_answer` `none`, and every row NULL
+`idle_since` (no phase 3, §2): every request reads as one recorded before
+schema v7 and falls back by its `created_at` and the relay window. The store
+id is kept, so no label changes owner.
 
 #### v6 → v5 (reverses `migrateV5toV6`)
 
 Use this to roll a migrated store back so a v5 binary (0.11.x, the releases
-before schema v6) can open it. Order of operations:
+before schema v6) can open it. On a v7 store, run the v7 → v6 recipe above
+first. Order of operations:
 
 1. Stop every agent and every long-running agent-director process on the host
    (each agent's `agent-director serve` runs inside its Claude session, so the
@@ -588,8 +733,8 @@ launch records its owner. The store id is kept, so no label changes owner.
 #### v5 → v4 (reverses `migrateV4toV5`)
 
 Use this to roll a migrated store back so a v4 binary (the release before
-schema v5) can open it. On a v6 store, run the v6 → v5 recipe above first.
-Order of operations:
+schema v5) can open it. On a v6 store, run the v6 → v5 recipe above first,
+and on a v7 store the v7 → v6 recipe before that. Order of operations:
 
 1. Stop every agent and every long-running agent-director process on the host
    (each agent's `agent-director serve` runs inside its Claude session, so the
@@ -694,7 +839,8 @@ installing.
 - `internal/store/schema.go` — `ensureSchema`, `runMigrationChain`,
   `migrationSteps`/`migrationStep`, `migrationStepFrom`, `createSchema`,
   `schemaDDL`, `migrateV1toV2`, `migrateV2toV3`, `migrateV3toV4`,
-  `migrateV4toV5`, `migrateV5toV6`, `buildMigrationRefusal`.
+  `migrateV4toV5`, `migrateV5toV6`, `migrateV6toV7` with its column list
+  `v7Columns`, `buildMigrationRefusal`.
 - `internal/store/migrate_auth.go` — the sentinel gate: `authorizeMigration`,
   `parseAuthorization`, `consumeAuthorization`, `sentinelPath`,
   `sentinelFilename` (`migrate-authorized`), the trail events.
@@ -716,25 +862,38 @@ installing.
   new version's `schema_v<N>_test.go` (§3): `TestV5MigrationKeepsV4Rows`,
   the store-id tests (`TestStoreIDKept`,
   `TestStoreID_MissingOrMalformedFailsOpen`) and the downgrade tests:
-  `TestDowngradeRecipe_MatchesGuide` parses both recipe SQL blocks of §5,
-  "v6 → v5" and "v5 → v4", and fails when either differs from its test copy
-  (`v6ToV5RecipeStatements`, `v5ToV4RecipeStatements`) or lacks the
-  `.bail on` / `BEGIN;` / `COMMIT;` frame, so neither recipe here can drift
-  from the statements the tests run; it is also the test that pins the
-  v6 → v5 recipe to the guide. `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults`
-  takes a current store back to v5 first (`v6ToV5RecipeStatements`), applies
-  the recipe to `seedV5DowngradeRows`, checks every v4 column and history
-  entry survives, then re-migrates and checks the v5 and v6 columns take
-  their defaults (pre-trust opt-out and life numbers are lost; no launch
-  owner).
+  `TestDowngradeRecipe_MatchesGuide` parses the three recipe SQL blocks of
+  §5, "v7 → v6", "v6 → v5" and "v5 → v4", and fails when any differs from
+  its test copy (`v7ToV6RecipeStatements`, `v6ToV5RecipeStatements`,
+  `v5ToV4RecipeStatements`) or lacks the `.bail on` / `BEGIN;` / `COMMIT;`
+  frame, so no recipe here can drift from the statements the tests run; it
+  is also the test that pins the v7 → v6 and v6 → v5 recipes to the guide.
+  `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults` takes a current
+  store back to v5 first (`v7ToV6RecipeStatements`, then
+  `v6ToV5RecipeStatements`), applies the recipe to `seedV5DowngradeRows`,
+  checks every v4 column and history entry survives, then re-migrates and
+  checks the v5 and v6 columns take their defaults (pre-trust opt-out and
+  life numbers are lost; no launch owner).
 - `internal/store/schema_v6_test.go` — v6's own cases (§3):
   `TestV6MigrationKeepsV5Rows` (`makeV5Fixture` migrated: every v5 value
   kept, no launch owner, the store id kept) and
-  `TestDowngradeV6ToV5_KeepsRowsThenRemigrates`, which applies
-  `v6ToV5RecipeStatements` to a store holding a `pending` row with a
-  recorded owner, checks the v5 store keeps every other value and the store
-  id and is refused with `ErrSchemaMigrationRequired`, then re-migrates and
-  checks the row has no owner.
+  `TestDowngradeV6ToV5_KeepsRowsThenRemigrates`, which takes a current store
+  back to v6 (`v7ToV6RecipeStatements`), applies `v6ToV5RecipeStatements` to
+  it holding a `pending` row with a recorded owner, checks the v5 store keeps
+  every other value and the store id and is refused with
+  `ErrSchemaMigrationRequired`, then re-migrates and checks the row has no
+  owner.
+- `internal/store/schema_v7_test.go` — v7's own cases (§3):
+  `TestV7MigrationKeepsV6Rows` (`makeV6Fixture` migrated: every v6 value of
+  the row and its requests kept, the v7 columns at their defaults through
+  `assertV7Defaults`, the store id kept, and both requests judged as recorded
+  before v7) and `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which applies
+  `v7ToV6RecipeStatements` to a store holding a request the relay hook
+  recorded with its identity, checks the v6 store has a v6 store's shape,
+  keeps every other value of the row and the request and the store id, and
+  is refused with `ErrSchemaMigrationRequired`, then re-migrates and checks
+  the v7 columns take their defaults (`assertV7Defaults`: the request now
+  reads as recorded before v7) and every other value is kept.
 - `internal/store/migration_fixtures_test.go` — the migration-gate fixtures
   (`makeVersionedDB`, `writeSentinel` / `writeSentinelRaw`,
   `assertSentinel`, `stampUserVersion`, `snapshotDBBytes`,
@@ -754,7 +913,14 @@ installing.
   statements on a closed store in one transaction) and
   `v6ToV5RecipeStatements`, which must match the v6 → v5 recipe statement for
   statement (checked by `TestDowngradeRecipe_MatchesGuide` in
-  `schema_v5_test.go`).
+  `schema_v5_test.go`). The v7 helpers: `v7ColumnSpecs`, `v7ColumnNames`,
+  `assertNoV7Columns`, `preAddV7Columns`, `breakV7IdleSinceColumn` (an
+  `IDLE_SINCE` column the hop's exact-name probe misses, so the hop fails at
+  its last column), `makeV6Fixture` (the v6 store with a relay row in
+  `check_permission`, an open request and a decided one, returned as a
+  `v6Fixture`) and `v7ToV6RecipeStatements`, which must match the v7 → v6
+  recipe statement for statement (checked by
+  `TestDowngradeRecipe_MatchesGuide`).
 - `internal/store/testdata/schema_v1.sql` — the v1 fixture `makeVersionedDB`
   builds every older version from.
 - docs/engineering-guide.md §10 — sandboxed execution, the b.8dr incident.

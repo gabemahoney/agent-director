@@ -109,7 +109,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 - `launch_started_at` (timestamp?): Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise.
 - `liveness_unverified_since` (timestamp?): RFC3339 timestamp of the first sweep that noted this live row (left it unverified, or noted it unreported); kept while later sweeps change liveness_note, unreported included. Cleared to NULL together with liveness_note when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note.
 - `liveness_note` (string?): Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at a Claude Code startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.
-- `permission_requests` ([]object): All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.
+- `permission_requests` ([]object): Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock.
 - `transcript_status` (string): Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no claude_session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. A reuse starts a new life with no history; a failed reuse's restore returns the pre-reuse life.
 - `prior_sessions` ([]object): Archived prior sessions of the current life, newest first, excluding the row's current session id — the queryable link back to sessions orphaned by a rotation (b.v2c). Session history belongs to a life: after a reuse, which starts a new life, no earlier life's session appears; a failed reuse's restore returns the pre-reuse life's. Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).
 
@@ -186,7 +186,7 @@ End the agent of a live row's current launch (pending included). kill finds the 
 
 ## decide
 
-Caller's allow/deny verdict on an open PermissionRequest. One atomic write records it only while the request is open and deliverable, so the first call wins; an open request past its relay window is refused and the caller's verdict is not recorded: ErrAlreadyDecided if its relay hook denied it at its timeout (decide waits out the end of the window to see this), otherwise ErrRelayFallenBack (answer at the pane) while the Spawn is still in check_permission with no other open or later request, else ErrNoOpenPermissionRequest (its dialog may have closed: do not answer at the pane). Only for rows with relay_mode=on.
+Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack: only a pane answer can close it. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms passed before recording: ErrStoreBusy.
 
 ### Parameters
 
@@ -194,10 +194,17 @@ Caller's allow/deny verdict on an open PermissionRequest. One atomic write recor
 - `request_token` (string, required): UUIDv4 token identifying the specific permission request to decide. Minted by runRelay per-request; required to enforce per-row isolation when multiple concurrent requests exist for the same Spawn.
 - `decision` (string, required): Either `allow` or `deny`.
 - `reason` (string, optional): Currently discarded on deny; the canonical DecisionReasonOperator is persisted regardless. Reserved for future schema additions.
+- `max_wait_ms` (int, optional): Optional bound on the whole call, in milliseconds from its start (no default). The verdict write waits for the store's write lock at most what is left of it (with nothing left, it goes ahead only if the lock is free at once); not taken in time, decide returns ErrStoreBusy and has recorded nothing, so a retry is safe. The wait for the relay hook's ack also ends at the bound, with not_confirmed: once the verdict is recorded decide never returns ErrStoreBusy. A caller with a deadline passes at most its deadline minus 1 s. Omitted: no bound, the store's busy timeout applies. Negative: ErrInvalidFlags.
 
 ### Result
 
-_None._
+- `delivery` (string): delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack.
+- `confirm_by` (timestamp): RFC3339 time by which not_confirmed ends: the relay hook's kill instant plus 2 s, by when its hook has acked (delivered) or is gone (fallen_back). For a request recorded before this release: requested_at plus the relay window plus 2 s.
+- `hook_alive` (bool?): Whether the request's relay hook process runs, checked in the reader's pid namespace by its pid and start time: true; false (no such process, another start time, or a zombie); null when it cannot be checked (another or unreadable pid namespace, unreadable /proc, or a request recorded before this release).
+- `hook_gone_at` (timestamp?): When a reader first found the request fallen back; null until then. A reading verb (get, list, get-permission) records it only if the store's write lock is free at that moment, never waiting.
+- `attempted_decision` (string?): The verdict a decide refused as fallen back (ErrRelayFallenBack) tried to record, the latest one; null when none. Stored and shown, never acted on.
+- `attempted_at` (timestamp?): When that refused decide ran; null when none.
+- `tool_use_id` (string?): The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).
 
 ### Errors
 
@@ -209,10 +216,12 @@ _None._
 - `ErrAlreadyDecided`
 - `ErrAmbiguousRequest`
 - `ErrInvalidDecision`
+- `ErrInvalidFlags`
+- `ErrStoreBusy`
 
 ## get-permission
 
-Fetch one permission_requests row by request_token alone. decision, decision_reason and decided_at are null while it is open.
+Fetch one permission_requests row by request_token alone. decision, decision_reason and decided_at are null while it is open; decision is not the outcome: read delivery.
 
 ### Parameters
 
@@ -225,9 +234,16 @@ Fetch one permission_requests row by request_token alone. decision, decision_rea
 - `tool_name` (string): Claude Code tool that triggered the permission request (e.g. "Bash", "Write").
 - `tool_input` (string): Raw JSON string of the tool's input as stored in the DB; NOT a nested JSON object. Passes through byte-identical from the DB column — consumers parse it themselves.
 - `requested_at` (timestamp): RFC3339 timestamp when the row was created (maps from the created_at DB column).
-- `decision` (string?): "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB).
+- `decision` (string?): "allow" or "deny" once a verdict is recorded; null while the row is open (decision IS NULL in the DB). A recorded verdict is not the outcome: read delivery.
 - `decision_reason` (string?): Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).
 - `decided_at` (timestamp?): RFC3339 timestamp when the verdict was written; null while the row is open.
+- `delivery` (string): delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, no pane answer recorded through agent-director, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent and only a pane answer can close the request. Derived on every read; a request recorded before this release falls back by its relay window, as before.
+- `confirm_by` (timestamp): RFC3339 time by which not_confirmed ends: the relay hook's kill instant plus 2 s, by when its hook has acked (delivered) or is gone (fallen_back). For a request recorded before this release: requested_at plus the relay window plus 2 s.
+- `hook_alive` (bool?): Whether the request's relay hook process runs, checked in the reader's pid namespace by its pid and start time: true; false (no such process, another start time, or a zombie); null when it cannot be checked (another or unreadable pid namespace, unreadable /proc, or a request recorded before this release).
+- `hook_gone_at` (timestamp?): When a reader first found the request fallen back; null until then. A reading verb (get, list, get-permission) records it only if the store's write lock is free at that moment, never waiting.
+- `attempted_decision` (string?): The verdict a decide refused as fallen back (ErrRelayFallenBack) tried to record, the latest one; null when none. Stored and shown, never acted on.
+- `attempted_at` (timestamp?): When that refused decide ran; null when none.
+- `tool_use_id` (string?): The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).
 
 ### Errors
 
@@ -338,7 +354,7 @@ Enumerate rows. All filters AND together. Order is unspecified; callers sort.
 
 ### Result
 
-- `spawns` ([]Spawn): Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited.
+- `spawns` ([]Spawn): Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock.
 
 ### Errors
 
@@ -429,6 +445,7 @@ Internal: run by each Spawn's --settings hooks with payload JSON on stdin; write
 ### Parameters
 
 - `stdin` (json, required): Claude Code hook payload (hook_event_name, transcript_path, tool_name, reason, ...).
+- `timeout` (int, optional): The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the hook never acks a verdict without 2 s left before it. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.
 
 ### Result
 

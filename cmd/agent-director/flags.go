@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -67,6 +68,30 @@ func (k *kvSliceValue) Set(v string) error {
 		*k.dst = map[string]string{}
 	}
 	(*k.dst)[v[:i]] = v[i+1:]
+	return nil
+}
+
+// optionalInt64Value implements flag.Value for an integer flag whose absence
+// means something no value does (decide's --max-wait-ms: no bound). *dst
+// stays nil until the flag is given; Set parses a base-10 int64 into a new
+// value, so a later occurrence wins.
+type optionalInt64Value struct {
+	dst **int64
+}
+
+func (o optionalInt64Value) String() string {
+	if o.dst == nil || *o.dst == nil {
+		return ""
+	}
+	return strconv.FormatInt(**o.dst, 10)
+}
+
+func (o optionalInt64Value) Set(v string) error {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return err
+	}
+	*o.dst = &n
 	return nil
 }
 

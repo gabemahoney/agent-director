@@ -216,7 +216,9 @@ var successCases = append([]successCase{
 	},
 
 	// ── decide ────────────────────────────────────────────────────────────
-	// decide result is empty ({}).  The row must be in check_permission
+	// decide's result is the request's delivery facts (b.146 rule 15); the
+	// request, recorded before schema v7, reads not_confirmed with its
+	// fixture-derived confirm_by.  The row must be in check_permission
 	// with relay_mode=on and an open permission request (ErrRelayModeOff
 	// guards the relay_mode=off path; ErrNoOpenPermissionRequest guards the
 	// missing-request path).
@@ -246,8 +248,9 @@ var successCases = append([]successCase{
 
 	// ── get-permission ────────────────────────────────────────────────────
 	// Token-only lookup: seed an open permission_requests row and read it
-	// back. The result carries 8 fields; nondeterminism.json must exclude
-	// request_id (autoincrement) and requested_at (CURRENT_TIMESTAMP).
+	// back. The result carries 8 fields and the 7 delivery facts;
+	// nondeterminism.json must exclude request_id (autoincrement) and
+	// requested_at (CURRENT_TIMESTAMP).
 	{
 		verb: "get-permission",
 		seed: func(t *testing.T) (string, map[string]any) {

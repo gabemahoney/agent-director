@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,8 +31,10 @@ import (
 const gateHookDeadline = 30 * time.Second
 
 // gateRelayTimeoutSeconds is the relay window a relay-on home configures, so an
-// applied relayed PermissionRequest ends on its own with the timeout deny.
-const gateRelayTimeoutSeconds = 1
+// applied relayed PermissionRequest ends on its own with the timeout deny: its
+// poll ends 3 s before its kill (the 2 s reserve and the deny's 1 s lead,
+// b.146 rule 4), a second after its start.
+const gateRelayTimeoutSeconds = 4
 
 // gateHome is a throwaway HOME whose hooks run with the fake tmux first on
 // PATH, logging every call to <home>/fake-tmux.log.
@@ -59,9 +62,34 @@ func (h gateHome) seed(t *testing.T, id, relayMode string, identity apitest.Spaw
 // within gateHookDeadline and made no tmux call, and returns its stdout.
 func (h gateHome) hook(t *testing.T, id, relayMode, payload string) string {
 	t.Helper()
+	return h.hookArgs(t, id, relayMode, payload)
+}
+
+// hookArgs is hook with args after the verb (spawn writes --timeout N on the
+// relay hook's entry, b.146 rule 4).
+func (h gateHome) hookArgs(t *testing.T, id, relayMode, payload string, args ...string) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), gateHookDeadline)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, "hook")
+	cmd := h.hookCmd(ctx, t, id, relayMode, payload, args...)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("hook still running after %s; stderr=%q", gateHookDeadline, stderr.String())
+	}
+	if err != nil {
+		t.Fatalf("hook: %v (exit %d); want exit 0\nstderr=%s", err, cmd.ProcessState.ExitCode(), stderr.String())
+	}
+	assertNoTmuxCall(t, h.home)
+	return stdout.String()
+}
+
+// hookCmd is the hook verb's command for id with args after the verb, payload
+// on stdin and the environment an agent's pane gives it.
+func (h gateHome) hookCmd(ctx context.Context, t *testing.T, id, relayMode, payload string, args ...string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, binaryPath, append([]string{"hook"}, args...)...)
 	cmd.Env = []string{
 		"PATH=" + h.fakeDir + ":" + os.Getenv("PATH"),
 		"HOME=" + h.home,
@@ -76,17 +104,70 @@ func (h gateHome) hook(t *testing.T, id, relayMode, payload string) string {
 	}
 	cmd.WaitDelay = time.Second
 	cmd.Stdin = strings.NewReader(payload)
-	var stdout, stderr strings.Builder
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		t.Fatalf("hook still running after %s; stderr=%q", gateHookDeadline, stderr.String())
+	return cmd
+}
+
+// TestHookCLIKilledDuringItsLockWaitWritesNothing (b.146 rule 1): a relay
+// hook SIGKILLed while its first write waits for a write lock another process
+// holds writes nothing: the row reads as before, with no request.
+func TestHookCLIKilledDuringItsLockWaitWritesNothing(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs /proc to see the hook waiting for the lock")
 	}
+	h := newGateHome(t)
+	const id = "id-gate-killed"
+	h.seed(t, id, hook.RelayModeOn, withTestProcessPane(t))
+	before := h.row(t, id)
+	release := apitest.HoldWriteLock(t, stateDB(h.home), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), gateHookDeadline)
+	defer cancel()
+	cmd := h.hookCmd(ctx, t, id, hook.RelayModeOn,
+		`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start hook: %v", err)
+	}
+	waitStoreOpen(t, cmd.Process.Pid, stateDB(h.home))
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatalf("kill hook: %v", err)
+	}
+	_ = cmd.Wait()
+	release()
+
+	after := h.row(t, id)
+	if after.State != before.State || after.RowVersion != before.RowVersion {
+		t.Errorf("row after the killed hook = state %q version %d; want %q, %d unchanged", after.State, after.RowVersion, before.State, before.RowVersion)
+	}
+	st := openDBForRead(t, h.home)
+	if reqs, err := st.PermissionRequestsForSpawn(id); err != nil || len(reqs) != 0 {
+		t.Errorf("permission requests = %+v, %v; want none recorded", reqs, err)
+	}
+}
+
+// waitStoreOpen waits until process pid, still running, has the WAL of the
+// store at dbPath open (its fd table under /proc names it): it has opened the
+// store and read it, and a relay hook then has only in-memory work left
+// before its first write, which waits for a held write lock. It fails the
+// test after 10 s.
+func waitStoreOpen(t *testing.T, pid int, dbPath string) {
+	t.Helper()
+	wal, err := filepath.EvalSymlinks(dbPath)
 	if err != nil {
-		t.Fatalf("hook: %v (exit %d); want exit 0\nstderr=%s", err, cmd.ProcessState.ExitCode(), stderr.String())
+		t.Fatalf("resolve %s: %v", dbPath, err)
 	}
-	assertNoTmuxCall(t, h.home)
-	return stdout.String()
+	wal += "-wal"
+	fds := filepath.Join("/proc", strconv.Itoa(pid), "fd")
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		entries, err := os.ReadDir(fds)
+		if err != nil {
+			t.Fatalf("read %s: %v (the hook exited?)", fds, err)
+		}
+		for _, e := range entries {
+			if target, err := os.Readlink(filepath.Join(fds, e.Name())); err == nil && target == wal {
+				return
+			}
+		}
+	}
+	t.Fatalf("the hook (pid %d) did not open %s within 10s", pid, wal)
 }
 
 // assertNoTmuxCall fails when the fake tmux logged any call under home.
@@ -349,33 +430,60 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 // set, an applied SessionStart and an applied relayed PermissionRequest
 // (relay on) leave the log empty. SR-22.9: no resolver walk and no tmux call
 // on the hook path. The control first proves the fake logs every socket-form
-// call to FAKE_TMUX_LOG, so an empty log is not vacuous.
+// call to FAKE_TMUX_LOG, so an empty log is not vacuous. The relayed request
+// ends with its timeout deny, acked, the row left in check_permission (b.146
+// rule 3), counted from the relay window or from the --timeout spawn writes on
+// the hook's entry (rule 4), which wins over the window.
 func TestHookGateCLINoTmuxCall(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	assertFakeTmuxLogs(t, fakeDir)
 
 	deny := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", "") + "\n"
+	const pr = `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}`
 	cases := []struct {
 		name       string
 		relayMode  string
 		payload    string
+		window     bool     // the home configures gateRelayTimeoutSeconds; otherwise the default day
+		args       []string // after the hook verb
 		wantStdout string
 		wantState  string
-		wantDenied bool // a stored request decided deny/timeout (the relay flow ran)
+		wantDenied bool // a stored request decided deny/timeout and acked (the relay flow ran)
 	}{
 		{
 			name:       "session_start",
 			relayMode:  "off",
 			payload:    `{"hook_event_name":"SessionStart"}`,
+			window:     true,
 			wantStdout: "",
 			wantState:  store.StateWaiting,
 		},
 		{
 			name:       "relayed_permission_request",
 			relayMode:  hook.RelayModeOn,
-			payload:    `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}`,
+			payload:    pr,
+			window:     true,
 			wantStdout: deny,
-			wantState:  store.StateWorking,
+			wantState:  store.StateCheckPermission,
+			wantDenied: true,
+		},
+		{
+			name:       "relayed_permission_request_with_timeout_arg",
+			relayMode:  hook.RelayModeOn,
+			payload:    pr,
+			args:       []string{"--timeout", strconv.Itoa(gateRelayTimeoutSeconds)},
+			wantStdout: deny,
+			wantState:  store.StateCheckPermission,
+			wantDenied: true,
+		},
+		{
+			name:       "relayed_permission_request_unparseable_timeout_arg_reads_the_window",
+			relayMode:  hook.RelayModeOn,
+			payload:    pr,
+			window:     true,
+			args:       []string{"--timeout", "soon"},
+			wantStdout: deny,
+			wantState:  store.StateCheckPermission,
 			wantDenied: true,
 		},
 	}
@@ -384,10 +492,12 @@ func TestHookGateCLINoTmuxCall(t *testing.T) {
 			h := gateHome{home: t.TempDir(), fakeDir: fakeDir}
 			const id = "id-gate-notmux"
 			h.seed(t, id, tc.relayMode, withTestProcessPane(t))
-			writeRelayTimeout(t, h.home)
+			if tc.window {
+				writeRelayTimeout(t, h.home)
+			}
 
-			// h.hook asserts the fake's log is empty after the hook.
-			if out := h.hook(t, id, tc.relayMode, tc.payload); out != tc.wantStdout {
+			// h.hookArgs asserts the fake's log is empty after the hook.
+			if out := h.hookArgs(t, id, tc.relayMode, tc.payload, tc.args...); out != tc.wantStdout {
 				t.Errorf("stdout = %q; want %q", out, tc.wantStdout)
 			}
 			if got := h.row(t, id).State; got != tc.wantState {
@@ -428,7 +538,8 @@ func writeRelayTimeout(t *testing.T, home string) {
 }
 
 // assertOneTimeoutDeny checks id holds exactly one permission request, decided
-// deny for timeout: the gated INSERT applied and the relay flow ran to its end.
+// deny for timeout and acked, recorded with the hook's own identity: the gated
+// first write applied and the relay flow ran to its end (b.146 rules 2, 3).
 func assertOneTimeoutDeny(t *testing.T, home, id string) {
 	t.Helper()
 	st, err := store.Open(stateDB(home))
@@ -440,8 +551,9 @@ func assertOneTimeoutDeny(t *testing.T, home, id string) {
 	if err != nil {
 		t.Fatalf("PermissionRequestsForSpawn: %v", err)
 	}
-	if len(reqs) != 1 || reqs[0].Decision != "deny" || reqs[0].DecisionReason != store.DecisionReasonTimeout {
-		t.Errorf("permission requests = %+v; want one decided deny/%s", reqs, store.DecisionReasonTimeout)
+	if len(reqs) != 1 || reqs[0].Decision != "deny" || reqs[0].DecisionReason != store.DecisionReasonTimeout ||
+		reqs[0].DeliveredAt.IsZero() || reqs[0].Hook.PID <= 0 || reqs[0].Hook.Starttime == "" || reqs[0].PreV7() {
+		t.Errorf("permission requests = %+v; want one decided deny/%s, acked, with its hook's identity", reqs, store.DecisionReasonTimeout)
 	}
 }
 

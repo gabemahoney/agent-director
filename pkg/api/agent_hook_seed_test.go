@@ -24,9 +24,11 @@ func seedAgentState(s *store.Store, dbPath, id, state string) error {
 	})
 }
 
-// relayHookTimeout does what id's live relay hook does at its poll deadline
-// (internal/hook's timeout path): deny request token with reason timeout,
-// then move the row to working, which closes the permission dialog.
+// relayHookTimeout does what id's live relay hook from before schema v7 did
+// at its poll deadline, for a request recorded before v7: deny request token
+// with reason timeout, then move the row to working, which closes the
+// permission dialog. (A relay hook from v7 on records its deny and its ack in
+// one statement and leaves the row in check_permission, b.146 rule 3.)
 func relayHookTimeout(t *testing.T, e *killEnv, id, token string) {
 	t.Helper()
 	if ok, err := e.st.DecidePermissionRequest(id, token, "deny", store.DecisionReasonTimeout, store.WriterProcessHook); err != nil || !ok {

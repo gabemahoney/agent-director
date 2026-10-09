@@ -245,6 +245,7 @@ function buildDecide(p: DecideParams): string[] {
   ];
   if (p.request_token !== undefined) f.push("--request-token", p.request_token);
   if (p.reason !== undefined) f.push("--reason", p.reason);
+  if (p.max_wait_ms !== undefined) f.push("--max-wait-ms", String(p.max_wait_ms));
   return f;
 }
 

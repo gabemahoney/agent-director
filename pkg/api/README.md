@@ -14,6 +14,7 @@ CLI and MCP server; no subprocess or network hop required.
   - [SendKeys](#sendkeys)
   - [ReadPane](#readpane)
   - [Kill](#kill)
+- [Permission relay](#permission-relay)
 - [Version mapping](#version-mapping)
 - [Errors](#errors)
 - [See also](#see-also)
@@ -254,19 +255,21 @@ Most-likely sentinel errors:
   it; retry send-keys later`); `Decide` on it would return
   `ErrAlreadyDecided`. With zero rows the message names none (`… whose
   request is not yet recorded; answer it with decide once get lists
-  it`). `Decide` refused near the window's end first waits, at most 3 s, for the relay hook's timeout deny, then
-  returns `ErrAlreadyDecided`, `ErrRelayFallenBack` or
-  `ErrNoOpenPermissionRequest`. This guard is
-  **time-bounded**: it releases once every request's relay hook is
-  presumed to have answered or died,
-  letting the caller recover the wedged row through this sanctioned,
-  audited surface. `Decide`'s `ErrRelayFallenBack` points here; it is
-  returned only once the guard has released on that request's account,
-  and only while the spawn is still in `check_permission` with no other
-  open request and none recorded after that one. Otherwise `Decide`
-  returns `ErrNoOpenPermissionRequest`: the request's dialog may have
-  closed, so do not answer it at the pane. The guard does not apply
-  that check: once it has released, it accepts such a send.
+  it`). This guard is **time-bounded**: a request holds it until 2 s
+  after its relay window ends, open or decided (a decided one no longer
+  once another of the row's requests is still open past that point), and
+  it releases once none holds, letting the caller recover the wedged row
+  through this sanctioned, audited surface. It judges every request by
+  its window, so it can still hold on account of a request `Decide` has
+  refused with `ErrRelayFallenBack` (its relay hook is gone and acked no
+  verdict), which `Decide` reports within seconds of the hook's end. For
+  a request recorded before this release, `Decide` refused near the
+  window's end first waits, at most 3 s, then returns
+  `ErrAlreadyDecided`, `ErrRelayFallenBack` (by then the guard has
+  released on that request's account) or `ErrNoOpenPermissionRequest`
+  (its dialog may have closed, so do not answer it at the pane); the
+  guard does not apply that check, so once it has released it accepts
+  such a send.
 - `ErrTmuxSendKeys`: the row's session or pane is not there.
 - `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
   earlier launch left behind is there on a live row, or tmux holds
@@ -467,6 +470,35 @@ the agents. What to do next with a stuck live row is the live-row sequence
 in the top-level README's
 [Caller contract](../../README.md#caller-contract). See `(*Client).Kill`
 godoc.
+
+---
+
+## Permission relay
+
+`(*Client).Decide` records a verdict on a relayed permission request, waits
+at most 1 s for the agent's relay hook to confirm it, and returns a
+`DecideResult`, which embeds `RequestDelivery`: read `Delivery`
+(`delivered` or `not_confirmed`), not the recorded decision. On
+`not_confirmed`, poll `GetPermission` until `Delivery` reads `delivered` or
+`fallen_back`, which it does by `ConfirmBy`.
+
+`DecideParams.MaxWaitMs` bounds the whole call, its reads and its write,
+and has no default; pass at most your deadline minus 1 s. A bound reached
+before the verdict is recorded returns `ErrStoreBusy` with nothing
+recorded, whether the store was held by another process or by another
+call on the same `Client` (a `Client` uses one store connection).
+Once the verdict is recorded, `Decide` never returns `ErrStoreBusy`.
+
+`ErrNoOpenPermissionRequest` means no open request has that token, or the
+request is closed: do not answer it at the pane. A request is closed while
+its Spawn is `ended` or `missing`, and one still awaiting an answer when
+`find-missing` marked its Spawn `missing` stays closed after `Resume`;
+`Get` and `List` no longer show it. `GetPermission` still reads its
+delivery, which is `delivered` only if its relay hook confirmed a verdict.
+
+The exported functions `api.Decide`, `api.Get`, `api.List` and
+`api.GetPermission` take a `RelayView` (the `Client` methods pass their
+own), and `DecideResult` embeds `RequestDelivery`.
 
 ---
 

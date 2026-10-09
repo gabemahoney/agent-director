@@ -100,7 +100,7 @@ func TestGetCheckPermission(t *testing.T) {
 					t.Fatalf("DecidePermissionRequest(%s) = %v, %v", tok, ok, err)
 				}
 			}
-			got, err := api.Get(s, "id-d-1")
+			got, err := api.Get(s, api.RelayView{}, "id-d-1")
 			if err != nil {
 				t.Fatalf("Get: %v", err)
 			}
@@ -175,7 +175,7 @@ func TestGetReadsAndErrors(t *testing.T) {
 			if want == nil {
 				want = tc.historyErr
 			}
-			got, err := api.Get(f, "id-g")
+			got, err := api.Get(f, api.RelayView{}, "id-g")
 			if !errors.Is(err, want) || (err == nil && len(got.PermissionRequests) != 0) {
 				t.Errorf("Get = %+v, %v; want error %v", got.PermissionRequests, err, want)
 			}
@@ -210,12 +210,12 @@ func TestLivenessFieldsGetAndList(t *testing.T) {
 		seedWaiting(t, dbPath, r.id, opts...)
 	}
 	s := openDB(t, dbPath)
-	list, err := api.List(s, api.ListParams{})
+	list, err := api.List(s, api.RelayView{}, api.ListParams{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	for _, r := range rows {
-		got, err := api.Get(s, r.id)
+		got, err := api.Get(s, api.RelayView{}, r.id)
 		if err != nil {
 			t.Fatalf("Get(%s): %v", r.id, err)
 		}
@@ -245,7 +245,7 @@ func TestGetJSONLPathAndNoExtraEnv(t *testing.T) {
 	seedWaiting(t, dbPath, "id-jsonl-legacy")
 	s := openDB(t, dbPath)
 	for id, want := range map[string]string{"id-jsonl-set": path, "id-jsonl-legacy": ""} {
-		got, err := api.Get(s, id)
+		got, err := api.Get(s, api.RelayView{}, id)
 		if err != nil {
 			t.Fatalf("Get(%s): %v", id, err)
 		}

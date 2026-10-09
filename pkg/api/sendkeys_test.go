@@ -219,7 +219,7 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA, 2*relayGuardWindow)
 	now := time.Now()
 
-	_, err := api.Decide(e.st, relayGuardWindow, now, api.DecideParams{
+	_, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }}, api.DecideParams{
 		ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 	if !errors.Is(err, api.ErrRelayFallenBack) {
 		t.Fatalf("Decide err = %v; want ErrRelayFallenBack", err)

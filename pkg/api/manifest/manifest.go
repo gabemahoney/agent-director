@@ -216,6 +216,23 @@ const killDescription = "End the agent of a live row's current launch (pending i
 	"A live row whose recorded tmux session name cannot be used (it is empty, contains a control character, or contains a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see \"Operator actions\" in the agent-director README). " +
 	liveRowSequence
 
+// permissionRequestsDescription is the text of the permission_requests field
+// of get's result and of each list row (b.146 rule 15).
+const permissionRequestsDescription = "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock."
+
+// deliveryFactFields are a permission request's delivery facts besides
+// delivery itself (b.146 rule 15), as decide and get-permission return them
+// and as every element of get's and list's permission_requests carries them.
+// Each verb puts its own delivery field, whose values differ, before them.
+var deliveryFactFields = []FieldDef{
+	{Name: "confirm_by", Type: "timestamp", Description: "RFC3339 time by which not_confirmed ends: the relay hook's kill instant plus 2 s, by when its hook has acked (delivered) or is gone (fallen_back). For a request recorded before this release: requested_at plus the relay window plus 2 s.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+	{Name: "hook_alive", Type: "bool?", Description: "Whether the request's relay hook process runs, checked in the reader's pid namespace by its pid and start time: true; false (no such process, another start time, or a zombie); null when it cannot be checked (another or unreadable pid namespace, unreadable /proc, or a request recorded before this release).", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+	{Name: "hook_gone_at", Type: "timestamp?", Description: "When a reader first found the request fallen back; null until then. A reading verb (get, list, get-permission) records it only if the store's write lock is free at that moment, never waiting.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+	{Name: "attempted_decision", Type: "string?", Description: "The verdict a decide refused as fallen back (ErrRelayFallenBack) tried to record, the latest one; null when none. Stored and shown, never acted on.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
+	{Name: "attempted_at", Type: "timestamp?", Description: "When that refused decide ran; null when none.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+	{Name: "tool_use_id", Type: "string?", Description: "The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+}
+
 // Verbs is the canonical, ordered list of verbs implemented by this binary.
 // Epic 2+ workers append entries here as they implement new verbs.
 var Verbs = []VerbDef{
@@ -475,7 +492,7 @@ var Verbs = []VerbDef{
 			{Name: "launch_started_at", Type: "timestamp?", Description: "Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "liveness_unverified_since", Type: "timestamp?", Description: "RFC3339 timestamp of the first sweep that noted this live row (left it unverified, or noted it unreported); kept while later sweeps change liveness_note, unreported included. Cleared to NULL together with liveness_note when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "liveness_note", Type: "string?", Description: "Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at a Claude Code startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-			{Name: "permission_requests", Type: "[]object", Description: "All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "permission_requests", Type: "[]object", Description: permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "transcript_status", Type: "string", Description: "Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no claude_session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. A reuse starts a new life with no history; a failed reuse's restore returns the pre-reuse life.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"present", "never_written", "rotated", "no_session"}},
 			{Name: "prior_sessions", Type: "[]object", Description: "Archived prior sessions of the current life, newest first, excluding the row's current session id — the queryable link back to sessions orphaned by a rotation (b.v2c). Session history belongs to a life: after a reuse, which starts a new life, no earlier life's session appears; a failed reuse's restore returns the pre-reuse life's. Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
@@ -625,7 +642,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "decide",
-		Description: "Caller's allow/deny verdict on an open PermissionRequest. One atomic write records it only while the request is open and deliverable, so the first call wins; an open request past its relay window is refused and the caller's verdict is not recorded: ErrAlreadyDecided if its relay hook denied it at its timeout (decide waits out the end of the window to see this), otherwise ErrRelayFallenBack (answer at the pane) while the Spawn is still in check_permission with no other open or later request, else ErrNoOpenPermissionRequest (its dialog may have closed: do not answer at the pane). Only for rows with relay_mode=on.",
+		Description: "Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack: only a pane answer can close it. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms passed before recording: ErrStoreBusy.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -665,8 +682,19 @@ var Verbs = []VerbDef{
 				AllowEmpty:    true,
 				AllowedValues: nil,
 			},
+			{
+				Name:          "max_wait_ms",
+				Type:          "int",
+				Description:   "Optional bound on the whole call, in milliseconds from its start (no default). The verdict write waits for the store's write lock at most what is left of it (with nothing left, it goes ahead only if the lock is free at once); not taken in time, decide returns ErrStoreBusy and has recorded nothing, so a retry is safe. The wait for the relay hook's ack also ends at the bound, with not_confirmed: once the verdict is recorded decide never returns ErrStoreBusy. A caller with a deadline passes at most its deadline minus 1 s. Omitted: no bound, the store's busy timeout applies. Negative: ErrInvalidFlags.",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
 		},
-		ResultFields: []FieldDef{},
+		ResultFields: append([]FieldDef{
+			{Name: "delivery", Type: "string", Description: "delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"delivered", "not_confirmed"}},
+		}, deliveryFactFields...),
 		ErrorNames: []string{
 			"ErrMissingRequestToken",
 			"ErrSpawnNotFound",
@@ -676,11 +704,13 @@ var Verbs = []VerbDef{
 			"ErrAlreadyDecided",
 			"ErrAmbiguousRequest",
 			"ErrInvalidDecision",
+			"ErrInvalidFlags",
+			"ErrStoreBusy",
 		},
 	},
 	{
 		Name:        "get-permission",
-		Description: "Fetch one permission_requests row by request_token alone. decision, decision_reason and decided_at are null while it is open.",
+		Description: "Fetch one permission_requests row by request_token alone. decision, decision_reason and decided_at are null while it is open; decision is not the outcome: read delivery.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -694,16 +724,17 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 		},
-		ResultFields: []FieldDef{
+		ResultFields: append([]FieldDef{
 			{Name: "request_token", Type: "string", Description: "UUIDv4 token the row is keyed under (echoed back).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "request_id", Type: "int", Description: "Autoincrement primary key of the permission_requests row.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tool_name", Type: "string", Description: "Claude Code tool that triggered the permission request (e.g. \"Bash\", \"Write\").", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tool_input", Type: "string", Description: "Raw JSON string of the tool's input as stored in the DB; NOT a nested JSON object. Passes through byte-identical from the DB column — consumers parse it themselves.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "requested_at", Type: "timestamp", Description: "RFC3339 timestamp when the row was created (maps from the created_at DB column).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
-			{Name: "decision", Type: "string?", Description: "\"allow\" or \"deny\" once decided; null while the row is open (decision IS NULL in the DB).", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
+			{Name: "decision", Type: "string?", Description: "\"allow\" or \"deny\" once a verdict is recorded; null while the row is open (decision IS NULL in the DB). A recorded verdict is not the outcome: read delivery.", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
 			{Name: "decision_reason", Type: "string?", Description: "Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).", Nullable: true, AllowEmpty: false, AllowedValues: []string{"operator", "timeout", "find_missing"}},
 			{Name: "decided_at", Type: "timestamp?", Description: "RFC3339 timestamp when the verdict was written; null while the row is open.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-		},
+			{Name: "delivery", Type: "string", Description: "delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, no pane answer recorded through agent-director, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent and only a pane answer can close the request. Derived on every read; a request recorded before this release falls back by its relay window, as before.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"delivered", "not_confirmed", "fallen_back"}},
+		}, deliveryFactFields...),
 		ErrorNames: []string{
 			"ErrPermissionRequestNotFound",
 		},
@@ -955,7 +986,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrListInvalidLabel",
@@ -1117,6 +1148,15 @@ var Verbs = []VerbDef{
 				Type:          "json",
 				Description:   "Claude Code hook payload (hook_event_name, transcript_path, tool_name, reason, ...).",
 				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+			{
+				Name:          "timeout",
+				Type:          "int",
+				Description:   "The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the hook never acks a verdict without 2 s left before it. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.",
+				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: nil,

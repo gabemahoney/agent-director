@@ -738,6 +738,14 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // a row stuck pending, a stale state or a gone agent depends on find-missing
 // being scheduled.
 //
+// After the sweep it repairs stale check_permission rows (b.146 rule 9;
+// RepairCheckPermission): a row with relay_mode on in check_permission none
+// of whose permission requests still awaits an answer and none of whose relay
+// hooks may still run (a request find-missing's mark closed is not judged) is
+// moved to waiting when the agent's idle-prompt Notification was the last
+// hook it recorded, and to working otherwise. Repaired rows are in neither
+// result list.
+//
 // CLI: agent-director find-missing
 //
 // Errors:
@@ -750,5 +758,10 @@ func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return FindMissingResult{}, err
 	}
-	return FindMissing(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Tmux.EffectivePendingGrace(), c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
+	res, err := FindMissing(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Tmux.EffectivePendingGrace(), c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
+	if err != nil {
+		return FindMissingResult{}, err
+	}
+	RepairCheckPermission(c.st, c.relayView(), c.logger)
+	return res, nil
 }

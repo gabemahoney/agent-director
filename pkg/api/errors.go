@@ -144,22 +144,22 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // (RelayRequestGuardReleasable) across every one of the Spawn's
 // permission-request rows, decided or not, and refuses while any of them
 // holds the guard or the Spawn has zero request rows. A request holds while
-// its relay hook may still deliver it — a verdict recorded in its window, or
-// the timeout deny the hook records at its poll deadline, at or slightly
-// after the end of the request's window — with one exception: a decided
-// request stops holding once another of the Spawn's requests has fallen back
-// (still open after its relay hook settled, which decide reports as
-// ErrRelayFallenBack, or as ErrNoOpenPermissionRequest when the Spawn is not
-// shown to be sitting on it alone): that request's open record keeps the
-// Spawn in check_permission, and while its dialog is on screen only a pane
-// answer closes it.
-// For an open request decide covers the window's end: it waits it out and
-// then returns ErrAlreadyDecided for a request the hook denied, or, for one
-// still open, ErrRelayFallenBack (ErrNoOpenPermissionRequest when the Spawn is
-// not shown to be sitting on it alone, b.t6e), by when the guard has released
-// on that request's account. Once it has released on every request's account,
-// send-keys is the sanctioned recovery surface for a Spawn wedged in
-// check_permission behind a dead relay.
+// its relay hook may still deliver it by the request's relay window — a
+// verdict recorded in its window, or the timeout deny the hook records at
+// its deadline — with one exception: a decided request stops holding once
+// another of the Spawn's requests has fallen back by that window (still open
+// after its relay hook is presumed settled, relayRequestFallenBack): that
+// request's open record keeps the Spawn in check_permission, and only a pane
+// answer can close it.
+//
+// The guard is judged by the relay window only, also for a request recorded
+// from schema v7 on, whose relay hook decide judges by its process (b.146
+// rule 5): decide can report such a request fallen back (ErrRelayFallenBack)
+// within seconds of its hook's death while this guard still holds on its
+// account until its window ends (b.146 step 2b rewrites the guard). Once it
+// has released on every request's account, send-keys is the sanctioned
+// recovery surface for a Spawn wedged in check_permission behind a dead
+// relay.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
 // ErrInvalidFlags is returned when a flag or parameter value fails basic
@@ -181,10 +181,12 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     an `older_than` that is not a non-negative duration, or whose day
 //     count is above 106751 (expire), with a description naming the param
 //     and the expected form (b.anw, b.hxn, b.sgw).
-//   - The shared verb layer, for spawn only: runSpawn returns it (wrapped)
-//     when an explicit instance id contains an ASCII control character
-//     (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the TypeScript
-//     client all return it (SR-9.1).
+//   - The shared verb layer, for spawn and decide: runSpawn returns it
+//     (wrapped) when an explicit instance id contains an ASCII control
+//     character (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the
+//     TypeScript client all return it (SR-9.1); decide returns it for a
+//     negative max_wait_ms (DecideParams.MaxWaitMs, b.146 decision 9 B),
+//     which the CLI refuses first.
 //   - The exported Go function Expire, for a negative retentionDays or a
 //     negative olderThan, before anything runs (b.f4v). Client.Expire passes
 //     the configured retention, from 1 to config.MaxExpireRetentionDays, so
@@ -193,11 +195,11 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// So spawn's manifest ErrorNames lists it; no other callable verb lists it,
-// because the CLI flag-parse and MCP argument emissions are not
-// verb-specific and the expire verb's surfaces never reach Expire's refusal:
-// only a Go caller passing Client.Expire a negative olderThan does. (The
-// internal, non-callable trail-emit verb also lists it.)
+// So spawn's and decide's manifest ErrorNames list it; no other callable
+// verb lists it, because the CLI flag-parse and MCP argument emissions are
+// not verb-specific and the expire verb's surfaces never reach Expire's
+// refusal: only a Go caller passing Client.Expire a negative olderThan does.
+// (The internal, non-callable trail-emit verb also lists it.)
 // It stays in five-way coherence check 3's exceptions per SR-1.7; while
 // spawn lists it, spawn's listing already satisfies check 3, so the
 // exception changes nothing.

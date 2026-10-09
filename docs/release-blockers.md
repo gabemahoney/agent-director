@@ -37,5 +37,31 @@ first live publish.
 
 ---
 
+## B146 — the relay rewrite ships whole, after CSCB (OPEN)
+
+**Status:** Open.
+
+### What it gates
+
+Any release whose binary carries b.146 step 2 (b.q2i: schema v7, `decide`'s
+`delivery`, `max_wait_ms` and `ErrStoreBusy`, the relay hook's ack). Step 2
+changes what `decide` returns and when `ErrRelayFallenBack` comes, and schema
+v7 is one migration shared with steps 2b (b.3oc) and 2c (b.8t7), so:
+
+- it must not be released without steps 2b and 2c in the same release; and
+- it must not be released before the CSCB coordination bee, b.u7d, is
+  finished: CSCB ships its handling of `delivery`, `max_wait_ms`,
+  `ErrStoreBusy` and the step 2b and 2c surfaces, and bumps its pinned
+  client, first.
+
+### Resolution steps
+
+1. Steps 2, 2b and 2c are merged on the release branch.
+2. b.u7d is closed: CSCB confirms the release that carries its items and its
+   pinned AD client equals this release.
+3. Mark this blocker resolved here with the date.
+
+---
+
 _Add future blockers below using the same template: identifier, status, what it
 gates, resolution steps._

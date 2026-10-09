@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
-import type { SpawnParams } from "../src/types.js";
+import type { SpawnParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -46,3 +46,19 @@ function _assertSpawnParamsCwdIsRequired(): void {
   void _bad;
 }
 void _assertSpawnParamsCwdIsRequired;
+
+// Typecheck (b.146 rule 15): decide's delivery is never fallen_back (decide refuses such a request with
+// ErrRelayFallenBack), get's and list's rows carry permission_requests arrays, and get's singular
+// permission_request is gone; tsc reports an unused directive if any of these loosens.
+function _assertRelayDeliveryTypes(get: GetResult, row: ListRow, decided: DecideResult): void {
+  // @ts-expect-error — decide never reports fallen_back
+  const _bad: DecideResult["delivery"] = "fallen_back";
+  const _reqs: PermissionRequestInfo[] = [...get.permission_requests, ...row.permission_requests];
+  const _delivery: Delivery = decided.delivery;
+  // @ts-expect-error — GetResult has permission_requests, not permission_request
+  void get.permission_request;
+  void _bad;
+  void _reqs;
+  void _delivery;
+}
+void _assertRelayDeliveryTypes;

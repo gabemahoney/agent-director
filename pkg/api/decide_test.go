@@ -23,7 +23,7 @@ import (
 // window; it returns how long decide waited for the relay hook (b.pzy).
 func decideA(s *store.Store, window time.Duration, now time.Time, decision, reason string) (time.Duration, error) {
 	var slept time.Duration
-	_, err := api.DecideWithSleep(s, window, now, func(d time.Duration) { slept += d }, api.DecideParams{
+	_, err := api.DecideWithSleep(s, api.RelayView{Window: window, Now: func() time.Time { return now }}, func(d time.Duration) { slept += d }, api.DecideParams{
 		ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: decision, Reason: reason})
 	return slept, err
 }
@@ -67,7 +67,7 @@ func TestDecideRefusals(t *testing.T) {
 			if tc.rows > 1 {
 				openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0)
 			}
-			_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{ClaudeInstanceID: tc.id,
+			_, err := api.Decide(s, api.RelayView{Window: 24 * time.Hour}, api.DecideParams{ClaudeInstanceID: tc.id,
 				RequestToken: tc.token, Decision: tc.decision})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v; want %v", err, tc.want)
@@ -306,18 +306,21 @@ func TestDecideFallenBackShownAlone(t *testing.T) {
 	}
 }
 
-// decideInterleaved is a DecideStore that runs write where a write landing among decide's reads would: right after its
-// last read of the request ("after request"), or right before or after its read of the Spawn's requests ("before
-// requests", "after requests"); at "wait" the test's sleep runs it instead.
+// decideInterleaved is a DecideStore that runs write once where a write landing among decide's reads would: right
+// after its last read of the request ("after request"), or right before or after its read of the Spawn's requests
+// ("before requests", "after requests"); at "wait" the test's sleep runs it instead. decide reads the request more
+// than once (b.146 rule 5's check-before-read), and "after request" follows the last of them.
 type decideInterleaved struct {
 	*store.Store
 	at    string
 	write func()
+	reads *int // GetPermissionRequest calls so far
+	last  int  // the read "after request" follows
 }
 
 func (d decideInterleaved) GetPermissionRequest(id, token string) (store.PermissionRow, error) {
 	pr, err := d.Store.GetPermissionRequest(id, token)
-	if d.at == "after request" {
+	if *d.reads++; d.at == "after request" && *d.reads == d.last {
 		d.write()
 	}
 	return pr, err
@@ -390,7 +393,9 @@ func TestDecideFallenBackWriteBetweenReads(t *testing.T) {
 				}
 			}
 			slept := false
-			_, err := api.DecideWithSleep(decideInterleaved{Store: s, at: tc.at, write: write}, relayGuardWindow, now,
+			// The request's third read is its last: decide's two check-before-read reads, then the refusal's.
+			interleaved := decideInterleaved{Store: s, at: tc.at, write: write, reads: new(int), last: 3}
+			_, err := api.DecideWithSleep(interleaved, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }},
 				func(time.Duration) {
 					slept = true
 					if tc.at == "wait" {

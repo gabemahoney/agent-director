@@ -23,10 +23,10 @@ func TestAdviceFollow_F2_ListLabelKeyValueForm(t *testing.T) {
 	r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithRawLabels(`{"team":"alpha"}`)}})
 	e.seedRow(t, killRowSpec{})
 
-	_, err := api.List(e.st, api.ListParams{Labels: []string{"team"}})
+	_, err := api.List(e.st, api.RelayView{}, api.ListParams{Labels: []string{"team"}})
 	adviceAssertAdvice(t, err, api.ErrListInvalidLabel, `"team" is not in key=value form`)
 
-	res, err := api.List(e.st, api.ListParams{Labels: []string{"team=alpha"}})
+	res, err := api.List(e.st, api.RelayView{}, api.ListParams{Labels: []string{"team=alpha"}})
 	if err != nil {
 		t.Fatalf("list --label team=alpha: %v", err)
 	}
@@ -44,15 +44,15 @@ func TestAdviceFollow_F3_DecideRequestTokenRequired(t *testing.T) {
 	now := time.Now()
 	params := api.DecideParams{ClaudeInstanceID: r.ID, Decision: "allow"}
 
-	_, err := api.Decide(e.st, relayGuardWindow, now, params)
+	_, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }}, params)
 	adviceAssertAdvice(t, err, api.ErrMissingRequestToken, "request_token is required")
 
-	row, err := api.Get(e.st, r.ID)
+	row, err := api.Get(e.st, api.RelayView{}, r.ID)
 	if err != nil || len(row.PermissionRequests) != 1 {
 		t.Fatalf("get = %+v, %v; want one open permission request", row.PermissionRequests, err)
 	}
 	params.RequestToken = row.PermissionRequests[0].RequestToken
-	if _, err := api.Decide(e.st, relayGuardWindow, now, params); err != nil {
+	if _, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }}, params); err != nil {
 		t.Fatalf("decide with get's request_token: %v", err)
 	}
 	if pr, err := e.st.GetPermissionRequest(r.ID, params.RequestToken); err != nil || pr.Decision != "allow" {

@@ -54,7 +54,7 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // dbFileMode is the mode the SQLite file itself is forced to on every Open.
 // 0600 = owner read/write only.
@@ -71,6 +71,11 @@ type Store struct {
 	// storeID is store_meta's store_id, read once at open (SR-5.1); see
 	// StoreID.
 	storeID string
+	// busyTimeoutMs is the busy timeout the store's connection was opened
+	// with (busyTimeoutOrDefault's value). A bounded-wait write sets a
+	// shorter one on the connection for its own transaction and puts this
+	// one back afterwards (lockwait.go).
+	busyTimeoutMs int
 }
 
 // DefaultBusyTimeoutMs is the busy timeout, in whole milliseconds (10000),
@@ -240,7 +245,7 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{db: db, storeID: storeID}, nil
+	return &Store{db: db, storeID: storeID, busyTimeoutMs: busyTimeoutMs}, nil
 }
 
 // Close releases the underlying database handle. Safe to call once.

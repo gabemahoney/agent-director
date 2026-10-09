@@ -93,10 +93,13 @@ const (
 var ErrSpawnNotFound = store.ErrSpawnNotFound
 
 // ErrNoOpenPermissionRequest is returned by decide when the target Spawn has
-// no outstanding permission request to resolve: the request is absent, or its
-// record is still open past its relay window but the Spawn is not shown to be
-// sitting on it alone, so its permission dialog may have closed and it is not
-// to be answered at the pane (b.t6e).
+// no outstanding permission request to resolve: the request is absent; or it
+// is closed (b.146 rule 12): its Spawn is ended or missing, or find-missing
+// marked the Spawn missing before the request's relay hook delivered the
+// verdict recorded on it; or, for a request recorded before schema v7, its
+// record is still open past its relay window but the Spawn is not shown to
+// be sitting on it alone, so its permission dialog may have closed (b.t6e).
+// Nothing was recorded, and the request is not to be answered at the pane.
 var ErrNoOpenPermissionRequest = store.ErrNoOpenPermissionRequest
 
 // ErrAlreadyDecided is returned by decide when the outstanding permission
@@ -108,6 +111,18 @@ var ErrAlreadyDecided = store.ErrAlreadyDecided
 // from internal/store so external consumers can do errors.Is(err, api.X)
 // without importing internal/store directly.
 var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
+
+// ErrStoreBusy is returned by decide called with a max_wait_ms bound
+// (DecideParams.MaxWaitMs; b.146 decision 9 B) when the bound is reached
+// before its verdict commits: another process held the store's write lock,
+// or another call of this process held the store's connection, for longer
+// than what was left of the bound, or a request recorded before schema v7
+// could not be settled within it. Nothing was recorded, so the call
+// can be retried. Once the verdict has committed, decide never returns it: a
+// bound reached during the wait for the relay hook's ack returns
+// not_confirmed instead. Without a bound decide never returns it.
+// Re-exported from internal/store.
+var ErrStoreBusy = store.ErrStoreBusy
 
 // ErrSchemaMismatch is returned by api.New when this binary cannot use the
 // store. For a store newer than the binary, install the matching binary. For

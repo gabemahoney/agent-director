@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -78,14 +79,20 @@ const sessionStartHookTimeoutSeconds = 600
 //	        outer entry AND an inner "timeout": <effective relay timeout>
 //	        on the command object, sibling of "type"/"command"/"args";
 //	        "SessionStart"'s agent-director hook entry carries an inner
-//	        "timeout": 600 on its command object, never on the outer entry)
+//	        "timeout": 600 on its command object, never on the outer entry;
+//	        "PermissionRequest"'s args are ["hook","--timeout","<effective
+//	        relay timeout>"])
 //	  },
 //	  "permissions": { "allow": [...], "deny": [...], "ask": [...] }
 //	}
 //
 // Every agent-director hook is registered in EXEC FORM (SR-22.9, "Exec-form
 // hooks"): `command` is the program path and `args` its argument list, so
-// Claude Code starts `<bin> hook` directly with no `sh` between them. A
+// Claude Code starts `<bin> hook` directly with no `sh` between them. The
+// PermissionRequest entry's args are `["hook", "--timeout", "<N>"]`, N being
+// the same effective relay timeout as its inner `timeout`: the relay hook
+// counts its kill instant from its own start plus N (b.146 rule 4), so it
+// never acks a verdict too late to write it. A
 // shell-form entry ("command":"<bin> hook") would run under `sh -c`, and
 // dash does not exec its last command, so the hook's parent would be that
 // shell. In exec form the hook's getppid() is the Claude process itself —
@@ -141,8 +148,14 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 	hooks := map[string]any{}
 	for _, evt := range hookEvents {
 		// Exec form (SR-22.9): the path verbatim as the program, "hook" as
-		// its one argument.
-		command := map[string]any{"type": "command", "command": exe, "args": []string{"hook"}}
+		// its first argument. The relay hook (PermissionRequest) is also
+		// told its own timeout, the one this entry gives Claude Code, so it
+		// knows its kill instant (b.146 rule 4).
+		args := []string{"hook"}
+		if evt == hookPermissionRequest {
+			args = append(args, "--timeout", strconv.Itoa(relayTimeout))
+		}
+		command := map[string]any{"type": "command", "command": exe, "args": args}
 		if matcherFields[evt] {
 			command["timeout"] = relayTimeout
 		}

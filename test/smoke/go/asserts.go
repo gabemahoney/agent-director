@@ -150,13 +150,21 @@ func AssertExpectedError(t testing.TB, verbDef manifest.VerbDef, err error) {
 
 // findFieldByJSONTag looks up a struct field whose json tag primary token
 // matches name (snake_case). Falls back to Go field-name matching only when
-// no json tag is present at all (safety net for untagged fields).
+// no json tag is present at all (safety net for untagged fields). An
+// untagged embedded struct's fields are searched too, as encoding/json
+// promotes them (e.g. api.RequestDelivery in DecideResult).
 func findFieldByJSONTag(rt reflect.Type, rv reflect.Value, name string) (reflect.StructField, reflect.Value, bool) {
 	for i := 0; i < rt.NumField(); i++ {
 		sf := rt.Field(i)
 		fv := rv.Field(i)
 
 		tag := sf.Tag.Get("json")
+		if sf.Anonymous && tag == "" && sf.Type.Kind() == reflect.Struct {
+			if esf, efv, ok := findFieldByJSONTag(sf.Type, fv, name); ok {
+				return esf, efv, true
+			}
+			continue
+		}
 		if tag != "" {
 			// Primary token is the part before any comma.
 			primary := strings.Split(tag, ",")[0]

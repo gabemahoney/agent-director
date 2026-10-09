@@ -4,11 +4,18 @@ import (
 	"time"
 )
 
+// This file holds the relay's time-based boundaries: the send-keys relay
+// guard's release, and the deliverability, settle instant and fallen-back
+// judgement of a permission request recorded before schema v7, whose relay
+// hook recorded neither its identity nor an ack. A request recorded from v7
+// on is judged by its relay hook process instead (relay_delivery.go; b.146
+// rules 5 and 14), except by the send-keys guard, which step 2b rewrites.
+
 // RelayKillSafetyMargin is the epsilon subtracted from the effective relay
-// window when deciding whether a permission request is still deliverable
-// (SR-3.4). A row whose age is within this margin of the deadline is treated
-// as already-undeliverable so Decide never records a success for a request
-// Claude Code is about to — or has just — killed.
+// window when deciding whether a permission request recorded before schema v7
+// is still deliverable (SR-3.4). A row whose age is within this margin of the
+// deadline is treated as already-undeliverable so Decide never records a
+// success for a request Claude Code is about to — or has just — killed.
 //
 // Rationale: the per-hook kill is deterministic at the configured window
 // (Epic 1 emits relay.timeout_seconds as the per-hook `timeout`, default
@@ -101,48 +108,55 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 // before the insert. A relay hook still alive at the end of the window ends
 // in one of two ways:
 //
-//   - At its poll deadline, created_at + window: internal/hook's Poll counts
-//     the window from the stored created_at too. It then records its timeout
-//     deny, moves the row to working and returns the deny to Claude Code,
-//     which closes the dialog. The guard's release leaves that timeout path
-//     margin + createdAtResolution (2 s) to complete in.
+//   - At its own deadline. A relay hook from before schema v7 polled until
+//     created_at + window, then recorded its timeout deny and returned it to
+//     Claude Code, which closes the dialog; the guard's release leaves that
+//     path margin + createdAtResolution (2 s) to complete in. A relay hook
+//     from v7 on counts from its own start plus the timeout spawn wrote for
+//     it, which is no later than created_at + window: it records and acks its
+//     timeout deny in one statement no later than 2 s before Claude Code's
+//     kill, and writes it only once it is acked (internal/hook's runRelay).
 //   - At Claude Code's kill, its per-hook timeout of the same window, armed
 //     when Claude Code started the hook: by created_at + window +
 //     createdAtResolution, plus however late the kill comes, which the margin
 //     covers. A killed hook's output is discarded, so it closes no dialog.
 //
 // A request decided in its window has its verdict recorded before
-// created_at + window - margin (Decide's boundary), so its hook has had more
-// than twice the margin plus createdAtResolution (3 s) to read the verdict
-// and return it, which closes the dialog. So at the guard's release a live
-// hook has returned its verdict or deny, or is dead, unless both its delivery
-// of its verdict or timeout deny ended more than margin + createdAtResolution
-// past created_at + window (its deny and working writes wait for the store's
-// write lock, each up to the store busy timeout, or the process stalled) and
-// Claude Code killed it more than the margin late. That residual race is not
-// closed here: nothing stored shows a hook stuck delivering.
+// created_at + window - margin (Decide's boundary for a request recorded
+// before v7), so its hook has had more than twice the margin plus
+// createdAtResolution (3 s) to read the verdict and return it, which closes
+// the dialog. So at the guard's release a live hook has returned its verdict
+// or deny, or is dead, unless both its delivery of its verdict or timeout
+// deny ended more than margin + createdAtResolution past created_at + window
+// (a hook from before v7 waited for the store's write lock, each write up to
+// the store busy timeout, or the process stalled) and Claude Code killed it
+// more than the margin late. That residual race is not closed here: nothing
+// stored by a hook from before v7 shows a hook stuck delivering.
 //
 // From Decide's boundary to the guard's release (window - margin to window +
-// margin + createdAtResolution) Decide refuses but the relay poller may still
-// be alive: at its poll deadline it denies the request, which closes Claude
-// Code's permission dialog and moves the row to working, where the send_keys
-// guard no longer applies. Decide therefore does not answer a refusal inside
-// that span at once: it waits until relayHookSettledAt, the guard's release
-// on the request's account, and reads the request again, so
-// ErrRelayFallenBack ("answer at the pane") is returned only for a request
-// whose row is still open once its poller is presumed no longer able to
-// answer it (b.pzy), and then only while the Spawn is still shown sitting on
-// it alone (decide.go's fallenBackUnshown, b.t6e).
+// margin + createdAtResolution) Decide refuses a request recorded before
+// schema v7 but its relay poller may still be alive: at its poll deadline it
+// denies the request, which closes Claude Code's permission dialog. Decide
+// therefore does not answer a refusal inside that span at once: it waits
+// until relayHookSettledAt, the guard's release on the request's account,
+// and reads the request again, so ErrRelayFallenBack ("answer at the pane")
+// is returned only for a request whose row is still open once its poller is
+// presumed no longer able to answer it (b.pzy), and then only while the
+// Spawn is still shown sitting on it alone (decide.go's fallenBackUnshown,
+// b.t6e).
 //
 // The span is agent-director's to absorb, not the caller's to time (b.ah6):
 // no runtime caller-facing text (error messages, manifest Descriptions)
 // states either boundary or the margin. A send_keys refused while the open
 // request holds the guard names an open request (namedBefore) and is told to
-// answer it with decide, and decide's wait ends as the guard releases on
-// that request's account, so a pane answer that follows its
-// ErrRelayFallenBack is not refused on that request's account, nor on
-// account of a decided request of the same Spawn (relayRequestFallenBack,
-// b.ceq).
+// answer it with decide. For a request recorded before v7, decide's wait ends
+// as the guard releases on that request's account, so a pane answer that
+// follows its ErrRelayFallenBack is not refused on that request's account,
+// nor on account of a decided request of the same Spawn
+// (relayRequestFallenBack, b.ceq). For a request recorded from v7 on, decide
+// reports it fallen back as soon as its relay hook is gone, while the guard
+// still holds on its account until its window ends (b.146 step 2b rewrites
+// the guard).
 
 // RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
 // whose delivery window has provably elapsed (guard may release) from rows that
@@ -201,17 +215,17 @@ func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time
 }
 
 // relayRequestFallenBack reports whether permission request pr has fallen back
-// at now: its record is still open (no decision) at or after its
-// relayHookSettledAt, so its relay hook is presumed dead and, if its dialog is
-// still on screen, only a pane answer can close it. It is the one definition
-// of "fallen back": Decide returns ErrRelayFallenBack only for such a request
-// (after its wait), and only while the Spawn is still shown sitting on it
-// alone, otherwise ErrNoOpenPermissionRequest (decide.go's fallenBackUnshown,
-// b.t6e); and the send_keys guard stops holding on account of a decided
-// request once another request of the same Spawn has fallen back (b.ceq),
-// whichever of the two Decide returns for it. A decided request has not
-// fallen back. Like its siblings it is a pure function of the row, the
-// resolved effective relay window and the injected now.
+// by time at now: its record is still open (no decision) at or after its
+// relayHookSettledAt, so its relay hook is presumed dead and only a pane
+// answer can close it. It is the time-based definition of "fallen back": the
+// one of a request recorded before schema v7, for which Decide returns
+// ErrRelayFallenBack only (after its wait), and only while the Spawn is still
+// shown sitting on it alone, otherwise ErrNoOpenPermissionRequest (decide.go's
+// fallenBackUnshown, b.t6e); and the send_keys guard's, which stops holding
+// on account of a decided request once another request of the same Spawn has
+// fallen back by it (b.ceq). A decided request has not fallen back. Like its
+// siblings it is a pure function of the row, the resolved effective relay
+// window and the injected now.
 func relayRequestFallenBack(pr PermissionRow, effectiveWindow time.Duration, now time.Time) bool {
 	return pr.Decision == "" && !now.Before(relayHookSettledAt(pr.CreatedAt, effectiveWindow))
 }

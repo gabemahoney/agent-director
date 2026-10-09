@@ -255,13 +255,15 @@ func guideRecipe(t *testing.T, heading string) (stmts, frame []string) {
 }
 
 // TestDowngradeRecipe_MatchesGuide: each downgrade recipe's test copy
-// (v6ToV5RecipeStatements, v5ToV4RecipeStatements) is the guide's recipe
-// statement for statement, run in bail mode in one transaction.
+// (v7ToV6RecipeStatements, v6ToV5RecipeStatements, v5ToV4RecipeStatements) is
+// the guide's recipe statement for statement, run in bail mode in one
+// transaction.
 func TestDowngradeRecipe_MatchesGuide(t *testing.T) {
 	for _, r := range []struct {
 		heading string
 		want    []string
 	}{
+		{"#### v7 → v6", v7ToV6RecipeStatements},
 		{"#### v6 → v5", v6ToV5RecipeStatements},
 		{"#### v5 → v4", v5ToV4RecipeStatements},
 	} {
@@ -279,7 +281,7 @@ func TestDowngradeRecipe_MatchesGuide(t *testing.T) {
 }
 
 // TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults: on a store taken
-// back to v5 first (the v6 → v5 recipe), the recipe leaves v4 with no
+// back to v5 first (the v7 → v6 and v6 → v5 recipes), the recipe leaves v4 with no
 // store_meta or v5 column and every v4 value of a reused row and an opted-out
 // row; an authorised re-migration gives the ordinary defaults (earlier lives
 // read as current until the next reuse; the opt-out is lost; no launch owner)
@@ -287,6 +289,7 @@ func TestDowngradeRecipe_MatchesGuide(t *testing.T) {
 func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	path, oldID := newClosedStore(t)
 	reused, optedOut := seedV5DowngradeRows(t, path)
+	applyRecipe(t, path, v7ToV6RecipeStatements)
 	applyRecipe(t, path, v6ToV5RecipeStatements)
 	cols := map[string][]string{}
 	withRaw(t, path, func(db *sql.DB) {

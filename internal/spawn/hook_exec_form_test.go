@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,7 +16,8 @@ import (
 // elements (SR-3.8): the hook's parent is the Claude process itself.
 
 // execFormEvents is the eight events every spawn registers; relay events
-// carry matcher "*" and the inner relay timeout. SessionStart's
+// carry matcher "*" and the inner relay timeout, and PermissionRequest's args
+// pass that timeout as --timeout (b.146 rule 4). SessionStart's
 // agent-director hook carries the inner sessionStartHookTimeoutSeconds; the
 // other five non-relay events and the help entry carry no timeout.
 var execFormEvents = map[string]bool{
@@ -87,6 +89,10 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 		want := map[string]any{"type": "command", "command": exe, "args": []any{"hook"}}
 		if relay {
 			want["timeout"] = timeout
+		}
+		if evt == "PermissionRequest" {
+			// b.146 rule 4: the relay hook is told its own timeout, the inner one.
+			want["args"] = []any{"hook", "--timeout", strconv.Itoa(cfg.Relay.EffectiveTimeoutSeconds())}
 		}
 		if evt == "SessionStart" {
 			want["timeout"] = float64(sessionStartHookTimeoutSeconds)

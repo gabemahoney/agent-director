@@ -39,7 +39,7 @@ func TestGetPermission(t *testing.T) {
 					t.Fatalf("DecidePermissionRequest = %v, %v", ok, err)
 				}
 			}
-			got, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: storefix.TestRequestTokenA})
+			got, err := api.GetPermission(s, api.RelayView{}, api.GetPermissionParams{RequestToken: storefix.TestRequestTokenA})
 			if err != nil {
 				t.Fatalf("GetPermission: %v", err)
 			}
@@ -86,11 +86,11 @@ func TestGetPermissionNotFound(t *testing.T) {
 	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`,
 		config.Relay{PermissionRequestCap: 5}.PermissionRequestCap)
 	for _, tok := range []string{"deadbeef-dead-4dea-adea-deadbeefdead", tokens[0]} {
-		if _, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: tok}); !errors.Is(err, api.ErrPermissionRequestNotFound) {
+		if _, err := api.GetPermission(s, api.RelayView{}, api.GetPermissionParams{RequestToken: tok}); !errors.Is(err, api.ErrPermissionRequestNotFound) {
 			t.Errorf("GetPermission(%s) err = %v; want ErrPermissionRequestNotFound", tok, err)
 		}
 	}
-	if got, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: storefix.TestRequestTokenB}); err != nil || got.Decision != nil {
+	if got, err := api.GetPermission(s, api.RelayView{}, api.GetPermissionParams{RequestToken: storefix.TestRequestTokenB}); err != nil || got.Decision != nil {
 		t.Errorf("open row = %+v, %v; want readable and undecided", got, err)
 	}
 }

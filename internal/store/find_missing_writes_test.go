@@ -40,9 +40,11 @@ func seedFMRow(t *testing.T, f *v5Store, state string, opts ...apitest.SpawnOpti
 // TestAppliedWriteChangesOnlyItsColumns checks each applied write sets only
 // its own columns and adds 1 to row_version, every other column kept: the
 // mark on every live state (prior state returned), the note (first and
-// overwrite), the clear, the adoption, EndHeldLaunch and the unreported note
+// overwrite), the clear, the adoption, EndHeldLaunch, the unreported note
 // of a pending row (b.kdf), which keeps the state, launch_started_at (CSCB),
-// last_seen_at, the launch owner, every identity and an earlier note's time.
+// last_seen_at, the launch owner, every identity and an earlier note's time,
+// and the repair of a stale check_permission row (b.146 rule 9), which writes
+// working, or waiting when idle_since is set, and keeps idle_since.
 func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	type applied struct {
 		name, state string
@@ -55,6 +57,15 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	}
 	unreported := func(s *store.Store, r fmRow) (store.CondResult, error) {
 		return s.NoteUnreportedIfSameLife(r.id, r.examined)
+	}
+	repairTo := func(want string) func(s *store.Store, r fmRow) (store.CondResult, error) {
+		return func(s *store.Store, r fmRow) (store.CondResult, error) {
+			state, res, err := s.RepairCheckPermissionIfSameLife(r.id, r.examined)
+			if err == nil && state != want {
+				err = fmt.Errorf("repair wrote %q, want %q", state, want)
+			}
+			return res, err
+		}
 	}
 	// newSince fails unless the write set liveness_unverified_since to a CURRENT_TIMESTAMP, then expects it.
 	newSince := func(t *testing.T, w *apitest.SpawnColumns, a apitest.SpawnColumns) {
@@ -100,6 +111,16 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 			}, func(_ *testing.T, w *apitest.SpawnColumns, _ apitest.SpawnColumns) {
 				w.State, w.EndedAt, w.LaunchStartedAt = store.StateEnded, rvEndedAtText, nil
 			}},
+		// b.146 rule 9, problem 3: the state, the launch start's clear and
+		// the version only; idle_since, the liveness note and last_seen_at kept.
+		{"repair, to working", store.StateCheckPermission, append([]apitest.SpawnOption{rvRelayOn}, liveness...), repairTo(store.StateWorking),
+			func(_ *testing.T, w *apitest.SpawnColumns, _ apitest.SpawnColumns) {
+				w.State, w.LaunchStartedAt = store.StateWorking, nil
+			}},
+		{"repair, to waiting", store.StateCheckPermission, append([]apitest.SpawnOption{rvRelayOn, apitest.WithIdleSince(rvIdleSince)}, liveness...),
+			repairTo(store.StateWaiting), func(_ *testing.T, w *apitest.SpawnColumns, _ apitest.SpawnColumns) {
+				w.State, w.LaunchStartedAt = store.StateWaiting, nil
+			}},
 	}
 	for _, st := range []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
 		cases = append(cases, applied{"mark/" + st, st, liveness, func(s *store.Store, r fmRow) (store.CondResult, error) {
@@ -140,8 +161,9 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	}
 }
 
-// TestFindMissingIfSameLifeRefused checks each guarded write (the adoption and
-// the unreported note included) is refused, writing nothing, for each
+// TestFindMissingIfSameLifeRefused checks each guarded write (the adoption, the
+// unreported note and the check_permission repair included) is refused,
+// writing nothing, for each
 // differing snapshot component, a repeat from the same snapshot, a finished
 // row and a deleted one.
 func TestFindMissingIfSameLifeRefused(t *testing.T) {
@@ -168,10 +190,17 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 			res, err := s.NoteUnreportedIfSameLife(id, snap)
 			return "", res, err
 		},
+		"repair": func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
+			_, res, err := s.RepairCheckPermissionIfSameLife(id, snap)
+			return "", res, err
+		},
 	}
 	// liveState is the state a write's refusal cases start from: the unreported
-	// note applies only to a pending row, so its cases start there (b.kdf).
-	liveState := map[string]string{"unreported": store.StatePending}
+	// note applies only to a pending row, so its cases start there (b.kdf);
+	// the repair only to a relay-on check_permission row (b.146 rule 9), which
+	// writeOpts seeds with the relay on.
+	liveState := map[string]string{"unreported": store.StatePending, "repair": store.StateCheckPermission}
+	writeOpts := map[string][]apitest.SpawnOption{"repair": {rvRelayOn}}
 	cases := []struct {
 		name   string
 		state  string                   // "" = waiting
@@ -201,7 +230,7 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 				if state == "" {
 					state = cmp.Or(liveState[name], store.StateWaiting)
 				}
-				r := seedFMRow(t, f, state, liveness...)
+				r := seedFMRow(t, f, state, append(slices.Clone(liveness), writeOpts[name]...)...)
 				if tc.mutate != nil {
 					tc.mutate(&r.examined)
 				}

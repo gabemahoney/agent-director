@@ -250,6 +250,22 @@ func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string,
 	}
 }
 
+// SeedRelayRequest records req on instanceID as the relay hook's first write
+// does (b.146 rule 1): through the gated InsertRelayRequest of the row's own
+// agent (WithSeedPane), which moves the row to check_permission and inserts
+// the request with req's hook identity, tool_use_id, agent_id and settle
+// instant. s must come from OpenTempStore (or be registered).
+func SeedRelayRequest(t *testing.T, s *store.Store, instanceID string, req store.RelayRequest) {
+	t.Helper()
+	dbPath := StorePath(t, s, "storefix.SeedRelayRequest")
+	if err := WithSeedPane(dbPath, instanceID, func(gate store.HookGate) error {
+		_, applied, err := s.InsertRelayRequest(instanceID, gate, req, 0, store.DefaultLockWait)
+		return seedWriteErr("relay request "+req.RequestToken, applied, err)
+	}); err != nil {
+		t.Fatalf("storefix.SeedRelayRequest(%q): %v", instanceID, err)
+	}
+}
+
 // SeedAgentDirectorDir creates homeDir's .agent-director/templates directory
 // (mode 0700) and returns it, for a test that needs it before make-template,
 // which otherwise creates it itself.

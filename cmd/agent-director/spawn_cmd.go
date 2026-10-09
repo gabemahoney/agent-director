@@ -333,9 +333,14 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
 	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
+	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); reached before the verdict is recorded: ErrStoreBusy, nothing recorded")
 	if err := fs.Parse(args); err != nil {
 		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.MaxWaitMs != nil && *p.MaxWaitMs < 0 {
+		cliOutcome = "ErrInvalidFlags"
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--max-wait-ms must not be negative")
 	}
 	if p.ClaudeInstanceID == "" {
 		cliOutcome = "ErrInvalidFlags"

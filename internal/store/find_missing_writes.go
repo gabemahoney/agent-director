@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // liveStateGuardSQL is the WHERE fragment that confines a find-missing write
@@ -59,13 +60,24 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
-// closeOrphanedRequestsSQL is the close MarkMissingIfSameLife folds into its
-// transaction (SR-5.4; b.146 rule 12): every open request of the row denied
-// with reason find_missing in one statement, which returns what it closed for
-// the trail.
-const closeOrphanedRequestsSQL = `UPDATE permission_requests
-    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
-  WHERE claude_instance_id = ? AND decision IS NULL
+// denyOrphanedRequestsSQL is the first statement of the close
+// MarkMissingIfSameLife folds into its transaction (SR-5.4; b.146 rule 12):
+// every request of the row that still awaits an answer (awaitingAnswerSQL)
+// and is undecided is denied with reason find_missing and marked closed. It
+// returns what it closed for the trail.
+var denyOrphanedRequestsSQL = `UPDATE permission_requests AS pr
+    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, closed_at = ?
+  WHERE pr.claude_instance_id = ? AND pr.decision IS NULL AND ` + awaitingAnswerSQL + `
+  RETURNING request_id, request_token, tool_name`
+
+// closeDecidedRequestsSQL is the close's second statement: every request of
+// the row that still awaits an answer after the first, a decided one whose
+// relay hook has not acked its verdict, is marked closed, its decision,
+// decision_reason and decided_at kept. It returns what it closed for the
+// trail.
+var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
+    SET closed_at = ?
+  WHERE pr.claude_instance_id = ? AND ` + awaitingAnswerSQL + `
   RETURNING request_id, request_token, tool_name`
 
 // MarkMissingIfSameLife is find-missing's mark (SR-11.3, SR-11.6; Appendix
@@ -91,10 +103,18 @@ const closeOrphanedRequestsSQL = `UPDATE permission_requests
 //     launch_token, tmux_socket, the server or pane identity columns or the
 //     launch owner. A row that exists but is terminal or holds another
 //     snapshot: CondChanged.
-//  3. The close: every open request of the row (decision NULL) gets decision
-//     deny, decision_reason find_missing and decided_at CURRENT_TIMESTAMP, in
-//     one statement, so a relay polling for the row reads a fail-closed deny
-//     rather than spinning to its own timeout.
+//  3. The close (b.146 rule 12): every request of the row that still awaits
+//     an answer (awaitingAnswerSQL: not acked and not answered at the pane,
+//     or, recorded before schema v7, undecided) is closed, its closed_at set
+//     to the time of the close, so that no request of the row awaits an
+//     answer after the mark, and none holds the row's moves to working, shows
+//     on get and list, or blocks find-missing's check_permission repair once
+//     the row is resumed. An undecided one also gets decision deny,
+//     decision_reason find_missing and decided_at CURRENT_TIMESTAMP, as
+//     before, so a relay polling for the row reads a fail-closed deny rather
+//     than spinning to its own timeout. A decided one, whose relay hook has
+//     not acked its verdict, keeps its decision, decision_reason and
+//     decided_at. Two statements, the deny first.
 //
 // Any failure in the read, the mark, the close or the commit rolls the whole
 // transaction back: the row keeps its state and snapshot, and its requests
@@ -102,10 +122,11 @@ const closeOrphanedRequestsSQL = `UPDATE permission_requests
 // never applies without the mark.
 //
 // After the commit, and only then, it emits per closed request, in request-id
-// order, one ad.row_mutation.committed (writer find_missing) and one
-// ad.find_missing.tick with reconciliation_reason permission_orphan_closeout,
-// fail-open (SR-A-2.5, SR-A-3.2). It emits nothing for the mark itself: the
-// mark's tick stays with the caller.
+// order, one ad.row_mutation.committed (writer find_missing) for a request it
+// denied, and one ad.find_missing.tick with reconciliation_reason
+// permission_orphan_closeout for every request it closed, fail-open
+// (SR-A-2.5, SR-A-3.2). It emits nothing for the mark itself: the mark's tick
+// stays with the caller.
 //
 // It returns the prior state and CondApplied when the transaction committed;
 // CondChanged or CondAbsent, having written nothing, otherwise. The prior
@@ -172,31 +193,54 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 	committed = true
 
 	for _, c := range closed {
-		emitDecisionCommitted(instanceID, c.token, c.requestID, c.toolName, "deny", DecisionReasonFindMissing, WriterProcessFindMissing)
+		if c.denied {
+			emitDecisionCommitted(instanceID, c.token, c.requestID, c.toolName, "deny", DecisionReasonFindMissing, WriterProcessFindMissing)
+		}
 		emitOrphanCloseoutTick(instanceID, c.token)
 	}
 	return prior, CondApplied, nil
 }
 
-// closedRequest is one permission request closeOrphanedRequests closed.
+// closedRequest is one permission request closeOrphanedRequests closed;
+// denied when the close also denied it (it was undecided).
 type closedRequest struct {
 	requestID int64
 	token     string
 	toolName  string
+	denied    bool
 }
 
-// closeOrphanedRequests runs closeOrphanedRequestsSQL for instanceID on conn,
-// inside the transaction its caller holds, and returns the requests it
-// closed in request-id order. It emits nothing.
+// closeOrphanedRequests closes every request of instanceID that still awaits
+// an answer, on conn, inside the transaction its caller holds: the undecided
+// ones denied (denyOrphanedRequestsSQL), then the decided ones marked closed
+// (closeDecidedRequestsSQL), both with one closed_at. It returns the requests
+// it closed in request-id order and emits nothing.
 func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID string) ([]closedRequest, error) {
-	rows, err := conn.QueryContext(ctx, closeOrphanedRequestsSQL, "deny", DecisionReasonFindMissing, instanceID)
+	at := millisArg(time.Now())
+	denied, err := queryClosedRequests(ctx, conn, true, denyOrphanedRequestsSQL, "deny", DecisionReasonFindMissing, at, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	kept, err := queryClosedRequests(ctx, conn, false, closeDecidedRequestsSQL, at, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	closed := append(denied, kept...)
+	slices.SortFunc(closed, func(a, b closedRequest) int { return cmp.Compare(a.requestID, b.requestID) })
+	return closed, nil
+}
+
+// queryClosedRequests runs one of the close's statements, q with args, on
+// conn and returns the requests it returned, each marked denied as given.
+func queryClosedRequests(ctx context.Context, conn *sql.Conn, denied bool, q string, args ...any) ([]closedRequest, error) {
+	rows, err := conn.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var closed []closedRequest
 	for rows.Next() {
-		var c closedRequest
+		c := closedRequest{denied: denied}
 		if err := rows.Scan(&c.requestID, &c.token, &c.toolName); err != nil {
 			return nil, err
 		}
@@ -205,7 +249,6 @@ func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID strin
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	slices.SortFunc(closed, func(a, b closedRequest) int { return cmp.Compare(a.requestID, b.requestID) })
 	return closed, nil
 }
 
@@ -409,6 +452,62 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 	}
 	res, err = s.condNotApplied(instanceID, errPrefix)
 	return res, RowSnapshot{}, err
+}
+
+// repairCheckPermissionSQL is RepairCheckPermissionIfSameLife's one
+// statement: the move out of check_permission (waiting when idle_since is
+// set, working otherwise), the launch-start clear and the version advance,
+// guarded by check_permission, relay_mode on, the examined row snapshot and
+// no permission request of the row still awaiting an answer (b.146 rule 9).
+var repairCheckPermissionSQL = `UPDATE spawns
+    SET state = CASE WHEN idle_since IS NOT NULL THEN ? ELSE ? END,
+        ` + launchStartClear + `,
+        ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND state = ? AND relay_mode = 'on' AND ` + snapshotMatchSQL + `
+    AND NOT EXISTS (SELECT 1 FROM permission_requests pr
+                     WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + awaitingAnswerSQL + `)
+  RETURNING state`
+
+// RepairCheckPermissionIfSameLife is find-missing's repair of a stale
+// check_permission row (b.146 rule 9, problem 3): one conditional statement
+// that moves the row out of check_permission, to waiting when idle_since is
+// set (the main agent's idle-prompt Notification landed and no hook since)
+// and to working otherwise, only while the row is in check_permission with
+// relay_mode on (a row with the relay off is in check_permission while
+// Claude Code's own dialog waits, with no request on record), still holds
+// examined (the snapshot the sweep read; SR-5.3) and none of its permission
+// requests still awaits an answer (awaitingAnswerSQL: not closed by
+// find-missing's mark, and not acked and not answered at the pane, or,
+// recorded before schema v7, undecided).
+// In the same statement it NULLs launch_started_at and advances row_version
+// by one (SR-5.2). It writes no other column: idle_since is kept until the
+// agent's next hook clears it, and last_seen_at is not bumped, since no hook
+// reported.
+//
+// Whether a request's relay hook may still be alive is the caller's to check
+// before calling: a process check is no statement. A request recorded after
+// that check advances the row's snapshot (its relay hook's transaction moves
+// the row to check_permission), so the snapshot guard refuses the repair.
+//
+// It returns the state written and CondApplied when the write applied;
+// CondChanged, having written nothing, when the row exists but is not in
+// check_permission, has the relay off, holds another snapshot or has a
+// request that still awaits an answer; CondAbsent when no row has the id. A
+// store failure is
+// returned as a wrapped error with a zero CondResult (SR-5.8). It emits no
+// trail event: the tick is the caller's.
+func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowSnapshot) (newState string, res CondResult, err error) {
+	const errPrefix = "store: repair check_permission if same life"
+	args := append([]any{StateWaiting, StateWorking, instanceID, StateCheckPermission}, snapshotMatchArgs(examined)...)
+	err = s.db.QueryRow(repairCheckPermissionSQL, args...).Scan(&newState)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		res, err = s.condNotApplied(instanceID, errPrefix)
+		return "", res, err
+	case err != nil:
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	return newState, CondApplied, nil
 }
 
 // execGuarded runs one guarded UPDATE or DELETE and reports whether it

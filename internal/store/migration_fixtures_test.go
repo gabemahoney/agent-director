@@ -456,6 +456,150 @@ var v6ToV5RecipeStatements = []string{
 	"PRAGMA user_version = 5",
 }
 
+// v7ColumnSpecs are the columns the v6→v7 step adds (b.146 steps 2, 2b and
+// 2c), in schema order: sixteen on permission_requests, after created_at, and
+// spawns.idle_since, after launch_owner_pidns.
+var v7ColumnSpecs = []columnSpec{
+	{"permission_requests", "hook_pid", "INTEGER", false, ""},
+	{"permission_requests", "hook_starttime", "TEXT", false, ""},
+	{"permission_requests", "hook_pidns", "TEXT", false, ""},
+	{"permission_requests", "tool_use_id", "TEXT", false, ""},
+	{"permission_requests", "agent_id", "TEXT", false, ""},
+	{"permission_requests", "delivered_at", "INTEGER", false, ""},
+	{"permission_requests", "settled_at", "INTEGER", false, ""},
+	{"permission_requests", "hook_gone_at", "INTEGER", false, ""},
+	{"permission_requests", "attempted_decision", "TEXT", false, ""},
+	{"permission_requests", "attempted_at", "INTEGER", false, ""},
+	{"permission_requests", "pane_answer", "TEXT", true, "'none'"},
+	{"permission_requests", "pane_as", "TEXT", false, ""},
+	{"permission_requests", "pane_sender_pid", "INTEGER", false, ""},
+	{"permission_requests", "pane_sender_starttime", "TEXT", false, ""},
+	{"permission_requests", "pane_sender_pidns", "TEXT", false, ""},
+	{"permission_requests", "closed_at", "INTEGER", false, ""},
+	{"spawns", "idle_since", "TEXT", false, ""},
+}
+
+// v7ColumnNames are table's v7 column names, in schema order.
+func v7ColumnNames(table string) []string {
+	var names []string
+	for _, c := range v7ColumnSpecs {
+		if c.table == table {
+			names = append(names, c.name)
+		}
+	}
+	return names
+}
+
+// assertNoV7Columns fails if any v7 column is present.
+func assertNoV7Columns(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, want := range v7ColumnSpecs {
+			for _, name := range tableColumnNames(t, db, want.table) {
+				if strings.EqualFold(name, want.name) {
+					t.Errorf("%s present; want absent", want.key())
+				}
+			}
+		}
+	})
+}
+
+// preAddV7Columns adds the named v7 columns ("table.column") with their
+// definitions: a v6→v7 hop that stopped part-way.
+func preAddV7Columns(t *testing.T, path string, keys ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, k := range keys {
+			found := false
+			for _, spec := range v7ColumnSpecs {
+				if spec.key() == k {
+					mustExec(t, db, spec.addColumnDDL())
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("unknown v7 column %q", k)
+			}
+		}
+	})
+}
+
+// breakV7IdleSinceColumn adds IDLE_SINCE to a v6 store: the hop's probe
+// compares names exactly, so it adds every permission_requests column and then
+// fails at spawns.idle_since, its last column, as a duplicate column.
+func breakV7IdleSinceColumn(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE spawns ADD COLUMN IDLE_SINCE TEXT") })
+}
+
+// v6Fixture describes what makeV6Fixture seeded: a relay-on row in
+// check_permission with an open request and a decided one, recorded before
+// schema v7 (no relay hook identity, no settle instant). requests holds
+// quote() literals of every v6 permission_requests column, by token.
+type v6Fixture struct {
+	dir, path        string
+	id               string
+	open, decided    string
+	requestCols      []string
+	requests         map[string]map[string]string
+	spawnCols        []string
+	spawn            map[string]string
+	openCreatedAtSQL string
+}
+
+// makeV6Fixture builds a genuine v6 store under dir holding f.id in
+// check_permission with request f.open undecided (created_at
+// f.openCreatedAtSQL, long past any relay window) and request f.decided
+// decided allow, closed.
+func makeV6Fixture(t *testing.T, dir string) v6Fixture {
+	t.Helper()
+	f := v6Fixture{dir: dir, path: makeVersionedDB(t, dir, 6), id: "v6-relay",
+		open: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", decided: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
+		openCreatedAtSQL: "2026-04-01 10:00:00"}
+	withRaw(t, f.path, func(db *sql.DB) {
+		mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, row_version)
+			VALUES (?, 'check_permission', '/work/relay', 'ad-relay', 'on', 4)`, f.id)
+		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input, created_at)
+			VALUES (?, ?, 'Bash', '{"command":"ls"}', ?)`, f.id, f.open, f.openCreatedAtSQL)
+		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input,
+			decision, decided_at, created_at) VALUES (?, ?, 'Read', '{}', 'allow', '2026-04-01 09:00:05', '2026-04-01 09:00:00')`,
+			f.id, f.decided)
+		f.requestCols = tableColumnNames(t, db, "permission_requests")
+		f.spawnCols = tableColumnNames(t, db, "spawns")
+	})
+	f.requests = map[string]map[string]string{}
+	for _, r := range readQuotedRows(t, f.path, "permission_requests", f.id, "request_id", f.requestCols) {
+		f.requests[unquote(r["request_token"])] = r
+	}
+	f.spawn = readRawSpawn(t, f.path, f.id, f.spawnCols)
+	return f
+}
+
+// v7ToV6RecipeStatements reverses migrateV6toV7: the seventeen v7 columns
+// dropped in the order the hop adds them, then the version stamped back to 6.
+// It must match docs/migration-guide.md's "v7 → v6" recipe statement for
+// statement.
+var v7ToV6RecipeStatements = []string{
+	"ALTER TABLE permission_requests DROP COLUMN hook_pid",
+	"ALTER TABLE permission_requests DROP COLUMN hook_starttime",
+	"ALTER TABLE permission_requests DROP COLUMN hook_pidns",
+	"ALTER TABLE permission_requests DROP COLUMN tool_use_id",
+	"ALTER TABLE permission_requests DROP COLUMN agent_id",
+	"ALTER TABLE permission_requests DROP COLUMN delivered_at",
+	"ALTER TABLE permission_requests DROP COLUMN settled_at",
+	"ALTER TABLE permission_requests DROP COLUMN hook_gone_at",
+	"ALTER TABLE permission_requests DROP COLUMN attempted_decision",
+	"ALTER TABLE permission_requests DROP COLUMN attempted_at",
+	"ALTER TABLE permission_requests DROP COLUMN pane_answer",
+	"ALTER TABLE permission_requests DROP COLUMN pane_as",
+	"ALTER TABLE permission_requests DROP COLUMN pane_sender_pid",
+	"ALTER TABLE permission_requests DROP COLUMN pane_sender_starttime",
+	"ALTER TABLE permission_requests DROP COLUMN pane_sender_pidns",
+	"ALTER TABLE permission_requests DROP COLUMN closed_at",
+	"ALTER TABLE spawns DROP COLUMN idle_since",
+	"PRAGMA user_version = 6",
+}
+
 // applyRecipe runs stmts on the closed store at path in one transaction.
 func applyRecipe(t *testing.T, path string, stmts []string) {
 	t.Helper()

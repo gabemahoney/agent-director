@@ -61,6 +61,8 @@ func TestLinuxStartTimeReader(t *testing.T) {
 	}{
 		{name: "alive state S returns field 22 verbatim", setup: stat("S", start), want: alive},
 		{name: "alive state R returns field 22 verbatim", setup: stat("R", start), want: alive},
+		{name: "uninterruptible sleep D is alive", setup: stat("D", start), want: alive},
+		{name: "stopped T is alive", setup: stat("T", start), want: alive},
 		{name: "alive keeps leading zeros verbatim", setup: stat("S", "000123"), want: answer{"000123", true, true}},
 		{name: "zombie Z is gone", setup: stat("Z", start), want: gone},
 		{name: "dead X is gone", setup: stat("X", start), want: gone},

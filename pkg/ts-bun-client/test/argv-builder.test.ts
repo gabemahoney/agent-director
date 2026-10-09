@@ -46,6 +46,8 @@ test.each([
     ["decide", ...ID, "--decision", "allow", "--request-token", "tok", "--reason", "safe"]],
   ["decide: no token or reason", "decide", { claude_instance_id: "id-1", decision: "deny" },
     ["decide", ...ID, "--decision", "deny"]],
+  ["decide: max_wait_ms (b.146 decision 9 B), 0 included", "decide", { claude_instance_id: "id-1", decision: "allow", request_token: "tok", max_wait_ms: 0 },
+    ["decide", ...ID, "--decision", "allow", "--request-token", "tok", "--max-wait-ms", "0"]],
   ["get-permission", "get-permission", { request_token: "tok" }, ["get-permission", "--request-token", "tok"]],
   ["find-missing", "find-missing", {}, ["find-missing"]],
   ["expire", "expire", { older_than: "7d" }, ["expire", "--older-than", "7d"]],

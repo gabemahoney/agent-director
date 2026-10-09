@@ -42,12 +42,18 @@ func SetClockForTest(c *Client, now func() time.Time) { c.now = now }
 func SetProcCheckerForTest(c *Client, pc ProcChecker) { c.procChecker = pc }
 
 // SetSleepForTest replaces c's sleep (time.Sleep in production), the pause of Client.Kill's process wait (SR-6.1)
-// and of Client.Decide's wait for a fallen-back request's relay hook (b.pzy), for this Client only.
+// and of Client.Decide's waits for its verdict's ack (b.146 rule 16) and for a pre-v7 request's relay hook (b.pzy),
+// for this Client only.
 func SetSleepForTest(c *Client, sleep func(time.Duration)) { c.sleep = sleep }
 
-// DecideWithSleep is Decide with the sleep of its wait for a fallen-back
-// request's relay hook given (b.pzy), so a test stands in for the hook on its
-// own clock. External callers use Decide or (c *Client).Decide instead.
+// SetSelfPIDNSForTest replaces c's reader of its own pid namespace (probe.SelfPIDNamespace in production), the
+// namespace a recorded relay hook is judged in (b.146 rule 14), for this Client only.
+func SetSelfPIDNSForTest(c *Client, read func() (string, bool)) { c.selfPIDNS = read }
+
+// DecideWithSleep is Decide with the sleep of its waits given (its verdict's
+// ack, b.146 rule 16; a pre-v7 request's relay hook, b.pzy), so a test stands
+// in for the hook on its own clock. External callers use Decide or
+// (c *Client).Decide instead.
 var DecideWithSleep = decide
 
 // CreatedAtResolution is the storage resolution of a permission request's

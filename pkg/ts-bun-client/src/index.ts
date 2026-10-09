@@ -34,7 +34,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (50 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (51 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -75,6 +75,7 @@ export {
   ErrAlreadyDecided,
   ErrPermissionRequestNotFound,
   ErrAmbiguousRequest,
+  ErrStoreBusy,
   ErrMissingRequestToken,
   ErrInvalidFlags,
   ErrConfigMalformed,
@@ -94,7 +95,13 @@ export type { CheckedLocation, UnreachableReason } from "./errors.js";
 export type { ClientOptions, Logger } from "./types.js";
 
 // Shared sub-shapes.
-export type { VerbSummary, PermissionRequestInfo, ListRow } from "./types.js";
+export type {
+  VerbSummary,
+  PermissionRequestInfo,
+  ListRow,
+  Delivery,
+  RequestDelivery,
+} from "./types.js";
 
 // Verb Params / Result interfaces.
 export type {

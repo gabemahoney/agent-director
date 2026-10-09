@@ -390,7 +390,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (50 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (51 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -476,6 +476,12 @@ export class ErrAlreadyDecided extends AgentDirectorError {}
 export class ErrPermissionRequestNotFound extends AgentDirectorError {}
 /** Mirrors ErrAmbiguousRequest (package: store) */
 export class ErrAmbiguousRequest extends AgentDirectorError {}
+/**
+ * Mirrors ErrStoreBusy (package: store): decide's `max_wait_ms` bound was reached before its
+ * verdict was recorded (another process held the store's write lock). Nothing was recorded, so
+ * the call can be retried.
+ */
+export class ErrStoreBusy extends AgentDirectorError {}
 /** Mirrors ErrMissingRequestToken (package: api) */
 export class ErrMissingRequestToken extends AgentDirectorError {}
 /** Mirrors ErrInvalidFlags (package: api) */
@@ -509,7 +515,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 50
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 51
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -534,6 +540,7 @@ const ERROR_TABLE = {
   ErrAlreadyDecided,
   ErrPermissionRequestNotFound,
   ErrAmbiguousRequest,
+  ErrStoreBusy,
   // tmux package
   ErrTmuxNotAvailable,
   ErrTmuxSessionCreate,

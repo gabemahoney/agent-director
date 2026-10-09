@@ -4,14 +4,14 @@ package store
 // SR-12): a fresh store, an authorized open from every released version,
 // refusals, step re-entry (b.93m), rollback and the consume. Fixtures:
 // migration_fixtures_test.go; v5 data, store id and downgrade cases:
-// schema_v5_test.go; v6 data and downgrade cases: schema_v6_test.go.
+// schema_v5_test.go; v6 data and downgrade cases: schema_v6_test.go; v7's:
+// schema_v7_test.go.
 
 import (
 	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -52,9 +52,9 @@ func columnsByName(shape map[string]any) map[string]any {
 }
 
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
-// schemaVersion, every table and index, the v3, v5 and v6 columns (v6's last,
-// in order), store_meta, WAL and foreign keys on, no sentinel, and a 0700
-// parent and 0600 file that a second open does not widen.
+// schemaVersion, every table and index, the v3, v5, v6 and v7 columns (in
+// order, last on their tables), store_meta, WAL and foreign keys on, no
+// sentinel, and a 0700 parent and 0600 file that a second open does not widen.
 func TestFreshStoreSchema(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent-director") // OpenOrInit creates the parent
 	path := filepath.Join(dir, "state.db")
@@ -108,41 +108,38 @@ func TestFreshStoreSchema(t *testing.T) {
 		"claude_session_id", "jsonl_path", "recorded_at", "life_number"}; !slices.Equal(got, want) {
 		t.Errorf("session_history columns = %v; want %v", got, want)
 	}
-	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs))
-	v6 := v6ColumnNames()
-	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(v6) || !slices.Equal(cols[len(cols)-len(v6):], v6) {
-		t.Errorf("spawns columns = %v; want the v6 columns last, in order %v", cols, v6)
+	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs))
+	// spawns ends with the v6 columns then v7's idle_since; permission_requests
+	// with the v7 columns after created_at (the two-places rule's order).
+	wantSpawnsTail := append(v6ColumnNames(), v7ColumnNames("spawns")...)
+	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
+		t.Errorf("spawns columns = %v; want the v6 then v7 columns last, in order %v", cols, wantSpawnsTail)
+	}
+	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
+	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
+		!slices.Equal(cols[len(cols)-len(wantRequestsTail):], wantRequestsTail) {
+		t.Errorf("permission_requests columns = %v; want created_at then the v7 columns last, in order %v", cols, wantRequestsTail)
 	}
 	assertSentinel(t, dir, false)
 }
 
-// TestNoAgentSuppliedIdentifierInSchema checks no agent-supplied per-call id
-// (tool_use_id) appears in the schema DDL or in production Go source.
-func TestNoAgentSuppliedIdentifierInSchema(t *testing.T) {
-	forbidden := []string{"tool_use_id", "toolUseID", "ToolUseID"}
+// TestNoAgentSuppliedIdentifierIsAKey: the hook input's tool_use_id and
+// agent_id are recorded on a request (b.146 rule 2) but never identify one
+// (b.c26): no index, UNIQUE or primary key covers either; a request stays
+// keyed by its row id and (claude_instance_id, request_token), the token the
+// relay hook mints.
+func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 	s, _ := openTempStore(t)
-	for _, ddl := range queryStrings(t, s.db, "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL") {
-		for _, bad := range forbidden {
-			if strings.Contains(strings.ToLower(ddl), strings.ToLower(bad)) {
-				t.Errorf("schema DDL contains %q:\n%s", bad, ddl)
+	for _, idx := range queryStrings(t, s.db, `SELECT name FROM sqlite_master WHERE type = 'index'`) {
+		for _, col := range queryStrings(t, s.db, `SELECT name FROM pragma_index_info(?)`, idx) {
+			if col == "tool_use_id" || col == "agent_id" {
+				t.Errorf("index %s covers %s; want no agent-supplied id in any key", idx, col)
 			}
 		}
 	}
-	for _, dir := range []string{"internal/hook", "internal/store", "pkg/api", "cmd/agent-director"} {
-		err := filepath.WalkDir(filepath.Join("..", "..", dir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return err
-			}
-			src, err := os.ReadFile(path)
-			for _, bad := range forbidden {
-				if strings.Contains(string(src), bad) {
-					t.Errorf("%s contains %q", path, bad)
-				}
-			}
-			return err
-		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", dir, err)
+	for _, c := range readTableShape(t, s.db, "permission_requests") {
+		if c.pk != 0 && c.name != "request_id" {
+			t.Errorf("permission_requests primary key includes %s; want request_id alone", c.name)
 		}
 	}
 }
@@ -206,6 +203,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertTrailInt(t, lines[0], "to", schemaVersion)
 			assertV5Defaults(t, path, "pre", 0)
 			assertV6Defaults(t, path, "pre")
+			assertV7Defaults(t, path, "pre")
 			if raw := assertOneStoreID(t, path); raw != id {
 				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
 			}
@@ -327,8 +325,8 @@ func TestNewerThanBinaryIsSchemaMismatch(t *testing.T) {
 }
 
 // TestMigrationStepReentry: a step re-run over a DB it migrated wholly or in
-// part succeeds and gives the schema one run gives (b.93m); v4→v5 and v5→v6
-// never add a second store id or replace one (SR-5.4).
+// part succeeds and gives the schema one run gives (b.93m); v4→v5 and every
+// later hop never add a second store id or replace one (SR-5.4).
 func TestMigrationStepReentry(t *testing.T) {
 	const preID = "0123456789abcdef"
 	var allV5 []string
@@ -340,6 +338,13 @@ func TestMigrationStepReentry(t *testing.T) {
 	}
 	preV6 := func(names ...string) func(*testing.T, string) {
 		return func(t *testing.T, path string) { preAddV6Columns(t, path, names...) }
+	}
+	var allV7 []string
+	for _, c := range v7ColumnSpecs {
+		allV7 = append(allV7, c.key())
+	}
+	preV7 := func(keys ...string) func(*testing.T, string) {
+		return func(t *testing.T, path string) { preAddV7Columns(t, path, keys...) }
 	}
 	meta := func(id string) func(*testing.T, string) {
 		return func(t *testing.T, path string) { preAddStoreMeta(t, path, id) }
@@ -367,6 +372,10 @@ func TestMigrationStepReentry(t *testing.T) {
 		{"v5→v6 after launch_owner_pid", 5, preV6("launch_owner_pid"), 1, ""},
 		{"v5→v6 after launch_owner_starttime alone", 5, preV6("launch_owner_starttime"), 1, ""},
 		{"v5→v6 after all three", 5, preV6(v6ColumnNames()...), 1, ""},
+		{"v6→v7 run twice", 6, nil, 2, ""},
+		{"v6→v7 after hook_pid", 6, preV7("permission_requests.hook_pid"), 1, ""},
+		{"v6→v7 after pane_answer and idle_since", 6, preV7("permission_requests.pane_answer", "spawns.idle_since"), 1, ""},
+		{"v6→v7 after all seventeen", 6, preV7(allV7...), 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -419,6 +428,7 @@ func TestMigrationRollback(t *testing.T) {
 		{"v4→v5 at session_history.life_number", 4, breakV5SessionHistoryHop, "session_history.life_number"},
 		{"v4→v5 at the store_id insert", 4, breakV5StoreMetaStep, ""},
 		{"v5→v6 at launch_owner_pidns, after the first two columns", 5, breakV6PIDNSColumn, "spawns.launch_owner_pidns"},
+		{"v6→v7 at idle_since, after every permission_requests column", 6, breakV7IdleSinceColumn, "spawns.idle_since"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -428,6 +438,8 @@ func TestMigrationRollback(t *testing.T) {
 				path = makeV4HistoryFixture(t, t.TempDir()).path
 			case 5:
 				path = makeV5Fixture(t, t.TempDir()).path
+			case 6:
+				path = makeV6Fixture(t, t.TempDir()).path
 			default:
 				path = makeVersionedDB(t, t.TempDir(), tc.from)
 			}

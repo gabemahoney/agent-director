@@ -111,7 +111,7 @@ func rlfEarlierOnDisk(t *testing.T, r reuseRow) {
 // rlfGet is get of id.
 func rlfGet(t *testing.T, e *killEnv, id string) api.SpawnRow {
 	t.Helper()
-	row, err := api.Get(e.st, id)
+	row, err := api.Get(e.st, api.RelayView{}, id)
 	if err != nil {
 		t.Fatalf("Get(%s): %v", id, err)
 	}

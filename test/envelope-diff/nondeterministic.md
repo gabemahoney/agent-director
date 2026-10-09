@@ -70,13 +70,13 @@ Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs who
 |---|---|---|
 | `spawn` | `.claude_instance_id` | UUID generated per call |
 | `version` | `.version`, `.commit` | CLI stamped with -ldflags; `pkg/api.Version()` returns package default |
-| `decide` | — | all values fixture-derived |
+| `decide` | `.attempted_at`, `.hook_gone_at` | the request's delivery facts (b.146 rule 15): these two instants are written at call time (a refused decide's attempt, a reader that finds the request fallen back), so a run that sets one sets it to its own clock; `delivery`, `confirm_by` and `hook_alive` derive from the fixture row and are diffed |
 | `expire` | `.ids` | which rows are selected depends on the call-time cutoff (now minus the window); `count`, `kept` and `kept_ids` are diffed; both cases in `success_expire.go` pin `kept` and `kept_ids` through `want`, and `TestEnvelopeDiff_Success/expire/kept` pins `ids` as well |
 | `find-missing` | — | all values fixture-derived |
-| `get` | — | all values fixture-derived |
-| `get-permission` | `.request_id`, `.requested_at` | excluded as the store-assigned columns named in the case's comment (`success_cases.go`): `request_id` is the autoincrement row id, `requested_at` the row's `CURRENT_TIMESTAMP`. Both are written once, when the case seeds its `permission_requests` row, and both store copies carry them, so by the decision tree above they are fixture-derived; the other six fields are diffed |
+| `get` | `.permission_requests[*].attempted_at`, `.permission_requests[*].hook_gone_at` | each request's call-time instants, as for `decide`; every other value is fixture-derived |
+| `get-permission` | `.attempted_at`, `.hook_gone_at`, `.request_id`, `.requested_at` | `attempted_at` and `hook_gone_at` are written at call time, as for `decide`. `request_id` and `requested_at` are excluded as the store-assigned columns named in the case's comment (`success_cases.go`): `request_id` is the autoincrement row id, `requested_at` the row's `CURRENT_TIMESTAMP`. Both are written once, when the case seeds its `permission_requests` row, and both store copies carry them, so by the decision tree above they are fixture-derived; the other fields are diffed |
 | `kill` | — | all values fixture-derived |
-| `list` | — | all values fixture-derived |
+| `list` | `.spawns[*].permission_requests[*].attempted_at`, `.spawns[*].permission_requests[*].hook_gone_at` | each request's call-time instants, as for `decide`; every other value is fixture-derived |
 | `make-template` | `.path` | output path resolved at call time |
 | `pause` | — | all values fixture-derived |
 | `read-pane` | — | all values fixture-derived |

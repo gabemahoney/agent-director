@@ -1,16 +1,27 @@
 {
-  "decide": [],
+  "decide": [
+    ".attempted_at",
+    ".hook_gone_at"
+  ],
   "expire": [
     ".ids"
   ],
   "find-missing": [],
-  "get": [],
+  "get": [
+    ".permission_requests[*].attempted_at",
+    ".permission_requests[*].hook_gone_at"
+  ],
   "get-permission": [
+    ".attempted_at",
+    ".hook_gone_at",
     ".request_id",
     ".requested_at"
   ],
   "kill": [],
-  "list": [],
+  "list": [
+    ".spawns[*].permission_requests[*].attempted_at",
+    ".spawns[*].permission_requests[*].hook_gone_at"
+  ],
   "make-template": [
     ".path"
   ],

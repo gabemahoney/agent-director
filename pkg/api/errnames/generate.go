@@ -68,6 +68,7 @@ var packageOf = map[string]string{
 	"ErrAlreadyDecided":            "store",
 	"ErrPermissionRequestNotFound": "store",
 	"ErrAmbiguousRequest":          "store",
+	"ErrStoreBusy":                 "store",
 
 	// internal/tmux
 	// ErrTmuxListPanesFailed is intentionally absent: the pane listing is

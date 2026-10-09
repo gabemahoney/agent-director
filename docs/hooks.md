@@ -18,6 +18,10 @@ is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
 directly, with no shell in between, and feeds it the payload JSON on
 stdin. The hook's parent process is therefore the Claude process that
 fired it. The README states the minimum supported Claude Code version.
+The `PermissionRequest` entry's arguments are `["hook", "--timeout",
+"<N>"]`, N being the same per-hook `timeout` the entry gives Claude Code
+(`[relay] timeout_seconds`), so the relay hook knows when Claude Code will
+end it (see "PermissionRequest relay path" below).
 
 A Claude Code version older than that ignores `args` and runs the bare
 binary through `/bin/sh`, so each hook reaches agent-director with no
@@ -55,7 +59,7 @@ null.
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
 | `PostToolUse` | — | `working` |
 | `Stop` | — | `waiting` |
-| `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`; any other state: soft refresh (see "The idle-prompt Notification" below) |
+| `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request still awaiting an answer; any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below) |
 | `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`) |
@@ -88,8 +92,23 @@ Claude Code sends a `Notification` with `notification_type`
   "Only the row's own agent moves the row"). The trail records an
   `ad.spawn.state_transition` from `working` to `waiting` with
   `soft_refresh` false and `triggering_event_name` `Notification`;
+- so does a row with `relay_mode=on` in `check_permission` none of whose
+  permission requests still awaits an answer (a request awaits one until
+  its relay hook confirms a verdict in the store, a pane answer is recorded
+  on it, or `find-missing` closes it): the agent's turn ended after its
+  last request was answered, and the hook that would have moved the row
+  (the turn's `Stop`, after a denied request) was lost. The trail records
+  the move from `check_permission` to `waiting`;
 - a row in any other state gets the soft refresh: `last_seen_at` is
-  bumped and the state does not change.
+  bumped and the state does not change. A row with the relay off in
+  `check_permission`, or one with a request that still awaits an answer,
+  is such a row.
+
+Every applied write of this Notification, the soft refresh included, sets
+the row's `idle_since` to the current time, and the agent's next applied
+hook clears it. `find-missing` reads it when it repairs a relay row left in
+`check_permission`: `waiting` when it is set, `working` when it is not (see
+"PermissionRequest relay path" below).
 
 Every other Notification (`permission_prompt`, `auth_success`,
 `elicitation_dialog`, a missing or unknown type), and an idle-prompt
@@ -279,8 +298,9 @@ The agent's next applied hook clears the note and
 SessionStart that arrives later records the session id and identity and moves the row to
 `waiting`; a UserPromptSubmit (for example from the prompt the caller
 typed) moves it to `working` and records the session id. A
-UserPromptSubmit held because the row has open permission requests
-writes nothing, so the note stays.
+UserPromptSubmit held because a permission request of the row still
+awaits an answer writes nothing but the clearing of `idle_since`, so the
+note stays.
 
 ### Subagents and in-process teammates
 
@@ -378,9 +398,14 @@ the entry's 600 s timeout (see "SessionStart before the launch's identity
 write"). It happens only in the race described above; the hook still exits
 0 with empty stdout whatever the wait's result.
 
-The relay-mode `PermissionRequest` path is fail-*closed*: any internal
-error emits a `deny` decision envelope on stdout before the hook exits.
-See "Permission relay" in `architecture.md`.
+The relay-mode `PermissionRequest` path is fail-*closed* until its request
+is recorded: any internal error before then, its first store write
+included, emits a `deny` decision envelope on stdout before the hook
+exits, so the tool is denied. Once the request is recorded, the hook writes
+only an answer it has first confirmed in the store; any failure after that
+ends with no answer, so Claude Code asks in its own permission prompt and
+the request reads `fallen_back`. See "PermissionRequest relay path" below
+and "Permission relay" in `architecture.md`.
 
 ## Fire order
 
@@ -517,50 +542,75 @@ designed to keep this window closed.
 ## PermissionRequest relay path
 
 When a Spawn's `relay_mode=on`, the hook handler takes a second branch
-on PermissionRequest events: after the normal state-tracking write
-(state → `check_permission`), it records the request and enters a
-polling loop, and only returns when the orchestrator's `decide` verb has
-written a row in `permission_requests` or the relay times out. The branch
-runs only when that write applied: a PermissionRequest from another
-process records no request and writes nothing to stdout, and so does
-one whose request insert, which carries the same check, does not
-apply. See `permissions.md` for the user-facing
-contract; this section covers the implementation.
+on PermissionRequest events instead of the ordinary state write: it
+records the request, polls for the orchestrator's `decide` verdict, and
+writes an answer on stdout only once it has confirmed it in the store. See
+`permissions.md` for the user-facing contract; this section covers the
+hook's side.
 
-### Polling loop
+### The relay hook's clock
 
-`internal/hook/polling.go` implements `Poll(ctx, store, clock, cfg,
-instanceID, requestToken, rng)` — the token is the per-request UUIDv4
-minted by `runRelay`, so each polling loop reads only its own row.
-Each iteration:
+The hook reads the time first thing, and `--timeout N` (written by `spawn`
+on the `PermissionRequest` entry, the same N as that entry's per-hook
+`timeout`) gives the instant Claude Code will end it: its start plus N.
+A hook entry spawned before the argument existed reads the loaded config's
+`[relay] timeout_seconds` instead. Every step below keeps time against that
+instant, with a 2 s reserve before it for writing the answer and exiting:
 
-1. `GetPermissionRequest(instanceID, requestToken)`:
-   - `sql.ErrNoRows` → the row is gone. Rows are INSERT-only, so this
-     is rare — normally an ON DELETE CASCADE from a spawn delete.
-     Return fail-closed.
-   - other SQL error → increment a retry counter; abandon after 5
-     consecutive errors (`pollMaxReadRetries`).
-   - row found, decision NULL → sleep and loop.
-   - row found, decision populated → return the decision.
-2. Check the timeout deadline; if expired → return fail-closed. The
-   deadline is `relay.timeout_seconds` counted from the row's stored
-   `created_at`, the instant `decide` and the send-keys relay guard
-   count the request's window from (b.z6g). Until a read returns the
-   row, and should `created_at` be later than the loop's start (a clock
-   stepped back), the window counted from the loop's start bounds it:
-   the deadline is the earlier of the two.
-3. Sleep `max(50ms, base + uniform(0, jitter))`. The 50ms floor is
-   load-bearing: a misconfigured `relay.poll_base_ms=0,
-   relay.poll_jitter_ms=0` must not pin CPU.
+| Instant | What happens there |
+| --- | --- |
+| start + N − 3 s | the poll ends: no verdict yet means the timeout deny |
+| start + N − 2 s | the last moment a store write may commit; later, the hook gives no answer |
+| start + N | Claude Code ends the hook |
+| start + N + 2 s | the request's settle instant (`settled_at`), `confirm_by` |
 
-The sleeper uses `time.NewTimer + select` so `ctx.Done()` preempts
-the sleep cleanly. The loop never sleeps past the deadline.
+So `timeout_seconds` of 3 or less leaves no time to poll, and at 2 or less
+no time to answer.
+
+### The steps
+
+1. **The first write.** One store transaction moves the row to
+   `check_permission` and records the request, both or neither, under the
+   same gate as every hook (see "Only the row's own agent moves the row";
+   a PermissionRequest from another process records nothing and writes
+   nothing to stdout). The request carries the hook's own pid, start time
+   and pid namespace, the payload's `tool_use_id` and `agent_id`, and its
+   settle instant. Its wait for the store's write lock ends at the 2 s
+   reserve; a lock not taken by then, or any other failure, writes nothing
+   and returns a deny envelope (the tool is denied).
+2. **The poll.** `internal/hook/polling.go`'s `Poll` reads the hook's own
+   request (by the UUIDv4 `request_token` it minted) every
+   `max(50ms, relay.poll_base_ms + uniform(0, relay.poll_jitter_ms))`,
+   never sleeping past the poll's end. The 50 ms floor is load-bearing: a
+   misconfigured `relay.poll_base_ms=0, relay.poll_jitter_ms=0` must not
+   pin CPU. The loop only reads; it never writes the request.
+3. **The ack, then the answer.** On reading a verdict the hook commits
+   `delivered_at` in one statement that returns the verdict it confirmed,
+   and only then writes that verdict as its envelope and exits. Inside
+   that write's transaction, once it holds the store's write lock and
+   before the statement, the hook checks that its parent process is still
+   the Claude Code that started it (pid and start time); if not, nothing
+   is written. So a Claude Code that exited while the hook waited for the
+   lock gets no confirmation.
+4. **The timeout deny.** At the poll's end, one guarded statement, with
+   the same parent check inside its transaction, records `deny`,
+   `decision_reason` `timeout` and `delivered_at` together, only while the
+   request is still undecided; a verdict that landed first is confirmed
+   and written instead. The deny leaves the row's state as it is.
+
+The hook never writes an answer it has not confirmed in the store, because
+Claude Code acts on a hook's JSON whatever its exit code. A changed parent,
+a store write that fails or misses the reserve, a request deleted under it
+(its spawn row removed) or five failed reads in a row end the hook with
+empty stdout: Claude Code asks in its own permission prompt, and readers
+find the request fallen back once they see the hook gone.
 
 ### Writing the envelope
 
 The handler emits exactly one line on stdout — the
-`hookSpecificOutput` envelope per SRD §6.3. Non-PermissionRequest
-events leave stdout empty (state-tracking has no envelope contract).
+`hookSpecificOutput` envelope per SRD §6.3 — or nothing.
+Non-PermissionRequest events leave stdout empty (state-tracking has no
+envelope contract).
 
 ### `AGENT_DIRECTOR_RELAY_MODE` env var
 
@@ -575,17 +625,20 @@ survives any DB-side breakage.
 ### Fail-closed boundary
 
 `internal/hook/handler.go` runs a `failClosed` helper on every
-pre-relay failure path (instance-id missing, transition, UPSERT,
-session-id). The helper writes a deny envelope only when `relayActive`
+failure path before the relay branch (instance id missing or invalid,
+classify failure), and `cmd/agent-director`'s `runHook` writes the same
+deny when the config cannot be loaded or the store cannot be opened. The
+helper writes a deny envelope only when `relayActive`
 is true AND the payload's peeked event name is `PermissionRequest`
 (the b.45p gate). Failures where the event name is unknowable —
 stdin read failure, unparseable payload — exit silently instead,
 because a permission-shaped envelope from a non-PermissionRequest
 process would be routed by fd to the in-flight tool and race the
-legitimate PermissionRequest sibling. `runRelay` itself runs the polling
-loop and writes either the decision envelope or — on
-timeout/ctx-cancel/preemption/read-retry-exhaustion — a deny
-envelope. See `permissions.md` for the enumerated failure modes.
+legitimate PermissionRequest sibling. `runRelay` denies the same way
+when it cannot mint a token or its first write fails or is cut; once
+the request is recorded it writes a confirmed answer or nothing (see
+"The steps" above). See `permissions.md` for the enumerated failure
+modes.
 
 ### Per-request rows in `permission_requests`
 
@@ -596,11 +649,41 @@ concurrent PermissionRequest events for the same Spawn coexist and
 are decided independently — a decision targets exactly one row, and
 one poller. Rows are INSERT-only: nothing replaces an open row, and a
 polling loop that sees `sql.ErrNoRows` (possible via `ON DELETE
-CASCADE` when the spawn row is deleted) fails closed. Closed
-(decided) rows are evicted oldest-first when the table exceeds
-`relay.permission_request_cap`, except a spawn's newest request while
-that spawn has an open request (`decide` relies on it; see
-[permissions.md](permissions.md#deliver-or-refuse-contract)).
+CASCADE` when the spawn row is deleted) ends with no answer. Closed rows
+(those no longer awaiting an answer) are evicted oldest-first when the
+table exceeds `relay.permission_request_cap`, except a spawn's newest
+request while that spawn has a request that still awaits an answer
+(`decide` relies on it for a request recorded before this release; see
+[permissions.md](permissions.md#requests-recorded-before-this-release)).
+
+### A relay row left in `check_permission`
+
+While any of its requests still awaits an answer, a row stays in
+`check_permission`: the agent's moves to `working` are held (the hook is
+applied, writes no state, and clears `idle_since`). Once none does, the
+row stays there until the agent's next hook, which after a denied request
+is normally the turn's `Stop`. If that hook is lost:
+
+- the idle-prompt Notification moves the row to `waiting` (see "The
+  idle-prompt Notification" above);
+- a scheduled `find-missing` moves the row out of `check_permission` in
+  one guarded statement once none of its requests still awaits an answer
+  and none has a relay hook that may still run (one whose `confirm_by` has
+  not passed and that is not provably gone): to `waiting` when `idle_since`
+  is set, otherwise to `working`. A request `find-missing` closed when it
+  marked the row `missing` is not judged: the row is back in
+  `check_permission` only through a later hook (after a `resume`), and
+  that request's leftover hook cannot move the row, so a hook that cannot
+  be checked does not hold the row there until its `confirm_by`. The
+  statement applies only while the row
+  is still in `check_permission` with `relay_mode=on`, holds the snapshot
+  the sweep read and has no request awaiting an answer, so a hook or a new
+  request that lands first wins. It writes one `ad.find_missing.tick` with
+  `reconciliation_reason` `stale_check_permission`; the row is in neither
+  of `find-missing`'s result lists.
+
+A row with the relay off is in `check_permission` while Claude Code's own
+prompt waits, with no request on record, so neither move applies to it.
 
 ## References
 

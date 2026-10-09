@@ -116,8 +116,10 @@ func (c *gateMoveClock) Sleep(_ context.Context, d time.Duration) {
 	*c.now = c.now.Add(d)
 }
 
-// TestHookGateRelayTimeoutWriteAfterGateStopsHolding: a resume clears the pane
-// mid-poll; the gated timeout write then writes nothing and logs no event (A8).
+// TestHookGateRelayTimeoutWriteAfterGateStopsHolding: find-missing's mark and
+// a resume clear the pane mid-poll; the relay hook then writes nothing to the
+// row and logs no event (A8). The mark closed its request (deny,
+// find_missing), which the hook acks and returns (b.146 rule 3).
 func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 	const id = "gate-relay-timeout"
 	st, _ := seedAgentRow(t, id, store.StateWorking)
@@ -149,8 +151,8 @@ func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 		moved, moveErr = st.GetSpawn(id)
 	}}
 	hc := hookConfig(envWith(id), agent)
-	hc.Cfg = config.Relay{TimeoutSeconds: 1}
-	hc.Clock = clock
+	hc.RelayTimeout = 10 * time.Second
+	hc.Clock, hc.Now = clock, func() time.Time { return *clock.now }
 
 	var stdout strings.Builder
 	if err := hook.Handle(context.Background(), strings.NewReader(string(readPayloadFixture(t, "permission-request.json"))),
@@ -161,19 +163,19 @@ func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 		t.Fatalf("row move during the poll: ran=%v err=%v", clock.moved, moveErr)
 	}
 
-	// SR-22.9, decision A8: the timeout write's gate no longer holds; nothing written, no second event.
+	// SR-22.9, decision A8: the hook writes nothing more to the row and no second event.
 	assertRowUnchanged(t, st, id, moved)
 	if moved.State != store.StatePending {
 		t.Errorf("State after the move = %q; want pending", moved.State)
 	}
 	if n := len(hookIgnoredAfter(t, before, id)); n != 0 {
-		t.Errorf("ad.hook.ignored lines = %d; want 0 (the INSERT applied; the timeout write logs only)", n)
+		t.Errorf("ad.hook.ignored lines = %d; want 0 (the first write applied)", n)
 	}
 	if n := len(linesAfter(t, before, "ad.hook.fired", id)); n != 1 {
 		t.Errorf("ad.hook.fired lines = %d; want 1", n)
 	}
-	if !strings.Contains(stdout.String(), `"deny"`) {
-		t.Errorf("stdout = %q; want the timeout's deny envelope", stdout.String())
+	if want := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", store.DecisionReasonFindMissing) + "\n"; stdout.String() != want {
+		t.Errorf("stdout = %q; want %q, the mark's deny, acked", stdout.String(), want)
 	}
 }
 

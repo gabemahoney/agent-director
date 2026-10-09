@@ -51,6 +51,10 @@ type SpawnColumns struct {
 	LaunchOwnerPID       any
 	LaunchOwnerStarttime any
 	LaunchOwnerPIDNS     any
+
+	// The schema-v7 spawns column (b.146 problem 3): when the main agent's
+	// idle-prompt Notification last landed, as stored text.
+	IdleSince any
 }
 
 // ReadSpawnColumns reads every column of instanceID's spawns row from the
@@ -74,7 +78,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 	                  launch_token, tmux_socket, tmux_server_pid,
 	                  tmux_server_started, tmux_server_starttime, pane_id,
 	                  pane_pid, pane_starttime, launch_owner_pid,
-	                  launch_owner_starttime, launch_owner_pidns
+	                  launch_owner_starttime, launch_owner_pidns, idle_since
 	             FROM spawns
 	            WHERE claude_instance_id = ?`
 	var c SpawnColumns
@@ -87,7 +91,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 		&c.LaunchToken, &c.TmuxSocket, &c.TmuxServerPID,
 		&c.TmuxServerStarted, &c.TmuxServerStarttime, &c.PaneID,
 		&c.PanePID, &c.PaneStarttime, &c.LaunchOwnerPID,
-		&c.LaunchOwnerStarttime, &c.LaunchOwnerPIDNS,
+		&c.LaunchOwnerStarttime, &c.LaunchOwnerPIDNS, &c.IdleSince,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SpawnColumns{}, fmt.Errorf("ReadSpawnColumns: %w: %s", store.ErrSpawnNotFound, instanceID)

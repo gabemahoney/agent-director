@@ -257,6 +257,20 @@ func WithLaunchOwner(o store.LaunchOwner) SpawnOption {
 	}
 }
 
+// WithIdleSince stores ts as the row's schema-v7 idle_since (b.146 problem
+// 3): the time the main agent's idle-prompt Notification last landed, which
+// find-missing's check_permission repair reads. Without it the row has none
+// (NULL).
+func WithIdleSince(ts string) SpawnOption {
+	return func(o *spawnOpts) { o.set("idle_since", ts) }
+}
+
+// WithRelayMode stores mode as the row's relay_mode in place of SeedSpawn's
+// relayMode argument, for seeders that take no relay mode of their own.
+func WithRelayMode(mode string) SpawnOption {
+	return func(o *spawnOpts) { o.set("relay_mode", mode) }
+}
+
 // WithTmuxSocket stores socket as the row's recorded tmux socket in place of
 // TestSocket, keeping every other launch-identity default (token, pane). A
 // launch on the row (resume) needs the socket's directory to exist.

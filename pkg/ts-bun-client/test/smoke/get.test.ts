@@ -4,7 +4,8 @@
  * Happy path: a working row's fields, with no launch_started_at; a pending
  * row's launch_started_at, RFC3339 UTC at its started_at instant (SR-22.2).
  * tmux_socket (AC-LKP-22): a row seeded with --socket shows that exact path; a
- * row from before the release (--no-launch-identity) has no key.
+ * row from before the release (--no-launch-identity) has no key. A
+ * check_permission row lists its open requests with their delivery facts.
  * Error path: unknown id → ErrSpawnNotFound.
  */
 
@@ -57,6 +58,21 @@ test("get: row from before the release has no tmux_socket key (AC-LKP-22)", asyn
     const result = await seedAndGet(homeDir, "smoke-get-no-socket-id", { state: "ended", "no-launch-identity": true });
     expect(result.claude_instance_id).toBe("smoke-get-no-socket-id");
     expect(Object.keys(result)).not.toContain("tmux_socket");
+  });
+}, 10_000);
+
+test("get: a check_permission row carries its open requests with their delivery facts (b.146 rule 15)", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    runHelper("seed-spawn", { store, state: "check_permission", id: "smoke-get-cp-id", "relay-mode": "on", "create-store": true });
+    const token = runHelper("seed-permission-request", { store, "spawn-id": "smoke-get-cp-id", tool: "Bash" })["request_token"];
+    using client = await openClient(store);
+    const result = await client.get({ claude_instance_id: "smoke-get-cp-id" });
+    expect(result.permission_requests).toHaveLength(1);
+    expect(result.permission_requests[0]).toMatchObject({ request_token: token, tool_name: "Bash", decision: null,
+      decision_reason: null, delivery: "not_confirmed", hook_alive: null, hook_gone_at: null, attempted_decision: null,
+      attempted_at: null, tool_use_id: null });
+    expect(Number.isNaN(Date.parse(result.permission_requests[0]!.confirm_by))).toBe(false);
   });
 }, 10_000);
 

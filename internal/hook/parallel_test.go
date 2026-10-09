@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
@@ -24,16 +23,17 @@ type relayPair struct {
 	doneA, doneB   chan struct{}
 }
 
-// startRelayPair runs A and B from instanceID's own agent (SR-22.9) with relay
-// timeouts timeoutA and timeoutB seconds, and waits for both rows, open or decided.
-func startRelayPair(t *testing.T, st *store.Store, instanceID string, timeoutA, timeoutB int) *relayPair {
+// startRelayPair runs A and B from instanceID's own agent (SR-22.9) on the
+// real clock with relay timeouts (--timeout) timeoutA and timeoutB, and waits
+// for both rows, open or decided.
+func startRelayPair(t *testing.T, st *store.Store, instanceID string, timeoutA, timeoutB time.Duration) *relayPair {
 	t.Helper()
 	p := &relayPair{doneA: make(chan struct{}), doneB: make(chan struct{})}
 	agent := agentParent(t, st, instanceID)
-	run := func(tool string, timeout int, out *bytes.Buffer, done chan struct{}) {
+	run := func(tool string, timeout time.Duration, out *bytes.Buffer, done chan struct{}) {
 		defer close(done)
 		hc := hookConfig(envWith(instanceID), agent)
-		hc.Cfg, hc.Clock = config.Relay{TimeoutSeconds: timeout}, hook.DefaultPollClock()
+		hc.RelayTimeout, hc.Now, hc.Clock = timeout, time.Now, hook.DefaultPollClock()
 		_ = hook.Handle(context.Background(), strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"`+tool+`","tool_input":{}}`),
 			out, st, hc, nil)
 	}
@@ -42,8 +42,7 @@ func startRelayPair(t *testing.T, st *store.Store, instanceID string, timeoutA, 
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && (p.tokenA == "" || p.tokenB == "") {
-		// Decided rows too: a short window counts from the whole-second created_at,
-		// so its timeout may decide the row before it is ever seen open (b.z6g).
+		// Decided rows too: a short timeout may decide a row before it is ever seen open.
 		rows, _ := st.PermissionRequestsForSpawn(instanceID)
 		for _, r := range rows { // by tool: concurrent inserts may tie on created_at
 			switch r.ToolName {
@@ -86,7 +85,7 @@ func decided(t *testing.T, st *store.Store, id, token string) (string, string) {
 func TestParallelHookOrdering(t *testing.T) {
 	const id = "parallel-hook-ord"
 	st, _ := seedAgentRow(t, id, store.StateWorking)
-	p := startRelayPair(t, st, id, 30, 30)
+	p := startRelayPair(t, st, id, 30*time.Second, 30*time.Second)
 
 	if state, err := st.GetSpawnState(id); err != nil || state != store.StateCheckPermission {
 		t.Errorf("state = %q (%v) before any row is decided; want check_permission", state, err)
@@ -110,14 +109,16 @@ func TestParallelHookOrdering(t *testing.T) {
 	}
 }
 
-// TestPerRowTimeoutIsolation: A's 1s relay window, counted from its created_at,
-// writes deny/timeout to A's row only; B stays open until its own allow, which carries no reason.
+// TestPerRowTimeoutIsolation: A's 4 s relay timeout ends its poll a second
+// after its start (its kill less the reserve and the deny's lead) and writes
+// deny/timeout to A's row only; B stays open until its own allow, which carries
+// no reason.
 func TestPerRowTimeoutIsolation(t *testing.T) {
 	const id = "per-row-timeout-iso"
 	st, _ := seedAgentRow(t, id, store.StateWorking)
-	p := startRelayPair(t, st, id, 1, 60)
+	p := startRelayPair(t, st, id, 4*time.Second, 60*time.Second)
 
-	waitDone(t, p.doneA, "hook A (1s timeout)")
+	waitDone(t, p.doneA, "hook A (4s timeout)")
 	if d, r := decided(t, st, id, p.tokenA); d != "deny" || r != store.DecisionReasonTimeout {
 		t.Errorf("row A = %q/%q; want deny/%s", d, r, store.DecisionReasonTimeout)
 	}

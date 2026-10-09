@@ -17,32 +17,28 @@ import (
 // the most aggressive setting.
 const pollFloor = 50 * time.Millisecond
 
-// nowFunc is the wall-clock seam Poll uses for its deadline math.
-// Held as a package var so tests can inject a virtual clock that
-// advances only when the fake sleeper is invoked — see
-// internal/hook/export_test.go. Defaults to time.Now in production.
-var nowFunc = time.Now
-
 // pollMaxReadRetries is the upper bound on consecutive SQL read
 // failures the polling loop tolerates before giving up. Each retry
 // pays the floor sleep so a flapping DB doesn't burn CPU. Past the
-// budget the loop fails closed (deny envelope).
+// budget the loop gives up, and the relay hook exits with no answer
+// (b.146 rule 3).
 const pollMaxReadRetries = 5
 
 // PollResult captures the outcome of one polling-loop run. Decision
-// is the empty string when the loop exited without a definitive
-// answer (timeout / ctx / preemption / exhaustion); the handler
-// translates that into a deny envelope at the boundary.
+// is the empty string when the loop exited without a decision read:
+// TimedOut is then true when it reached its deadline (the relay hook
+// makes its timeout deny), and false when it gave up otherwise
+// (ctx cancelled, the request gone, or the read-retry budget spent;
+// the relay hook then exits with no answer).
 //
-// CreatedAt is populated from the decided row's created_at column in
-// the happy-path (Decision != ""). It is the zero time.Time on all
-// timeout/error paths — runRelay does one additional GetPermissionRequest
-// to recover it when needed.
+// CreatedAt is the request's created_at from the last read that returned
+// the row; the zero time.Time when no read did.
 type PollResult struct {
 	Decision  string
 	Reason    string
-	Why       string    // human-readable reason for diagnostics; not echoed to Claude.
-	CreatedAt time.Time // zero on timeout/error paths; non-zero on decided path.
+	Why       string // human-readable reason for diagnostics; not echoed to Claude.
+	TimedOut  bool
+	CreatedAt time.Time
 }
 
 // PollStore is the narrow surface the loop reads. *store.Store
@@ -77,89 +73,67 @@ func (realPollClock) Sleep(ctx context.Context, d time.Duration) {
 // own.
 func DefaultPollClock() PollClock { return realPollClock{} }
 
-// Poll runs the SRD §6.2 relay polling loop. requestToken narrows the read to
-// the specific permission_requests row minted for this relay invocation (the
-// UUIDv4 token minted by mintRequestToken in runRelay). The pair
-// (instanceID, requestToken) uniquely identifies the row per SRD §6.2.
+// Poll runs the SRD §6.2 relay polling loop until deadline on the clock now.
+// requestToken narrows the read to the specific permission_requests row
+// minted for this relay invocation (the UUIDv4 token minted by
+// mintRequestToken in runRelay). The pair (instanceID, requestToken) uniquely
+// identifies the row per SRD §6.2.
 //
 // Behavior per iteration:
 //
 //  1. Read the permission_requests row by (instanceID, requestToken).
-//     - sql.ErrNoRows → another hook event preempted; fail-closed deny.
-//     - any other error → bounded retry (pollMaxReadRetries), then fail-closed deny.
+//     - sql.ErrNoRows → the row was deleted (a cascade from a spawn delete);
+//     give up.
+//     - any other error → bounded retry (pollMaxReadRetries), then give up.
 //     - decision still NULL → sleep and loop.
 //     - decision populated → return it.
-//  2. The per-iteration sleep is `max(pollFloor, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`.
-//     ctx.Done preempts the sleep (the realPollClock uses a Timer +
-//     select).
-//  3. The overall loop is capped by cfg.TimeoutSeconds, counted from the
-//     row's stored created_at (below). On expiry the loop returns a
-//     fail-closed deny without making one more poll (the timeout boundary
-//     is the answer the operator agreed to).
+//  2. The per-iteration sleep is `max(pollFloor, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`,
+//     never past deadline. ctx.Done preempts the sleep (the realPollClock
+//     uses a Timer + select).
+//  3. At deadline the loop returns TimedOut without making one more poll.
 //
-// The deadline is the window counted from the row's stored created_at, as
-// pkg/api counts every relay boundary of the request: decide's
-// deliverability cutoff, the send_keys relay guard's release and the end
-// of decide's wait, which both come 2 s after the window ends
-// (relayHookSettledAt, pkg/api/deliverability.go). Those boundaries
-// leave the timeout deny a fixed slack after created_at + window to land
-// in. created_at keeps whole seconds and is stored before Poll starts, so a
-// deadline counted from Poll's own start would spend up to a second of that
-// slack, plus however long the INSERT's commit and the trail emit after it
-// took (b.z6g). Until a read returns the row, and should created_at ever be
-// later than Poll's start (a clock stepped back), the window counted from
-// Poll's start bounds the deadline: it is the earlier of the two.
+// runRelay passes the relay hook's own deadline, counted from its start and
+// the timeout spawn wrote for it (b.146 rule 4): its kill instant less the
+// reserve its ack keeps less the lead its timeout deny may wait for the
+// store's write lock.
 //
 // The polling loop NEVER writes to permission_requests — SRD §6.2
-// invariant. Only decide() owns the decision columns.
-func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, instanceID, requestToken string, rng *rand.Rand) PollResult {
-	// EffectiveTimeoutSeconds is the single source of truth for the relay
-	// window: it applies the "non-positive falls back to the 86400 default"
-	// rule (see b.p48) so the poll deadline and the per-hook `timeout`
-	// emitted into synthesized settings can never disagree (SR-1.3). A
-	// loaded config's window is at most config.MaxRelayTimeoutSeconds
-	// (b.8q2), so neither the conversion nor the deadline overflows.
-	timeout := time.Duration(cfg.EffectiveTimeoutSeconds()) * time.Second
-	deadline := nowFunc().Add(timeout)
-
+// invariant. decide() owns the verdict; the relay hook's ack and timeout
+// deny are runRelay's.
+func Poll(ctx context.Context, s PollStore, clock PollClock, now func() time.Time, deadline time.Time, cfg config.Relay, instanceID, requestToken string, rng *rand.Rand) PollResult {
 	readFails := 0
+	var createdAt time.Time
 	for {
 		// Honor ctx before each iteration so a fast cancel doesn't
 		// pay a full sleep.
 		if err := ctx.Err(); err != nil {
-			return PollResult{Why: "ctx cancelled: " + err.Error()}
+			return PollResult{Why: "ctx cancelled: " + err.Error(), CreatedAt: createdAt}
 		}
 		// `!Before` (i.e. now >= deadline) handles the virtual-clock
 		// edge case where Sleep clamps sleep=remaining and leaves
-		// nowFunc() == deadline exactly; `After` alone would spin in
+		// now() == deadline exactly; `After` alone would spin in
 		// that case (real wall-clock time would have stepped past in
 		// production, masking the issue).
-		if !nowFunc().Before(deadline) {
-			return PollResult{Why: "polling timeout exceeded"}
+		if !now().Before(deadline) {
+			return PollResult{Why: "polling timeout exceeded", TimedOut: true, CreatedAt: createdAt}
 		}
 
 		row, err := s.GetPermissionRequest(instanceID, requestToken)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// Row is gone — the (instanceID, requestToken) pair no
-			// longer exists. This should be rare in v2 (rows are
-			// INSERT-only and only removed by ON DELETE CASCADE), but
-			// a cascade from a spawn delete is possible. Fail closed.
-			return PollResult{Why: "row preempted (deleted) during poll"}
+			// longer exists. Rows are removed only by ON DELETE CASCADE
+			// from a spawn delete.
+			return PollResult{Why: "row preempted (deleted) during poll", CreatedAt: createdAt}
 		case err != nil:
 			readFails++
 			if readFails > pollMaxReadRetries {
-				return PollResult{Why: "exceeded read-retry budget: " + err.Error()}
+				return PollResult{Why: "exceeded read-retry budget: " + err.Error(), CreatedAt: createdAt}
 			}
 			clock.Sleep(ctx, pollFloor)
 			continue
 		}
-
-		// Count the window from the stored created_at (see above). It never
-		// changes, so every read after the first leaves the deadline as is.
-		if fromCreatedAt := row.CreatedAt.Add(timeout); fromCreatedAt.Before(deadline) {
-			deadline = fromCreatedAt
-		}
+		createdAt = row.CreatedAt
 
 		if row.Decision != "" {
 			return PollResult{
@@ -180,7 +154,7 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 			sleep = pollFloor
 		}
 		// Never sleep past the deadline.
-		if remaining := deadline.Sub(nowFunc()); remaining < sleep {
+		if remaining := deadline.Sub(now()); remaining < sleep {
 			sleep = remaining
 		}
 		if sleep > 0 {

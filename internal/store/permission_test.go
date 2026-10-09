@@ -563,7 +563,7 @@ func TestDecideIfDeliverableRefusesFinishedSpawn(t *testing.T) {
 			}
 			mark := TrailMark(t)
 
-			ok, err := s.DecidePermissionRequestIfDeliverable(id, tokenA, "allow", "", WriterProcessDecide, time.Now().Add(-time.Hour))
+			ok, err := s.DecideRelayRequest(id, tokenA, "allow", "", WriterProcessDecide, time.Now().Add(-time.Hour), DefaultLockWait)
 
 			if live := tc.finish == nil; err != nil || ok != live {
 				t.Fatalf("DecidePermissionRequestIfDeliverable = %v, %v; want %v, nil", ok, err, live)

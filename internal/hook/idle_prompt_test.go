@@ -3,16 +3,21 @@ package hook_test
 // idle_prompt_test.go — b.svb through hook.Handle on a real store: the main
 // agent's idle-prompt Notification returns a row left working (a background
 // fork's PreToolUse after the turn's Stop) to waiting; every other
-// Notification, and an idle prompt carrying agent_id, is a soft refresh. The
-// store-level columns, the gate and every prior state are in
-// internal/store/hook_gate_test.go (TestHookGateWaitingIfWorking).
+// Notification, and an idle prompt carrying agent_id, is a soft refresh; after
+// a delivered timeout deny it also leaves check_permission (b.146 problem 3).
+// The store-level columns, the gate and every prior state are in
+// internal/store/hook_gate_test.go (TestHookGateWaitingIfWorking) and
+// internal/store/relay_writes_test.go.
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // notificationPayload is notification.json (an idle prompt) with
@@ -117,6 +122,45 @@ func TestNotificationOnWorkingRow(t *testing.T) {
 			fireGate(t, st, id, agentParent(t, st, id), nil, notificationPayload(t, tc.ntype, tc.agentID))
 
 			assertNotificationApplied(t, st, id, before, prior, store.StateWorking)
+		})
+	}
+}
+
+// TestIdlePromptAfterDeliveredTimeoutDeny replays b.146 problem 3: a relayed
+// request's timeout deny is delivered (the row stays check_permission), the
+// turn's Stop is lost, and the main agent's idle-prompt Notification moves the
+// relay-on row to waiting and records idle_since; a subagent's idle prompt is a
+// soft refresh that records none.
+func TestIdlePromptAfterDeliveredTimeoutDeny(t *testing.T) {
+	for i, tc := range []struct {
+		name, agentID, want string
+		idle                bool
+	}{
+		{"main agent", "", store.StateWaiting, true},
+		{"subagent", "a5b92f0e7d3c6184", store.StateCheckPermission, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "p3-idle-after-deny-" + string(rune('a'+i))
+			st, dbPath := storefix.OpenTempStore(t)
+			if _, err := apitest.SeedSpawn(dbPath, id, store.StateWorking, "", "on", "", false); err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+			agent := agentParent(t, st, id)
+			if out, _ := fireRelay(t, st, relayHC(id, agent, 10*time.Second), relayPayload); !strings.Contains(out, `"deny"`) {
+				t.Fatalf("relay stdout = %q; want its timeout deny", out)
+			}
+			prior := mustGetSpawn(t, st, id)
+			if prior.State != store.StateCheckPermission {
+				t.Fatalf("state after the delivered deny = %q; want check_permission", prior.State)
+			}
+			before := len(readTrailLines(t, trailFile()))
+
+			fireGate(t, st, id, agent, nil, notificationPayload(t, "idle_prompt", tc.agentID))
+
+			assertNotificationApplied(t, st, id, before, prior, tc.want)
+			if got := mustGetSpawn(t, st, id).IdleSince != ""; got != tc.idle {
+				t.Errorf("idle_since set = %v; want %v", got, tc.idle)
+			}
 		})
 	}
 }

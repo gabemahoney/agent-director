@@ -210,6 +210,11 @@
     "description": ""
   },
   {
+    "name": "ErrStoreBusy",
+    "package": "store",
+    "description": ""
+  },
+  {
     "name": "ErrConfigMalformed",
     "package": "clisetup",
     "description": ""

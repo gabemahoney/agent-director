@@ -13,8 +13,8 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -179,17 +179,15 @@ func TestSubagentOrdinaryHookApplies(t *testing.T) {
 }
 
 // TestSubagentRelayedPermissionRequestRelays: a relayed PermissionRequest with
-// agent_id from the row's agent still records its request and answers.
+// agent_id from the row's agent still records its request, with that agent_id
+// (b.146 rule 2), and answers.
 func TestSubagentRelayedPermissionRequestRelays(t *testing.T) {
 	const id = "sub-relay"
 	st, _ := seedAgentRow(t, id, store.StateWorking)
 	payload, _, _ := subPayload(t, "permission-request.json", map[string]any{"agent_id": "a1d2e3f4a5b6c7d8"})
 	before := len(readTrailLines(t, trailFile()))
-	now, restore := setupVirtualClock(t)
-	defer restore()
 	hc := hookConfig(envWith(id), agentParent(t, st, id))
-	hc.Cfg = config.Relay{TimeoutSeconds: 1}
-	hc.Clock = &advancingClock{now: now}
+	hc.RelayTimeout = 10 * time.Second
 
 	var stdout bytes.Buffer
 	if err := hook.Handle(context.Background(), bytes.NewReader(payload), &stdout, st, hc, newSilentLogger()); err != nil {
@@ -197,8 +195,8 @@ func TestSubagentRelayedPermissionRequestRelays(t *testing.T) {
 	}
 
 	rows, err := st.PermissionRequestsForSpawn(id)
-	if err != nil || len(rows) != 1 {
-		t.Errorf("permission requests = %d (err %v); want 1 recorded", len(rows), err)
+	if err != nil || len(rows) != 1 || rows[0].AgentID != "a1d2e3f4a5b6c7d8" {
+		t.Errorf("permission requests = %+v (err %v); want 1 recorded with agent_id a1d2e3f4a5b6c7d8", rows, err)
 	}
 	assertDenyEnvelope(t, &stdout) // the relay's timeout answer
 	assertNoIgnored(t, before, id)

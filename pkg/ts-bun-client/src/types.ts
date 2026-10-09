@@ -105,8 +105,51 @@ export interface VerbSummary {
   description: string;
 }
 
-/** Mirrors pkg/api/get.go::PermissionRequestInfo — embedded in GetResult when state=check_permission. */
-export interface PermissionRequestInfo {
+/**
+ * A permission request's delivery state (b.146 rule 15):
+ * - `"delivered"`: the request's relay hook acked a verdict before writing it to Claude Code.
+ * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
+ * - `"fallen_back"`: no ack, no pane answer recorded through agent-director, and the relay
+ *   hook is gone (or cannot be checked and `confirm_by` has passed): no answer from the relay
+ *   reached the agent, and only a pane answer can close the request.
+ */
+export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
+
+/**
+ * Mirrors pkg/api/relay_delivery.go::RequestDelivery — a permission request's delivery facts
+ * (b.146 rule 15), on every `get` / `list` permission request, on `getPermission` and on
+ * `decide`'s result. Derived on every read. A recorded `decision` is not the outcome:
+ * `delivery` is.
+ */
+export interface RequestDelivery {
+  /** Delivery state; see {@link Delivery}. */
+  delivery: Delivery;
+  /**
+   * RFC3339 time by which `not_confirmed` ends: the relay hook's kill instant plus 2 s. For a
+   * request recorded before this release: `requested_at` plus the relay window plus 2 s.
+   */
+  confirm_by: string;
+  /**
+   * Whether the relay hook process runs: true, false, or null when it cannot be checked
+   * (another or unreadable pid namespace, unreadable /proc, or a request recorded before this
+   * release).
+   */
+  hook_alive: boolean | null;
+  /** When a reader first found the request fallen back; null until then. */
+  hook_gone_at: string | null;
+  /** The verdict a decide refused as fallen back tried to record; null when none. Never acted on. */
+  attempted_decision: "allow" | "deny" | null;
+  /** When that refused decide ran; null when none. */
+  attempted_at: string | null;
+  /** The request's tool_use_id from Claude Code's hook input; null when none was given. */
+  tool_use_id: string | null;
+}
+
+/**
+ * Mirrors pkg/api/get.go::PermissionRequestInfo — one open permission request (still awaiting
+ * an answer) on a `get` or `list` row in state check_permission, with its delivery facts.
+ */
+export interface PermissionRequestInfo extends RequestDelivery {
   /** Autoincrement primary key of the permission_requests row. */
   request_id: number;
   /** UUIDv4 token minted by runRelay for this request. Pass to the decide verb to target a specific row. */
@@ -117,6 +160,10 @@ export interface PermissionRequestInfo {
   tool_input: string;
   /** RFC3339 timestamp when the permission request row was created. */
   requested_at: string;
+  /** The recorded verdict, not the outcome (read `delivery`); null while none is recorded. */
+  decision: "allow" | "deny" | null;
+  /** The recorded verdict's decision_reason; null when none is recorded. */
+  decision_reason: string | null;
 }
 
 /** Mirrors pkg/api/list.go::ListRow — one Spawn row returned by the list verb. */
@@ -176,6 +223,11 @@ export interface ListRow {
    * clears it. `unreported` never replaces `provenance_conflict`.
    */
   liveness_note?: string | null;
+  /**
+   * The row's open permission requests (those still awaiting an answer), each with its
+   * delivery facts; populated only when state is check_permission, `[]` otherwise.
+   */
+  permission_requests: PermissionRequestInfo[];
 }
 
 // ---------------------------------------------------------------------------
@@ -333,8 +385,13 @@ export interface GetResult {
    * clears it. `unreported` never replaces `provenance_conflict`.
    */
   liveness_note?: string | null;
-  /** Open permission request; present only when state=check_permission with an undecided row. */
-  permission_request?: PermissionRequestInfo | null;
+  /**
+   * The row's open permission requests (those still awaiting an answer: not acked by their relay
+   * hook and not answered at the pane, decided or not), each with its delivery facts; populated
+   * only when state is check_permission, `[]` otherwise. A row can read waiting while a request
+   * is still open: follow a tracked request with `getPermission`.
+   */
+  permission_requests: PermissionRequestInfo[];
 }
 
 /** Mirrors pkg/api.SendKeysParams (json tags). */
@@ -404,11 +461,25 @@ export interface DecideParams {
   decision: "allow" | "deny";
   /** Optional free-text message surfaced to Claude on deny. */
   reason?: string;
+  /**
+   * Optional bound on the whole call, in milliseconds from its start (no default). Reached
+   * before the verdict is recorded: `ErrStoreBusy`, nothing recorded, so a retry is safe. Once
+   * the verdict is recorded the call never rejects with `ErrStoreBusy`: the wait for the relay
+   * hook's ack ends at the bound with `not_confirmed`. Pass at most your deadline minus 1 s.
+   * Negative: `ErrInvalidFlags`.
+   */
+  max_wait_ms?: number;
 }
 
-/** Mirrors pkg/api/decide.go::DecideResult (empty; reserved for future fields). */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface DecideResult {}
+/**
+ * Mirrors pkg/api/decide.go::DecideResult — the request's delivery facts once the verdict is
+ * recorded, read after decide's wait of at most 1 s for the relay hook's ack. `delivery` is
+ * `"delivered"` or `"not_confirmed"` (poll `getPermission`, at the latest at `confirm_by`); a
+ * request whose relay hook fell back rejects with `ErrRelayFallenBack` instead.
+ */
+export interface DecideResult extends RequestDelivery {
+  delivery: "delivered" | "not_confirmed";
+}
 
 /** Mirrors pkg/api.GetPermissionParams (json tags). */
 export interface GetPermissionParams {
@@ -416,8 +487,11 @@ export interface GetPermissionParams {
   request_token: string;
 }
 
-/** Mirrors pkg/api/get_permission.go::GetPermissionResult */
-export interface GetPermissionResult {
+/**
+ * Mirrors pkg/api/get_permission.go::GetPermissionResult, with the request's delivery facts.
+ * A recorded `decision` is not the outcome: `delivery` is.
+ */
+export interface GetPermissionResult extends RequestDelivery {
   /** UUIDv4 token the row is keyed under (echoed back). */
   request_token: string;
   /** Autoincrement primary key of the permission_requests row. */

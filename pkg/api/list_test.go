@@ -50,7 +50,7 @@ func TestListFilters(t *testing.T) {
 	s, _ := apitest.SeedListFixture(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := api.List(s, tc.p)
+			res, err := api.List(s, api.RelayView{}, tc.p)
 			if err != nil {
 				t.Fatalf("List: %v", err)
 			}
@@ -68,14 +68,15 @@ func TestListFilters(t *testing.T) {
 		})
 	}
 	for _, label := range []string{"foo", "=value"} {
-		if _, err := api.List(s, api.ListParams{Labels: []string{label}}); !errors.Is(err, api.ErrListInvalidLabel) {
+		if _, err := api.List(s, api.RelayView{}, api.ListParams{Labels: []string{label}}); !errors.Is(err, api.ErrListInvalidLabel) {
 			t.Errorf("label %q: err = %v; want ErrListInvalidLabel", label, err)
 		}
 	}
 }
 
 // TestListRowKeySetUnchanged pins the list row's exact JSON key set with every
-// optional field present: jsonl_path and extra_env, seeded on the row, are dropped.
+// optional field present: jsonl_path and extra_env, seeded on the row, are
+// dropped; permission_requests (b.146 rule 15) is always there.
 func TestListRowKeySetUnchanged(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -91,7 +92,7 @@ func TestListRowKeySetUnchanged(t *testing.T) {
 	if err := apitest.SeedParentChild(dbPath, "row-parent", "row-max"); err != nil {
 		t.Fatalf("SeedParentChild: %v", err)
 	}
-	res, err := api.List(openDB(t, dbPath), api.ListParams{TmuxSessionName: "ts-row-max"})
+	res, err := api.List(openDB(t, dbPath), api.RelayView{}, api.ListParams{TmuxSessionName: "ts-row-max"})
 	if err != nil || len(res.Spawns) != 1 {
 		t.Fatalf("List = %+v, %v; want row-max alone", res.Spawns, err)
 	}
@@ -105,9 +106,12 @@ func TestListRowKeySetUnchanged(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"claude_instance_id", "cwd", "ended_at", "labels", "last_seen_at", "liveness_note",
-		"liveness_unverified_since", "parent_id", "relay_mode", "started_at", "state", "tmux_session_name"}
+		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v (no jsonl_path, no extra_env, nothing new)", got, want)
+	}
+	if reqs, ok := m["permission_requests"].([]any); !ok || len(reqs) != 0 {
+		t.Errorf("permission_requests = %v; want [] on a row not in check_permission", m["permission_requests"])
 	}
 }
 

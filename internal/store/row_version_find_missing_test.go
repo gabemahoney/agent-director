@@ -2,20 +2,22 @@ package store_test
 
 // SR-5.2 versioning cases for find-missing's guarded writes (SR-11.3,
 // SR-11.6), its unreported note of a live pending row (b.kdf, b.146 rule 10),
-// its adoption write (SR-3.6) and a launch's release of its hold (b.kdf, rule
-// 11), appended to row_version_test.go's applied and no-op tables.
+// its adoption write (SR-3.6), a launch's release of its hold (b.kdf, rule
+// 11) and its repair of a stale check_permission row (b.146 rule 9, problem
+// 3), appended to row_version_test.go's applied and no-op tables.
 
 import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // rvGuarded is one of find-missing's guarded writes; prior is the mark's
-// returned prior state and "" for the others.
+// returned prior state, the repair's written state, and "" for the others.
 type rvGuarded struct {
 	name string
 	run  func(s *store.Store, id string, examined store.RowSnapshot) (prior string, res store.CondResult, err error)
@@ -40,7 +42,18 @@ var (
 		res, err := s.NoteUnreportedIfSameLife(id, e)
 		return "", res, err
 	}}
+	rvRepair = rvGuarded{"RepairCheckPermissionIfSameLife", func(s *store.Store, id string, e store.RowSnapshot) (string, store.CondResult, error) {
+		return s.RepairCheckPermissionIfSameLife(id, e)
+	}}
 )
+
+// idleKept fails unless idle_since is unchanged.
+func idleKept(t *testing.T, before, after apitest.SpawnColumns) {
+	t.Helper()
+	if after.IdleSince != before.IdleSince {
+		t.Errorf("idle_since %#v -> %#v; want kept", before.IdleSince, after.IdleSince)
+	}
+}
 
 // unreportedNote seeds note unreported with a first noted time (b.kdf).
 var unreportedNote = []apitest.SpawnOption{
@@ -220,6 +233,14 @@ func rvFindMissingWrites() []rowVersionCase {
 			write: applied(rvUnreported, ""), check: notedUnreported},
 		{name: "ReleaseLaunchOwner/applied, pending row with an owner", state: "pending", opts: withOwner,
 			wantState: "pending", write: rvRelease("", goodToken, store.CondApplied), check: ownerCleared},
+		// b.146 rule 9, problem 3: the repair of a stale check_permission row
+		// picks waiting when idle_since is set, else working, and keeps it.
+		{name: "RepairCheckPermissionIfSameLife/applied, relay-on row with no request awaiting: working", state: "check_permission",
+			opts: []apitest.SpawnOption{rvRelayOn}, clears: true, wantState: "working",
+			write: applied(rvRepair, "working"), check: idleKept},
+		{name: "RepairCheckPermissionIfSameLife/applied, relay-on row with idle_since set: waiting", state: "check_permission",
+			opts: []apitest.SpawnOption{rvRelayOn, apitest.WithIdleSince(rvIdleSince)}, clears: true, wantState: "waiting",
+			write: applied(rvRepair, "waiting"), check: idleKept},
 	}
 }
 
@@ -258,6 +279,25 @@ func rvFindMissingNoOps() []rowVersionCase {
 			write: rvRelease("", goodToken, store.CondChanged)},
 		rowVersionCase{name: "ReleaseLaunchOwner/absent row", state: "pending", opts: withOwner,
 			write: rvRelease("rv-absent", goodToken, store.CondAbsent)},
+		rowVersionCase{name: "RepairCheckPermissionIfSameLife/stale snapshot, hook wrote first", state: "check_permission",
+			opts: []apitest.SpawnOption{rvRelayOn}, setup: rvSoftRefresh,
+			write: rvRepair.write("", func(s *store.RowSnapshot) { s.RowVersion-- }, store.CondChanged, "")},
+		rowVersionCase{name: "RepairCheckPermissionIfSameLife/a request still awaiting an answer", state: "check_permission",
+			opts: []apitest.SpawnOption{rvRelayOn}, setup: func(t *testing.T, f *v5Store, id string) { seedRequest(t, f, id) },
+			write: rvRepair.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "RepairCheckPermissionIfSameLife/a relay request's verdict not yet acked", state: "working",
+			opts: []apitest.SpawnOption{rvRelayOn}, setup: func(t *testing.T, f *v5Store, id string) {
+				rvInsertRelay(t, f, id)
+				ok, err := f.s.DecideRelayRequest(id, rvRelayToken, "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait)
+				wantBool(t, "DecideRelayRequest", ok, err, true)
+			},
+			write: rvRepair.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "RepairCheckPermissionIfSameLife/relay off", state: "check_permission",
+			write: rvRepair.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "RepairCheckPermissionIfSameLife/row not in check_permission", state: "working",
+			opts: []apitest.SpawnOption{rvRelayOn}, write: rvRepair.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "RepairCheckPermissionIfSameLife/absent row", state: "check_permission",
+			opts: []apitest.SpawnOption{rvRelayOn}, write: rvRepair.write("rv-absent", nil, store.CondAbsent, "")},
 	)
 	for _, g := range []rvGuarded{rvMark, rvNote, rvClear} {
 		cases = append(cases,

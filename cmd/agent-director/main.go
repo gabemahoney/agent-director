@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -130,8 +131,13 @@ const hookExitCode = 0
 // not: both take the store from config.Store.EffectiveDbPath (b.8up), and its
 // busy timeout from config.Store.EffectiveBusyTimeoutMs (b.c7f).
 //
+// The relay hook's kill instant is its start plus the per-hook timeout spawn
+// wrote for it (b.146 rule 4), so the start is read first, and the timeout
+// comes from the hook's --timeout argument (hookTimeout).
+//
 // The function never returns an error; it logs and returns.
 func runHook() int {
+	start := time.Now()
 	logger := newHookLogger()
 	// Wire the hook logger into the trail writer so emit failures and
 	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
@@ -199,6 +205,11 @@ func runHook() int {
 	// launch's identity write, which the hook also caps at 540 s from its
 	// start on Now's monotonic reading (SR-22.9, SR-13.4; WD 2026-09-30c):
 	// time.Now is passed as is, never stripped by .UTC or .Round(0).
+	//
+	// The relay hook's timing and identity (b.146 rules 2, 4 and 14): Start,
+	// read above before anything else, and RelayTimeout, the --timeout spawn
+	// wrote, give its kill instant; Self reads its own pid, start time and
+	// pid namespace once, when it records its request.
 	hc := hook.HandleConfig{
 		Env:          hook.OSGetenv,
 		Cfg:          cfg.Relay,
@@ -207,11 +218,49 @@ func runHook() int {
 		ParentProc:   hookParentProc(),
 		Now:          time.Now,
 		PendingGrace: cfg.Tmux.EffectivePendingGrace(),
+		Start:        start,
+		RelayTimeout: hookTimeout(os.Args[2:]),
+		Self:         hookSelf(probe.NewProcChecker()),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
 	}
 	return hookExitCode
+}
+
+// hookTimeout parses the hook verb's arguments: --timeout N, the per-hook
+// timeout in seconds spawn writes on the relay hook's settings entry (b.146
+// rule 4). It returns 0 — Handle then reads the loaded config's relay window,
+// the value spawn writes — when the flag is absent (a hook entry spawned
+// before it existed), unparseable or not positive, and for any other argument
+// it does not know: the hook path never fails on its arguments (SRD §3.2).
+func hookTimeout(args []string) time.Duration {
+	var seconds int
+	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.IntVar(&seconds, "timeout", 0, "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
+	if err := fs.Parse(args); err != nil || seconds <= 0 || seconds > config.MaxRelayTimeoutSeconds {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// hookSelf returns the hook's reader of its own identity (b.146 rules 2 and
+// 14): its pid, its start time through pc (field 22 of /proc/<pid>/stat on
+// Linux, the form proc_starttime records) and its pid namespace
+// (probe.SelfPIDNamespace). When either the start time or the namespace
+// cannot be read it returns the zero identity, which records none: readers
+// then fall back to the request's settle instant.
+func hookSelf(pc probe.ProcChecker) func() store.ProcessIdentity {
+	return func() store.ProcessIdentity {
+		pid := os.Getpid()
+		start, alive, known := pc.StartTime(pid)
+		ns, nsKnown := probe.SelfPIDNamespace()
+		if !alive || !known || start == "" || !nsKnown {
+			return store.ProcessIdentity{}
+		}
+		return store.ProcessIdentity{PID: pid, Starttime: start, PIDNamespace: ns}
+	}
 }
 
 // hookParentProc is the hook's parent-process reader: the per-OS start-time

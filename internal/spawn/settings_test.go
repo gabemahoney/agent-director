@@ -106,7 +106,9 @@ func TestSynthesizeSettingsPermissions(t *testing.T) {
 
 // TestSynthesizeSettingsRelayTimeout pins SR-1.3 and b.8q2: both relay hooks
 // carry the effective relay timeout (86400 for 0 or a negative value), whose
-// milliseconds fit Claude Code's 32-bit hook timer; SessionStart keeps 600 s.
+// milliseconds fit Claude Code's 32-bit hook timer, and the PermissionRequest
+// hook's --timeout argument is the same value (b.146 rule 4); SessionStart
+// keeps 600 s.
 func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 	const exe = "/opt/ad/bin/agent-director"
 	withStubExe(t, exe)

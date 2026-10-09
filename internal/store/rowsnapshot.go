@@ -83,11 +83,27 @@ type LaunchIdentity struct {
 // schema v6, a launch whose own start time or pid namespace could not be
 // read, or a launch whose hold has ended. find-missing judges such a row by
 // its pending grace period alone. The columns are read only for a pending
-// row; on any other row they carry no meaning.
-type LaunchOwner struct {
-	PID          int    // launch_owner_pid
-	Starttime    string // launch_owner_starttime, same form as proc_starttime
-	PIDNamespace string // launch_owner_pidns, as probe.SelfPIDNamespace read it; "" = NULL
+// row; on any other row they carry no meaning. Its fields are
+// ProcessIdentity's: PID is launch_owner_pid, Starttime
+// launch_owner_starttime and PIDNamespace launch_owner_pidns.
+type LaunchOwner = ProcessIdentity
+
+// ProcessIdentity is a recorded process (b.146 rule 14): its pid, its start
+// time and its pid namespace, each as the process itself read them. A reader
+// judges the pid only in the same pid namespace, and only alive with exactly
+// that start time. It is a row's launch owner (LaunchOwner, schema v6) and a
+// permission request's relay hook and pane-answer sender (schema v7). Zero
+// values mean NULL; PID 0 means none is recorded.
+type ProcessIdentity struct {
+	PID          int    // the pid
+	Starttime    string // its start time, same form as proc_starttime
+	PIDNamespace string // its pid namespace, as probe.SelfPIDNamespace read it; "" = NULL
+}
+
+// processIdentityArgs returns p as the bound arguments of a pid, start-time
+// and pid-namespace column triple, in that order, a zero value as NULL.
+func processIdentityArgs(p ProcessIdentity) []any {
+	return []any{positiveIntArg(p.PID), nullableStringArg(p.Starttime), nullableStringArg(p.PIDNamespace)}
 }
 
 // launchOwnerColumns is the one column fragment a read selects to fill a
@@ -105,7 +121,7 @@ func launchOwnerDest(o *LaunchOwner) []any {
 // launchOwnerArgs returns o as the bound arguments of the three launch-owner
 // columns, in schema order, a zero value as NULL.
 func launchOwnerArgs(o LaunchOwner) []any {
-	return []any{positiveIntArg(o.PID), nullableStringArg(o.Starttime), nullableStringArg(o.PIDNamespace)}
+	return processIdentityArgs(o)
 }
 
 // launchOwnerClear is the SET fragment that ends a launch's hold: the three

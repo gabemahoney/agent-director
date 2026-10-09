@@ -311,6 +311,13 @@ export declare class ErrPermissionRequestNotFound extends AgentDirectorError {
 /** Mirrors ErrAmbiguousRequest (package: store) */
 export declare class ErrAmbiguousRequest extends AgentDirectorError {
 }
+/**
+ * Mirrors ErrStoreBusy (package: store): decide's `max_wait_ms` bound was reached before its
+ * verdict was recorded (another process held the store's write lock). Nothing was recorded, so
+ * the call can be retried.
+ */
+export declare class ErrStoreBusy extends AgentDirectorError {
+}
 /** Mirrors ErrMissingRequestToken (package: api) */
 export declare class ErrMissingRequestToken extends AgentDirectorError {
 }

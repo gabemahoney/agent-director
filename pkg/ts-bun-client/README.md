@@ -224,6 +224,46 @@ agent-director make-template --name dev --cwd /repos/widget --overwrite
 await client.makeTemplate({ name: "dev", cwd: "/repos/widget", overwrite: true });
 ```
 
+### decide
+
+Answer a relayed permission request of a Spawn launched with
+`relay_mode: "on"`. `decide` records the verdict, waits at most 1 s for the
+agent's relay hook to confirm it, and resolves with the request's
+`delivery`.
+
+```sh
+agent-director decide --claude-instance-id <id> --request-token <token> --decision allow --max-wait-ms 2000
+```
+
+```ts
+const result = await client.decide({
+  claude_instance_id: "<id>",
+  request_token: "<token>",
+  decision: "allow",
+  max_wait_ms: 2000, // at most your deadline minus 1 s
+});
+if (result.delivery === "not_confirmed") {
+  const later = await client.getPermission({ request_token: "<token>" });
+  console.log(later.delivery, later.confirm_by);
+}
+```
+
+`"delivered"`: the relay hook confirmed the verdict before handing it to
+Claude Code. `"not_confirmed"`: poll `getPermission` until `delivery` reads
+`"delivered"` or `"fallen_back"`, which it does by `confirm_by`. `decision`
+is the verdict recorded, not the outcome: read `delivery`. `max_wait_ms`
+bounds the whole call, its reads and its write, and has no default; without
+it `decide` can wait up to the store's busy timeout. `decide` rejects,
+recording no verdict, with `ErrRelayFallenBack` when the request's relay
+hook is gone and took no verdict (only an answer at the pane can close it),
+with `ErrStoreBusy` when `max_wait_ms` ran out before the verdict was
+recorded (retry), and with `ErrNoOpenPermissionRequest` when no open
+request has that token or the request is closed (do not answer it at the
+pane). The `permission_requests` of `get` and of each `list` row carry the
+same delivery fields, for requests that still await an answer only; a row
+can read `waiting` while a request is still open, so follow the requests
+you track with `getPermission`.
+
 ## Consumption
 
 The supported consumption mode is Bun-runtime ESM:
@@ -419,13 +459,14 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on` while one of the spawn's permission requests holds the relay guard, or before any request is recorded; nothing was sent. The message names the request holding the guard. If it is pending, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`); `decide` on it would throw `ErrAlreadyDecided`. With no request recorded yet the message names none (`… whose request is not yet recorded; answer it with decide once get lists it`). Once every request's relay hook is presumed to have answered or died, this guard lets `send-keys` through. |
-| `ErrRelayFallenBack` | `decide` was called on an open request whose relay window has run out (from 1 s before it ends), and the request's record is still open 2 s after its window ended: its relay hook can no longer answer it, and no verdict was recorded. A call made before then first waits for that instant (at most 3 s). Thrown only while the spawn is still in `check_permission` with no other open request and none recorded after this one; otherwise `decide` throws `ErrNoOpenPermissionRequest`. Answer at the pane with `send-keys`; this request no longer holds the relay guard. If `send-keys` still throws `ErrSendKeysWhileRelayed`, a request the spawn recorded since holds the guard; the error names it: answer that one with `decide`. |
+| `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on` while one of the spawn's permission requests holds the relay guard, or before any request is recorded; nothing was sent. The message names the request holding the guard. If it is pending, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`); `decide` on it would throw `ErrAlreadyDecided`. With no request recorded yet the message names none (`… whose request is not yet recorded; answer it with decide once get lists it`). The guard is time-bounded: a request holds it until 2 s after its relay window ends, so it can still hold on account of a request `decide` has rejected with `ErrRelayFallenBack`; once no request holds it, it lets `send-keys` through. |
+| `ErrRelayFallenBack` | `decide` was called on a request whose relay hook is gone and acked no verdict, with no pane answer recorded through agent-director: no answer from the relay reached the agent, and only an answer at the pane can close the request. Thrown within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process). No verdict was recorded; the caller's is kept as the request's `attempted_decision`. For a request recorded before this release: thrown once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `decide` throws `ErrNoOpenPermissionRequest`. |
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `--decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair (or it was already decided). `decide` also throws it for a request whose record is still open 2 s after its relay window ended when the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into Claude's prompt, so do not answer it at the pane. `send-keys` does not apply this check. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed, so do not answer it at the pane. |
-| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay hook denied when its window ran out, before the call or while `decide` waited at the window's end (`getPermission` returns `decision_reason` `"timeout"`); the hook normally returned that deny to Claude Code, which closed the dialog, so there is nothing to answer at the pane. It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`). |
+| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed, so do not answer it at the pane. It throws it too for a request `find-missing` closed when it marked the spawn `missing` before the request's relay hook confirmed the verdict recorded on it, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (`"delivered"` only if its relay hook confirmed). Do not answer it at the pane. For a request recorded before this release, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into Claude's prompt, so do not answer it at the pane. `send-keys` does not apply this check. |
+| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay hook denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the hook recorded that deny with its confirmation before returning it to Claude Code, so there is nothing to answer at the pane. It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`). |
+| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and the bound ran out, during its reads or its write, before its verdict was recorded: another agent-director process held the store that long (or, for a request recorded before this release, `decide` would have had to wait past the bound for the end of its relay window). Nothing was recorded, so retry. Once the verdict is recorded, `decide` never throws it: a bound reached while it waits for the relay hook's confirmation resolves with `delivery` `"not_confirmed"`. Without `max_wait_ms` it is never thrown. |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
 | `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
 
@@ -442,7 +483,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation, or `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f). |
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation, `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f), or `decide` was given a negative `max_wait_ms`. |
 
 **CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all four are in the "AD is sick" alert set):
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -156,6 +157,12 @@ type Spawn struct {
 	// returns a Spawn fills it, the zero value for NULL (a row from before
 	// schema v6 included).
 	LaunchOwner LaunchOwner
+
+	// IdleSince is the schema-v7 idle_since column (b.146 problem 3), as
+	// stored ("" = NULL): set by the main agent's idle-prompt Notification
+	// (ApplyHookWaitingIfWorking), NULLed by any later hook. find-missing's
+	// repair of a stale check_permission row picks waiting when it is set.
+	IdleSince string
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -243,8 +250,32 @@ func (s *Store) InsertPending(sp Spawn) error {
 // GetSpawn returns the full row for the given claude_instance_id. Missing
 // rows yield ErrSpawnNotFound; other failures wrap the driver error.
 func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
-	q := `SELECT ` + spawnColumns + ` FROM spawns WHERE claude_instance_id = ?`
-	sp, err := scanSpawn(s.db.QueryRow(q, instanceID), getSpawnErrs)
+	sp, err := scanSpawn(s.db.QueryRow(getSpawnSQL, instanceID), getSpawnErrs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return Spawn{}, err
+	}
+	return sp, nil
+}
+
+// getSpawnSQL is the read of one row by id.
+const getSpawnSQL = `SELECT ` + spawnColumns + ` FROM spawns WHERE claude_instance_id = ?`
+
+// GetSpawnWithin is GetSpawn with its waits bounded by maxWait: for the
+// store's one connection, when another call of this process holds it, and
+// for a lock another connection holds (DefaultLockWait: as GetSpawn waits). A
+// read that waits longer returns an error wrapping ErrStoreBusy. decide reads
+// it under a max_wait_ms bound (b.146 decision 9 B). Results otherwise as
+// GetSpawn's.
+func (s *Store) GetSpawnWithin(instanceID string, maxWait time.Duration) (Spawn, error) {
+	var sp Spawn
+	err := s.readWithin(maxWait, "", func(ctx context.Context, conn *sql.Conn) error {
+		var err error
+		sp, err = scanSpawn(conn.QueryRowContext(ctx, getSpawnSQL, instanceID), getSpawnErrs)
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
@@ -264,7 +295,8 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 // are the same row's values the Spawn's own fields read. The SR-5.5 columns are selected bare and decoded in
 // Go; the other v5 columns follow the v3 identity columns' rule (NULL is the
 // zero value; any other stored value scans normally). The v6 launch-owner
-// columns (launchOwnerColumns) come last, after lifeColumns, by the same rule.
+// columns (launchOwnerColumns) come after lifeColumns, by the same rule, and
+// the v7 idle_since last.
 const spawnColumns = `
         claude_instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, claude_args, relay_mode,
@@ -275,7 +307,8 @@ const spawnColumns = `
         COALESCE(liveness_note, ''), extra_env,
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
-        ` + launchOwnerColumns
+        ` + launchOwnerColumns + `,
+        COALESCE(idle_since, '')`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -322,6 +355,7 @@ func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
+	dest = append(dest, &sp.IdleSince)
 	err := sc.Scan(dest...)
 	if err != nil {
 		return Spawn{}, fmt.Errorf("%s: %w", errs.scan, err)

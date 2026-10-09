@@ -112,8 +112,12 @@ type ClassifyResult struct {
 
 	// WaitingIfWorking is true for the main agent's idle-prompt Notification
 	// (notification_type idle_prompt, no agent_id; b.svb): a row that is
-	// working when the write lands returns to waiting, and a row in any other
-	// state gets the soft refresh. The idle prompt means the main agent's turn
+	// working when the write lands returns to waiting, as does a row with
+	// relay_mode on in check_permission none of whose permission requests
+	// still awaits an answer (b.146 problem 3), a row in any other state gets
+	// the soft
+	// refresh, and every applied write records idle_since. The idle prompt
+	// means the main agent's turn
 	// has ended, so a working row was left there by a hook with no Stop after
 	// it, such as a PreToolUse from a background fork after the turn's Stop
 	// or, before Claude Code 2.1.288, from a background subagent still
@@ -219,10 +223,11 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		res.NewState = store.StateWaiting
 	case "Notification":
 		// b.svb: the main agent's idle-prompt Notification returns a working
-		// row to waiting (before Claude Code 2.1.288 also while a background
-		// subagent still runs; see NotificationTypeIdlePrompt); any other
-		// Notification, and an idle prompt from a subagent or in-process
-		// teammate, is a soft refresh.
+		// row, or a relayed check_permission row with no request that still
+		// awaits an answer (b.146 problem 3), to waiting (before Claude Code 2.1.288
+		// also while a background subagent still runs; see
+		// NotificationTypeIdlePrompt); any other Notification, and an idle
+		// prompt from a subagent or in-process teammate, is a soft refresh.
 		res.SoftRefresh = true
 		res.WaitingIfWorking = p.NotificationType == NotificationTypeIdlePrompt && p.AgentID == ""
 	case "PermissionRequest":

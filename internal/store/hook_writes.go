@@ -17,18 +17,20 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 }
 
 // ApplyHookTransitionResult is the gated write of an ordinary hook (every
-// event but SessionStart, which RecordSessionStartIdentity writes; the main
-// agent's idle-prompt Notification is ApplyHookWaitingIfWorking, whose soft
-// refresh is this write). The transition follows SRD §5.2:
+// event but SessionStart, which RecordSessionStartIdentity writes, the main
+// agent's idle-prompt Notification, which ApplyHookWaitingIfWorking writes,
+// and a relayed PermissionRequest, whose move to check_permission is in
+// InsertRelayRequest's transaction). The transition follows SRD §5.2:
 //   - When newState is non-empty, the row's state moves to newState and
 //     last_seen_at is bumped; a state other than ended clears ended_at.
 //   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP.
 //   - When softRefresh=true, state stays; last_seen_at is bumped.
 //
 // Each branch also clears the liveness_unverified_since/liveness_note markers
-// and advances row_version by one; the ended transition and every transition
-// to a state other than pending set launch_started_at to NULL, and a soft
-// refresh leaves it unchanged (SR-5.2).
+// and idle_since (any hook after the idle-prompt Notification clears it,
+// b.146 problem 3) and advances row_version by one; the ended transition and
+// every transition to a state other than pending set launch_started_at to
+// NULL, and a soft refresh leaves it unchanged (SR-5.2).
 //
 // The gate (SR-22.9): every branch's UPDATE carries hookGateSQL in its own
 // WHERE, so it applies only when gate.ParentPID and gate.ParentStart are the
@@ -39,15 +41,18 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // session id is never a gate. gate.SessionStart and gate.Examined are not
 // used here.
 //
-// Multi-row retention (SR-5.1/SR-5.2): when newState is `working` and open
-// permission_requests rows still exist for this Spawn, the transition is held
-// and nothing is written; the Spawn stays at check_permission until every row
-// has been decided. The hold checks the gate first: a hook whose gate holds
-// is applied (HookApplied.Applied) with UpsertNoChange and a no-op
-// ad.spawn.state_transition (prior == new, SR-A-2.2); one whose gate does not
-// hold reports its reason and emits nothing. Each runRelay timeout path calls
-// the working transition for its own row; the last row's call is the one that
-// actually advances the state.
+// Multi-row retention (SR-5.1/SR-5.2): when newState is `working` and a
+// permission request of this Spawn still awaits an answer
+// (OpenPermissionRequestsForSpawn; b.146 rule 9: not closed by find-missing's
+// mark, and not acked and not answered at the pane, or, recorded before
+// schema v7, undecided), the transition is
+// held and the state is not written; the Spawn stays at check_permission
+// until no request awaits an answer. The hold checks the gate first: a hook
+// whose gate holds is applied (HookApplied.Applied) with UpsertNoChange and a
+// no-op ad.spawn.state_transition (prior == new, SR-A-2.2), and its only
+// write is clearing idle_since when it is set (any later hook clears it,
+// b.146 problem 3); one whose gate does not hold reports its reason and
+// emits nothing.
 //
 // Not applied: when the UPDATE matched no row, one read after it decides the
 // reason (notAppliedReason): no row with the id yields HookApplied{} and no
@@ -58,9 +63,8 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // liveness-note clear.
 //
 // triggeringEventName is a free-form string identifying what caused this
-// transition. For hook-driven transitions it is the canonical Claude Code
-// lifecycle event name (e.g. "PermissionRequest"); the relay's timeout write
-// passes "PermissionRequestTimeout" with the hook's own gate.
+// transition: the canonical Claude Code lifecycle event name (e.g.
+// "PostToolUse").
 //
 // The outcome (SR-A-2.1): UpsertUpdated when the UPDATE affected a row;
 // UpsertNoChange when it did not (gate, no row) or the retention guard held
@@ -98,12 +102,12 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 	)
 	switch {
 	case softRefresh:
-		set = `last_seen_at = CURRENT_TIMESTAMP`
+		set = `last_seen_at = CURRENT_TIMESTAMP, ` + idleClear
 		trailNew = priorState
 		errPrefix = "store: soft refresh"
 	case newState == StateEnded:
 		set = `state = ?, last_seen_at = CURRENT_TIMESTAMP,
-		       ended_at = CURRENT_TIMESTAMP, ` + launchStartClear
+		       ended_at = CURRENT_TIMESTAMP, ` + launchStartClear + `, ` + idleClear
 		setArgs = []any{newState}
 		errPrefix = "store: ended transition"
 	default:
@@ -116,14 +120,33 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// its old ended_at. A target other than pending clears the launch
 		// start in the same statement; a pending target (no hook passes one
 		// today) leaves it (SR-5.2).
-		set = `state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL`
+		set = `state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + idleClear
 		if newState != StatePending {
 			set += `, ` + launchStartClear
 		}
 		setArgs = []any{newState}
 		errPrefix = "store: state transition"
 	}
+	return s.applyGatedHookWrite(instanceID, gate, set, setArgs, priorState, trailNew, softRefresh,
+		triggeringEventName, jsonlPath, jsonlPresent, errPrefix)
+}
 
+// idleClear is the SET fragment every applied hook write carries except the
+// main agent's idle-prompt Notification, which sets idle_since: any later
+// hook clears it (b.146 problem 3).
+const idleClear = `idle_since = NULL`
+
+// idleSet is the idle-prompt Notification's SET fragment: the time it landed
+// (b.146 problem 3).
+const idleSet = `idle_since = CURRENT_TIMESTAMP`
+
+// gatedHookUpdate returns the one UPDATE of a gated hook write on
+// instanceID's spawns row, with its arguments: set (whose placeholders take
+// setArgs) followed by what every applied hook writes — the liveness markers
+// NULLed, the session record (hookSessionRecordSet with jsonlPath and
+// jsonlPresent), the pane start time when NULL (hookPaneStartSet) and the
+// row_version advance — guarded by the gate (hookGateSQL).
+func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any, jsonlPath string, jsonlPresent bool) (string, []any) {
 	recordSet, recordArgs := hookSessionRecordSet(gate, jsonlPath, jsonlPresent)
 	q := `UPDATE spawns
 	         SET ` + set + `,
@@ -131,10 +154,20 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 	             ` + recordSet + hookPaneStartSet + `,
 	             ` + rowVersionAdvance + `
 	       WHERE claude_instance_id = ? AND ` + hookGateSQL
-	args := append(setArgs, recordArgs...)
+	args := append(append([]any{}, setArgs...), recordArgs...)
 	args = append(args, gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)
+	return q, args
+}
 
+// applyGatedHookWrite runs gatedHookUpdate's statement for set and reports it
+// as ApplyHookTransitionResult does: UpsertUpdated and one
+// ad.spawn.state_transition (priorState to trailNew, soft_refresh as given)
+// when it applied; UpsertNoChange with notAppliedReason's reason when it
+// matched no row; UpsertError with a wrapped error (named by errPrefix) on a
+// failure.
+func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, trailNew string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
+	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
 	res, err := s.db.Exec(q, args...)
 	if err != nil {
 		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
@@ -162,70 +195,92 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 }
 
 // ApplyHookWaitingIfWorking is the gated write of the main agent's
-// idle-prompt Notification (b.svb). Claude Code sends that Notification only
-// while its main agent is idle at the prompt, so a row still working then was
-// left there by a hook with no Stop after it (a background fork's PreToolUse
-// after the turn's Stop): the row returns to waiting. A row in any other state
-// gets the ordinary soft refresh. Idle is the main agent's alone: before
-// Claude Code 2.1.288 (anthropics/claude-code#93672) the Notification also
-// fires while a background subagent is still running, and a row that
-// subagent's hook moved to working then reads waiting, its tool possibly still
-// running, until the subagent's next tool hook.
+// idle-prompt Notification (b.svb; b.146 problem 3). Claude Code sends that
+// Notification only while its main agent is idle at the prompt, so a row
+// still working then was left there by a hook with no Stop after it (a
+// background fork's PreToolUse after the turn's Stop): the row returns to
+// waiting. So does a row with relay_mode on in check_permission none of whose
+// permission requests still awaits an answer (OpenPermissionRequestsForSpawn's
+// rule): the agent's turn ended after its last request was answered, and its
+// Stop was lost (b.146 problem 3). A row in any other state, a row with the
+// relay off in check_permission (no request records its dialog), or one with
+// a request that still awaits an answer, gets a soft refresh. Idle is the main agent's alone: before Claude Code 2.1.288
+// (anthropics/claude-code#93672) the Notification also fires while a
+// background subagent is still running, and a row that subagent's hook moved
+// to working then reads waiting, its tool possibly still running, until the
+// subagent's next tool hook.
 //
-// The return to waiting is one statement whose WHERE carries the state
-// condition (state = working) with the gate (hookGateSQL), so it applies only
-// to a working row, for the row's own agent, at the moment it runs; no read
-// decides it. It writes what a non-terminal ApplyHookTransitionResult
-// transition writes (the state; last_seen_at bumped; ended_at,
-// launch_started_at and the liveness markers NULLed; the session record; the
-// pane start time when NULL; row_version advanced by one) and emits
-// ad.spawn.state_transition from working to waiting with soft_refresh false.
-// The retention hold does not apply: it holds transitions to working only.
+// Every applied write of this Notification, a soft refresh included, sets
+// idle_since to the current time, and any later hook clears it: find-missing's
+// repair of a stale check_permission row picks waiting when it is set and
+// working when it is not (b.146 rule 9, problem 3).
 //
-// When that statement matches no row (the row is not working, the gate does
-// not hold, or no row has the id), the write is ApplyHookTransitionResult's
-// soft refresh, which tells those apart and reports and emits exactly as for
-// any soft-refresh hook. A row that becomes working between the two
-// statements gets the soft refresh: the Notification is then ordered before
-// the hook that moved the row.
+// Each return to waiting is one statement whose WHERE carries the state
+// condition (state working, or state check_permission with relay_mode on and
+// no request that still awaits an answer) with the gate (hookGateSQL), so it
+// applies only to
+// such a row, for the row's own agent, at the moment it runs; no read
+// decides it. The working statement runs first, then the check_permission
+// one. Each writes what a non-terminal ApplyHookTransitionResult transition
+// writes (the state; last_seen_at bumped; ended_at, launch_started_at and the
+// liveness markers NULLed; the session record; the pane start time when NULL;
+// row_version advanced by one), sets idle_since, and emits
+// ad.spawn.state_transition from its state to waiting with soft_refresh
+// false. The retention hold does not apply: it holds transitions to working
+// only.
+//
+// When neither statement matches a row (the row is in another state, the gate
+// does not hold, or no row has the id), the write is a soft refresh that also
+// sets idle_since, which tells those apart and reports and emits exactly as
+// ApplyHookTransitionResult's soft refresh does. A row that becomes working
+// between the statements gets the soft refresh: the Notification is then
+// ordered before the hook that moved the row.
 //
 // The outcome and errors are ApplyHookTransitionResult's.
 func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	const errPrefix = "store: waiting-if-working transition"
-	recordSet, recordArgs := hookSessionRecordSet(gate, jsonlPath, jsonlPresent)
-	q := `UPDATE spawns
-	         SET state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `,
-	             liveness_unverified_since = NULL, liveness_note = NULL,
-	             ` + recordSet + hookPaneStartSet + `,
-	             ` + rowVersionAdvance + `
-	       WHERE claude_instance_id = ? AND state = ? AND ` + hookGateSQL
-	args := append([]any{StateWaiting}, recordArgs...)
-	args = append(args, gate.ParentStart, instanceID, StateWorking)
-	args = append(args, hookGateArgs(gate)...)
-
-	moved, err := s.execGuarded(q, args, errPrefix)
+	set := `state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `, ` + idleSet
+	for _, from := range []struct{ state, cond string }{
+		{StateWorking, `state = '` + StateWorking + `'`},
+		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND NOT EXISTS (
+		     SELECT 1 FROM permission_requests pr
+		      WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + awaitingAnswerSQL + `)`},
+	} {
+		q, args := gatedHookUpdate(instanceID, gate, set, []any{StateWaiting}, jsonlPath, jsonlPresent)
+		moved, err := s.execGuarded(q+` AND `+from.cond, args, errPrefix)
+		if err != nil {
+			return UpsertError, HookApplied{}, err
+		}
+		if moved {
+			_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+				"claude_instance_id":    instanceID,
+				"prior_state":           from.state,
+				"new_state":             StateWaiting,
+				"triggering_event_name": triggeringEventName,
+				"soft_refresh":          false,
+				"source":                "ad_spawn_store",
+			})
+			return UpsertUpdated, HookApplied{Applied: true}, nil
+		}
+	}
+	priorState, found, err := s.selectPriorState(instanceID)
 	if err != nil {
 		return UpsertError, HookApplied{}, err
 	}
-	if !moved {
-		return s.ApplyHookTransitionResult(instanceID, gate, "", true, triggeringEventName, jsonlPath, jsonlPresent)
+	if !found {
+		return UpsertNoChange, HookApplied{}, nil
 	}
-	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
-		"prior_state":           StateWorking,
-		"new_state":             StateWaiting,
-		"triggering_event_name": triggeringEventName,
-		"soft_refresh":          false,
-		"source":                "ad_spawn_store",
-	})
-	return UpsertUpdated, HookApplied{Applied: true}, nil
+	return s.applyGatedHookWrite(instanceID, gate, `last_seen_at = CURRENT_TIMESTAMP, `+idleSet, nil,
+		priorState, priorState, true, triggeringEventName, jsonlPath, jsonlPresent, "store: idle soft refresh")
 }
 
 // holdWorkingTransition is the multi-row retention guard of a working
-// transition (ApplyHookTransitionResult). held is false when no open
-// permission request remains, and the caller writes the transition. When one
-// does, the transition is held and nothing is written: the gate is read first
-// (readHookGateRow), and only a hook whose gate holds gets the no-op
+// transition (ApplyHookTransitionResult). held is false when no permission
+// request still awaits an answer (OpenPermissionRequestsForSpawn), and the
+// caller writes the transition. When one does, the transition is held and the
+// state is not written: the gate is read first (readHookGateRow), and only a
+// hook whose gate holds gets its one write, idle_since cleared when it is set
+// (clearIdleSinceSQL; any later hook clears it, b.146 problem 3), the no-op
 // ad.spawn.state_transition (prior == new, SR-A-2.2) and an applied result; a
 // missing row or a gate that does not hold reports notAppliedReason and emits
 // nothing.
@@ -244,6 +299,10 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 	if !r.found || !r.gateMatches {
 		return true, UpsertNoChange, notAppliedReason(r), nil
 	}
+	if _, err := s.execGuarded(clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...),
+		"store: working transition hold idle clear"); err != nil {
+		return true, UpsertError, HookApplied{}, err
+	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 		"claude_instance_id":    instanceID,
 		"prior_state":           r.state,
@@ -254,6 +313,13 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 	})
 	return true, UpsertNoChange, HookApplied{Applied: true}, nil
 }
+
+// clearIdleSinceSQL is a held working transition's one write: idle_since
+// NULLed, with the version advance, only on a row that has it set and for
+// which the hook's gate holds.
+const clearIdleSinceSQL = `UPDATE spawns
+    SET ` + idleClear + `, ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND idle_since IS NOT NULL AND ` + hookGateSQL
 
 // sessionStartPrior is what a SessionStart write replaces, read at the
 // snapshot the caller examined: the prior state (for the trail) and the
@@ -271,7 +337,8 @@ type sessionStartPrior struct {
 // the presence rule, pid and proc_starttime as the hook's parent
 // (gate.ParentPID, gate.ParentStart: the pane process, SR-3.8), pane_starttime
 // when NULL; it bumps last_seen_at, clears ended_at, both liveness columns
-// (SessionStart is proof of life, SR-8.2) and launch_started_at, and advances
+// (SessionStart is proof of life, SR-8.2), idle_since (any hook clears it,
+// b.146 problem 3) and launch_started_at, and advances
 // row_version by exactly one (SR-5.2).
 //
 // The statement's WHERE carries the gate (hookGateSQL) and the snapshot
@@ -335,6 +402,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	             proc_starttime            = ?,
 	             liveness_unverified_since = NULL,
 	             liveness_note             = NULL,
+	             ` + idleClear + `,
 	             ` + hookPaneStartSet + `,
 	             ` + launchStartClear + `,
 	             ` + rowVersionAdvance + `

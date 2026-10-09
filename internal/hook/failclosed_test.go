@@ -1,11 +1,13 @@
 package hook_test
 
 // failclosed_test.go — Handle's error paths against a HookStore double: SRD
-// §3.2 (state tracking is fail-open: log, exit 0, print nothing), SRD §6.4 (with
-// relay_mode on, every failure of a PermissionRequest hook ends in a deny
-// envelope) and b.45p (a hook that is not, or may not be, a PermissionRequest
-// prints nothing). Poll's own fail-closed exits are pinned in polling_test.go;
-// the timeout's DB-before-stdout order in timeout_writes_test.go.
+// §3.2 (state tracking is fail-open: log, exit 0, print nothing), SRD §6.4
+// (with relay_mode on, a PermissionRequest hook that fails before its request
+// is recorded ends in a deny envelope) and b.45p (a hook that is not, or may
+// not be, a PermissionRequest prints nothing). Poll's exits are pinned in
+// polling_test.go; the relay's failures after its request is recorded, which
+// print nothing (b.146 rule 3), and its ack-before-answer order in
+// relay_test.go and timeout_writes_test.go.
 
 import (
 	"bytes"
@@ -18,28 +20,42 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
-// flakyRelayStore is a HookStore double with programmable errors and recorded
-// calls. Its gated writes report applied unless they error (the hook is the
-// row's own agent, SR-22.9); the gate itself is the store's and is tested
-// against a real store. GetPermissionRequest returns getRows/getErrs in turn,
-// the last entry sticky.
+// flakyRelayStore is a HookStore and hook.RelayStore double with programmable
+// errors and recorded calls. Its gated writes report applied unless they
+// error (the hook is the row's own agent, SR-22.9); the gate itself is the
+// store's and is tested against a real store. GetPermissionRequest runs
+// onGet, then returns getRows/getErrs in turn, the last entry sticky.
+// AckRelayDecision acks ackDecision when set, else the decision of the last
+// row read; ackNone makes it match nothing. DenyRelayTimeout denies unless
+// denyNone.
 type flakyRelayStore struct {
-	transitionErr, identityErr, upsertErr error
+	transitionErr, identityErr, insertErr error
+	ackErr, denyErr                       error
+	ackNone, denyNone                     bool
+	ackDecision, ackReason                string
 	getRows                               []store.PermissionRow
 	getErrs                               []error
+	onGet                                 func()
 	idx                                   atomic.Int32
 	identityN                             int
-	decideArgs                            []decideCall
+	inserts                               []store.RelayRequest
+	acks, denies                          []relayWrite
 	transitionArgs                        []transitionCall
 }
 
-type decideCall struct{ InstanceID, RequestToken, Decision, Reason string }
+// relayWrite is one recorded ack or timeout deny: its request and its wait
+// for the write lock.
+type relayWrite struct {
+	InstanceID, RequestToken string
+	MaxWait                  time.Duration
+}
 
 type transitionCall struct {
 	InstanceID, NewState string
@@ -55,19 +71,66 @@ func (f *flakyRelayStore) RecordSessionStartIdentity(string, store.HookGate, str
 	f.identityN++
 	return store.HookApplied{Applied: f.identityErr == nil}, false, f.identityErr
 }
-func (f *flakyRelayStore) UpsertOpenPermissionRequest(string, store.HookGate, string, string, string, int, string) (store.HookApplied, error) {
-	return store.HookApplied{Applied: f.upsertErr == nil}, f.upsertErr
+func (f *flakyRelayStore) InsertRelayRequest(_ string, _ store.HookGate, req store.RelayRequest, _ int, _ time.Duration) (store.UpsertOutcome, store.HookApplied, error) {
+	f.inserts = append(f.inserts, req)
+	if f.insertErr != nil {
+		return store.UpsertError, store.HookApplied{}, f.insertErr
+	}
+	return store.UpsertInserted, store.HookApplied{Applied: true}, nil
 }
-func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string, _ string) (bool, error) {
-	f.decideArgs = append(f.decideArgs, decideCall{instanceID, requestToken, decision, reason})
-	return true, nil
+func (f *flakyRelayStore) AckRelayDecision(instanceID, requestToken string, _ time.Time, maxWait time.Duration, check func() error) (string, string, bool, error) {
+	f.acks = append(f.acks, relayWrite{instanceID, requestToken, maxWait})
+	if check != nil {
+		if err := check(); err != nil {
+			return "", "", false, err
+		}
+	}
+	switch {
+	case f.ackErr != nil:
+		return "", "", false, f.ackErr
+	case f.ackNone:
+		return "", "", false, nil
+	case f.ackDecision != "":
+		return f.ackDecision, f.ackReason, true, nil
+	}
+	row := f.lastRow()
+	return row.Decision, row.DecisionReason, row.Decision != "", nil
+}
+func (f *flakyRelayStore) DenyRelayTimeout(instanceID, requestToken string, _ time.Time, maxWait time.Duration, check func() error) (bool, error) {
+	f.denies = append(f.denies, relayWrite{instanceID, requestToken, maxWait})
+	if check != nil {
+		if err := check(); err != nil {
+			return false, err
+		}
+	}
+	return f.denyErr == nil && !f.denyNone, f.denyErr
 }
 func (f *flakyRelayStore) GetPermissionRequest(_, _ string) (store.PermissionRow, error) {
+	if f.onGet != nil {
+		f.onGet()
+	}
 	if len(f.getRows) == 0 {
 		return store.PermissionRow{}, sql.ErrNoRows
 	}
 	i := min(int(f.idx.Add(1)-1), len(f.getRows)-1)
 	return f.getRows[i], f.getErrs[i]
+}
+
+// lastRow is the row the latest read returned.
+func (f *flakyRelayStore) lastRow() store.PermissionRow {
+	if len(f.getRows) == 0 {
+		return store.PermissionRow{}
+	}
+	return f.getRows[max(min(int(f.idx.Load())-1, len(f.getRows)-1), 0)]
+}
+
+// relayDoubleConfig is hookConfig for a relayed hook of id against a double:
+// a parent that stays the hook's starting Claude Code, hookConfig's virtual
+// clock, and a 30 s relay timeout.
+func relayDoubleConfig(id string) hook.HandleConfig {
+	hc := hookConfig(envWith(id), hookParent{PID: 4242, Start: storefix.SeedPaneStarttime, Name: "claude"})
+	hc.RelayTimeout = 30 * time.Second
+	return hc
 }
 
 // envWith is a relay-on hook environment for instance id.
@@ -98,7 +161,9 @@ func (errReader) Read([]byte) (int, error) { return 0, errors.New("simulated std
 // TestHandleErrorPaths: Handle returns nil on every path, makes only the store
 // calls before a failure, logs the failure and prints the envelope the event
 // and relay mode call for: nothing (SRD §3.2, b.45p), deny (SRD §6.4) or, for
-// the relayed request that is decided, the decision.
+// the relayed request that is decided, the decision. A relayed request makes
+// no separate state write: its first write is the request with the move to
+// check_permission (b.146 rule 1).
 func TestHandleErrorPaths(t *testing.T) {
 	const (
 		id   = "id-1"
@@ -137,13 +202,11 @@ func TestHandleErrorPaths(t *testing.T) {
 		// SRD §6.4: relay on, a PermissionRequest's failures are a deny envelope.
 		{name: "PermissionRequest, no instance id", env: relayOnNoID, payload: pr, want: deny},
 		{name: "PermissionRequest, invalid instance id", env: envWith("id/with/slash"), payload: pr, want: deny},
-		{name: "PermissionRequest, transition error", env: relayOn, payload: pr, st: &flakyRelayStore{transitionErr: dbErr},
-			transitions: 1, want: deny, outcome: "error"},
-		{name: "PermissionRequest, upsert error", env: relayOn, payload: pr, st: &flakyRelayStore{upsertErr: dbErr},
-			transitions: 1, want: deny, log: "relay: upsert", outcome: "error", noRelayLines: true},
+		{name: "PermissionRequest, first write error", env: relayOn, payload: pr, st: &flakyRelayStore{insertErr: dbErr},
+			want: deny, log: "first write", outcome: "error", noRelayLines: true},
 		{name: "PermissionRequest, allowed", env: relayOn, payload: pr,
-			st:          &flakyRelayStore{getRows: []store.PermissionRow{{Decision: "allow", DecisionReason: "trusted"}}, getErrs: []error{nil}},
-			transitions: 1, want: hook.EncodeDecision(hook.EventNamePermissionRequest, "allow", "trusted") + "\n"},
+			st:   &flakyRelayStore{getRows: []store.PermissionRow{{Decision: "allow", DecisionReason: "trusted"}}, getErrs: []error{nil}},
+			want: hook.EncodeDecision(hook.EventNamePermissionRequest, "allow", "trusted") + "\n", outcome: "inserted"},
 		// b.45p: relay on, a hook that is not (or may not be) a PermissionRequest prints nothing.
 		{name: "relay on, malformed payload", env: relayOn, payload: "not json"},
 		{name: "relay on, stdin read error", env: relayOn, log: "read payload"},
@@ -164,8 +227,9 @@ func TestHandleErrorPaths(t *testing.T) {
 			var stdout, logBuf bytes.Buffer
 			before := len(readTrailLines(t, trailFile()))
 
-			err := hook.Handle(context.Background(), stdin, &stdout, st,
-				hook.HandleConfig{Env: tc.env, Cfg: config.Relay{TimeoutSeconds: 1}}, log.New(&logBuf, "", 0))
+			hc := relayDoubleConfig(id)
+			hc.Env = tc.env
+			err := hook.Handle(context.Background(), stdin, &stdout, st, hc, log.New(&logBuf, "", 0))
 
 			if err != nil || stdout.String() != tc.want {
 				t.Errorf("Handle = %v, stdout %q; want nil, %q", err, stdout.String(), tc.want)

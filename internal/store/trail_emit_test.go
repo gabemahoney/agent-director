@@ -92,41 +92,47 @@ func assertSpawnStateTransitionFields(t *testing.T, row map[string]any, instance
 	}
 }
 
-// TestRowMutationEmit: a committed permission_requests insert or decide emits
-// one ad.row_mutation.committed line carrying its writer, kind, decision and
-// reason (find_missing never inserts); the same write repeated, a collision or
-// a decide of a decided row, writes and emits nothing.
+// TestRowMutationEmit (SR-A-2.5; b.146 rules 1, 3, 12): each committed
+// permission_requests write emits, after its commit, one
+// ad.row_mutation.committed line carrying its writer, kind, decision and
+// reason: the relay hook's first write (an insert, with its row's state
+// transition to check_permission), decide's verdict, the relay hook's timeout
+// deny and find-missing's deny at its mark. The same write repeated (a token
+// collision, or a request no longer undecided) writes and emits nothing.
 func TestRowMutationEmit(t *testing.T) {
+	type write func(t *testing.T, s *Store) (bool, error)
+	decide := func(decision, reason string) write {
+		return func(_ *testing.T, s *Store) (bool, error) {
+			return s.DecideRelayRequest(relayID, tokenA, decision, reason, WriterProcessDecide, time.Time{}, DefaultLockWait)
+		}
+	}
 	cases := []struct {
 		name, writer, kind       string
-		decision, reason         string // the decide's arguments
-		wantDecision, wantReason any    // nil: JSON null
+		write                    write
+		wantDecision, wantReason any // nil: JSON null
 	}{
-		{"hook insert", WriterProcessHook, "insert", "", "", nil, nil},
-		{"decide insert", WriterProcessDecide, "insert", "", "", nil, nil},
-		{"decide allow", WriterProcessDecide, "update", "allow", "", "allow", nil},
-		{"decide deny operator", WriterProcessDecide, "update", "deny", "operator", "deny", "operator"},
-		{"find_missing deny", WriterProcessFindMissing, "update", "deny", WriterProcessFindMissing, "deny", WriterProcessFindMissing},
+		{"relay hook's first write", WriterProcessHook, "insert", func(_ *testing.T, s *Store) (bool, error) {
+			_, applied, err := s.InsertRelayRequest(relayID, agentGate("PermissionRequest", ""), relayReq(tokenA), 0, DefaultLockWait)
+			return applied.Applied, err
+		}, nil, nil},
+		{"decide allow", WriterProcessDecide, "update", decide("allow", ""), "allow", nil},
+		{"decide deny operator", WriterProcessDecide, "update", decide("deny", DecisionReasonOperator), "deny", DecisionReasonOperator},
+		{"relay hook's timeout deny", WriterProcessHook, "update", func(_ *testing.T, s *Store) (bool, error) {
+			return s.DenyRelayTimeout(relayID, tokenA, time.Now(), DefaultLockWait, nil)
+		}, "deny", DecisionReasonTimeout},
+		{"find_missing deny at the mark", WriterProcessFindMissing, "update", func(t *testing.T, s *Store) (bool, error) {
+			_, res, err := s.MarkMissingIfSameLife(relayID, mustGetSpawn(t, s, relayID).Snapshot)
+			return res == CondApplied, err
+		}, "deny", DecisionReasonFindMissing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := openTempStore(t)
-			id := "trail-emit-" + tc.name
-			seedSpawnForPerm(t, s, id, "on")
-			write := func() (bool, error) {
-				if tc.kind == "insert" {
-					err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, tc.writer)
-					return err == nil, err
-				}
-				return s.DecidePermissionRequest(id, tokenA, tc.decision, tc.reason, tc.writer)
-			}
+			s, _ := newRelayRow(t, "on", StateWorking)
 			if tc.kind == "update" {
-				if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
-					t.Fatalf("seed request: %v", err)
-				}
+				insertRelay(t, s, relayReq(tokenA))
 			}
 			mark := TrailMark(t)
-			if ok, err := write(); err != nil || !ok {
+			if ok, err := tc.write(t, s); err != nil || !ok {
 				t.Fatalf("write = %v, %v; want applied", ok, err)
 			}
 			lines := trailEventsSince(t, mark, "ad.row_mutation.committed")
@@ -138,8 +144,15 @@ func TestRowMutationEmit(t *testing.T) {
 				t.Errorf("[ts] = %v; want an SR-A-7.9 timestamp", row["ts"])
 			}
 			for key, want := range map[string]string{"source": "ad_store", "writer_process": tc.writer,
-				"mutation_kind": tc.kind, "claude_instance_id": id, "request_token": tokenA, "tool_name": "Bash"} {
+				"mutation_kind": tc.kind, "claude_instance_id": relayID, "request_token": tokenA, "tool_name": "Bash"} {
 				assertTrailStr(t, row, key, want)
+			}
+			if tc.kind == "insert" {
+				if lines := TrailEventsSince(t, mark, "ad.spawn.state_transition", relayID); len(lines) != 1 {
+					t.Errorf("state_transition lines = %d; want 1", len(lines))
+				} else {
+					assertSpawnStateTransitionFields(t, lines[0], relayID, StateWorking, StateCheckPermission, "PermissionRequest", false)
+				}
 			}
 			if _, ok := row["request_id"].(float64); !ok {
 				t.Errorf("[request_id] = %v; want a number", row["request_id"])
@@ -151,7 +164,7 @@ func TestRowMutationEmit(t *testing.T) {
 			}
 
 			mark = TrailMark(t)
-			if ok, err := write(); ok || (tc.kind == "insert") != errors.Is(err, ErrRequestTokenCollision) ||
+			if ok, err := tc.write(t, s); ok || (tc.kind == "insert") != errors.Is(err, ErrRequestTokenCollision) ||
 				(tc.kind == "update" && err != nil) {
 				t.Errorf("repeated %s = %v, %v; want a collision, or not applied with no error", tc.kind, ok, err)
 			}

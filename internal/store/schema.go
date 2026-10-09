@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// schemaDDL is the canonical schema v6 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v7 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -49,6 +49,14 @@ import (
 // nullable: the process that began the row's current launch (LaunchOwner).
 // The column order and constraint text match migrateV5toV6 exactly, so a
 // fresh store and a migrated store have identical column lists.
+//
+// v7 changes vs v6 (b.146 steps 2, 2b and 2c, one release, one migration):
+// the columns v7Columns lists, in its order — on permission_requests,
+// appended after created_at, the relay hook's identity, its delivery and
+// settle instants, the reader and decide facts, the pane-answer columns and
+// the close marker closed_at; on spawns, idle_since after launch_owner_pidns. The column text matches
+// v7Columns exactly (the two-places rule), so a fresh store and a migrated
+// store have identical column lists.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     claude_instance_id         TEXT PRIMARY KEY,
@@ -83,7 +91,8 @@ CREATE TABLE IF NOT EXISTS spawns (
     pane_starttime             TEXT,
     launch_owner_pid           INTEGER,
     launch_owner_starttime     TEXT,
-    launch_owner_pidns         TEXT
+    launch_owner_pidns         TEXT,
+    idle_since                 TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -100,6 +109,22 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     decision_reason     TEXT,
     decided_at          TIMESTAMP,
     created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    hook_pid            INTEGER,
+    hook_starttime      TEXT,
+    hook_pidns          TEXT,
+    tool_use_id         TEXT,
+    agent_id            TEXT,
+    delivered_at        INTEGER,
+    settled_at          INTEGER,
+    hook_gone_at        INTEGER,
+    attempted_decision  TEXT,
+    attempted_at        INTEGER,
+    pane_answer         TEXT NOT NULL DEFAULT 'none',
+    pane_as             TEXT,
+    pane_sender_pid       INTEGER,
+    pane_sender_starttime TEXT,
+    pane_sender_pidns     TEXT,
+    closed_at           INTEGER,
     UNIQUE(claude_instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(claude_instance_id, decision);
@@ -144,6 +169,7 @@ var migrationSteps = []migrationStep{
 	{from: 3, apply: migrateV3toV4},
 	{from: 4, apply: migrateV4toV5},
 	{from: 5, apply: migrateV5toV6},
+	{from: 6, apply: migrateV6toV7},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -546,6 +572,111 @@ func migrateV5toV6(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v5→v6 migration tx: %w", err)
+	}
+	return nil
+}
+
+// v7Columns is every column migrateV6toV7 adds, in order, with the exact
+// column text schemaDDL uses (the two-places rule). v7 is the one migration
+// of b.146 steps 2, 2b and 2c, which ship in one release: a later step adds
+// its columns by appending entries here and the same text to schemaDDL.
+//
+// On permission_requests (b.146 rules 2, 3, 5, 14, 15, 16):
+//   - hook_pid, hook_starttime, hook_pidns: the relay hook that recorded the
+//     request, read at its start (its pid, /proc/self/stat field 22 and the
+//     target of /proc/self/ns/pid), so a reader can tell whether it is gone;
+//   - tool_use_id, agent_id: from the hook input;
+//   - delivered_at: the hook's ack, committed before it writes its answer
+//     (milliseconds since the epoch, as the other three instants below);
+//   - settled_at: the hook's kill instant plus the reserve, the time a reader
+//     falls back to when it cannot check the hook process; NULL on a request
+//     recorded before v7, which falls back by its created_at and the relay
+//     window as before;
+//   - hook_gone_at: when a reader first found the hook gone;
+//   - attempted_decision, attempted_at: a refused decide's verdict, shown and
+//     never acted on;
+//   - pane_answer ('none' until a pane answer is recorded), pane_as and the
+//     pane answer's sender identity (pane_sender_pid, pane_sender_starttime,
+//     pane_sender_pidns), written by step 2b's pane answers;
+//   - closed_at: when find-missing's mark closed the request (b.146 rule 12),
+//     a request that still awaited an answer when its Spawn was marked
+//     missing, decided or not (milliseconds since the epoch). A closed
+//     request no longer awaits an answer. NULL on every request recorded
+//     before v7 and on every request no mark closed.
+//
+// On spawns (b.146 problem 3): idle_since, the time the main agent's
+// idle-prompt Notification last landed, NULLed by any later hook.
+var v7Columns = []struct{ table, name, ddl string }{
+	{"permission_requests", "hook_pid", "ALTER TABLE permission_requests ADD COLUMN hook_pid INTEGER"},
+	{"permission_requests", "hook_starttime", "ALTER TABLE permission_requests ADD COLUMN hook_starttime TEXT"},
+	{"permission_requests", "hook_pidns", "ALTER TABLE permission_requests ADD COLUMN hook_pidns TEXT"},
+	{"permission_requests", "tool_use_id", "ALTER TABLE permission_requests ADD COLUMN tool_use_id TEXT"},
+	{"permission_requests", "agent_id", "ALTER TABLE permission_requests ADD COLUMN agent_id TEXT"},
+	{"permission_requests", "delivered_at", "ALTER TABLE permission_requests ADD COLUMN delivered_at INTEGER"},
+	{"permission_requests", "settled_at", "ALTER TABLE permission_requests ADD COLUMN settled_at INTEGER"},
+	{"permission_requests", "hook_gone_at", "ALTER TABLE permission_requests ADD COLUMN hook_gone_at INTEGER"},
+	{"permission_requests", "attempted_decision", "ALTER TABLE permission_requests ADD COLUMN attempted_decision TEXT"},
+	{"permission_requests", "attempted_at", "ALTER TABLE permission_requests ADD COLUMN attempted_at INTEGER"},
+	{"permission_requests", "pane_answer", "ALTER TABLE permission_requests ADD COLUMN pane_answer TEXT NOT NULL DEFAULT 'none'"},
+	{"permission_requests", "pane_as", "ALTER TABLE permission_requests ADD COLUMN pane_as TEXT"},
+	{"permission_requests", "pane_sender_pid", "ALTER TABLE permission_requests ADD COLUMN pane_sender_pid INTEGER"},
+	{"permission_requests", "pane_sender_starttime", "ALTER TABLE permission_requests ADD COLUMN pane_sender_starttime TEXT"},
+	{"permission_requests", "pane_sender_pidns", "ALTER TABLE permission_requests ADD COLUMN pane_sender_pidns TEXT"},
+	{"permission_requests", "closed_at", "ALTER TABLE permission_requests ADD COLUMN closed_at INTEGER"},
+	{"spawns", "idle_since", "ALTER TABLE spawns ADD COLUMN idle_since TEXT"},
+}
+
+// migrateV6toV7 upgrades a v6 database to v7 inside a single transaction
+// (b.146 steps 2, 2b and 2c): it adds v7Columns, in order, and stamps
+// user_version = 7 as the last statement.
+//
+// There is no phase 3 and no backfill: ADD COLUMN gives every existing
+// request NULL in every new column but pane_answer, which takes its default
+// 'none' (no pane answer recorded), and every row NULL idle_since. A request
+// recorded before the upgrade therefore has no hook identity and no
+// settled_at: readers fall back by its created_at and the relay window, as
+// before the upgrade. No existing value is rewritten, and store_meta and its
+// store id are kept.
+//
+// SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER
+// is guarded by a pragma_table_info probe of its own table and skipped when
+// the column is already present, making the hop idempotent on re-entry. Any
+// probe or ALTER failure rolls the whole hop back, leaving user_version=6 and
+// none of the new columns.
+func migrateV6toV7(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v6→v7 migration tx: %w", err)
+	}
+	for _, col := range v7Columns {
+		// The table name comes from the trusted literal list above, never
+		// from input; pragma_table_info takes it as a bound argument.
+		var exists int
+		err := tx.QueryRow(
+			"SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+			col.table, col.name,
+		).Scan(&exists)
+		switch {
+		case err == nil:
+			// Column already present — skip to stay idempotent.
+			continue
+		case errors.Is(err, sql.ErrNoRows):
+			// Column absent — add it below.
+		default:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v6→v7 probe %s.%s: %w", col.table, col.name, err)
+		}
+		if _, err := tx.Exec(col.ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v6→v7 add %s.%s: %w", col.table, col.name, err)
+		}
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 7"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v6→v7 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v6→v7 migration tx: %w", err)
 	}
 	return nil
 }

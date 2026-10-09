@@ -21,14 +21,13 @@ import (
 // Every write takes the hook's store.HookGate and reports store.HookApplied
 // (SR-22.9): the gate is a condition of each write's own statement. GetSpawn
 // gives SessionStart the snapshot it examines (SR-5.3) and ad.hook.ignored
-// its row fields (SR-14).
+// its row fields (SR-14). A relayed PermissionRequest also needs the relay
+// writes (RelayStore), which *store.Store has.
 type HookStore interface {
 	GetSpawn(instanceID string) (store.Spawn, error)
 	ApplyHookTransition(instanceID string, gate store.HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.HookApplied, error)
 	RecordSessionStartIdentity(instanceID string, gate store.HookGate, jsonlPath string, jsonlPresent bool) (applied store.HookApplied, snapshotChanged bool, err error)
-	UpsertOpenPermissionRequest(instanceID string, gate store.HookGate, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.HookApplied, error)
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
 }
 
 // outcomeTransitioner is an optional extension of HookStore. *store.Store
@@ -77,7 +76,31 @@ type HandleConfig struct {
 	// Tests inject a virtual clock that Clock.Sleep advances; the difference
 	// between two of its readings is the virtual elapsed time. A nil Now means
 	// SessionStart never waits.
+	//
+	// The relay hook's timing (b.146 rule 4) reads it too: its kill instant
+	// (Start plus RelayTimeout), its first write's and its ack's cut, and its
+	// poll's deadline. A nil Now gives the relay hook time.Now.
 	Now func() time.Time
+	// Start is the instant the hook process started, on Now's clock:
+	// cmd/agent-director reads time.Now first thing in the hook verb. The
+	// relay hook's kill instant is Start plus RelayTimeout (b.146 rule 4).
+	// The zero time reads Now at Handle's entry.
+	Start time.Time
+	// RelayTimeout is the per-hook timeout spawn wrote for the relay hook in
+	// the agent's settings, its --timeout argument (b.146 rule 4): Claude Code
+	// kills the hook at Start plus it. Zero or negative (a hook entry spawned
+	// before this argument existed, or an unparseable one) reads Cfg's
+	// effective relay window, the value spawn writes there.
+	RelayTimeout time.Duration
+	// Self reads the hook process's own identity at its start, which the
+	// relay hook records with its request (b.146 rules 2 and 14): its pid,
+	// its start time (/proc/self/stat field 22) and its pid namespace (the
+	// target of /proc/self/ns/pid). It returns the zero identity when it
+	// cannot read the start time or the namespace. cmd/agent-director wires
+	// the per-OS readers; tests inject a double. A nil Self records no
+	// identity: readers then cannot tell whether the hook is gone and fall
+	// back to its settle instant.
+	Self func() store.ProcessIdentity
 	// PendingGrace is the effective pending grace period
 	// (config.Tmux.EffectivePendingGrace, SR-13.4): SessionStart waits for its
 	// launch's identity write until the row's launch start plus PendingGrace,
@@ -88,12 +111,29 @@ type HandleConfig struct {
 	PendingGrace time.Duration
 }
 
+// clock is hc.Now, or time.Now when it is nil (the relay hook's clock).
+func (hc HandleConfig) clock() func() time.Time {
+	if hc.Now == nil {
+		return time.Now
+	}
+	return hc.Now
+}
+
+// self is hc.Self's identity, or the zero identity when it is nil.
+func (hc HandleConfig) self() store.ProcessIdentity {
+	if hc.Self == nil {
+		return store.ProcessIdentity{}
+	}
+	return hc.Self()
+}
+
 // Handle is the entry point cmd/ dispatches into. It captures the hook's
-// parent process, reads the payload from stdin, classifies the event, applies
-// the gated row write, and — when the event is PermissionRequest AND
-// AGENT_DIRECTOR_RELAY_MODE=on and the write applied — runs the relay flow
-// (INSERT per-request-token + polling loop + envelope on stdout per SRD
-// §6.2/§6.3).
+// parent process, reads the payload from stdin, classifies the event and
+// applies the gated row write. When the event is PermissionRequest AND
+// AGENT_DIRECTOR_RELAY_MODE=on it runs the relay flow instead (runRelay, SRD
+// §6.2/§6.3; b.146 step 2): one gated transaction records the request and the
+// move to check_permission together, then the polling loop, then the acked
+// answer on stdout.
 //
 // The gate (SR-22.9): the hook's parent pid (HandleConfig.ParentPID) and that
 // pid's start time (HandleConfig.ParentProc) are captured once, at entry,
@@ -137,19 +177,26 @@ type HandleConfig struct {
 // that write is logged, so no_pane_recorded is written for SessionStart only
 // after its bounded wait (recordSessionStart). Only
 // SessionStart waits, a subagent's never does, and the wait makes no tmux
-// call. Every other event is one gated
-// ApplyHookTransitionResult with the payload's session id, transcript path and
-// its presence on disk; the session id is recorded, never a gate. The main
-// agent's idle-prompt Notification is ApplyHookWaitingIfWorking instead, with
-// the same gate and records: a row working when it lands returns to waiting,
-// and any other row is soft refreshed (applyOrdinaryHook; b.svb).
+// call. Every other event but a relayed PermissionRequest (whose write is
+// runRelay's) is one gated ApplyHookTransitionResult with the payload's
+// session id, transcript path and its presence on disk; the session id is
+// recorded, never a gate. The main agent's idle-prompt Notification is
+// ApplyHookWaitingIfWorking instead, with the same gate and records: a row
+// working, or relayed and in check_permission with no permission request that
+// still awaits an answer, returns to waiting, any other row is soft
+// refreshed, and
+// either way the row records idle_since (applyOrdinaryHook; b.svb, b.146
+// problem 3).
 //
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
-// and returns nil. The relay flow has stronger fail-closed semantics
-// per SRD §6.4 — every failure path emits a deny envelope before
-// returning, so Claude Code never hangs. A relayed PermissionRequest that
-// the gate did not apply returns no decision (empty stdout), so the
-// process's own Claude Code asks as it would with no relay.
+// and returns nil. The relay flow is fail-closed per SRD §6.4 and b.146
+// rule 3: a failure before its request is recorded (its first write
+// included) emits a deny envelope, so no dialog appears; once the request is
+// recorded, the hook writes only an answer it has acked, and every failure
+// ends with an empty stdout, so Claude Code's own dialog appears and the
+// request falls back. A relayed PermissionRequest that the gate did not apply
+// returns no decision (empty stdout), so the process's own Claude Code asks
+// as it would with no relay.
 //
 // Exactly one ad.hook.fired trail event is emitted per invocation
 // regardless of exit path (SR-A-2.1); an ignored hook's upsert_outcome is
@@ -160,6 +207,12 @@ type HandleConfig struct {
 // Stdout is reserved for the decision envelope; state-tracking events
 // (everything except an on-relay PermissionRequest) leave it empty.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
+	// The hook's start, from which the relay hook's kill instant is counted
+	// (b.146 rule 4).
+	start := hc.Start
+	if start.IsZero() {
+		start = hc.clock()()
+	}
 	// The gate's identity, captured before any store call (SR-22.9).
 	parent := captureParent(hc)
 
@@ -277,9 +330,19 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		SessionID:   sessionID,
 	}
 	jsonlPresent := transcriptPresent(transcriptPath)
+	onIgnored := func(reason string) {
+		emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
+			instanceID: instanceID,
+			event:      res.EventName,
+			sessionID:  res.SessionID,
+			parent:     parent,
+			reason:     reason,
+		})
+	}
 
 	var applied store.HookApplied
-	if res.EventName == "SessionStart" {
+	switch {
+	case res.EventName == "SessionStart":
 		var outcome store.UpsertOutcome
 		applied, outcome, err = recordSessionStart(ctx, st, hc, instanceID, gate, transcriptPath, jsonlPresent, logger)
 		fields["upsert_outcome"] = string(outcome)
@@ -287,7 +350,22 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
 			return nil
 		}
-	} else {
+	case relayActive && res.EventName == EventNamePermissionRequest:
+		// The relay branch (b.146 rule 1): its first write records the
+		// request and the move to check_permission in one gated
+		// transaction, so no separate state write comes first. It writes
+		// the hook's one ad.hook.ignored itself when the gate does not hold.
+		runRelay(ctx, stdout, st, hc, newRelayClock(hc, start), logger, relayInput{
+			instanceID:        instanceID,
+			gate:              gate,
+			parent:            parent,
+			agentID:           res.AgentID,
+			transcriptPath:    transcriptPath,
+			transcriptPresent: jsonlPresent,
+			raw:               raw,
+		}, fields, onIgnored)
+		return nil
+	default:
 		var upsertOutcome store.UpsertOutcome
 		upsertOutcome, applied, err = applyOrdinaryHook(st, instanceID, gate, res, transcriptPath, jsonlPresent)
 		fields["upsert_outcome"] = string(upsertOutcome)
@@ -297,49 +375,22 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		}
 	}
 
-	if !applied.Applied {
-		// Not this row's agent (or no row): nothing written, no relay, no
-		// decision on stdout, exit 0 (SR-22.9).
-		if applied.Reason != "" {
-			emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
-				instanceID: instanceID,
-				event:      res.EventName,
-				sessionID:  res.SessionID,
-				parent:     parent,
-				reason:     applied.Reason,
-			})
-		}
-		return nil
+	if !applied.Applied && applied.Reason != "" {
+		// Not this row's agent: nothing written, no decision on stdout, exit
+		// 0 (SR-22.9). No row: the same, with no ad.hook.ignored.
+		onIgnored(applied.Reason)
 	}
-
-	// Relay branch. Only PermissionRequest events with explicit
-	// relay-on env take the polling path; everything else falls
-	// through to the standard state-tracking exit (no stdout).
-	if relayActive && res.EventName == EventNamePermissionRequest {
-		clock := hc.Clock
-		if clock == nil {
-			clock = DefaultPollClock()
-		}
-		onIgnored := func(reason string) {
-			emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
-				instanceID: instanceID,
-				event:      res.EventName,
-				sessionID:  res.SessionID,
-				parent:     parent,
-				reason:     reason,
-			})
-		}
-		runRelay(ctx, stdout, st, hc.Cfg, clock, logger, instanceID, gate, raw, fields, onIgnored)
-	}
-
 	return nil
 }
 
-// applyOrdinaryHook is Handle's gated write of every event but SessionStart,
-// with ad.hook.fired's upsert_outcome. The main agent's idle-prompt
-// Notification (res.WaitingIfWorking) is ApplyHookWaitingIfWorking: a row
-// working when the write lands returns to waiting, any other row is soft
-// refreshed (b.svb). Every other event is one ApplyHookTransitionResult. A
+// applyOrdinaryHook is Handle's gated write of every event but SessionStart
+// and a relayed PermissionRequest, with ad.hook.fired's upsert_outcome. The
+// main agent's idle-prompt Notification (res.WaitingIfWorking) is
+// ApplyHookWaitingIfWorking: a row working, or relayed and in
+// check_permission with no permission request that still awaits an answer,
+// returns to waiting, any other row is soft refreshed, and the row records
+// idle_since (b.svb, b.146
+// problem 3). Every other event is one ApplyHookTransitionResult. A
 // store without those (a test double) gets ApplyHookTransition, which for the
 // idle-prompt Notification is the soft refresh res also carries, and the
 // outcome is store.UpsertNoChange as a conservative sentinel (store.UpsertError

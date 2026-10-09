@@ -200,41 +200,50 @@ func TestTrailEmitHookFired(t *testing.T) {
 }
 
 // TestTrailEmitRelayLines: a relayed PermissionRequest that polls prints its
-// decision (a poll that fails closed, a deny, SRD §6.4) and writes one
+// acked answer (a verdict, or its timeout deny, SRD §6.4) and writes one
 // ad.relay_attempt.completed (CASE B: the relay is DB-poll based, so its fields
 // are degenerate) and, after its envelope, one ad.resume.observed with the
 // verdict and a numeric elapsed_ms_from_row_open (non-negative and small for a
-// row just opened); both carry ad.hook.fired's request_token.
+// row just opened); both carry ad.hook.fired's request_token. A poll whose
+// reads keep failing answers nothing and writes no ad.resume.observed (b.146
+// rule 3).
 func TestTrailEmitRelayLines(t *testing.T) {
 	cases := []struct {
 		verdict          string
 		rows             []store.PermissionRow
 		errs             []error
-		behavior, reason string // the envelope
+		behavior, reason string // the envelope; "" = none
 	}{
 		{"allow", []store.PermissionRow{{Decision: "allow", DecisionReason: "ok", CreatedAt: time.Now()}}, []error{nil}, "allow", "ok"},
 		{"deny", []store.PermissionRow{{Decision: "deny", DecisionReason: "nope"}}, []error{nil}, "deny", "nope"},
 		{"timeout", []store.PermissionRow{{}}, []error{nil}, "deny", ""},
-		{"error", make([]store.PermissionRow, 10), repeatErr(10, errors.New("db error")), "deny", ""},
+		{"error", make([]store.PermissionRow, 10), repeatErr(10, errors.New("db error")), "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.verdict, func(t *testing.T) {
 			id := "te-relay-lines-" + tc.verdict
-			now, restore := setupVirtualClock(t)
-			defer restore()
 			before := len(readTrailLines(t, trailFile()))
 			var stdout bytes.Buffer
 			if err := hook.Handle(context.Background(), strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Write"}`),
-				&stdout, &flakyRelayStore{getRows: tc.rows, getErrs: tc.errs},
-				hook.HandleConfig{Env: envWith(id), Cfg: config.Relay{TimeoutSeconds: 1}, Clock: &advancingClock{now: now}}, nil); err != nil {
+				&stdout, &flakyRelayStore{getRows: tc.rows, getErrs: tc.errs}, relayDoubleConfig(id), nil); err != nil {
 				t.Fatalf("Handle: %v", err)
 			}
-			if want := hook.EncodeDecision(hook.EventNamePermissionRequest, tc.behavior, tc.reason) + "\n"; stdout.String() != want {
+			want := ""
+			if tc.behavior != "" {
+				want = hook.EncodeDecision(hook.EventNamePermissionRequest, tc.behavior, tc.reason) + "\n"
+			}
+			if stdout.String() != want {
 				t.Errorf("stdout = %q; want %q", stdout.String(), want)
 			}
 
 			token, _ := hookFiredAt(t, before)["request_token"].(string)
 			attempt, resume := linesAfter(t, before, "ad.relay_attempt.completed", id), linesAfter(t, before, "ad.resume.observed", id)
+			if tc.behavior == "" {
+				if token == "" || len(attempt) != 1 || len(resume) != 0 {
+					t.Errorf("ad.hook.fired token %q, %d ad.relay_attempt.completed, %d ad.resume.observed; want a token, 1, 0", token, len(attempt), len(resume))
+				}
+				return
+			}
 			if token == "" || len(attempt) != 1 || len(resume) != 1 {
 				t.Fatalf("ad.hook.fired token %q, %d ad.relay_attempt.completed, %d ad.resume.observed; want a token, 1, 1", token, len(attempt), len(resume))
 			}

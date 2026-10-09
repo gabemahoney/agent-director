@@ -1,7 +1,8 @@
 /**
  * Smoke test — list verb
  *
- * Happy path: the seeded row is listed with its state and cwd.
+ * Happy path: the seeded row is listed with its state and cwd, and a
+ * check_permission row with its open requests and their delivery facts.
  * Error path: a label without "=" → ErrListInvalidLabel.
  */
 
@@ -17,6 +18,20 @@ test("list: happy path — returns seeded spawns array", async () => {
     const row = (await client.list({})).spawns.find((r) => r.claude_instance_id === "smoke-list-id");
     expect(row?.state).toBe("working");
     expect(typeof row?.cwd).toBe("string");
+    expect(row?.permission_requests).toEqual([]);
+  });
+}, 10_000);
+
+test("list: a check_permission row carries its open requests with their delivery facts (b.146 rule 15)", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    runHelper("seed-spawn", { store, state: "check_permission", id: "smoke-list-cp-id", "relay-mode": "on", "create-store": true });
+    const token = runHelper("seed-permission-request", { store, "spawn-id": "smoke-list-cp-id", tool: "Bash" })["request_token"];
+    using client = await openClient(store);
+    const row = (await client.list({})).spawns.find((r) => r.claude_instance_id === "smoke-list-cp-id");
+    expect(row?.permission_requests).toHaveLength(1);
+    expect(row?.permission_requests[0]).toMatchObject({ request_token: token, decision: null, delivery: "not_confirmed",
+      hook_alive: null, hook_gone_at: null, attempted_decision: null, attempted_at: null, tool_use_id: null });
   });
 }, 10_000);
 

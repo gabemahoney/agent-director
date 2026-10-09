@@ -86,13 +86,31 @@ type Client struct {
 	// read-pane's lookup checks the server with it.
 	// Tests replace it per Client.
 	procChecker ProcChecker
-	// sleep pauses kill's process wait between two readings (SR-6.1) and
-	// decide's wait for a fallen-back request's relay hook (b.pzy),
-	// time.Sleep in production. Tests replace it per Client, so the shared
-	// test clock advances in virtual time (Appendix F.5).
-	sleep  func(time.Duration)
-	mu     sync.Mutex
-	closed bool
+	// sleep pauses kill's process wait between two readings (SR-6.1),
+	// decide's wait for its verdict's ack (b.146 rule 16) and its wait for a
+	// pre-v7 request's relay hook to settle (b.pzy), time.Sleep in
+	// production. Tests replace it per Client, so the shared test clock
+	// advances in virtual time (Appendix F.5).
+	sleep func(time.Duration)
+	// selfPIDNS reads this process's own pid namespace, in which a recorded
+	// relay hook is judged (b.146 rule 14): probe.SelfPIDNamespace in
+	// production. Tests replace it per Client. nil reads an unknown
+	// namespace, so every hook is judged "can't tell".
+	selfPIDNS func() (string, bool)
+	mu        sync.Mutex
+	closed    bool
+}
+
+// relayView is the RelayView of the Client's reads and decide: its
+// start-time reader, its pid namespace reader, its clock and the configured
+// effective relay window.
+func (c *Client) relayView() RelayView {
+	return RelayView{
+		Procs:        c.procChecker,
+		PIDNamespace: c.selfPIDNS,
+		Now:          c.now,
+		Window:       time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second,
+	}
 }
 
 // New constructs a Client from opts, wiring config, store, and tmux.
@@ -108,9 +126,10 @@ type Client struct {
 //     query, action and create timeouts and the pipe-close wait taken from
 //     the loaded config's [tmux] table at construction (SR-2.4, SR-4.1), so
 //     a changed value applies to the next Client built.
-//  6. Set the Client's clock (time.Now), its sleep (time.Sleep) and the
-//     production start-time reader (probe.NewProcChecker). This store's id is read once by the
-//     store's open (Store.StoreID) and used from there.
+//  6. Set the Client's clock (time.Now), its sleep (time.Sleep), the
+//     production start-time reader (probe.NewProcChecker) and its own pid
+//     namespace reader (probe.SelfPIDNamespace). This store's id is read
+//     once by the store's open (Store.StoreID) and used from there.
 //
 // On any error a nil *Client is returned together with a descriptive,
 // errors.Is-matchable error. The constructor never leaves partially-
@@ -216,6 +235,7 @@ func New(opts Options) (*Client, error) {
 		now:         time.Now,
 		procChecker: probe.NewProcChecker(),
 		sleep:       time.Sleep,
+		selfPIDNS:   probe.SelfPIDNamespace,
 	}, nil
 }
 

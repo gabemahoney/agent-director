@@ -6,10 +6,12 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// PermissionRequestInfo is the open permission_requests row projection
-// surfaced on `get` when the spawn is in state `check_permission`.
-// ToolInput is the raw JSON string from the DB column — callers parse
-// it themselves; the verb MUST NOT re-encode it as a nested object.
+// PermissionRequestInfo is the projection of an open permission request (one
+// that still awaits an answer, b.146 rule 9) surfaced on `get` and `list`
+// rows in state `check_permission`. ToolInput is the raw JSON string from the
+// DB column — callers parse it themselves; the verb MUST NOT re-encode it as
+// a nested object. The embedded RequestDelivery carries the request's
+// delivery facts (b.146 rule 15).
 type PermissionRequestInfo struct {
 	// RequestID is the autoincrement primary key of the permission_requests row.
 	RequestID int64 `json:"request_id"`
@@ -25,6 +27,15 @@ type PermissionRequestInfo struct {
 	// RequestedAt is the RFC3339 timestamp when the permission request row was
 	// created (created_at column).
 	RequestedAt time.Time `json:"requested_at"`
+	// Decision is the verdict recorded on the request, "allow" or "deny";
+	// null while none is. A recorded verdict is not the outcome: Delivery
+	// says whether it reached the agent (an open request's verdict has not
+	// been acked yet).
+	Decision *string `json:"decision"`
+	// DecisionReason is the recorded verdict's decision_reason; null when
+	// none is recorded.
+	DecisionReason *string `json:"decision_reason"`
+	RequestDelivery
 }
 
 // SpawnRow is the JSON-friendly projection of store.Spawn. Field names
@@ -109,11 +120,13 @@ type SpawnRow struct {
 	// unreported never replaces provenance_conflict. Nil (omitted) when NULL
 	// in the store. Same "" == NULL mapping.
 	LivenessNote *string `json:"liveness_note,omitempty"`
-	// PermissionRequests is the slice of open permission requests awaiting
-	// orchestrator decisions. Populated only when state is check_permission;
-	// always a non-nil slice (encodes as [] when empty, never null, never
-	// omitted). Callers use the request_token of each element to target a
-	// specific row with the decide verb.
+	// PermissionRequests is the slice of open permission requests: those that
+	// still await an answer (not acked by their relay hook and not answered
+	// at the pane, decided or not; one recorded before schema v7 while
+	// undecided), each with its delivery facts. Populated only when state is
+	// check_permission; always a non-nil slice (encodes as [] when empty,
+	// never null, never omitted). Callers use the request_token of each
+	// element to target a specific row with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
 	// TranscriptStatus is a derived, operator-facing summary of the current
 	// session's transcript state (b.v2c AC8). Session history belongs to a
@@ -216,9 +229,13 @@ func launchStartedAt(state string, millis int64) *time.Time {
 
 // GetStore is the narrow store surface Get needs. Matches the existing
 // methods on *store.Store; defined as an interface so api.Get's
-// permission-fetch branch is testable without raw SQL fixtures.
+// permission-fetch branch is testable without raw SQL fixtures. A GetStore
+// that also records hook_gone_at (*store.Store does) gets that write from
+// Get; one that does not reports the stored value only.
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
+	// OpenPermissionRequestsForSpawn reads the Spawn's permission requests
+	// that still await an answer (b.146 rule 9).
 	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 	// ListSessionHistory returns the instance's archived sessions of one
 	// life only — life is the LifeNumber of the row Get read — newest
@@ -251,20 +268,29 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 // Get returns the full Spawn row for the given claude_instance_id. Missing
 // rows surface store.ErrSpawnNotFound for the CLI to translate.
 //
-// When the spawn's state is `check_permission`, all open (undecided)
-// permission_requests rows are fetched and projected into the
-// PermissionRequests slice. For all other states the slice is left as
-// an empty non-nil slice (encodes as []).
+// When the spawn's state is `check_permission`, its open permission requests
+// (those that still await an answer, b.146 rule 9;
+// OpenPermissionRequestsForSpawn) are fetched and projected into the
+// PermissionRequests slice, each with its delivery facts (b.146 rule 15)
+// judged through v. For all other states the slice is left as an empty
+// non-nil slice (encodes as []).
 //
-// Open-rows-only contract: closed (decided) rows are never visible in
-// the PermissionRequests output. OpenPermissionRequestsForSpawn enforces
-// this at the SQL layer (decision IS NULL predicate).
+// The requests are read by the check-before-read rule (b.146 rule 5): read,
+// judge each request's relay hook process, read again, so a hook that acked
+// and exited between a read and its check is never reported fallen back. Get
+// is a reading verb and never waits for the store's write lock (b.146
+// problem 4): it writes hook_gone_at on the requests it found fallen back
+// only if the lock is free at that moment, and otherwise reports them with
+// hook_gone_at as stored.
+//
+// Closed requests (acked, answered at the pane, or closed by find-missing's
+// mark) are never visible in the PermissionRequests output.
 //
 // PriorSessions and TranscriptStatus cover the visible history only.
 // Session history belongs to a life: Get reads the entries of the life of
 // the row it read, then drops the entry for the row's current session id
 // (a row with no current session id drops nothing).
-func Get(s GetStore, instanceID string) (SpawnRow, error) {
+func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 	row, err := s.GetSpawn(instanceID)
 	if err != nil {
 		return SpawnRow{}, err
@@ -318,20 +344,14 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 		out.Labels = map[string]string{}
 	}
 
-	if out.State == "check_permission" {
-		prs, err := s.OpenPermissionRequestsForSpawn(instanceID)
+	if out.State == store.StateCheckPermission {
+		j := newRelayJudge(v)
+		infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, instanceID)
 		if err != nil {
 			return SpawnRow{}, err
 		}
-		for _, pr := range prs {
-			out.PermissionRequests = append(out.PermissionRequests, PermissionRequestInfo{
-				RequestID:    pr.RequestID,
-				RequestToken: pr.RequestToken,
-				ToolName:     pr.ToolName,
-				ToolInput:    pr.ToolInput,
-				RequestedAt:  pr.CreatedAt,
-			})
-		}
+		out.PermissionRequests = infos
+		recordGone(s, j.now(), readerLockWait, goneSlotsOf(nil, out.PermissionRequests))
 	}
 
 	return out, nil
@@ -339,22 +359,26 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 
 // Get returns the full DB row for a tracked Spawn: state, cwd, tmux session
 // name, relay mode, session id, labels, timestamps, and (when applicable) the
-// open permission-requests slice. On a pending row it also carries
+// open permission-requests slice, each request with its delivery facts
+// (delivery, confirm_by, hook_alive, hook_gone_at, attempted_decision,
+// attempted_at, tool_use_id). On a pending row it also carries
 // launch_started_at, when the agent's launch began. When the row records
 // one, it carries tmux_socket, the tmux socket the row's latest launch
 // uses, in any state. prior_sessions and transcript_status come from the
 // current life's history only: after a reuse (spawn with ReuseFinished),
 // which starts a new life, Get shows none of the earlier lives' history.
+// Get never waits for the store's write lock.
 //
 // CLI: agent-director get
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for claudeInstanceID.
 //
-// Nondeterminism: none.
+// Nondeterminism: the delivery facts depend on the clock and on whether each
+// request's relay hook process runs.
 func (c *Client) Get(claudeInstanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnRow{}, err
 	}
-	return Get(c.st, claudeInstanceID)
+	return Get(c.st, c.relayView(), claudeInstanceID)
 }

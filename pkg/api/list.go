@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // ErrListInvalidLabel is returned by the list verb when a caller-supplied
@@ -13,10 +15,16 @@ import (
 var ErrListInvalidLabel = errors.New("ErrListInvalidLabel")
 
 // ListStore is the narrow store surface List needs. *store.Store
-// satisfies it via ListSpawns; tests fake the surface so the verb's
-// filter-translation can be exercised without driving SQLite.
+// satisfies it via ListSpawns and OpenPermissionRequestsForSpawn; tests fake
+// the surface so the verb's filter-translation can be exercised without
+// driving SQLite. A ListStore that also records hook_gone_at (*store.Store
+// does) gets that write from List; one that does not reports the stored
+// value only.
 type ListStore interface {
 	ListSpawns(f ListFilters) ([]Spawn, error)
+	// OpenPermissionRequestsForSpawn reads a Spawn's permission requests that
+	// still await an answer (b.146 rule 9).
+	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 }
 
 // ListParams is the typed parameter shape for the list verb.
@@ -97,6 +105,11 @@ type ListRow struct {
 	// it; unreported never replaces provenance_conflict. Nil (omitted) when
 	// NULL in the store. Same "" == NULL mapping.
 	LivenessNote *string `json:"liveness_note,omitempty"`
+	// PermissionRequests is, as SpawnRow.PermissionRequests, the row's open
+	// permission requests (those that still await an answer), each with its
+	// delivery facts (b.146 rule 15). Populated only when state is
+	// check_permission; always a non-nil slice (encodes as [] when empty).
+	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
 }
 
 // ListResult is the typed return shape. Spawns is always a non-nil
@@ -122,7 +135,14 @@ type ListResult struct {
 // of the form `foo` (no separator) yields ErrListInvalidLabel; the
 // store is never reached. Empty key (`=v`) is also rejected so the
 // json_extract path never receives an empty key string.
-func List(s ListStore, params ListParams) (ListResult, error) {
+//
+// Each row in check_permission carries its open permission requests with
+// their delivery facts, judged through v and read as Get reads them (the
+// check-before-read rule, b.146 rule 5). List is a reading verb and never
+// waits for the store's write lock (b.146 problem 4): it writes hook_gone_at
+// on every request it found fallen back, in one write, only if the lock is
+// free at that moment.
+func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 	labels := make(map[string]string, len(params.Labels))
 	for _, raw := range params.Labels {
 		idx := strings.IndexByte(raw, '=')
@@ -144,9 +164,10 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 		return ListResult{}, err
 	}
 
+	j := newRelayJudge(v)
 	out := make([]ListRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ListRow{
+		row := ListRow{
 			ClaudeInstanceID:        r.ClaudeInstanceID,
 			ParentID:                r.ParentID,
 			State:                   r.State,
@@ -160,8 +181,23 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
 			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
 			LivenessNote:            nullableString(r.LivenessNote),
-		})
+			PermissionRequests:      []PermissionRequestInfo{},
+		}
+		if r.State == store.StateCheckPermission {
+			infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, r.ClaudeInstanceID)
+			if err != nil {
+				return ListResult{}, err
+			}
+			row.PermissionRequests = infos
+		}
+		out = append(out, row)
 	}
+	// Every row is built, so the slots below point at their final elements.
+	var slots []goneSlot
+	for i := range out {
+		slots = goneSlotsOf(slots, out[i].PermissionRequests)
+	}
+	recordGone(s, j.now(), readerLockWait, slots)
 	return ListResult{Spawns: out}, nil
 }
 
@@ -169,17 +205,20 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 // together; an absent filter is permissive. State values OR together. When no
 // rows match, ListResult.Spawns is a non-nil empty slice. Returned order is
 // unspecified. A pending row also carries launch_started_at, when the agent's
-// launch began.
+// launch began. A row in check_permission carries its open permission
+// requests with their delivery facts, as Get does. List never waits for the
+// store's write lock.
 //
 // CLI: agent-director list
 //
 // Errors:
 //   - [ErrListInvalidLabel]: a Labels entry is not in "key=value" form.
 //
-// Nondeterminism: none.
+// Nondeterminism: the delivery facts depend on the clock and on whether each
+// request's relay hook process runs.
 func (c *Client) List(params ListParams) (ListResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ListResult{}, err
 	}
-	return List(c.st, params)
+	return List(c.st, c.relayView(), params)
 }
