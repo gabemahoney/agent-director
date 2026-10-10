@@ -106,6 +106,11 @@
 # that is not valid JSON stops the install with exit 4, left as it was with
 # nothing beside it. Several documents, refused, are advice_follow.sh's J21.
 #
+# Re-run (b.pye): a hooks-on re-run with no flags after a clean install
+# returns 0, copies both binaries again (new files, new inodes) and leaves the
+# merged files as they were, each after a .bak; neither it nor --help mentions
+# "already installed", and --help says the steps run again.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -1052,6 +1057,39 @@ invalid|{\n
 invalid-after-document|{"theme":"dark"}\n{\n
 EOF
 HOOKS=""
+
+# A re-run with no flags after a clean install (b.pye) copies the pair it
+# finds (agent-director through its ~/.local/bin link, the installed
+# agent-director-admin) again and returns 0, leaving settings.json and
+# config.toml as they were, each after a .bak. The first install already put
+# the same bytes at 0755, so the copy shows only in the inodes: install.sh
+# copies each binary to a .tmp.<pid> beside it and mvs that over it, so each
+# ends up a new file. Neither run nor --help mentions an "already installed"
+# message, which install.sh never prints, and --help's "Idempotent:" paragraph
+# says what this checks (pinned with its line breaks joined, as
+# advice_follow.sh pins --help sentences).
+new_home rerun-no-flags
+mkdir -p "$H/.local/bin"
+HOOKS=1 PATH_PREFIX="$H/.local/bin"
+run_install 0 '*' --from-release v0.11.0-fake
+rc="$RC" merged="$(cat "$H/.claude/settings.json" "$H/.agent-director/config.toml" | sha256sum)"
+bin_ino="$(stat -c %i "$H/.agent-director/bin/agent-director")"
+admin_ino="$(stat -c %i "$H/.agent-director/admin/agent-director-admin")"
+run_install 0 '*'
+HOOKS="" PATH_PREFIX=""
+report rerun-no-flags-exit-codes "$rc $RC" "0 0"
+report_installed rerun-no-flags
+report rerun-no-flags-binaries-copied-again \
+    "$([[ "$(stat -c %i "$H/.agent-director/bin/agent-director")" != "$bin_ino" ]] && echo new || echo same) $([[ "$(stat -c %i "$H/.agent-director/admin/agent-director-admin")" != "$admin_ino" ]] && echo new || echo same)" "new new"
+report rerun-no-flags-merged-unchanged "$(cat "$H/.claude/settings.json" "$H/.agent-director/config.toml" | sha256sum)" "$merged"
+report rerun-no-flags-backups \
+    "$(compgen -G "$H/.claude/settings.json.bak.*" | wc -l) $(compgen -G "$H/.agent-director/config.toml.bak.*" | wc -l)" "1 1"
+report rerun-no-flags-already-installed "$(cat "$OUT" "$ERR" | grep -c 'already installed')" "0"
+run_install 0 '*' --help
+report help-exit-code "$RC" "0"
+report help-idempotent-steps-run-again \
+    "$(tr '\n' ' ' <"$OUT" | grep -cF 'Its steps run again: the binaries are copied again (with --keep-prior, not snapshotted: any earlier .prior files are kept), the store is opened (a state.db already at its target version is not migrated) and, with hooks on, settings.json and config.toml are merged again (no hook is added twice), each after a fresh timestamped .bak.')" "1"
+report help-already-installed "$(grep -c 'already installed' "$OUT")" "0"
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 

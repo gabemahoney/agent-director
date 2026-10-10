@@ -122,8 +122,19 @@
 #      agent-director), ErrSchemaVerifyFailed (needs a human), or, when the
 #      store open fails another way, agent-director's own err_name.
 #
-# Idempotent: re-running the script with no flags after a clean
-# install is a no-op (returns 0, prints "already installed at vX").
+# Idempotent: re-running it after a clean install, with the same
+# binaries (a no-flag re-run outside a checkout picks the
+# agent-director on PATH and the installed agent-director-admin, as
+# above) and the same --no-hooks, symlink and --register-mcp choices,
+# ends in the same state and returns 0 on success. Its steps run
+# again: the binaries are copied again (with --keep-prior, not
+# snapshotted: any earlier .prior files are kept), the store is opened
+# (a state.db already at its target version is not migrated) and, with
+# hooks on, settings.json and config.toml are merged again (no hook is
+# added twice), each after a fresh timestamped .bak. With
+# --register-mcp, `claude mcp add` refuses a name already registered in
+# its scope, so a re-run from the same directory prints
+# "registration failed (continuing anyway)" and still returns 0.
 
 set -euo pipefail
 
