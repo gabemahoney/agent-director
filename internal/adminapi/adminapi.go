@@ -31,7 +31,8 @@ type KillResult struct {
 type DeleteResult struct {
 	// Results maps each requested id to its outcome: "ok" when the row was
 	// removed, or an err_name ("ErrSpawnNotFound", "ErrInternal"). It is never
-	// nil and has one entry per distinct requested id.
+	// nil: when the batch ran (nil error) it has one entry per distinct
+	// requested id, and when Delete returns an error it is empty.
 	Results map[string]string `json:"results"`
 }
 

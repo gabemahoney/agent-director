@@ -34,6 +34,13 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 	return s
 }
 
+// emptyGetJSON is the row every Get failure encodes: claude_args, labels,
+// permission_requests and prior_sessions empty, never null, every other field zero (b.4nt).
+const emptyGetJSON = `{"claude_instance_id":"","parent_id":"","state":"","cwd":"","tmux_session_name":"",` +
+	`"claude_args":[],"relay_mode":"","jsonl_path":"","claude_session_id":"","labels":{},` +
+	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z",` +
+	`"permission_requests":[],"transcript_status":"","prior_sessions":[]}`
+
 // jsonOf returns v's JSON encoding.
 func jsonOf(t *testing.T, v any) string {
 	t.Helper()
@@ -153,34 +160,38 @@ func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.Se
 
 // TestGetReadsAndErrors pins SR-3.1 and SR-5.9 with a recording store: the
 // permission rows are read only in check_permission, history once for the
-// row's own life, and either read's error propagates (b.v2c AC6/AC8).
+// row's own life, and either read's error propagates (b.v2c AC6/AC8). Every
+// failure, an unknown id's included, encodes emptyGetJSON (b.4nt).
 func TestGetReadsAndErrors(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
 	cases := []struct {
-		name                string
-		state               string
+		name, id, state     string
 		permErr, historyErr error
+		want                error
 		permCalls           int
+		historyLives        []int64
 	}{
-		{"waiting skips the permission read", store.StateWaiting, nil, nil, 0},
-		{"check_permission read error", store.StateCheckPermission, boom, nil, 1},
-		{"session history read error", store.StateEnded, nil, boom, 0},
+		{name: "waiting skips the permission read", id: "id-g", state: store.StateWaiting, historyLives: []int64{3}},
+		{name: "check_permission read error", id: "id-g", state: store.StateCheckPermission,
+			permErr: boom, want: boom, permCalls: 1, historyLives: []int64{3}},
+		{name: "session history read error", id: "id-g", state: store.StateEnded,
+			historyErr: boom, want: boom, historyLives: []int64{3}},
+		{name: "unknown id", id: "absent", state: store.StateCheckPermission, want: store.ErrSpawnNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &recordingGetStore{spawn: store.Spawn{ClaudeInstanceID: "id-g", State: tc.state, LifeNumber: 3},
 				permErr: tc.permErr, historyErr: tc.historyErr}
-			want := tc.permErr
-			if want == nil {
-				want = tc.historyErr
+			got, err := api.Get(f, tc.id)
+			if !errors.Is(err, tc.want) || (err == nil && len(got.PermissionRequests) != 0) {
+				t.Errorf("Get = %+v, %v; want error %v", got.PermissionRequests, err, tc.want)
 			}
-			got, err := api.Get(f, "id-g")
-			if !errors.Is(err, want) || (err == nil && len(got.PermissionRequests) != 0) {
-				t.Errorf("Get = %+v, %v; want error %v", got.PermissionRequests, err, want)
+			if out := jsonOf(t, got); err != nil && out != emptyGetJSON {
+				t.Errorf("Get on failure = %s; want %s", out, emptyGetJSON)
 			}
-			if f.permCalls != tc.permCalls || !slices.Equal(f.historyLives, []int64{3}) {
-				t.Errorf("permission reads %d, history lives %v; want %d and [3]", f.permCalls, f.historyLives, tc.permCalls)
+			if f.permCalls != tc.permCalls || !slices.Equal(f.historyLives, tc.historyLives) {
+				t.Errorf("permission reads %d, history lives %v; want %d and %v", f.permCalls, f.historyLives, tc.permCalls, tc.historyLives)
 			}
 		})
 	}

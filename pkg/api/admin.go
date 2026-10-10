@@ -22,7 +22,8 @@ func init() {
 	adminapi.Delete = func(c any, claudeInstanceIDs []string) (adminapi.DeleteResult, error) {
 		client, err := adminClient(c)
 		if err != nil {
-			return adminapi.DeleteResult{}, err
+			// Results is never nil, as adminapi.DeleteResult documents (b.4nt).
+			return adminapi.DeleteResult{Results: map[string]string{}}, err
 		}
 		return client.deleteRows(claudeInstanceIDs)
 	}

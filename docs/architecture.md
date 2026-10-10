@@ -9417,7 +9417,12 @@ the unexported `Client.deleteRows` (`pkg/api/delete.go`). It processes ids
 one at a time, returning a per-row map of `{id: "ok" | "<err_name>"}`
 (`adminapi.DeleteResult`). The batch never aborts on a partial
 failure — every id in the input is attempted; the map records the
-outcome.
+outcome. The map is never nil, on a failure too: the hook's refusal of a
+`c` that is not a non-nil `*api.Client` (`admin.go`) and `ErrClientClosed`
+from `Client.deleteRows` on a closed Client come with an empty `Results`
+(`{}` in JSON), as Expire, FindMissing and List return their empty lists
+(b.4nt, b.hbt). The admin binary prints the error envelope on any error,
+so only a Go caller sees that result.
 
 `delete` bypasses every state-precondition guard. A live-state row
 is removed by id exactly the same way a terminal row is. The verb
