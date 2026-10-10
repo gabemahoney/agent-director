@@ -19,14 +19,26 @@
 // make test-docker without EPIC, which fails. They now go on the advice's makes,
 // each as one quoted word that no character in its value can break.
 //
+// b.uc7: the refusal said "Nothing was run." when a host goal given before the
+// guarded ones had already run (make test-docker generate), or under make -j had
+// started a go build or docker build beside the guard (make -j8 generate
+// test-docker). With a guarded goal given, every other recipe now waits for the
+// guard.
+//
 // Like the other test/sandbox suites it drives a copy of the Makefile under test
 // in a temp tree, with logging fake go, bun and docker on PATH, and runs no repo
 // binary, so it needs no sandboxguard TestMain.
 //
 // Fails before the fix: MAKEFILE_UNDER_TEST=<pre-fix Makefile> fails every
 // TestRequireSandbox_RefusesOutsideSandbox cell and TestRequireSandbox_AdviceFollow;
-// without the order-only `| _require-sandbox` block, the _j8 cells fail. Before
-// b.4a1's fix, the cells that mix a guarded goal with a container goal fail.
+// without the `$(_REQUIRE_SANDBOX_WAIT): | _require-sandbox` block, the _j8 cells
+// fail. Before b.uc7's fix, the host-goal-first cells, the
+// sandbox_generate_sandbox_flags cells, and each
+// TestRequireSandbox_NothingRunsBeforeGuard cell with a target outside the guard
+// and none of test, all and envelope-diff-ts fail; with the advice built when
+// the guard's recipe runs (= for :=), sandbox_generate_sandbox_flags fails.
+// Before b.4a1's fix, the cells that mix a guarded goal with a container goal
+// fail.
 // Before b.qgr's fix, the cells whose advice keeps a command-line variable
 // fail, and so do TestRequireSandbox_AdviceKeepsValues and
 // TestRequireSandbox_AdviceCopiesCmd. Without _require_sandbox_var's $
@@ -169,6 +181,9 @@ var (
 	engineCall = regexp.MustCompile(`(\bdocker|\bpodman|\$\(CONTAINER_ENGINE\)) (build|run)\b|\$\(_SANDBOX_RUN\)`)
 	// subMake matches a sub-make in a recipe line and captures its goal.
 	subMake = regexp.MustCompile(`\$\(MAKE\) ([^\s;|&]+)`)
+	// traced matches the line make --trace prints for each recipe it starts and
+	// captures the target.
+	traced = regexp.MustCompile(`(?m)^Makefile:\d+: (?:update )?target '([^']+)' `)
 )
 
 // rule is one Makefile rule: its targets, prerequisites (order-only ones too)
@@ -229,34 +244,45 @@ func toolTargets(t *testing.T, makefile string) []string {
 	})
 }
 
+// reaching returns, in Makefile order, every target whose rule r has self(r)
+// true, or has one of deps(r) among those targets.
+func reaching(rs []rule, self func(r rule) bool, deps func(r rule) []string) []string {
+	reached := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for _, r := range rs {
+			for _, tg := range r.targets {
+				if !reached[tg] && (self(r) || slices.ContainsFunc(deps(r), func(d string) bool { return reached[d] })) {
+					reached[tg], changed = true, true
+				}
+			}
+		}
+	}
+	return targetsOf(rs, func(_ rule, tg string) bool { return reached[tg] })
+}
+
 // engineTargets returns, in Makefile order, every target that starts a
 // container: in its own recipe, or through a prerequisite or sub-make goal
 // that does.
 func engineTargets(t *testing.T, makefile string) []string {
 	t.Helper()
-	rs := rules(t, makefile)
-	starts := map[string]bool{}
-	startsContainer := func(r rule) bool {
-		deps := slices.Clone(r.prereqs)
-		for _, l := range r.recipe {
-			for _, m := range subMake.FindAllStringSubmatch(l, -1) {
-				deps = append(deps, m[1])
-			}
-		}
-		return slices.ContainsFunc(r.recipe, engineCall.MatchString) ||
-			slices.ContainsFunc(deps, func(d string) bool { return starts[d] })
-	}
-	for changed := true; changed; {
-		changed = false
-		for _, r := range rs {
-			for _, tg := range r.targets {
-				if !starts[tg] && startsContainer(r) {
-					starts[tg], changed = true, true
+	return reaching(rules(t, makefile), func(r rule) bool { return slices.ContainsFunc(r.recipe, engineCall.MatchString) },
+		func(r rule) []string {
+			deps := slices.Clone(r.prereqs)
+			for _, l := range r.recipe {
+				for _, m := range subMake.FindAllStringSubmatch(l, -1) {
+					deps = append(deps, m[1])
 				}
 			}
-		}
-	}
-	return targetsOf(rs, func(_ rule, tg string) bool { return starts[tg] })
+			return deps
+		})
+}
+
+// guardedTargets returns, in Makefile order, every target that reaches
+// _require-sandbox through its prerequisites.
+func guardedTargets(rs []rule) []string {
+	return reaching(rs, func(r rule) bool { return slices.Contains(r.prereqs, "_require-sandbox") },
+		func(r rule) []string { return r.prereqs })
 }
 
 // TestRequireSandbox_RefusesOutsideSandbox (b.8yq): outside the sandbox every
@@ -270,7 +296,9 @@ func engineTargets(t *testing.T, makefile string) []string {
 // only on the host never goes in the CMD= but runs on the host as itself,
 // keeping its place before or after the sandbox (b.4a1): each goal that starts
 // a container (found by engineTargets) and each in hostOnly (a host tool or the
-// host's own setup) has a cell after a guarded goal.
+// host's own setup) has a cell after a guarded goal. Nothing runs either with a
+// host goal first or under make -k, and the advice keeps a command-line
+// SANDBOX_FLAGS whichever goal reaches the guard first (b.uc7).
 func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 	root := tree(t)
 	targets := toolTargets(t, filepath.Join(root, "Makefile"))
@@ -309,9 +337,9 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 		name          string
 		args, env     []string
 		goals, advice string
-		// j8 adds a copy of the cell run under make -j8, which starts a goal's
-		// prerequisites together: the go builds and docker build that test, all
-		// and envelope-diff-ts need must still wait for the guard.
+		// j8 adds a copy of the cell run under make -j8, which starts the goals
+		// and their prerequisites together: every go build and docker build must
+		// still wait for the guard.
 		j8 bool
 	}
 	var cells []cell
@@ -363,10 +391,30 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 		// A := value is the one make expanded, its $ doubled back; inside CMD="…" each $ is escaped.
 		cell{name: "generate_simple_var", args: []string{"generate", "X:=a$$b"},
 			goals: "generate", advice: `make sandbox 'X=a$$b' CMD="make generate 'X=a\$\$b'"`},
+		// b.uc7: a host goal before the guarded one runs nothing first, nor does
+		// make -k, which goes on with the goals that do not wait for the guard.
+		cell{name: "test_docker_generate", args: []string{"test-docker", "generate", "EPIC=harness-smoke"},
+			goals:  "test-docker generate",
+			advice: testDockerGenerateAdvice},
+		cell{name: "k_test_docker_generate", args: []string{"-k", "test-docker", "generate", "EPIC=harness-smoke"},
+			goals:  "test-docker generate",
+			advice: testDockerGenerateAdvice},
+		// b.uc7: sandbox waits for the guard, so when it reaches the guard first the
+		// guard inherits its override SANDBOX_FLAGS += …; the advice still keeps the
+		// command-line SANDBOX_FLAGS, as it is built from the global variables.
+		cell{name: "sandbox_generate_sandbox_flags", args: []string{"sandbox", "generate", "SANDBOX_FLAGS=--foo", "CMD=go version"},
+			goals: "sandbox generate",
+			advice: `make sandbox 'CMD=go version' 'SANDBOX_FLAGS=--foo' && ` +
+				`make sandbox 'SANDBOX_FLAGS=--foo' CMD="make generate 'SANDBOX_FLAGS=--foo'"`, j8: true},
+		cell{name: "generate_sandbox_sandbox_flags", args: []string{"generate", "sandbox", "SANDBOX_FLAGS=--foo", "CMD=go version"},
+			goals: "generate sandbox",
+			advice: `make sandbox 'SANDBOX_FLAGS=--foo' CMD="make generate 'SANDBOX_FLAGS=--foo'" && ` +
+				`make sandbox 'CMD=go version' 'SANDBOX_FLAGS=--foo'`, j8: true},
 	)
 	// b.4a1: each host-only goal after a guarded one: the container goals, and
-	// hostOnly. No _j8 copy: with no test, all or envelope-diff-ts among the
-	// goals, test-image's go build and docker build do not wait for the guard.
+	// hostOnly. No _j8 copy: the advice does not depend on -j, and
+	// TestRequireSandbox_NothingRunsBeforeGuard runs make -j8 generate <goal>
+	// for each, checking that no recipe but the guard's starts.
 	for _, tg := range hostGoals {
 		if tg != "test" { // advised as make test-sandbox, in the cells above
 			cells = append(cells, cell{name: "generate_" + tg, args: []string{"generate", tg},
@@ -402,6 +450,57 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 	}
 }
 
+// TestRequireSandbox_NothingRunsBeforeGuard (b.uc7): with a guarded goal given,
+// make starts no recipe but the guard's, in any goal order and under make -j8.
+// The rule scan pairs each target with a recipe with generate, and each target
+// that reaches the guard with test-docker, so a new one is covered too; make
+// --trace names every recipe it starts, those that run no fake tool included.
+func TestRequireSandbox_NothingRunsBeforeGuard(t *testing.T) {
+	root := tree(t)
+	rs := rules(t, filepath.Join(root, "Makefile"))
+	recipes := targetsOf(rs, func(r rule, tg string) bool { return len(r.recipe) > 0 && tg != "_require-sandbox" })
+	guarded := guardedTargets(rs)
+	for _, want := range []string{"build", "bin/ts-helper", "test-docker", "check-sandbox-bypass", "tla", "release-bats"} {
+		if !slices.Contains(recipes, want) {
+			t.Fatalf("recipe targets = %q, missing %q: the rule scan no longer finds the known recipes", recipes, want)
+		}
+	}
+	for _, want := range []string{"generate", "envelope-diff-ts", "test", "all"} {
+		if !slices.Contains(guarded, want) {
+			t.Fatalf("guardedTargets = %q, missing %q: the rule scan no longer finds the known guarded targets", guarded, want)
+		}
+	}
+	var cases []string
+	add := func(args ...string) {
+		if c := strings.Join(args, " "); !slices.Contains(cases, c) {
+			cases = append(cases, c)
+		}
+	}
+	for _, tg := range recipes {
+		add(tg, "generate")
+		add("-j8", "generate", tg)
+	}
+	for _, g := range guarded {
+		add("test-docker", g)
+		add("-j8", g, "test-docker")
+	}
+	// The version stamp spares release-binaries the jq read of a package.json
+	// the temp tree lacks, whose $(error) would stop make before the recipe starts.
+	env := []string{"AGENT_DIRECTOR_BUILD_VERSION=0.0.0-test"}
+	for _, c := range cases {
+		t.Run(c, func(t *testing.T) {
+			code, out, _ := run(t, root, env, append([]string{"make", "--trace"}, strings.Fields(c)...)...)
+			var started []string
+			for _, m := range traced.FindAllStringSubmatch(out, -1) {
+				started = append(started, m[1])
+			}
+			if code != 2 || !slices.Equal(started, []string{"_require-sandbox"}) {
+				t.Errorf("exit %d, recipes started %q, want 2 and _require-sandbox's only; output:\n%s", code, started, out)
+			}
+		})
+	}
+}
+
 // briefCalls reduces each logged call to "<tool> <subcommand> <last arg>" (the
 // -ldflags of a go build vary) and sorts them (make -j runs in any order).
 func briefCalls(calls []string) []string {
@@ -417,9 +516,10 @@ func briefCalls(calls []string) []string {
 	return brief
 }
 
-// TestRequireSandbox_Passes (b.8yq): the guard lets the tool run in the sandbox
-// or with the CI bypass, a dry run outside the sandbox still exits 0, and
-// targets that only build (build, ts-helper) still run on the host, also under -j8.
+// TestRequireSandbox_Passes (b.8yq, b.uc7): the guard lets the tool run in the
+// sandbox or with the CI bypass, a dry run outside the sandbox still exits 0, and
+// with no guarded goal build, ts-helper and test-docker still run on the host,
+// also under -j8.
 func TestRequireSandbox_Passes(t *testing.T) {
 	root := tree(t)
 	builds := []string{"go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}
@@ -437,6 +537,12 @@ func TestRequireSandbox_Passes(t *testing.T) {
 		{name: "build_outside_sandbox", args: []string{"build"}, wantCalls: builds},
 		{name: "build_ts_helper_j8_outside_sandbox", args: []string{"-j8", "build", "ts-helper"},
 			wantCalls: append([]string{"go build ./test/smoke/ts-helper/"}, builds...)},
+		// b.uc7: with no guarded goal no recipe waits for the guard; in the sandbox
+		// the guard passes and the recipes that wait for it run.
+		{name: "test_docker_j8_outside_sandbox", args: []string{"-j8", "test-docker", "EPIC=harness-smoke"},
+			wantCalls: append([]string{"docker build", "docker run"}, builds...)},
+		{name: "sandbox_marker_test_docker_generate_j8", args: []string{"-j8", "test-docker", "generate", "EPIC=harness-smoke"},
+			env: []string{"AGENT_DIRECTOR_TEST_SANDBOX=1"}, wantCalls: append([]string{"docker build", "docker run"}, generateAndBuilds...)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, out, calls := run(t, root, tc.env, append([]string{"make"}, tc.args...)...)
@@ -456,6 +562,10 @@ func TestRequireSandbox_Passes(t *testing.T) {
 // generateAndBuilds are the go calls of make generate test-docker: go generate,
 // and test-docker's builds (through test-image).
 var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}
+
+// testDockerGenerateAdvice is the advice for make test-docker generate EPIC=harness-smoke.
+const testDockerGenerateAdvice = `make test-docker 'EPIC=harness-smoke' && ` +
+	`make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'"`
 
 // follow runs advice in root with bash, as printed, and checks that it exits 0
 // and that its tool calls, the container engine's left out, are wantCalls.
