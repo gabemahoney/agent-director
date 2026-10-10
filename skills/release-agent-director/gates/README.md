@@ -259,7 +259,9 @@ b.9qj the source-of-truth tests run the gate in temp git repos, and
 `check-version-coherence.test.ts` and `version-bump.test.ts` stage their
 versioned `package.json` fixtures under the OS temp dir. Since b.ngj
 `TestWorktreePollution` plants its untracked file in a temp git repo and runs
-the worktree-clean gate there.
+the worktree-clean gate there. Since b.1xi `readme-snippets.test.ts` writes
+its scratch `.ts` file into a fresh dir under the OS temp dir and runs `tsc`
+on it there.
 
 **`bin/` pre-build.** Each child's `make test-docker` runs `make build` first
 (`test-docker` depends on `test-image`, which depends on `build`), under the
@@ -308,14 +310,6 @@ poll loop reports each moment `bin/agent-director` is missing. The last
 `checking context: file '…' not found`. `file changed as we read it` means a
 half-written binary in the image. The control, the same loop building one
 fixed version so that `bin/` stays current, printed nothing.
-
-**Known gap.** One test adds a path to the tree without taking the lock:
-
-- "README TS snippets typecheck" in
-  `pkg/ts-bun-client/test/readme-snippets.test.ts` (b.1xi, open) writes
-  `test/tmp-readme-check-<ms>.ts` beside itself for the few seconds `tsc`
-  takes to check it, then deletes it. It runs in `coverage.bun-test`'s
-  `bun test`, concurrently with the docker epics' context collection.
 
 #### Field-mapping: executor output → report phase object
 
