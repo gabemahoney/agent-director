@@ -460,7 +460,10 @@ This skill runs `install.sh` from the same directory. The script:
    8. **Source-tree version check** — when the binary came from a
       local source (`--binary` or the in-repo build) AND install.sh
       lives inside a git checkout, the binary's embedded commit
-      must match `HEAD`. Catches the "operator forgot to
+      must match `HEAD`. A linked worktree counts as a checkout, and
+      the checkout is the nearest one above the script, so a
+      worktree nested inside another checkout is held to its own
+      `HEAD`. Catches the "operator forgot to
       `make build` after pulling new code" footgun.
    9. **Version-stamp pairing** — `agent-director version` and
       `agent-director-admin version` must report the same version and
