@@ -1,7 +1,7 @@
 // Package sandboxtest holds helpers shared by the Makefile-plumbing regression
 // tests under test/sandbox/ (gitmount → b.kbe, cmdinject → b.ay3, prebuild →
-// b.2b3, cigates → b.ug8, releaseversion → b.x7z, requiresandbox → b.8yq and
-// b.4a1).
+// b.2b3, cigates → b.ug8, releaseversion → b.x7z, requiresandbox → b.8yq,
+// b.4a1 and b.1ce).
 //
 // The suites exercise the real repo Makefile by running `make` against it (or
 // a throwaway copy) with a fake tool on PATH, then asserting on what the recipe

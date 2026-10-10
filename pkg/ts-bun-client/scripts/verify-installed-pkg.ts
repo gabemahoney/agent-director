@@ -14,13 +14,17 @@
  *             overwrite gauntlet (SR-1.2). Exits 0 on success, non-zero on
  *             any failure.
  *
- * Dev-only env vars (for in-repo development; not used in production):
- *   AD_VERIFY_AGAINST=<path>   Load Client from this index.ts path instead
- *                              of the installed "agent-director" package.
- *   AD_CLI_PATH=<path>         Pass as _cliPath to the Client constructor to
- *                              bypass platform-package CLI resolution. Use with
- *                              the in-repo dist/agent-director-linux-amd64
- *                              binary during local development.
+ * Optional env vars:
+ *   AD_VERIFY_AGAINST=<path>   Dev-only: load Client from this index.ts path
+ *                              instead of the installed "agent-director" package.
+ *   AD_CLI_PATH=<path>         Pass as _cliPath to Client.create, skipping
+ *                              system-install discovery ($HOME/.agent-director/
+ *                              bin, then PATH; see src/internal/discovery.ts).
+ *                              The Makefile pre-release targets
+ *                              verify-installed-pkg-full and
+ *                              verify-prerelease-linux set it to the stamped
+ *                              dist/agent-director-<os>-<arch> binary, since
+ *                              the package ships no CLI.
  *   EXPECTED_VERSION=<semver>  When set, assert client.version().version equals
  *                              this value (e.g. "0.6.3" — the npm package
  *                              version returned by client.version() per b.6o1,
@@ -28,8 +32,10 @@
  *                              the /release skill's smoke gate to catch
  *                              version-stamp regressions (b.6oj). Unset or empty → skipped.
  *
- * Production codepath: bare `import { Client } from "agent-director"` with no
- * env var overrides. The packed tarball must resolve correctly.
+ * Production codepath: bare `import { Client } from "agent-director"` (no
+ * AD_VERIFY_AGAINST). The packed tarball must resolve correctly. CLI discovery
+ * is the production one unless AD_CLI_PATH overrides it, as the pre-release
+ * targets above do.
  */
 
 import * as fs from "node:fs";
@@ -120,15 +126,16 @@ async function runSmoke(): Promise<void> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ad-verify-"));
   const storePath = path.join(tmpDir, "state.db");
 
-  // Dev override: bypass platform-package CLI resolution when AD_CLI_PATH is
-  // set. The production codepath never sets this env var.
+  // AD_CLI_PATH, when set, overrides system-install discovery (see header);
+  // the Makefile pre-release targets set it to the stamped dist binary.
   const devCliPath = process.env.AD_CLI_PATH;
 
   try {
     const ctorOpts: Record<string, unknown> = { storePath };
     if (devCliPath) {
-      // _cliPath is a test-only DI hook on SubprocessClient that bypasses
-      // resolveCliPath(). Undocumented on ClientOptions; cast through unknown.
+      // _cliPath is the DI hook on Client.create that skips
+      // discoverSystemBinary(). It is not on the public ClientOptions, hence
+      // the untyped options record.
       ctorOpts._cliPath = devCliPath;
     }
 
