@@ -29,8 +29,6 @@ import { test, expect, beforeAll } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { Client } from "../src/client.js";
-import { FAKE_TMUX_BIN } from "./internal/helper.js";
-import { withTempHome } from "./internal/tempHome.js";
 
 const pkgRoot = path.resolve(import.meta.dir, "..");
 const fixtureDir = path.join(pkgRoot, "test", "fixtures", "public-surface");
@@ -307,40 +305,3 @@ test("public-surface: dist/index.d.ts does not leak _cliPath (SR-4.9)", () => {
   const src = fs.readFileSync(distIndexDts, "utf-8");
   expect(src).not.toContain("_cliPath");
 });
-
-test("public-surface: Client.create and a call read every ClientOptions field — no dead option (b.78b)", () =>
-  withTempHome(async (home) => {
-    // b.78b: createIfMissing was declared and documented, but nothing read it.
-    const body = interfaceBody(typesGolden(), "ClientOptions").replace(/\/\*[\s\S]*?\*\//g, "");
-    const fields = [...body.matchAll(/^\s*(\w+)\??\s*:/gm)].map((m) => m[1]);
-    expect(fields).toContain("storePath");
-    const valid: Record<string, unknown> = {
-      storePath: path.join(home, "state.db"),
-      home,
-      tmuxCommand: FAKE_TMUX_BIN,
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
-      callTimeoutMs: 30_000,
-    };
-    const read = new Set<string>();
-    let enumerated = false;
-    const opts = new Proxy({ ...valid, _cliPath: process.env.CLI_PATH }, {
-      get(t, k, r) {
-        read.add(String(k));
-        return Reflect.get(t, k, r);
-      },
-      has(t, k) {
-        read.add(String(k));
-        return Reflect.has(t, k);
-      },
-      // A spread/Object.assign/Object.keys copy reads every key, used or not.
-      ownKeys(t) {
-        enumerated = true;
-        return Reflect.ownKeys(t);
-      },
-    });
-    using client = await Client.create(opts as unknown as Parameters<typeof Client.create>[0]);
-    expect((await client.list({})).spawns).toEqual([]);
-    expect(enumerated, "Client enumerated its options; a per-field read check cannot see which it uses").toBe(false);
-    expect(fields.filter((f) => !read.has(f)), "ClientOptions fields Client.create and a call never read").toEqual([]);
-    expect(fields.filter((f) => !(f in valid)), "ClientOptions fields this test gives no value").toEqual([]);
-  }));

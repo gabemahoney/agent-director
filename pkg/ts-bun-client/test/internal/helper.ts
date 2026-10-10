@@ -26,12 +26,13 @@ export function homeStore(home: string): string {
 }
 
 /**
- * A Client over the in-repo CLI (CLI_PATH) on storePath (the CLI creates a missing store),
+ * A Client over the in-repo CLI (CLI_PATH) on storePath, created if missing,
  * running tmux as the fake; extra overrides any option (the `_cliPath` hook included).
  */
 export function openClient(storePath: string, extra: Record<string, unknown> = {}): Promise<Client> {
   return Client.create({
     storePath,
+    createIfMissing: true,
     tmuxCommand: FAKE_TMUX_BIN,
     _cliPath: process.env.CLI_PATH,
     ...extra,

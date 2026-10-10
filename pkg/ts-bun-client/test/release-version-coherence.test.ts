@@ -67,7 +67,7 @@ test(
       writeFileSync(
         join(consumerDir, "consumer.ts"),
         `import { Client } from "agent-director";\n` +
-          `const c = await Client.create({ storePath: ${store} });\n` +
+          `const c = await Client.create({ storePath: ${store}, createIfMissing: true });\n` +
           `console.log(JSON.stringify(await c.version({})));\nc.close();\n`
       );
       const out = await run(["bun", "run", "consumer.ts"], consumerDir, { HOME: home });
