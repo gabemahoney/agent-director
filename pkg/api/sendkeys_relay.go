@@ -160,7 +160,10 @@ func (r spawnRequests) find(token string) (PermissionRow, bool) {
 // sendKeysRefusal is b.146 rule 7 for a send-keys call with params on the
 // Spawn, in its table's order; nil when the call may go on to the pane (and,
 // with expect_pane_sha256, to its hash check). hold is how long an intent
-// whose sender cannot be checked counts as in progress (paneIntentHold).
+// whose sender cannot be checked counts as in progress (paneIntentHold), and
+// retry the next step ErrSendKeysWhileRelayed gives on a recorded verdict
+// (relayGuardRefusal): retrySendKeysLater for send-keys, retryLater for
+// pause, held as a plain send-keys (b.zdz).
 //
 //  1. Any relay hook of the Spawn may still answer its request
 //     (hookMayAnswer): ErrSendKeysWhileRelayed, plain or with a token.
@@ -178,10 +181,10 @@ func (r spawnRequests) find(token string) (PermissionRow, bool) {
 //
 // Nothing is written here: a caller that refuses with ErrRelayFallenBack
 // records hook_gone_at through recordFallenBackGone.
-func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration) error {
+func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration, retry string) error {
 	id := r.sp.ClaudeInstanceID
 	if pr, ok := r.liveHolder(); ok {
-		return relayGuardRefusal(id, pr.RequestToken, pr.Decision != "")
+		return relayGuardRefusal(id, pr.RequestToken, pr.Decision != "", retry)
 	}
 	if params.RequestToken == "" {
 		if pr, ok := r.oldestFallenBack(); ok {
@@ -231,7 +234,7 @@ func (r spawnRequests) notFallenBackRefusal(pr PermissionRow, what string) error
 	case r.delivery(pr).Delivery == DeliveryDelivered:
 		return fmt.Errorf("%w; its relay hook delivered it; %s", alreadyDecidedError(id, pr), what)
 	}
-	return relayGuardRefusal(id, pr.RequestToken, pr.Decision != "")
+	return relayGuardRefusal(id, pr.RequestToken, pr.Decision != "", retrySendKeysLater)
 }
 
 // paneInProgress reports whether pr carries a pane answer through send-keys
@@ -384,6 +387,13 @@ func relayFallenBackError(instanceID, token, what string, details RelayFallenBac
 	}
 }
 
+// retrySendKeysLater is ErrSendKeysWhileRelayed's next step on a request
+// whose verdict is recorded (b.ceq) for send-keys and record-pane-answer.
+// Pause, held as a plain send-keys (b.zdz), gives retryLater instead: the
+// refused call is pause, and no error description names pause as a call to
+// retry (SR-1.4).
+const retrySendKeysLater = "retry send-keys later"
+
 // relayGuardRefusal is the ErrSendKeysWhileRelayed refusal for request
 // holding of spawn instanceID, whose relay hook may still answer it (b.146
 // rule 7). Every refusal of that name is built here. It states no release time
@@ -393,13 +403,13 @@ func relayFallenBackError(instanceID, token, what string, details RelayFallenBac
 //     decide.
 //   - A request with a recorded verdict (decided true): it says the verdict is
 //     recorded and its relay hook may still be delivering it, and advises
-//     retrying send-keys later (b.ceq); decide on it would return
-//     ErrAlreadyDecided.
-func relayGuardRefusal(instanceID, holding string, decided bool) error {
+//     retry, the refused call's own next step (b.ceq): retrySendKeysLater,
+//     or retryLater for pause. decide on it would return ErrAlreadyDecided.
+func relayGuardRefusal(instanceID, holding string, decided bool, retry string) error {
 	if decided {
 		return fmt.Errorf(
-			"%w: spawn %s: the relayed permission verdict on request %s is recorded and its relay hook may still be delivering it; retry send-keys later",
-			ErrSendKeysWhileRelayed, instanceID, holding)
+			"%w: spawn %s: the relayed permission verdict on request %s is recorded and its relay hook may still be delivering it; %s",
+			ErrSendKeysWhileRelayed, instanceID, holding, retry)
 	}
 	return fmt.Errorf(
 		"%w: spawn %s is awaiting a relayed permission decision on request %s; answer it with decide",

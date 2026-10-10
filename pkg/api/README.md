@@ -261,9 +261,10 @@ Most-likely sentinel errors:
   decide`), and `Decide` answers it. If its verdict is already recorded,
   it says to retry later (`… the relayed permission verdict on request
   <request_token> is recorded and its relay hook may still be delivering
-  it; retry send-keys later`); `Decide` on it would return
-  `ErrAlreadyDecided`. Once that hook has ended, a plain retry can get
-  `ErrDialogMaybeOpen` until Claude Code proves the request gone.
+  it; retry send-keys later`; from `Pause`, `… retry later`); `Decide` on
+  it would return `ErrAlreadyDecided`. Once that hook has ended, a plain
+  retry can get `ErrDialogMaybeOpen` until Claude Code proves the request
+  gone.
 - `ErrRelayFallenBack`: a plain call (no `RequestToken`) while a request
   of the row has fallen back with no pane answer recorded (its relay hook
   is gone and acked no verdict); nothing was sent. `api.ErrDetails(err)`
@@ -522,8 +523,8 @@ relay hook confirmed a verdict.
 
 `ErrRelayFallenBack` means the request's relay hook is gone and acked no
 verdict, and no pane answer is recorded on it through agent-director.
-`Decide` returns it for that request, and a plain `SendKeys` for the
-Spawn's oldest such request. `api.ErrDetails(err)` returns its facts as a
+`Decide` returns it for that request, and a plain `SendKeys` and `Pause`
+for the Spawn's oldest such request. `api.ErrDetails(err)` returns its facts as a
 `RelayFallenBackDetails`: the request's `PermissionRequestInfo`, the
 Spawn's `State`, and `OpenRequests`, the Spawn's other open requests. It
 is closed in one of three ways, each recorded in `PaneAnswer` (`PaneAs`
@@ -570,6 +571,23 @@ unproven a while is a reason to read the pane. A plain `SendKeys` whose
 an LLM judged that screen, so never set it from an automatic flow. A
 subagent's denied request is proven only by the Spawn's end.
 
+`Pause` types `/exit` and Enter as a plain `SendKeys` without
+`ExpectPaneSHA256` would, so on a relayed Spawn it is held as one: it
+returns `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or
+`ErrDialogMaybeOpen`, with the same `ErrDetails`, typing nothing and
+starting no wait, whenever that `SendKeys` would. It takes no pane hash, so
+it stays held until Claude Code proves each request gone (after a
+subagent's denied request, until the Spawn ends). To stop a held Spawn,
+`Kill` it, or have a person or an LLM read the pane, first close any
+fallen-back request (a pane answer with its `RequestToken`, or
+`RecordPaneAnswer`: a pane hash gets a plain `SendKeys` past
+`ErrDialogMaybeOpen` only, never past `ErrRelayFallenBack`), answer any
+other dialog, read the pane again and check the prompt is empty
+(`SendKeys` does not clear a draft as `Pause` does), then send `/exit`
+with `SendKeys` and that read's `PaneSHA256` as `ExpectPaneSHA256`, and
+poll `Status` until the row reads `ended` (`SendKeys` does not wait for
+it).
+
 `api.DetailedError` is the error type that carries such facts: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
 the object; `api.ErrDetails(err)` returns the `Details` of the first one in
@@ -585,9 +603,9 @@ naming its `PaneAnswer`, as `SendKeys` and `RecordPaneAnswer` do, and
 records nothing.
 
 The exported functions `api.Decide`, `api.Get`, `api.List` and
-`api.GetPermission` take a `RelayView`, and `api.SendKeys` and
-`api.RecordPaneAnswer` an env holding one (the `Client` methods pass their
-own); `DecideResult` embeds `RequestDelivery`.
+`api.GetPermission` take a `RelayView`, and `api.SendKeys`,
+`api.RecordPaneAnswer` and `api.Pause` (`PauseEnv`) an env holding one (the
+`Client` methods pass their own); `DecideResult` embeds `RequestDelivery`.
 
 ---
 
@@ -640,9 +658,9 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry `SendKeys` later |
-| `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |
-| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256` while a permission request of the Spawn is not proven gone by Claude Code's hooks; nothing was sent — retry later, or have a person or an LLM look and send with the pane's hash; `ErrDetails` gives its facts |
+| `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry the call later |
+| `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |
+| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by Claude Code's hooks; nothing was sent — retry later, or have a person or an LLM look and send with the pane's hash (for `Pause`, `/exit`; or `Kill`); `ErrDetails` gives its facts |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

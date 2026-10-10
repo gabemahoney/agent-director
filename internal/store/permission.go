@@ -218,7 +218,8 @@ type PermissionRow struct {
 
 // ProvenGone reports whether Claude Code proved r's permission dialog gone
 // (ProvenGoneAt set; b.146 step 2c). Until it does, r holds plain send-keys
-// to its live Spawn, whatever agent-director's own records say of it.
+// and pause (b.zdz) to its live Spawn, whatever agent-director's own records
+// say of it.
 func (r PermissionRow) ProvenGone() bool { return !r.ProvenGoneAt.IsZero() }
 
 // PreV7 reports whether r was recorded before schema v7, by a relay hook that

@@ -460,6 +460,18 @@ person or an LLM read the pane and, having looked, send with that read's
 `pane_sha256`: a matching hash passes this hold (every other refusal still
 applies), and a changed pane is `ErrPaneChanged`.
 
+`pause` is held like a plain `send-keys` without `--expect-pane-sha256`
+(`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)
+and types nothing; it takes no pane hash. To stop a held agent, `kill` it,
+or close any fallen-back request (above), then have a person or an LLM
+read the pane, answer any dialog, check the prompt is empty, send `/exit`
+with that read's hash and poll `status` until the row is `ended`:
+
+```sh
+agent-director send-keys --claude-instance-id "$id" --text /exit \
+    --expect-pane-sha256 "$hash"
+```
+
 Never pass `--expect-pane-sha256` from an automatic flow: it says that a
 person or an LLM judged that exact screen, and passed blindly it lets
 through the Enter this hold exists to stop.
@@ -876,14 +888,15 @@ the class of every tmux error, is in
   read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
   minus 1 s; its `ErrStoreBusy` and `ErrRelayFallenBack` record nothing (see
   [Intercept permission prompts](#intercept-permission-prompts)).
-- `ErrRelayFallenBack` comes from `decide` and from a plain `send-keys`.
-  Close the request with a pane answer (`send-keys --request-token`) or
-  with `record-pane-answer` (see
+- `ErrRelayFallenBack` comes from `decide`, a plain `send-keys` and
+  `pause`. Close the request with a pane answer
+  (`send-keys --request-token`) or with `record-pane-answer` (see
   [Answer a request at the pane](#answer-a-request-at-the-pane)).
-- `ErrDialogMaybeOpen` comes from a plain `send-keys` while Claude Code
-  has not shown a permission request's dialog gone. Retry later; if it
-  stays held, a person or an LLM looks at the pane and sends with its
-  `pane_sha256`. Never pass `--expect-pane-sha256` from an automatic flow.
+- `ErrDialogMaybeOpen` comes from a plain `send-keys` and from `pause`
+  while Claude Code has not shown a permission request's dialog gone.
+  Retry later; if it stays held, a person or an LLM looks at the pane and
+  sends with its `pane_sha256` (for `pause`, `/exit`; or `kill`). Never
+  pass `--expect-pane-sha256` from an automatic flow.
 - Some errors carry their facts in an `err_details` object beside
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):
@@ -1600,7 +1613,8 @@ hand-edit or migrate `state.db` to stop agents, and never delete a row.
    ```
 
    `pause` stops only a `waiting` row. For every other live row, and for
-   any row `pause` refuses (a row this binary cannot reach, for example) or
+   any row `pause` refuses (a row this binary cannot reach, or a relay-on
+   row held by a permission request, for example) or
    that does not end in time, use `agent-director kill` and steps 1 to 5 of
    the live-row sequence of the [caller contract](#caller-contract), which
    `kill`'s description also gives. With a binary from before this release,

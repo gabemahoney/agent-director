@@ -761,7 +761,8 @@ refuses no `send-keys`, and `decide` refuses it, never with
 agent-director's own records of a request (its relay hook's ack, a pane
 answer, `record-pane-answer`) do not show that Claude Code's dialog for it
 is gone. Until a hook of the agent shows it, the request holds a plain
-`send-keys` without a pane hash to the row (`ErrDialogMaybeOpen`; see
+`send-keys` without a pane hash, and `pause`, to the row
+(`ErrDialogMaybeOpen`; see
 [permissions.md](permissions.md#the-dialog-hold)). On a relay-on agent
 (`AGENT_DIRECTOR_RELAY_MODE=on`), these hooks write that proof on the
 row's requests not yet proven, as `proven_gone_at` (the hook's clock) and
@@ -796,8 +797,8 @@ Notification, not a `Stop` or idle prompt carrying `agent_id`, and not a
   row already `ended` or `missing` the same way.
 - **Subagents.** A request with an `agent_id` is proven only by its
   tool's `PostToolUse` or the agent's end. A denied subagent request runs
-  no tool, so it holds a plain `send-keys` without a pane hash until the
-  agent ends.
+  no tool, so it holds a plain `send-keys` without a pane hash, and
+  `pause`, until the agent ends.
 
 ## References
 

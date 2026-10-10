@@ -93,7 +93,8 @@ type RequestDelivery struct {
 	PaneAs *string `json:"pane_as"`
 	// ProvenGoneAt is when Claude Code proved the request's permission dialog
 	// gone (b.146 step 2c); null until then. While it is null, the request
-	// holds plain send-keys to its live Spawn (ErrDialogMaybeOpen).
+	// holds plain send-keys without a pane hash, and pause (b.zdz), to its
+	// live Spawn (ErrDialogMaybeOpen).
 	ProvenGoneAt *time.Time `json:"proven_gone_at"`
 	// ProvenGoneHow is how: tool_ran (its tool's PostToolUse or
 	// PostToolUseFailure, by tool_use_id), turn_end (the turn of the agent

@@ -1,7 +1,9 @@
 /**
- * helper — shared test helpers: ts-helper seeding (runHelper), Clients over the
- * in-repo CLI, process env and cwd scoping, the fake-tmux log, and .claude.json
- * pre-trust fixtures. setup.ts (the preload) sets TS_HELPER_PATH, FAKE_TMUX_DIR and CLI_PATH.
+ * helper — shared test helpers: ts-helper seeding (runHelper; a relay-on row
+ * with a fallen-back request, seedFallenBackRelayRow), Clients over the in-repo
+ * CLI, process env and cwd scoping, the fake-tmux log (its send-keys calls,
+ * paneSends), and .claude.json pre-trust fixtures. setup.ts (the preload)
+ * sets TS_HELPER_PATH, FAKE_TMUX_DIR and CLI_PATH.
  */
 
 import * as fs from "fs";
@@ -140,6 +142,28 @@ export function fakeTmuxCalls(logPath: string): string[][] {
     .split("---\n")
     .filter((rec) => rec !== "")
     .map((rec) => rec.split("\n").slice(0, -1));
+}
+
+/** The send-keys invocations in a FAKE_TMUX_LOG file, each argv from "send-keys" on; [] when there were none. */
+export function paneSends(logPath: string): string[][] {
+  return fakeTmuxCalls(logPath)
+    .filter((argv) => argv.includes("send-keys"))
+    .map((argv) => argv.slice(argv.indexOf("send-keys")));
+}
+
+/**
+ * Seeds, in homeDir's store (created if missing), relay-on row `id` in `state` on a private tmux socket under
+ * homeDir, with one Bash permission request past its relay window (fallen back), its relay hook gone a minute
+ * ago, and the row's own labelled session in the fake-tmux table, its pane showing "answered at tmux". Returns
+ * the request's token and the pane's id.
+ */
+export function seedFallenBackRelayRow(homeDir: string, id: string, state: string): { token: string; paneId: string } {
+  const store = homeStore(homeDir);
+  runHelper("seed-spawn", { store, state, id, "relay-mode": "on", "create-store": true, socket: privateTmuxSocket(homeDir) });
+  const token = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
+    "created-ago-seconds": "172800", "hook-gone-ago-seconds": "60" })["request_token"] as string;
+  const paneId = runHelper("seed-row-session", { store, id, capture: "answered at tmux\n" })["pane_id"] as string;
+  return { token, paneId };
 }
 
 /**

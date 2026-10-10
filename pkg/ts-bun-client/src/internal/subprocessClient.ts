@@ -489,7 +489,14 @@ export class SubprocessClient {
     return this.#enqueue<ListResult>("list", params);
   }
 
-  /** pause — politely shut down a waiting Spawn. */
+  /**
+   * pause — politely shut down a waiting Spawn. Held like a plain sendKeys without
+   * expect_pane_sha256: rejects, typing nothing, with ErrSendKeysWhileRelayed, ErrRelayFallenBack
+   * or ErrDialogMaybeOpen whenever that sendKeys would. It takes no pane hash, and the hold
+   * (ErrDialogMaybeOpen) lasts until Claude Code's hooks prove each request gone, whatever is
+   * done at the pane. Past it: readPane, answer any dialog, then sendKeys `/exit` with the judged
+   * pane's expect_pane_sha256; or kill.
+   */
   async pause(params: PauseParams): Promise<PauseResult> {
     this.#assertOpen();
     return this.#enqueue<PauseResult>("pause", params);

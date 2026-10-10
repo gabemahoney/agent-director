@@ -412,7 +412,7 @@
         {
           "name": "unproven_requests",
           "type": "[]object",
-          "description": "Every permission request of the row that Claude Code has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those: the agent is gone). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256 is refused. Always a non-null array.",
+          "description": "Every permission request of the row that Claude Code has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those: the agent is gone). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -804,7 +804,7 @@
         {
           "name": "proven_gone_at",
           "type": "timestamp?",
-          "description": "When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256 is refused (ErrDialogMaybeOpen).",
+          "description": "When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -1027,7 +1027,7 @@
         {
           "name": "proven_gone_at",
           "type": "timestamp?",
-          "description": "When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256 is refused (ErrDialogMaybeOpen).",
+          "description": "When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -1509,7 +1509,7 @@
     },
     {
       "name": "pause",
-      "description": "Shut down a waiting row: send `/exit` to the agent's own pane and wait up to pause.timeout_seconds for `ended`. A finished row (ended/missing) is a no-op success. `missing` is not proof the agent exited (see find-missing). tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "Shut down a waiting row: type `/exit`, wait up to pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof the agent exited (see find-missing). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1527,6 +1527,9 @@
       "error_names": [
         "ErrSpawnNotFound",
         "ErrSpawnNotPausable",
+        "ErrSendKeysWhileRelayed",
+        "ErrRelayFallenBack",
+        "ErrDialogMaybeOpen",
         "ErrPauseTimeout",
         "ErrTmuxNotAvailable",
         "ErrTmuxSendKeys",
@@ -1581,7 +1584,7 @@
     },
     {
       "name": "trail-emit",
-      "description": "Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db, so it works during corrupted-state recovery.",
+      "description": "Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db.",
       "callable": false,
       "handle_free": false,
       "params": [
@@ -1661,7 +1664,7 @@
     },
     {
       "name": "hook",
-      "description": "Internal: run by each Spawn's --settings hooks with payload JSON on stdin; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
+      "description": "Internal: run by each Spawn's --settings hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
       "callable": false,
       "handle_free": false,
       "params": [

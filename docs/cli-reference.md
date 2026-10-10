@@ -110,7 +110,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 - `liveness_unverified_since` (timestamp?): RFC3339 timestamp of the first sweep that noted this live row (left it unverified, or noted it unreported); kept while later sweeps change liveness_note, unreported included. Cleared to NULL together with liveness_note when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note.
 - `liveness_note` (string?): Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at a Claude Code startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.
 - `permission_requests` ([]object): Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock.
-- `unproven_requests` ([]object): Every permission request of the row that Claude Code has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those: the agent is gone). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256 is refused. Always a non-null array.
+- `unproven_requests` ([]object): Every permission request of the row that Claude Code has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those: the agent is gone). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array.
 - `transcript_status` (string): Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no claude_session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. A reuse starts a new life with no history; a failed reuse's restore returns the pre-reuse life.
 - `prior_sessions` ([]object): Archived prior sessions of the current life, newest first, excluding the row's current session id — the queryable link back to sessions orphaned by a rotation (b.v2c). Session history belongs to a life: after a reuse, which starts a new life, no earlier life's session appears; a failed reuse's restore returns the pre-reuse life's. Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).
 
@@ -223,7 +223,7 @@ Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). R
 - `tool_use_id` (string?): The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).
 - `pane_answer` (string): How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.
 - `pane_as` (string?): The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. The caller's claim, stored and never checked.
-- `proven_gone_at` (timestamp?): When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256 is refused (ErrDialogMaybeOpen).
+- `proven_gone_at` (timestamp?): When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).
 - `proven_gone_how` (string?): How it was proven gone. tool_ran: a PostToolUse or PostToolUseFailure carried its tool_use_id. turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification proves a request with no agent_id (the main agent's, or one recorded before this release). agent_gone: its spawn was marked missing, ended or resumed. Null until proven.
 - `unproven_since` (timestamp?): For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer's or record-pane-answer's write, or the close of its spawn's requests; a request recorded before this release: its recorded verdict). Null while it still awaits an answer, and once proven gone.
 
@@ -267,7 +267,7 @@ Fetch one permission_requests row by request_token alone. decision, decision_rea
 - `tool_use_id` (string?): The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).
 - `pane_answer` (string): How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.
 - `pane_as` (string?): The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. The caller's claim, stored and never checked.
-- `proven_gone_at` (timestamp?): When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256 is refused (ErrDialogMaybeOpen).
+- `proven_gone_at` (timestamp?): When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).
 - `proven_gone_how` (string?): How it was proven gone. tool_ran: a PostToolUse or PostToolUseFailure carried its tool_use_id. turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification proves a request with no agent_id (the main agent's, or one recorded before this release). agent_gone: its spawn was marked missing, ended or resumed. Null until proven.
 - `unproven_since` (timestamp?): For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer's or record-pane-answer's write, or the close of its spawn's requests; a request recorded before this release: its recorded verdict). Null while it still awaits an answer, and once proven gone.
 
@@ -423,7 +423,7 @@ Enumerate rows. All filters AND together. Order is unspecified; callers sort.
 
 ## pause
 
-Shut down a waiting row: send `/exit` to the agent's own pane and wait up to pause.timeout_seconds for `ended`. A finished row (ended/missing) is a no-op success. `missing` is not proof the agent exited (see find-missing). tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Shut down a waiting row: type `/exit`, wait up to pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof the agent exited (see find-missing). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
@@ -437,6 +437,9 @@ _None._
 
 - `ErrSpawnNotFound`
 - `ErrSpawnNotPausable`
+- `ErrSendKeysWhileRelayed`
+- `ErrRelayFallenBack`
+- `ErrDialogMaybeOpen`
 - `ErrPauseTimeout`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
@@ -478,7 +481,7 @@ _None._
 
 ## trail-emit
 
-Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db, so it works during corrupted-state recovery.
+Emit an ad.* trail event (sub-verb relay-attempt) without opening state.db.
 
 ### Parameters
 
@@ -501,7 +504,7 @@ _None._
 
 ## hook
 
-Internal: run by each Spawn's --settings hooks with payload JSON on stdin; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).
+Internal: run by each Spawn's --settings hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).
 
 ### Parameters
 

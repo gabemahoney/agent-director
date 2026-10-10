@@ -42,7 +42,7 @@ func ErrDetails(err error) any {
 }
 
 // RelayFallenBackDetails is ErrRelayFallenBack's err_details (b.146 rule 15),
-// from decide and from send-keys: the request that fell back, with the same
+// from decide, send-keys and pause: the request that fell back, with the same
 // fields get-permission and get's permission_requests give it (its delivery
 // facts at the refusal, pane_answer none or intent), the Spawn's state, and
 // every other request of the Spawn that still awaits an answer.
@@ -78,11 +78,12 @@ type OpenRequestFacts struct {
 }
 
 // DialogMaybeOpenDetails is ErrDialogMaybeOpen's err_details (b.146 step 2c,
-// in decision 8's shape): the oldest request of the Spawn that no hook of
-// Claude Code has proven gone, with the same fields get's unproven_requests
-// give it (its delivery facts at the refusal: how agent-director's records
-// say it closed, delivery and pane_answer, and since when, unproven_since),
-// the Spawn's state, and every other request of the Spawn not proven gone.
+// in decision 8's shape), from send-keys and pause: the oldest request of the
+// Spawn that no hook of Claude Code has proven gone, with the same fields
+// get's unproven_requests give it (its delivery facts at the refusal: how
+// agent-director's records say it closed, delivery and pane_answer, and since
+// when, unproven_since), the Spawn's state, and every other request of the
+// Spawn not proven gone.
 type DialogMaybeOpenDetails struct {
 	PermissionRequestInfo
 	// State is the Spawn's state when the refusal was made.

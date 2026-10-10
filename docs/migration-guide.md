@@ -386,6 +386,19 @@ of a row already `ended` or `missing` are proven gone (`agent_gone`) by
 the migration itself (phase 3 above), not later at its resume, so they
 never read unproven.
 
+`pause` is held as a plain `send-keys` without `--expect-pane-sha256` is,
+so each request above that refuses such a `send-keys`, with
+`ErrRelayFallenBack` or `ErrDialogMaybeOpen`, refuses `pause` to its agent
+too. `pause` takes no pane hash, and a pane hash gets a plain `send-keys`
+past `ErrDialogMaybeOpen` only, never past `ErrRelayFallenBack`. To stop
+such an agent, `kill` it, or have a person or an LLM `read-pane` and first
+close a fallen-back request (`record-pane-answer` as above, or a pane
+answer with its `--request-token` if its prompt still waits), answer any
+other dialog on the pane, `read-pane` again and check the prompt is empty,
+send `/exit` with `send-keys` and that read's `pane_sha256`, and poll `get`
+or `status` until the row is `ended` (see "Send-keys interaction" in
+docs/permissions.md).
+
 Session history belongs to a life: each `session_history` entry carries the
 life of the id that was current when its session ran, and after the v5 hop
 every existing entry is in its row's current life (life 0). Only a reuse

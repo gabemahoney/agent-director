@@ -38,7 +38,7 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // instant plus a 2 s reserve), so the refusal arrives within seconds of the
 // hook's end, not after the request's relay window.
 //
-// Two verbs return it:
+// Three verbs return it:
 //
 //   - Decide, for the request it was asked to decide (decision 1 A). It
 //     checks the hook process before it reads the record, so a hook that
@@ -48,6 +48,8 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 //   - SendKeys without a request token (b.146 rule 7), for the oldest open
 //     request of the Spawn that has fallen back: a plain send could land on
 //     that request's dialog. Nothing is sent.
+//   - Pause, held as a plain SendKeys (b.zdz), for the same request: its
+//     `/exit` and Enter could land on that dialog. Nothing is sent.
 //
 // Its err_details (RelayFallenBackDetails) give the request's facts
 // (request_token, tool_name, tool_input, requested_at and its delivery
