@@ -224,9 +224,11 @@ func DescSocketDirNothingDone(socket, dir, reason string) DescCase {
 // swallowed or only logged, which kill's texts never make (SR-18.9).
 var swallowedStatements = []string{"swallow", "swallowed", "swallows", "logged", "WARN"}
 
-// DescKillInternalTrigger is DescUnusableNameTrigger as kill's manifest
-// description and Client.Kill's Go doc prose state it (SR-1.7, SR-3.2), also
-// never saying that tmux failures are swallowed or logged (SR-18.9).
+// DescKillInternalTrigger is DescUnusableNameTrigger as Client.Kill's Go doc
+// prose states it, and kill's manifest description with the three kinds in
+// kill's own short form (DescKillManifest swaps in unusableNameKindsKill;
+// b.7vf) (SR-1.7, SR-3.2), also never saying that tmux failures are swallowed
+// or logged (SR-18.9).
 func DescKillInternalTrigger() DescCase {
 	c := DescUnusableNameTrigger()
 	c.Name = "kill, " + c.Name
@@ -254,13 +256,14 @@ func DescKillRepeatedAfterLastSession(verb string) DescCase {
 // SR-18.7's two consequences of running kill or find-missing as the wrong user
 // or against the wrong tmux server, as the one sentence DescKillManifest and
 // DescFindMissingManifest both require: "kill's success on a finished row is
-// not verification that the agent exited" (finishedRowNotVerification); and
-// "on the wrong tmux server, a row wrongly marked missing, kill's no-op
-// success and a reuse together start a second agent for the same id"
+// not verification of exit" (finishedRowNotVerification; b.7vf shortened "that
+// the agent exited" to "of exit", as missingNotProofShort did); and "on the
+// wrong tmux server, a row wrongly marked missing, kill's no-op success and a
+// reuse together start a second agent for the same id"
 // (wrongServerSecondAgent).
 const (
 	notVerification            = "not verification"
-	finishedRowNotVerification = "kill's success on a finished row is " + notVerification + " that the agent exited"
+	finishedRowNotVerification = "kill's success on a finished row is " + notVerification + " of exit"
 	wrongServerSecondAgent     = "on the wrong tmux server, a row wrongly marked missing, " +
 		"kill's no-op success and a reuse together start a second agent for the same id"
 )
@@ -306,21 +309,31 @@ func classStatedAlone(name string) string {
 
 // DescKillManifest is kill's manifest description (SR-6.1, SR-1.7, SR-18.1,
 // SR-18.7, SR-18.9; decision-0930b Q4 and Q5): success only once the agent
-// process is gone, else ErrTmuxKillFailed; kill_sent; a finished row's no-op
-// success is not verification; the row's state is not changed; the per-call
-// contract; each error's class (tmuxErrorClasses), GONE being success;
+// process and every other process found in the session's panes are gone, else
+// ErrTmuxKillFailed; kill_sent; a finished row's no-op success; the row's
+// state is not changed; the per-call contract; each error's class
+// (tmuxErrorClasses), GONE being success;
 // DescKillRepeatedAfterLastSession("kill"); never delete; the same user and
-// tmux environment and their two consequences; and DescKillInternalTrigger.
+// tmux environment and their two consequences, the first that the no-op
+// success is not verification (b.7vf dropped kill's second statement of it);
+// that a process an earlier ErrTmuxKillFailed named is not the agent; and
+// DescKillInternalTrigger, its three kinds in kill's own short form
+// unusableNameKindsKill (b.7vf).
 // Check it with AssertAgentTextCase.
 func DescKillManifest() DescCase {
 	trigger := DescKillInternalTrigger()
+	trigger.Require = slices.Clone(trigger.Require)
+	i := slices.Index(trigger.Require, unusableNameKindsFull)
+	if i < 0 {
+		panic("apitest: DescKillManifest: DescUnusableNameTrigger no longer requires unusableNameKindsFull, so kill's short form unusableNameKindsKill would not be required")
+	}
+	trigger.Require[i] = unusableNameKindsKill
 	require := []string{
-		"succeeds only once the agent process is gone; otherwise it returns ErrTmuxKillFailed",
+		"succeeds only once the agent process and every other process found in the session's panes are gone; otherwise it returns ErrTmuxKillFailed",
 		"kill_sent says whether a kill was sent",
 		"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call",
-		"that is " + notVerification + " that the agent exited",
 		"kill never changes the row's state",
-		"Success is judged per call", "later calls do not track it",
+		"Success is judged per call", "named a non-agent process", "later calls do not track it",
 		"a retried kill checks only the agent process",
 		"A retry's success means only that the agent is gone",
 		"(for kill, " + classGone + " is success)",

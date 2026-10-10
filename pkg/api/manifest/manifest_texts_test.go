@@ -55,6 +55,7 @@ func manifestTextCases() []textCase {
 		{verb: "spawn", c: apitest.DescSpawnLaunchTimeoutRule()},
 		{verb: "spawn", c: apitest.DescSpawnScanRefusal()},
 		{verb: "spawn", c: apitest.DescSpawnHeldName()},
+		{verb: "spawn", c: tokens("tmux error classes", "ErrTmuxSessionCreate (LAUNCH FAILURE)", "ErrTmuxNotAvailable (ENVIRONMENT)")},
 		{verb: "spawn", c: tokens("pre-check ErrInternal", "ErrInternal", "collision pre-check", "read the store")},
 		{verb: "spawn", c: tokens("reuse ErrInternal triggers", "ErrInternal, nothing created or changed",
 			"a reuse's archive of the previous session", "or its change failed", "a busy store included")},

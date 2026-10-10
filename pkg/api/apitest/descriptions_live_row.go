@@ -47,14 +47,14 @@ func liveRowSteps() []liveRowStep {
 		},
 		{
 			phrases: []string{
-				"If the row is pending, wait until its launch start (status)",
+				"If pending, wait until its launch start (status)",
 				fmt.Sprintf("plus the pending grace period (%d s unless configured)", config.DefaultPendingGraceSeconds),
 				"inside it, wait and check again, never escalate",
 			},
 			keys: []string{"wait until its launch start", "unless configured", "never escalate"},
 		},
 		{
-			phrases: []string{"Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs"},
+			phrases: []string{"Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs"},
 			keys:    []string{"then check status", "about 5 s apart", "at most three runs"},
 		},
 		{
