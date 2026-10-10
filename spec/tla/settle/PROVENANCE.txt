@@ -1,0 +1,170 @@
+spec/tla/settle/ provenance
+
+What this is
+  Bee b.3ie's TLA+ model of the settle time. It models how status, get and
+  list derive the settled state, and how each store write path sets the
+  columns that derivation reads. The model is B3ieSettle.tla. With it come
+  its 32 cfgs, the scripts that wrote and checked its scheduler jobs, the
+  job table, the job ids, the verdicts and one local sanity run. Bee b.3ie
+  owns the model and its results. The files are vendored as the record of
+  the model checking done before b.3ie's product code.
+
+Not wired into make tla
+  Nothing in the repo runs these files. `make tla` runs ci/suite.tsv only,
+  and ci/run_ci.sh never reads settle/. To run a cfg again, build a job
+  context the way gen-jobs.sh does and submit it to the job scheduler.
+
+Source
+  Bee b.3ie, directory tickets/Bugs/b.3ie/ of the Apiary ticket tree
+  (outside this repo). Copied byte for byte with cp on 2026-10-10. Each
+  file was checked equal to its source with diff at copy time. The pin
+  list below has their SHA-256s.
+
+Layout (the bee folder's relative layout)
+  B3ieSettle.tla          the model
+  README.md               the design modelled, the invariants, the
+                          mutations and the findings
+  cfg/*.cfg               one cfg per scheduler job (32)
+  gen-jobs.sh             wrote cfg/ and the job directories
+  verify-jobs.sh          checked the job directories without running TLC
+  job-README.md           the job table, with the expected verdicts
+  job-Dockerfile          the job image file of each job
+  job-ids.txt             the 32 scheduler job ids
+  job-ids-long.txt        the job id of the pass_tchange_before rerun
+  verdicts.txt            the verdict line of each job
+  tla-logs/sanity.cfg     the local sanity run's cfg
+  tla-logs/runsanity.sh   the script that ran it
+  tla-logs/sanity.log     its log
+  PROVENANCE.txt          this file
+  gen-jobs.sh, verify-jobs.sh and tla-logs/runsanity.sh name the bee
+  folder and the b.3ie worktree by absolute path. They are kept as written,
+  as a record. They do not run from here as they are.
+
+Not vendored
+  The 33 job directories: job-<cfg>/ for each cfg, and
+  job-pass_tchange_before-long/ for the rerun. Each holds copies of files
+  vendored here or in spec/tla/, plus the two-line `runs` file gen-jobs.sh
+  writes. Also not vendored: b.3ie.md, impl-plan.md,
+  settling-state-decision.md and job-ids.txt.notes.
+
+Job image files
+  tlcjob.sh: the tlcjob.sh in every job directory is byte-identical to
+  spec/tla/jobs/lib/tlcjob.sh (cmp and sha256sum, 2026-10-10). So no copy
+  is vendored here; the jobs used spec/tla/jobs/lib/tlcjob.sh.
+  tla2tools.jar: the jar in every job directory is byte-identical to
+  spec/tla/tla2tools.jar (cmp and sha256sum, 2026-10-10). Its SHA-256 is
+  that jar's pin in spec/tla/PROVENANCE.txt. TLC2 Version
+  2026.09.23.154203 (rev: 4260e47).
+  B3ieSettle.tla and the cfg in every job directory are byte-identical to
+  the vendored B3ieSettle.tla and cfg/<cfg>.cfg. The Dockerfile in each of
+  the 32 first-run job directories is byte-identical to job-Dockerfile.
+
+Scheduler results
+  32 jobs, submitted on 2026-10-10 from 05:08Z. Their ids are in
+  job-ids.txt. 31 of the 32 verdicts match the expected table in
+  job-README.md. Seven of the 8 green runs pass. The 11 red runs, the
+  control, the limit and the 11 probes each fail on the invariant the
+  table names. red_insertnobase fails in the initial state, so its verdict
+  has no state count ("?").
+  pass_tchange_before did not finish. Its verdict is INCOMPLETE(disk-cap)
+  at 113,590,337 distinct states, with no violation found. It is being
+  rerun as job j20261010073940-8cae25 (job-ids-long.txt) with a 60 GB disk
+  cap and a 5.5 h run cap. The rerun's context is the first run's, except
+  for the Dockerfile's ENV line (XMX=24g DIRECT=4g BUDGET=20000
+  DISKCAP_MB=60000) and a run cap of 19800 s in `runs`. Its result is
+  pending. It will be appended to this section when it is back.
+  The verdict lines, as in verdicts.txt (cfg | verdict/distinct states):
+    ctl_today | JOB-VERDICT ctl_today=FAIL(Invariant_HeldOrLastSettled_is_violated)/94
+    lim_tchange_bee | JOB-VERDICT lim_tchange_bee=FAIL(Invariant_BeeFormReaderT_is_violated)/279468
+    pass_before | JOB-VERDICT pass_before=PASS/1565892
+    pass_const | JOB-VERDICT pass_const=PASS/4206033
+    pass_const_t1 | JOB-VERDICT pass_const_t1=PASS/4206033
+    pass_immnostamp | JOB-VERDICT pass_immnostamp=PASS/454768
+    pass_noterm | JOB-VERDICT pass_noterm=PASS/276003
+    pass_t0 | JOB-VERDICT pass_t0=PASS/4206033
+    pass_tchange | JOB-VERDICT pass_tchange=PASS/28203720
+    pass_tchange_before | JOB-VERDICT pass_tchange_before=INCOMPLETE(disk-cap)/113590337
+    probe_chaina | JOB-VERDICT probe_chaina=FAIL(Invariant_ProbeChainHoldsA_is_violated)/24445
+    probe_chainc | JOB-VERDICT probe_chainc=FAIL(Invariant_ProbeChainReachesC_is_violated)/107737
+    probe_cmdcuts | JOB-VERDICT probe_cmdcuts=FAIL(Invariant_ProbeCmdCutsSettle_is_violated)/523
+    probe_dup | JOB-VERDICT probe_dup=FAIL(Invariant_ProbeDup_is_violated)/2072
+    probe_flap | JOB-VERDICT probe_flap=FAIL(Invariant_ProbeFlap_is_violated)/20795
+    probe_guarddiff | JOB-VERDICT probe_guarddiff=FAIL(Invariant_ProbeGuardDiffers_is_violated)/517
+    probe_holdsold | JOB-VERDICT probe_holdsold=FAIL(Invariant_ProbeHoldsOld_is_violated)/2209
+    probe_hookleavesterm | JOB-VERDICT probe_hookleavesterm=FAIL(Invariant_ProbeHookLeavesTerminal_is_violated)/597
+    probe_shortturn | JOB-VERDICT probe_shortturn=FAIL(Invariant_ProbeShortTurn_is_violated)/25227
+    probe_tchange | JOB-VERDICT probe_tchange=FAIL(Invariant_ProbeTChangeRead_is_violated)/24422
+    probe_twohooks | JOB-VERDICT probe_twohooks=FAIL(Invariant_ProbeTwoHooks_is_violated)/82
+    red_cmdsettles | JOB-VERDICT red_cmdsettles=FAIL(Invariant_ImmediateAtOnce_is_violated)/42
+    red_guardreported | JOB-VERDICT red_guardreported=FAIL(Invariant_GuardsReadRaw_is_violated)/439
+    red_insertnobase | JOB-VERDICT red_insertnobase=FAIL(Invariant_NeverUnsupported_is_violated)/?
+    red_negage | JOB-VERDICT red_negage=FAIL(Invariant_ReadsLinearizable_is_violated)/26246
+    red_nowoutside | JOB-VERDICT red_nowoutside=FAIL(Invariant_SettledIsSpec_is_violated)/2725
+    red_prevraw | JOB-VERDICT red_prevraw=FAIL(Invariant_SettledIsSpec_is_violated)/1669
+    red_readafter | JOB-VERDICT red_readafter=FAIL(Invariant_ReadsLinearizable_is_violated)/142587
+    red_samerestart | JOB-VERDICT red_samerestart=FAIL(Invariant_SettledIsSpec_is_violated)/20296
+    red_stalebase | JOB-VERDICT red_stalebase=FAIL(Invariant_SettledIsSpec_is_violated)/656
+    red_strictgt | JOB-VERDICT red_strictgt=FAIL(Invariant_ZeroIsRaw_is_violated)/110
+    red_termsettles | JOB-VERDICT red_termsettles=FAIL(Invariant_ImmediateAtOnce_is_violated)/179
+
+Local sanity run (tla-logs/sanity.log)
+  The design at T = 2, MaxTime 3, MaxWrites 3, with every invariant. It ran
+  once, on 2026-10-10, in a local container of the job image's base
+  (eclipse-temurin:21-jre) with a 900 MB memory cap. It used
+  spec/tla/jobs/lib/tlcjob.sh and spec/tla/tla2tools.jar. Result: PASS,
+  158,868 distinct states, depth 12, 6 s.
+
+Wording
+  The vendored b.3ie files keep their own wording. Everything else in this
+  file follows the repo's wording rule.
+
+Pin list
+  One line per vendored file: SHA-256, two spaces, the path relative to
+  spec/tla/settle/ (sha256sum format). PROVENANCE.txt is not pinned.
+  test/tla/provenance_test.go checks that every other file under settle/
+  has a pin line with its SHA-256, and that every pin names such a file.
+
+43d57a0a704e2d49e5d9568cdc9fd9f9e25eece8051e56ff83fa12aeecc091a4  B3ieSettle.tla
+ebbed2d1a57e960907cc7de131d1d8a753cfa07bf34271f90c9aa24c5bb38f35  README.md
+c845527d746b1d221d401946cc55bdd2f4f06d818a3a922ef99b779e7d75131b  cfg/ctl_today.cfg
+04fae86620721f3a792809f8b7eeb0bc868d91a95338fa74806c21026ba03a6d  cfg/lim_tchange_bee.cfg
+49bc7532e342a69648bccef9234ac709a9d9162a89c68780129cd093b1e145a5  cfg/pass_before.cfg
+a24a6d39aff4d62ac6cfc8a1af73fd1bb90f3913119ced4f53aa0b8d8fb07ef2  cfg/pass_const.cfg
+a619c2631945a8f7f3b28dca4412b52742c1c62c135de239cd71960312a5614d  cfg/pass_const_t1.cfg
+01ac9bcf74a9c5952ac3e30e0fd909fbd4be20b2c761c3bba90bf29597816f03  cfg/pass_immnostamp.cfg
+c76c35e01b00ae52a255ca04666a200016a2537ce2fe66656971a36672d3213a  cfg/pass_noterm.cfg
+06009d215c2449df56f08fbc15c66dc00b74b7a70d7f86f7ab2229c03879957e  cfg/pass_t0.cfg
+922a69505b103340f4d83242a49929c28224416cc828058e79b9823bf71cad59  cfg/pass_tchange.cfg
+187dba178e84cacdb8e33141857b4203936a82d96c814e3c5c2ee26a0df4d7bd  cfg/pass_tchange_before.cfg
+e6f5b0c23389a65712c829b1b371581ce135150ea61aeeae8527e2cb132cf3f3  cfg/probe_chaina.cfg
+1664dafd90b7d3e551c8e9614b8865780b103c23cee19a253283e702dd3276b0  cfg/probe_chainc.cfg
+f06291d8a90a02c5a19434cceb3c2e5523a3fba5a991b04211e19c822e5e09b3  cfg/probe_cmdcuts.cfg
+16f5270008a1a4ea32708437c8df27d8772a0e402649268911b5a9cc629581bc  cfg/probe_dup.cfg
+c15a7fe3b4b39eda61f091c6ef2ced35241abbca613004adafc190e1a43c9b54  cfg/probe_flap.cfg
+c8035b6bc9d05646c7f1d66e48d429a8cc5e01db378233adb6c4f266268b8752  cfg/probe_guarddiff.cfg
+3580938daa1b3ede8e7782fa9f60e05350a91b2955c69ab60514564b515c6441  cfg/probe_holdsold.cfg
+b6bc7f4903971d8f32ca44f9ada76e8ce48afc74ace6ecd3b94fec5a1995491e  cfg/probe_hookleavesterm.cfg
+579be337523ad3aa9ab5b9bd4da98972484c404a75fce887c6813e5b60bcc914  cfg/probe_shortturn.cfg
+b380f0f373407d2fd5573bed49dfcedf712c690f3eafa414d85a5531fef692f3  cfg/probe_tchange.cfg
+7d093460a56569b5113bb70f44c87138ab15e6036c0e6232fc971db710144e33  cfg/probe_twohooks.cfg
+302ee690f741b26936a04be4484d318451bcbb9306ec051f49377a043b813ae8  cfg/red_cmdsettles.cfg
+66c3f07a9406d57a2c3eb29c9714a6b0c3827fb34918990c1bbed9a2de7a0b1a  cfg/red_guardreported.cfg
+f9cd94f39abe1f5ccd86bf634b196c281e0ee36b8be66fba1e2e1f30a5719470  cfg/red_insertnobase.cfg
+37045e0ef1b904421dcefe2e140a8416ded3d6f36a1411577afd7cc7523379d8  cfg/red_negage.cfg
+51dcae5889370e82d8f1542cd34c31fb04a7dbe980e0765b554832b74c0f8e41  cfg/red_nowoutside.cfg
+3b62400e2b53899e3f87d0d8486b6f58c3d8f5aff9e35a4da960887fb9b8aa28  cfg/red_prevraw.cfg
+2a3ca0e6f682763b5103282a7d739d723862ab81fe01cfbddad35e2859b90642  cfg/red_readafter.cfg
+de4c3059bd7027a1f2a886b7d959a29c25ed3ca1574a064c1440add0d7335f89  cfg/red_samerestart.cfg
+4d4515469495dd59636d23c1c703ec04f1a37907eaba54c2e151863c296573f6  cfg/red_stalebase.cfg
+83c332636041594802a72306516fe1a938b91332301e40f48788ac7470198d1a  cfg/red_strictgt.cfg
+4ab1f151fd480cb74dddca5ea336b178158e732411b06a9529a1033b58c5d846  cfg/red_termsettles.cfg
+ed24ff3097507953df11d42931758fe11c7cd62eb2d191d21f0e5da0dc9bd4a0  gen-jobs.sh
+ab0e3ee919bea0902b4f35a9abcd7e6c1a6c55ee3491c27fd48567e15d07d9b0  job-Dockerfile
+e9a973fbd3bee3687a9aa5a9630bcd6a0ba90398555e799dcbfb18ad1d6b096e  job-README.md
+b361e58a9afc6b143db4864de072dba78f59a36a891c192af29db0806e5bbec2  job-ids-long.txt
+8864f574f641b3586465ebf558536b6643298aaa23b086441f3884721baca992  job-ids.txt
+00bdade7bdf41156d1c32eb4c04f5e62b98d6d6d440d2a1b49cf559a7206c2ed  tla-logs/runsanity.sh
+c7fe24adde64545089bc596b23dca2ff072384ba133f1560d1fb14de6572b8e9  tla-logs/sanity.cfg
+9d4f09773debdf067c09b35bb0808269fe188afce6f163e94ca33f6fb14259e8  tla-logs/sanity.log
+45e13272b3a107cd6fa79dd353aa17ac534dfae8f251ff61b5e29f4f8ba20d9a  verdicts.txt
+018bee820c6c4f2cab2838d55e7962c340f2523c26fc75f2df972c33c2baf9d3  verify-jobs.sh

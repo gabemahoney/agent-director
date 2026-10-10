@@ -15,12 +15,10 @@ import (
 	"testing"
 )
 
-// TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
-// against the file's SHA-256, and that only the repo's own files are unpinned:
-// three named files plus the b.66h runs (launch/).
-func TestProvenancePinsEveryVendoredFile(t *testing.T) {
-	tree := filepath.Join(repoRoot(t), "spec", "tla")
-	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
+// pinLines returns the sha256sum-format pin lines of a PROVENANCE.txt text as
+// path -> SHA-256; a path pinned twice is an error.
+func pinLines(t *testing.T, prov string) map[string]string {
+	t.Helper()
 	pins := map[string]string{}
 	for _, m := range regexp.MustCompile(`(?m)^([0-9a-f]{64})  ([^ \n]+)$`).FindAllStringSubmatch(prov, -1) {
 		if _, dup := pins[m[2]]; dup {
@@ -28,6 +26,17 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 		}
 		pins[m[2]] = m[1]
 	}
+	return pins
+}
+
+// TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
+// against the file's SHA-256, and that only the repo's own files are unpinned:
+// three named files plus the b.66h runs (launch/). The b.3ie model (settle/)
+// has its own pin list.
+func TestProvenancePinsEveryVendoredFile(t *testing.T) {
+	tree := filepath.Join(repoRoot(t), "spec", "tla")
+	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
+	pins := pinLines(t, prov)
 	if len(pins) != 100 {
 		t.Errorf("%d pin lines, want 100", len(pins))
 	}
@@ -37,7 +46,7 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(tree, p)
-		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") {
+		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "settle/") {
 			unpinned = append(unpinned, rel)
 		}
 		return nil
@@ -80,6 +89,38 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	sort.Strings(named)
 	if !reflect.DeepEqual(vendored, named) {
 		t.Errorf("ci/cfg holds %d cfgs; want exactly the %d suite.tsv names", len(vendored), len(named))
+	}
+}
+
+// TestSettleProvenance: settle/PROVENANCE.txt pins every other file under
+// settle/ with its SHA-256, and each pin names one of those files.
+func TestSettleProvenance(t *testing.T) {
+	tree := filepath.Join(repoRoot(t), "spec", "tla", "settle")
+	pins := pinLines(t, readFile(t, filepath.Join(tree, "PROVENANCE.txt")))
+	err := filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(tree, p)
+		if rel == "PROVENANCE.txt" {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		want, ok := pins[rel]
+		delete(pins, rel)
+		if got := fmt.Sprintf("%x", sha256.Sum256(b)); !ok || got != want {
+			t.Errorf("settle/%s: SHA-256 %s, pinned %q", rel, got, want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel := range pins {
+		t.Errorf("settle/PROVENANCE.txt pins %s, which is not a vendored file under settle/", rel)
 	}
 }
 
