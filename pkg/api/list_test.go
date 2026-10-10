@@ -13,9 +13,9 @@ import (
 )
 
 // TestListFilters pins list's filters over apitest.SeedListFixture (SRD §12):
-// state is OR within its list, every filter ANDs with the others, a label is
-// key=value with a non-empty key, tmux_session_name is byte-exact and "" no
-// filter, limit caps the rows; a query matching nothing gives a non-nil [] .
+// state is OR within its list, every filter ANDs with the others,
+// tmux_session_name is byte-exact and "" no filter, limit caps the rows; a
+// query matching nothing gives a non-nil [] .
 func TestListFilters(t *testing.T) {
 	t.Parallel()
 	all := []string{"row-a-wait-foo", "row-b-wait-foo-other", "row-c-work-bar", "row-d-ended-foo", "row-e-ask", "row-f-wait-no-label"}
@@ -67,9 +67,31 @@ func TestListFilters(t *testing.T) {
 			}
 		})
 	}
-	for _, label := range []string{"foo", "=value"} {
-		if _, err := api.List(s, api.ListParams{Labels: []string{label}}); !errors.Is(err, api.ErrListInvalidLabel) {
-			t.Errorf("label %q: err = %v; want ErrListInvalidLabel", label, err)
+}
+
+// failingListStore is a ListStore whose every read fails with errSentinel.
+type failingListStore struct{}
+
+func (failingListStore) ListSpawns(api.ListFilters) ([]api.Spawn, error) { return nil, errSentinel }
+
+// TestListFailures: a label not in key=value form with a non-empty key is
+// refused before the store read, and every failure encodes spawns as [] (b.hbt).
+func TestListFailures(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		label string
+		want  error
+	}{
+		"label with no separator": {"foo", api.ErrListInvalidLabel},
+		"label with an empty key": {"=value", api.ErrListInvalidLabel},
+		"store read fails":        {"k=v", errSentinel},
+	} {
+		res, err := api.List(failingListStore{}, api.ListParams{Labels: []string{tc.label}})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v; want %v", name, err, tc.want)
+		}
+		if got := jsonOf(t, res); got != `{"spawns":[]}` {
+			t.Errorf("%s: List = %s; want {\"spawns\":[]}", name, got)
 		}
 	}
 }

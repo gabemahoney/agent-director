@@ -122,12 +122,16 @@ type ListResult struct {
 // of the form `foo` (no separator) yields ErrListInvalidLabel; the
 // store is never reached. Empty key (`=v`) is also rejected so the
 // json_extract path never receives an empty key string.
+//
+// Every failure (an invalid label, the store read's error, or
+// ErrClientClosed from (c *Client).List) returns Spawns as a non-nil empty
+// slice, as ListResult documents (b.hbt).
 func List(s ListStore, params ListParams) (ListResult, error) {
 	labels := make(map[string]string, len(params.Labels))
 	for _, raw := range params.Labels {
 		idx := strings.IndexByte(raw, '=')
 		if idx <= 0 {
-			return ListResult{}, fmt.Errorf("%w: %q is not in key=value form", ErrListInvalidLabel, raw)
+			return ListResult{Spawns: []ListRow{}}, fmt.Errorf("%w: %q is not in key=value form", ErrListInvalidLabel, raw)
 		}
 		labels[raw[:idx]] = raw[idx+1:]
 	}
@@ -141,7 +145,7 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 		Limit:           params.Limit,
 	})
 	if err != nil {
-		return ListResult{}, err
+		return ListResult{Spawns: []ListRow{}}, err
 	}
 
 	out := make([]ListRow, 0, len(rows))
@@ -179,7 +183,7 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 // Nondeterminism: none.
 func (c *Client) List(params ListParams) (ListResult, error) {
 	if err := c.checkClosed(); err != nil {
-		return ListResult{}, err
+		return ListResult{Spawns: []ListRow{}}, err
 	}
 	return List(c.st, params)
 }

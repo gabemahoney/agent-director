@@ -23,8 +23,11 @@ source "${GATE_LIB}/emit-diagnostic.sh"
 # ---------------------------------------------------------------------------
 TARGET="${1:-}"
 if [[ -z "${TARGET}" ]] || ! [[ "${TARGET}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
-  printf '{"gate":"branch.worktree-create","offending_file_or_artifact":null,"description":"target version %s is not strict SemVer","corrective_action":"Pass a clean X.Y.Z value."}\n' \
-    "${TARGET}" >&2
+  emit_diagnostic \
+    "branch.worktree-create" \
+    "null" \
+    "target version ${TARGET} is not strict SemVer" \
+    "Pass a clean X.Y.Z value."
   exit 2
 fi
 

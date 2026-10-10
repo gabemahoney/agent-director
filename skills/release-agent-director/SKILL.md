@@ -136,10 +136,11 @@ A condensed terminal summary also prints at end-of-run.
 ## Test coverage
 
 The synthetic-regression suite (`skills/release-agent-director/tests/synthetic-regressions/`)
-covers every gate and phase invariant. Run with:
+covers every gate and phase invariant. Run it in the sandbox, never on the host:
 
 ```
-go test ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
+make sandbox CMD="make release-smoke"
 ```
 
-Or via `make release-smoke`.
+`make release-smoke` runs `go test ./skills/release-agent-director/tests/synthetic-regressions/... -count=1`;
+outside the sandbox it refuses and prints the command above.

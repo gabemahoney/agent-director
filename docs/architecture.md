@@ -1783,11 +1783,14 @@ checked.
    [Err-name five-way coherence](#err-name-five-way-coherence) before
    proceeding — the CI drift gate will fail if any of the five sources
    are out of sync.
-5. Run `make generate` to regenerate `docs/cli-reference.md` and
-   `docs/mcp-reference.md` from the manifest.
-6. Verify idempotency: re-run `make generate` and confirm `git status`
-   shows no diff. A second run that produces a diff means the generator is
-   non-deterministic — fix it before merging.
+5. Run `make sandbox CMD="make generate"` to regenerate
+   `docs/cli-reference.md` and `docs/mcp-reference.md` from the manifest.
+   A bare `make generate` on a development host refuses (exit 2) and
+   prints that command; see
+   [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
+6. Verify idempotency: re-run `make sandbox CMD="make generate"` and
+   confirm `git status` shows no diff. A second run that produces a diff
+   means the generator is non-deterministic — fix it before merging.
 
 **Prohibitions.**
 
@@ -6535,8 +6538,8 @@ special-cases `errors.Is(err, ErrUnknownTool)` before delegating to
 
 **`catalog.json`** — a machine-readable snapshot of `Catalog`,
 generated deterministically by `go generate ./pkg/api/errnames/...`.
-The doc-drift CI gate (`make doc-drift`) enforces that the checked-in
-`catalog.json` stays in sync with the Go source.
+The doc-drift CI gate (`.github/workflows/doc-drift.yml`) enforces that
+the checked-in `catalog.json` stays in sync with the Go source.
 
 **Consumers:** `cmd/agent-director`'s envelope writer and
 `internal/mcp`'s `classifyDispatchError` both call `errnames.Classify`
@@ -6659,6 +6662,16 @@ or catalog Go source requires regenerating the corresponding JSON file.
    docs/engineering-guide.md §10 and
    [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
 
+The workflow's make targets that run `go generate`, `go run` or `go test`
+(`check-doccomments`, `generate`, `err-coherence`, `errnames-json`,
+`surface-json`, `nondet-coverage`) refuse outside the sandbox container
+(the Makefile's `_require-sandbox` guard, b.8yq). The workflow sets
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` on each step that runs one, as
+its hosted runner holds no real store. On a development host, run each of
+them as `make sandbox CMD="make <target>"`; the drift steps' `::error::`
+annotations print that form for `generate`, `surface-json` and
+`errnames-json`.
+
 **Adding a new sentinel**
 
 1. Add `var ErrFoo = errors.New("ErrFoo: ...")` to `pkg/api/errors.go`.
@@ -6670,8 +6683,10 @@ or catalog Go source requires regenerating the corresponding JSON file.
    attribution that reflection can recover, so the generator cannot infer the origin
    package automatically. A missing entry causes the generator to exit 1 with an explicit
    error message.
-6. Run `make errnames-json && make surface-json` to refresh the committed JSON outputs.
-7. Run `make err-coherence` locally to confirm all five checks pass before pushing.
+6. Run `make sandbox CMD="make errnames-json surface-json"` to refresh the committed
+   JSON outputs.
+7. Run `make sandbox CMD="make err-coherence"` to confirm all five checks pass before
+   pushing.
 
 ### Registration
 
@@ -9165,7 +9180,10 @@ missed or failed in the store, a row found alive (its note cleared or
 none to clear, or a live `pending` row's `provenance_conflict` kept) and a
 live `pending` row noted `unreported` (or found already noted so) are in
 neither list; `get` and `list` show the note. Both lists are sorted and
-never null. The verb adds no
+never null, on a failure too: the live-row read's error, and
+`ErrClientClosed` from `Client.FindMissing` on a closed Client, come with
+an empty `FindMissingResult` (counts 0, `IDs` and `UnverifiedIDs` non-nil
+and empty), as a sweep that judged no row does (b.hbt). The verb adds no
 verb-level error; `ErrProbeUnsupported` stays in its error list (SR-1.7)
 but is never returned.
 
@@ -9269,7 +9287,10 @@ stored text in the `storeTimestamp` layout), in instance-id order, each an
 judged like any other. Live rows, `pending` included, and rows with a NULL
 `ended_at` are never selected and get no tmux call. A failed candidate read
 is logged and fails the verb, with no tmux call; besides the two refusals
-above, it is the verb's only failure.
+above, it is the verb's only failure, and `Client.Expire` adds
+`ErrClientClosed` on a closed Client. Every failure returns the refusals'
+empty `ExpireResult` (counts 0, `IDs` and `KeptIDs` non-nil and empty, so
+`[]` in JSON), as a run that selected no row does (b.hbt).
 
 **Per-row order (SR-12.2).** Rows are judged in instance-id order, so the
 per-socket stop and the budget's cut-off fall on the same rows on every
@@ -10992,6 +11013,23 @@ gates/pack/         gates/notes/        gates/publish/
 gates/finalize/
 ```
 
+**Gate diagnostics.** A failing gate writes each SR-14 diagnostic to stderr
+as one JSON object per line. Gate scripts must build every diagnostic with
+`emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never by hand; the
+sole exception is the publish orchestrator, whose `emit_publish_diagnostic`
+adds the publish-only fields. Both build the object with `jq`, so the line
+is valid JSON whatever its fields carry, raw command output with TABs, CRs
+or other control characters included. `emit_diagnostic` feeds the
+description to `jq` on stdin, not as an argument, so it may be any size;
+Linux caps one argument at 128 KiB. The guard test
+`TestNoHandRolledDiagnosticJSON`
+(`skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars/`)
+fails on any `printf` of a `{"gate"` line in `gates/**/*.sh`. One invalid
+line costs a whole gate's diagnostics: the parallel executor
+(`gates/lib/run-parallel.sh`) parses every stderr line of a gate that
+starts with `{` in a single `jq -s`, and records an empty list if that
+fails.
+
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,
 every diagnostic message, and elapsed time per phase.
@@ -11066,6 +11104,11 @@ than `go test ./...`.
   `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
   the Docker hook pattern's stand-ins).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
+- Sets `AGENT_DIRECTOR_TEST_HARNESS=1` (an image `ENV`), the marker that
+  this is the Docker test harness container. `db-reset.sh` refuses to run
+  without exactly that value (see [Driver](#driver)). The sandbox container
+  does not set it; like `AGENT_DIRECTOR_TEST_SANDBOX` it is an
+  accident-prevention gate, not a security boundary.
 - Default command is `/opt/driver/run-testplan.sh`.
 
 The image is built via `make test-image`. `make test-image-smoke` exercises
@@ -11083,13 +11126,35 @@ it standalone: confirms `claude --version` reports the pinned version,
 2. Case order comes from the t1's `children:` YAML list. Alphabetical
    basename sort would scramble paired cases (e.g. the smoke-2 / smoke-3
    DB-isolation pair) — `children:` preserves authoring order.
-3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`: it
-   removes `~/.agent-director/state.db` + WAL/SHM, kills tmux sessions
-   matching the `cd-` prefix, then calls `agent-director list` to
-   rebuild the store at the binary's current schema version (a fresh DB
-   is created directly at that version, not migrated up from v1). Cases must therefore derive the expected `user_version` from the
+3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`
+   (b.8yq). In order, it:
+   - refuses, exit 2 with nothing changed, unless
+     `AGENT_DIRECTOR_TEST_HARNESS=1` (set by the image, see
+     [Container](#container)): it ends every tmux server of its user and
+     deletes the store, so it must never run on a host;
+   - ends every tmux server whose socket is in a `tmux-<uid>` directory up
+     to four levels under `/tmp`, `$HOME` or its own `TMUX_TMPDIR`, so every
+     session goes, whatever its name: the default and `-L` servers, and
+     those of a case that points `TMUX_TMPDIR` at its own directory. If the
+     script itself runs inside tmux, it ends that server's other sessions
+     and spares its own;
+   - waits for the processes of those servers' panes to exit, and after a
+     grace of 5 to 6 s kills (`SIGKILL`, by the pane's process session)
+     whatever still runs, naming each such pane on stderr. A real Claude
+     Code left by an earlier case cannot rewrite `~/.claude.json` under the
+     next one;
+   - removes `~/.agent-director/state.db` + WAL/SHM;
+   - calls `agent-director list` to rebuild the store at the binary's
+     current schema version (a fresh DB is created directly at that
+     version, not migrated up from v1). It exits 1 if that fails.
+
+   Cases must therefore derive the expected `user_version` from the
    shipped binary rather than hard-code a literal; hard-coding a stale
-   version is what turned this lane red in b.m9q.
+   version is what turned this lane red in b.m9q. A case never relies on a
+   tmux server, session or pane process from an earlier case.
+   `harness-smoke`'s smoke-5 checks the reset end to end: four servers,
+   none with a `cd-` session, and a pane that ignores `SIGHUP` and
+   `SIGTERM`.
 4. For each case, the driver runs in one of two modes:
    - `DRIVER_MODE=shell` (default) — extracts the t2 body's fenced
      ```bash``` block and executes it directly. No API calls. Used by
@@ -11190,8 +11255,9 @@ prose says `sqlite3`. Never write another `sqlite3` wrapper or call
 runs in `make test-sandbox` (`go test ./...`); no workflow runs it. The
 `sql.sh` tests use temp-dir stores and a real `sqlite3` (with none on PATH
 they fail inside the sandbox and skip elsewhere); the re-run test uses a
-temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`. None
-touches `~/.agent-director`, tmux or Docker.
+temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`; the
+`db-reset.sh` test uses a temp HOME and logging fakes of tmux, `pkill` and
+`agent-director`. None touches `~/.agent-director`, tmux or Docker.
 
 - **`sqlite_guard_test.go`**:
   - `TestNoBareSqlite3InCasesOrDriver` scans every `bash`, `sh` and
@@ -11228,6 +11294,13 @@ touches `~/.agent-director`, tmux or Docker.
   case and again before the re-run, that the re-run's trace shows the
   case's own failure, and that `details` say `xtrace rerun skipped:
   db-reset failed before it` when the second reset fails.
+- **`db_reset_test.go`**: `TestDBResetRefusesOutsideTheHarness` (b.8yq)
+  runs the real `db-reset.sh` with `AGENT_DIRECTOR_TEST_HARNESS` unset,
+  empty, `0` and `true`. Each run must exit 2 with the refusal on stderr,
+  run no tmux, `pkill` or `agent-director`, and leave a seeded store
+  untouched. It never sets the marker to `1`; the harness's smoke-5 case
+  covers the reset itself. `DB_RESET_UNDER_TEST=<path>` runs it against
+  another copy, to prove the fails-before direction.
 
 **Must use:** a test of a `test/driver/` script goes in
 `test/driver-scripts/` and reuses its `newStore`, `holdLock`,
@@ -15495,8 +15568,43 @@ otherwise (fail-closed, exit 1 with a message naming both):
 
 | Const | Variable | Meaning |
 | --- | --- | --- |
-| `sandboxguard.EnvVar` | `AGENT_DIRECTOR_TEST_SANDBOX` | The process is inside the sandbox container. Exported by the `make sandbox*` targets; also checked by the bun preload `pkg/ts-bun-client/test/setup.ts`. |
-| `sandboxguard.BypassEnvVar` | `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` | The caller asserts there is **no real `~/.agent-director` to damage** — true only on an ephemeral GitHub-hosted runner. Go-only. |
+| `sandboxguard.EnvVar` | `AGENT_DIRECTOR_TEST_SANDBOX` | The process is inside the sandbox container. Exported by the `make sandbox*` targets; also checked by the bun preload `pkg/ts-bun-client/test/setup.ts` and the Makefile's `_require-sandbox` guard (below). |
+| `sandboxguard.BypassEnvVar` | `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` | The caller asserts there is **no real `~/.agent-director` to damage** — true only on an ephemeral GitHub-hosted runner. Honoured by `Require()` and by `_require-sandbox`; the bun preload ignores it. |
+
+A third marker, `AGENT_DIRECTOR_TEST_HARNESS=1`, is not a sandbox marker
+and neither guard reads it: it marks the Docker test harness container and
+gates only `test/driver/db-reset.sh` (see [Test Harness](#test-harness)).
+
+**Makefile guard (`_require-sandbox`, b.8yq).** The same rule covers the
+make targets whose own recipe runs a go or bun tool outside
+`$(_SANDBOX_RUN)` (`go generate`, `go run`, `go test` or `bun test`):
+`generate`, `surface-json`, `errnames-json`, `check-doccomments`,
+`nondet-coverage`, `err-coherence`, `release-smoke`, `envelope-diff-ts` and
+`test`. Each of them lists the phony `_require-sandbox` as its first
+prerequisite, and `all` (the default goal) reaches it through `generate`.
+It passes, printing
+nothing, when `AGENT_DIRECTOR_TEST_SANDBOX` or
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is set. Otherwise it exits 2
+before anything runs, and its stderr names the goals and the command that
+runs them in the sandbox, built from all the goals whatever their order
+and under `-j`: `make sandbox CMD="make <goals>"`, or, for `test`,
+`make test-sandbox` (`test-install-sh` starts a container, and the
+sandbox has no container engine). With `test` and other goals it joins
+the two with `&&`, `make test-sandbox` first only if `test` is the first
+goal: `make generate test` gives
+`make sandbox CMD="make generate" && make test-sandbox`. When `test`,
+`all` or `envelope-diff-ts` is a goal, the build prerequisites that do work of
+their own (`build`, `bin/ts-helper`, `test/fake-tmux/tmux` and the
+sandbox image's `_sandbox-preflight`) take the guard as an order-only
+prerequisite, so nothing runs before it, also under `make -j`.
+`make build`, `make test-image` and the `make sandbox*` targets still run
+on the host, and `make -n` still exits 0.
+
+**Must use:** a new make target whose recipe runs `go generate`, `go run`,
+`go test` or `bun test` outside `$(_SANDBOX_RUN)` lists `_require-sandbox`
+as its first prerequisite. Never write another environment check in a
+recipe. `test/sandbox/requiresandbox` scans the Makefile's recipes for
+such targets, so a new one is checked without editing the test.
 
 The guard defends against b.8dr: a host-side `go test` can rewrite the real
 store no matter how `HOME` is set. Redirecting `HOME` does not hold as a
@@ -15507,9 +15615,11 @@ all still reach real state. The container is the only isolation boundary; the
 bypass is not isolation, it is an assertion that there is nothing to isolate
 from.
 
-The bypass is set **only at the `job:`/`step:` level** of the two
-GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`), each with an
-in-file comment recording why it is safe there. It must never be a
+The bypass is set **only at the `job:`/`step:` level** of the three
+GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`,
+`doc-drift.yml`), each with an in-file comment recording why it is safe there.
+`doc-drift.yml` sets it on each step that runs a `_require-sandbox` target.
+It must never be a
 repository/organization-level Actions variable or secret, and never appear in
 `.github/workflows/pre-release-verify-mac.yml` — that job runs on
 `[self-hosted, macOS, ARM64]`, a persistent machine that plausibly holds a real
@@ -15523,7 +15633,8 @@ would also disable the guard on the self-hosted runner (b.175).
 
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
-`prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z). Those tests run `make` against the real
+`prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
+b.8yq). Those tests run `make` against the real
 repo Makefile with a fake container engine or tool on PATH, never a real
 container, and assert on what the recipe produced. They exec no built binary
 and open no store, so they carry no sandbox guard.
@@ -15547,6 +15658,18 @@ wrapper first on PATH. It checks that a dry run of a non-release target
 stamps the `package.json` version, takes `AGENT_DIRECTOR_BUILD_VERSION`
 without running jq, and, with no jq, no `package.json`, no `.version` or an
 empty one, exits non-zero with the version error and creates no `dist/`.
+
+`requiresandbox` copies the Makefile into a temp tree and puts logging
+fakes of go, bun and docker first on PATH, with neither sandbox variable
+set. It finds every target whose recipe runs `go generate`, `go run`,
+`go test` or `bun test` outside `$(_SANDBOX_RUN)`, and checks that each
+one, `all`, the default goal, two goals at once and `test` with other
+goals in either order exit 2 with the refusal and its advice and run
+nothing, also under `-j8` for `test`, `all`, the default goal,
+`envelope-diff-ts` and the mixed-goal cells. It checks that the guard
+passes with the sandbox marker or the bypass, that `make -n` and the
+build-only targets still run outside the sandbox, and that the advice, run
+as printed through a fake engine, runs `go generate` in the "container".
 
 - `RepoRoot(t)` returns the directory holding the root `go.mod`.
 - `MakefileUnderTest(t)` returns the repo Makefile, or the path in
@@ -15655,9 +15778,12 @@ The Makefile target builds all three required binaries incrementally, then
 runs the two test files:
 
 ```
-envelope-diff-ts: agent-director ts-helper fake-tmux
+envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
     cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 ```
 
-It is wired into `make test` so `go test ./...` will not run unless the TS
+It runs only in the sandbox (`make sandbox CMD="make envelope-diff-ts"`):
+outside it `_require-sandbox` refuses before any build starts (see
+[Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass)). It is
+wired into `make test` so `go test ./...` will not run unless the TS
 envelope-diff suite passes first.

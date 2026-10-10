@@ -25,7 +25,9 @@ Every gate script **must** adhere to the following contract:
   ```
 
   Use `lib/emit-diagnostic.sh` (see below) to produce correctly-escaped
-  diagnostics rather than hand-rolling the JSON.
+  diagnostics rather than hand-rolling the JSON. The test
+  `TestNoHandRolledDiagnosticJSON` fails on any `*.sh` here that `printf`s
+  a `{"gate"` line.
 
 - Gates **must not** mutate repository state. They are read-only checks.
   Any gate that needs to modify state should instead report a diagnostic
@@ -60,9 +62,17 @@ emit_diagnostic \
 exit 1
 ```
 
-`emit_diagnostic` handles JSON-escaping of all four fields. The
-`offending_file_or_artifact` argument may be the literal string `"null"` to
-emit a JSON `null` rather than a quoted string.
+`emit_diagnostic` builds the object with `jq` and writes it to stderr as one
+compact line. `jq` escapes everything JSON requires in all four fields:
+quotes, backslashes, newlines, TABs, CRs and the other control characters
+below U+0020. So raw command output, such as `go test` `FAIL` lines or Go
+compiler errors, can go straight into a field and the line stays valid JSON.
+The description reaches `jq` on stdin, so it may be any size. The other three
+fields go as `jq --arg`, so each must stay under Linux's 128 KiB limit on one
+argument; keep them to a gate name, a path and fixed text. The function needs
+`jq` on `PATH`; without it no diagnostic is written. The
+`offending_file_or_artifact` argument may be the literal string `"null"`, or
+empty, to emit a JSON `null` rather than a quoted string.
 
 ### `finalize/write-report.sh`
 

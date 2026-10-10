@@ -407,8 +407,12 @@ This skill runs `install.sh` from the same directory. The script:
       "Where install.sh looks for each binary" below describes, and
       verifies each is an executable regular file. Pre-flight prints
       the two it settled as `  source  : <path>` and
-      `  admin source: <path>`. A source not found is refused with
-      exit 3, naming every path tried and the flags to pass:
+      `  admin source: <path>`. These lines and every pre-flight
+      message name the in-repo build as `<checkout>/bin/<binary>`,
+      where `<checkout>` is the checkout's real path (symlinks
+      resolved), with no `../..`. A source not found is
+      refused with exit 3, naming every path tried and the flags to
+      pass:
       - agent-director not found: "install.sh: no source binary
         found.", `Tried:` the checkout's `bin/agent-director` and
         `command -v agent-director`, and "Pass --binary <path> to

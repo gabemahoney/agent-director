@@ -381,8 +381,11 @@ func findMissingAction(r findMissingRow) string {
 //     write settled.
 //  7. Provisional transcripts are healed (healProvisionalTranscripts).
 //
-// The result lists are sorted. The only error returned is the live-row
-// read's.
+// The result lists are sorted. The only error FindMissing returns is the
+// live-row read's, and (c *Client).FindMissing adds one, ErrClientClosed on a
+// closed Client, before it calls FindMissing. Every failure returns an empty
+// FindMissingResult (counts 0, IDs and UnverifiedIDs non-nil and empty), as
+// a sweep that judged no row does (b.hbt).
 //
 // A row marked missing is the sweep's judgement on the evidence available to
 // it, not proof that the agent has exited; neither ended nor missing means
@@ -398,7 +401,7 @@ func findMissingAction(r findMissingRow) string {
 func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcChecker, pendingGrace, sweepBudget time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
 	identities, err := s.ListLiveSpawnIdentities()
 	if err != nil {
-		return FindMissingResult{}, err
+		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
 	}
 	identities = slices.Clone(identities)
 	sort.SliceStable(identities, func(i, j int) bool {
@@ -748,7 +751,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // Nondeterminism: none.
 func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
-		return FindMissingResult{}, err
+		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
 	}
 	return FindMissing(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Tmux.EffectivePendingGrace(), c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
 }

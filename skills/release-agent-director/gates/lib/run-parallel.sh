@@ -27,6 +27,12 @@
 
 set -uo pipefail
 
+# The missing-cwd diagnostic below goes through emit_diagnostic like every
+# gate's, so a gate name or cwd with quotes or control characters stays valid
+# JSON. The library defines only that one function and no globals.
+# shellcheck source=../lib/emit-diagnostic.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/emit-diagnostic.sh"
+
 # ─── argument validation ──────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
   printf 'usage: run-parallel.sh <gates-config.json>\n' >&2
@@ -104,8 +110,11 @@ for ((idx = 0; idx < GATE_COUNT; idx++)); do
 
     if [[ ! -d "$cwd" ]]; then
       # Emit an SR-14 style diagnostic for missing cwd; mark as failed.
-      printf '{"gate":"%s","offending_file_or_artifact":"%s","description":"gate cwd does not exist: %s","corrective_action":"Fix the cwd field in the gates-config.json for this gate."}\n' \
-        "$name" "$cwd" "$cwd" >&2
+      emit_diagnostic \
+        "$name" \
+        "$cwd" \
+        "gate cwd does not exist: ${cwd}" \
+        "Fix the cwd field in the gates-config.json for this gate."
       exit_code=1
     else
       (cd "$cwd" && bash -c "$cmd") || exit_code=$?

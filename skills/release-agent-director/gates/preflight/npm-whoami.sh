@@ -3,7 +3,11 @@
 # checks:      npm whoami exits 0 (token is valid against the registry)
 # pass:        silent exit 0
 # fail:        emit SR-14 JSON diagnostic to stderr, exit 1
-# depends on:  npm; honours $NPM_REGISTRY if set
+# depends on:  npm, jq (via emit_diagnostic); honours $NPM_REGISTRY if set
+
+GATE_LIB="$(cd "$(dirname "$0")/../lib" && pwd)"
+# shellcheck source=../lib/emit-diagnostic.sh
+source "${GATE_LIB}/emit-diagnostic.sh"
 
 if [ -n "${NPM_REGISTRY:-}" ]; then
   NPM_STDERR=$(npm whoami --registry "$NPM_REGISTRY" 2>&1 1>/dev/null)
@@ -14,8 +18,10 @@ else
 fi
 
 if [ $NPM_EXIT -ne 0 ]; then
-  DESCRIPTION=$(printf '%s' "$NPM_STDERR" | head -1 | sed 's/"/\\"/g')
-  printf '{"gate":"preflight.npm-whoami","offending_file_or_artifact":null,"description":"%s","corrective_action":"Token may be expired — generate a new one and update NPM_TOKEN."}\n' \
-    "$DESCRIPTION" >&2
+  emit_diagnostic \
+    "preflight.npm-whoami" \
+    "null" \
+    "$(printf '%s' "$NPM_STDERR" | head -1)" \
+    "Token may be expired — generate a new one and update NPM_TOKEN."
   exit 1
 fi

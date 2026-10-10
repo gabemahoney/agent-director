@@ -724,6 +724,39 @@ test_J3_InstalledSkillRerunPairsInstalledAdmin() {
     done
 }
 
+# J3: the refusal for both binaries names the in-repo paths it tried as
+# <root>/bin/..., with no ../.. (b.j6w), from install.sh's usual place and
+# through a symlinked skill directory (whose ../.. is the real root). With the
+# binaries put at those paths, the re-run's "source  :" and "admin source:"
+# name them the same way.
+test_J3_TriedPathsResolved() {
+    local dir sh h root="$ROOT/j3-tried"
+    install_copy "$root/skills/install-agent-director/install.sh"
+    mkdir -p "$ROOT/j3-tried-link/skills" \
+        && ln -s "$root/skills/install-agent-director" "$ROOT/j3-tried-link/skills/install-agent-director" \
+        || { bad "symlink the skill directory"; return; }
+    root="$(cd -P "$root" && pwd -P)"
+    for dir in j3-tried j3-tried-link; do
+        sh="$ROOT/$dir/skills/install-agent-director/install.sh" h="$(new_home)"
+        rm -rf "$root/bin"
+        run "$h" bash "$sh" --no-hooks --no-symlink
+        expect_rc 3 "$dir: no source binaries" || continue
+        grep -qxF "  Tried: $root/bin/agent-director" "$ERR" \
+            || bad "$dir: no \"Tried: $root/bin/agent-director\" line: $(flat "$ERR")"
+        grep -qxF "  Tried: $root/bin/agent-director-admin" "$ERR" \
+            || bad "$dir: no \"Tried: $root/bin/agent-director-admin\" line: $(flat "$ERR")"
+        { mkdir -p "$root/bin" && cp "$BIN" "$root/bin/agent-director" && cp "$ADMIN" "$root/bin/agent-director-admin"; } \
+            || { bad "$dir: put the binaries at the paths tried"; continue; }
+        run "$h" bash "$sh" --no-hooks --no-symlink
+        expect_rc 0 "$dir: re-run with the binaries at the paths tried" || continue
+        grep -qxF "  source  : $root/bin/agent-director" "$OUT" \
+            || bad "$dir: no \"source  : $root/bin/agent-director\" line: $(flat "$OUT")"
+        grep -qxF "  admin source: $root/bin/agent-director-admin" "$OUT" \
+            || bad "$dir: no \"admin source: $root/bin/agent-director-admin\" line: $(flat "$OUT")"
+        expect_installed "$h" "$BIN" "$ADMIN"
+    done
+}
+
 # ---- J4: wrong-architecture --binary ---------------------------------------------
 
 # J4: "Did you pass the wrong --binary?"
@@ -763,7 +796,7 @@ j5_stale() {
 # J5: "rebuild it first: make build", over an installed pair of another build:
 # the checkout's agent-director-admin is used, not the installed one (b.azo).
 test_J5_StaleBinaryMakeBuild() {
-    local h got; h="$(new_home)"; j11_paths "$h"
+    local h want; h="$(new_home)"; j11_paths "$h"
     run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "install the old pair" || return
     j5_stale "$h" || return
@@ -772,9 +805,9 @@ test_J5_StaleBinaryMakeBuild() {
     expect_rc 0 "advised: $cmd" || return
     run_in "$h" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
     expect_rc 0 "re-run after make build" || return
-    got="$(grep -m1 '^  admin source: ' "$OUT")" got="${got#  admin source: }"
-    [[ -n "$got" && "$got" -ef "$TREE/bin/agent-director-admin" ]] \
-        || bad "admin source \"$got\"; want $TREE/bin/agent-director-admin, not the installed $J11A"
+    want="$(cd -P "$TREE" && pwd -P)/bin/agent-director-admin" # no ../.. (b.j6w)
+    grep -qxF "  admin source: $want" "$OUT" \
+        || bad "no \"admin source: $want\" line, not the installed $J11A: $(flat "$OUT")"
     expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 

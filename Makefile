@@ -90,6 +90,9 @@ _release_version_checked = $(if $(and $(filter 1,$(words $(1))),$(filter-out nul
 release-binaries: VERSION_STR = $(if $(strip $(AGENT_DIRECTOR_BUILD_VERSION)),$(AGENT_DIRECTOR_BUILD_VERSION),$(call _release_version_checked,$(RELEASE_VERSION)))
 release-binaries: VERSION_LDFLAGS = -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
 
+# all runs generate, so outside the sandbox it stops at generate's
+# _require-sandbox guard (b.8yq) before anything runs; build waits for that
+# guard too, also under make -j (see _require-sandbox).
 all: generate build
 
 # build builds both binaries with the same version stamp: agent-director and
@@ -99,7 +102,13 @@ build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director-admin ./cmd/agent-director-admin
 
-test: envelope-diff-ts test-install-sh
+# test runs go test and bun test, so it runs only in the sandbox
+# (_require-sandbox, b.8yq); outside it nothing runs, not even the builds of
+# its other prerequisites, also under make -j (see _require-sandbox). Its
+# refusal names make test-sandbox for it, which runs everything test runs:
+# `make sandbox CMD="make test"` cannot work, because test-install-sh starts a
+# container and the sandbox has no container engine.
+test: _require-sandbox envelope-diff-ts test-install-sh
 	go test -timeout $(GO_TEST_TIMEOUT) ./...
 
 # test-install-sh runs test/install-sh/retry.sh, which checks install.sh's:
@@ -166,17 +175,19 @@ test-install-sh: _sandbox-build
 test-install-sh-advice: _sandbox-build
 	$(_SANDBOX_RUN) bash test/install-sh/advice_follow.sh
 
-generate:
+# generate, surface-json and errnames-json run go generate, so each runs only
+# in the sandbox (_require-sandbox, b.8yq): make sandbox CMD="make generate".
+generate: _require-sandbox
 	go generate ./...
 
 # surface-json regenerates pkg/api/manifest/surface.json from the manifest.
 # Also run by 'make generate' via the //go:generate directive in pkg/api/manifest/doc.go.
-surface-json:
+surface-json: _require-sandbox
 	go generate ./pkg/api/manifest/...
 
 # errnames-json regenerates pkg/api/errnames/catalog.json from the err_name catalog.
 # Also run by 'make generate' via the //go:generate directive in pkg/api/errnames/doc.go.
-errnames-json:
+errnames-json: _require-sandbox
 	go generate ./pkg/api/errnames/...
 
 lint:
@@ -188,20 +199,24 @@ lint:
 #   (c) callable-verb manifest ErrorNames ⊆ errnames.Catalog
 #   (d) errnames.Catalog ⊆ callable-verb manifest ErrorNames
 #   (e) catalog.json and surface.json match their generators (via sub-tests)
-err-coherence:
+# It runs go test, so only in the sandbox (_require-sandbox, b.8yq).
+err-coherence: _require-sandbox
 	go test -timeout $(GO_TEST_TIMEOUT) ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
 
 # check-doccomments asserts that every exported identifier in pkg/api has a
 # non-empty doc comment. Exits non-zero with per-identifier diagnostics if
 # any are missing. Run this locally when adding a new exported symbol to
 # ensure it is documented before pushing. Wired into the doc-drift CI gate.
-check-doccomments:
+# It runs go run, so only in the sandbox (_require-sandbox, b.8yq):
+# make sandbox CMD="make check-doccomments".
+check-doccomments: _require-sandbox
 	go run ./tools/check-doccomments -package ./pkg/api
 
 # nondet-coverage checks that every callable verb in manifest.CallableVerbs()
 # has a top-level key in test/envelope-diff/nondeterministic.json and vice
-# versa. Exits non-zero with a descriptive message on any mismatch.
-nondet-coverage:
+# versa. Exits non-zero with a descriptive message on any mismatch. It runs
+# go run, so only in the sandbox (_require-sandbox, b.8yq).
+nondet-coverage: _require-sandbox
 	go run ./tools/check-nondet test/envelope-diff/nondeterministic.json
 
 # check-sandbox-bypass asserts that the sandbox-guard bypass
@@ -467,7 +482,7 @@ _SANDBOX_RUN = $(_SANDBOX_ENV) $(CONTAINER_ENGINE) run --rm \
 # then cached) and prints the detected configuration so a run is self-
 # documenting — done here, not in preflight, because the pid flag can only be
 # probed after the image is built.
-.PHONY: _sandbox-preflight _sandbox-build
+.PHONY: _sandbox-preflight _sandbox-build _require-sandbox
 _sandbox-preflight:
 	@if ! command -v $(CONTAINER_ENGINE) >/dev/null 2>&1; then \
 		echo "ERROR: container engine '$(CONTAINER_ENGINE)' not found on PATH." >&2; \
@@ -496,6 +511,66 @@ _sandbox-build: _sandbox-preflight
 	fi; \
 	pid="$$(cat "$$f" 2>/dev/null)"; \
 	echo "[sandbox] engine=$(CONTAINER_ENGINE) net='$(_SANDBOX_NET)' pid='$$pid' uidmap='$(_SANDBOX_UIDMAP)'$(if $(strip $(SANDBOX_FLAGS)), extra='$(SANDBOX_FLAGS)',)"
+
+# _require-sandbox (b.8yq) is the one guard for the targets that run a go or
+# bun tool themselves (go generate, go run, go test, bun test): generate,
+# surface-json, errnames-json, check-doccomments, nondet-coverage,
+# err-coherence, release-smoke, envelope-diff-ts and test, and all through
+# generate. Each lists it as a prerequisite, so make stops before that
+# target's recipe runs; a dry run (make -n) only prints the check. test,
+# envelope-diff-ts and all also have prerequisites that do work of their own
+# (go build, docker build), and make -j starts a target's prerequisites
+# together, so when one of those three is a goal the block below orders the
+# recipes of that work after the guard as well: nothing runs before it, under
+# -j too. It passes, printing nothing, where those tools may run:
+#   - inside the sandbox container: AGENT_DIRECTOR_TEST_SANDBOX is set there
+#     (_SANDBOX_RUN sets it), e.g. make sandbox CMD="make generate";
+#   - with BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS set, the CI bypass that
+#     sandboxguard.Require() also honours, for a runner with no real
+#     ~/.agent-director to damage (b.175). The doc-drift workflow sets it on
+#     each step that runs one of these targets directly (make generate,
+#     check-doccomments, err-coherence, surface-json, errnames-json and
+#     nondet-coverage) on its GitHub-hosted runner.
+# Anywhere else, such as a development host, it exits 2 and names the command
+# that runs the same goals in the sandbox: _REQUIRE_SANDBOX_ADVICE. It is
+# built from all the goals, never from the target that reached the guard
+# first, so it is the same whatever their order and under -j:
+#   - make sandbox CMD="make <goals>" when test is not a goal;
+#   - make test-sandbox when test is the only goal: make test cannot run in
+#     the sandbox (see test);
+#   - both, joined by &&, when test comes with other goals:
+#     make test-sandbox for test and make sandbox CMD="make <the others>" for
+#     the rest, test's first when test is the first goal, else last.
+# Like AGENT_DIRECTOR_TEST_SANDBOX itself it is an accident-prevention gate,
+# not a security boundary: it keeps the rule that nothing runs on the host.
+_REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
+_REQUIRE_SANDBOX_OTHERS = $(filter-out test,$(_REQUIRE_SANDBOX_GOALS))
+_REQUIRE_SANDBOX_TEST_CMD = $(if $(filter test,$(_REQUIRE_SANDBOX_GOALS)),make test-sandbox)
+_REQUIRE_SANDBOX_OTHERS_CMD = $(if $(_REQUIRE_SANDBOX_OTHERS),make sandbox CMD="make $(_REQUIRE_SANDBOX_OTHERS)")
+# _require_sandbox_and joins two commands with &&, or returns the one that is
+# not empty.
+_require_sandbox_and = $(if $(and $(1),$(2)),$(1) && $(2),$(1)$(2))
+_REQUIRE_SANDBOX_ADVICE = $(strip $(if $(filter test,$(firstword $(_REQUIRE_SANDBOX_GOALS))), \
+	$(call _require_sandbox_and,$(_REQUIRE_SANDBOX_TEST_CMD),$(_REQUIRE_SANDBOX_OTHERS_CMD)), \
+	$(call _require_sandbox_and,$(_REQUIRE_SANDBOX_OTHERS_CMD),$(_REQUIRE_SANDBOX_TEST_CMD))))
+_require-sandbox:
+	@if [ -z "$$AGENT_DIRECTOR_TEST_SANDBOX" ] && [ -z "$$BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS" ]; then \
+		echo 'ERROR: make $(_REQUIRE_SANDBOX_GOALS) runs go or bun tools, which run only in the sandbox, never on the host (b.8yq).' >&2; \
+		echo '       AGENT_DIRECTOR_TEST_SANDBOX is unset, so this is not the sandbox. Nothing was run.' >&2; \
+		echo '       Run it in the sandbox: $(_REQUIRE_SANDBOX_ADVICE)' >&2; \
+		exit 2; \
+	fi
+
+# The recipes that do work for test, envelope-diff-ts and all before the tool
+# runs: build (go build, also through agent-director), bin/ts-helper and
+# test/fake-tmux/tmux (go build), and _sandbox-preflight, which the docker
+# build of test-install-sh's _sandbox-build waits for. Order-only, so the
+# guard never makes one of them out of date, and only when one of the three is
+# a goal, so make build, make test-image and the sandbox targets still run
+# them on the host.
+ifneq ($(filter test envelope-diff-ts all,$(_REQUIRE_SANDBOX_GOALS)),)
+build bin/ts-helper test/fake-tmux/tmux _sandbox-preflight: | _require-sandbox
+endif
 
 # test-sandbox runs the FULL suite (go test ./... then bun test) in the
 # container. The suite's exit code propagates and output streams live.
@@ -881,8 +956,11 @@ agent-director: build
 #   fake-tmux      — ensures test/fake-tmux/tmux is built
 #
 # The test runner is invoked from the pkg/ts-bun-client directory so that
-# bunfig.toml and the local package.json are in scope.
-envelope-diff-ts: agent-director ts-helper fake-tmux
+# bunfig.toml and the local package.json are in scope. It runs bun test, so
+# only in the sandbox (_require-sandbox, b.8yq); outside it nothing is built
+# first, also under make -j (see _require-sandbox). In the sandbox:
+# make sandbox CMD="make envelope-diff-ts".
+envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
 	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 
 # release-shellcheck runs shellcheck against gate scripts under
@@ -916,8 +994,9 @@ release-shellcheck:
 
 # release-smoke runs the synthetic-regression test suite that replaced the
 # legacy test-*.sh harnesses (E10 retirement). Each test covers one gate or
-# phase invariant from the /release skill.
-release-smoke:
+# phase invariant from the /release skill. It runs go test, so only in the
+# sandbox (_require-sandbox, b.8yq): make sandbox CMD="make release-smoke".
+release-smoke: _require-sandbox
 	go test -timeout $(GO_TEST_TIMEOUT) ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
 
 # release-bats was retired alongside the cabi-matrix removal — the only
