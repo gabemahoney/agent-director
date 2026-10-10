@@ -8909,7 +8909,10 @@ missed or failed in the store, a row found alive (its note cleared or
 none to clear, or a live `pending` row's `provenance_conflict` kept) and a
 live `pending` row noted `unreported` (or found already noted so) are in
 neither list; `get` and `list` show the note. Both lists are sorted and
-never null. The verb adds no
+never null, on a failure too: the live-row read's error, and
+`ErrClientClosed` from `Client.FindMissing` on a closed Client, come with
+an empty `FindMissingResult` (counts 0, `IDs` and `UnverifiedIDs` non-nil
+and empty), as a sweep that judged no row does (b.hbt). The verb adds no
 verb-level error; `ErrProbeUnsupported` stays in its error list (SR-1.7)
 but is never returned.
 
@@ -9013,7 +9016,10 @@ stored text in the `storeTimestamp` layout), in instance-id order, each an
 judged like any other. Live rows, `pending` included, and rows with a NULL
 `ended_at` are never selected and get no tmux call. A failed candidate read
 is logged and fails the verb, with no tmux call; besides the two refusals
-above, it is the verb's only failure.
+above, it is the verb's only failure, and `Client.Expire` adds
+`ErrClientClosed` on a closed Client. Every failure returns the refusals'
+empty `ExpireResult` (counts 0, `IDs` and `KeptIDs` non-nil and empty, so
+`[]` in JSON), as a run that selected no row does (b.hbt).
 
 **Per-row order (SR-12.2).** Rows are judged in instance-id order, so the
 per-socket stop and the budget's cut-off fall on the same rows on every

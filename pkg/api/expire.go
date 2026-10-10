@@ -205,14 +205,16 @@ func (r expireRow) verdict() string {
 // days), as the key's 0 does, and never every finished row; and a count above
 // config.MaxExpireRetentionDays gives the largest window instead of a wrapped
 // one. A negative retentionDays (even when olderThan is non-nil) and a
-// negative olderThan are refused with ErrInvalidFlags and an empty
-// ExpireResult (counts 0, IDs and KeptIDs non-nil and empty) before any read,
-// tmux call or log line (b.f4v), as ParseOlderThan refuses a negative
-// older_than on the CLI and MCP. Only an explicit zero olderThan selects every
-// finished row with an ended_at. These two refusals and the one candidate
-// read (ExpireStore.ListExpireCandidates) are the only failures of the verb:
-// the read's error is logged on lg and returned, with no tmux call. Expire
-// reads time only through now, never time.Now.
+// negative olderThan are refused with ErrInvalidFlags before any read, tmux
+// call or log line (b.f4v), as ParseOlderThan refuses a negative older_than
+// on the CLI and MCP. Only an explicit zero olderThan selects every finished
+// row with an ended_at. These two refusals and the one candidate read
+// (ExpireStore.ListExpireCandidates) are Expire's only failures, and
+// (c *Client).Expire adds one, ErrClientClosed on a closed Client, before it
+// calls Expire. The read's error is logged on lg and returned, with no tmux
+// call. Every failure returns an empty ExpireResult (counts 0, IDs and
+// KeptIDs non-nil and empty), as a run that selected no row does (b.hbt).
+// Expire reads time only through now, never time.Now.
 //
 // Each selected row is judged in instance-id order, so the per-socket stop
 // and the budget's cut-off fall on the same rows on every run (SR-12.2):
@@ -259,16 +261,17 @@ func (r expireRow) verdict() string {
 // rows tmux_skipped, and a non-positive one makes no tmux call. s, t, pc and
 // now must not be nil; a nil lg writes no log line.
 func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olderThan *time.Duration, sweepBudget time.Duration, now func() time.Time, lg ExpireLogger) (ExpireResult, error) {
-	// A refusal returns an empty result whose lists are non-nil, as ExpireResult
-	// documents, so it encodes `[]` like a run that selected no row.
-	refused := ExpireResult{IDs: []string{}, KeptIDs: []string{}}
+	// Every failure (a refusal or the candidate read's) returns an empty result
+	// whose lists are non-nil, as ExpireResult documents, so it encodes `[]`
+	// like a run that selected no row.
+	failed := ExpireResult{IDs: []string{}, KeptIDs: []string{}}
 	window, err := retentionWindow(retentionDays)
 	if err != nil {
-		return refused, err
+		return failed, err
 	}
 	if olderThan != nil {
 		if *olderThan < 0 {
-			return refused, fmt.Errorf("%w: olderThan = %v is negative; pass a positive duration, nil for the retention window (retentionDays, or the configured expire_retention_days through Client.Expire), or an explicit zero to select every finished row",
+			return failed, fmt.Errorf("%w: olderThan = %v is negative; pass a positive duration, nil for the retention window (retentionDays, or the configured expire_retention_days through Client.Expire), or an explicit zero to select every finished row",
 				ErrInvalidFlags, *olderThan)
 		}
 		window = *olderThan
@@ -283,7 +286,7 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 		if lg != nil {
 			lg.Printf("expire: ListExpireCandidates: %v", err)
 		}
-		return ExpireResult{}, err
+		return failed, err
 	}
 	candidates = slices.Clone(candidates)
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -494,7 +497,7 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // Nondeterminism: none.
 func (c *Client) Expire(olderThan *time.Duration) (ExpireResult, error) {
 	if err := c.checkClosed(); err != nil {
-		return ExpireResult{}, err
+		return ExpireResult{IDs: []string{}, KeptIDs: []string{}}, err
 	}
 	return Expire(c.st, c.tmuxClient, c.procChecker, c.cfg.Defaults.EffectiveExpireRetentionDays(), olderThan, c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
 }

@@ -64,7 +64,9 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 }
 
 // TestAllVerbsReturnErrClientClosedAfterClose: every verb on a closed Client
-// returns ErrClientClosed; the guard fires before any param is read.
+// returns ErrClientClosed before any param is read; the List, FindMissing and
+// Expire results still encode their lists as [] (b.hbt). Get and Delete are
+// not covered here.
 func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	if api.ErrClientClosed == nil {
@@ -75,26 +77,37 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	ctx := context.Background()
-	for name, call := range map[string]func() error{
-		"Version":      func() error { _, err := c.Version(); return err },
-		"Spawn":        func() error { _, err := c.Spawn(api.SpawnParams{}); return err },
-		"Status":       func() error { _, err := c.Status(""); return err },
-		"Get":          func() error { _, err := c.Get(""); return err },
-		"List":         func() error { _, err := c.List(api.ListParams{}); return err },
-		"SendKeys":     func() error { _, err := c.SendKeys(api.SendKeysParams{}); return err },
-		"ReadPane":     func() error { _, err := c.ReadPane(api.ReadPaneParams{}); return err },
-		"Kill":         func() error { _, err := c.Kill(api.KillParams{}); return err },
-		"Pause":        func() error { _, err := c.Pause(ctx, api.PauseParams{}); return err },
-		"Decide":       func() error { _, err := c.Decide(api.DecideParams{}); return err },
-		"Resume":       func() error { _, err := c.Resume(api.ResumeParams{}); return err },
-		"FindMissing":  func() error { _, err := c.FindMissing(ctx); return err },
-		"Expire":       func() error { _, err := c.Expire(nil); return err },
-		"Delete":       func() error { _, err := adminapi.Delete(c, nil); return err },
-		"KillFinished": func() error { _, err := adminapi.KillFinished(c, ""); return err },
-		"MakeTemplate": func() error { _, err := c.MakeTemplate(api.MakeTemplateParams{}); return err },
+	emptyJSON := map[string]string{
+		"List":        `{"spawns":[]}`,
+		"FindMissing": `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
+		"Expire":      `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`,
+	}
+	for name, call := range map[string]func() (any, error){
+		"Version":      func() (any, error) { return c.Version() },
+		"Spawn":        func() (any, error) { return c.Spawn(api.SpawnParams{}) },
+		"Status":       func() (any, error) { return c.Status("") },
+		"Get":          func() (any, error) { return c.Get("") },
+		"List":         func() (any, error) { return c.List(api.ListParams{}) },
+		"SendKeys":     func() (any, error) { return c.SendKeys(api.SendKeysParams{}) },
+		"ReadPane":     func() (any, error) { return c.ReadPane(api.ReadPaneParams{}) },
+		"Kill":         func() (any, error) { return c.Kill(api.KillParams{}) },
+		"Pause":        func() (any, error) { return c.Pause(ctx, api.PauseParams{}) },
+		"Decide":       func() (any, error) { return c.Decide(api.DecideParams{}) },
+		"Resume":       func() (any, error) { return c.Resume(api.ResumeParams{}) },
+		"FindMissing":  func() (any, error) { return c.FindMissing(ctx) },
+		"Expire":       func() (any, error) { return c.Expire(nil) },
+		"Delete":       func() (any, error) { return adminapi.Delete(c, nil) },
+		"KillFinished": func() (any, error) { return adminapi.KillFinished(c, "") },
+		"MakeTemplate": func() (any, error) { return c.MakeTemplate(api.MakeTemplateParams{}) },
 	} {
-		if err := call(); !errors.Is(err, api.ErrClientClosed) {
+		res, err := call()
+		if !errors.Is(err, api.ErrClientClosed) {
 			t.Errorf("%s on a closed client: %v; want ErrClientClosed", name, err)
+		}
+		if want, ok := emptyJSON[name]; ok {
+			if got := jsonOf(t, res); got != want {
+				t.Errorf("%s on a closed client = %s; want %s", name, got, want)
+			}
 		}
 	}
 	if err := c.Close(); err != nil {
