@@ -134,7 +134,10 @@ func helpHandler([]string) error {
 }
 
 // versionHandler prints the build-time version stamp as JSON, as
-// agent-director version does.
+// agent-director version does. pkg/api.Version never errors today; a failure
+// is named as runOnClient names a verb's (errnames.Classify: its Catalog
+// name, else ErrInternal), never ErrJSONMarshal, which is only for
+// writeJSON's json.Marshal (b.3jc).
 func versionHandler(args []string) error {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
 	if done, err := parseFlags(fs, args); done {
@@ -142,7 +145,8 @@ func versionHandler(args []string) error {
 	}
 	res, err := pkgapi.Version()
 	if err != nil {
-		return writeError(errJSONMarshal, err.Error())
+		name, desc := errnames.Classify(err)
+		return writeError(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(res)
 }

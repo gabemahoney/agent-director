@@ -98,11 +98,13 @@ var Catalog = []Entry{
 	// (the config cannot be loaded; the store cannot be opened; the store's
 	// schema is newer than the binary or needs a migration). They are
 	// catalogued so the surfaces built from this Catalog, the TS client's
-	// error classes among them, know them (b.vma, b.cm7). Only a
-	// clisetup.OpenError carries their sentinels (OpenError.Is), so no verb
-	// error's name changes, and an error that wraps store.ErrSchemaMismatch
-	// or store.ErrSchemaMigrationRequired but is no OpenError stays
-	// ErrInternal.
+	// error classes among them, know them (b.vma, b.cm7). A
+	// clisetup.OpenError carries the sentinel its Name names (OpenError.Is).
+	// The two schema sentinels are the store's (clisetup re-exports
+	// store.ErrSchemaMismatch and store.ErrSchemaMigrationRequired), so an
+	// error from pkg/api.New that wraps one gets the same name as the CLI's
+	// OpenError (b.x8s). The store returns them only when it opens, so no
+	// verb error's name changes.
 	{Name: "ErrConfigMalformed", Err: clisetup.ErrConfigMalformed},
 	{Name: "ErrStoreOpen", Err: clisetup.ErrStoreOpen},
 	{Name: "ErrSchemaMismatch", Err: clisetup.ErrSchemaMismatch},

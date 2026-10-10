@@ -1,12 +1,16 @@
 package errnames_test
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
@@ -29,23 +33,51 @@ func TestClassifyKnown(t *testing.T) {
 }
 
 // TestClassifyUnknown verifies that an unrecognized error collapses to
-// "ErrInternal" with the original error message as description. That includes
-// a store schema sentinel wrapped by anything but a clisetup.OpenError (b.cm7).
+// "ErrInternal" with the original error message as description.
 func TestClassifyUnknown(t *testing.T) {
-	for _, err := range []error{
-		errors.New("something completely unexpected"),
-		fmt.Errorf("verb: %w", store.ErrSchemaMismatch),
-		fmt.Errorf("verb: %w", store.ErrSchemaMigrationRequired),
+	err := errors.New("something completely unexpected")
+	if name, desc := errnames.Classify(err); name != "ErrInternal" || desc != err.Error() {
+		t.Errorf("Classify(%q) = (%q, %q), want (%q, %q)", err, name, desc, "ErrInternal", err.Error())
+	}
+}
+
+// TestClassifyNewSchemaRefusal is the b.x8s regression: api.New's refusal of a
+// newer or older store schema classifies as the CLI names it, not ErrInternal.
+func TestClassifyNewSchemaRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		want        string
+		userVersion int
+	}{
+		{"ErrSchemaMismatch", 99},
+		{"ErrSchemaMigrationRequired", 1},
 	} {
-		name, desc := errnames.Classify(err)
-		if name != "ErrInternal" || desc != err.Error() {
-			t.Errorf("Classify(%q) = (%q, %q), want (%q, %q)", err, name, desc, "ErrInternal", err.Error())
-		}
+		t.Run(tc.want, func(t *testing.T) {
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "state.db")
+			apitest.SeedStore(t, dbPath)
+			db, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatalf("sql.Open: %v", err)
+			}
+			if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", tc.userVersion)); err != nil {
+				t.Fatalf("stamp user_version: %v", err)
+			}
+			_ = db.Close()
+
+			c, err := api.New(api.Options{StorePath: dbPath, ConfigPath: filepath.Join(dir, "absent.toml")})
+			if c != nil {
+				_ = c.Close()
+				t.Fatalf("api.New on a user_version %d store succeeded; want a schema refusal", tc.userVersion)
+			}
+			if name, desc := errnames.Classify(err); name != tc.want || desc != err.Error() {
+				t.Errorf("Classify(%q) = (%q, %q), want (%q, %q)", err, name, desc, tc.want, err.Error())
+			}
+		})
 	}
 }
 
 // TestClassifyOpenError: a clisetup.OpenError classifies as its Name, with its
-// cause's text, whatever store sentinel the cause wraps (b.vma, b.cm7).
+// cause's text (b.vma, b.cm7).
 func TestClassifyOpenError(t *testing.T) {
 	for _, tc := range []struct {
 		want  string

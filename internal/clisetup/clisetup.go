@@ -32,15 +32,16 @@ const (
 // ErrSchemaMigrationRequired are the sentinels pkg/api/errnames.Catalog pairs
 // with the err_names of the same names (b.vma, b.cm7); errors.Is matches an
 // OpenError with the one its Name names (OpenError.Is). The two schema
-// sentinels are not store.ErrSchemaMismatch and
-// store.ErrSchemaMigrationRequired, which an OpenError's cause still wraps:
-// only an OpenError matches them, so errnames.Classify still names any other
-// error that wraps a store schema sentinel ErrInternal.
+// sentinels are the store's own, store.ErrSchemaMismatch and
+// store.ErrSchemaMigrationRequired (pkg/api re-exports them under the same
+// names), so errnames.Classify gives a schema refusal the same name whether it
+// comes as an OpenError or straight from pkg/api.New (b.x8s). The store
+// returns them only when it opens, so no verb error wraps them.
 var (
 	ErrConfigMalformed         = errors.New(errConfigMalformed)
 	ErrStoreOpen               = errors.New(errStoreOpen)
-	ErrSchemaMismatch          = errors.New(errSchemaMismatch)
-	ErrSchemaMigrationRequired = errors.New(errSchemaMigrationRequired)
+	ErrSchemaMismatch          = store.ErrSchemaMismatch
+	ErrSchemaMigrationRequired = store.ErrSchemaMigrationRequired
 )
 
 // ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite are the sentinels

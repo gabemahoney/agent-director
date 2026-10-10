@@ -24,6 +24,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // errorEnvelope is the JSON shape emitted on stderr for CLI-level errors.
@@ -34,7 +35,9 @@ type errorEnvelope struct {
 }
 
 // CLI-internal error names. These signal dispatch and output failures of the
-// CLI itself, not errors a verb returns, so no verb lists them. They are in
+// CLI itself, not errors a verb returns, so no verb lists them:
+// errUnknownVerb for a verb the CLI does not know, errJSONMarshal only for a
+// json.Marshal failure of a verb's result. They are in
 // pkg/api/errnames.Catalog (with internal/clisetup's sentinels, b.cm7) so
 // the TS client knows them.
 const (
@@ -276,11 +279,11 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 	verbs, err := pkgapi.Help()
 	if err != nil {
 		// pkg/api.Help never errors today, but if a future implementation
-		// changes that, surface it via the dispatch envelope path.
-		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
-			return werr
-		}
-		return errDispatch
+		// changes that, name the error as every verb handler does
+		// (errnames.Classify: its Catalog name, else ErrInternal), never
+		// ErrJSONMarshal, which is only for the json.Marshal below (b.3jc).
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	payload, err := json.Marshal(helpResult{Verbs: verbs})
 	if err != nil {
@@ -297,15 +300,15 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 
 // versionHandler implements the `version` verb. Prints
 // {"version": "<stamp>", "commit": "<sha>"} per the manifest. The client's
-// Version() never errors; the same envelope path as helpHandler is kept
-// for uniformity.
+// Version() fails only on a closed Client, and no caller passes one; a
+// failure is named as every verb handler names one
+// (errnames.Classify: its Catalog name, else ErrInternal), never
+// ErrJSONMarshal, which is only for the json.Marshal below (b.3jc).
 func versionHandler(client *pkgapi.Client, _ []string) error {
 	res, err := client.Version()
 	if err != nil {
-		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
-			return werr
-		}
-		return errDispatch
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	payload, err := json.Marshal(res)
 	if err != nil {
