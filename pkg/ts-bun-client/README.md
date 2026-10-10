@@ -83,6 +83,9 @@ expand its config path `~/.agent-director/config.toml`.
 
 Set them only when the consumer needs to override the CLI's default for that field.
 
+A call that opens a store that does not exist yet creates it (its parent
+directories, the file and its schema); no option turns this off.
+
 For `spawn`, `home` and `storePath` must name the store of the tmux server
 the spawn reaches. The agent's hooks open the store that
 `~/.agent-director/config.toml` under the pane's `HOME` names, and on a

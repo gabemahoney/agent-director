@@ -125,10 +125,7 @@ async function runSmoke(): Promise<void> {
   const devCliPath = process.env.AD_CLI_PATH;
 
   try {
-    const ctorOpts: Record<string, unknown> = {
-      storePath,
-      createIfMissing: true,
-    };
+    const ctorOpts: Record<string, unknown> = { storePath };
     if (devCliPath) {
       // _cliPath is a test-only DI hook on SubprocessClient that bypasses
       // resolveCliPath(). Undocumented on ClientOptions; cast through unknown.
@@ -193,10 +190,7 @@ async function runFull(): Promise<void> {
   const storePath = path.join(tmpDir, "state.db");
   const devCliPath = process.env.AD_CLI_PATH;
 
-  const ctorOpts: Record<string, unknown> = {
-    storePath,
-    createIfMissing: true,
-  };
+  const ctorOpts: Record<string, unknown> = { storePath };
   if (devCliPath) {
     ctorOpts._cliPath = devCliPath;
   }

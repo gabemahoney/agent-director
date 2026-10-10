@@ -32,6 +32,10 @@ export interface Logger {
  * An empty `storePath`, `home` or `tmuxCommand` is forwarded as given (e.g.
  * `--store-path ""`); the CLI rejects it on every verb call, which then
  * rejects with `ErrInvalidFlags`. It never falls back to the default. b.pu2.
+ *
+ * A call that opens a store that does not exist creates it (its parent
+ * directories, the file and its schema): the CLI always opens the store that
+ * way, and no option turns it off. b.78b.
  */
 export interface ClientOptions {
     /**
@@ -64,12 +68,6 @@ export interface ClientOptions {
      * differs from the calling process's HOME. b.32k.
      */
     home?: string;
-    /**
-     * When `true`, create the store and initialize the database schema if the
-     * store file does not yet exist. When `false` (the default), opening a
-     * non-existent store returns an error. Mirrors `pkg/api.Options.CreateIfMissing`.
-     */
-    createIfMissing?: boolean;
     /** Optional logger for client-side warnings (e.g., non-fatal close errors). */
     logger?: Logger;
     /**

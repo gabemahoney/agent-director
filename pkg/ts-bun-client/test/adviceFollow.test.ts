@@ -33,7 +33,6 @@ for (const bad of [0, -1]) {
     tmpDirs.push(dir);
     const opts: Record<string, unknown> = {
       storePath: path.join(dir, "state.db"),
-      createIfMissing: true,
       callTimeoutMs: bad,
       _cliPath: fixturePath,
     };

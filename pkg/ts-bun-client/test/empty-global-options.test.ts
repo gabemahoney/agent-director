@@ -18,7 +18,7 @@ test.each([
   ["tmuxCommand", "--tmux-command"],
 ] as const)('%s: "" → every verb call rejects with ErrInvalidFlags "%s requires a value"; nothing under HOME', async (option, flag) => {
   await withTempHome(async (homeDir) => {
-    const opts = { [option]: "", createIfMissing: true, _cliPath: process.env.CLI_PATH };
+    const opts = { [option]: "", _cliPath: process.env.CLI_PATH };
     using client = await Client.create(opts as unknown as Parameters<typeof Client.create>[0]);
     for (const err of [await rejection(client.version({})), await rejection(client.list({}))]) {
       expect(err).toBeInstanceOf(ErrInvalidFlags);
