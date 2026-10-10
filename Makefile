@@ -477,12 +477,10 @@ _sandbox-build: _sandbox-preflight
 # surface-json, errnames-json, check-doccomments, nondet-coverage,
 # err-coherence, release-smoke, envelope-diff-ts and test, and all through
 # generate. Each lists it as a prerequisite, so make stops before that
-# target's recipe runs; a dry run (make -n) only prints the check. test,
-# envelope-diff-ts and all also have prerequisites that do work of their own
-# (go build, docker build), and make -j starts a target's prerequisites
-# together, so when one of those three is a goal the block below orders the
-# recipes of that work after the guard as well: nothing runs before it, under
-# -j too. It passes, printing nothing, where those tools may run:
+# target's recipe runs; a dry run (make -n) only prints the check. When one
+# of them is a goal, every other recipe waits for the guard as well (b.uc7,
+# the block below): nothing runs before it, whatever the order of the goals,
+# under make -j too. It passes, printing nothing, where those tools may run:
 #   - inside the sandbox container: AGENT_DIRECTOR_TEST_SANDBOX is set there
 #     (_SANDBOX_RUN sets it), e.g. make sandbox CMD="make generate";
 #   - with BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS set, the CI bypass that
@@ -494,7 +492,8 @@ _sandbox-build: _sandbox-preflight
 # Anywhere else, such as a development host, it exits 2 and names the command
 # that runs the same goals in the sandbox: _REQUIRE_SANDBOX_ADVICE, which works
 # when followed as printed. It is built from all the goals, never from the
-# target that reached the guard first, so it is the same whatever their order
+# target that reached the guard first, and once, at global scope, so no
+# target's own variables change it (b.uc7): it is the same whatever their order
 # and under -j. The goals that cannot run in the sandbox never go in a
 # make sandbox CMD= (b.4a1); they run on the host: test as make test-sandbox
 # (make test cannot run in the sandbox, see test), and each goal in
@@ -513,6 +512,18 @@ _sandbox-build: _sandbox-preflight
 #   make generate test-docker     make sandbox CMD="make generate" && make test-docker
 #   make test-image generate test test-docker
 #                                 make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker
+# The variables given on the command line (EPIC=…, GO_TEST_TIMEOUT=…, CMD=…)
+# go in the advice too (b.qgr), so a goal that needs one still gets it: each
+# as one single-quoted 'NAME=value' word, sorted by name, on every make the
+# advice runs, the make inside the sandbox command's CMD= included. CMD
+# itself goes on the host makes only, as the sandbox command's CMD= is the
+# advice's own and no goal run inside it reads CMD:
+#   make generate test-docker EPIC=harness-smoke
+#     make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'" && make test-docker 'EPIC=harness-smoke'
+# Each value is copied unexpanded ($(value)), so building the advice runs
+# nothing in it, and the advice reaches printf through the environment (see
+# _require-sandbox), so no quote, newline or other character in a value can
+# end the recipe's quoting or start a command of its own (b.ay3).
 # Like AGENT_DIRECTOR_TEST_SANDBOX itself it is an accident-prevention gate,
 # not a security boundary: it keeps the rule that nothing runs on the host.
 _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
@@ -539,31 +550,85 @@ _REQUIRE_SANDBOX_LEAD = $(call _require_sandbox_lead,$(_REQUIRE_SANDBOX_GOALS))
 _REQUIRE_SANDBOX_REST = $(wordlist $(words x $(_REQUIRE_SANDBOX_LEAD)),$(words $(_REQUIRE_SANDBOX_GOALS)),$(_REQUIRE_SANDBOX_GOALS))
 _REQUIRE_SANDBOX_IN = $(filter-out $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
 _REQUIRE_SANDBOX_TAIL = $(filter $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
-# _require_sandbox_host_cmd returns make <the goals of $(1)>, run on the host,
-# with test as test-sandbox; nothing when $(1) is empty.
-_require_sandbox_host_cmd = $(if $(strip $(1)),make $(patsubst test,test-sandbox,$(strip $(1))))
-_REQUIRE_SANDBOX_IN_CMD = $(if $(_REQUIRE_SANDBOX_IN),make sandbox CMD="make $(_REQUIRE_SANDBOX_IN)")
+# _REQUIRE_SANDBOX_VARS are the names of the variables given on the command
+# line, sorted. They are found by origin: MAKEOVERRIDES, where make lists
+# them, is emptied below (b.ay3).
+_REQUIRE_SANDBOX_VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v))))
+# _require_sandbox_q quotes $(1) as one POSIX shell word: in single quotes,
+# each ' in it as '\''.
+_require_sandbox_q = '$(subst ','\'',$(1))'
+# _require_sandbox_dq escapes $(1) for the inside of a "…" in a POSIX shell.
+_require_sandbox_dq = $(subst `,\`,$(subst $$,\$$,$(subst ",\",$(subst \,\\,$(1)))))
+# _require_sandbox_var returns NAME=value for the variable named $(1), as it
+# was given: the value unexpanded ($(value)), and when make had already
+# expanded it (:= or != on the command line) with each $ doubled, so the
+# NAME=value reads back the same.
+_require_sandbox_var = $(1)=$(if $(filter simple,$(flavor $(1))),$(subst $$,$$$$,$(value $(1))),$(value $(1)))
+# _require_sandbox_vars returns a space and the quoted NAME=value of each
+# variable named in $(1), space-separated; nothing when $(1) is empty.
+_require_sandbox_vars = $(if $(1), $(foreach v,$(1),$(call _require_sandbox_q,$(call _require_sandbox_var,$(v)))))
+# _require_sandbox_host_cmd returns make <the goals of $(1)> and the
+# command-line variables, run on the host, with test as test-sandbox; nothing
+# when $(1) is empty.
+_require_sandbox_host_cmd = $(if $(strip $(1)),make $(patsubst test,test-sandbox,$(strip $(1)))$(call _require_sandbox_vars,$(_REQUIRE_SANDBOX_VARS)))
+# The sandbox command takes every command-line variable but CMD, on make
+# sandbox and on the make inside its CMD=.
+_REQUIRE_SANDBOX_IN_VARS = $(call _require_sandbox_vars,$(filter-out CMD,$(_REQUIRE_SANDBOX_VARS)))
+_REQUIRE_SANDBOX_IN_CMD = $(if $(_REQUIRE_SANDBOX_IN),make sandbox$(_REQUIRE_SANDBOX_IN_VARS) CMD="$(call _require_sandbox_dq,make $(_REQUIRE_SANDBOX_IN)$(_REQUIRE_SANDBOX_IN_VARS))")
 # _require_sandbox_and joins two commands with &&, or returns the one that is
-# not empty.
-_require_sandbox_and = $(if $(strip $(1)),$(if $(strip $(2)),$(strip $(1)) && $(strip $(2)),$(strip $(1))),$(strip $(2)))
-_REQUIRE_SANDBOX_ADVICE = $(call _require_sandbox_and,$(call _require_sandbox_and,$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_LEAD)),$(_REQUIRE_SANDBOX_IN_CMD)),$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_TAIL)))
+# not empty. It strips nothing: a value's own spaces must stay.
+_require_sandbox_and = $(if $(1),$(if $(2),$(1) && $(2),$(1)),$(2))
+# The advice is built once, here at global scope (:=), not when the guard's
+# recipe runs (b.uc7). There _require-sandbox would see the target-specific
+# variables of the target that reached it first, as each prerequisite inherits
+# them: sandbox's override SANDBOX_FLAGS += … gives a command-line
+# SANDBOX_FLAGS the origin override and another value, so the advice of
+# make sandbox generate SANDBOX_FLAGS=… would drop it. Here every variable has
+# its global origin, value and flavor, whatever the goals' order. := expands
+# the line once and keeps the result as it is: the values copied by $(value)
+# are never expanded.
+_REQUIRE_SANDBOX_ADVICE := $(call _require_sandbox_and,$(call _require_sandbox_and,$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_LEAD)),$(_REQUIRE_SANDBOX_IN_CMD)),$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_TAIL)))
+# The advice reaches the recipe in the environment, never in its text (b.qgr):
+# in the text a ' in a value would end the shell's quoting, and a newline would
+# end the line, which make runs as its own command. printf prints it as is,
+# where dash's echo would rewrite its backslashes.
+_require-sandbox: export AGENT_DIRECTOR_SANDBOX_ADVICE = $(_REQUIRE_SANDBOX_ADVICE)
 _require-sandbox:
 	@if [ -z "$$AGENT_DIRECTOR_TEST_SANDBOX" ] && [ -z "$$BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS" ]; then \
 		echo 'ERROR: make $(_REQUIRE_SANDBOX_GOALS) runs go or bun tools, which run only in the sandbox, never on the host (b.8yq).' >&2; \
 		echo '       AGENT_DIRECTOR_TEST_SANDBOX is unset, so this is not the sandbox. Nothing was run.' >&2; \
-		echo '       Run it in the sandbox: $(_REQUIRE_SANDBOX_ADVICE)' >&2; \
+		printf '       Run it in the sandbox: %s\n' "$$AGENT_DIRECTOR_SANDBOX_ADVICE" >&2; \
 		exit 2; \
 	fi
 
-# The recipes that do work for test, envelope-diff-ts and all before the tool
-# runs: build (go build, also through agent-director), bin/ts-helper and
-# test/fake-tmux/tmux (go build), and _sandbox-preflight, which the docker
-# build of test-install-sh's _sandbox-build waits for. Order-only, so the
-# guard never makes one of them out of date, and only when one of the three is
-# a goal, so make build, make test-image and the sandbox targets still run
-# them on the host.
-ifneq ($(filter test envelope-diff-ts all,$(_REQUIRE_SANDBOX_GOALS)),)
-build bin/ts-helper test/fake-tmux/tmux _sandbox-preflight: | _require-sandbox
+# _REQUIRE_SANDBOX_GUARDED are the targets that reach the guard: those that
+# list _require-sandbox, and all, through generate.
+# Must use: a new target that lists _require-sandbox, or reaches one that
+# does through its prerequisites, joins this list.
+_REQUIRE_SANDBOX_GUARDED := generate surface-json errnames-json \
+	check-doccomments nondet-coverage err-coherence release-smoke \
+	envelope-diff-ts test all
+# _REQUIRE_SANDBOX_WAIT are the targets with a recipe of their own that do not
+# list _require-sandbox: the host goals and the others below. When a goal is in
+# _REQUIRE_SANDBOX_GUARDED, each of them waits for the guard (b.uc7), so no
+# recipe runs before its refusal: not a goal given before the guarded ones,
+# which make would otherwise build in full first (make test-docker generate),
+# nor a go build or docker build that make -j would start together with the
+# guard (make -j8 generate test-docker, make -j8 test). The wait is order-only,
+# so the guard never makes a file such as bin/ts-helper out of date. With no
+# such goal nothing waits: make build, make test-image and the sandbox targets
+# run on the host. In the sandbox the guard passes and the rest runs after it.
+# The list is kept by hand: a global .EXTRA_PREREQS would cover new targets
+# itself, but GNU make 4.3 does not add it to a target with variables of its
+# own (release-binaries, sandbox, tla, …).
+# Must use: a new target with a recipe joins this list (a host goal does
+# through _REQUIRE_SANDBOX_HOST_GOALS), unless it lists _require-sandbox.
+_REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint \
+	check-sandbox-bypass list-test-docker-epics consumer-dryrun \
+	release-binaries release-binaries-smoke release-bats \
+	verify-installed-pkg-full bin/ts-helper test/fake-tmux/tmux
+ifneq ($(filter $(_REQUIRE_SANDBOX_GUARDED),$(_REQUIRE_SANDBOX_GOALS)),)
+$(_REQUIRE_SANDBOX_WAIT): | _require-sandbox
 endif
 
 # test-sandbox runs the FULL suite (go test ./... then bun test) in the

@@ -34,16 +34,16 @@ Every gate script **must** adhere to the following contract:
   and let the orchestrator decide whether to proceed.
 
 - Command output, and any JSON that holds it (diagnostics, sub-checks,
-  excerpts), reaches `jq` on stdin or in a file `jq` reads, never as
-  `--arg` or `--argjson`. Linux caps one argument at 128 KiB; over that the
-  exec of `jq` fails with "Argument list too long" and the JSON it was
-  building is lost. `printf '%s' "$out" | jq -Rs .` turns raw output into
-  one JSON string with no change to its content. Two places still pass a
-  JSON array as `--argjson`: `finalize/write-report.sh`'s phases and
-  diagnostics arrays (its positional arguments, below) and the publish
-  orchestrator's `--prior-phases` array. See docs/architecture.md "Command
-  output reaches `jq` on stdin" for where the rule applies today and for
-  these two exceptions.
+  excerpts, report phases), reaches `jq` on stdin or in a file `jq` reads,
+  never as `--arg` or `--argjson`. Linux caps one argument at 128 KiB; over
+  that the exec of `jq` fails with "Argument list too long" and the JSON it
+  was building is lost. `printf '%s' "$out" | jq -Rs .` turns raw output
+  into one JSON string with no change to its content. The same cap applies
+  to a script's own arguments, so a script that takes such JSON from its
+  caller takes the path of a file holding it: the publish orchestrator's
+  `--prior-phases` and `finalize/write-report.sh`'s phases and diagnostics
+  (below). See docs/architecture.md "Command output reaches `jq` on stdin"
+  for where the rule applies today.
 
 - Every `*.sh` under this directory must pass `make release-shellcheck`,
   which the lint workflow (`.github/workflows/lint.yml`) runs on every PR
@@ -95,13 +95,31 @@ positional arguments:
 ```
 write-report.sh <invocation-ts> <mode> <bump-kind> \
                 <source-version> <target-version> \
-                <phases-json-array> [<diagnostics-json-array>] \
+                <phases-json-file> [<diagnostics-json-file>] \
                 <elapsed-seconds>
 ```
 
-`phases-json-array` is a JSON array of phase objects (SR-15 schema).
-`diagnostics-json-array` is a JSON array of SR-14 payloads collected across
-all gate stderr streams during the run; omit or pass `[]` if no gates failed.
+`phases-json-file` is the path of a file holding the JSON array of phase
+objects (SR-15 schema). `diagnostics-json-file` is the path of a file
+holding the JSON array of SR-14 payloads collected across all gate stderr
+streams during the run; omit it or pass `""` if no gates failed. Relative
+paths resolve against the caller's working directory.
+
+The arrays go as files, never as the arrays themselves: they carry gate
+output verbatim, and Linux's 128 KiB cap on one argument would stop the
+script from starting. Each file must be a readable regular file (not a pipe
+or `<(…)`) holding exactly one JSON array. Otherwise the script exits 2,
+naming the argument, and writes no report. That includes an empty or
+newline-only file and one holding SR-14 objects one per line (JSON Lines).
+
+Inline JSON in place of a path, `[]` included, is refused too, in one of
+two ways depending on its size:
+
+- Under 128 KiB, the script exits 2 ("not a readable regular file").
+- Over 128 KiB, the script cannot start: the calling shell reports
+  "Argument list too long" and exits 126.
+
+Neither writes a report.
 
 ## Orchestrator Usage
 
@@ -114,6 +132,8 @@ gates in the order defined for that phase. For each gate:
 2. **Capture stderr** into a variable/file.
 3. If the exit code is non-zero, parse every line of captured stderr as a
    JSON SR-14 diagnostic and append it to the in-memory diagnostics list.
+   "Finalizing" below writes the list as one JSON array, not one object per
+   line.
 4. Record the phase outcome (`passed`, `failed`, or `skipped`).
 
 ### Coverage phase (parallel)
@@ -327,7 +347,7 @@ fixed version so that `bin/` stays current, printed nothing.
 
 The executor's consolidated output shape differs from the report phase shape
 that `finalize/write-report.sh` consumes, and `write-report.sh` validates
-only that the phases value is a JSON array. The orchestrator **must**
+only that its phases file holds one JSON array. The orchestrator **must**
 translate the executor output into the report phase shape before invoking
 `write-report.sh`, applying the following mapping:
 
@@ -354,20 +374,40 @@ gates) is **not** remediated by this work — that is a PRD Non-Goal.
 
 ### Finalizing
 
-After all phases complete, invoke the finalize helper with the accumulated
-phase objects and diagnostics list:
+After all phases complete, write the accumulated phase objects to one file
+and the diagnostics list to another, each as one JSON array, then invoke
+the finalize helper with the two paths.
+
+- `$phases_json` holds the phase objects as one JSON array.
+- `$diagnostics_json` holds the diagnostics list as one JSON array too. The
+  stderr lines that "Sequential phases" step 3 parses are one SR-14 object
+  each, so join them into one array (`jq -s .` turns such lines into one);
+  never write them one per line. If no gate failed, `$diagnostics_json`
+  may be empty or unset, and `${diagnostics_json:-[]}` below writes `[]`.
 
 ```bash
+phases_file="$(mktemp)"
+diagnostics_file="$(mktemp)"
+printf '%s\n' "$phases_json" > "$phases_file"
+printf '%s\n' "${diagnostics_json:-[]}" > "$diagnostics_file"
 bash skills/release-agent-director/gates/finalize/write-report.sh \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   "dry-run" \
   "patch" \
   "0.9.3" \
   "0.9.4" \
-  "$phases_json" \
-  "$diagnostics_json" \
+  "$phases_file" \
+  "$diagnostics_file" \
   "$elapsed_seconds"
 ```
+
+`printf` is a shell builtin, so writing the files is not limited by the
+argument cap. If either file holds anything but exactly one JSON array (an
+empty or newline-only file, or objects one per line included), the script
+exits 2 and writes no report. Passing `"$phases_json"` itself in place of
+`"$phases_file"` writes no report either: under 128 KiB the script exits 2;
+over 128 KiB the shell cannot start it ("Argument list too long", exit
+126).
 
 The resulting `dist/release-report.json` is the canonical artifact for
 post-run inspection, CI upload, and audit trail.
