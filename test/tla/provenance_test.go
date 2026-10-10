@@ -32,7 +32,7 @@ func pinLines(t *testing.T, prov string) map[string]string {
 // TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
 // against the file's SHA-256, and that only the repo's own files are unpinned:
 // three named files plus the b.66h runs (launch/). The b.3ie model (settle/)
-// has its own pin list.
+// and the b.36h model (hold36h/) each have their own pin list.
 func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
@@ -46,7 +46,7 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(tree, p)
-		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "settle/") {
+		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "hold36h/") {
 			unpinned = append(unpinned, rel)
 		}
 		return nil
@@ -95,7 +95,20 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 // TestSettleProvenance: settle/PROVENANCE.txt pins every other file under
 // settle/ with its SHA-256, and each pin names one of those files.
 func TestSettleProvenance(t *testing.T) {
-	tree := filepath.Join(repoRoot(t), "spec", "tla", "settle")
+	checkOwnPins(t, "settle")
+}
+
+// TestHold36hProvenance: hold36h/PROVENANCE.txt pins every other file under
+// hold36h/ with its SHA-256, and each pin names one of those files.
+func TestHold36hProvenance(t *testing.T) {
+	checkOwnPins(t, "hold36h")
+}
+
+// checkOwnPins checks that spec/tla/<dir>/PROVENANCE.txt pins every other
+// file under dir with its SHA-256, and that each pin names one of those files.
+func checkOwnPins(t *testing.T, dir string) {
+	t.Helper()
+	tree := filepath.Join(repoRoot(t), "spec", "tla", dir)
 	pins := pinLines(t, readFile(t, filepath.Join(tree, "PROVENANCE.txt")))
 	err := filepath.WalkDir(tree, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -112,7 +125,7 @@ func TestSettleProvenance(t *testing.T) {
 		want, ok := pins[rel]
 		delete(pins, rel)
 		if got := fmt.Sprintf("%x", sha256.Sum256(b)); !ok || got != want {
-			t.Errorf("settle/%s: SHA-256 %s, pinned %q", rel, got, want)
+			t.Errorf("%s/%s: SHA-256 %s, pinned %q", dir, rel, got, want)
 		}
 		return nil
 	})
@@ -120,7 +133,7 @@ func TestSettleProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for rel := range pins {
-		t.Errorf("settle/PROVENANCE.txt pins %s, which is not a vendored file under settle/", rel)
+		t.Errorf("%s/PROVENANCE.txt pins %s, which is not a vendored file under %s/", dir, rel, dir)
 	}
 }
 

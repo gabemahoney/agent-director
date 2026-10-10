@@ -1,0 +1,2 @@
+# b.36h: one run per job. Expected: FAIL NoStaleHold
+Hold36h red_today_stale @3300

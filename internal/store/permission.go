@@ -281,11 +281,14 @@ const awaitingAnswerSQL = `pr.closed_at IS NULL AND pr.pane_answer IN ('none', '
 // that holds while the request holds its Spawn's row (b.omt): it still awaits
 // an answer (awaitingAnswerSQL) and Claude Code has not proven its dialog gone
 // (proven_gone_at NULL; b.146 step 2c). Exactly three writes read it: the
-// working hold (holdWorkingTransition, through its read holdingRequestSQL),
-// and, in a NOT EXISTS of their own statement, the idle-prompt Notification's
-// move from check_permission to waiting (ApplyHookWaitingIfWorking) and
-// find-missing's repair of a stale check_permission row
-// (repairCheckPermissionSQL). A request proven gone holds none of them,
+// working hold (holdWorkingTransition, through its read holdingRequestSQL,
+// which picks the branch, and in a NOT EXISTS of the move to working's own
+// UPDATE, applyWorkingWrite, so a request recorded after the read still holds
+// the row; b.36h), and, in a NOT EXISTS of their own statement, the
+// idle-prompt Notification's move from check_permission to waiting
+// (ApplyHookWaitingIfWorking) and find-missing's repair of a stale
+// check_permission row (repairCheckPermissionSQL). The two hook writes' NOT
+// EXISTS is noRequestHoldsRowSQL. A request proven gone holds none of them,
 // whatever agent-director's own records say of it: a person's answer at the
 // pane, which nothing records, leaves it awaiting an answer, and the main
 // agent's Stop or idle-prompt Notification after it then proves its dialog
