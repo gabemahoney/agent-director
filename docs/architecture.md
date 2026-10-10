@@ -10686,6 +10686,23 @@ gates/pack/         gates/notes/        gates/publish/
 gates/finalize/
 ```
 
+**Gate diagnostics.** A failing gate writes each SR-14 diagnostic to stderr
+as one JSON object per line. Gate scripts must build every diagnostic with
+`emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never by hand; the
+sole exception is the publish orchestrator, whose `emit_publish_diagnostic`
+adds the publish-only fields. Both build the object with `jq`, so the line
+is valid JSON whatever its fields carry, raw command output with TABs, CRs
+or other control characters included. `emit_diagnostic` feeds the
+description to `jq` on stdin, not as an argument, so it may be any size;
+Linux caps one argument at 128 KiB. The guard test
+`TestNoHandRolledDiagnosticJSON`
+(`skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars/`)
+fails on any `printf` of a `{"gate"` line in `gates/**/*.sh`. One invalid
+line costs a whole gate's diagnostics: the parallel executor
+(`gates/lib/run-parallel.sh`) parses every stderr line of a gate that
+starts with `{` in a single `jq -s`, and records an empty list if that
+fails.
+
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,
 every diagnostic message, and elapsed time per phase.

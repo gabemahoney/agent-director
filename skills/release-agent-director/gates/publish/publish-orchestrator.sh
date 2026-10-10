@@ -176,14 +176,6 @@ for _i in "${!BINARY_PATHS[@]}"; do
 done
 unset _i
 
-# JSON-escape: backslash → \\, double-quote → \", newline → \n
-_jesc() {
-  printf '%s' "$1" \
-    | sed -e 's/\\/\\\\/g' \
-          -e 's/"/\\"/g' \
-          -e ':a;N;$!ba;s/\n/\\n/g'
-}
-
 # ─── emit_publish_diagnostic ──────────────────────────────────────────────────
 # Emits an extended SR-14 diagnostic (publish-phase fields) to stderr and
 # appends the JSON string to the DIAGNOSTICS array.

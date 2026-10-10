@@ -101,9 +101,14 @@ in the run report.
 ```
 
 Gate scripts produce diagnostics via
-`skills/release-agent-director/gates/lib/emit-diagnostic.sh`, which handles
-JSON-escaping of all four fields. Hand-rolling JSON in gate scripts is
-prohibited.
+`skills/release-agent-director/gates/lib/emit-diagnostic.sh`, which builds each
+object with `jq`. Every field is escaped as JSON requires, control characters
+such as TAB and CR included, so a field may carry raw command output. The
+description reaches `jq` on stdin, so it may be any size. Hand-rolling JSON in
+gate scripts is prohibited; the test `TestNoHandRolledDiagnosticJSON` fails on
+any gate script that `printf`s a `{"gate"` line. The publish phase's extended
+diagnostics (such as `upstream_response_verbatim`) come from the publish
+orchestrator's own `jq` builder, `emit_publish_diagnostic`.
 
 ---
 
