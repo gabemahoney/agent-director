@@ -1,0 +1,2 @@
+# b.36h: one run per job. Expected: FAIL RowSettles
+Hold36h lim_cond_sub_noclaim @3300

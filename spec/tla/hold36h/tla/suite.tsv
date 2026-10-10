@@ -1,0 +1,17 @@
+run	expected	what
+red_split	FAIL WorkingTrue	control, today's code: a subagent's working write read before the main agent's request was recorded overwrites its check_permission
+red_split_all	FAIL WorkingTrue	control, today's code, every switch, two turns: the same violation
+ctl_split_nosub	PASS	control: today's code with the main agent alone (its hooks run one at a time) is safe, every switch: the race needs two agents
+cond_safe	PASS	the fix: safety, subagent, every switch
+cond_safe3	PASS	the fix: safety, three turns, every switch
+cond_live1	PASS	the fix: every property, one turn (the local sanity run)
+cond_live	PASS	the fix: every property, subagent, hook deaths, record-pane-answer used
+cond_live_slow	PASS	the fix: every property, slow idle hook
+cond_live3	PASS	the fix: every property, three turns
+red_today_stale	FAIL NoStaleHold	red for NoStaleHold: b.omt's proof rule off (today), with the fix's write
+red_today_settle	FAIL RowSettles	red for RowSettles: b.omt's proof rule off (today), with the fix's write
+lim_cond_sub_noclaim	FAIL RowSettles	b.omt's accepted residual, unchanged by the fix: a subagent's request denied at the pane holds until record-pane-answer or the row's end
+p_race	FAIL NeverHit	probe: a working write read 'not held' and a request holds at its write (the fix reports it held)
+p_mainrace	FAIL NeverHit	probe: the same race with the main agent's write and the subagent's request
+p_txrace	FAIL NeverHit	probe: the race through the lock: the read ran inside the open transaction, the write waited for its commit
+p_staleheld	FAIL NeverHit	probe: the opposite window: a read 'held' whose request no longer holds at the write (unchanged by the fix: find-missing repairs it)

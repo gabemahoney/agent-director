@@ -1,0 +1,160 @@
+spec/tla/hold36h/ provenance
+
+What this is
+  Bee b.36h's TLA+ model of the store's working hold as a read followed by
+  a separate write, with the store lock (Hold36h.tla, built on b.omt's
+  OmtHold). Write = "split" is the code before b.36h's fix: the UPDATE to
+  working carries the gate only, so a relay request recorded between the
+  hold's read and that UPDATE is overwritten with working. Write = "cond"
+  is the fix: the UPDATE carries the hold's NOT EXISTS (holdsRowSQL), and a
+  lost race is reported as held. With the model come its 16 cfgs, the
+  scripts that wrote them and the job directories, the 16 scheduler job
+  directories as submitted (less their jar, below), the job table, the job
+  ids and the audited verdicts. Bee b.36h owns the model and its results.
+  The files are vendored as the record of the model checking done before
+  b.36h's product code.
+
+Results
+  All 16 jobs match job-README.md's expected table (verdicts.txt, audited
+  2026-10-10). Every fix run is a complete PASS (cond_live3 2,655,041
+  distinct states, cond_safe3 2,811,652); red_split and red_split_all fail
+  WorkingTrue on today's write; ctl_split_nosub passes; every red run and
+  probe fails on its target.
+
+Not wired into make tla
+  Nothing in the repo runs these files. `make tla` runs ci/suite.tsv only,
+  and ci/run_ci.sh never reads hold36h/. To run a job again, copy
+  spec/tla/tla2tools.jar into its job-<run>/ directory and submit that
+  directory to the job scheduler.
+
+Source
+  Bee b.36h, directory tickets/Bugs/b.36h/ of the Apiary ticket tree
+  (outside this repo). Copied byte for byte with rsync -a on 2026-10-10 and
+  checked equal to the source with diff -r. Not copied: the bee's ticket
+  file, its fix plan, and each job directory's tla2tools.jar. Every one of
+  those 16 jars was checked byte-identical (cmp) to spec/tla/tla2tools.jar,
+  SHA-256 32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81,
+  so the repo keeps one copy. At copy time every job directory was also
+  checked to hold exactly six files: tlcjob.sh equal to
+  spec/tla/jobs/lib/tlcjob.sh, Hold36h.tla equal to tla/Hold36h.tla, its cfg
+  equal to tla/cfg/<run>.cfg, a Dockerfile equal to every other job's, its
+  runs file and the jar.
+
+Layout (the bee folder's relative layout)
+  tla/Hold36h.tla         the model
+  tla/cfg/*.cfg           one cfg per scheduler job (16)
+  tla/suite.tsv           run, expected verdict, what it shows
+  tla/gencfg.py           wrote tla/cfg/ and tla/suite.tsv
+  tla/mkjobs.sh           wrote the job directories
+  tla/runlocal.sh         the capped (2 GB) local sanity runs
+  job-<run>/              each job directory as submitted, less its jar
+  job-README.md           the job table, with the expected verdicts and
+                          the local sanity results
+  job-ids.txt             the 16 scheduler job ids
+  verdicts.txt            the audited JOB-VERDICT line of each job
+
+Pins (sha256sum format, paths relative to spec/tla/hold36h/)
+af9c73029e1d7584957afea3ffa904ac64485a13fecc1f69c1d9d15abf31859b  job-README.md
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-cond_live/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-cond_live/Hold36h.tla
+f3d15d25b2888020175ae113ca7cc7270d7de74a8c0b9d981cb6f7f53b3a8c14  job-cond_live/cond_live.cfg
+66f0c4c582fe4663605425d395e9126732e86f18b0bf31495dd884472b65e379  job-cond_live/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-cond_live/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-cond_live1/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-cond_live1/Hold36h.tla
+0602321bd930207cbda97496d17821486b6d65152fcc243a73f830acf079c05c  job-cond_live1/cond_live1.cfg
+abb386bf9086bed9d31f66903d7802790d2af730783958a200a393413d4d5981  job-cond_live1/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-cond_live1/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-cond_live3/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-cond_live3/Hold36h.tla
+58e4655a62435a45810c2bd7409c7fcfd36972344994a496f3439db684c2e244  job-cond_live3/cond_live3.cfg
+cb4798b5231f5bc35ab81f5254e5cf18a32dd533a5713a2ec49f266dd95b8cd6  job-cond_live3/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-cond_live3/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-cond_live_slow/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-cond_live_slow/Hold36h.tla
+c3cd08c4f8912486ec03aa56312e8d340d9cda530592db079f48788b89c77757  job-cond_live_slow/cond_live_slow.cfg
+5e78453657c7b4307d37baa472d2743a1c852a2728ede09d42b21534121d0e7e  job-cond_live_slow/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-cond_live_slow/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-cond_safe/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-cond_safe/Hold36h.tla
+49e9cf42e5f95cbadfcd73c6630300857d74590826fa07210a53bb29a2f26900  job-cond_safe/cond_safe.cfg
+3534828a3358c1f81df14f8d9dafa55ceabd3126d114e2f08b24cb8cc4a66d8c  job-cond_safe/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-cond_safe/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-cond_safe3/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-cond_safe3/Hold36h.tla
+a346792d4bac470e2788b30f4a8761767c1a3ddd1a66c324267648dc0f625f5e  job-cond_safe3/cond_safe3.cfg
+b4b6f88134d6c3fe447f16f8322ada535ad2ff1a940fd934b25a14e45e4d6a56  job-cond_safe3/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-cond_safe3/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-ctl_split_nosub/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-ctl_split_nosub/Hold36h.tla
+db73ab23bd7412c216a8714b9049a0fd934370495cb29e77a782a67686c671cb  job-ctl_split_nosub/ctl_split_nosub.cfg
+0351668038ceafeba0baaea4571135fae9ae71322e984dfb77b92898343c2d53  job-ctl_split_nosub/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-ctl_split_nosub/tlcjob.sh
+946e579d2b1989b931a95fcfe4b1dc755a2978d7de954d298f6403ebfdc3a45a  job-ids.txt
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-lim_cond_sub_noclaim/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-lim_cond_sub_noclaim/Hold36h.tla
+5bf3f29df913ba3fe61821d986ae9800bb576ae692a8ca140bef9a2259fc3bb3  job-lim_cond_sub_noclaim/lim_cond_sub_noclaim.cfg
+e1624a9d546878d50a8af43fbe291ddc5cc00267cb33e866251ef2ebd68caaf6  job-lim_cond_sub_noclaim/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-lim_cond_sub_noclaim/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-p_mainrace/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-p_mainrace/Hold36h.tla
+dc9b5f8e081028e4f84d5aa45133ac152677c0d2bdb6a640db97333b0a6cf66d  job-p_mainrace/p_mainrace.cfg
+04b7cca8190639de402ef6255b9afa6c68021523777611603f90751949f6c467  job-p_mainrace/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-p_mainrace/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-p_race/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-p_race/Hold36h.tla
+5c85318f928e21339fbacc24b74f5dd109a6a782306c864c89a6586199fb6e54  job-p_race/p_race.cfg
+c4bb25a243fe64ec7baef529342855108e561b09f8c5639e4dd59e0337bed6e5  job-p_race/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-p_race/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-p_staleheld/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-p_staleheld/Hold36h.tla
+0c6a661678022c1198de598f19917ac4a73e18bc49a1450771eb9933c85a7630  job-p_staleheld/p_staleheld.cfg
+831b3a30d66a7486e171568e781bede4cb3dec50036f091149e01deba6924751  job-p_staleheld/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-p_staleheld/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-p_txrace/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-p_txrace/Hold36h.tla
+60095f02676ece087a4e379fa6d8f28739479e0ef6490ff1c81513a149defde8  job-p_txrace/p_txrace.cfg
+c57ad0193bd99a7a80c27b787009c1e3e73abebd67511b8255e561fdb15890dc  job-p_txrace/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-p_txrace/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-red_split/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-red_split/Hold36h.tla
+89295f5e70787d2941a99fbc5c4cf6d03fdc831db8be457437ba184d45ea7a72  job-red_split/red_split.cfg
+1ae0f7a52f2bb4804cdae2648e3fd8b4fa84c78ebd5e20ed1562fac9a91e26bc  job-red_split/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-red_split/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-red_split_all/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-red_split_all/Hold36h.tla
+71237135d98846c2cf194eac14b5465ee7f935a5ee6ebd197eb6e64a86f98f0f  job-red_split_all/red_split_all.cfg
+ebdfb4028114ab9f5d5cb5089ff35e8543852b9a2f206b15f8c2fb655dbc89ba  job-red_split_all/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-red_split_all/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-red_today_settle/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-red_today_settle/Hold36h.tla
+284c11c0984cf2499239010fbf4c2f3c70fccebedbabfbf42786483fdcc6e9b6  job-red_today_settle/red_today_settle.cfg
+6fd9fe73bbb71afb24da5fc89c6057f8584aa55201b544ce0bb566f59b4495b5  job-red_today_settle/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-red_today_settle/tlcjob.sh
+f17019c6d77e151737b81151f2ac37accf5d01689f103e846a74da3bd4716a4b  job-red_today_stale/Dockerfile
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  job-red_today_stale/Hold36h.tla
+5adc7dc0caec49cc8d3255e273a4205bff9f539cfd4d97883266f133f822e778  job-red_today_stale/red_today_stale.cfg
+28e9b56967ea43ae376aaec89dcf0004191e10bb7ba6a981de02815e6225101c  job-red_today_stale/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-red_today_stale/tlcjob.sh
+7856c1d8d3f42fe490280ecef44febcb5c7aed899b08b65542cb3e81194a7d5a  tla/Hold36h.tla
+f3d15d25b2888020175ae113ca7cc7270d7de74a8c0b9d981cb6f7f53b3a8c14  tla/cfg/cond_live.cfg
+0602321bd930207cbda97496d17821486b6d65152fcc243a73f830acf079c05c  tla/cfg/cond_live1.cfg
+58e4655a62435a45810c2bd7409c7fcfd36972344994a496f3439db684c2e244  tla/cfg/cond_live3.cfg
+c3cd08c4f8912486ec03aa56312e8d340d9cda530592db079f48788b89c77757  tla/cfg/cond_live_slow.cfg
+49e9cf42e5f95cbadfcd73c6630300857d74590826fa07210a53bb29a2f26900  tla/cfg/cond_safe.cfg
+a346792d4bac470e2788b30f4a8761767c1a3ddd1a66c324267648dc0f625f5e  tla/cfg/cond_safe3.cfg
+db73ab23bd7412c216a8714b9049a0fd934370495cb29e77a782a67686c671cb  tla/cfg/ctl_split_nosub.cfg
+5bf3f29df913ba3fe61821d986ae9800bb576ae692a8ca140bef9a2259fc3bb3  tla/cfg/lim_cond_sub_noclaim.cfg
+dc9b5f8e081028e4f84d5aa45133ac152677c0d2bdb6a640db97333b0a6cf66d  tla/cfg/p_mainrace.cfg
+5c85318f928e21339fbacc24b74f5dd109a6a782306c864c89a6586199fb6e54  tla/cfg/p_race.cfg
+0c6a661678022c1198de598f19917ac4a73e18bc49a1450771eb9933c85a7630  tla/cfg/p_staleheld.cfg
+60095f02676ece087a4e379fa6d8f28739479e0ef6490ff1c81513a149defde8  tla/cfg/p_txrace.cfg
+89295f5e70787d2941a99fbc5c4cf6d03fdc831db8be457437ba184d45ea7a72  tla/cfg/red_split.cfg
+71237135d98846c2cf194eac14b5465ee7f935a5ee6ebd197eb6e64a86f98f0f  tla/cfg/red_split_all.cfg
+284c11c0984cf2499239010fbf4c2f3c70fccebedbabfbf42786483fdcc6e9b6  tla/cfg/red_today_settle.cfg
+5adc7dc0caec49cc8d3255e273a4205bff9f539cfd4d97883266f133f822e778  tla/cfg/red_today_stale.cfg
+ca825f03a7638a28c9f7345a5e76466e0387b2c98f8115553d551ad7cdb47b7d  tla/gencfg.py
+65df787a5b7fe083b13578efc9eaccc1c77eb129477eaaeb26f19c9c94de1740  tla/mkjobs.sh
+b7ccf6fb569001f14fcb5f795c63ff5e357f11af06fca2f85517d2bea4a9a822  tla/runlocal.sh
+24c04b4a40326ee38ef5c093b32b033c58774c855ccff1d5d0b1141e38d804bc  tla/suite.tsv
+edb7767fbcf8e10466514fabcdad741536192075a83d70c36edbe47e8ff8b91c  verdicts.txt
