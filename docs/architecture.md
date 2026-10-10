@@ -15734,8 +15734,27 @@ each in goal order, joined by `&&`:
 | `generate test-docker` | `make sandbox CMD="make generate" && make test-docker` |
 | `test-image generate test test-docker` | `make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker` |
 
-The advice names the goals only: variables given on the command line
-(`EPIC=…`, `CMD=…`) are not carried into it.
+Variables given on the command line (`EPIC=…`, `GO_TEST_TIMEOUT=…`,
+`CMD=…`) go on every make the advice runs (b.qgr), sorted by name, each as
+one single-quoted `'NAME=value'` word with its value as given, unexpanded
+(a `NAME:=value`, which make has already expanded, with each `$` doubled,
+so it reads back the same). The sandbox command carries all of them but `CMD`, on `make sandbox` and on
+the make inside its `CMD="…"`; `CMD` goes on the host makes only, as that
+`CMD=` is the advice's own. `make generate test-docker EPIC=harness-smoke`
+advises
+`make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'" && make test-docker 'EPIC=harness-smoke'`.
+Building the advice expands no value, and no quote, `$`, newline or other
+shell character in a value can break or inject into the printed advice
+(b.ay3). Make syntax in a variable other than `CMD` is still expanded on
+the host, just as in the command the user typed: make expands each
+command-line variable but `CMD` (which is `unexport`ed) into every recipe's
+environment, so `make generate 'EPIC=$(shell …)'` runs the shell on the
+host during the refusal, and following the advice runs it on the host
+again. A variable set only in the environment is not copied: it reaches
+the advice's host makes, which read the same environment, but not the make
+inside the sandbox's `CMD=`: the container gets only the variables its
+`-e` flags pass, `AGENT_DIRECTOR_TEST_SANDBOX`, `AGENT_DIRECTOR_SANDBOX_CMD`
+and any in `SANDBOX_FLAGS`.
 
 When `test`,
 `all` or `envelope-diff-ts` is a goal, the build prerequisites that do work of
@@ -15792,7 +15811,7 @@ would also disable the guard on the self-hosted runner (b.175).
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq and b.4a1). Those tests run `make` against the real
+b.8yq, b.4a1 and b.qgr). Those tests run `make` against the real
 repo Makefile with a fake container engine or tool on PATH, never a real
 container, and assert on what the recipe produced. They exec no built binary
 and open no store, so they carry no sandbox guard.

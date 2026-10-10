@@ -553,6 +553,18 @@ _sandbox-build: _sandbox-preflight
 #   make generate test-docker     make sandbox CMD="make generate" && make test-docker
 #   make test-image generate test test-docker
 #                                 make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker
+# The variables given on the command line (EPIC=…, GO_TEST_TIMEOUT=…, CMD=…)
+# go in the advice too (b.qgr), so a goal that needs one still gets it: each
+# as one single-quoted 'NAME=value' word, sorted by name, on every make the
+# advice runs, the make inside the sandbox command's CMD= included. CMD
+# itself goes on the host makes only, as the sandbox command's CMD= is the
+# advice's own and no goal run inside it reads CMD:
+#   make generate test-docker EPIC=harness-smoke
+#     make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'" && make test-docker 'EPIC=harness-smoke'
+# Each value is copied unexpanded ($(value)), so building the advice runs
+# nothing in it, and the advice reaches printf through the environment (see
+# _require-sandbox), so no quote, newline or other character in a value can
+# end the recipe's quoting or start a command of its own (b.ay3).
 # Like AGENT_DIRECTOR_TEST_SANDBOX itself it is an accident-prevention gate,
 # not a security boundary: it keeps the rule that nothing runs on the host.
 _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
@@ -579,19 +591,45 @@ _REQUIRE_SANDBOX_LEAD = $(call _require_sandbox_lead,$(_REQUIRE_SANDBOX_GOALS))
 _REQUIRE_SANDBOX_REST = $(wordlist $(words x $(_REQUIRE_SANDBOX_LEAD)),$(words $(_REQUIRE_SANDBOX_GOALS)),$(_REQUIRE_SANDBOX_GOALS))
 _REQUIRE_SANDBOX_IN = $(filter-out $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
 _REQUIRE_SANDBOX_TAIL = $(filter $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
-# _require_sandbox_host_cmd returns make <the goals of $(1)>, run on the host,
-# with test as test-sandbox; nothing when $(1) is empty.
-_require_sandbox_host_cmd = $(if $(strip $(1)),make $(patsubst test,test-sandbox,$(strip $(1))))
-_REQUIRE_SANDBOX_IN_CMD = $(if $(_REQUIRE_SANDBOX_IN),make sandbox CMD="make $(_REQUIRE_SANDBOX_IN)")
+# _REQUIRE_SANDBOX_VARS are the names of the variables given on the command
+# line, sorted. They are found by origin: MAKEOVERRIDES, where make lists
+# them, is emptied below (b.ay3).
+_REQUIRE_SANDBOX_VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v))))
+# _require_sandbox_q quotes $(1) as one POSIX shell word: in single quotes,
+# each ' in it as '\''.
+_require_sandbox_q = '$(subst ','\'',$(1))'
+# _require_sandbox_dq escapes $(1) for the inside of a "…" in a POSIX shell.
+_require_sandbox_dq = $(subst `,\`,$(subst $$,\$$,$(subst ",\",$(subst \,\\,$(1)))))
+# _require_sandbox_var returns NAME=value for the variable named $(1), as it
+# was given: the value unexpanded ($(value)), and when make had already
+# expanded it (:= or != on the command line) with each $ doubled, so the
+# NAME=value reads back the same.
+_require_sandbox_var = $(1)=$(if $(filter simple,$(flavor $(1))),$(subst $$,$$$$,$(value $(1))),$(value $(1)))
+# _require_sandbox_vars returns a space and the quoted NAME=value of each
+# variable named in $(1), space-separated; nothing when $(1) is empty.
+_require_sandbox_vars = $(if $(1), $(foreach v,$(1),$(call _require_sandbox_q,$(call _require_sandbox_var,$(v)))))
+# _require_sandbox_host_cmd returns make <the goals of $(1)> and the
+# command-line variables, run on the host, with test as test-sandbox; nothing
+# when $(1) is empty.
+_require_sandbox_host_cmd = $(if $(strip $(1)),make $(patsubst test,test-sandbox,$(strip $(1)))$(call _require_sandbox_vars,$(_REQUIRE_SANDBOX_VARS)))
+# The sandbox command takes every command-line variable but CMD, on make
+# sandbox and on the make inside its CMD=.
+_REQUIRE_SANDBOX_IN_VARS = $(call _require_sandbox_vars,$(filter-out CMD,$(_REQUIRE_SANDBOX_VARS)))
+_REQUIRE_SANDBOX_IN_CMD = $(if $(_REQUIRE_SANDBOX_IN),make sandbox$(_REQUIRE_SANDBOX_IN_VARS) CMD="$(call _require_sandbox_dq,make $(_REQUIRE_SANDBOX_IN)$(_REQUIRE_SANDBOX_IN_VARS))")
 # _require_sandbox_and joins two commands with &&, or returns the one that is
-# not empty.
-_require_sandbox_and = $(if $(strip $(1)),$(if $(strip $(2)),$(strip $(1)) && $(strip $(2)),$(strip $(1))),$(strip $(2)))
+# not empty. It strips nothing: a value's own spaces must stay.
+_require_sandbox_and = $(if $(1),$(if $(2),$(1) && $(2),$(1)),$(2))
 _REQUIRE_SANDBOX_ADVICE = $(call _require_sandbox_and,$(call _require_sandbox_and,$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_LEAD)),$(_REQUIRE_SANDBOX_IN_CMD)),$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_TAIL)))
+# The advice reaches the recipe in the environment, never in its text (b.qgr):
+# in the text a ' in a value would end the shell's quoting, and a newline would
+# end the line, which make runs as its own command. printf prints it as is,
+# where dash's echo would rewrite its backslashes.
+_require-sandbox: export AGENT_DIRECTOR_SANDBOX_ADVICE = $(_REQUIRE_SANDBOX_ADVICE)
 _require-sandbox:
 	@if [ -z "$$AGENT_DIRECTOR_TEST_SANDBOX" ] && [ -z "$$BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS" ]; then \
 		echo 'ERROR: make $(_REQUIRE_SANDBOX_GOALS) runs go or bun tools, which run only in the sandbox, never on the host (b.8yq).' >&2; \
 		echo '       AGENT_DIRECTOR_TEST_SANDBOX is unset, so this is not the sandbox. Nothing was run.' >&2; \
-		echo '       Run it in the sandbox: $(_REQUIRE_SANDBOX_ADVICE)' >&2; \
+		printf '       Run it in the sandbox: %s\n' "$$AGENT_DIRECTOR_SANDBOX_ADVICE" >&2; \
 		exit 2; \
 	fi
 

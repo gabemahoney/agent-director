@@ -14,6 +14,11 @@
 // Those now run on the host, as themselves, before or after the one sandbox
 // command.
 //
+// b.qgr: that command named the goals only and dropped the variables given on
+// the command line, so make generate test-docker EPIC=harness-smoke advised a
+// make test-docker without EPIC, which fails. They now go on the advice's makes,
+// each as one quoted word that no character in its value can break.
+//
 // Like the other test/sandbox suites it drives a copy of the Makefile under test
 // in a temp tree, with logging fake go, bun and docker on PATH, and runs no repo
 // binary, so it needs no sandboxguard TestMain.
@@ -22,6 +27,10 @@
 // TestRequireSandbox_RefusesOutsideSandbox cell and TestRequireSandbox_AdviceFollow;
 // without the order-only `| _require-sandbox` block, the _j8 cells fail. Before
 // b.4a1's fix, the cells that mix a guarded goal with a container goal fail.
+// Before b.qgr's fix, the cells whose advice keeps a command-line variable
+// fail, and so do TestRequireSandbox_AdviceKeepsValues and
+// TestRequireSandbox_AdviceCopiesCmd. Without _require_sandbox_var's $
+// doubling, generate_simple_var and AdviceKeepsValues' simple_dollar fail.
 package sandboxrequiresandbox_test
 
 import (
@@ -38,8 +47,11 @@ import (
 )
 
 // fakeTool stands in for go and bun: it logs "<tool> <args>" and succeeds.
+// When PROBE is set it also writes PROBE's value to a new probe.* file in the
+// current directory (see takeProbes).
 const fakeTool = `#!/bin/sh
 printf '%s %s\n' "$(basename "$0")" "$*" >> "$FAKE_TOOL_LOG"
+[ -z "${PROBE+set}" ] || printf '%s' "$PROBE" > "$(mktemp probe.XXXXXX)"
 `
 
 // fakeEngine stands in for docker. It logs "docker <subcommand>". A run of the
@@ -338,6 +350,19 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 			advice: `make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker`, j8: true},
 		cell{name: "test_test_docker", args: []string{"test", "test-docker"},
 			goals: "test test-docker", advice: "make test-sandbox test-docker", j8: true},
+		// b.qgr: the command-line variables, sorted by name, go on every make the
+		// advice runs, the one in the sandbox's CMD= too; CMD only on the host makes.
+		cell{name: "test_generate_vars", args: []string{"test", "generate", "GO_TEST_TIMEOUT=60m", "EPIC=harness-smoke"},
+			goals: "test generate",
+			advice: `make test-sandbox 'EPIC=harness-smoke' 'GO_TEST_TIMEOUT=60m' && ` +
+				`make sandbox 'EPIC=harness-smoke' 'GO_TEST_TIMEOUT=60m' CMD="make generate 'EPIC=harness-smoke' 'GO_TEST_TIMEOUT=60m'"`},
+		cell{name: "generate_sandbox_cmd", args: []string{"generate", "sandbox", "CMD=go version"},
+			goals: "generate sandbox", advice: `make sandbox CMD="make generate" && make sandbox 'CMD=go version'`},
+		cell{name: "generate_cmd", args: []string{"generate", "CMD=go version"},
+			goals: "generate", advice: `make sandbox CMD="make generate"`},
+		// A := value is the one make expanded, its $ doubled back; inside CMD="…" each $ is escaped.
+		cell{name: "generate_simple_var", args: []string{"generate", "X:=a$$b"},
+			goals: "generate", advice: `make sandbox 'X=a$$b' CMD="make generate 'X=a\$\$b'"`},
 	)
 	// b.4a1: each host-only goal after a guarded one: the container goals, and
 	// hostOnly. No _j8 copy: with no test, all or envelope-diff-ts among the
@@ -428,39 +453,173 @@ func TestRequireSandbox_Passes(t *testing.T) {
 	}
 }
 
-// TestRequireSandbox_AdviceFollow (b.8yq, b.4a1): the refusal's advice, run as
-// printed, exits 0 and runs the goals' go calls: go generate in the (fake)
-// container, where the guard passes, and test-docker's builds on the host,
-// where its container engine is (docker fails in the fake container).
+// generateAndBuilds are the go calls of make generate test-docker: go generate,
+// and test-docker's builds (through test-image).
+var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}
+
+// follow runs advice in root with bash, as printed, and checks that it exits 0
+// and that its tool calls, the container engine's left out, are wantCalls.
+func follow(t *testing.T, root string, env []string, advice string, wantCalls []string) {
+	t.Helper()
+	code, out, calls := run(t, root, env, "bash", "-c", advice)
+	calls = slices.DeleteFunc(calls, func(c string) bool { return strings.HasPrefix(c, "docker ") })
+	if code != 0 {
+		t.Errorf("%s: exit %d, want 0; output:\n%s", advice, code, out)
+	}
+	if got := briefCalls(calls); !slices.Equal(got, briefCalls(wantCalls)) {
+		t.Errorf("%s ran %q, want %q; output:\n%s", advice, calls, wantCalls, out)
+	}
+}
+
+// TestRequireSandbox_AdviceFollow (b.8yq, b.4a1, b.qgr): the refusal's advice,
+// run as printed, exits 0 and runs the goals' go calls: go generate in the
+// (fake) container, where the guard passes, and test-docker's builds on the
+// host, where its container engine is (docker fails in the fake container).
 func TestRequireSandbox_AdviceFollow(t *testing.T) {
 	root := tree(t)
 	for _, tc := range []struct {
-		name       string
-		goals, env []string
-		advice     string
-		wantCalls  []string
+		name      string
+		args, env []string
+		advice    string
+		wantCalls []string
 	}{
-		{name: "generate", goals: []string{"generate"}, advice: `make sandbox CMD="make generate"`,
+		{name: "generate", args: []string{"generate"}, advice: `make sandbox CMD="make generate"`,
 			wantCalls: []string{"go generate ./..."}},
-		// EPIC is set in the environment: the advice names the goals only.
-		{name: "generate_test_docker", goals: []string{"generate", "test-docker"}, env: []string{"EPIC=harness-smoke"},
-			advice:    `make sandbox CMD="make generate" && make test-docker`,
-			wantCalls: []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}},
+		// EPIC in the environment is no command-line variable, so the advice names
+		// the goals only; its make test-docker reads EPIC from the same environment.
+		{name: "generate_test_docker_env_epic", args: []string{"generate", "test-docker"}, env: []string{"EPIC=harness-smoke"},
+			advice: `make sandbox CMD="make generate" && make test-docker`, wantCalls: generateAndBuilds},
+		// b.qgr: EPIC on the command line goes on every make the advice runs.
+		{name: "generate_test_docker_epic_arg", args: []string{"generate", "test-docker", "EPIC=harness-smoke"},
+			advice: `make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'" && ` +
+				`make test-docker 'EPIC=harness-smoke'`,
+			wantCalls: generateAndBuilds},
+		// b.qgr: a CMD for make sandbox goes on that host make, not in the advice's own CMD=.
+		{name: "generate_sandbox_cmd", args: []string{"generate", "sandbox", "CMD=go version"},
+			advice:    `make sandbox CMD="make generate" && make sandbox 'CMD=go version'`,
+			wantCalls: []string{"go generate ./...", "go version"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			code, out, _ := run(t, root, tc.env, append([]string{"make"}, tc.goals...)...)
+			code, out, _ := run(t, root, tc.env, append([]string{"make"}, tc.args...)...)
 			if code != 2 || !strings.Contains(out, "Run it in the sandbox: "+tc.advice+"\n") {
-				t.Fatalf("make %s: exit %d, want 2 with the advice %q; output:\n%s", strings.Join(tc.goals, " "), code, tc.advice, out)
+				t.Fatalf("make %s: exit %d, want 2 with the advice %q; output:\n%s", strings.Join(tc.args, " "), code, tc.advice, out)
+			}
+			follow(t, root, tc.env, tc.advice, tc.wantCalls)
+		})
+	}
+}
+
+// adviceIn returns the advice the refusal in out prints: everything after
+// "Run it in the sandbox: " up to make's own error line, as a value with a
+// newline makes it span lines.
+func adviceIn(t *testing.T, out string) string {
+	t.Helper()
+	_, rest, found := strings.Cut(out, "Run it in the sandbox: ")
+	advice, _, ended := strings.Cut(rest, "\nmake: ")
+	if !found || !ended {
+		t.Fatalf("no advice followed by make's error line in the output:\n%s", out)
+	}
+	return advice
+}
+
+// takeProbes returns, sorted, the PROBE values the fake tools have seen in
+// root (one per call) and removes them.
+func takeProbes(t *testing.T, root string) []string {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(root, "probe.*"))
+	if err != nil {
+		t.Fatalf("glob probes: %v", err)
+	}
+	var probes []string
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read probe: %v", err)
+		}
+		if err := os.Remove(p); err != nil {
+			t.Fatalf("remove probe: %v", err)
+		}
+		probes = append(probes, string(b))
+	}
+	slices.Sort(probes)
+	return probes
+}
+
+// TestRequireSandbox_AdviceKeepsValues (b.qgr, b.ay3): a command-line value
+// with quotes, $, backquotes, backslashes, ;, newlines, runs of spaces or make
+// syntax reaches the go calls of the followed advice, on the host and in the
+// sandbox, as it reaches them when the command runs in the sandbox. None of it
+// runs as a command: not when the advice runs, nor when the refusal prints it
+// under make -i, which would run any command a value split off the recipe line.
+// A value given with := is the one make has already expanded; the advice gives
+// it back with =, so each of its $ must be doubled for the go calls to see it
+// unchanged.
+func TestRequireSandbox_AdviceKeepsValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		op          string // how PROBE is given on the command line; "" is =
+	}{
+		{name: "quotes", value: `it's "quoted"`},
+		{name: "dollar", value: `$$HOME $$$$`},
+		{name: "command_substitution", value: "`touch MARKER` $(touch MARKER)"},
+		{name: "backslash", value: `a\b \" \\ \`},
+		{name: "semicolon", value: `'; touch MARKER; echo '`},
+		{name: "newline", value: "x\ntouch MARKER\n"},
+		{name: "spaces", value: "a  b   "},
+		{name: "make_syntax", value: "a,b) (c % # $(EPIC)"},
+		// make reads it as a$b $$HOME; given back as PROBE=a$b $$HOME, without the
+		// doubling, the go calls would see a $HOME.
+		{name: "simple_dollar", op: ":=", value: `a$$b $$$$HOME`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := tree(t)
+			marker := filepath.Join(t.TempDir(), "marker")
+			op := tc.op
+			if op == "" {
+				op = "="
+			}
+			args := []string{"generate", "test-docker", "EPIC=harness-smoke", "PROBE" + op + strings.ReplaceAll(tc.value, "MARKER", marker)}
+			noMarker := func(step string) {
+				t.Helper()
+				if _, err := os.Stat(marker); err == nil {
+					t.Fatalf("%s ran a command from the value %q: %s exists", step, tc.value, marker)
+				}
 			}
 
-			code, out, calls := run(t, root, tc.env, "bash", "-c", tc.advice)
-			calls = slices.DeleteFunc(calls, func(c string) bool { return strings.HasPrefix(c, "docker ") })
-			if code != 0 {
-				t.Errorf("%s: exit %d, want 0; output:\n%s", tc.advice, code, out)
+			code, out, _ := run(t, root, []string{"AGENT_DIRECTOR_TEST_SANDBOX=1"}, append([]string{"make"}, args...)...)
+			want := takeProbes(t, root)
+			if code != 0 || len(want) != len(generateAndBuilds) {
+				t.Fatalf("in the sandbox: exit %d and PROBE seen %d times, want 0 and %d; output:\n%s", code, len(want), len(generateAndBuilds), out)
 			}
-			if got := briefCalls(calls); !slices.Equal(got, briefCalls(tc.wantCalls)) {
-				t.Errorf("%s ran %q, want %q; output:\n%s", tc.advice, calls, tc.wantCalls, out)
+			noMarker("the run in the sandbox")
+
+			_, out, _ = run(t, root, nil, append([]string{"make", "-i"}, args...)...)
+			advice := adviceIn(t, out)
+			takeProbes(t, root) // make -i runs the goals after the refusal
+			noMarker("the refusal")
+
+			follow(t, root, nil, advice, generateAndBuilds)
+			if got := takeProbes(t, root); !slices.Equal(got, want) {
+				t.Errorf("following %s, the go calls saw PROBE as %q, want %q as in the sandbox", advice, got, want)
 			}
+			noMarker("the advice")
 		})
+	}
+}
+
+// TestRequireSandbox_AdviceCopiesCmd (b.qgr, b.ay3): a CMD given with other
+// goals goes in the advice as typed, and its $(shell …) does not run on the
+// host while the advice is built.
+func TestRequireSandbox_AdviceCopiesCmd(t *testing.T) {
+	root := tree(t)
+	marker := filepath.Join(t.TempDir(), "marker")
+	cmd := "CMD=$(shell touch " + marker + ")"
+	advice := `make sandbox CMD="make generate" && make sandbox '` + cmd + `'`
+	code, out, calls := run(t, root, nil, "make", "generate", "sandbox", cmd)
+	if code != 2 || len(calls) != 0 || !strings.Contains(out, "Run it in the sandbox: "+advice+"\n") {
+		t.Errorf("exit %d, calls %q, want 2, none and the advice %q; output:\n%s", code, calls, advice, out)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Errorf("CMD's $(shell …) ran on the host: %s exists", marker)
 	}
 }
