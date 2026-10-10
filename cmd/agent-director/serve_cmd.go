@@ -46,10 +46,17 @@ import (
 // the default store (Pin 2) and to the tmux on PATH. --home needs no
 // threading: run() set HOME before either Client expands a "~/" path.
 //
+// newClient opens the MCP Client: pkg/api.New in production (handlers()); a
+// test passes a stand-in to reach the failure path. A failed open is named
+// by clisetup.NewOpenError, as setupClient's Open names its own: a schema
+// refusal is ErrSchemaMismatch or ErrSchemaMigrationRequired, anything else
+// ErrStoreOpen (b.uii).
+//
 // Pin H6: cfg is threaded in directly from run() via setupClient() so
 // newMCPLogger can receive it without a Client.Config() accessor, which
 // would leak internal/config.Config into pkg/api's public surface.
-func serveHandlerWith(cfg config.Config, o clisetup.Overrides, args []string) error {
+func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
+	newClient func(pkgapi.Options) (*pkgapi.Client, error), args []string) error {
 	var stdioFlag bool
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -65,10 +72,12 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides, args []string) er
 	}
 
 	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4), on the
-	// store and tmux command o selects (b.wb7).
-	mcpClient, err := pkgapi.New(mcpClientOptions(o))
+	// store and tmux command o selects (b.wb7), and name a failed open as
+	// clisetup.Open does (b.uii).
+	mcpClient, err := newClient(mcpClientOptions(o))
 	if err != nil {
-		return writeApiErrorAndDispatch("ErrStoreOpen", err.Error())
+		oe := clisetup.NewOpenError(err)
+		return writeApiErrorAndDispatch(oe.Name, oe.Error())
 	}
 	defer mcpClient.Close()
 

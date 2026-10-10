@@ -24,18 +24,26 @@ func TestVersionHandlerClientErrorIsClassified(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	stdout, stderr, err := captureStdio(t, func() error { return versionHandler(client, nil) })
+	env := captureEnvelope(t, func() error { return versionHandler(client, nil) })
+	if want := (errorEnvelope{ErrName: "ErrInternal", ErrDescription: pkgapi.ErrClientClosed.Error()}); env != want {
+		t.Errorf("envelope = %+v; want %+v", env, want)
+	}
+}
+
+// captureEnvelope runs fn under captureStdio and returns the one error envelope
+// it wrote to stderr; fn must return errDispatch and write nothing to stdout.
+func captureEnvelope(t *testing.T, fn func() error) errorEnvelope {
+	t.Helper()
+	stdout, stderr, err := captureStdio(t, fn)
 	if !errors.Is(err, errDispatch) || stdout != "" {
-		t.Fatalf("versionHandler = %v, stdout = %q; want errDispatch and empty stdout (stderr=%q)", err, stdout, stderr)
+		t.Fatalf("handler = %v, stdout = %q; want errDispatch and empty stdout (stderr=%q)", err, stdout, stderr)
 	}
 	var env errorEnvelope
 	dec := json.NewDecoder(strings.NewReader(stderr))
 	if derr := dec.Decode(&env); derr != nil || dec.More() {
 		t.Fatalf("stderr = %q; want exactly one JSON error envelope (decode: %v)", stderr, derr)
 	}
-	if want := (errorEnvelope{ErrName: "ErrInternal", ErrDescription: pkgapi.ErrClientClosed.Error()}); env != want {
-		t.Errorf("envelope = %+v; want %+v", env, want)
-	}
+	return env
 }
 
 // captureStdio runs fn with os.Stdout and os.Stderr sent to files and returns

@@ -65,7 +65,8 @@ type Overrides struct {
 	TmuxCommand string
 }
 
-// OpenError is why Open could not open the Client. Name is the err_name of
+// OpenError is why a command binary could not open a Client: Open's, or
+// agent-director serve's MCP Client (NewOpenError). Name is the err_name of
 // the error envelope the binary prints, and Err the cause, whose text is the
 // envelope's err_description.
 type OpenError struct {
@@ -106,11 +107,29 @@ func APIOptions(o Overrides) pkgapi.Options {
 	}
 }
 
+// NewOpenError returns the *OpenError of err, a non-nil error from
+// pkg/api.New: named ErrSchemaMismatch or ErrSchemaMigrationRequired when the
+// store's schema refused the open, and ErrStoreOpen otherwise. Open names its
+// pkg/api.New failure with it, and agent-director serve the failure of its MCP
+// Client's pkg/api.New, so every Client a command binary opens names a failed
+// open alike (b.uii).
+func NewOpenError(err error) *OpenError {
+	name := errStoreOpen
+	switch {
+	case errors.Is(err, store.ErrSchemaMismatch):
+		name = errSchemaMismatch
+	case errors.Is(err, store.ErrSchemaMigrationRequired):
+		name = errSchemaMigrationRequired
+	}
+	return &OpenError{Name: name, Err: err}
+}
+
 // Open constructs the pkg/api.Client every store-backed CLI verb uses, from
 // APIOptions(o) with the recovery logger, and returns the loaded config with
 // it. On failure the error is an *OpenError: ErrConfigMalformed when the
-// config cannot be loaded, ErrSchemaMismatch or ErrSchemaMigrationRequired
-// when the store's schema refuses the open, and ErrStoreOpen otherwise.
+// config cannot be loaded, and otherwise NewOpenError's name for the
+// pkg/api.New failure (ErrSchemaMismatch or ErrSchemaMigrationRequired when
+// the store's schema refuses the open, ErrStoreOpen otherwise).
 //
 // Design pins:
 //   - Pin 1 (CreateIfMissing=true): the CLI is the one place that opts in to
@@ -138,14 +157,7 @@ func Open(o Overrides) (*pkgapi.Client, config.Config, error) {
 	apiOpts.Logger = NewRecoveryLogger(cfg) // Pin 3
 	client, err := pkgapi.New(apiOpts)
 	if err != nil {
-		name := errStoreOpen
-		switch {
-		case errors.Is(err, store.ErrSchemaMismatch):
-			name = errSchemaMismatch
-		case errors.Is(err, store.ErrSchemaMigrationRequired):
-			name = errSchemaMigrationRequired
-		}
-		return nil, config.Config{}, &OpenError{Name: name, Err: err}
+		return nil, config.Config{}, NewOpenError(err)
 	}
 	return client, cfg, nil
 }

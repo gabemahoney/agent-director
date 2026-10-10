@@ -22,8 +22,8 @@ import (
 var envelopeNameExclusions = map[string]string{"ErrUnknownTool": "internal/mcp"}
 
 // extraNameCarriers maps struct types beyond those with a json:"err_name"
-// field to the field a binary writes as an envelope's err_name: setupClient
-// and runOnClient write a clisetup.OpenError's Name.
+// field to the field a binary writes as an envelope's err_name: setupClient,
+// runOnClient and serveHandlerWith write a clisetup.OpenError's Name.
 var extraNameCarriers = map[string]string{"OpenError": "Name"}
 
 // TestEnvelopeErrNamesCatalogued fails when cmd/ or internal/ hands an error

@@ -96,7 +96,9 @@ var Catalog = []Entry{
 	// ErrSchemaMigrationRequired come from no verb handler: clisetup.Open
 	// names them when the CLI cannot open its Client, before any verb runs
 	// (the config cannot be loaded; the store cannot be opened; the store's
-	// schema is newer than the binary or needs a migration). They are
+	// schema is newer than the binary or needs a migration), and
+	// clisetup.NewOpenError names the last three alike when serve cannot open
+	// its MCP Client (b.uii). They are
 	// catalogued so the surfaces built from this Catalog, the TS client's
 	// error classes among them, know them (b.vma, b.cm7). A
 	// clisetup.OpenError carries the sentinel its Name names (OpenError.Is).

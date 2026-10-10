@@ -105,7 +105,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"resume":         func(args []string) error { return resumeHandlerWith(client, args) },
 		"find-missing":   func(args []string) error { return findMissingHandlerWith(client, args) },
 		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
-		"serve":          func(args []string) error { return serveHandlerWith(cfg, o, args) },
+		"serve":          func(args []string) error { return serveHandlerWith(cfg, o, pkgapi.New, args) },
 		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
 	}
 }
