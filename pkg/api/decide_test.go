@@ -420,7 +420,7 @@ func TestDecideFallenBackWriteBetweenReads(t *testing.T) {
 // call passes a reason literal other than "" or a DecisionReason* value.
 func TestDecisionReasonOnlyCanonicalValues(t *testing.T) {
 	t.Parallel()
-	canonical := map[string]bool{`""`: true, `"operator"`: true, `"timeout"`: true, `"find_missing"`: true}
+	canonical := map[string]bool{`""`: true, `"operator"`: true, `"timeout"`: true, `"find_missing"`: true, `"ended"`: true}
 	skip := map[string]bool{"apitest": true, "testsupport": true, "testdata": true, "test": true, "vendor": true}
 	root := filepath.Join("..", "..")
 	for _, dir := range []string{"internal", "pkg", "cmd"} {

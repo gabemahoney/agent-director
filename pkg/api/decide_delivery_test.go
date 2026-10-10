@@ -98,7 +98,9 @@ func TestDecideReportsDelivery(t *testing.T) {
 // with ErrRelayFallenBack at once (no wait, long before its relay window ends),
 // nothing is recorded as its decision, and the verdict is kept as
 // attempted_decision / attempted_at with hook_gone_at, which a later refused
-// decide keeps while replacing the attempt.
+// decide keeps while replacing the attempt. The refusal advises a pane answer
+// or record-pane-answer and carries the request's facts as err_details, read
+// after that write (step 2b).
 func TestDecideRefusesFallenBackAtOnce(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -121,7 +123,11 @@ func TestDecideRefusesFallenBackAtOnce(t *testing.T) {
 			_, waited, err := e.decideWith(t, e.s, "allow", nil, nil)
 
 			assertOneSentinel(t, err, api.ErrRelayFallenBack)
-			adviceAssertPhrase(t, err, "only an answer at the pane can close it")
+			adviceAssertPhrase(t, err, advRelayFallenBack)
+			d := assertFallenBackDetails(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
+			if d["attempted_decision"] != "allow" || d["hook_gone_at"] == nil || d["tool_use_id"] != "toolu_01" || len(d["open_requests"].([]any)) != 0 {
+				t.Errorf("err_details = %v; want the attempt (allow), hook_gone_at and tool_use_id recorded, no other open request", d)
+			}
 			if waited != 0 {
 				t.Errorf("decide waited %v; want the refusal at once", waited)
 			}

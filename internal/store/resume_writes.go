@@ -1,6 +1,10 @@
 package store
 
-import "fmt"
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
 
 // ResumePrior holds what resume's move to pending clears, exactly as stored,
 // so a failed launch's restore writes it back byte for byte (SR-8.5, SR-5.3).
@@ -46,28 +50,43 @@ const moveToPendingSQL = `UPDATE spawns
   WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // MoveToPending is resume's move of a finished row to pending, the write that
-// begins its launch (SR-8.3). It is one conditional statement (SR-5.6) that
-// applies only while the row is ended or missing and its row snapshot equals
-// examined, compared on the values exactly as stored (SR-5.3). In that
-// statement it sets state pending; clears pid, proc_starttime, ended_at,
-// liveness_unverified_since, liveness_note and the six server and pane
-// identity columns; sets launch_started_at to launchStartedAtMillis (the
-// caller's clock; the store reads none), launch_token to token, tmux_socket to
-// socket, parent_id to parentID and the three launch-owner columns to owner
-// (the resume records itself as the owner of the launch it begins, b.kdf),
-// each zero value written as NULL; and advances row_version by one. Every
-// other column
+// begins its launch (SR-8.3), with a backstop close of the row's open
+// permission requests (b.146 rule 12) in the same transaction, both or
+// neither. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
+// waiting the store's busy timeout for the write lock).
+//
+// The move is one conditional statement (SR-5.6) that applies only while the
+// row is ended or missing and its row snapshot equals examined, compared on
+// the values exactly as stored (SR-5.3). In that statement it sets state
+// pending; clears pid, proc_starttime, ended_at, liveness_unverified_since,
+// liveness_note and the six server and pane identity columns; sets
+// launch_started_at to launchStartedAtMillis (the caller's clock; the store
+// reads none), launch_token to token, tmux_socket to socket, parent_id to
+// parentID and the three launch-owner columns to owner (the resume records
+// itself as the owner of the launch it begins, b.kdf), each zero value
+// written as NULL; and advances row_version by one. Every other column
 // (claude_session_id, jsonl_path, life_number, no_pre_trust, started_at,
-// last_seen_at and the request fields) is unchanged, session_history and
-// permission_requests are not touched, and no trail event is emitted.
+// last_seen_at and the request fields) is unchanged, and session_history is
+// not touched.
+//
+// The close (closeOrphanedRequests, as the ended transition's): every request
+// of the row that still awaits an answer gets closed_at, an undecided one
+// also denied with decision_reason ended, a decided one whose relay hook has
+// not acked keeps its verdict. The ended transition and find-missing's mark
+// already close a finished row's requests, so this finds one only on a row
+// that finished before they did (an earlier release, or any path that missed
+// them): no request of the row's earlier launch awaits an answer in the life
+// the resume begins. After the commit it emits one ad.row_mutation.committed
+// (writer resume, decision_reason ended) per request it denied, in
+// request-id order, fail-open; nothing else.
 //
 // It returns CondApplied with movedVersion, the version the write produced
 // (examined.RowVersion + 1), which the restore's condition takes; CondChanged
 // when the row exists but is live, pending or differs from examined; CondAbsent
 // when no row has the id. Neither writes anything and both return movedVersion
 // 0. A store failure, a foreign-key failure on a parentID that names no row
-// included, returns a wrapped error with a zero CondResult and writes nothing
-// (SR-5.8).
+// included, returns a wrapped error with a zero CondResult and writes nothing,
+// the row and its requests as they were (SR-5.8).
 func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
 	args := []any{
@@ -80,21 +99,43 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 	args = append(args, instanceID)
 	args = append(args, finishedStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	r, err := s.db.Exec(moveToPendingSQL, args...)
+	var (
+		moved  bool
+		closed []closedRequest
+	)
+	err = s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		r, err := conn.ExecContext(ctx, moveToPendingSQL, args...)
+		if err != nil {
+			return err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		moved = true
+		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded)
+		if err != nil {
+			return fmt.Errorf("close permission requests: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return 0, 0, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	if !moved {
+		// Nothing was written: the guarded statement matched no row.
+		res, err = s.condNotApplied(instanceID, errPrefix)
+		return res, 0, err
 	}
-	if n > 0 {
-		// The condition pinned row_version to examined.RowVersion and the
-		// statement advanced it by exactly one.
-		return CondApplied, examined.RowVersion + 1, nil
+	for _, c := range closed {
+		c.emitDeny(instanceID, DecisionReasonEnded, WriterProcessResume)
 	}
-	res, err = s.condNotApplied(instanceID, errPrefix)
-	return res, 0, err
+	// The condition pinned row_version to examined.RowVersion and the
+	// statement advanced it by exactly one.
+	return CondApplied, examined.RowVersion + 1, nil
 }
 
 // restoreAfterFailedResumeSQL is RestoreAfterFailedResume's one statement

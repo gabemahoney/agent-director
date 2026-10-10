@@ -44,14 +44,16 @@ import (
 type apiErrEnvelope struct {
 	ErrName        string `json:"err_name"`
 	ErrDescription string `json:"err_description"`
+	ErrDetails     any    `json:"err_details,omitempty"`
 }
 
 // marshalErrEnvelope classifies err via the errnames catalog and returns
-// {"err_name":…,"err_description":…} bytes.
+// {"err_name":…,"err_description":…} bytes, with the error's err_details
+// (api.ErrDetails; b.146 rule 15) when it carries them.
 func marshalErrEnvelope(err error) []byte {
 	name, desc := errnames.Classify(err)
 	desc = errnames.TrimNamePrefix(name, desc)
-	b, _ := json.Marshal(apiErrEnvelope{ErrName: name, ErrDescription: desc})
+	b, _ := json.Marshal(apiErrEnvelope{ErrName: name, ErrDescription: desc, ErrDetails: api.ErrDetails(err)})
 	return b
 }
 
@@ -66,21 +68,22 @@ type clientDispatchFn func(c *api.Client, params map[string]any) ([]byte, bool)
 // The init() guard below ensures this table is complete with respect to
 // manifest.CallableVerbs() at startup; missing entries cause a panic.
 var dispatch = map[string]clientDispatchFn{
-	"spawn":          dispatchSpawn,
-	"status":         dispatchStatus,
-	"get":            dispatchGet,
-	"send-keys":      dispatchSendKeys,
-	"read-pane":      dispatchReadPane,
-	"kill":           dispatchKill,
-	"decide":         dispatchDecide,
-	"get-permission": dispatchGetPermission,
-	"resume":         dispatchResume,
-	"find-missing":   dispatchFindMissing,
-	"expire":         dispatchExpire,
-	"make-template":  dispatchMakeTemplate,
-	"list":           dispatchList,
-	"pause":          dispatchPause,
-	"version":        dispatchVersion,
+	"spawn":              dispatchSpawn,
+	"status":             dispatchStatus,
+	"get":                dispatchGet,
+	"send-keys":          dispatchSendKeys,
+	"read-pane":          dispatchReadPane,
+	"kill":               dispatchKill,
+	"decide":             dispatchDecide,
+	"get-permission":     dispatchGetPermission,
+	"record-pane-answer": dispatchRecordPaneAnswer,
+	"resume":             dispatchResume,
+	"find-missing":       dispatchFindMissing,
+	"expire":             dispatchExpire,
+	"make-template":      dispatchMakeTemplate,
+	"list":               dispatchList,
+	"pause":              dispatchPause,
+	"version":            dispatchVersion,
 }
 
 func init() {
@@ -413,6 +416,18 @@ func dispatchGetPermission(c *api.Client, params map[string]any) ([]byte, bool) 
 		return marshalErrEnvelope(err), true
 	}
 	res, err := c.GetPermission(p)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchRecordPaneAnswer(c *api.Client, params map[string]any) ([]byte, bool) {
+	var p api.RecordPaneAnswerParams
+	if err := remarshal(params, &p); err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	res, err := c.RecordPaneAnswer(p)
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

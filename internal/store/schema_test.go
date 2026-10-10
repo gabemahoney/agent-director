@@ -375,7 +375,7 @@ func TestMigrationStepReentry(t *testing.T) {
 		{"v6→v7 run twice", 6, nil, 2, ""},
 		{"v6→v7 after hook_pid", 6, preV7("permission_requests.hook_pid"), 1, ""},
 		{"v6→v7 after pane_answer and idle_since", 6, preV7("permission_requests.pane_answer", "spawns.idle_since"), 1, ""},
-		{"v6→v7 after all seventeen", 6, preV7(allV7...), 1, ""},
+		{"v6→v7 after all eighteen", 6, preV7(allV7...), 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

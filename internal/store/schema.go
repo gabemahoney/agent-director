@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     pane_sender_pid       INTEGER,
     pane_sender_starttime TEXT,
     pane_sender_pidns     TEXT,
+    pane_intent_at      INTEGER,
     closed_at           INTEGER,
     UNIQUE(claude_instance_id, request_token)
 );
@@ -595,14 +596,19 @@ func migrateV5toV6(db *sql.DB) error {
 //   - hook_gone_at: when a reader first found the hook gone;
 //   - attempted_decision, attempted_at: a refused decide's verdict, shown and
 //     never acted on;
-//   - pane_answer ('none' until a pane answer is recorded), pane_as and the
+//   - pane_answer ('none' until a pane answer is recorded), pane_as, the
 //     pane answer's sender identity (pane_sender_pid, pane_sender_starttime,
-//     pane_sender_pidns), written by step 2b's pane answers;
-//   - closed_at: when find-missing's mark closed the request (b.146 rule 12),
-//     a request that still awaited an answer when its Spawn was marked
-//     missing, decided or not (milliseconds since the epoch). A closed
-//     request no longer awaits an answer. NULL on every request recorded
-//     before v7 and on every request no mark closed.
+//     pane_sender_pidns) and pane_intent_at, when its intent was written
+//     (milliseconds since the epoch; NULL once the sender released it),
+//     written by step 2b's pane answers (send-keys --request-token,
+//     record-pane-answer, and the PostToolUse close);
+//   - closed_at: when a close of its Spawn's requests closed the request
+//     (b.146 rule 12): find-missing's mark of the Spawn missing, the terminal
+//     SessionEnd's move to ended, or resume's move of a finished Spawn to
+//     pending as a backstop; a request that still awaited an answer then,
+//     decided or not, one recorded before v7 included (milliseconds since the
+//     epoch). A closed request no longer awaits an answer. NULL on every
+//     request no close closed.
 //
 // On spawns (b.146 problem 3): idle_since, the time the main agent's
 // idle-prompt Notification last landed, NULLed by any later hook.
@@ -622,6 +628,7 @@ var v7Columns = []struct{ table, name, ddl string }{
 	{"permission_requests", "pane_sender_pid", "ALTER TABLE permission_requests ADD COLUMN pane_sender_pid INTEGER"},
 	{"permission_requests", "pane_sender_starttime", "ALTER TABLE permission_requests ADD COLUMN pane_sender_starttime TEXT"},
 	{"permission_requests", "pane_sender_pidns", "ALTER TABLE permission_requests ADD COLUMN pane_sender_pidns TEXT"},
+	{"permission_requests", "pane_intent_at", "ALTER TABLE permission_requests ADD COLUMN pane_intent_at INTEGER"},
 	{"permission_requests", "closed_at", "ALTER TABLE permission_requests ADD COLUMN closed_at INTEGER"},
 	{"spawns", "idle_since", "ALTER TABLE spawns ADD COLUMN idle_since TEXT"},
 }

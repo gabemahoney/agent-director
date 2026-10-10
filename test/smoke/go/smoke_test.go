@@ -141,6 +141,19 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		// The process-checker fake is not used: the Client built below
 		// reads start times with the production reader.
 		rec, _ = tmuxfix.NewRecorderForReadPane(t, storePath, spec.SeedID, smokePaneText)
+	case seedFallenBack:
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "on", "", false); err != nil {
+			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)
+		}
+		rec, _ = tmuxfix.NewRecorderForReadPane(t, storePath, spec.SeedID, smokePaneText)
+		storefix.SeedOpenPermissionRequests(t, st, spec.SeedID, []string{storefix.TestRequestTokenA})
+		pr, err := st.GetPermissionRequest(spec.SeedID, storefix.TestRequestTokenA)
+		if err == nil {
+			err = apitest.AgePermissionRequest(storePath, pr.RequestID, 48*time.Hour, time.Minute)
+		}
+		if err != nil {
+			t.Fatalf("runVerbSubtest: seed a fallen-back request on %q: %v", spec.SeedID, err)
+		}
 	case seedPause:
 		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "waiting", "", "", "", false); err != nil {
 			t.Fatalf("runVerbSubtest: seed waiting %q: %v", spec.SeedID, err)

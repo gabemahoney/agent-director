@@ -277,19 +277,22 @@ column is already there. Any probe or `ALTER` failure rolls the whole hop
 back: `user_version` stays 5 and none of the three columns exists.
 `migrateV6toV7` (b.146 step 2) is an additive `ADD COLUMN` hop across two
 tables, driven by one list, `v7Columns` (`schema.go`), that holds each
-column's table, name and exact `schemaDDL` text: sixteen `ALTER TABLE
+column's table, name and exact `schemaDDL` text: seventeen `ALTER TABLE
 permission_requests ADD COLUMN` (the relay hook's `hook_pid`,
 `hook_starttime` and `hook_pidns`; `tool_use_id`, `agent_id`,
 `delivered_at`, `settled_at`, `hook_gone_at`, `attempted_decision`,
-`attempted_at`; `pane_answer TEXT NOT NULL DEFAULT 'none'`, `pane_as` and
-the pane-answer sender's `pane_sender_pid`, `pane_sender_starttime` and
-`pane_sender_pidns`; then `closed_at` INTEGER, when find-missing's mark
-closed the request, in milliseconds since the epoch), appended after
-`created_at`, then `ALTER TABLE spawns ADD COLUMN idle_since`, appended
-after `launch_owner_pidns`. Each is guarded by a `pragma_table_info` probe
-of its own table and skipped when the column is already there. Any probe or
-`ALTER` failure rolls the whole hop back: `user_version` stays 6 and none of
-the seventeen columns exists.)
+`attempted_at`; `pane_answer TEXT NOT NULL DEFAULT 'none'`, `pane_as`, the
+pane-answer sender's `pane_sender_pid`, `pane_sender_starttime` and
+`pane_sender_pidns`, and `pane_intent_at` INTEGER, when a pane answer's
+intent was written; then `closed_at` INTEGER, when a close of the
+request's spawn closed it (find-missing's mark, the terminal SessionEnd's
+move to `ended`, or resume's move to `pending`); the instants in
+milliseconds since the epoch), appended after `created_at`, then `ALTER
+TABLE spawns ADD COLUMN idle_since`, appended after `launch_owner_pidns`.
+Each is guarded by a `pragma_table_info` probe of its own table and skipped
+when the column is already there. Any probe or `ALTER` failure rolls the
+whole hop back: `user_version` stays 6 and none of the eighteen columns
+exists.)
 
 **Phase 3 — data backfill/transform.** `UPDATE`/`INSERT … SELECT` to populate
 new columns or reshape rows, if the migration keeps data. Not every hop needs
@@ -320,10 +323,33 @@ existing permission request NULL in each new column but `pane_answer`, which
 takes its default `none`, and every row NULL `idle_since`. A request with no
 `settled_at` is one recorded before v7, so readers and `decide` judge it as
 before the upgrade, by its `created_at` and the relay window. A NULL
-`closed_at` means no mark closed the request: an existing request that a
+`closed_at` means no close closed the request: an existing request that a
 pre-v7 mark denied keeps its `find_missing` deny, which already makes it no
-longer await an answer, so nothing needs backfilling. No existing value is
-rewritten, and `store_meta` and its store id are kept.
+longer await an answer, so nothing needs backfilling. An existing request
+still undecided on a row that is already `ended` is not backfilled either:
+resume's move to `pending` closes it (denied, `decision_reason` `ended`)
+before the row's next launch. No existing value is rewritten, and
+`store_meta` and its store id are kept.
+
+**What the upgrade changes for an existing request.** An undecided request
+recorded before v7 is judged by time, and from its relay window plus 2 s on
+it reads `fallen_back`. From v7 on, `send-keys` refuses a plain call (no
+`request_token`) with `ErrRelayFallenBack` while any request of the agent
+is fallen back with no pane answer recorded, in every live state of the
+row. So a request left open before the upgrade, typically one answered at
+the pane after its relay hook was killed, refuses plain `send-keys` to its
+agent once the store is migrated, until it is closed: with
+`record-pane-answer --request-token <T> --as unknown --expect-pane-sha256
+<H>` (H the `pane_sha256` of a `read-pane` a person or an LLM looked at),
+with a pane answer, or with its row (the agent ends, or `find-missing`
+marks it `missing`). The refusal's `err_details` name the request
+(`request_token`) and the agent's other open requests. `record-pane-answer`
+is the way out: `decide` records no verdict on such a request, and once
+the agent has left `check_permission` or recorded a later request it
+returns `ErrNoOpenPermissionRequest` for it ("do not answer it at the
+pane"), while plain `send-keys` is still refused with `ErrRelayFallenBack`
+on its account. Its PostToolUse does not close it either: no `tool_use_id`
+was recorded for it.
 
 Session history belongs to a life: each `session_history` entry carries the
 life of the id that was current when its session ran, and after the v5 hop
@@ -615,23 +641,24 @@ ALTER TABLE permission_requests DROP COLUMN pane_as;
 ALTER TABLE permission_requests DROP COLUMN pane_sender_pid;
 ALTER TABLE permission_requests DROP COLUMN pane_sender_starttime;
 ALTER TABLE permission_requests DROP COLUMN pane_sender_pidns;
+ALTER TABLE permission_requests DROP COLUMN pane_intent_at;
 ALTER TABLE permission_requests DROP COLUMN closed_at;
 ALTER TABLE spawns DROP COLUMN idle_since;
 PRAGMA user_version = 6;
 COMMIT;
 ```
 
-That is exactly what `migrateV6toV7` adds: sixteen columns on
-`permission_requests` and `idle_since` on `spawns`. Drop all seventeen and no
+That is exactly what `migrateV6toV7` adds: seventeen columns on
+`permission_requests` and `idle_since` on `spawns`. Drop all eighteen and no
 other column or table; `store_meta` and its store id stay, so labels written
 before the rollback still read as this store's. `PRAGMA user_version = 6` is
 the last statement before `COMMIT`. `PRAGMA user_version;` should then print
 `6`, and `.schema permission_requests` and `.schema spawns` should show none
-of the seventeen columns. A v6 binary then opens the store.
+of the eighteen columns. A v6 binary then opens the store.
 
 SQLite refuses `DROP COLUMN` on a column that is a PRIMARY KEY, has a UNIQUE
 constraint, is indexed, appears in a CHECK or foreign-key constraint, or is
-used by a generated column, trigger or view. None of the seventeen is any of
+used by a generated column, trigger or view. None of the eighteen is any of
 these in the v7 DDL: each is a plain column, nullable or, for `pane_answer`,
 `NOT NULL DEFAULT 'none'`. The `permission_requests` UNIQUE constraint and
 its two indexes cover only `claude_instance_id`, `request_token`,
@@ -648,19 +675,26 @@ The recipe deletes no row. What is lost is the values in the dropped columns:
 each permission request's relay hook identity, its ack (`delivered_at`) and
 settle instant, the facts readers and `decide` recorded on it
 (`hook_gone_at`, `attempted_decision`, `attempted_at`), its `tool_use_id` and
-`agent_id`, when find-missing's mark closed it (`closed_at`), and each row's
-`idle_since`. A v6 binary judges every request by its `created_at` and the
-relay window, as it judged its own: a request with a recorded `decision`
-reads as decided, one without as open, fallen back once its relay window has
-ended. A request the mark closed always has a `decision` (the mark denies an
-undecided one), so it reads as decided. With every agent stopped (step 1) no
-relay hook is left to deliver one.
+`agent_id`, its pane answer (`pane_answer`, `pane_as`, the sender and
+`pane_intent_at`), when a close of its spawn closed it (`closed_at`), and
+each row's `idle_since`. A v6 binary judges every request by its
+`created_at` and the relay window, as it judged its own: a request with a
+recorded `decision` reads as decided, one without as open, fallen back once
+its relay window has ended. A request a close closed always has a
+`decision` (a close denies an undecided one), and so does one closed at the
+pane with a verdict (`sent`, `tool_ran`, or `outside` claiming `allow` or
+`deny`), so each reads as decided. A request recorded answered outside
+agent-director with the claim `unknown`, or left with a pane answer's
+`intent`, has no `decision` and reads as open again. With every agent
+stopped (step 1) no relay hook is left to deliver one.
 
 **If the store is later migrated to v7 again**, the hop gives every request
 NULL in the new columns and `pane_answer` `none`, and every row NULL
 `idle_since` (no phase 3, §2): every request reads as one recorded before
-schema v7 and falls back by its `created_at` and the relay window. The store
-id is kept, so no label changes owner.
+schema v7 and falls back by its `created_at` and the relay window, and an
+undecided one refuses plain `send-keys` until it is closed (see "What the
+upgrade changes for an existing request" in §2). The store id is kept, so
+no label changes owner.
 
 #### v6 → v5 (reverses `migrateV5toV6`)
 

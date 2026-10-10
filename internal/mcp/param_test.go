@@ -57,6 +57,10 @@ func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]a
 			args[p.Name] = paramToken
 		case "decision":
 			args[p.Name] = "allow"
+		case "as":
+			args[p.Name] = "unknown"
+		case "expect_pane_sha256":
+			args[p.Name] = strings.Repeat("0", 64)
 		case "text":
 			args[p.Name] = "hi"
 		case "name":

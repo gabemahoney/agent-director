@@ -141,8 +141,33 @@ func (e *killEnv) sendKeys(p api.SendKeysParams) (api.SendKeysResult, error) {
 
 // sendKeysAt is sendKeys with the relay window and guard clock given, for a
 // relay guard judged against permission requests stored at wall-clock time.
+// The pid namespace reader is unset, so every relay hook is judged "can't
+// tell" (by its confirm_by), as before relay hooks were judged by process.
 func (e *killEnv) sendKeysAt(window time.Duration, now time.Time, p api.SendKeysParams) (api.SendKeysResult, error) {
-	return api.SendKeys(e.store, e.rec, e.pc, window, now, p)
+	return api.SendKeys(e.store, e.rec, api.SendKeysEnv{
+		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: window},
+	}, p)
+}
+
+// RecordHookGone delegates.
+func (w *killStore) RecordHookGone(at time.Time, maxWait time.Duration, ids ...int64) (map[int64]time.Time, error) {
+	return w.st.RecordHookGone(at, maxWait, ids...)
+}
+
+// RecordPaneIntent delegates.
+func (w *killStore) RecordPaneIntent(id, token, as string, sender api.ProcessIdentity, now func() time.Time, maxWait time.Duration,
+	check api.PaneCheck) (api.PaneIntent, bool, error) {
+	return w.st.RecordPaneIntent(id, token, as, sender, now, maxWait, check)
+}
+
+// RecordPaneSent delegates.
+func (w *killStore) RecordPaneSent(id, token string, intent api.PaneIntent, maxWait time.Duration) (bool, error) {
+	return w.st.RecordPaneSent(id, token, intent, maxWait)
+}
+
+// ReleasePaneIntent delegates.
+func (w *killStore) ReleasePaneIntent(id, token string, intent api.PaneIntent, maxWait time.Duration) (bool, error) {
+	return w.st.ReleasePaneIntent(id, token, intent, maxWait)
 }
 
 // sendKeysClient runs Client.SendKeys on a new e.client, for the cases that

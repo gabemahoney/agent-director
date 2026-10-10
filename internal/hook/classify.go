@@ -67,6 +67,9 @@ type payload struct {
 	// NotificationType is a Notification's kind; see
 	// NotificationTypeIdlePrompt.
 	NotificationType string `json:"notification_type"`
+	// ToolUseID is a tool event's tool_use_id (PreToolUse, PostToolUse,
+	// PostToolUseFailure, PermissionRequest).
+	ToolUseID string `json:"tool_use_id"`
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -154,7 +157,26 @@ type ClassifyResult struct {
 	// agent's own process (SR-22.9; WD 2026-09-30b). agent_type alone (a
 	// session started with --agent) does not mark one and is not read.
 	AgentID string
+
+	// ToolUseID is the payload's tool_use_id verbatim; empty when it carried
+	// none. A PostToolUse or PostToolUseFailure carrying it closes the
+	// fallen-back permission request with the same tool_use_id (ToolRan;
+	// b.146 rule 13).
+	ToolUseID string
 }
+
+// ToolRan reports whether the result is a PostToolUse or PostToolUseFailure
+// carrying a tool_use_id: Claude Code ran that tool use, so a permission
+// dialog for it was answered allow (b.146 rule 13).
+func (r ClassifyResult) ToolRan() bool {
+	return r.ToolUseID != "" && (r.EventName == EventNamePostToolUse || r.EventName == EventNamePostToolUseFailure)
+}
+
+// The tool events whose hook means the tool ran (b.146 rule 13).
+const (
+	EventNamePostToolUse        = "PostToolUse"
+	EventNamePostToolUseFailure = "PostToolUseFailure"
+)
 
 // SubagentLifecycle reports whether the result is a SessionStart or
 // SessionEnd from a subagent or an in-process teammate (a non-empty
@@ -204,6 +226,7 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		SessionID:      extractSessionID(p.TranscriptPath),
 		TranscriptPath: p.TranscriptPath,
 		AgentID:        p.AgentID,
+		ToolUseID:      p.ToolUseID,
 	}
 
 	switch res.EventName {
@@ -217,7 +240,9 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		} else {
 			res.NewState = store.StateWorking
 		}
-	case "PostToolUse":
+	case EventNamePostToolUse, EventNamePostToolUseFailure:
+		// The tool ran (and, for PostToolUseFailure, failed): the turn goes
+		// on, as after PostToolUse.
 		res.NewState = store.StateWorking
 	case "Stop":
 		res.NewState = store.StateWaiting

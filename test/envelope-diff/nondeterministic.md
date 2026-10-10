@@ -79,7 +79,8 @@ Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs who
 | `list` | `.spawns[*].permission_requests[*].attempted_at`, `.spawns[*].permission_requests[*].hook_gone_at` | each request's call-time instants, as for `decide`; every other value is fixture-derived |
 | `make-template` | `.path` | output path resolved at call time |
 | `pause` | — | all values fixture-derived |
-| `read-pane` | — | all values fixture-derived |
+| `read-pane` | — | all values fixture-derived (`pane_sha256` is the hash of the fixture's pane text) |
+| `record-pane-answer` | — | all values fixture-derived (the request token and the caller's claim) |
 | `resume` | — | all values fixture-derived |
 | `send-keys` | — | all values fixture-derived |
 | `status` | — | all values fixture-derived |

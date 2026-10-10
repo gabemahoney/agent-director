@@ -77,6 +77,11 @@ func matrixCases() map[string]matrixCase {
 		// not-found and proves the JSON shape decoded cleanly).
 		"get-permission": {args: `{"request_token":"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}`},
 
+		// record-pane-answer: token-only lookup, as get-permission; its as and
+		// hash must decode too, or the verb refuses with ErrInvalidFlags first.
+		"record-pane-answer": {args: `{"request_token":"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa","as":"unknown","expect_pane_sha256":"` +
+			strings.Repeat("0", 64) + `","n_lines":3}`},
+
 		"list":         {args: `{"limit":10}`},
 		"find-missing": {args: `{}`},
 		"expire":       {args: `{"older_than":"7d"}`},

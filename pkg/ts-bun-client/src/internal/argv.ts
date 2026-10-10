@@ -33,6 +33,7 @@ import type {
   KillParams,
   DecideParams,
   GetPermissionParams,
+  RecordPaneAnswerParams,
   ResumeParams,
   ExpireParams,
   MakeTemplateParams,
@@ -128,6 +129,8 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildDecide(params as DecideParams);
     case "get-permission":
       return buildGetPermission(params as GetPermissionParams);
+    case "record-pane-answer":
+      return buildRecordPaneAnswer(params as RecordPaneAnswerParams);
     case "resume":
       return buildResume(params as ResumeParams);
     case "find-missing":
@@ -211,14 +214,15 @@ function buildGet(p: GetParams): string[] {
 }
 
 function buildSendKeys(p: SendKeysParams): string[] {
-  const f: string[] = [
-    "send-keys",
-    "--claude-instance-id",
-    p.claude_instance_id,
-    "--text",
-    p.text,
-  ];
+  const f: string[] = ["send-keys", "--claude-instance-id", p.claude_instance_id];
+  if (p.text !== undefined) f.push("--text", p.text);
   if (p.allow_pending === true) f.push("--allow-pending");
+  if (p.no_enter === true) f.push("--no-enter");
+  if (p.key !== undefined) f.push("--key", p.key);
+  if (p.expect_pane_sha256 !== undefined) f.push("--expect-pane-sha256", p.expect_pane_sha256);
+  if (p.n_lines !== undefined && p.n_lines > 0) f.push("--n-lines", String(p.n_lines));
+  if (p.request_token !== undefined) f.push("--request-token", p.request_token);
+  if (p.as !== undefined) f.push("--as", p.as);
   return f;
 }
 
@@ -251,6 +255,20 @@ function buildDecide(p: DecideParams): string[] {
 
 function buildGetPermission(p: GetPermissionParams): string[] {
   return ["get-permission", "--request-token", p.request_token];
+}
+
+function buildRecordPaneAnswer(p: RecordPaneAnswerParams): string[] {
+  const f: string[] = [
+    "record-pane-answer",
+    "--request-token",
+    p.request_token,
+    "--as",
+    p.as,
+    "--expect-pane-sha256",
+    p.expect_pane_sha256,
+  ];
+  if (p.n_lines !== undefined && p.n_lines > 0) f.push("--n-lines", String(p.n_lines));
+  return f;
 }
 
 function buildResume(p: ResumeParams): string[] {

@@ -273,6 +273,13 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return d.client.GetPermission(p)
 
+	case "record-pane-answer":
+		var p api.RecordPaneAnswerParams
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.RecordPaneAnswer(p)
+
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownTool, toolName)
 	}

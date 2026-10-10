@@ -15,7 +15,9 @@
 //	                     --no-launch-identity seeds a row from before the
 //	                     release, with no launch token, socket or identity).
 //	seed-parent-child    Link an existing child spawn to an existing parent.
-//	seed-permission-request  Insert an open permission request for a spawn.
+//	seed-permission-request  Insert an open permission request for a spawn
+//	                     (--created-ago-seconds backdates it,
+//	                     --hook-gone-ago-seconds records hook_gone_at).
 //	seed-template        Write a .toml template file.
 //	seed-empty-store     Initialise a fresh SQLite store.
 //	seed-row-session     Write a seeded row's own labelled session and pane
@@ -32,6 +34,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -198,9 +201,13 @@ func cmdSeedPermissionRequest(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		storePath = fs.String("store", "", "path to SQLite store file (required)")
-		spawnID   = fs.String("spawn-id", "", "claude_instance_id of an existing spawn (required)")
-		toolName  = fs.String("tool", "", "tool name for the permission request (required)")
+		storePath  = fs.String("store", "", "path to SQLite store file (required)")
+		spawnID    = fs.String("spawn-id", "", "claude_instance_id of an existing spawn (required)")
+		toolName   = fs.String("tool", "", "tool name for the permission request (required)")
+		createdAgo = fs.Int("created-ago-seconds", 0, "backdate the request's created_at this many seconds (0: now); "+
+			"past the relay window it has fallen back (b.146)")
+		goneAgo = fs.Int("hook-gone-ago-seconds", 0, "record hook_gone_at this many seconds ago (0: none), "+
+			"as a reader that found the relay hook gone then would")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -223,6 +230,11 @@ func cmdSeedPermissionRequest(args []string, stdout, stderr io.Writer) int {
 
 	seed, err := apitest.SeedPermissionRequest(*storePath, *spawnID, *toolName)
 	if err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	if err := apitest.AgePermissionRequest(*storePath, seed.RequestID, time.Duration(*createdAgo)*time.Second,
+		time.Duration(*goneAgo)*time.Second); err != nil {
 		printError(stderr, err)
 		return 1
 	}

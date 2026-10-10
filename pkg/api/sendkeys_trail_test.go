@@ -62,8 +62,14 @@ func sktUnusablePending(opts ...apitest.SpawnOption) sktSeed {
 	}
 }
 
+// sktHeld gives r one permission request in its relay window at the fixture
+// clock: its relay hook may still answer it (b.146 rule 7).
+func sktHeld(t *testing.T, e *killEnv, r *killRow) {
+	storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
+}
+
 // sktReleased gives r one permission request past its relay window at the
-// fixture clock, which Client.SendKeys judges the guard by.
+// fixture clock, which Client.SendKeys judges the guard by: it has fallen back.
 func sktReleased(t *testing.T, e *killEnv, r *killRow) {
 	storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
 	storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA,
@@ -112,9 +118,11 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 		{name: "pending with no launch start", seed: func(t *testing.T, e *killEnv) killRow {
 			return e.seedRow(t, e.pendingSpec(pendingOurs, apitest.WithNoLaunchStartedAt()))
 		}, allow: true, outcome: "ErrSpawnNotInteractive", rowState: "pending"},
-		{name: "relay held", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}),
+		{name: "relay held", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}, sktHeld),
 			outcome: "ErrSendKeysWhileRelayed", rowState: "check_permission", guard: "held"},
-		{name: "relay released", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}, sktReleased),
+		{name: "relay fallen back", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}, sktReleased),
+			outcome: "ErrRelayFallenBack", rowState: "check_permission", guard: "held"},
+		{name: "relay released", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}),
 			outcome: "ok", rowState: "check_permission", guard: "released"},
 		{name: "ours, live row", seed: sktRow(killRowSpec{}), outcome: "ok", rowState: "waiting"},
 		{name: "ours, pending row", seed: sktPending(pendingOurs), allow: true, outcome: "ok", rowState: "pending"},

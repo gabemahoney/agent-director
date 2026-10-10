@@ -2,9 +2,11 @@ package store_test
 
 // SR-5.2 versioning cases for the relay's spawns writes of b.146 step 2: the
 // relay hook's first write (rule 1), a move to working held by a request that
-// still awaits an answer, which clears idle_since, and the idle-prompt
+// still awaits an answer, which clears idle_since, the idle-prompt
 // Notification's move of a relay-on check_permission row whose request is
-// acked (problem 3), appended to row_version_test.go's applied table.
+// acked (problem 3), and the ended transition and resume's move closing a
+// request that still awaits an answer (rule 12), appended to
+// row_version_test.go's applied table.
 
 import (
 	"testing"
@@ -65,13 +67,47 @@ func idleSet(t *testing.T, before, after apitest.SpawnColumns) {
 	}
 }
 
+// rvAllClosed fails unless id has requests and the close of its requests
+// (b.146 rule 12) closed each one, denying it with reason ended.
+func rvAllClosed(t *testing.T, f *v5Store, id string) {
+	t.Helper()
+	reqs, err := f.s.PermissionRequestsForSpawn(id)
+	if err != nil || len(reqs) == 0 {
+		t.Fatalf("PermissionRequestsForSpawn = %d, %v; want the seeded request", len(reqs), err)
+	}
+	for _, pr := range reqs {
+		if !pr.Closed() || pr.Decision != "deny" || pr.DecisionReason != store.DecisionReasonEnded {
+			t.Errorf("request %s = decision %q (%q), closed %v; want deny (ended), closed", pr.RequestToken, pr.Decision, pr.DecisionReason, pr.Closed())
+		}
+	}
+}
+
 // rvRelayWrites are the relay's applied spawns writes: the first write moves
 // a working row to check_permission and clears idle_since and the launch
 // start; a held move to working writes only idle_since's clear; the idle
 // Notification moves a check_permission row whose request is acked to
-// waiting and sets idle_since.
+// waiting and sets idle_since; the ended transition and resume's move close
+// a request still awaiting an answer in the same one-version write.
 func rvRelayWrites() []rowVersionCase {
+	moved := rvMoveIdentity()
+	seedOpen := func(t *testing.T, f *v5Store, id string) { seedRequest(t, f, id) }
 	return []rowVersionCase{
+		{name: "ApplyHookTransitionResult/ended transition closing a request awaiting an answer", state: "check_permission",
+			opts: []apitest.SpawnOption{rvRelayOn}, setup: seedOpen, clears: true, wantState: "ended",
+			write: func(t *testing.T, f *v5Store, id string) {
+				out, applied, err := f.s.ApplyHookTransitionResult(id, rvAgentGate(t, f, id), "ended", false, "SessionEnd", "", false)
+				if err != nil || !applied.Applied || out != store.UpsertUpdated {
+					t.Fatalf("ended transition = %q, %+v, %v; want %q, applied", out, applied, err, store.UpsertUpdated)
+				}
+				rvAllClosed(t, f, id)
+			}},
+		{name: "MoveToPending/applied, ended row with a request an earlier release left open", state: "ended",
+			opts: []apitest.SpawnOption{rvRelayOn}, setup: seedOpen, wantState: "pending",
+			identity: &moved, writesToken: true, launchStart: rvMoveStart,
+			write: func(t *testing.T, f *v5Store, id string) {
+				rvMove(t, f, id, rvExamine(t, f, id), store.CondApplied)
+				rvAllClosed(t, f, id)
+			}},
 		{name: "InsertRelayRequest/applied, working row with idle_since", state: "working",
 			opts: []apitest.SpawnOption{rvRelayOn, apitest.WithIdleSince(rvIdleSince)}, clears: true, wantState: "check_permission",
 			write: rvInsertRelay, check: idleCleared},

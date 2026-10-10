@@ -10,8 +10,8 @@ import (
 // errorName names a verb error as errnames.Classify would, for the trail
 // fields that carry an err_name: ad.resume.restored's and
 // ad.spawn.reuse_restored's launch_error, ad.kill.called's outcome,
-// ad.send_keys.called's outcome and ad.launch.name_held's outcome (SR-6.4,
-// SR-7.4, SR-10.6, SR-14). pkg/api cannot import
+// ad.send_keys.called's outcome (b.146 step 2b's refusals included) and
+// ad.launch.name_held's outcome (SR-6.4, SR-7.4, SR-10.6, SR-14). pkg/api cannot import
 // pkg/api/errnames (errnames imports pkg/api for its sentinels), so this is
 // the one pkg/api mapping of those verbs' names; extend it here when one of
 // them gains a name. Every name it gives matches exactly one catalogued
@@ -40,6 +40,20 @@ func errorName(err error) string {
 		return "ErrSendKeysWhileRelayed"
 	case errors.Is(err, ErrSpawnNotResumable):
 		return "ErrSpawnNotResumable"
+	case errors.Is(err, ErrRelayFallenBack):
+		return "ErrRelayFallenBack"
+	case errors.Is(err, ErrPaneChanged):
+		return "ErrPaneChanged"
+	case errors.Is(err, ErrPaneAnswerInProgress):
+		return "ErrPaneAnswerInProgress"
+	case errors.Is(err, ErrInvalidFlags):
+		return "ErrInvalidFlags"
+	case errors.Is(err, store.ErrNoOpenPermissionRequest):
+		return "ErrNoOpenPermissionRequest"
+	case errors.Is(err, store.ErrAlreadyDecided):
+		return "ErrAlreadyDecided"
+	case errors.Is(err, store.ErrStoreBusy):
+		return "ErrStoreBusy"
 	}
 	return "ErrInternal"
 }

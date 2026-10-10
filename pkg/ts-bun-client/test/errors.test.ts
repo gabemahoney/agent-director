@@ -66,6 +66,27 @@ test("unknown err_name: errorFromEnvelope warns once and returns the base; throw
   expect(thrown.message).toContain("ErrTotallyBogus");
 });
 
+// b.146 rule 15: an envelope's err_details object reaches errDetails through both factories, as
+// sent; an envelope without one, or with a non-object value, gives null.
+test.each([
+  ["an object", { request_token: "t", not_before: null, nested: { n_lines: 25 } }, { request_token: "t", not_before: null, nested: { n_lines: 25 } }],
+  ["absent", undefined, null],
+  ["null", null, null],
+  ["a list", [1, 2], null],
+  ["a string", "details", null],
+] as const)("err_details %s: errDetails through errorFromEnvelope and throwFromEnvelope", (_case, details, want) => {
+  const env: Record<string, unknown> = { err_name: "ErrClaimTooSoon", err_description: "d" };
+  if (details !== undefined) env["err_details"] = details;
+  const thrown = thrownBy(() => throwFromEnvelope("record-pane-answer", env)) as AgentDirectorError;
+  const built = errorFromEnvelope("record-pane-answer", "ErrClaimTooSoon", "d",
+    want as Readonly<Record<string, unknown>> | null);
+  for (const err of [thrown, built]) {
+    expect(err.errName).toBe("ErrClaimTooSoon");
+    expect(err.errDetails).toEqual(want);
+  }
+  expect(new AgentDirectorError("v", "ErrX", "d").errDetails).toBeNull();
+});
+
 const locs: CheckedLocation[] = [
   { kind: "standard-install-path", detail: "/h/.agent-director/bin/agent-director" },
   { kind: "path-lookup", detail: "/usr/bin" },

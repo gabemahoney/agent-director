@@ -8,7 +8,8 @@ package store
 // the "awaits an answer" rule (rule 9) and the remembered idle-prompt
 // Notification (problem 3). find-missing's check_permission repair is
 // find_missing_writes_test.go's and row_version_find_missing_test.go's; the
-// mark's close of relay requests is relay_close_test.go's.
+// close of relay requests (find-missing's mark, the terminal SessionEnd,
+// resume's move) is relay_close_test.go's.
 
 import (
 	"context"
@@ -603,6 +604,32 @@ func TestRecordHookGoneAndRefusedDecision(t *testing.T) {
 	}
 }
 
+// TestRecordRefusedDecisionOnlyWhileAwaiting (b.146 rules 9, 15): a refused
+// decide's attempt is stored only on a request that still awaits an answer;
+// one acked, answered at the pane, closed, or decided before v7 is left as it
+// was, with no error.
+func TestRecordRefusedDecisionOnlyWhileAwaiting(t *testing.T) {
+	at := time.UnixMilli(time.Now().UnixMilli()).UTC()
+	for _, tc := range awaitCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, path := newRelayRow(t, "on", StateWorking)
+			recordAwaitCase(t, s, path, tc)
+			before := requestDump(t, path)
+
+			if err := s.RecordRefusedDecision(relayID, tokenA, "deny", at, at, DefaultLockWait); err != nil {
+				t.Fatalf("RecordRefusedDecision: %v; want nil", err)
+			}
+
+			if pr := mustRequest(t, s, tokenA); tc.awaits && (pr.AttemptedDecision != "deny" || !pr.AttemptedAt.Equal(at)) {
+				t.Errorf("request = attempted %q at %v; want deny at %v stored", pr.AttemptedDecision, pr.AttemptedAt, at)
+			}
+			if after := requestDump(t, path); !tc.awaits && !mapsEqual(after[0], before[0]) {
+				t.Errorf("request changed:\n got  %v\n want %v", after[0], before[0])
+			}
+		})
+	}
+}
+
 // awaitCase is one request's history and whether it still awaits an answer
 // (b.146 rule 9).
 type awaitCase struct {
@@ -636,7 +663,16 @@ var awaitCases = []awaitCase{
 		}
 	}, false},
 	{"pane answer begun", false, func(t *testing.T, _ *Store, path string) { setPaneAnswer(t, path, tokenA, PaneAnswerIntent) }, true},
-	{"pane answer completed", false, func(t *testing.T, _ *Store, path string) { setPaneAnswer(t, path, tokenA, "pane") }, false},
+	{"pane answer sent", false, func(t *testing.T, _ *Store, path string) { setPaneAnswer(t, path, tokenA, PaneAnswerSent) }, false},
+	{"answered outside agent-director", false, func(t *testing.T, _ *Store, path string) { setPaneAnswer(t, path, tokenA, PaneAnswerOutside) }, false},
+	{"its tool ran", false, func(t *testing.T, _ *Store, path string) { setPaneAnswer(t, path, tokenA, PaneAnswerToolRan) }, false},
+	// b.146 step 2b: record-pane-answer closes a request recorded before v7 too.
+	{"before v7, undecided, answered outside agent-director", true, func(t *testing.T, _ *Store, path string) {
+		setPaneAnswer(t, path, tokenA, PaneAnswerOutside)
+	}, false},
+	{"before v7, undecided, pane answer begun", true, func(t *testing.T, _ *Store, path string) {
+		setPaneAnswer(t, path, tokenA, PaneAnswerIntent)
+	}, true},
 	{"undecided, closed by find-missing's mark", false, func(t *testing.T, s *Store, _ string) { markRelayRow(t, s) }, false},
 	{"before v7, undecided", true, nil, true},
 	{"before v7, decided", true, func(t *testing.T, s *Store, _ string) {
@@ -649,6 +685,11 @@ var awaitCases = []awaitCase{
 		markRelayRow(t, s)
 	}, false},
 	{"before v7, undecided, closed by find-missing's mark", true, func(t *testing.T, s *Store, _ string) { markRelayRow(t, s) }, false},
+	{"undecided, closed by its SessionEnd", false, func(t *testing.T, s *Store, _ string) { endRelayRow(t, s) }, false},
+	{"decided, not acked, closed by its SessionEnd", false, func(t *testing.T, s *Store, _ string) {
+		decideA(t, s, "allow")
+		endRelayRow(t, s)
+	}, false},
 }
 
 // markRelayRow is find-missing's mark of relayID as it reads now; it must apply.
@@ -679,10 +720,12 @@ func recordAwaitCase(t *testing.T, s *Store, path string, tc awaitCase) {
 }
 
 // TestAwaitingAnswerRule (b.146 rules 9, 12): a request from v7 on awaits an
-// answer until its hook acks it or a completed pane answer or find-missing's
-// mark closes it, a recorded verdict notwithstanding; one from before v7 while
-// it is undecided and not closed. Such a request is in
-// OpenPermissionRequestsForSpawn and holds the row's move to working.
+// answer until its hook acks it or a completed pane answer, find-missing's
+// mark or its Spawn's SessionEnd closes it, a recorded verdict
+// notwithstanding; one from before v7 while
+// it is undecided, not closed and not answered at the pane. Such a request is
+// in OpenPermissionRequestsForSpawn and holds the row's move to working, and
+// PermissionRow.AwaitsAnswer agrees with the SQL rule.
 func TestAwaitingAnswerRule(t *testing.T) {
 	for _, tc := range awaitCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -691,6 +734,9 @@ func TestAwaitingAnswerRule(t *testing.T) {
 
 			if got := len(openTokens(t, s, relayID)) == 1; got != tc.awaits {
 				t.Errorf("listed open = %v; want %v", got, tc.awaits)
+			}
+			if got := mustRequest(t, s, tokenA).AwaitsAnswer(); got != tc.awaits {
+				t.Errorf("PermissionRow.AwaitsAnswer = %v; want %v, as the SQL rule", got, tc.awaits)
 			}
 			if err := agentHook(s, relayID, StateWorking, false, "PostToolUse"); err != nil {
 				t.Fatalf("PostToolUse: %v", err)

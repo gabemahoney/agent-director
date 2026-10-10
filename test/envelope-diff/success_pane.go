@@ -7,10 +7,16 @@
 package envelope_diff
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -56,6 +62,40 @@ func seedSendKeys(t *testing.T) (string, map[string]any) {
 	t.Helper()
 	dir, ctx := seedPaneRow(t, sendKeysID)
 	ctx["text"] = sendKeysText
+	return dir, ctx
+}
+
+// recordPaneAnswerID is the row record-pane-answer acts on.
+const recordPaneAnswerID = "id-rpa-1"
+
+// seedRecordPaneAnswer seeds record-pane-answer's row (seedPaneRow), its pane
+// capturing readPaneText, with request A recorded by a relay hook that
+// recorded no identity and settled an hour ago (fallen back) and found gone a
+// minute ago (b.146 rule 13); ctx carries the pane's SHA-256 as "hash".
+func seedRecordPaneAnswer(t *testing.T) (string, map[string]any) {
+	t.Helper()
+	dir, ctx := seedPaneRow(t, recordPaneAnswerID)
+	ctx[ctxCapture] = readPaneText
+	dbPath := filepath.Join(dir, "state.db")
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("seedRecordPaneAnswer: open: %v", err)
+	}
+	storefix.RegisterStorePath(t, s, dbPath)
+	storefix.SeedRelayRequest(t, s, recordPaneAnswerID, store.RelayRequest{RequestToken: storefix.TestRequestTokenA,
+		ToolName: "Bash", ToolInput: `{"command":"ls"}`, SettledAt: time.Now().Add(-time.Hour)})
+	pr, err := s.GetPermissionRequest(recordPaneAnswerID, storefix.TestRequestTokenA)
+	if err == nil {
+		_, err = s.RecordHookGone(time.Now().Add(-time.Minute), store.DefaultLockWait, pr.RequestID)
+	}
+	if cerr := s.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		t.Fatalf("seedRecordPaneAnswer: %v", err)
+	}
+	sum := sha256.Sum256([]byte(readPaneText))
+	ctx["hash"] = hex.EncodeToString(sum[:])
 	return dir, ctx
 }
 

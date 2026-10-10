@@ -177,6 +177,25 @@ var successCases = append([]successCase{
 		},
 	},
 
+	// ── record-pane-answer ────────────────────────────────────────────────
+	// A fallen-back request whose relay hook was found gone a minute ago, on
+	// a row whose own session each run's fake table holds (success_pane.go):
+	// both runners capture the pane, match its hash and record it answered
+	// outside agent-director, typing nothing (b.146 rule 13).
+	{
+		verb:      "record-pane-answer",
+		seed:      seedRecordPaneAnswer,
+		tmuxTable: writePaneRowTable,
+		params: func(ctx map[string]any) map[string]any {
+			return map[string]any{"request_token": storefix.TestRequestTokenA, "as": "deny", "expect_pane_sha256": ctx["hash"]}
+		},
+		cliArgv: func(ctx map[string]any) []string {
+			return []string{"record-pane-answer", "--request-token", storefix.TestRequestTokenA, "--as", "deny",
+				"--expect-pane-sha256", ctx["hash"].(string)}
+		},
+		want: map[string]any{"pane_answer": "outside", "decision": "deny", "decision_reason": "pane_outside"},
+	},
+
 	// ── read-pane ─────────────────────────────────────────────────────────
 	// A live row on a socket of its own; each run's fake table holds the
 	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's

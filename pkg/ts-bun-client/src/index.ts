@@ -34,7 +34,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (51 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (54 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -70,6 +70,9 @@ export {
   ErrJsonlNeverWritten,
   ErrRelayModeOff,
   ErrRelayFallenBack,
+  ErrPaneChanged,
+  ErrPaneAnswerInProgress,
+  ErrClaimTooSoon,
   ErrInvalidDecision,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,
@@ -101,6 +104,17 @@ export type {
   ListRow,
   Delivery,
   RequestDelivery,
+  PaneAnswer,
+} from "./types.js";
+
+// err_details shapes (b.146 rule 15), the values of AgentDirectorError.errDetails.
+export type {
+  RelayFallenBackDetails,
+  OpenRequestFacts,
+  PaneAnswerInProgressDetails,
+  ClaimTooSoonDetails,
+  PaneChangedDetails,
+  PaneKeySentDetails,
 } from "./types.js";
 
 // Verb Params / Result interfaces.
@@ -113,6 +127,7 @@ export type {
   KillParams, KillResult,
   DecideParams, DecideResult,
   GetPermissionParams, GetPermissionResult,
+  RecordPaneAnswerParams, RecordPaneAnswerResult,
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
   ExpireParams, ExpireResult,

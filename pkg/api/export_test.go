@@ -50,6 +50,10 @@ func SetSleepForTest(c *Client, sleep func(time.Duration)) { c.sleep = sleep }
 // namespace a recorded relay hook is judged in (b.146 rule 14), for this Client only.
 func SetSelfPIDNSForTest(c *Client, read func() (string, bool)) { c.selfPIDNS = read }
 
+// SetPaneSelfForTest replaces c's reader of its own identity, which a pane answer records as its sender (b.146
+// rule 8, problem 2), for this Client only.
+func SetPaneSelfForTest(c *Client, self func() ProcessIdentity) { c.paneSelf = self }
+
 // DecideWithSleep is Decide with the sleep of its waits given (its verdict's
 // ack, b.146 rule 16; a pre-v7 request's relay hook, b.pzy), so a test stands
 // in for the hook on its own clock. External callers use Decide or
@@ -103,12 +107,16 @@ const GuardErrorEval = guardError
 // package api_test can assert the guard-evaluation outcome string (in
 // particular guardError) that Client.SendKeys records on ad.send_keys.called —
 // a value the pure exported SendKeys discards. It flattens the unexported
-// sendKeysGuard result into (eval, refuse, err) so the test needs no access to
-// the struct's unexported fields.
-func EvaluateRelayGuardForTest(s SendKeysStore, effectiveWindow time.Duration, now time.Time, row Spawn, instanceID string) (eval string, refuse bool, err error) {
-	g, err := evaluateRelayGuard(s, effectiveWindow, now, row, instanceID)
-	return g.eval, g.refuse, err
+// sendKeysGuard result into (eval, refusal, err) so the test needs no access
+// to the struct's unexported fields; hold is the pane-answer intent hold.
+func EvaluateRelayGuardForTest(s SendKeysStore, v RelayView, hold time.Duration, row Spawn, params SendKeysParams) (eval string, refusal error, err error) {
+	g, err := evaluateRelayGuard(s, newRelayJudge(v), hold, row, params)
+	return g.eval, g.refusal, err
 }
+
+// PaneSHA256 exposes paneSHA256, the hash read-pane returns and send-keys and record-pane-answer compare (b.146
+// rule 7), so no test spells the algorithm.
+var PaneSHA256 = paneSHA256
 
 // StartingSessionLimits and StartingSessionRow expose the starting-session
 // rule's inputs (starting_session.go) to package api_test.

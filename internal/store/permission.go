@@ -14,12 +14,35 @@ import (
 )
 
 // Canonical decision_reason values per SR-1.3. A single source of truth so
-// all callers (relay timeout, find-missing reconciler, operator verb) use the
-// exact string the schema expects.
+// all callers (relay timeout, find-missing reconciler, operator verb, the
+// close of an ended Spawn's requests) use the exact string the schema
+// expects.
+//
+// DecisionReasonFindMissing and DecisionReasonEnded are the deny a close
+// writes on a request that was still undecided when its asking agent was
+// gone (b.146 rule 12; closeOrphanedRequests): find-missing's mark of a
+// missing Spawn, and the terminal SessionEnd's move to ended (or, as a
+// backstop, resume's move of a finished Spawn to pending). Neither is a
+// verdict a caller or a relay hook chose (PermissionRow.CloseDenied).
 const (
 	DecisionReasonOperator    = "operator"
 	DecisionReasonTimeout     = "timeout"
 	DecisionReasonFindMissing = "find_missing"
+	DecisionReasonEnded       = "ended"
+)
+
+// The decision_reason values of a request closed at the pane (b.146 step 2b),
+// each recorded with its pane_answer: a pane answer through send-keys
+// (DecisionReasonPane, pane_answer sent, decision its claimed verdict), a
+// caller's record of an answer made outside agent-director
+// (DecisionReasonPaneOutside, pane_answer outside, decision the claim or NULL
+// for unknown), and the PostToolUse close (DecisionReasonToolRan, pane_answer
+// tool_ran, decision allow). Each verdict is a claim or an inference, never a
+// reading of Claude Code's screen.
+const (
+	DecisionReasonPane        = "pane"
+	DecisionReasonPaneOutside = "pane_outside"
+	DecisionReasonToolRan     = "tool_ran"
 )
 
 // WriterProcess constants identify which process path wrote a
@@ -27,23 +50,35 @@ const (
 // DecidePermissionRequest so ad.row_mutation.committed events carry a
 // first-class discriminator. The closed set is:
 //
-//   - WriterProcessHook        — the hook verb's relay path
-//   - WriterProcessDecide      — the decide verb
-//   - WriterProcessFindMissing — the find-missing reconciler
+//   - WriterProcessHook              — the hook verb's relay path, the
+//     PostToolUse close of a request whose tool ran (b.146 rule 13), and the
+//     terminal SessionEnd's close of its Spawn's requests (b.146 rule 12)
+//   - WriterProcessDecide            — the decide verb
+//   - WriterProcessFindMissing       — the find-missing reconciler
+//   - WriterProcessSendKeys          — send-keys' pane answer (b.146 rule 8)
+//   - WriterProcessRecordPaneAnswer  — the record-pane-answer verb (b.146
+//     rule 13)
+//   - WriterProcessResume            — resume's move to pending, closing a
+//     request an earlier release left open on the finished Spawn (b.146
+//     rule 12)
 //
 // New writers must extend this set deliberately rather than inventing
 // ad-hoc strings.
 const (
-	WriterProcessHook        = "hook"
-	WriterProcessDecide      = "decide"
-	WriterProcessFindMissing = "find_missing"
+	WriterProcessHook             = "hook"
+	WriterProcessDecide           = "decide"
+	WriterProcessFindMissing      = "find_missing"
+	WriterProcessSendKeys         = "send_keys"
+	WriterProcessRecordPaneAnswer = "record_pane_answer"
+	WriterProcessResume           = "resume"
 )
 
 // ErrNoOpenPermissionRequest is returned by decide() when no row
 // exists in permission_requests for the given (instance_id, request_token)
-// pair; when the request is closed (its Spawn is ended or missing, or
-// find-missing's mark closed it before its relay hook acked the verdict
-// recorded on it; b.146 rule 12); or when a request recorded before schema v7
+// pair; when the request is closed (its Spawn is ended or missing, or a close
+// of its requests, find-missing's mark or its Spawn's end, closed it before
+// its relay hook acked a verdict recorded on it; b.146 rule 12); or when a
+// request recorded before schema v7
 // is still open past its relay window but the Spawn is not shown to be
 // sitting on it alone (pkg/api's decide, b.t6e). SRD §6.2: typically means
 // the Spawn isn't currently sitting on a PermissionRequest hook (or one was
@@ -54,7 +89,10 @@ var ErrNoOpenPermissionRequest = errors.New("ErrNoOpenPermissionRequest")
 // its decision column is already non-NULL. SRD §6.2: first decide
 // wins; subsequent calls report this so the caller knows their write
 // was not applied. The relay hook's fail-closed deny at its timeout
-// (DecisionReasonTimeout) is a first decide too.
+// (DecisionReasonTimeout) is a first decide too. It is also returned when a
+// completed pane answer closed the request (pane_answer sent, outside or
+// tool_ran; b.146 step 2b), decision set or not (an outside record claiming
+// unknown leaves it NULL).
 var ErrAlreadyDecided = errors.New("ErrAlreadyDecided")
 
 // ErrRequestTokenCollision is returned by UpsertOpenPermissionRequest when a
@@ -76,14 +114,21 @@ var ErrPermissionRequestNotFound = errors.New("ErrPermissionRequestNotFound")
 // Task E.
 var ErrAmbiguousRequest = errors.New("ErrAmbiguousRequest")
 
-// The pane_answer values the store compares (schema v7). PaneAnswerNone is
-// the column default: no pane answer recorded through agent-director.
-// PaneAnswerIntent is a pane answer begun whose keys may or may not have been
-// typed (b.146 step 2b). Either still leaves a request awaiting an answer;
-// step 2b's values for a completed pane answer close it.
+// The pane_answer values (schema v7; b.146 step 2b). PaneAnswerNone is the
+// column default: no pane answer recorded through agent-director.
+// PaneAnswerIntent is a pane answer through send-keys begun whose key may or
+// may not have been typed. Either still leaves a request awaiting an answer.
+// The other three close it: PaneAnswerSent, the pane answer's key was sent
+// (rule 8); PaneAnswerOutside, a caller recorded it answered outside
+// agent-director (record-pane-answer, rule 13); PaneAnswerToolRan, the
+// agent's PostToolUse or PostToolUseFailure carried the request's
+// tool_use_id, so its tool ran (rule 13).
 const (
-	PaneAnswerNone   = "none"
-	PaneAnswerIntent = "intent"
+	PaneAnswerNone    = "none"
+	PaneAnswerIntent  = "intent"
+	PaneAnswerSent    = "sent"
+	PaneAnswerOutside = "outside"
+	PaneAnswerToolRan = "tool_ran"
 )
 
 // PermissionRow is the materialized shape returned by GetPermissionRequest,
@@ -128,16 +173,23 @@ type PermissionRow struct {
 	AttemptedDecision string
 	AttemptedAt       time.Time
 	// PaneAnswer is pane_answer: PaneAnswerNone unless a pane answer was
-	// recorded (b.146 step 2b). PaneAs is that answer's claimed verdict and
-	// PaneSender the process that sent it.
-	PaneAnswer string
-	PaneAs     string
-	PaneSender ProcessIdentity
-	// ClosedAt is when find-missing's mark closed the request (b.146
-	// rule 12): it still awaited an answer when its Spawn was marked missing.
-	// The mark denies such a request with decision_reason find_missing when
-	// it was undecided, and keeps the verdict of one that was decided but not
-	// acked. Zero when no mark closed it.
+	// recorded (b.146 step 2b). PaneAs is that answer's claimed verdict
+	// (allow, deny, or unknown for a record-pane-answer that did not see it),
+	// PaneSender the process that sent a pane answer through send-keys, and
+	// PaneIntentAt when that sender wrote its intent; both are zero once the
+	// sender released the intent (its call ended without recording sent).
+	PaneAnswer   string
+	PaneAs       string
+	PaneSender   ProcessIdentity
+	PaneIntentAt time.Time
+	// ClosedAt is when a close of its Spawn's requests closed the request
+	// (b.146 rule 12; closeOrphanedRequests): it still awaited an answer when
+	// its Spawn was marked missing (find-missing's mark) or ended (the
+	// terminal SessionEnd), or when its finished Spawn was resumed (resume's
+	// move to pending, for a request an earlier release left open). The close
+	// denies such a request when it was undecided, with decision_reason
+	// find_missing (the mark) or ended (the others), and keeps the verdict of
+	// one that was decided but not acked. Zero when no close closed it.
 	ClosedAt time.Time
 }
 
@@ -147,19 +199,51 @@ type PermissionRow struct {
 // before (b.146 rule 5's compatibility clause).
 func (r PermissionRow) PreV7() bool { return r.SettledAt.IsZero() }
 
-// Closed reports whether find-missing's mark closed r (ClosedAt set): r no
-// longer awaits an answer, whatever its decision and delivery.
+// Closed reports whether a close of its Spawn's requests closed r (ClosedAt
+// set): r no longer awaits an answer, whatever its decision and delivery.
 func (r PermissionRow) Closed() bool { return !r.ClosedAt.IsZero() }
+
+// CloseDenied reports whether r's verdict is the fail-closed deny a close
+// wrote on it while it was undecided (decision_reason find_missing or ended;
+// b.146 rule 12): no verdict a caller or a relay hook chose.
+func (r PermissionRow) CloseDenied() bool {
+	return r.DecisionReason == DecisionReasonFindMissing || r.DecisionReason == DecisionReasonEnded
+}
+
+// PaneAnswered reports whether a completed pane answer closed r (b.146 step
+// 2b): pane_answer sent, outside or tool_ran. none, intent and the empty
+// value of a row built in memory are not.
+func (r PermissionRow) PaneAnswered() bool {
+	switch r.PaneAnswer {
+	case PaneAnswerSent, PaneAnswerOutside, PaneAnswerToolRan:
+		return true
+	}
+	return false
+}
+
+// AwaitsAnswer reports whether r still awaits an answer, as awaitingAnswerSQL
+// decides in a statement (b.146 rule 9): not closed with its Spawn (Closed),
+// no completed pane answer, and, recorded from schema v7 on, not acked, or,
+// recorded before v7, undecided.
+func (r PermissionRow) AwaitsAnswer() bool {
+	if r.Closed() || r.PaneAnswered() {
+		return false
+	}
+	if r.PreV7() {
+		return r.Decision == ""
+	}
+	return r.DeliveredAt.IsZero()
+}
 
 // awaitingAnswerSQL is the WHERE fragment, on a permission_requests row
 // named pr, that holds while the request still awaits an answer (b.146
-// rule 9): one that find-missing's mark has not closed (closed_at NULL, rule
-// 12) and that, recorded from schema v7 on, is not acked and has no completed
-// pane answer (pane_answer none or intent), or, recorded before v7 (no
-// settled_at), is undecided. It has no placeholders.
-const awaitingAnswerSQL = `pr.closed_at IS NULL
+// rule 9): one that no close of its Spawn's requests has closed (closed_at
+// NULL, rule 12), with no completed pane answer (pane_answer none or intent; b.146 step
+// 2b), and that, recorded from schema v7 on, is not acked, or, recorded before
+// v7 (no settled_at), is undecided. It has no placeholders.
+const awaitingAnswerSQL = `pr.closed_at IS NULL AND pr.pane_answer IN ('none', 'intent')
     AND CASE WHEN pr.settled_at IS NULL THEN pr.decision IS NULL
-             ELSE pr.delivered_at IS NULL AND pr.pane_answer IN ('none', 'intent') END`
+             ELSE pr.delivered_at IS NULL END`
 
 // permissionColumns is the one column list every read returning a
 // PermissionRow selects from a permission_requests row named pr, in
@@ -173,15 +257,15 @@ const permissionColumns = `pr.request_id, pr.claude_instance_id, pr.tool_name, p
        COALESCE(pr.attempted_decision, ''), pr.attempted_at,
        pr.pane_answer, COALESCE(pr.pane_as, ''),
        COALESCE(pr.pane_sender_pid, 0), COALESCE(pr.pane_sender_starttime, ''), COALESCE(pr.pane_sender_pidns, ''),
-       pr.closed_at`
+       pr.pane_intent_at, pr.closed_at`
 
 // scanPermissionRow scans one row selected with permissionColumns. The Scan
 // error is returned as is, so callers can still detect sql.ErrNoRows.
 func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 	var (
-		r                                                         PermissionRow
-		decidedAt                                                 sql.NullTime
-		deliveredAt, settledAt, hookGoneAt, attemptedAt, closedAt sql.NullInt64
+		r                                                                   PermissionRow
+		decidedAt                                                           sql.NullTime
+		deliveredAt, settledAt, hookGoneAt, attemptedAt, intentAt, closedAt sql.NullInt64
 	)
 	err := sc.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
 		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt,
@@ -191,7 +275,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		&r.AttemptedDecision, &attemptedAt,
 		&r.PaneAnswer, &r.PaneAs,
 		&r.PaneSender.PID, &r.PaneSender.Starttime, &r.PaneSender.PIDNamespace,
-		&closedAt)
+		&intentAt, &closedAt)
 	if err != nil {
 		return PermissionRow{}, err
 	}
@@ -202,6 +286,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 	r.SettledAt = millisTime(settledAt)
 	r.HookGoneAt = millisTime(hookGoneAt)
 	r.AttemptedAt = millisTime(attemptedAt)
+	r.PaneIntentAt = millisTime(intentAt)
 	r.ClosedAt = millisTime(closedAt)
 	return r, nil
 }
@@ -413,8 +498,8 @@ func (s *Store) GetPermissionRequestByToken(requestToken string) (PermissionRow,
 // OpenPermissionRequestsForSpawn returns the given Spawn's open requests, the
 // ones that still await an answer (b.146 rule 9; awaitingAnswerSQL), ordered
 // by created_at ASC: a request recorded from schema v7 on that its relay hook
-// has not acked, with no completed pane answer and not closed by
-// find-missing's mark, decided or not (a recorded verdict its hook has not
+// has not acked, with no completed pane answer and not closed with its Spawn
+// (closed_at), decided or not (a recorded verdict its hook has not
 // acked has not reached the agent); a request recorded before v7 while it is
 // undecided. Returns an empty slice (not nil) when none exists; nil error on
 // the empty-result case.
@@ -493,9 +578,9 @@ const decideRelayRequestSQL = `UPDATE permission_requests
 // wins. It writes only while the request:
 //
 //   - is undecided (decision IS NULL), not acked (delivered_at IS NULL), has
-//     no pane answer recorded (pane_answer 'none') and was not closed by
-//     find-missing's mark (closed_at IS NULL; the mark also decides every
-//     request it closes undecided, so this only restates rule 12);
+//     no pane answer recorded (pane_answer 'none') and was not closed with
+//     its Spawn (closed_at IS NULL; a close also decides every request it
+//     closes undecided, so this only restates rule 12);
 //   - for a request recorded before schema v7 (no settled_at), is still
 //     deliverable: its created_at is strictly after legacyCutoff, the
 //     created_at boundary pkg/api's single authority
@@ -551,10 +636,18 @@ func (s *Store) DecideRelayRequest(instanceID, requestToken, decision, reason, w
 
 // emitDecisionCommitted emits the ad.row_mutation.committed event of one
 // committed decision write on a permission request (SR-A-2.1): decide's, the
-// relay hook's timeout deny, and find-missing's close. reason "" is emitted
-// as null. A trail-emit failure must not fail the store call (SR-A-3.2).
+// relay hook's timeout deny, the deny of a close of a Spawn's requests
+// (find-missing's mark, the ended transition, resume's move; emitDeny), and
+// the closes at the pane
+// (b.146 step 2b: a pane answer's sent, record-pane-answer's outside, the
+// PostToolUse close). decision "" (an outside record claiming unknown) and
+// reason "" are emitted as null. A trail-emit failure must not fail the store
+// call (SR-A-3.2).
 func emitDecisionCommitted(instanceID, requestToken string, requestID int64, toolName, decision, reason, writerProcess string) {
-	var decisionReasonField any
+	var decisionField, decisionReasonField any
+	if decision != "" {
+		decisionField = decision
+	}
 	if reason != "" {
 		decisionReasonField = reason
 	}
@@ -563,7 +656,7 @@ func emitDecisionCommitted(instanceID, requestToken string, requestID int64, too
 		"request_token":      requestToken,
 		"request_id":         requestID,
 		"tool_name":          toolName,
-		"decision":           decision,
+		"decision":           decisionField,
 		"decision_reason":    decisionReasonField,
 		"writer_process":     writerProcess,
 		"mutation_kind":      "update",

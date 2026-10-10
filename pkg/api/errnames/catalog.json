@@ -175,6 +175,21 @@
     "description": ""
   },
   {
+    "name": "ErrPaneChanged",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrPaneAnswerInProgress",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrClaimTooSoon",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrInvalidDecision",
     "package": "api",
     "description": ""

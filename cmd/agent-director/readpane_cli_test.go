@@ -1,6 +1,8 @@
 package main_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -15,8 +17,9 @@ import (
 // TestReadPaneCLIFlags: read-pane's --ansi, --n-lines and --allow-pending
 // reach the capture of the agent's pane by id: -e only with --ansi (escapes
 // stripped without it), -S -<n> with the default 25, and stdout exactly
-// {"pane":...} (SR-7.2, SR-7.5). The refusals are pkg/api's and
-// test/envelope-diff's read-pane rows.
+// {"pane":...,"pane_sha256":...}, the SHA-256 in lowercase hex of exactly the
+// pane bytes returned (SR-7.2, SR-7.5; b.146 rule 7). The refusals are
+// pkg/api's and test/envelope-diff's read-pane rows.
 func TestReadPaneCLIFlags(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	ansi := tmuxfix.Find(tmuxfix.Captures(), "capture/ansi").Stdout
@@ -44,9 +47,12 @@ func TestReadPaneCLIFlags(t *testing.T) {
 				append([]string{"read-pane", "--claude-instance-id", id}, tc.flags...)...)
 
 			var res map[string]string
-			if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &res) != nil || len(res) != 1 || res["pane"] != tc.wantPane {
-				t.Fatalf("read-pane exit = %d, stdout = %q, stderr = %q; want 0, exactly {\"pane\":%q} and empty",
-					code, stdout, stderr, tc.wantPane)
+			sum := sha256.Sum256([]byte(tc.wantPane))
+			wantHash := hex.EncodeToString(sum[:])
+			if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &res) != nil || len(res) != 2 || res["pane"] != tc.wantPane ||
+				res["pane_sha256"] != wantHash {
+				t.Fatalf("read-pane exit = %d, stdout = %q, stderr = %q; want 0, exactly {\"pane\":%q,\"pane_sha256\":%q} and empty",
+					code, stdout, stderr, tc.wantPane, wantHash)
 			}
 			invs := assertInvocationKinds(t, home, "list-sessions", "list-panes", "capture-pane")
 			if want := append([]string{"-u", "-S", socket}, tc.wantArgs...); !slices.Equal(invs[2], want) {

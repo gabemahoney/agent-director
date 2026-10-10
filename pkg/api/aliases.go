@@ -54,6 +54,22 @@ type LaunchIdentity = store.LaunchIdentity
 // mean NULL, and PID 0 means no owner is recorded.
 type LaunchOwner = store.LaunchOwner
 
+// ProcessIdentity is re-exported from internal/store for the same reason. It
+// is the type of PermissionRow's Hook and PaneSender: a process's pid, its
+// start time and its pid namespace (b.146 rule 14); zero values mean NULL.
+type ProcessIdentity = store.ProcessIdentity
+
+// PaneIntent is re-exported from internal/store for the same reason. It
+// appears in the SendKeysStore interface method signatures: a pane answer's
+// claimed verdict, its sender and when its intent was written (b.146 rule 8).
+type PaneIntent = store.PaneIntent
+
+// PaneCheck is re-exported from internal/store for the same reason. It
+// appears in the SendKeysStore and RecordPaneAnswerStore interface method
+// signatures: a pane write's precondition, run inside the write's
+// transaction (b.146 rules 8 and 13).
+type PaneCheck = store.PaneCheck
+
 // ResumePrior is re-exported from internal/store for the same reason. It holds
 // what resume's move to pending clears, exactly as stored, so the restore after
 // a failed launch writes it back byte for byte (SR-8.5); zero values mean NULL.

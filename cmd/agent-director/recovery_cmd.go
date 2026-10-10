@@ -8,7 +8,6 @@ import (
 	"time"
 
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // findMissingHandlerWith implements `agent-director find-missing`.
@@ -27,8 +26,7 @@ func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 
 	result, err := client.FindMissing(context.Background())
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	if result.IDs == nil {
 		result.IDs = []string{}
@@ -62,8 +60,7 @@ func expireHandlerWith(client *pkgapi.Client, args []string) error {
 
 	result, err := client.Expire(older)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	// ids and kept_ids are never nil on success (ExpireResult), so both
 	// encode as [] when empty.

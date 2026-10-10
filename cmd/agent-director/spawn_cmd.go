@@ -26,8 +26,7 @@ func spawnHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Spawn(params)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -96,8 +95,7 @@ func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	res, err := client.Status(id)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, res)
 }
@@ -109,23 +107,30 @@ func sendKeysHandlerWith(client *pkgapi.Client, args []string) error {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if _, err := client.SendKeys(params); err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, struct{}{})
 }
 
-// parseSendKeysFlags carves argv into a SendKeysParams. `--text` is
-// required and may contain literal `\n` / `\r` from the caller — the verb
-// strips `\r` and preserves `\n` per SRD §4.3 and always appends a single
-// trailing Enter.
+// parseSendKeysFlags carves argv into a SendKeysParams. `--text` may contain
+// literal `\n` / `\r` from the caller — the verb strips `\r` and preserves
+// `\n` per SRD §4.3 and appends a single trailing Enter unless --no-enter.
+// The pane-answer flags (b.146 rule 8) are --request-token, --as, --key and
+// --expect-pane-sha256, with --n-lines; their combinations are checked by
+// the verb (ErrInvalidFlags), as for an MCP caller.
 func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	var p pkgapi.SendKeysParams
 	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
-	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input")
+	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input (default empty: Enter only)")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
+	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
+	fs.StringVar(&p.Key, "key", "", "send this one key instead of text, no Enter: Escape, Enter, Up, Down, Tab, or one character")
+	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed")
+	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
+	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")
 	if err := fs.Parse(args); err != nil {
 		return p, err
 	}
@@ -135,6 +140,31 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	// Empty --text is allowed (a press-Enter-only call has no body); the
 	// verb-layer state guard still applies.
 	return p, nil
+}
+
+// recordPaneAnswerHandlerWith implements `agent-director record-pane-answer`
+// (b.146 rule 13): it records that a fallen-back permission request was
+// answered outside agent-director. The verb checks --as and the hash
+// (ErrInvalidFlags), as for an MCP caller.
+func recordPaneAnswerHandlerWith(client *pkgapi.Client, args []string) error {
+	var p pkgapi.RecordPaneAnswerParams
+	fs := flag.NewFlagSet("record-pane-answer", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.RequestToken, "request-token", "", "token of the permission request answered outside agent-director")
+	fs.StringVar(&p.As, "as", "", "how it was answered: allow, deny, or unknown when not seen (stored as the caller's claim)")
+	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane that showed it answered")
+	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.RequestToken == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
+	}
+	result, err := client.RecordPaneAnswer(p)
+	if err != nil {
+		return writeVerbError(err)
+	}
+	return writeJSON(os.Stdout, result)
 }
 
 // readPaneHandlerWith implements `agent-director read-pane`. The handler
@@ -147,8 +177,7 @@ func readPaneHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.ReadPane(params)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -214,8 +243,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.MakeTemplate(p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -251,8 +279,7 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	p.Labels = labels
 	result, err := client.List(p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -277,8 +304,7 @@ func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Pause(context.Background(), p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -356,8 +382,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Decide(p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -378,8 +403,7 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Resume(p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -403,8 +427,7 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Kill(p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -423,8 +446,7 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	res, err := client.Get(id)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, res)
 }
@@ -446,8 +468,7 @@ func getPermissionHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.GetPermission(p)
 	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+		return writeVerbError(err)
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -470,6 +491,19 @@ func writeJSON(w io.Writer, v any) error {
 // re-printing.
 func writeApiErrorAndDispatch(name, description string) error {
 	if werr := writeError(os.Stderr, name, description); werr != nil {
+		return werr
+	}
+	return errDispatch
+}
+
+// writeVerbError writes a verb error's envelope to stderr and returns
+// errDispatch: its err_name and err_description as errnames.Classify gives
+// them (the redundant "ErrName: " prefix trimmed), and its err_details
+// (pkgapi.ErrDetails; b.146 rule 15) when it carries them.
+func writeVerbError(err error) error {
+	name, desc := errnames.Classify(err)
+	env := errorEnvelope{ErrName: name, ErrDescription: errnames.TrimNamePrefix(name, desc), ErrDetails: pkgapi.ErrDetails(err)}
+	if werr := writeEnvelope(os.Stderr, env); werr != nil {
 		return werr
 	}
 	return errDispatch

@@ -46,6 +46,7 @@ var gateEvents = []gateEvent{
 	{name: "PreToolUse/Bash", fixture: "pre-tool-use-bash.json", event: "PreToolUse", state: store.StateWorking},
 	{name: "PreToolUse/AskUserQuestion", fixture: "pre-tool-use-ask-user-question.json", event: "PreToolUse", state: store.StateAskUser},
 	{name: "PostToolUse", fixture: "post-tool-use.json", event: "PostToolUse", state: store.StateWorking},
+	{name: "PostToolUseFailure", fixture: "post-tool-use-failure.json", event: "PostToolUseFailure", state: store.StateWorking},
 	{name: "Stop", fixture: "stop.json", event: "Stop", state: store.StateWaiting},
 	{name: "Notification/idle_prompt", fixture: "notification.json", event: "Notification", soft: true, idle: true},
 	{name: "PermissionRequest", fixture: "permission-request.json", event: "PermissionRequest", state: store.StateCheckPermission},

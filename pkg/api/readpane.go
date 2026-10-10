@@ -63,13 +63,18 @@ type ReadPaneParams struct {
 	AllowPending bool `json:"allow_pending"`
 }
 
-// ReadPaneResult is the typed return shape — a single `pane` string field
-// the CLI marshals to `{"pane":"..."}`. Keeping the payload behind one
-// key leaves room for future fields (e.g. `truncated`, `state_at_capture`)
-// without breaking the wire shape.
+// ReadPaneResult is the typed return shape — the `pane` text and its
+// `pane_sha256`, which the CLI marshals to `{"pane":"...","pane_sha256":"..."}`.
 type ReadPaneResult struct {
 	// Pane is the captured pane text. ANSI handling depends on ReadPaneParams.ANSI.
 	Pane string `json:"pane"`
+	// PaneSHA256 is the SHA-256, in lowercase hex, of exactly the bytes of
+	// Pane (b.146 rule 7). A caller that chose what to type from this pane
+	// passes it as send-keys' or record-pane-answer's expect_pane_sha256 with
+	// the same n_lines; those compare it with the pane as read-pane gives it
+	// by default (ANSI stripped), so the hash of an ansi read never matches.
+	// It is a checksum: agent-director does not look at what the bytes say.
+	PaneSHA256 string `json:"pane_sha256"`
 }
 
 // ReadPane is the verb-handler entry point for `agent-director read-pane`
@@ -127,6 +132,8 @@ type ReadPaneResult struct {
 //     as state signal; ASCII-mapping them would destroy that.
 //   - ANSI=true → return raw bytes from tmux exactly as captured. Useful
 //     for a TUI viewer or a debugger inspecting color-coded output.
+//   - PaneSHA256 is the SHA-256 of exactly the bytes returned (b.146 rule 7),
+//     for send-keys' and record-pane-answer's expect_pane_sha256.
 //
 // ReadPane judges the lookup's server with the production start-time reader
 // (probe.NewProcChecker), the one [New] gives a Client.
@@ -177,7 +184,7 @@ func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPanePa
 	if !params.ANSI {
 		pane = tmux.StripANSI(pane)
 	}
-	return ReadPaneResult{Pane: pane}, nil
+	return ReadPaneResult{Pane: pane, PaneSHA256: paneSHA256(pane)}, nil
 }
 
 // readPaneRun is one ReadPane call: the pane verbs' shared run with
@@ -227,7 +234,10 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 // found by the row's label on its recorded socket and targeted by pane id.
 // When NLines is 0 the default of [DefaultReadPaneLines] (25) is used; there
 // is no upper cap. By default ANSI escape sequences are stripped while
-// unicode TUI glyphs are preserved; set ANSI:true to receive raw bytes.
+// unicode TUI glyphs are preserved; set ANSI:true to receive raw bytes. The
+// result's PaneSHA256 is the SHA-256 of the returned text, which a caller
+// that types or records an answer based on what it read passes back as
+// ExpectPaneSHA256 (SendKeys, RecordPaneAnswer).
 //
 // The pane read is the agent's own pane in the tmux session that carries the
 // row's current launch label, on the row's recorded socket, found by its pane

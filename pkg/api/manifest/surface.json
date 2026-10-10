@@ -404,7 +404,7 @@
         {
           "name": "permission_requests",
           "type": "[]object",
-          "description": "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock.",
+          "description": "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request) and pane_as (string?). get and list never wait for the store's write lock.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -437,7 +437,7 @@
     },
     {
       "name": "send-keys",
-      "description": "Send text into the agent's own pane: `\\r` stripped, `\\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "Send text into the agent's own pane: `\\r` stripped, `\\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). With request_token: a pane answer, one key, no Enter. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -453,8 +453,8 @@
         {
           "name": "text",
           "type": "string",
-          "description": "Text to type into the Spawn's input. `\\r` stripped pre-send; `\\n` preserved as newline-in-input.",
-          "required": true,
+          "description": "Text to type into the Spawn's input. `\\r` stripped pre-send; `\\n` preserved as newline-in-input. Empty/omitted: nothing typed (Enter only, unless no_enter or key). Exclusive with key; must be empty on a pane answer.",
+          "required": false,
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -467,13 +467,78 @@
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null
+        },
+        {
+          "name": "no_enter",
+          "type": "bool",
+          "description": "Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "key",
+          "type": "string",
+          "description": "Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Required on a pane answer. Anything else: ErrInvalidFlags.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "expect_pane_sha256",
+          "type": "string",
+          "description": "Required on a pane answer, optional otherwise. The pane_sha256 read-pane returned for the pane the caller looked at (64 hex digits). Before acting, the agent's pane is captured with the same n_lines, ANSI stripped as read-pane gives it by default, and its SHA-256 compared byte for byte; a difference is ErrPaneChanged, nothing done, and the error does not carry the new hash: read the pane again. It means a person or LLM judged this exact screen: never pass it from an automatic flow.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "n_lines",
+          "type": "int",
+          "description": "The n_lines of the read-pane expect_pane_sha256 came from. Defaults to 25 when 0/omitted.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "request_token",
+          "type": "string",
+          "description": "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). Under the store's lock it checks the pane's hash and records pane_answer intent (with its own process as sender) before sending the key, then records pane_answer sent, decision as and decision_reason pane. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any request of the Spawn has fallen back with no pane answer recorded.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "as",
+          "type": "string",
+          "description": "A pane answer's claimed verdict, allow or deny: recorded as the request's pane_as and, once its key is sent, its decision. The caller's claim: agent-director never checks it against the key. Only with request_token.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": [
+            "allow",
+            "deny",
+            ""
+          ]
         }
       ],
       "result_fields": [],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrSpawnNotFound",
         "ErrSpawnNotInteractive",
         "ErrSendKeysWhileRelayed",
+        "ErrRelayFallenBack",
+        "ErrNoOpenPermissionRequest",
+        "ErrAlreadyDecided",
+        "ErrPaneAnswerInProgress",
+        "ErrPaneChanged",
+        "ErrStoreBusy",
         "ErrTmuxNotAvailable",
         "ErrTmuxSendKeys",
         "ErrTmuxUnresponsive",
@@ -531,6 +596,14 @@
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
+        },
+        {
+          "name": "pane_sha256",
+          "type": "string",
+          "description": "SHA-256, lowercase hex, of exactly the bytes of pane. Pass it as send-keys' or record-pane-answer's expect_pane_sha256, with the same n_lines, when acting on what this pane shows; they compare it with the pane captured as read-pane gives it by default (ANSI stripped), so the hash of an ansi=true read never matches. A checksum: agent-director does not look at what the bytes say.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
         }
       ],
       "error_names": [
@@ -577,7 +650,7 @@
     },
     {
       "name": "decide",
-      "description": "Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack: only a pane answer can close it. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms passed before recording: ErrStoreBusy.",
+      "description": "Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms passed before recording: ErrStoreBusy.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -634,7 +707,7 @@
         {
           "name": "delivery",
           "type": "string",
-          "description": "delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack.",
+          "description": "delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -692,6 +765,32 @@
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
+        },
+        {
+          "name": "pane_answer",
+          "type": "string",
+          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": [
+            "none",
+            "intent",
+            "sent",
+            "outside",
+            "tool_ran"
+          ]
+        },
+        {
+          "name": "pane_as",
+          "type": "string?",
+          "description": "The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. The caller's claim, stored and never checked.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": [
+            "allow",
+            "deny",
+            "unknown"
+          ]
         }
       ],
       "error_names": [
@@ -767,7 +866,7 @@
         {
           "name": "decision",
           "type": "string?",
-          "description": "\"allow\" or \"deny\" once a verdict is recorded; null while the row is open (decision IS NULL in the DB). A recorded verdict is not the outcome: read delivery.",
+          "description": "\"allow\" or \"deny\" once a verdict is recorded; null while the row is open (decision IS NULL in the DB), and for a record-pane-answer claiming unknown. A recorded verdict is not the outcome: read delivery and pane_answer.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": [
@@ -778,13 +877,17 @@
         {
           "name": "decision_reason",
           "type": "string?",
-          "description": "Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).",
+          "description": "Canonical decision-reason string: for deny rows operator / timeout / find_missing / ended (SR-1.3; find_missing and ended: the request was still undecided when find-missing marked its spawn missing, or when its spawn ended or was resumed, and is closed); for a request closed at the pane, allow or deny, pane (a pane answer through send-keys), pane_outside (record-pane-answer) or tool_ran (its tool ran); null for open rows AND for allow rows decided by decide (closed-allow carries no reason).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": [
             "operator",
             "timeout",
-            "find_missing"
+            "find_missing",
+            "ended",
+            "pane",
+            "pane_outside",
+            "tool_ran"
           ]
         },
         {
@@ -798,7 +901,7 @@
         {
           "name": "delivery",
           "type": "string",
-          "description": "delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, no pane answer recorded through agent-director, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent and only a pane answer can close the request. Derived on every read; a request recorded before this release falls back by its relay window, as before.",
+          "description": "delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request is open and only an answer at the pane, or record-pane-answer, closes it; with sent, outside or tool_ran it is closed. Derived on every read; a request recorded before this release falls back by its relay window, as before.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -857,10 +960,148 @@
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
+        },
+        {
+          "name": "pane_answer",
+          "type": "string",
+          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": [
+            "none",
+            "intent",
+            "sent",
+            "outside",
+            "tool_ran"
+          ]
+        },
+        {
+          "name": "pane_as",
+          "type": "string?",
+          "description": "The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. The caller's claim, stored and never checked.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": [
+            "allow",
+            "deny",
+            "unknown"
+          ]
         }
       ],
       "error_names": [
         "ErrPermissionRequestNotFound"
+      ]
+    },
+    {
+      "name": "record-pane-answer",
+      "description": "Close a fallen-back request answered outside agent-director; types nothing. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.",
+      "callable": true,
+      "handle_free": false,
+      "params": [
+        {
+          "name": "request_token",
+          "type": "string",
+          "description": "Token of the permission request answered outside agent-director (as get, get-permission or ErrRelayFallenBack's err_details name it). Accepted only while it has fallen back (its relay hook gone, no verdict acked, no pane answer completed) and no pane answer through send-keys on it is still being sent (else ErrPaneAnswerInProgress); acked or answered at the pane: ErrAlreadyDecided; closed with its spawn: ErrNoOpenPermissionRequest. Its relay hook must have been gone at least 2 s, from the request's hook_gone_at (written now when it has none), or from its confirm_by when earlier and the hook is judged by time (it cannot be checked, or the request was recorded before this release): Claude Code draws a dialog only after the hook ends, so a pane read sooner may not show it yet; else ErrClaimTooSoon with err_details.not_before (null only while the hook is seen running). Once recorded, plain send-keys is no longer refused on its account.",
+          "required": true,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "as",
+          "type": "string",
+          "description": "How it was answered, as the caller claims: allow, deny, or unknown. Pass unknown unless the answer was seen. Recorded as pane_as, and as decision (null for unknown) with decision_reason pane_outside; never checked.",
+          "required": true,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": [
+            "allow",
+            "deny",
+            "unknown"
+          ]
+        },
+        {
+          "name": "expect_pane_sha256",
+          "type": "string",
+          "description": "Required. The pane_sha256 read-pane returned for the pane the caller looked at (64 hex digits). Before acting, the agent's pane is captured with the same n_lines, ANSI stripped as read-pane gives it by default, and its SHA-256 compared byte for byte; a difference is ErrPaneChanged, nothing done, and the error does not carry the new hash: read the pane again. It means a person or LLM judged this exact screen: never pass it from an automatic flow.",
+          "required": true,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "n_lines",
+          "type": "int",
+          "description": "The n_lines of the read-pane expect_pane_sha256 came from. Defaults to 25 when 0/omitted.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        }
+      ],
+      "result_fields": [
+        {
+          "name": "request_token",
+          "type": "string",
+          "description": "The request's token (echoed back).",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "pane_answer",
+          "type": "string",
+          "description": "Always outside: the request is closed as answered outside agent-director.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "pane_as",
+          "type": "string",
+          "description": "The claim recorded.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": [
+            "allow",
+            "deny",
+            "unknown"
+          ]
+        },
+        {
+          "name": "decision",
+          "type": "string?",
+          "description": "The claim when allow or deny; null for unknown.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": [
+            "allow",
+            "deny"
+          ]
+        },
+        {
+          "name": "decision_reason",
+          "type": "string",
+          "description": "Always pane_outside.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        }
+      ],
+      "error_names": [
+        "ErrInvalidFlags",
+        "ErrPermissionRequestNotFound",
+        "ErrSpawnNotFound",
+        "ErrNoOpenPermissionRequest",
+        "ErrAlreadyDecided",
+        "ErrClaimTooSoon",
+        "ErrPaneAnswerInProgress",
+        "ErrPaneChanged",
+        "ErrStoreBusy",
+        "ErrTmuxNotAvailable",
+        "ErrTmuxCaptureFailed",
+        "ErrTmuxUnresponsive",
+        "ErrTmuxSessionConflict"
       ]
     },
     {
@@ -1191,7 +1432,7 @@
         {
           "name": "spawns",
           "type": "[]Spawn",
-          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock.",
+          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request) and pane_as (string?). get and list never wait for the store's write lock.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -1355,7 +1596,7 @@
     },
     {
       "name": "hook",
-      "description": "Internal: run by each Spawn's --settings hooks with payload JSON on stdin; writes the row only when the hook's parent process is the row's recorded pane process (the agent); any other process's hook, or a subagent's SessionStart or SessionEnd, changes nothing and is logged as ad.hook.ignored. Exits 0 (fail-open).",
+      "description": "Internal: run by each Spawn's --settings hooks with payload JSON on stdin; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
       "callable": false,
       "handle_free": false,
       "params": [

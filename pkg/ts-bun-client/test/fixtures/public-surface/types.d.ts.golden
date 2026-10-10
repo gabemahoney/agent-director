@@ -102,11 +102,25 @@ export interface VerbSummary {
  * A permission request's delivery state (b.146 rule 15):
  * - `"delivered"`: the request's relay hook acked a verdict before writing it to Claude Code.
  * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
- * - `"fallen_back"`: no ack, no pane answer recorded through agent-director, and the relay
- *   hook is gone (or cannot be checked and `confirm_by` has passed): no answer from the relay
- *   reached the agent, and only a pane answer can close the request.
+ * - `"fallen_back"`: no ack, and the relay hook is gone (or cannot be checked and `confirm_by`
+ *   has passed): no answer from the relay reached the agent. While `pane_answer` is `"none"` or
+ *   `"intent"` the request is open and only an answer at the pane, or `recordPaneAnswer`, closes
+ *   it; with `"sent"`, `"outside"` or `"tool_ran"` it is closed.
  */
 export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
+/**
+ * How a permission request was answered at the pane (b.146 step 2b):
+ * - `"none"`: no pane answer recorded through agent-director (something outside it, such as a
+ *   person at tmux, may still have answered it).
+ * - `"intent"`: a pane answer through `sendKeys` was started; whether its key was typed is unknown.
+ * - `"sent"`: a pane answer's key was sent (`decision_reason` `"pane"`).
+ * - `"outside"`: a caller recorded it answered outside agent-director (`recordPaneAnswer`,
+ *   `decision_reason` `"pane_outside"`).
+ * - `"tool_ran"`: Claude Code reported its tool ran (`decision` `"allow"`, `decision_reason`
+ *   `"tool_ran"`).
+ * `"sent"`, `"outside"` and `"tool_ran"` close the request; its `delivery` stays `"fallen_back"`.
+ */
+export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
 /**
  * Mirrors pkg/api/relay_delivery.go::RequestDelivery — a permission request's delivery facts
  * (b.146 rule 15), on every `get` / `list` permission request, on `getPermission` and on
@@ -135,6 +149,13 @@ export interface RequestDelivery {
     attempted_at: string | null;
     /** The request's tool_use_id from Claude Code's hook input; null when none was given. */
     tool_use_id: string | null;
+    /** How the request was answered at the pane; see {@link PaneAnswer}. */
+    pane_answer: PaneAnswer;
+    /**
+     * The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see
+     * the answer); null when none was recorded. The caller's claim, stored and never checked.
+     */
+    pane_as: "allow" | "deny" | "unknown" | null;
 }
 /**
  * Mirrors pkg/api/get.go::PermissionRequestInfo — one open permission request (still awaiting
@@ -366,16 +387,21 @@ export interface GetResult {
      */
     permission_requests: PermissionRequestInfo[];
 }
-/** Mirrors pkg/api.SendKeysParams (json tags). */
+/**
+ * Mirrors pkg/api.SendKeysParams (json tags). A call is plain, or a pane answer when
+ * `request_token` is set (b.146 rule 8): a pane answer needs `as`, `key` and
+ * `expect_pane_sha256`, takes no `text`, and sends exactly one key with no Enter.
+ */
 export interface SendKeysParams {
-    /** Id of the Spawn whose pane will receive the text. */
+    /** Id of the Spawn whose pane will receive the keys. */
     claude_instance_id: string;
     /**
-     * Text to deliver to the pane. CR bytes stripped; LF preserved; Enter
-     * appended. Empty text sends Enter only: it submits what is already typed,
-     * such as a text a failed sendKeys left unsubmitted.
+     * Text to deliver to the pane on a plain call. CR bytes stripped; LF preserved; Enter
+     * appended unless `no_enter`. Empty or omitted text sends Enter only: it submits what is
+     * already typed, such as a text a failed sendKeys left unsubmitted. Exclusive with `key`;
+     * must be empty on a pane answer.
      */
-    text: string;
+    text?: string;
     /**
      * When true, also allows a pending row: a launch (spawn, reuse or resume)
      * whose agent has not reported in yet. Keys are delivered only to a
@@ -383,6 +409,29 @@ export interface SendKeysParams {
      * still rejected.
      */
     allow_pending?: boolean;
+    /** Type `text` with no Enter after it (plain calls; a pane answer never presses Enter). */
+    no_enter?: boolean;
+    /**
+     * One key to send instead of text, never followed by Enter: a named key (`"Escape"`,
+     * `"Enter"`, `"Up"`, `"Down"`, `"Tab"`) or one character. Required on a pane answer.
+     */
+    key?: string;
+    /**
+     * The `pane_sha256` of the readPane the keys were chosen from: the pane is captured again
+     * with the same `n_lines` (ANSI stripped) and compared byte for byte, `ErrPaneChanged` when it
+     * differs (the error does not carry the new hash). Required on a pane answer. Never pass it
+     * from an automatic flow: it means a person or LLM judged this exact screen.
+     */
+    expect_pane_sha256?: string;
+    /** The `n_lines` of the readPane `expect_pane_sha256` came from. Defaults to 25. */
+    n_lines?: number;
+    /**
+     * Makes the call a pane answer to this fallen-back permission request of the Spawn: one key
+     * (`key`), no Enter, recorded as `pane_answer` `"sent"` with `decision` = `as`.
+     */
+    request_token?: string;
+    /** A pane answer's claimed verdict, recorded as its decision; never checked against the key. */
+    as?: "allow" | "deny";
 }
 /** Mirrors pkg/api/sendkeys.go::SendKeysResult (empty; reserved for future fields). */
 export interface SendKeysResult {
@@ -406,6 +455,12 @@ export interface ReadPaneParams {
 export interface ReadPaneResult {
     /** Captured pane text. */
     pane: string;
+    /**
+     * SHA-256, lowercase hex, of exactly the bytes of `pane`. Pass it as sendKeys' or
+     * recordPaneAnswer's `expect_pane_sha256`, with the same `n_lines`, when acting on what this
+     * pane shows; those compare it with the pane as readPane gives it by default (ANSI stripped).
+     */
+    pane_sha256: string;
 }
 /** Mirrors pkg/api.KillParams. */
 export interface KillParams {
@@ -465,12 +520,111 @@ export interface GetPermissionResult extends RequestDelivery {
     tool_input: string;
     /** RFC3339 timestamp when the permission request row was created. */
     requested_at: string;
-    /** "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB). */
+    /**
+     * "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB), and
+     * for a recordPaneAnswer claiming unknown.
+     */
     decision?: "allow" | "deny" | null;
-    /** Canonical decision-reason string ("operator" | "timeout" | "find_missing") for deny rows; null for open rows and for allow rows. */
-    decision_reason?: "operator" | "timeout" | "find_missing" | null;
+    /**
+     * Canonical decision-reason string: "operator" | "timeout" | "find_missing" | "ended" for deny
+     * rows ("find_missing" / "ended": still undecided when find-missing marked its spawn missing, or
+     * when its spawn ended or was resumed, and closed); "pane" | "pane_outside" | "tool_ran" for a
+     * request closed at the pane; null for open rows and for allow rows decided by decide.
+     */
+    decision_reason?: "operator" | "timeout" | "find_missing" | "ended" | "pane" | "pane_outside" | "tool_ran" | null;
     /** RFC3339 timestamp when the verdict was written; null while the row is open. */
     decided_at?: string | null;
+}
+/**
+ * Mirrors pkg/api.RecordPaneAnswerParams (json tags) — record that a fallen-back permission
+ * request was answered outside agent-director (b.146 rule 13). It types nothing.
+ */
+export interface RecordPaneAnswerParams {
+    /** Token of the permission request answered outside agent-director. */
+    request_token: string;
+    /**
+     * How it was answered, as the caller claims: "allow", "deny", or "unknown" when the answer was
+     * not seen (pass "unknown" unless it was). Stored, never checked.
+     */
+    as: "allow" | "deny" | "unknown";
+    /** The `pane_sha256` of the readPane that showed it answered; compared byte for byte. */
+    expect_pane_sha256: string;
+    /** The `n_lines` of that readPane. Defaults to 25. */
+    n_lines?: number;
+}
+/** Mirrors pkg/api.RecordPaneAnswerResult — the request as recordPaneAnswer recorded it. */
+export interface RecordPaneAnswerResult {
+    /** The request's token (echoed back). */
+    request_token: string;
+    /** Always "outside". */
+    pane_answer: "outside";
+    /** The claim recorded. */
+    pane_as: "allow" | "deny" | "unknown";
+    /** The claim when "allow" or "deny"; null for "unknown". */
+    decision: "allow" | "deny" | null;
+    /** Always "pane_outside". */
+    decision_reason: "pane_outside";
+}
+/**
+ * Mirrors pkg/api.OpenRequestFacts — one other open request of the Spawn in
+ * {@link RelayFallenBackDetails}.
+ */
+export interface OpenRequestFacts {
+    request_token: string;
+    tool_name: string;
+    requested_at: string;
+    delivery: Delivery;
+    hook_alive: boolean | null;
+    pane_answer: PaneAnswer;
+}
+/**
+ * Mirrors pkg/api.RelayFallenBackDetails — ErrRelayFallenBack's errDetails (from decide and from
+ * a plain sendKeys): the request that fell back (its fields and delivery facts), the Spawn's
+ * state and its other open requests (null when they could not be read).
+ */
+export interface RelayFallenBackDetails extends PermissionRequestInfo {
+    state: string;
+    open_requests: OpenRequestFacts[] | null;
+}
+/**
+ * Mirrors pkg/api.PaneAnswerInProgressDetails — ErrPaneAnswerInProgress's errDetails: another
+ * pane answer on the request is still being sent.
+ */
+export interface PaneAnswerInProgressDetails {
+    request_token: string;
+    pane_as: string;
+    pane_intent_at: string;
+    /** true when its sender process runs; null when it cannot be checked. */
+    sender_alive: boolean | null;
+    /** When the sender cannot be checked, the time the intent stops counting; else null. */
+    not_before: string | null;
+}
+/**
+ * Mirrors pkg/api.ClaimTooSoonDetails — ErrClaimTooSoon's errDetails: retry recordPaneAnswer
+ * at `not_before` (null only while the request's relay hook is seen running).
+ */
+export interface ClaimTooSoonDetails {
+    request_token: string;
+    hook_alive: boolean | null;
+    hook_gone_at: string | null;
+    not_before: string | null;
+}
+/**
+ * Mirrors pkg/api.PaneKeySentDetails — the errDetails of an ErrInternal from a pane answer
+ * (`sendKeys` with `request_token`) whose key was sent but whose record of it failed: the key
+ * reached the pane, so read it before anything else is sent.
+ */
+export interface PaneKeySentDetails {
+    key_sent: true;
+    request_token: string;
+}
+/**
+ * Mirrors pkg/api.PaneChangedDetails — ErrPaneChanged's errDetails. It never carries the pane's
+ * new hash: read the pane again before any retry.
+ */
+export interface PaneChangedDetails {
+    n_lines: number;
+    request_token?: string;
 }
 /** Mirrors pkg/api.ResumeParams (json tags). */
 export interface ResumeParams {

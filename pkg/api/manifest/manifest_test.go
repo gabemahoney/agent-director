@@ -186,7 +186,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "resume", "find-missing", "expire", "make-template", "list", "pause", "serve", "version", "trail-emit", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "pause", "serve", "version", "trail-emit", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -229,11 +229,11 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 }
 
 // TestCallableVerbsOrder asserts the callable subset preserves Verbs-defined
-// order (the 15 callable verbs in the order they appear in Verbs).
+// order (the 16 callable verbs in the order they appear in Verbs).
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
 		"spawn", "status", "get", "send-keys", "read-pane", "kill",
-		"decide", "get-permission", "resume", "find-missing", "expire",
+		"decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire",
 		"make-template", "list", "pause", "version",
 	}
 	got := manifest.CallableVerbs()
@@ -623,10 +623,24 @@ func TestResumeHasSRDErrorNames(t *testing.T) {
 		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
 }
 
-// TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven names.
+// TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven
+// names and b.146 rules 7 and 8's: the params' shape, the relay refusals, a
+// pane answer's request not open or still being answered, the pane's hash and
+// a pane answer's write lock.
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
-		"ErrSpawnNotInteractive", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
+		"ErrSpawnNotInteractive", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
+		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
+		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy")
+}
+
+// TestRecordPaneAnswerHasErrorNames pins record-pane-answer's (b.146 rule 13)
+// to exactly its thirteen names, as Client.RecordPaneAnswer's "Errors:" list.
+func TestRecordPaneAnswerHasErrorNames(t *testing.T) {
+	assertErrorNames(t, "record-pane-answer", "RecordPaneAnswer", true, "ErrInvalidFlags", "ErrPermissionRequestNotFound",
+		"ErrSpawnNotFound", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided", "ErrClaimTooSoon", "ErrPaneAnswerInProgress",
+		"ErrPaneChanged", "ErrStoreBusy", "ErrTmuxNotAvailable", "ErrTmuxCaptureFailed", "ErrTmuxUnresponsive",
+		"ErrTmuxSessionConflict")
 }
 
 // TestNoVerbListsErrInternal pins SR-1.7 / AC-CAT-03 for every verb, callable

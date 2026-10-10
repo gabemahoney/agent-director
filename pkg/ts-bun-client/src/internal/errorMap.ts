@@ -2,7 +2,7 @@
  * errorMap.ts — catalog-driven static error map for the subprocess Client.
  *
  * Builds a `Map<string, ErrConstructor>` at module load time by iterating
- * `pkg/api/errnames/catalog.json` (51 entries). The map
+ * `pkg/api/errnames/catalog.json` (54 entries). The map
  * keys are the canonical `err_name` strings (e.g. "ErrSpawnNotFound");
  * values are the typed constructors already exported from `src/errors.ts`.
  *
@@ -47,7 +47,8 @@ const _catalog = catalogJson as CatalogEntry[];
 type ErrConstructor = new (
   verb: string,
   err_name: string,
-  err_description: string
+  err_description: string,
+  err_details?: Readonly<Record<string, unknown>> | null
 ) => errors.AgentDirectorError;
 
 // ---------------------------------------------------------------------------
@@ -80,10 +81,14 @@ export const errorMap: ReadonlyMap<string, ErrConstructor> =
 // Envelope shape guard
 // ---------------------------------------------------------------------------
 
-/** Shape of a JSON envelope that carries a typed error. */
+/**
+ * Shape of a JSON envelope that carries a typed error. `err_details` is
+ * optional (b.146 rule 15): an object of facts, absent on most errors.
+ */
 interface ErrorEnvelope {
   err_name: string;
   err_description: string;
+  err_details?: unknown;
 }
 
 /**
@@ -124,10 +129,17 @@ export function throwFromEnvelope(verb: string, envelope: unknown): never {
     typeof envelopeRecord["err_description"] === "string"
       ? (envelopeRecord["err_description"] as string)
       : "";
+  // err_details is kept only when it is a JSON object (b.146 rule 15); any
+  // other value is ignored, as an envelope without it.
+  const rawDetails = envelopeRecord["err_details"];
+  const errDetails =
+    typeof rawDetails === "object" && rawDetails !== null && !Array.isArray(rawDetails)
+      ? (rawDetails as Readonly<Record<string, unknown>>)
+      : null;
 
   const Ctor = errorMap.get(errName);
   if (Ctor !== undefined) {
-    throw new Ctor(verb, errName, errDescription);
+    throw new Ctor(verb, errName, errDescription, errDetails);
   }
 
   // Unknown err_name (SRD SR-4.3): a binary of another version emitted a name

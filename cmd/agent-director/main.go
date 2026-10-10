@@ -28,10 +28,14 @@ import (
 )
 
 // errorEnvelope is the JSON shape emitted on stderr for CLI-level errors.
-// Matches SRD §12.2 / §13.1.
+// Matches SRD §12.2 / §13.1. ErrDetails is the optional err_details object
+// (b.146 rule 15, decision 8 A): the facts of a refusal that carries them
+// (pkgapi.ErrDetails), omitted otherwise; a caller that does not know the
+// key ignores it.
 type errorEnvelope struct {
 	ErrName        string `json:"err_name"`
 	ErrDescription string `json:"err_description"`
+	ErrDetails     any    `json:"err_details,omitempty"`
 }
 
 // CLI-internal error names. These signal dispatch and output failures of the
@@ -85,24 +89,25 @@ var verbAliases = map[string]string{
 // helpHandler ignores its client and versionHandler consults no store.
 func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":           func(args []string) error { return helpHandler(client, args) },
-		"version":        func(args []string) error { return versionHandler(client, args) },
-		"spawn":          func(args []string) error { return spawnHandlerWith(client, args) },
-		"status":         func(args []string) error { return statusHandlerWith(client, args) },
-		"get":            func(args []string) error { return getHandlerWith(client, args) },
-		"send-keys":      func(args []string) error { return sendKeysHandlerWith(client, args) },
-		"read-pane":      func(args []string) error { return readPaneHandlerWith(client, args) },
-		"kill":           func(args []string) error { return killHandlerWith(client, args) },
-		"pause":          func(args []string) error { return pauseHandlerWith(client, args) },
-		"list":           func(args []string) error { return listHandlerWith(client, args) },
-		"make-template":  func(args []string) error { return makeTemplateHandlerWith(client, args) },
-		"decide":         func(args []string) error { return decideHandlerWith(client, args) },
-		"get-permission": func(args []string) error { return getPermissionHandlerWith(client, args) },
-		"resume":         func(args []string) error { return resumeHandlerWith(client, args) },
-		"find-missing":   func(args []string) error { return findMissingHandlerWith(client, args) },
-		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
-		"serve":          func(args []string) error { return serveHandlerWith(cfg, args) },
-		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
+		"help":               func(args []string) error { return helpHandler(client, args) },
+		"version":            func(args []string) error { return versionHandler(client, args) },
+		"spawn":              func(args []string) error { return spawnHandlerWith(client, args) },
+		"status":             func(args []string) error { return statusHandlerWith(client, args) },
+		"get":                func(args []string) error { return getHandlerWith(client, args) },
+		"send-keys":          func(args []string) error { return sendKeysHandlerWith(client, args) },
+		"read-pane":          func(args []string) error { return readPaneHandlerWith(client, args) },
+		"kill":               func(args []string) error { return killHandlerWith(client, args) },
+		"pause":              func(args []string) error { return pauseHandlerWith(client, args) },
+		"list":               func(args []string) error { return listHandlerWith(client, args) },
+		"make-template":      func(args []string) error { return makeTemplateHandlerWith(client, args) },
+		"decide":             func(args []string) error { return decideHandlerWith(client, args) },
+		"get-permission":     func(args []string) error { return getPermissionHandlerWith(client, args) },
+		"record-pane-answer": func(args []string) error { return recordPaneAnswerHandlerWith(client, args) },
+		"resume":             func(args []string) error { return resumeHandlerWith(client, args) },
+		"find-missing":       func(args []string) error { return findMissingHandlerWith(client, args) },
+		"expire":             func(args []string) error { return expireHandlerWith(client, args) },
+		"serve":              func(args []string) error { return serveHandlerWith(cfg, args) },
+		"trail-emit":         func(args []string) error { return trailEmitHandlerWith(args) },
 	}
 }
 
@@ -209,18 +214,21 @@ func runHook() int {
 	// The relay hook's timing and identity (b.146 rules 2, 4 and 14): Start,
 	// read above before anything else, and RelayTimeout, the --timeout spawn
 	// wrote, give its kill instant; Self reads its own pid, start time and
-	// pid namespace once, when it records its request.
+	// pid namespace once, when it records its request. RelayHookGone judges a
+	// request's relay hook for the PostToolUse close (b.146 rule 13), with
+	// the same readers and relay window the verbs judge it with.
 	hc := hook.HandleConfig{
-		Env:          hook.OSGetenv,
-		Cfg:          cfg.Relay,
-		Clock:        hook.DefaultPollClock(),
-		ParentPID:    os.Getppid,
-		ParentProc:   hookParentProc(),
-		Now:          time.Now,
-		PendingGrace: cfg.Tmux.EffectivePendingGrace(),
-		Start:        start,
-		RelayTimeout: hookTimeout(os.Args[2:]),
-		Self:         hookSelf(probe.NewProcChecker()),
+		Env:           hook.OSGetenv,
+		Cfg:           cfg.Relay,
+		Clock:         hook.DefaultPollClock(),
+		ParentPID:     os.Getppid,
+		ParentProc:    hookParentProc(),
+		Now:           time.Now,
+		PendingGrace:  cfg.Tmux.EffectivePendingGrace(),
+		Start:         start,
+		RelayTimeout:  hookTimeout(os.Args[2:]),
+		Self:          hookSelf(probe.NewProcChecker()),
+		RelayHookGone: hookRelayHookGone(cfg.Relay),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
@@ -261,6 +269,20 @@ func hookSelf(pc probe.ProcChecker) func() store.ProcessIdentity {
 		}
 		return store.ProcessIdentity{PID: pid, Starttime: start, PIDNamespace: ns}
 	}
+}
+
+// hookRelayHookGone returns the hook's judge of a permission request's relay
+// hook (b.146 rules 5, 13 and 14): pkgapi.RelayHookGone with the per-OS
+// start-time reader, this process's pid namespace, time.Now and relay's
+// effective window, the view every verb judges relay hooks with.
+func hookRelayHookGone(relay config.Relay) func(store.PermissionRow) bool {
+	view := pkgapi.RelayView{
+		Procs:        probe.NewProcChecker(),
+		PIDNamespace: probe.SelfPIDNamespace,
+		Now:          time.Now,
+		Window:       time.Duration(relay.EffectiveTimeoutSeconds()) * time.Second,
+	}
+	return func(pr store.PermissionRow) bool { return pkgapi.RelayHookGone(view, pr) }
 }
 
 // hookParentProc is the hook's parent-process reader: the per-OS start-time
@@ -371,7 +393,12 @@ func versionHandler(client *pkgapi.Client, _ []string) error {
 
 // writeError marshals an error envelope as JSON to w with a trailing newline.
 func writeError(w io.Writer, name, desc string) error {
-	payload, err := json.Marshal(errorEnvelope{ErrName: name, ErrDescription: desc})
+	return writeEnvelope(w, errorEnvelope{ErrName: name, ErrDescription: desc})
+}
+
+// writeEnvelope marshals env as JSON to w with a trailing newline.
+func writeEnvelope(w io.Writer, env errorEnvelope) error {
+	payload, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}

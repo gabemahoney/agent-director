@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,14 +47,15 @@ func TestSendKeysText(t *testing.T) {
 type skRelay int
 
 const (
-	skRelayOff      skRelay = iota // relay_mode off
-	skRelayNoGuard                 // relay_mode on, the state is not check_permission
-	skRelayHeld                    // relay_mode on, one request still in its window
-	skRelayReleased                // relay_mode on, the one request past its window
+	skRelayOff        skRelay = iota // relay_mode off
+	skRelayNoGuard                   // relay_mode on, no request
+	skRelayHeld                      // relay_mode on, one request still in its window
+	skRelayFallenBack                // relay_mode on, the one request past its window (b.146 rule 7)
 )
 
 // TestSendKeysGuards: the state and relay guards refuse before any tmux call
 // though the row's own session is up; a row they pass gets the keys by pane id.
+// A relay-on row whose request fell back refuses plain send-keys (b.146 rule 7).
 func TestSendKeysGuards(t *testing.T) {
 	t.Parallel()
 	type guardCase struct {
@@ -84,17 +86,18 @@ func TestSendKeysGuards(t *testing.T) {
 			api.ErrSendKeysWhileRelayed},
 		guardCase{"relay held on check_permission, allow_pending", store.StateCheckPermission, true, skRelayHeld,
 			api.ErrSendKeysWhileRelayed},
-		guardCase{"relay released on check_permission", store.StateCheckPermission, false, skRelayReleased, nil},
+		guardCase{"relay request fallen back on check_permission", store.StateCheckPermission, false, skRelayFallenBack,
+			api.ErrRelayFallenBack},
 	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay != skRelayOff})
-			if tc.relay == skRelayHeld || tc.relay == skRelayReleased {
+			if tc.relay == skRelayHeld || tc.relay == skRelayFallenBack {
 				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
 			}
-			if tc.relay == skRelayReleased {
+			if tc.relay == skRelayFallenBack {
 				storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA,
 					2*sendKeysWindow())
 			}
@@ -129,9 +132,11 @@ func TestSendKeysGuardStoreReadError(t *testing.T) {
 		t.Fatalf("err = %v; want %v", err, storeErr)
 	}
 	e.assertNoTmuxCall(t)
-	eval, refuse, gerr := api.EvaluateRelayGuardForTest(e.store, sendKeysWindow(), e.clock.Now(), r.Spawn, r.ID)
-	if !errors.Is(gerr, storeErr) || eval != api.GuardErrorEval || refuse {
-		t.Errorf("guard = %q, refuse %v, err %v; want %q, false, %v", eval, refuse, gerr, api.GuardErrorEval, storeErr)
+	eval, refusal, gerr := api.EvaluateRelayGuardForTest(e.store,
+		api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()}, 0, r.Spawn,
+		api.SendKeysParams{ClaudeInstanceID: r.ID})
+	if !errors.Is(gerr, storeErr) || eval != api.GuardErrorEval || refusal != nil {
+		t.Errorf("guard = %q, refusal %v, err %v; want %q, nil, %v", eval, refusal, gerr, api.GuardErrorEval, storeErr)
 	}
 }
 
@@ -209,9 +214,12 @@ func setRequestsCreatedAt(t *testing.T, e *killEnv, id string, at time.Time) {
 	}
 }
 
-// TestRelayFallenBackIncidentRegression re-anchors the b.kk3 incident (SR-7.1):
-// a relay-on row whose open request fell out of its window refuses Decide
-// with ErrRelayFallenBack, and a later SendKeys delivers into the agent's pane.
+// TestRelayFallenBackIncidentRegression re-anchors the b.kk3 incident (SR-7.1)
+// under b.146 rule 7: a relay-on row whose open request fell out of its window
+// refuses Decide, and a plain SendKeys, with ErrRelayFallenBack (nothing
+// typed: a stray key could answer its dialog); a pane answer naming the
+// request delivers its one key into the agent's pane and closes it, after
+// which a plain SendKeys delivers again.
 func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
@@ -224,26 +232,36 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	if !errors.Is(err, api.ErrRelayFallenBack) {
 		t.Fatalf("Decide err = %v; want ErrRelayFallenBack", err)
 	}
+	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"}); !errors.Is(err, api.ErrRelayFallenBack) {
+		t.Fatalf("plain SendKeys after fallen-back: %v; want ErrRelayFallenBack", err)
+	}
+	e.assertNoTmuxCall(t)
+	advAssertPaneAnswered(t, e, r, storefix.TestRequestTokenA, advPaneAnswer(t, e, r, storefix.TestRequestTokenA, now))
+	e.rec.Reset()
 	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"}); err != nil {
-		t.Fatalf("SendKeys after fallen-back: %v", err)
+		t.Fatalf("plain SendKeys once the request is answered at the pane: %v", err)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "2")
 }
 
 // TestSendKeysRelayGuard pins the per-request guard on a relay-on
-// check_permission row (SR-4.2, SR-7.3): it holds until every request's relay
-// hook has settled (window, margin and created_at's resolution, b.z6g),
-// decided or not, and with no request at all (mid-insert), and a decided
-// request stops holding once another request has fallen back (b.ceq). A held
-// guard refuses with no tmux call, naming of the requests holding it an open
-// one before a decided one, then the oldest, then the lower request id
-// (b.ah6); a decided one is named with its own advice (b.ceq).
+// check_permission row for requests recorded before schema v7, judged by time
+// (SR-4.2, SR-7.3; b.146 rule 7): ErrSendKeysWhileRelayed while any request's
+// relay hook may still answer, until it has settled (window, margin and
+// created_at's resolution, b.z6g), decided or not; then ErrRelayFallenBack,
+// naming the oldest, while an undecided one has fallen back. With no request
+// at all the guard does not hold (the relay hook records its request and the
+// row's move in one transaction, b.146 rule 1). A held guard refuses with no
+// tmux call, naming of the requests whose hook may still answer an open one
+// before a decided one, then the oldest, then the lower request id (b.ah6); a
+// decided one is named with its own advice (b.ceq).
 func TestSendKeysRelayGuard(t *testing.T) {
 	t.Parallel()
 	tokens := []string{storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC}
-	past := 2 * relayGuardWindow // undeliverable, the guard released on its account
+	past := 2 * relayGuardWindow // undeliverable, fallen back when still open
 	settled := relayGuardSettled // a request still open then has fallen back
 	open, recorded := advSendKeysAnswerWithDecide, advSendKeysRetryLater
+	fellBack := func(token string) string { return "request " + token + " fell back" }
 	// backdated backdates open request tokens[i] by ages[i] (0: as recorded).
 	backdated := func(ages ...time.Duration) func(*testing.T, *killEnv, killRow) time.Time {
 		return func(t *testing.T, e *killEnv, r killRow) time.Time {
@@ -299,14 +317,14 @@ func TestSendKeysRelayGuard(t *testing.T) {
 		arrange func(*testing.T, *killEnv, killRow) time.Time // the guard's now; nil: time.Now()
 		advice  string                                        // the refusal's advice; "": the guard released
 	}{
-		{"no request (mid-insert) refuses", nil, nil, advSendKeysNoRequestYet},
+		{"no request delivers", nil, nil, ""},
 		{"all in window refuses", tokens, nil, open(tokens[0])},
 		{"one undeliverable, the rest in window refuses", tokens, backdated(past), open(tokens[1])},
 		{"all but one undeliverable refuses", tokens, backdated(past, past), open(tokens[2])},
-		{"all undeliverable delivers", tokens, backdated(past, past, past), ""},
+		{"all undeliverable refuses as fallen back, naming the oldest", tokens, backdated(past, past, past), fellBack(tokens[0])},
 		{"sole open request, just before its relay hook settles, refuses", tokens[:1],
 			soleAt(settled-time.Nanosecond, false), open(tokens[0])},
-		{"sole open request, as its relay hook settles, delivers", tokens[:1], soleAt(settled, false), ""},
+		{"sole open request, as its relay hook settles, refuses as fallen back", tokens[:1], soleAt(settled, false), fellBack(tokens[0])},
 		{"sole request decided, just before its relay hook settles, refuses", tokens[:1],
 			soleAt(settled-time.Nanosecond, true), recorded(tokens[0])},
 		{"sole request decided, as its relay hook settles, delivers", tokens[:1], soleAt(settled, true), ""},
@@ -323,7 +341,7 @@ func TestSendKeysRelayGuard(t *testing.T) {
 				setRequestsCreatedAt(t, e, r.ID, time.Now().Add(-10*time.Minute))
 				return time.Now()
 			}, open(tokens[2])},
-		{"a decided request in its window, another fallen back, delivers", tokens[:2], besideOlder(settled, false), ""},
+		{"a decided request in its window, another fallen back, refuses", tokens[:2], besideOlder(settled, false), recorded(tokens[0])},
 		{"a decided request in its window, another decided past its window, refuses", tokens[:2],
 			besideOlder(settled, true), recorded(tokens[0])},
 		{"an open request in its window holds beside a fallen-back one", tokens, besideOlder(settled, false), open(tokens[2])},
@@ -341,7 +359,11 @@ func TestSendKeysRelayGuard(t *testing.T) {
 			_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
 
 			if tc.advice != "" {
-				adviceAssertAdvice(t, err, api.ErrSendKeysWhileRelayed, tc.advice)
+				want := api.ErrSendKeysWhileRelayed
+				if strings.HasSuffix(tc.advice, " fell back") {
+					want = api.ErrRelayFallenBack
+				}
+				adviceAssertAdvice(t, err, want, tc.advice)
 				e.assertNoTmuxCall(t)
 				return
 			}

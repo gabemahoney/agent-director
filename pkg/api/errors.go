@@ -119,48 +119,71 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 // new life with no memory of the earlier one.
 var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 
-// ErrSendKeysWhileRelayed is returned when a caller tries to send keys
-// into a Spawn that is currently sitting on a live relayed permission prompt
-// (relay_mode=on AND state=check_permission). The relay path needs to own the
-// modal answer; a parallel send-keys would race the relay's decide() write and
-// split the answer across two pane events.
+// ErrSendKeysWhileRelayed is returned by send-keys, plain or a pane answer
+// (with a request token), while a relay hook of the Spawn may still answer its
+// request (b.146 rule 7): the relay owns that answer, and keys typed now would
+// race it. A relay hook may still answer while its process runs (judged by
+// pid, start time and pid namespace, b.146 rule 14), or, when its process
+// cannot be checked, until its request's confirm_by (its kill instant plus a
+// 2 s reserve); a request recorded before schema v7 holds by its relay window,
+// as before. A request whose relay hook acked its verdict holds only while the
+// hook process is seen running (it is writing the verdict to Claude Code). A
+// request that is closed (acked and its hook gone, answered at the pane, or
+// closed with its Spawn) never holds.
 //
-// Its message names the request holding the guard — an open one in preference
-// to a decided one, then the oldest — and states no release time (b.ah6). For
-// an open request the message advises answering it with decide, which can
-// still record a verdict. A decided one is named only when no open request
-// holds; its verdict is recorded and its relay hook may still be delivering
-// it, so decide on it would return ErrAlreadyDecided and there is nothing left
-// to answer: the message says so and advises retrying send-keys later (b.ceq).
-// It holds the guard until the Spawn leaves check_permission (normally once
-// its verdict is delivered), its relay hook is presumed settled or another
-// of the Spawn's requests falls back, whichever is first. When the Spawn has
-// zero request rows the request is still being recorded: the message names
-// none and advises decide once get lists it.
+// Its message names the request holding the guard — one still awaiting an
+// answer in preference to an acked one, then the oldest — and states no
+// release time (b.ah6). For an undecided request it advises answering it with
+// decide. For one whose verdict is recorded it says the relay hook may still
+// be delivering it and advises retrying send-keys later: decide on it would
+// return ErrAlreadyDecided.
 //
-// The refusal is time-bounded, not unconditional: Claude Code kills the relay
-// hook at its per-hook timeout, after which the poller can no longer deliver a
-// decision. The guard consults the shared guard-release signal
-// (RelayRequestGuardReleasable) across every one of the Spawn's
-// permission-request rows, decided or not, and refuses while any of them
-// holds the guard or the Spawn has zero request rows. A request holds while
-// its relay hook may still deliver it by the request's relay window — a
-// verdict recorded in its window, or the timeout deny the hook records at
-// its deadline — with one exception: a decided request stops holding once
-// another of the Spawn's requests has fallen back by that window (still open
-// after its relay hook is presumed settled, relayRequestFallenBack): that
-// request's open record keeps the Spawn in check_permission, and only a pane
-// answer can close it.
-//
-// The guard is judged by the relay window only, also for a request recorded
-// from schema v7 on, whose relay hook decide judges by its process (b.146
-// rule 5): decide can report such a request fallen back (ErrRelayFallenBack)
-// within seconds of its hook's death while this guard still holds on its
-// account until its window ends (b.146 step 2b rewrites the guard). Once it
-// has released on every request's account, send-keys is the sanctioned
-// recovery surface for a Spawn wedged in check_permission behind a dead
-// relay.
+// The guard holds for no time window beyond the relay hook's own, and has no
+// zero-rows rule: the relay hook records its request and the Spawn's move to
+// check_permission in one transaction (b.146 rule 1). It reads requests of a
+// Spawn with relay_mode on in every live state, not only check_permission: a
+// Spawn can read waiting while a request is still open.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
+
+// ErrPaneChanged is returned by send-keys and record-pane-answer given
+// expect_pane_sha256 when the agent's pane, captured with the same n_lines
+// and with ANSI stripped as read-pane gives it by default, no longer has that
+// SHA-256 (b.146 rules 7, 8 and 13): its bytes changed since the caller read
+// it. The comparison is byte equality; agent-director does not look at what
+// the bytes say. Nothing was sent or recorded. The error does not carry the
+// new hash: read the pane again (read-pane) and decide on what it shows
+// before any retry. Its err_details (PaneChangedDetails) give n_lines.
+var ErrPaneChanged = errors.New("ErrPaneChanged")
+
+// ErrPaneAnswerInProgress is returned by send-keys with a request token, and
+// by record-pane-answer, while another pane answer through send-keys on that
+// request is still being sent (b.146 problem 2): its intent is recorded
+// (pane_answer intent) and its sender process runs (pid, start time and pid
+// namespace, b.146 rule 14), or, when the sender cannot be checked, the
+// intent is younger than the tmux action timeout plus the pipe-close wait
+// plus 2 s. It keeps a double click from typing two answers, the second
+// landing on the next dialog or in the chat. Nothing was sent or recorded.
+// Once that sender has ended (its call recorded sent, or ended without it and
+// released the intent, or the process died), a retry with a fresh pane hash
+// is accepted. Its err_details (PaneAnswerInProgressDetails) give the
+// request, the claimed verdict, when the intent was written, whether the
+// sender runs and, when it cannot be checked, not_before.
+var ErrPaneAnswerInProgress = errors.New("ErrPaneAnswerInProgress")
+
+// ErrClaimTooSoon is returned by record-pane-answer when the request's relay
+// hook has not been gone for at least 2 s (b.146 rule 13, decision 5): Claude
+// Code draws a permission dialog only after the hook is gone, so a pane read
+// just after the hook's end may not show the dialog yet. It is measured from
+// the request's hook_gone_at, when a reader first found the hook gone (a
+// request with none yet gets it written now), or, when the hook cannot be
+// checked (or the request was recorded before schema v7) and its confirm_by
+// is earlier, from confirm_by: such a hook is gone by then at the latest. It
+// is also returned while the relay hook may still answer the request (its
+// process runs, or cannot be checked and its confirm_by has not passed).
+// Nothing was recorded. Its err_details (ClaimTooSoonDetails) give
+// not_before, the earliest time a record can be accepted (null only while the
+// hook is seen running).
+var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 
 // ErrInvalidFlags is returned when a flag or parameter value fails basic
 // validation. It has four sources:
@@ -181,12 +204,17 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     an `older_than` that is not a non-negative duration, or whose day
 //     count is above 106751 (expire), with a description naming the param
 //     and the expected form (b.anw, b.hxn, b.sgw).
-//   - The shared verb layer, for spawn and decide: runSpawn returns it
-//     (wrapped) when an explicit instance id contains an ASCII control
-//     character (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the
-//     TypeScript client all return it (SR-9.1); decide returns it for a
-//     negative max_wait_ms (DecideParams.MaxWaitMs, b.146 decision 9 B),
-//     which the CLI refuses first.
+//   - The shared verb layer, for spawn, decide, send-keys and
+//     record-pane-answer: runSpawn returns it (wrapped) when an explicit
+//     instance id contains an ASCII control character (0x00-0x1f or 0x7f),
+//     so the CLI, MCP, the Go client and the TypeScript client all return it
+//     (SR-9.1); decide returns it for a negative max_wait_ms
+//     (DecideParams.MaxWaitMs, b.146 decision 9 B), which the CLI refuses
+//     first; send-keys for a pane answer without as, key or
+//     expect_pane_sha256 or with text, and for any other combination its
+//     params do not allow (planSendKeys, b.146 rule 8); record-pane-answer
+//     for a missing token, an as other than allow, deny or unknown, or a
+//     missing or malformed hash (b.146 rule 13).
 //   - The exported Go function Expire, for a negative retentionDays or a
 //     negative olderThan, before anything runs (b.f4v). Client.Expire passes
 //     the configured retention, from 1 to config.MaxExpireRetentionDays, so
@@ -195,8 +223,9 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// So spawn's and decide's manifest ErrorNames list it; no other callable
-// verb lists it, because the CLI flag-parse and MCP argument emissions are
+// So spawn's, decide's, send-keys' and record-pane-answer's manifest
+// ErrorNames list it; no other callable verb lists it, because the CLI
+// flag-parse and MCP argument emissions are
 // not verb-specific and the expire verb's surfaces never reach Expire's
 // refusal: only a Go caller passing Client.Expire a negative olderThan does.
 // (The internal, non-callable trail-emit verb also lists it.)

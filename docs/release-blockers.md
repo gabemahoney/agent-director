@@ -54,12 +54,27 @@ v7 is one migration shared with steps 2b (b.3oc) and 2c (b.8t7), so:
   `ErrStoreBusy` and the step 2b and 2c surfaces, and bumps its pinned
   client, first.
 
+### Upgrade note the release must carry
+
+Release notes are built from commit messages, so the release that carries
+step 2b states this in a commit body (b.3oc): after the store is migrated
+to v7, a permission request recorded before the upgrade that fell back by
+time and was never decided (typically one answered at the pane after its
+relay hook was killed) refuses plain `send-keys` to its agent with
+`ErrRelayFallenBack`, in every live state of the row, until it is closed
+with `record-pane-answer --as unknown` (or a pane answer), or its row ends
+or is marked `missing`. `decide` does not close it, and for such a stale
+record may return `ErrNoOpenPermissionRequest` while plain `send-keys`
+still returns `ErrRelayFallenBack`. See docs/migration-guide.md, "What the
+upgrade changes for an existing request".
+
 ### Resolution steps
 
 1. Steps 2, 2b and 2c are merged on the release branch.
 2. b.u7d is closed: CSCB confirms the release that carries its items and its
    pinned AD client equals this release.
-3. Mark this blocker resolved here with the date.
+3. The release notes carry the upgrade note above.
+4. Mark this blocker resolved here with the date.
 
 ---
 

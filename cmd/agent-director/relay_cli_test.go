@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -119,6 +120,78 @@ func TestCLIDeliveryFactsJudgeRealProcesses(t *testing.T) {
 			row, _ := spawns[0].(map[string]any)
 			check("list's request", onlyRequestOf(t, "list", row))
 		})
+	}
+}
+
+// seedCLIRelayRequest seeds a relay-on check_permission row under a new home
+// with request A recorded by a relay hook with identity hook, and returns the
+// home and the row's id.
+func seedCLIRelayRequest(t *testing.T, hook store.ProcessIdentity) (home, id string) {
+	t.Helper()
+	home = t.TempDir()
+	id, err := apitest.SeedSpawn(stateDB(home), "", store.StateCheckPermission, "", "on", "", true)
+	if err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	s := openDBForRead(t, home)
+	storefix.RegisterStorePath(t, s, stateDB(home))
+	storefix.SeedRelayRequest(t, s, id, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash",
+		ToolInput: `{"command":"ls"}`, ToolUseID: "toolu_cli", Hook: hook, SettledAt: time.Now().Add(time.Hour)})
+	return home, id
+}
+
+// cliErrorEnvelope runs the CLI under home, fails unless it exited 1 with
+// empty stdout, and returns its stderr envelope as raw JSON fields.
+func cliErrorEnvelope(t *testing.T, home string, args ...string) map[string]json.RawMessage {
+	t.Helper()
+	stdout, stderr, code := runCLIWithHome(t, home, args...)
+	var env map[string]json.RawMessage
+	if code != 1 || stdout != "" || json.Unmarshal([]byte(stderr), &env) != nil {
+		t.Fatalf("%v: exit %d, stdout %q, stderr %q; want 1, nothing on stdout and one JSON envelope", args, code, stdout, stderr)
+	}
+	return env
+}
+
+// TestCLIErrDetails (b.146 rule 15, decision 8 A): a refusal that carries
+// facts prints them as the stderr envelope's err_details object: decide's and
+// plain send-keys' ErrRelayFallenBack on a request whose relay hook exited,
+// and record-pane-answer's ErrClaimTooSoon while its hook runs (not_before
+// null). An error with none has no err_details key.
+func TestCLIErrDetails(t *testing.T) {
+	cmd, gone := startChild(t, "sleep", "30")
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	home, id := seedCLIRelayRequest(t, gone)
+	for name, argv := range map[string][]string{
+		"decide":    decideArgv(id, storefix.TestRequestTokenA),
+		"send-keys": {"send-keys", "--claude-instance-id", id, "--text", "1"},
+	} {
+		env := cliErrorEnvelope(t, home, argv...)
+		var details map[string]any
+		if string(env["err_name"]) != `"ErrRelayFallenBack"` || json.Unmarshal(env["err_details"], &details) != nil {
+			t.Fatalf("%s envelope = %v; want ErrRelayFallenBack with an err_details object", name, env)
+		}
+		if details["request_token"] != storefix.TestRequestTokenA || details["tool_use_id"] != "toolu_cli" ||
+			details["delivery"] != "fallen_back" || details["hook_alive"] != false || details["state"] != store.StateCheckPermission {
+			t.Errorf("%s err_details = %v; want request A fallen back, hook_alive false, state check_permission", name, details)
+		}
+		if reqs, ok := details["open_requests"].([]any); !ok || len(reqs) != 0 {
+			t.Errorf("%s err_details.open_requests = %#v; want []", name, details["open_requests"])
+		}
+	}
+
+	alive, _ := seedCLIRelayRequest(t, realIdentity(t, os.Getpid()))
+	env := cliErrorEnvelope(t, alive, "record-pane-answer", "--request-token", storefix.TestRequestTokenA, "--as", "unknown",
+		"--expect-pane-sha256", strings.Repeat("0", 64))
+	var details map[string]any
+	if string(env["err_name"]) != `"ErrClaimTooSoon"` || json.Unmarshal(env["err_details"], &details) != nil ||
+		details["request_token"] != storefix.TestRequestTokenA || details["hook_alive"] != true || details["not_before"] != nil {
+		t.Errorf("record-pane-answer envelope = %v; want ErrClaimTooSoon, err_details request A, hook_alive true, not_before null", env)
+	}
+
+	env = cliErrorEnvelope(t, home, "get-permission", "--request-token", storefix.TestRequestTokenB)
+	if _, has := env["err_details"]; has || string(env["err_name"]) != `"ErrPermissionRequestNotFound"` {
+		t.Errorf("get-permission of an unknown token envelope = %v; want ErrPermissionRequestNotFound with no err_details", env)
 	}
 }
 

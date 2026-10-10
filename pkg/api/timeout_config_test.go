@@ -21,16 +21,18 @@ import (
 )
 
 // TestClientSendKeysRelayGuardUsesConfiguredWindow: R3 (b.8q2) — Client.SendKeys
-// on a relay-on row whose request is two default windows old delivers under the
-// default relay window and is refused, typing nothing, under the largest one.
+// on a relay-on row whose request (recorded before schema v7, judged by time)
+// is two default windows old finds it fallen back under the default relay
+// window (ErrRelayFallenBack, b.146 rule 7) and its relay hook possibly alive
+// under the largest one (ErrSendKeysWhileRelayed); either way it types nothing.
 func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		relay   int64
-		deliver bool
+		relay int64
+		want  error
 	}{
-		{config.DefaultRelayTimeoutSeconds, true},
-		{config.MaxRelayTimeoutSeconds, false},
+		{config.DefaultRelayTimeoutSeconds, api.ErrRelayFallenBack},
+		{config.MaxRelayTimeoutSeconds, api.ErrSendKeysWhileRelayed},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprint(tc.relay), func(t *testing.T) {
@@ -48,15 +50,8 @@ func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
 
 			_, err = c.SendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
 
-			if tc.deliver {
-				if err != nil {
-					t.Fatalf("SendKeys: %v; want the keys delivered once the request is past the window", err)
-				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
-				return
-			}
-			if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
-				t.Fatalf("SendKeys err = %v; want ErrSendKeysWhileRelayed", err)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("SendKeys err = %v; want %v", err, tc.want)
 			}
 			e.assertNoTmuxCall(t)
 		})

@@ -9,6 +9,10 @@ export { TS_ONLY_ERROR_NAMES } from "./internal/tsOnlyErrors.js";
  * `verb` names the callable verb that triggered the error (e.g. "spawn").
  * `errName` is the canonical error name from the Go errnames catalog.
  * `errDescription` is the human-readable description from the subprocess error envelope.
+ * `errDetails` is the envelope's optional `err_details` object (b.146 rule 15): the facts of a
+ * refusal that gives them as fields (ErrRelayFallenBack, ErrPaneAnswerInProgress,
+ * ErrClaimTooSoon, ErrPaneChanged, and the ErrInternal of a pane answer whose key was sent; see
+ * `RelayFallenBackDetails` and its siblings in types.ts), or null when the envelope carries none.
  * `message` is formatted as "${errName}: ${errDescription}".
  */
 export class AgentDirectorError extends Error {
@@ -18,12 +22,23 @@ export class AgentDirectorError extends Error {
   readonly errName: string;
   /** Human-readable description forwarded from the subprocess error envelope. */
   readonly errDescription: string;
+  /**
+   * The envelope's `err_details` object, as sent; null when it carries none (b.146 rule 15).
+   * Read fields from it, never from errDescription.
+   */
+  readonly errDetails: Readonly<Record<string, unknown>> | null;
 
-  constructor(verb: string, err_name: string, err_description: string) {
+  constructor(
+    verb: string,
+    err_name: string,
+    err_description: string,
+    err_details?: Readonly<Record<string, unknown>> | null
+  ) {
     super(`${err_name}: ${err_description}`);
     this.verb = verb;
     this.errName = err_name;
     this.errDescription = err_description;
+    this.errDetails = err_details ?? null;
     this.name = this.constructor.name;
     // Restore the prototype chain (required when extending built-ins in ES5 targets).
     Object.setPrototypeOf(this, new.target.prototype);
@@ -390,7 +405,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (51 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (54 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -464,8 +479,31 @@ export class ErrJsonlMissing extends AgentDirectorError {}
 export class ErrJsonlNeverWritten extends AgentDirectorError {}
 /** Mirrors ErrRelayModeOff (package: api) */
 export class ErrRelayModeOff extends AgentDirectorError {}
-/** Mirrors ErrRelayFallenBack (package: api) */
+/**
+ * Mirrors ErrRelayFallenBack (package: api): a permission request's relay hook is gone and acked
+ * no verdict, and no pane answer is recorded on it through agent-director. It arrives within
+ * seconds of the hook's end, from `decide` (for its request) and from a plain `sendKeys` (for the
+ * Spawn's oldest such request). `errDetails` is a `RelayFallenBackDetails`: answer the request
+ * with `sendKeys` and its `request_token`, or close it with `recordPaneAnswer`.
+ */
 export class ErrRelayFallenBack extends AgentDirectorError {}
+/**
+ * Mirrors ErrPaneChanged (package: api): the pane no longer has `expect_pane_sha256`; nothing was
+ * sent or recorded. Read the pane again. `errDetails` is a `PaneChangedDetails` (never the new
+ * hash).
+ */
+export class ErrPaneChanged extends AgentDirectorError {}
+/**
+ * Mirrors ErrPaneAnswerInProgress (package: api): another pane answer on the request is still
+ * being sent; nothing was sent or recorded. `errDetails` is a `PaneAnswerInProgressDetails`.
+ */
+export class ErrPaneAnswerInProgress extends AgentDirectorError {}
+/**
+ * Mirrors ErrClaimTooSoon (package: api): `recordPaneAnswer` before the request's relay hook has
+ * been gone 2 s (or while it may still answer); nothing was recorded. `errDetails` is a
+ * `ClaimTooSoonDetails`: retry at its `not_before`.
+ */
+export class ErrClaimTooSoon extends AgentDirectorError {}
 /** Mirrors ErrInvalidDecision (package: api) */
 export class ErrInvalidDecision extends AgentDirectorError {}
 /** Mirrors ErrNoOpenPermissionRequest (package: store) */
@@ -510,12 +548,13 @@ export class ErrInternal extends AgentDirectorError {}
 type ErrConstructor = new (
   verb: string,
   err_name: string,
-  err_description: string
+  err_description: string,
+  err_details?: Readonly<Record<string, unknown>> | null
 ) => AgentDirectorError;
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 51
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 54
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -561,6 +600,9 @@ const ERROR_TABLE = {
   ErrJsonlNeverWritten,
   ErrRelayModeOff,
   ErrRelayFallenBack,
+  ErrPaneChanged,
+  ErrPaneAnswerInProgress,
+  ErrClaimTooSoon,
   ErrInvalidDecision,
   ErrMissingRequestToken,
   ErrInvalidFlags,
@@ -590,20 +632,22 @@ const ERROR_TABLE = {
  * @param verb            The verb name that produced the error (e.g. "spawn").
  * @param err_name        The canonical error name from the envelope.
  * @param err_description The human-readable description from the envelope.
+ * @param err_details     The envelope's optional err_details object (b.146 rule 15).
  * @returns A typed subclass when err_name matches the catalog; a plain
  *          AgentDirectorError (with a console.warn) for unknown names.
  */
 export function errorFromEnvelope(
   verb: string,
   err_name: string,
-  err_description: string
+  err_description: string,
+  err_details?: Readonly<Record<string, unknown>> | null
 ): AgentDirectorError {
   const Ctor = (ERROR_TABLE as Readonly<Record<string, ErrConstructor>>)[err_name];
   if (Ctor) {
-    return new Ctor(verb, err_name, err_description);
+    return new Ctor(verb, err_name, err_description, err_details);
   }
   console.warn(
     `agent-director: unknown err_name "${err_name}" (verb=${verb}); returning base AgentDirectorError`
   );
-  return new AgentDirectorError(verb, err_name, err_description);
+  return new AgentDirectorError(verb, err_name, err_description, err_details);
 }

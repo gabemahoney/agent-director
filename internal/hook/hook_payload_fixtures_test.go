@@ -1,7 +1,8 @@
 // Hook payload fixtures (SR-20.6, AC-HOOK-01): testdata/hook-payloads holds
 // one payload per event agent-director registers (hookEvents in
 // internal/spawn/settings.go): SessionStart, UserPromptSubmit, PreToolUse,
-// PostToolUse, Stop, Notification, SessionEnd and PermissionRequest. The
+// PostToolUse, PostToolUseFailure, Stop, Notification, SessionEnd and
+// PermissionRequest. The
 // *-subagent fixtures carry agent_id (a subagent or in-process teammate,
 // SR-22.9, AC-HOOK-02); session-start-agent-type-only carries only
 // agent_type (a session started with --agent).
@@ -40,6 +41,7 @@ var payloadFixtures = []struct {
 	{"pre-tool-use-bash.json", "PreToolUse", "tool_name", "Bash", ""},
 	{"pre-tool-use-subagent.json", "PreToolUse", "tool_name", "Grep", "a5b92f0e7d3c6184"},
 	{"post-tool-use.json", "PostToolUse", "tool_response", "", ""},
+	{"post-tool-use-failure.json", "PostToolUseFailure", "error", "", ""},
 	{"stop.json", "Stop", "last_assistant_message", "", ""},
 	{"notification.json", "Notification", "notification_type", "idle_prompt", ""},
 	{"session-end-prompt-input-exit.json", "SessionEnd", "reason", "prompt_input_exit", ""},

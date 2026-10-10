@@ -185,9 +185,13 @@ func TestAmbiguousDecide(t *testing.T) {
 // canonical reason (SR-1.3) and decided_at; and a miss as
 // ErrPermissionRequestNotFound, never sql.ErrNoRows (SR-7.4).
 func TestGetPermissionRequestByToken(t *testing.T) {
-	if DecisionReasonOperator != "operator" || DecisionReasonTimeout != "timeout" || DecisionReasonFindMissing != "find_missing" {
-		t.Errorf("DecisionReason constants = %q, %q, %q; want operator, timeout, find_missing",
-			DecisionReasonOperator, DecisionReasonTimeout, DecisionReasonFindMissing)
+	if DecisionReasonOperator != "operator" || DecisionReasonTimeout != "timeout" || DecisionReasonFindMissing != "find_missing" ||
+		DecisionReasonEnded != "ended" {
+		t.Errorf("DecisionReason constants = %q, %q, %q, %q; want operator, timeout, find_missing, ended",
+			DecisionReasonOperator, DecisionReasonTimeout, DecisionReasonFindMissing, DecisionReasonEnded)
+	}
+	if WriterProcessResume != "resume" {
+		t.Errorf("WriterProcessResume = %q; want resume", WriterProcessResume)
 	}
 	cases := []struct{ name, decision, reason string }{
 		{"open", "", ""},
@@ -522,22 +526,31 @@ func TestMarkMissingClosesOpenRequests(t *testing.T) {
 
 // TestDecideIfDeliverableRefusesFinishedSpawn pins b.146 rule 12 in decide's
 // guarded write: on an open, deliverable request of an ended or missing Spawn
-// it records nothing and emits nothing; a live Spawn's request is recorded.
+// (one the close of its requests did not reach) it records nothing and emits
+// nothing; a live Spawn's request is recorded.
 func TestDecideIfDeliverableRefusesFinishedSpawn(t *testing.T) {
 	cases := []struct {
 		name   string
-		finish func(t *testing.T, s *Store, id string) // ends the Spawn, the request still open; nil: live
+		finish func(t *testing.T, s *Store, path, id string) // ends the Spawn, the request still open; nil: live
 	}{
 		{"live", nil},
-		{"ended by its agent's SessionEnd", func(t *testing.T, s *Store, id string) {
-			if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
-				t.Fatalf("insert: %v", err)
-			}
+		{"ended by its agent's SessionEnd, the request recorded after it", func(t *testing.T, s *Store, _, id string) {
 			if err := agentHook(s, id, StateEnded, false, "SessionEnd"); err != nil {
 				t.Fatalf("to ended: %v", err)
 			}
+			if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
 		}},
-		{"missing, the request recorded after the mark", func(t *testing.T, s *Store, id string) {
+		{"ended by an earlier release, the request left open", func(t *testing.T, s *Store, path, id string) {
+			if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			withRaw(t, path, func(db *sql.DB) {
+				mustExec(t, db, `UPDATE spawns SET state = 'ended', ended_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`, id)
+			})
+		}},
+		{"missing, the request recorded after the mark", func(t *testing.T, s *Store, _, id string) {
 			if _, res, err := s.MarkMissingIfSameLife(id, mustGetSpawn(t, s, id).Snapshot); err != nil || res != CondApplied {
 				t.Fatalf("mark = %v, %v", res, err)
 			}
@@ -548,7 +561,7 @@ func TestDecideIfDeliverableRefusesFinishedSpawn(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := openTempStore(t)
+			s, path := openTempStore(t)
 			const id = "deliverable-finished"
 			seedSpawnForPerm(t, s, id, "on")
 			if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
@@ -559,7 +572,7 @@ func TestDecideIfDeliverableRefusesFinishedSpawn(t *testing.T) {
 					t.Fatalf("insert: %v", err)
 				}
 			} else {
-				tc.finish(t, s, id)
+				tc.finish(t, s, path, id)
 			}
 			mark := TrailMark(t)
 

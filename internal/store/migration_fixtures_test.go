@@ -457,8 +457,8 @@ var v6ToV5RecipeStatements = []string{
 }
 
 // v7ColumnSpecs are the columns the v6→v7 step adds (b.146 steps 2, 2b and
-// 2c), in schema order: sixteen on permission_requests, after created_at, and
-// spawns.idle_since, after launch_owner_pidns.
+// 2c), in schema order: seventeen on permission_requests, after created_at,
+// and spawns.idle_since, after launch_owner_pidns.
 var v7ColumnSpecs = []columnSpec{
 	{"permission_requests", "hook_pid", "INTEGER", false, ""},
 	{"permission_requests", "hook_starttime", "TEXT", false, ""},
@@ -475,6 +475,7 @@ var v7ColumnSpecs = []columnSpec{
 	{"permission_requests", "pane_sender_pid", "INTEGER", false, ""},
 	{"permission_requests", "pane_sender_starttime", "TEXT", false, ""},
 	{"permission_requests", "pane_sender_pidns", "TEXT", false, ""},
+	{"permission_requests", "pane_intent_at", "INTEGER", false, ""},
 	{"permission_requests", "closed_at", "INTEGER", false, ""},
 	{"spawns", "idle_since", "TEXT", false, ""},
 }
@@ -575,7 +576,7 @@ func makeV6Fixture(t *testing.T, dir string) v6Fixture {
 	return f
 }
 
-// v7ToV6RecipeStatements reverses migrateV6toV7: the seventeen v7 columns
+// v7ToV6RecipeStatements reverses migrateV6toV7: the eighteen v7 columns
 // dropped in the order the hop adds them, then the version stamped back to 6.
 // It must match docs/migration-guide.md's "v7 → v6" recipe statement for
 // statement.
@@ -595,6 +596,7 @@ var v7ToV6RecipeStatements = []string{
 	"ALTER TABLE permission_requests DROP COLUMN pane_sender_pid",
 	"ALTER TABLE permission_requests DROP COLUMN pane_sender_starttime",
 	"ALTER TABLE permission_requests DROP COLUMN pane_sender_pidns",
+	"ALTER TABLE permission_requests DROP COLUMN pane_intent_at",
 	"ALTER TABLE permission_requests DROP COLUMN closed_at",
 	"ALTER TABLE spawns DROP COLUMN idle_since",
 	"PRAGMA user_version = 6",

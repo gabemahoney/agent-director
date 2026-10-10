@@ -129,7 +129,12 @@ for (const spawn of result.spawns) {
 ### sendKeys
 
 Send text to the agent's own pane, then one Enter to submit it. An empty
-`text` sends the Enter only, submitting what is already typed.
+or omitted `text` sends the Enter only, submitting what is already typed.
+`no_enter: true` types the text without the Enter, and `key` sends one key
+alone (`"Escape"`, `"Enter"`, `"Up"`, `"Down"`, `"Tab"`, or one character),
+never followed by Enter. With `expect_pane_sha256` (the `pane_sha256` of
+the `readPane` you looked at, with its `n_lines`), nothing is sent if the
+pane changed since (`ErrPaneChanged`).
 
 ```sh
 agent-director send-keys --claude-instance-id <id> --text "what is 2+2?"
@@ -177,8 +182,12 @@ agent-director read-pane --claude-instance-id <id> --n-lines 50
 
 ```ts
 const result = await client.readPane({ claude_instance_id: "<id>", n_lines: 50 });
-console.log(result.pane);
+console.log(result.pane, result.pane_sha256);
 ```
+
+`pane_sha256` is the SHA-256 of exactly the bytes of `pane`; pass it back as
+`sendKeys`' or `recordPaneAnswer`'s `expect_pane_sha256`, with the same
+`n_lines`, when you act on what this pane shows.
 
 `readPane` has no state guard — it works on `pending`, `ended`, and `missing`
 rows as well as live ones. The `allow_pending` flag is accepted for symmetry
@@ -255,14 +264,72 @@ is the verdict recorded, not the outcome: read `delivery`. `max_wait_ms`
 bounds the whole call, its reads and its write, and has no default; without
 it `decide` can wait up to the store's busy timeout. `decide` rejects,
 recording no verdict, with `ErrRelayFallenBack` when the request's relay
-hook is gone and took no verdict (only an answer at the pane can close it),
-with `ErrStoreBusy` when `max_wait_ms` ran out before the verdict was
-recorded (retry), and with `ErrNoOpenPermissionRequest` when no open
-request has that token or the request is closed (do not answer it at the
-pane). The `permission_requests` of `get` and of each `list` row carry the
-same delivery fields, for requests that still await an answer only; a row
-can read `waiting` while a request is still open, so follow the requests
-you track with `getPermission`.
+hook is gone and took no verdict (answer it at the pane, or record it
+answered: see below), with `ErrStoreBusy` when `max_wait_ms` ran out
+before the verdict was recorded (retry), and with
+`ErrNoOpenPermissionRequest` when no open request has that token or the
+request is closed (do not answer it at the pane). The
+`permission_requests` of `get` and of each `list` row carry the same
+delivery fields, `pane_answer` and `pane_as` included, for requests that
+still await an answer only; a row can read `waiting` while a request is
+still open, so follow the requests you track with `getPermission`.
+`decision_reason` is one of `"operator"`, `"timeout"`, `"find_missing"`,
+`"ended"`, `"pane"`, `"pane_outside"` and `"tool_ran"`. For a reason you
+do not know, read the recorded verdict from `decision` (`null` for a
+`"pane_outside"` `"unknown"` claim) and the outcome from `delivery` and
+`pane_answer`; never read a reason as a verdict.
+
+### Answering a request at the pane
+
+A request that fell back (`delivery` `"fallen_back"`) is closed only at the
+pane. Read the pane, and having looked, send the one key that answers it,
+naming the request:
+
+```ts
+const seen = await client.readPane({ claude_instance_id: "<id>" });
+// having looked at seen.pane, the caller picks the key and the verdict it gives
+await client.sendKeys({
+  claude_instance_id: "<id>",
+  request_token: "<token>",
+  as: "deny",
+  key: "<key>",
+  expect_pane_sha256: seen.pane_sha256,
+});
+```
+
+It sends exactly that key and no Enter, then records the request
+`pane_answer` `"sent"` with `decision` your `as` and `decision_reason`
+`"pane"`. `as`, `key` and `expect_pane_sha256` are required; never pass the
+hash from an automatic flow, since it says a person or an LLM judged that
+exact screen. An `ErrInternal` whose `errDetails` is a `PaneKeySentDetails`
+(`key_sent` `true`) means the key was sent but not recorded: read the pane
+before you send anything again. If the request was answered outside
+agent-director, record it instead (it types nothing):
+
+```ts
+try {
+  await client.recordPaneAnswer({
+    request_token: "<token>",
+    as: "unknown",
+    expect_pane_sha256: "<pane_sha256>",
+  });
+} catch (e) {
+  if (e instanceof ErrClaimTooSoon) {
+    // errDetails is a ClaimTooSoonDetails here.
+    console.log("retry at", e.errDetails?.["not_before"]);
+  } else {
+    throw e;
+  }
+}
+```
+
+Pass `as: "unknown"` unless you saw the answer. While a request is fallen
+back with no pane answer recorded, a `sendKeys` without `request_token`
+rejects with `ErrRelayFallenBack`, whose `errDetails`
+(`RelayFallenBackDetails`) name the request and the Spawn's other open
+requests. `ErrPaneChanged`: the pane changed since you read it; read it
+again (the error carries no new hash). `ErrPaneAnswerInProgress`: another
+pane answer to the request is still being sent; do nothing.
 
 ## Consumption
 
@@ -346,6 +413,16 @@ try {
 }
 ```
 
+Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
+the error envelope's optional `err_details` object, or `null`. Four errors
+carry one, typed as exported interfaces: `ErrRelayFallenBack`
+(`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
+(`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`)
+and `ErrPaneChanged` (`PaneChangedDetails`). So does the `ErrInternal` of a
+pane answer whose key was sent but not recorded (`PaneKeySentDetails`:
+`key_sent` `true` and `request_token`). Read facts from `errDetails`, never
+from `errDescription`.
+
 The public typed-error surface falls into four groups. Every class named below is exported from the package entry point. The tables are self-sufficient for choosing what to catch; the raw generated catalog for the group-4 classes lives in [`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json).
 
 ### Realistic catch-site shortlist
@@ -399,7 +476,7 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 50 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 54 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -459,14 +536,17 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on` while one of the spawn's permission requests holds the relay guard, or before any request is recorded; nothing was sent. The message names the request holding the guard. If it is pending, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`); `decide` on it would throw `ErrAlreadyDecided`. With no request recorded yet the message names none (`… whose request is not yet recorded; answer it with decide once get lists it`). The guard is time-bounded: a request holds it until 2 s after its relay window ends, so it can still hold on account of a request `decide` has rejected with `ErrRelayFallenBack`; once no request holds it, it lets `send-keys` through. |
-| `ErrRelayFallenBack` | `decide` was called on a request whose relay hook is gone and acked no verdict, with no pane answer recorded through agent-director: no answer from the relay reached the agent, and only an answer at the pane can close the request. Thrown within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process). No verdict was recorded; the caller's is kept as the request's `attempted_decision`. For a request recorded before this release: thrown once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `decide` throws `ErrNoOpenPermissionRequest`. |
+| `ErrSendKeysWhileRelayed` | `sendKeys` (plain or a pane answer) on a spawn with `relay_mode=on`, in any live state, while a relay hook of the spawn may still answer its request (its process runs, or it cannot be checked and the request's `confirm_by` has not passed); nothing was sent. The message names that request. If it is undecided, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`); `decide` on it would throw `ErrAlreadyDecided`. |
+| `ErrRelayFallenBack` | A request's relay hook is gone and acked no verdict, with no pane answer recorded through agent-director: no answer from the relay reached the agent. Thrown by `decide` on that request, within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process); no verdict was recorded, the caller's is kept as the request's `attempted_decision`. Thrown by a `sendKeys` without `request_token` while any request of the spawn is so; nothing was sent. `errDetails` is a `RelayFallenBackDetails`: the request's facts, the spawn's `state` and its other `open_requests`. Answer the request at the pane with `sendKeys` and its `request_token`, or close it with `recordPaneAnswer`. For a request recorded before this release, `decide` throws it once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `ErrNoOpenPermissionRequest`. |
+| `ErrPaneChanged` | `sendKeys` or `recordPaneAnswer` with `expect_pane_sha256`: the agent's pane no longer has that hash; nothing was sent or recorded. Read the pane again; `errDetails` (`PaneChangedDetails`) never carries the new hash. |
+| `ErrPaneAnswerInProgress` | A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` while another pane answer to the request is still being sent; nothing was sent or recorded. `errDetails` is a `PaneAnswerInProgressDetails`. Do nothing; a retry after that sender has ended needs a fresh hash. |
+| `ErrClaimTooSoon` | `recordPaneAnswer` before the request's relay hook has been gone 2 s, or while it may still answer the request; nothing was recorded. Retry at the `not_before` of its `errDetails` (`ClaimTooSoonDetails`; `null` only while the hook is seen running). |
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `--decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed, so do not answer it at the pane. It throws it too for a request `find-missing` closed when it marked the spawn `missing` before the request's relay hook confirmed the verdict recorded on it, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (`"delivered"` only if its relay hook confirmed). Do not answer it at the pane. For a request recorded before this release, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into Claude's prompt, so do not answer it at the pane. `send-keys` does not apply this check. |
-| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay hook denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the hook recorded that deny with its confirmation before returning it to Claude Code, so there is nothing to answer at the pane. It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`). |
-| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and the bound ran out, during its reads or its write, before its verdict was recorded: another agent-director process held the store that long (or, for a request recorded before this release, `decide` would have had to wait past the bound for the end of its relay window). Nothing was recorded, so retry. Once the verdict is recorded, `decide` never throws it: a bound reached while it waits for the relay hook's confirmation resolves with `delivery` `"not_confirmed"`. Without `max_wait_ms` it is never thrown. |
+| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed, so do not answer it at the pane. It throws it too for a request closed with its spawn (when its agent ended it, `decision_reason` `"ended"` for an undecided one, or when `find-missing` marked it `missing`) before the request's relay hook confirmed a verdict recorded on it, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (`"delivered"` only if its relay hook confirmed). Do not answer it at the pane. A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded before this release, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into Claude's prompt, so do not answer it at the pane. `send-keys` does not apply this check. |
+| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay hook denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the hook recorded that deny with its confirmation before returning it to Claude Code, so there is nothing to answer at the pane. It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay hook confirmed, or one already closed at the pane, throws it too. |
+| `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and the bound ran out, during its reads or its write, before its verdict was recorded: another agent-director process held the store that long (or, for a request recorded before this release, `decide` would have had to wait past the bound for the end of its relay window). Nothing was recorded, so retry. Once the verdict is recorded, `decide` never throws it: a bound reached while it waits for the relay hook's confirmation resolves with `delivery` `"not_confirmed"`. Without `max_wait_ms`, `decide` never throws it. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout; nothing was sent or recorded, so retry. |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
 | `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
 
@@ -483,7 +563,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation, `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f), or `decide` was given a negative `max_wait_ms`. |
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation, `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f), `decide` was given a negative `max_wait_ms`, `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash), or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was sent or recorded. |
 
 **CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all four are in the "AD is sick" alert set):
 
@@ -498,7 +578,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrInternal` | The CLI failed in a way it has no more specific name for: for example the store could not be read or written, or a row's recorded tmux session name cannot be used. The description says what failed and, where it matters, whether anything was changed; read it before you retry. An unusable recorded session name needs a human (see "Operator actions" in the agent-director README). It says nothing about whether an agent is alive. |
+| `ErrInternal` | The CLI failed in a way it has no more specific name for: for example the store could not be read or written, or a row's recorded tmux session name cannot be used. The description says what failed and, where it matters, whether anything was changed; read it before you retry. An unusable recorded session name needs a human (see "Operator actions" in the agent-director README). It says nothing about whether an agent is alive. From a pane answer (`sendKeys` with `request_token`) whose key was sent but not recorded, its `errDetails` is a `PaneKeySentDetails` (`key_sent` `true`): read the pane before you send anything again. |
 | `ErrJSONMarshal` | The verb ran and succeeded, but the CLI could not write its JSON result, so the result is lost and whatever the call changes was changed (a `spawn` launched its agent). A bug in agent-director. Check with `get`, `status` or `list` before you repeat a call that changes something. |
 | `ErrUnknownVerb` | The binary does not know the verb this client called, so nothing ran: the binary is of a different version than this client, most often an older one that the version floor still admits. Version error — install the agent-director release that matches this client; do not retry. |
 | `ErrTrailWrite` | Only the CLI's internal `trail-emit` command gives it, when it cannot write its trail event. No method of this client runs `trail-emit`, so a call through this client does not get it. |

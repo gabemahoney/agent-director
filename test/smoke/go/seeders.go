@@ -100,6 +100,15 @@ const (
 	// Used by read-pane, so its happy path takes the Ours path (SR-7.2).
 	seedReadPane
 
+	// seedFallenBack seeds a working row as seedReadPane does (its own pane
+	// captures smokePaneText) with an open request under
+	// storefix.TestRequestTokenA, recorded before schema v7, backdated past
+	// the relay window (fallen back) and its hook found gone a minute ago
+	// (apitest.AgePermissionRequest). Used by record-pane-answer (b.146 rule
+	// 13), whose happy path reads the pane's hash and records the request
+	// answered outside agent-director.
+	seedFallenBack
+
 	// seedPause seeds a waiting row through apitest.SeedSpawn (the same
 	// SR-20.3 defaults) and swaps the driver's Recorder for
 	// tmuxfix.NewRecorderForPause's, with an after-call hook on the Enter

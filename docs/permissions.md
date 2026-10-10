@@ -149,6 +149,11 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
 5. The hook's polling loop sees the verdict on its next read, confirms it
    and writes the envelope. `decide` waits at most 1 s for that
    confirmation and reports it (see "Delivery" below).
+6. A relay hook that ends with no confirmed verdict (it died, or Claude
+   Code ended it) leaves its request fallen back: no answer from the relay
+   reached the agent, `decide` refuses it with `ErrRelayFallenBack`, and
+   only an answer at the pane, or a record of one, closes it (see
+   "Answering at the pane" below).
 
 ### Envelope wire format
 
@@ -315,7 +320,7 @@ mode.
 The decide verb writes the decision via a single-statement UPDATE in its
 own write transaction, guarded by the first-call-wins `decision IS NULL`
 predicate, the request being unconfirmed, without a pane answer and not
-closed by `find-missing`, a `created_at > ?` deliverability predicate that
+closed with its spawn, a `created_at > ?` deliverability predicate that
 applies only to a request recorded before this release (one with no
 `settled_at`), and a check that the request's spawn is not `ended` or
 `missing` (the checks and the write are one atomic statement):
@@ -339,12 +344,14 @@ these outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Row exists with non-NULL decision → `ErrAlreadyDecided` (including a
-  request the relay hook denied at its timeout, and one `find-missing`
-  denied when it marked the spawn `missing`).
-- Row was closed by `find-missing` with a verdict recorded before the mark
-  that its relay hook had not confirmed → `ErrNoOpenPermissionRequest`,
-  whether or not the spawn was resumed since (see "A request of a finished
-  spawn is closed" below).
+  request the relay hook denied at its timeout, one `find-missing` denied
+  when it marked the spawn `missing`, and one closed at the pane with a
+  verdict).
+- Row was closed with its spawn, by `find-missing`'s mark or by the
+  spawn's end, before its relay hook confirmed a verdict, with a verdict
+  `find-missing` did not write (one recorded before the close, or the
+  `ended` deny) → `ErrNoOpenPermissionRequest`, whether or not the spawn
+  was resumed since (see "A request of a finished spawn is closed" below).
 - Row is still open but its spawn is `ended` or `missing` →
   `ErrNoOpenPermissionRequest` (see "A request of a finished spawn is
   closed" below).
@@ -367,10 +374,13 @@ its agent is gone (or judged gone by `find-missing`), so no relay hook of
 it can deliver a verdict. `decide` records nothing for it and answers
 with an existing error name:
 
-- a decided request → `ErrAlreadyDecided`;
-- an open request → `ErrNoOpenPermissionRequest`, whose message says the
-  request is closed because the spawn is `ended` or `missing`, nothing was
-  recorded, and not to answer it at the pane;
+- a decided request → `ErrAlreadyDecided`, except one closed (see below)
+  before its relay hook confirmed a verdict that `find-missing` did not
+  write → `ErrNoOpenPermissionRequest`;
+- an open request (one an earlier release left open) →
+  `ErrNoOpenPermissionRequest`, whose message says the request is closed
+  because the spawn is `ended` or `missing`, nothing was recorded, and not
+  to answer it at the pane;
 - no such request → `ErrNoOpenPermissionRequest`, as for a live spawn.
 
 `decide` checks the spawn's state when it reads the spawn, and its write
@@ -379,30 +389,43 @@ the two still gets nothing recorded. `send-keys` refuses an `ended` or
 `missing` spawn before its relay guard reads any request
 (`ErrSpawnNotInteractive`).
 
-`find-missing` closes a spawn's open requests when it marks the spawn
-`missing`, in the same store transaction as the mark: both are written or
-neither is. Every request that still awaits an answer is closed, decided
-or not:
+Three writes close a spawn's open requests, each in the same store
+transaction as its own change, so both are written or neither is:
+
+- `find-missing`'s mark of the spawn `missing`;
+- the agent's terminal SessionEnd, which moves the spawn to `ended`;
+- `resume`'s move of the finished spawn to `pending`, as a backstop for a
+  request left open by a release before this close.
+
+Every request that still awaits an answer is closed (`closed_at` is set),
+decided or not:
 
 - an undecided request gets `decision` `deny` with `decision_reason`
-  `find_missing`, so a relay hook still polling for it reads that deny
-  (and returns it, once confirmed, if its Claude Code is still the one
-  that started it); `decide` on it returns `ErrAlreadyDecided`;
+  `find_missing` (the mark) or `ended` (the other two), so a relay hook
+  still polling for it reads that deny (and returns it, once confirmed, if
+  its Claude Code is still the one that started it). `decide` on the
+  mark's deny returns `ErrAlreadyDecided`, and on the `ended` deny
+  `ErrNoOpenPermissionRequest`;
 - a decided request whose relay hook had not confirmed the verdict keeps
   it (a hook whose Claude Code still runs may still confirm and return
   it); `decide` on it returns `ErrNoOpenPermissionRequest`, whose message
-  says the request is closed, nothing was recorded, and not to answer it
-  at the pane (`ErrAlreadyDecided` once its hook has confirmed it).
+  says the request is closed (its spawn ended, or `find-missing` marked it
+  missing, before its relay hook delivered a verdict), nothing was
+  recorded, and not to answer it at the pane (`ErrAlreadyDecided` once its
+  hook has confirmed it).
+
+Each deny is written to the trail as one `ad.row_mutation.committed`
+(`writer_process` `find_missing`, `hook` or `resume`).
 
 A closed request stays closed after a `resume`: it no longer awaits an
-answer, so `get` and `list` do not show it and it no longer holds the
-spawn in `check_permission`, and `decide` refuses it as above, never with
-`ErrRelayFallenBack`. `get-permission` still reads it by its token, and
-its `delivery` follows the rules in "Delivery" below like any request's:
-`delivered` once its hook confirmed, `not_confirmed` while that hook may
-still run, `fallen_back` once it is gone (or cannot be checked and
-`confirm_by` has passed). A spawn marked `missing` never keeps an open
-request.
+answer, so `get` and `list` do not show it, it no longer holds the spawn in
+`check_permission` or off `working`, it never refuses `send-keys`, and
+`decide` refuses it as above, never with `ErrRelayFallenBack`.
+`get-permission` still reads it by its token, and its `delivery` follows
+the rules in "Delivery" below like any request's: `delivered` once its hook
+confirmed, `not_confirmed` while that hook may still run, `fallen_back`
+once it is gone (or cannot be checked and `confirm_by` has passed). A
+spawn marked `missing` or ended by its agent never keeps an open request.
 
 ### Delivery
 
@@ -412,16 +435,32 @@ nothing but `hook_gone_at` is written for them:
 
 | Field | Meaning |
 |---|---|
-| `delivery` | `delivered`: the relay hook confirmed a verdict in the store before handing it to Claude Code. `not_confirmed`: no confirmation yet, and the hook may still run. `fallen_back`: no confirmation, no pane answer recorded through agent-director, and the hook is gone, or cannot be checked and `confirm_by` has passed: no answer from the relay reached the agent, and only an answer at the pane can close the request. |
+| `delivery` | `delivered`: the relay hook confirmed a verdict in the store before handing it to Claude Code. `not_confirmed`: no confirmation yet, and the hook may still run. `fallen_back`: no confirmation, and the hook is gone, or cannot be checked and `confirm_by` has passed: no answer from the relay reached the agent. While `pane_answer` is `none` or `intent` the request is open, and only an answer at the pane, or `record-pane-answer`, closes it; with `sent`, `outside` or `tool_ran` it is closed and stays `fallen_back`. |
 | `confirm_by` | The request's settle instant: the moment Claude Code ends its relay hook plus 2 s. `not_confirmed` never lasts past it. |
 | `hook_alive` | `true` or `false` by the check below; `null` when it cannot tell. |
 | `hook_gone_at` | When a reader first found the request fallen back; `null` until then. |
 | `attempted_decision`, `attempted_at` | The verdict a `decide` refused with `ErrRelayFallenBack` tried to record, and when; shown, never acted on. |
 | `tool_use_id` | The `tool_use_id` of Claude Code's hook input; `null` when it gave none. |
+| `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported that its tool ran. `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
+| `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. It is the caller's claim, stored and never checked. |
 
 **`decision` is not the outcome.** `decision` is the verdict recorded,
 set before delivery is known: a request can read `decision` `allow` with
-`delivery` `fallen_back`. Read `delivery` for the outcome.
+`delivery` `fallen_back`. Read `delivery` for the outcome, and
+`pane_answer` for a request closed at the pane, whose `decision` is the
+caller's claim (`null` for a record claiming `unknown`).
+
+**`decision_reason`** names who recorded the verdict: `operator` (a
+`decide` deny; a `decide` allow records none), `timeout` (the relay hook's
+own deny), `find_missing` and `ended` (the deny a close wrote, see "A
+request of a finished spawn is closed" above), `pane` (a pane answer
+through `send-keys`), `pane_outside` (`record-pane-answer`) and `tool_ran`
+(the PostToolUse close). `pane` comes with an `allow` or a `deny`,
+`pane_outside` with either or with none (`unknown`), and `tool_ran` with an
+`allow`. A caller that meets a value it does not know reads the recorded
+verdict from `decision` (`null` for a `pane_outside` `unknown` claim) and
+the outcome from `delivery` and `pane_answer`; it never reads a reason as
+a verdict.
 
 **How a reader judges the relay hook.** The request records the hook's
 pid, its start time (on Linux, field 22 of `/proc/<pid>/stat`) and its pid
@@ -440,10 +479,16 @@ A reader checks the hook before it reads the request's record, so a hook
 that confirmed its answer and exited between the two is never reported
 fallen back.
 
-**What `decide` does.** On a request whose hook has fallen back, `decide`
+**What `decide` does.** On a request that has fallen back, `decide`
 returns `ErrRelayFallenBack` at once and records no verdict; it stores the
 caller's verdict as `attempted_decision` and `attempted_at`, and
-`hook_gone_at` when not yet set. Otherwise one guarded write records the
+`hook_gone_at` when not yet set, and the error's `err_details` give the
+request's facts and the spawn's other open requests (see "Send-keys
+interaction" below). On a request already answered at the pane
+(`pane_answer` `sent`, `outside` or `tool_ran`) it returns
+`ErrAlreadyDecided` naming that `pane_answer`, as `send-keys` and
+`record-pane-answer` do, and records nothing, not even
+`attempted_decision`. Otherwise one guarded write records the
 verdict (first call wins), then `decide` waits at most 1 s, by its own
 clock and its reads of the request included, for the hook's confirmation,
 and returns the request's delivery facts with `delivery` `delivered` or
@@ -482,7 +527,7 @@ bound).
 lists, in `permission_requests`, the requests that still await an answer:
 not confirmed by their relay hook and with no pane answer recorded,
 decided or not (a recorded verdict not yet confirmed has not reached the
-agent), and not closed by `find-missing`. A row can read `waiting` while
+agent), and not closed with the spawn. A row can read `waiting` while
 one of its requests still awaits an answer, so a caller follows each
 request it tracks with `get-permission`, not only rows in
 `check_permission`.
@@ -502,15 +547,30 @@ before the upgrade:
 
 - `confirm_by` is its `requested_at` plus the relay window plus 2 s, and
   `hook_alive` is `null`. Until `confirm_by`, `delivery` is
-  `not_confirmed`; after it, `delivered` when a verdict other than
-  `find-missing`'s is recorded, else `fallen_back`. Such a request awaits
-  an answer while it is undecided.
+  `not_confirmed`; after it, `delivered` when a verdict other than a
+  close's deny (`find_missing` or `ended`) is recorded, else `fallen_back`.
+  Such a request awaits an answer while it is undecided and not closed.
+- Fallen back and still undecided, such a request is open and fallen back
+  like any other: a plain `send-keys` to its spawn is refused with
+  `ErrRelayFallenBack` until it is closed, by a pane answer, by
+  `record-pane-answer`, or with its spawn (the spawn ends, or `find-missing`
+  marks it `missing`). This holds in every live state of the spawn, so a
+  request left open before the upgrade (its dialog answered at the pane
+  after its relay hook was killed, for example) refuses plain `send-keys`
+  once you upgrade: close it with `record-pane-answer --as unknown` and the
+  `pane_sha256` of a `read-pane` you looked at. `decide` does not close
+  it: once the spawn has left `check_permission` or recorded a later
+  request, `decide` on it returns `ErrNoOpenPermissionRequest` (see
+  below), while plain `send-keys` is still refused with
+  `ErrRelayFallenBack` on its account. Its PostToolUse does not close it
+  (no `tool_use_id` is recorded for it).
 - `decide` records a verdict on it only before its window less 1 s, and
   returns at once, with no wait for a confirmation such a hook never
   writes. Refused from then, it first waits until `confirm_by` (at most
   3 s; under `--max-wait-ms` that ends sooner it returns `ErrStoreBusy`
-  instead) and reads the request again: decided meanwhile (normally the
-  hook's own timeout deny, `decision_reason` `timeout`) →
+  instead) and reads the request again (a request already answered at the
+  pane is `ErrAlreadyDecided` at once, with no wait): decided meanwhile
+  (normally the hook's own timeout deny, `decision_reason` `timeout`) →
   `ErrAlreadyDecided`; still open → `ErrRelayFallenBack` only while the
   spawn is still in `check_permission` with no other open request and none
   recorded after this one, otherwise `ErrNoOpenPermissionRequest` (do not
@@ -520,175 +580,314 @@ before the upgrade:
 
 ### Send-keys interaction
 
-When a Spawn is sitting on a relayed permission prompt (`relay_mode=on`
-AND `state=check_permission`), `send-keys` may refuse with
-`ErrSendKeysWhileRelayed`: while the relay can still act, a pane-side
-keystroke would race the relay's `decide()` write and split the modal
-answer across two pane events, so the relay owns the answer and callers
-drive the modal through `decide`. The error name is the contract; its
-message (advice) names the request holding the guard, by its
-`request_token`, says what to do, and states no release time. When
-several requests hold the guard it names an undecided one before a
-decided one, then the oldest. The named request is either:
+On a spawn with `relay_mode=on`, in every live state (a row can read
+`waiting` or `working` while one of its requests is still open), `send-keys`
+first reads every permission request of the spawn, judging each relay hook
+as the readers do (see "How a reader judges the relay hook" above). It
+refuses in this order, sending nothing:
 
-- **Pending**: `spawn <id> is awaiting a relayed permission decision on
+| Call | Refused while | Error |
+|---|---|---|
+| any | a relay hook of the spawn may still answer its request: its process runs, or it cannot be checked and the request is open before its `confirm_by` | `ErrSendKeysWhileRelayed` |
+| plain (no `request_token`) | a request of the spawn is fallen back with `pane_answer` `none` or `intent` | `ErrRelayFallenBack`, with `err_details`, naming the oldest such request |
+| pane answer (`request_token` T) | the spawn has no request T | `ErrNoOpenPermissionRequest` |
+| pane answer | T is not fallen back: confirmed by its relay hook, closed with its spawn, or already closed at the pane | `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest` |
+| pane answer | another pane answer to T is still being sent | `ErrPaneAnswerInProgress`, with `err_details` |
+| either, with `expect_pane_sha256` | the agent's pane no longer has that hash | `ErrPaneChanged`, with `err_details` |
+
+All but the last are decided from the store and process checks, before
+any tmux call; the last needs a capture of the pane. A closed request (one
+closed with its spawn, or closed at the pane: `pane_answer` `sent`,
+`outside` or `tool_ran`) never refuses anything, and a request its relay
+hook confirmed holds only while that hook's process is seen running (it is
+writing its verdict to Claude Code). There is no other time window: a hold
+ends when the relay hook does, and a request recorded before this release,
+whose hook recorded no identity, holds until its `confirm_by`, its relay
+window plus 2 s (see "Residual race" below).
+
+So only a call that names the request it answers can type on a spawn with
+an open fallen-back request, and a plain `send-keys` (an automatic command
+and its Enter, say) cannot land on that request's prompt.
+
+`ErrSendKeysWhileRelayed`'s message (advice; the error name is the
+contract) names one request whose relay hook may still answer, one still
+awaiting an answer before a confirmed one, then the oldest, and states no
+release time:
+
+- **Undecided**: `spawn <id> is awaiting a relayed permission decision on
   request <request_token>; answer it with decide`.
-- **Already decided**, named only when no pending request holds the
-  guard: `spawn <id>: the relayed permission verdict on request
-  <request_token> is recorded and its relay hook may still be delivering
-  it; retry send-keys later`. There is nothing left to answer (`decide`
-  on it returns `ErrAlreadyDecided`). It holds the guard until the spawn
-  leaves `check_permission`, another of the spawn's requests falls back by
-  its window (see below), or 2 s have passed since its window ended,
-  whichever is first. A request whose relay hook died after its verdict
-  was recorded, with no other request fallen back, holds until then.
+- **Verdict recorded**: `spawn <id>: the relayed permission verdict on
+  request <request_token> is recorded and its relay hook may still be
+  delivering it; retry send-keys later`. There is nothing left to answer
+  (`decide` on it returns `ErrAlreadyDecided`).
 
-With zero request rows the request is still being recorded, so the
-message names none: `… whose request is not yet recorded; answer it
-with decide once get lists it` (`get` lists open requests under
-`permission_requests`).
+`ErrRelayFallenBack` (from a plain `send-keys`, and from `decide`) carries
+`err_details`, an object with:
 
-**The guard is time-bounded, and judges every request by its window.**
-Each request holds the guard until 2 s after its relay window ends,
-counted from its own `created_at`, pending or decided — a request recorded
-from this release on too, although `decide` judges such a request by its
-relay hook's process. So after `decide` refuses such a request with
-`ErrRelayFallenBack`, which it does within seconds of the hook's end,
-`send-keys` is still refused on that request's account until 2 s after its
-window ends. The guard consults the same time-based authority as the
-pre-release `decide` contract (same file, same margin constant in
-`pkg/api/deliverability.go`) — never dialog visibility. The one deliberate
-difference from that `decide` contract is the *sign* of the safety margin:
-`decide` fails **early** (refuses at `elapsed ≥ window − margin`), while the
-guard fails **late** (releases only at `elapsed ≥ window + margin + 1 s` for
-the rounding of `created_at`), so it does not free while a live relay hook
-could still answer, but for the residual race below. Concretely:
+- the request's fields as `get-permission` gives them: `request_id`,
+  `request_token`, `tool_name`, `tool_input`, `requested_at`, `decision`,
+  `decision_reason` and its delivery facts (`delivery` `fallen_back`,
+  `confirm_by`, `hook_alive`, `hook_gone_at`, `attempted_decision`,
+  `attempted_at`, `tool_use_id`, `pane_answer` `none` or `intent`,
+  `pane_as`);
+- `state`: the spawn's state;
+- `open_requests`: every other request of the spawn that still awaits an
+  answer, oldest first, each with `request_token`, `tool_name`,
+  `requested_at`, `delivery`, `hook_alive` and `pane_answer` (`[]` when
+  there is none; `null` when `decide` could not read them).
 
-- **Refuse while any row holds the guard.** A row holds until 2 s after
-  its window ends, pending or decided: the relay can still deliver its
-  verdict or its timeout deny, so send-keys stays out of the way. The next
-  bullet is the one exception.
-- **A decided row stops holding once another request has fallen back by
-  its window**: its record is still open 2 s after its window ended. Its
-  open record keeps the spawn in `check_permission`, so a decided request
-  of the same spawn no longer holds the guard; otherwise a `send-keys`
-  retried as that request's refusal advises would be refused for up to its
-  full relay window. Pending requests still in their windows keep holding,
-  so a pane answer never overtakes a verdict `decide` can still record.
-  The trade-off: the exception assumes Claude Code shows the oldest
-  pending permission dialog first, so the fallen-back request's dialog
-  (recorded before every request still in its window) is the one on
-  screen. It gives up the span between a `decide` and Claude Code acting
-  on the decided request's hook output: up to one poll sleep of its live
-  relay hook (`relay.poll_base_ms` plus jitter up to
-  `relay.poll_jitter_ms`; see "Flow" above) before the hook reads the
-  verdict, plus the hook confirming it, writing its output and exiting.
-  The assumption fails when a fallen-back request's dialog is no longer
-  on screen (its record was left open after the dialog closed): keys sent
-  in that span can then land in the decided request's still-pending
-  dialog. The guard does not apply `decide`'s checks (see "Known
-  limitations" below).
-- **Release once no row holds** — 2 s have passed since every row's
-  window ended, a decided row's excepted once another request has fallen
-  back. At that point no pending request's relay hook is presumed able to
-  deliver a decision (but see "Residual race" below), the guard would be
-  pure denial of service, and send-keys is the sanctioned recovery surface
-  (below). The margin is internal: the refusal's message does not state
-  it.
-- **Zero rows keep the guard held.** With no row there is no signal and
-  no authority to release; the state is a real mid-insert transient, so
-  the guard refuses rather than open a race.
+Its description says the request's relay hook is gone and acked no
+verdict and that no pane answer is recorded on it through agent-director;
+it never says that a prompt is on screen. A refusal that finds a request
+fallen back records its `hook_gone_at` when it has none, waiting for the
+store's write lock as any write does (fail-open).
 
-**Residual race.** The guard's release 2 s after the window ends rests on
-a live relay hook having answered, or been killed by Claude Code, by then.
-A relay hook of this release commits its last store write at least 2 s
-before Claude Code ends it, which comes no later than 1 s after the
-window counted from `created_at`. The guard can still release before a
-live hook's verdict or deny reaches Claude Code only if both:
+**Residual race.** A request whose relay hook cannot be checked is held
+until its `confirm_by` and is then fallen back. For a request recorded
+before this release, that is 2 s after its relay window ends, counted from
+its `created_at`, and rests on a live relay hook having answered, or been
+killed by Claude Code, by then. Keys can still reach Claude's prompt before
+a live hook's verdict or deny does only if both:
 
-- the hook's delivery of its verdict or timeout deny (reading the
-  verdict, or noticing its deadline, confirming it in the store; then
-  writing its envelope and exiting) ends more than 2 s past its window,
-  for example because the process stalls (a relay hook from before this
-  release could also wait up to `[store] busy_timeout_ms`, 10 s by
-  default, for each store write); and
+- the hook's delivery of its verdict or timeout deny (reading the verdict,
+  or noticing its deadline, and its store writes; then writing its
+  envelope and exiting) ends more than 2 s past its window, for example
+  because the process stalls (a relay hook from before this release could
+  wait up to `[store] busy_timeout_ms`, 10 s by default, for each store
+  write); and
 - Claude Code kills the hook more than 1 s after its per-hook timeout.
 
-Keys sent at the pane then can land in Claude's prompt. Nothing stored
-shows a hook stuck delivering, so this race is not closed. All of these
-instants assume the hook, the store and the caller share one wall clock.
+A relay hook of this release commits its last store write at least 2 s
+before Claude Code ends it, and its `confirm_by` is that end plus 2 s.
+Nothing stored shows a hook stuck delivering, so this race is not closed.
+All of these instants assume the hook, the store and the caller share one
+wall clock.
 
-#### Sanctioned recovery of a wedged relayed spawn
+### Answering at the pane
+
+agent-director never reads, matches or acts on what the pane says, and
+never picks a key. The caller looks at the pane (`read-pane`) and decides;
+agent-director checks only that the pane's bytes are still the ones the
+caller read (`pane_sha256`, a SHA-256 of exactly the bytes `read-pane`
+returned), sends exactly the key the caller named, and stores the
+caller's claim of what that key answered (`as`) without checking it.
+
+#### A pane answer through `send-keys`
+
+```sh
+agent-director send-keys --claude-instance-id <id> --request-token <T> \
+    --as allow|deny --key <K> --expect-pane-sha256 <H> [--n-lines N]
+```
+
+- `--as`, `--key` and `--expect-pane-sha256` are required, and `--text`
+  must be empty; anything else is `ErrInvalidFlags`, with nothing read,
+  sent or written. `--key` is one named key (`Escape`, `Enter`, `Up`,
+  `Down`, `Tab`, sent by name) or one character, typed literally. H is the
+  `pane_sha256` of the `read-pane` the caller judged, and `--n-lines` that
+  read's (default 25).
+- Under the store's write lock, in one transaction, it reads the spawn and
+  its requests again and applies the checks above again, captures the
+  agent's pane (the last N lines, ANSI stripped, as `read-pane` gives it by
+  default) and compares its SHA-256 with H, and records its intent:
+  `pane_answer` `intent`, `pane_as`, its own process (pid, start time and
+  pid namespace) as the sender, and `pane_intent_at`, the time read after
+  the checks and the capture, inside the transaction. That commits before
+  any key is sent.
+- It sends exactly that one key, never followed by Enter.
+- It records `pane_answer` `sent`, `decision` the `--as` value and
+  `decision_reason` `pane`, written to the trail as one
+  `ad.row_mutation.committed` (`writer_process` `send_keys`), unless the
+  request was closed meanwhile (its tool's PostToolUse close, or a close
+  with its spawn): that close wins, and the call still succeeds, since the
+  key was sent.
+- When the key send fails, or that last write does, it releases its
+  intent, trying up to 3 times within 10 s: the request stays
+  `pane_answer` `intent` (the key may have been typed) and a retry with a
+  fresh hash is accepted at once. A last write that failed after the key
+  was sent is `ErrInternal` with `err_details` `key_sent` `true` and the
+  `request_token`: the key was sent, so do not send it again without
+  reading the pane; close the request with `record-pane-answer` if the
+  pane shows it answered.
+- The store's write lock not taken within its busy timeout is
+  `ErrStoreBusy`, with nothing sent or recorded.
+
+**A second pane answer at once** (a double click, or two callers). While a
+pane answer's intent is recorded and its sender process runs (judged as a
+relay hook is), another pane answer to the same request is refused with
+`ErrPaneAnswerInProgress`, so its key cannot land on the next prompt or in
+the chat. Its `err_details` give `request_token`, `pane_as`,
+`pane_intent_at`, `sender_alive` (`true`, or `null` when the sender cannot
+be checked) and `not_before`. An intent whose sender runs never lapses by
+its age: its key may still be on its way. When the sender cannot be
+checked (another pid namespace, an unreadable `/proc`, or no identity
+recorded), the intent counts as in progress until `not_before`: the tmux
+action timeout plus the pipe-close wait plus 2 s after it was committed.
+Once the sender has ended, or released its intent, a
+retry needs a fresh hash: if the prompt is still there, answering again is
+safe; if it is gone, the caller records the answer with
+`record-pane-answer` instead.
+
+**`ErrPaneChanged`** (from `send-keys` or `record-pane-answer`): the pane's
+bytes changed since the caller read it (someone answered, another prompt
+came up, the prompt closed); nothing was sent or recorded. It never
+carries the new hash, since a caller that retried with it would skip
+looking: read the pane again. Its `err_details` give `n_lines` and the
+`request_token` named, if any. Volatile bytes in the captured lines (a
+spinner, a clock) cause such refusals; pick `--n-lines` to leave them out.
+The hash of an `ansi` read never matches.
+
+#### Plain `send-keys`
+
+A plain call types `--text` and then presses Enter, as before. `--no-enter`
+types the text with no Enter (with neither text nor key it is
+`ErrInvalidFlags`), and `--key K` sends that one key alone, with no Enter
+and no text. `--expect-pane-sha256` is optional: given, the pane is
+compared as for a pane answer (`ErrPaneChanged`) before anything is typed.
+`--as` without `--request-token` is `ErrInvalidFlags`.
+
+**Never pass `expect_pane_sha256` from an automatic flow.** The hash says
+that a person or an LLM judged that exact screen; passed blindly, it lets
+through the keys the check exists to stop.
+
+#### A request answered outside agent-director
+
+A request answered at tmux by a person, or by anything else outside
+agent-director, stays fallen back, and a plain `send-keys` stays refused,
+until it is closed. Two ways close it:
+
+1. **`record-pane-answer`** (it types nothing):
+
+   ```sh
+   agent-director record-pane-answer --request-token <T> \
+       --as allow|deny|unknown --expect-pane-sha256 <H> [--n-lines N]
+   ```
+
+   Pass `--as unknown` unless the answer was seen; the claim is stored,
+   never checked. It is accepted when T is fallen back, no pane answer
+   through `send-keys` on it is still being sent, its relay hook has been
+   gone at least 2 s (from its `hook_gone_at`, written now when it has
+   none, or from its `confirm_by` when that is earlier and the hook is
+   judged by time: it cannot be checked, or the request was recorded
+   before this release), and, under the store's write lock, the pane still
+   has hash H. It
+   records `pane_answer` `outside`, `pane_as` and `decision` the claim
+   (`decision` `null` for `unknown`) and `decision_reason` `pane_outside`,
+   written to the trail as one `ad.row_mutation.committed`
+   (`writer_process` `record_pane_answer`), and returns them.
+   - **Why the 2 s.** Claude Code draws its prompt only after the relay
+     hook ends, so a pane read in between may not show it yet, and the
+     hash of that read would still match. Too soon, or while the relay
+     hook may still answer the request, is `ErrClaimTooSoon`, whose
+     `err_details` give `hook_alive`, `hook_gone_at` and `not_before`:
+     `null` only while the relay hook is seen running; otherwise
+     `hook_gone_at` plus 2 s, or `confirm_by` plus 2 s for a hook judged
+     by time when that is earlier (also while such a hook may still
+     answer). Retry at `not_before`: a retry then is not refused as too
+     soon, and one before it gets the same refusal and `not_before`.
+   - Its other refusals: `ErrPermissionRequestNotFound` (no request has the
+     token), `ErrNoOpenPermissionRequest` (closed with its spawn),
+     `ErrAlreadyDecided` (confirmed, or already closed at the pane),
+     `ErrPaneAnswerInProgress`, `ErrPaneChanged`, `ErrStoreBusy`, and the
+     tmux errors of `read-pane`.
+2. **The PostToolUse close.** When the agent's `PostToolUse` or
+   `PostToolUseFailure` hook carries the `tool_use_id` of a fallen-back
+   request recorded from this release on, the tool ran, so its prompt was
+   answered allow: the hook records `pane_answer` `tool_ran`, `decision`
+   `allow` and `decision_reason` `tool_ran`, only while the request still
+   awaits an answer and its relay hook is judged gone (see
+   [hooks.md](hooks.md#a-request-whose-tool-ran)). It closes only allows:
+   Claude Code runs no hook for a deny at its prompt. That hook can fail
+   too, so this close is a help, not a guarantee.
+
+#### Recovering a wedged relayed spawn
 
 At the window's end the relay hook normally denies the request itself
 (see "Relay timeout default and override" above): `decide` then returns
 `ErrAlreadyDecided` (`decision_reason` `timeout`) and there is nothing to
 recover. A relayed spawn is wedged when its relay hook died or was killed
-without answering: `decide` returns `ErrRelayFallenBack`, with no verdict
-recorded, and only an answer at the pane can close the request. The
-operator then recovers it through sanctioned AD surface, with no dedicated
-answer-the-dialog verb and **without ever touching raw tmux**:
+without answering: `decide` and a plain `send-keys` return
+`ErrRelayFallenBack`. Recover it through agent-director, **never through
+raw tmux**:
 
-1. `decide` returns the typed `ErrRelayFallenBack` (see "Delivery" above,
-   and for a request recorded before this release "Requests recorded
-   before this release"). If it returns `ErrAlreadyDecided` instead, the
-   relay hook (or another caller) answered the request and there is
-   nothing to recover. If it returns `ErrNoOpenPermissionRequest`, the
-   request is closed or its dialog cannot be shown to be on screen: do not
-   answer it at the pane.
-2. The send-keys guard releases by its time-based authority, once no row
-   holds it — 2 s after the last pending request's window ends (while a
-   request that fell back by its window stays open, decided requests no
-   longer hold it). A request of the same spawn still pending in its
-   window may still hold it; `send-keys` then refuses with
-   `ErrSendKeysWhileRelayed` naming that request, and the operator answers
-   it with `decide`.
-3. Once the guard has released, `send-keys` is accepted: an operator who
-   has looked at the pane answers there.
-4. The action is audited: it appears in the trail as
-   `ad.send_keys.called` with `guard_evaluation=released`, so a recovery
-   send is distinguishable from an ordinary send and from a guard
-   refusal.
+1. Take the request's facts from the error's `err_details` (or
+   `get-permission`). If `decide` returns `ErrAlreadyDecided` instead, the
+   relay hook or another caller answered the request and there is nothing
+   to recover; if it returns `ErrNoOpenPermissionRequest`, the request is
+   closed or its prompt cannot be shown to wait: do not answer it at the
+   pane. If a plain `send-keys` is still refused with `ErrRelayFallenBack`
+   on that request (a stale record from before this release), close it
+   with step 4.
+2. `read-pane`, and have a person or an LLM look at it.
+3. If the request's prompt waits there, answer it with `send-keys` and its
+   `request_token`, the key and verdict chosen, and that read's
+   `pane_sha256`.
+4. If it was answered already, close it with `record-pane-answer` (`--as
+   unknown` unless the answer was seen).
+5. Both are audited: `ad.send_keys.called` (with `guard_evaluation`
+   `released` for a pane answer let through) and the request's
+   `ad.row_mutation.committed`.
 
 ### Known limitations
 
-`decide` and the readers judge stored records and the relay hook's
-process, never Claude Code's screen. These cases are not covered:
+`decide`, `send-keys` and the readers judge stored records and processes,
+never Claude Code's screen. These cases are not covered:
 
 - **What fallen back does not say.** `fallen_back` and
-  `ErrRelayFallenBack` mean no answer from the relay reached the agent.
-  They do not say whether Claude Code's permission prompt still waits:
-  someone at the pane may already have answered it, and nothing records
-  such an answer. The request then keeps awaiting an answer: `get` keeps
-  listing it, the spawn stays in `check_permission` until a later hook
-  moves it out (the agent's `Stop` or `AskUserQuestion`), and
-  `find-missing` does not repair the row.
+  `ErrRelayFallenBack` mean no answer from the relay reached the agent and
+  no pane answer is recorded through agent-director. They do not say
+  whether Claude Code's permission prompt still waits: someone at the pane
+  may already have answered it. Until such a request is closed
+  (`record-pane-answer`, or the PostToolUse close of an allow), `get`
+  keeps listing it, a plain `send-keys` is refused, the spawn stays in
+  `check_permission` until a later hook moves it out (the agent's `Stop`
+  or `AskUserQuestion`), and `find-missing` does not repair the row.
+- **A prompt agent-director has no record of.** A relay hook that dies, or
+  is killed, before it records its request leaves a prompt that no request
+  stands for, so a plain `send-keys` is not refused, and its Enter can
+  answer that prompt.
 - **A confirmed answer not returned.** The relay hook confirms its verdict
   or its timeout deny at least 2 s before Claude Code ends it, then writes
   it. A hook that dies or stalls past Claude Code's kill between the two
   leaves the request reading `delivered` while Claude Code never received
-  the answer; `decide` on it returns `ErrAlreadyDecided`, which advises no
-  pane answer.
+  the answer: `decide` on it returns `ErrAlreadyDecided`, which advises no
+  pane answer, and the request refuses no `send-keys`.
+- **Between the capture and the key.** The pane can change between
+  agent-director's capture and the moment Claude Code reads the key, a
+  window of milliseconds that no check closes.
+- **Identical prompts.** Two prompts whose captured bytes are the same
+  (same tool, same input, same surrounding lines) cannot be told apart: a
+  pane answer meant for one can close the other, and the record then names
+  the wrong request.
+- **A prompt drawn more than 2 s late.** `record-pane-answer` waits 2 s
+  after the relay hook was found gone (or after its `confirm_by`, for a
+  hook judged by time). A Claude Code that stalls longer
+  before drawing its prompt can let a caller record the request answered
+  before the prompt appears.
+- **A pane answer whose sender died.** It leaves `pane_answer` `intent`,
+  its key possibly typed. The request stays open and fallen back, so plain
+  `send-keys` stays refused, until a retry with a fresh hash or
+  `record-pane-answer` closes it.
 - **Requests recorded before this release.** `decide`'s check that the
   spawn is shown sitting on such a request alone reads stored records
-  only, so it can be wrong both ways. A record left open after its dialog
+  only, so it can be wrong both ways. A record left open after its prompt
   closed (answered at the pane after the hook was killed, or closed by a
   timeout deny the hook returned without recording it) keeps the spawn in
   `check_permission` until a later hook moves it out, and until then
-  `decide` still returns `ErrRelayFallenBack` for it; keys sent at the
-  pane as it advises are typed into Claude's prompt. A later request in
-  the gap between its hook moving the spawn to `check_permission` and its
-  record being written can make the check pass for a stale record too.
-  And a subagent's request recorded while an earlier dialog waits, or a
-  stale record still open, makes `decide` refuse a request whose dialog
-  waits with `ErrNoOpenPermissionRequest`; the request stalls until a
-  human answers it at the pane.
-- **`send-keys` does not enforce `decide`'s advice.** The send-keys
-  relay guard releases on the time-based signal (see "Send-keys
-  interaction" above) and does not apply `decide`'s checks. Once it has
-  released, `send-keys` is accepted even for a request `decide` refused
-  with `ErrNoOpenPermissionRequest`. Following that error's "do not
-  answer it at the pane" is up to the caller.
+  `decide` still returns `ErrRelayFallenBack` for it, whose advice is a
+  pane answer: a caller that looks at the pane finds no prompt for it and
+  records it with `record-pane-answer` instead. A later request in the gap
+  between its hook moving the spawn to `check_permission` and its record
+  being written can make the check pass for a stale record too. And a
+  subagent's request recorded while an earlier prompt waits, or a stale
+  record still open, makes `decide` refuse a request whose prompt waits
+  with `ErrNoOpenPermissionRequest`; the request stalls until a human
+  answers it at the pane.
+- **A pane answer does not apply `decide`'s check.** `send-keys` with the
+  token of a request recorded before this release is accepted once the
+  request has fallen back and the caller's hash matches, even when
+  `decide` refused that request with `ErrNoOpenPermissionRequest`.
+  Following that error's "do not answer it at the pane" is up to the
+  caller.
 
 ## References
 

@@ -271,20 +271,24 @@ func (s *Store) DenyRelayTimeout(instanceID, requestToken string, at time.Time, 
 	return denied, nil
 }
 
-// recordRefusedDecisionSQL is RecordRefusedDecision's one statement.
-const recordRefusedDecisionSQL = `UPDATE permission_requests
-	   SET attempted_decision = ?, attempted_at = ?, hook_gone_at = COALESCE(hook_gone_at, ?)
-	 WHERE claude_instance_id = ? AND request_token = ?`
+// recordRefusedDecisionSQL is RecordRefusedDecision's one statement, guarded
+// by the request still awaiting an answer.
+const recordRefusedDecisionSQL = `UPDATE permission_requests AS pr
+	   SET attempted_decision = ?, attempted_at = ?, hook_gone_at = COALESCE(pr.hook_gone_at, ?)
+	 WHERE pr.claude_instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL
 
 // RecordRefusedDecision stores the verdict a decide refused as fallen back
 // tried to record (b.146 rule 15): attempted_decision and attempted_at,
 // replacing an earlier attempt's, and, when hookGoneAt is not zero, sets
 // hook_gone_at to it unless it is already set (decide is a writing verb and
 // always writes it, rule 8). It writes nothing else: the attempt is shown,
-// never acted on. It waits at most maxWait for the write lock; when the lock
-// is not taken in that time it returns an error wrapping ErrStoreBusy and has
-// written nothing. It emits no trail event (ad.decide.called records the
-// call).
+// never acted on. It writes only while the request still awaits an answer
+// (awaitingAnswerSQL), so nothing lands on a request closed with its Spawn,
+// answered at the pane, acked or, recorded before schema v7, decided
+// meanwhile; such a request is left as it is and nil returned. It waits at
+// most maxWait for the write lock; when the lock is not taken in that time it
+// returns an error wrapping ErrStoreBusy and has written nothing. It emits no
+// trail event (ad.decide.called records the call).
 func (s *Store) RecordRefusedDecision(instanceID, requestToken, decision string, at, hookGoneAt time.Time, maxWait time.Duration) error {
 	return s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		if _, err := conn.ExecContext(ctx, recordRefusedDecisionSQL, decision, millisArg(at), millisArg(hookGoneAt),

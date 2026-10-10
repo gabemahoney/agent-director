@@ -25,6 +25,7 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{name: "PreToolUse AskUserQuestion", raw: `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`, wantState: store.StateAskUser},
 		{name: "PreToolUse Bash", raw: `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, wantState: store.StateWorking},
 		{name: "PostToolUse", raw: `{"hook_event_name":"PostToolUse"}`, wantState: store.StateWorking},
+		{name: "PostToolUseFailure", raw: `{"hook_event_name":"PostToolUseFailure"}`, wantState: store.StateWorking},
 		{name: "Stop", raw: `{"hook_event_name":"Stop"}`, wantState: store.StateWaiting},
 		{name: "Notification", raw: `{"hook_event_name":"Notification"}`, wantSoft: true},
 		{name: "Notification idle_prompt", raw: `{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, wantSoft: true, wantIdle: true},
@@ -132,6 +133,35 @@ func TestClassifyEventAgentID(t *testing.T) {
 			want.AgentID = res.AgentID
 			if res != want {
 				t.Errorf("result = %+v; want %+v", res, want)
+			}
+		})
+	}
+}
+
+// TestClassifyEventToolRan (b.146 rule 13): only a PostToolUse or
+// PostToolUseFailure carrying a tool_use_id says its tool ran; every event
+// carries its tool_use_id verbatim.
+func TestClassifyEventToolRan(t *testing.T) {
+	cases := []struct {
+		event, toolUseID string
+		want             bool
+	}{
+		{"PostToolUse", "toolu_01", true},
+		{"PostToolUseFailure", "toolu_01", true},
+		{"PostToolUse", "", false},
+		{"PostToolUseFailure", "", false},
+		{"PreToolUse", "toolu_01", false},
+		{"PermissionRequest", "toolu_01", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.event+"/"+tc.toolUseID, func(t *testing.T) {
+			p := map[string]any{"hook_event_name": tc.event, "tool_name": "Bash"}
+			if tc.toolUseID != "" {
+				p["tool_use_id"] = tc.toolUseID
+			}
+			res := classifyMap(t, p)
+			if res.ToolRan() != tc.want || res.ToolUseID != tc.toolUseID {
+				t.Errorf("ToolRan/ToolUseID = %v/%q; want %v/%q", res.ToolRan(), res.ToolUseID, tc.want, tc.toolUseID)
 			}
 		})
 	}

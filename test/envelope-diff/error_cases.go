@@ -27,6 +27,7 @@ package envelope_diff
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -67,6 +68,9 @@ type errorCase struct {
 	// rows whose errName alone does not show which path gave it.
 	desc func(ctx map[string]any) (c apitest.DescCase, forbid []string)
 }
+
+// zeroPaneHash is a well-formed expect_pane_sha256 (64 hex digits) no pane has.
+var zeroPaneHash = strings.Repeat("0", 64)
 
 // errorCases is the authoritative per-verb error-path fixture table: the rows
 // below, then the spawn, kill, read-pane, send-keys, pause and resume rows
@@ -323,6 +327,26 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"get-permission", "--request-token", storefix.TestRequestTokenA}
+		},
+	},
+
+	// ── record-pane-answer / ErrPermissionRequestNotFound ────────────────
+	// Token-only lookup against an empty store, as get-permission's row; as
+	// and the hash are well formed, so the params pass their check first.
+	{
+		verb:    "record-pane-answer",
+		errName: "ErrPermissionRequestNotFound",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			dbPath := apitest.SeedEmptyStore(t)
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"request_token": storefix.TestRequestTokenA, "as": "unknown", "expect_pane_sha256": zeroPaneHash}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"record-pane-answer", "--request-token", storefix.TestRequestTokenA, "--as", "unknown",
+				"--expect-pane-sha256", zeroPaneHash}
 		},
 	},
 

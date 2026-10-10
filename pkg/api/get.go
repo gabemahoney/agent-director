@@ -283,8 +283,9 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 // only if the lock is free at that moment, and otherwise reports them with
 // hook_gone_at as stored.
 //
-// Closed requests (acked, answered at the pane, or closed by find-missing's
-// mark) are never visible in the PermissionRequests output.
+// Closed requests (acked, answered at the pane, or closed with their Spawn by
+// find-missing's mark, the ended transition or resume's move) are never
+// visible in the PermissionRequests output.
 //
 // PriorSessions and TranscriptStatus cover the visible history only.
 // Session history belongs to a life: Get reads the entries of the life of

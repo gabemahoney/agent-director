@@ -129,8 +129,10 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 // store, on top of a bound it was given.
 const cliStartAllowance = 2 * time.Second
 
-// deliveryKeys are a permission request's delivery facts (b.146 rule 15).
-var deliveryKeys = []string{"delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at", "tool_use_id"}
+// deliveryKeys are a permission request's delivery facts (b.146 rule 15),
+// pane_answer and pane_as included (step 2b).
+var deliveryKeys = []string{"delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at", "tool_use_id",
+	"pane_answer", "pane_as"}
 
 // assertDeliveryKeys fails unless m, what's JSON object, carries every
 // delivery fact as a key (null when unset, never omitted).

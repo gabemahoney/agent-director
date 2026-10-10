@@ -15,14 +15,16 @@ import (
 // Exec-form hooks (SR-22.9, SR-20.6) and the launch argv of at least two
 // elements (SR-3.8): the hook's parent is the Claude process itself.
 
-// execFormEvents is the eight events every spawn registers; relay events
-// carry matcher "*" and the inner relay timeout, and PermissionRequest's args
-// pass that timeout as --timeout (b.146 rule 4). SessionStart's
-// agent-director hook carries the inner sessionStartHookTimeoutSeconds; the
-// other five non-relay events and the help entry carry no timeout.
+// execFormEvents is the nine events every spawn registers (PostToolUseFailure
+// carries a ran tool's tool_use_id, b.146 rule 13); relay events carry matcher
+// "*" and the inner relay timeout, and PermissionRequest's args pass that
+// timeout as --timeout (b.146 rule 4). SessionStart's agent-director hook
+// carries the inner sessionStartHookTimeoutSeconds; the other six non-relay
+// events and the help entry carry no timeout.
 var execFormEvents = map[string]bool{
 	"SessionStart": false, "UserPromptSubmit": false, "PreToolUse": true, "PostToolUse": false,
-	"Stop": false, "Notification": false, "SessionEnd": false, "PermissionRequest": true,
+	"PostToolUseFailure": false, "Stop": false, "Notification": false, "SessionEnd": false,
+	"PermissionRequest": true,
 }
 
 // assertExecFormSettings checks settingsJSON: each event has exactly one

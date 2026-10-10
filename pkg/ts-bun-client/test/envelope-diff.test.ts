@@ -883,6 +883,99 @@ describe("get-permission", () => {
   );
 });
 
+// ── record-pane-answer ────────────────────────────────────────────────────────
+
+describe("record-pane-answer", () => {
+  test(
+    "success path: a fallen-back request recorded answered outside, over read-pane's pane_sha256",
+    async () => {
+      const id = "id-rpa-1";
+      const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "ed-tmux-"));
+      const socket = privateTmuxSocket(tmuxDir);
+      const tablesCli = path.join(tmuxDir, "tables-cli");
+      const tablesClient = path.join(tmuxDir, "tables-client");
+      let requestToken = "";
+      const { homeA, storeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id, state: "check_permission", "relay-mode": "on", "create-store": true, socket });
+        // Past the relay window (fallen back) and its hook gone a minute ago (b.146 rule 13).
+        requestToken = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
+          "created-ago-seconds": "172800", "hook-gone-ago-seconds": "60" })["request_token"] as string;
+      });
+      for (const [store, tablesDir] of [[storeA, tablesCli], [storeB, tablesClient]]) {
+        runHelper("seed-row-session", { store, id, capture: "answered at tmux\n", "tables-dir": tablesDir });
+      }
+      try {
+        const read = runCli(["read-pane", "--claude-instance-id", id], { ...cliEnv(homeA), FAKE_TMUX_TABLES: tablesCli });
+        expect(read.exitCode).toBe(0);
+        const hash = (JSON.parse(read.stdout) as { pane_sha256: string }).pane_sha256;
+        const cli = runCli(
+          ["record-pane-answer", "--request-token", requestToken, "--as", "deny", "--expect-pane-sha256", hash],
+          { ...cliEnv(homeA), FAKE_TMUX_TABLES: tablesCli }
+        );
+        expect(cli.exitCode).toBe(0);
+
+        const ts = await withProcessEnv({ FAKE_TMUX_TABLES: tablesClient }, async () => {
+          using client = await Client.create({
+            storePath: storeB,
+            tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+          } as any);
+          return await client.recordPaneAnswer({ request_token: requestToken, as: "deny", expect_pane_sha256: hash });
+        });
+
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("record-pane-answer"),
+        });
+        expect(ts).toEqual({ request_token: requestToken, pane_answer: "outside", pane_as: "deny", decision: "deny",
+          decision_reason: "pane_outside" });
+      } finally {
+        cleanup();
+        fs.rmSync(tmuxDir, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrClaimTooSoon, its err_details the same on both sides",
+    async () => {
+      let requestToken = "";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id: "id-rpa-2", state: "check_permission", "relay-mode": "on", "create-store": true });
+        requestToken = runHelper("seed-permission-request", { store, "spawn-id": "id-rpa-2", tool: "Bash" })["request_token"] as string;
+      });
+      try {
+        const zero = "0".repeat(64);
+        const cli = runCli(
+          ["record-pane-answer", "--request-token", requestToken, "--as", "allow", "--expect-pane-sha256", zero],
+          cliEnv(homeA)
+        );
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        let tsErr: unknown;
+        try {
+          await client.recordPaneAnswer({ request_token: requestToken, as: "allow", expect_pane_sha256: zero });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+        // Its relay hook (recorded before schema v7, inside its relay window) cannot be checked:
+        // not_before is its confirm_by plus 2 s, the same instant on both sides (one seed).
+        const details = (JSON.parse(cli.stderr) as { err_details?: Record<string, unknown> }).err_details ?? {};
+        const perm = runCli(["get-permission", "--request-token", requestToken], cliEnv(homeA));
+        const confirmBy = (JSON.parse(perm.stdout) as { confirm_by: string }).confirm_by;
+        expect({ ...details, not_before: "" }).toEqual({ request_token: requestToken, hook_alive: null, hook_gone_at: null, not_before: "" });
+        expect(Date.parse(details["not_before"] as string) - Date.parse(confirmBy)).toBe(2000);
+        expect((tsErr as AgentDirectorError).errDetails).toEqual(details);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+});
+
 // ── resume ────────────────────────────────────────────────────────────────────
 
 describe("resume", () => {

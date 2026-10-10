@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -332,6 +333,38 @@ func SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestS
 		return PermissionRequestSeed{}, fmt.Errorf("SeedPermissionRequest: get: %w", err)
 	}
 	return PermissionRequestSeed{RequestID: row.RequestID, RequestToken: requestToken}, nil
+}
+
+// AgePermissionRequest backdates the created_at of request requestID by
+// createdAgo and records its hook_gone_at hookGoneAgo before now, each only
+// when positive, through a raw connection (the store writes neither on
+// request): a request recorded before schema v7 (SeedPermissionRequest)
+// backdated past the relay window has fallen back by time, and one whose
+// hook was found gone more than 2 s ago can be recorded answered outside
+// agent-director (record-pane-answer; b.146 rule 13).
+func AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error {
+	if createdAgo <= 0 && hookGoneAgo <= 0 {
+		return nil
+	}
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("AgePermissionRequest: %w", err)
+	}
+	defer raw.Close() //nolint:errcheck
+	now := time.Now().UTC()
+	if createdAgo > 0 {
+		if _, err := raw.Exec(`UPDATE permission_requests SET created_at = ? WHERE request_id = ?`,
+			now.Add(-createdAgo).Format("2006-01-02 15:04:05"), requestID); err != nil {
+			return fmt.Errorf("AgePermissionRequest: created_at: %w", err)
+		}
+	}
+	if hookGoneAgo > 0 {
+		if _, err := raw.Exec(`UPDATE permission_requests SET hook_gone_at = ? WHERE request_id = ?`,
+			now.Add(-hookGoneAgo).UnixMilli(), requestID); err != nil {
+			return fmt.Errorf("AgePermissionRequest: hook_gone_at: %w", err)
+		}
+	}
+	return nil
 }
 
 // SeedTemplate writes body to templatesDir/<name>.toml (creating the

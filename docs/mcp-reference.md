@@ -109,7 +109,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 - `launch_started_at`: type=timestamp? — Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise.
 - `liveness_unverified_since`: type=timestamp? — RFC3339 timestamp of the first sweep that noted this live row (left it unverified, or noted it unreported); kept while later sweeps change liveness_note, unreported included. Cleared to NULL together with liveness_note when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note.
 - `liveness_note`: type=string? — Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at a Claude Code startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.
-- `permission_requests`: type=[]object — Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock.
+- `permission_requests`: type=[]object — Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request) and pane_as (string?). get and list never wait for the store's write lock.
 - `transcript_status`: type=string — Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no claude_session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. A reuse starts a new life with no history; a failed reuse's restore returns the pre-reuse life.
 - `prior_sessions`: type=[]object — Archived prior sessions of the current life, newest first, excluding the row's current session id — the queryable link back to sessions orphaned by a rotation (b.v2c). Session history belongs to a life: after a reuse, which starts a new life, no earlier life's session appears; a failed reuse's restore returns the pre-reuse life's. Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).
 
@@ -119,13 +119,19 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 
 ## Tool: send-keys
 
-Send text into the agent's own pane: `\r` stripped, `\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Send text into the agent's own pane: `\r` stripped, `\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). With request_token: a pane answer, one key, no Enter. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Input schema
 
 - `claude_instance_id`: type=string, required=true — Id of the live Spawn to drive.
-- `text`: type=string, required=true — Text to type into the Spawn's input. `\r` stripped pre-send; `\n` preserved as newline-in-input.
+- `text`: type=string, required=false — Text to type into the Spawn's input. `\r` stripped pre-send; `\n` preserved as newline-in-input. Empty/omitted: nothing typed (Enter only, unless no_enter or key). Exclusive with key; must be empty on a pane answer.
 - `allow_pending`: type=bool, required=false — When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected.
+- `no_enter`: type=bool, required=false — Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter.
+- `key`: type=string, required=false — Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Required on a pane answer. Anything else: ErrInvalidFlags.
+- `expect_pane_sha256`: type=string, required=false — Required on a pane answer, optional otherwise. The pane_sha256 read-pane returned for the pane the caller looked at (64 hex digits). Before acting, the agent's pane is captured with the same n_lines, ANSI stripped as read-pane gives it by default, and its SHA-256 compared byte for byte; a difference is ErrPaneChanged, nothing done, and the error does not carry the new hash: read the pane again. It means a person or LLM judged this exact screen: never pass it from an automatic flow.
+- `n_lines`: type=int, required=false — The n_lines of the read-pane expect_pane_sha256 came from. Defaults to 25 when 0/omitted.
+- `request_token`: type=string, required=false — Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). Under the store's lock it checks the pane's hash and records pane_answer intent (with its own process as sender) before sending the key, then records pane_answer sent, decision as and decision_reason pane. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any request of the Spawn has fallen back with no pane answer recorded.
+- `as`: type=string, required=false — A pane answer's claimed verdict, allow or deny: recorded as the request's pane_as and, once its key is sent, its decision. The caller's claim: agent-director never checks it against the key. Only with request_token.
 
 ### Output schema
 
@@ -133,9 +139,16 @@ Send text into the agent's own pane: `\r` stripped, `\n` kept as a newline in th
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 - `ErrSpawnNotInteractive`
 - `ErrSendKeysWhileRelayed`
+- `ErrRelayFallenBack`
+- `ErrNoOpenPermissionRequest`
+- `ErrAlreadyDecided`
+- `ErrPaneAnswerInProgress`
+- `ErrPaneChanged`
+- `ErrStoreBusy`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
 - `ErrTmuxUnresponsive`
@@ -155,6 +168,7 @@ Capture the last N lines of the agent's own pane (default 25, no upper cap). ANS
 ### Output schema
 
 - `pane`: type=string — Captured pane text. ANSI handling depends on the `ansi` parameter.
+- `pane_sha256`: type=string — SHA-256, lowercase hex, of exactly the bytes of pane. Pass it as send-keys' or record-pane-answer's expect_pane_sha256, with the same n_lines, when acting on what this pane shows; they compare it with the pane captured as read-pane gives it by default (ANSI stripped), so the hash of an ansi=true read never matches. A checksum: agent-director does not look at what the bytes say.
 
 ### Errors
 
@@ -186,7 +200,7 @@ End the agent of a live row's current launch (pending included). kill finds the 
 
 ## Tool: decide
 
-Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack: only a pane answer can close it. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms passed before recording: ErrStoreBusy.
+Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms passed before recording: ErrStoreBusy.
 
 ### Input schema
 
@@ -198,13 +212,15 @@ Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). R
 
 ### Output schema
 
-- `delivery`: type=string — delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack.
+- `delivery`: type=string — delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.
 - `confirm_by`: type=timestamp — RFC3339 time by which not_confirmed ends: the relay hook's kill instant plus 2 s, by when its hook has acked (delivered) or is gone (fallen_back). For a request recorded before this release: requested_at plus the relay window plus 2 s.
 - `hook_alive`: type=bool? — Whether the request's relay hook process runs, checked in the reader's pid namespace by its pid and start time: true; false (no such process, another start time, or a zombie); null when it cannot be checked (another or unreadable pid namespace, unreadable /proc, or a request recorded before this release).
 - `hook_gone_at`: type=timestamp? — When a reader first found the request fallen back; null until then. A reading verb (get, list, get-permission) records it only if the store's write lock is free at that moment, never waiting.
 - `attempted_decision`: type=string? — The verdict a decide refused as fallen back (ErrRelayFallenBack) tried to record, the latest one; null when none. Stored and shown, never acted on.
 - `attempted_at`: type=timestamp? — When that refused decide ran; null when none.
 - `tool_use_id`: type=string? — The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).
+- `pane_answer`: type=string — How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.
+- `pane_as`: type=string? — The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. The caller's claim, stored and never checked.
 
 ### Errors
 
@@ -234,20 +250,57 @@ Fetch one permission_requests row by request_token alone. decision, decision_rea
 - `tool_name`: type=string — Claude Code tool that triggered the permission request (e.g. "Bash", "Write").
 - `tool_input`: type=string — Raw JSON string of the tool's input as stored in the DB; NOT a nested JSON object. Passes through byte-identical from the DB column — consumers parse it themselves.
 - `requested_at`: type=timestamp — RFC3339 timestamp when the row was created (maps from the created_at DB column).
-- `decision`: type=string? — "allow" or "deny" once a verdict is recorded; null while the row is open (decision IS NULL in the DB). A recorded verdict is not the outcome: read delivery.
-- `decision_reason`: type=string? — Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).
+- `decision`: type=string? — "allow" or "deny" once a verdict is recorded; null while the row is open (decision IS NULL in the DB), and for a record-pane-answer claiming unknown. A recorded verdict is not the outcome: read delivery and pane_answer.
+- `decision_reason`: type=string? — Canonical decision-reason string: for deny rows operator / timeout / find_missing / ended (SR-1.3; find_missing and ended: the request was still undecided when find-missing marked its spawn missing, or when its spawn ended or was resumed, and is closed); for a request closed at the pane, allow or deny, pane (a pane answer through send-keys), pane_outside (record-pane-answer) or tool_ran (its tool ran); null for open rows AND for allow rows decided by decide (closed-allow carries no reason).
 - `decided_at`: type=timestamp? — RFC3339 timestamp when the verdict was written; null while the row is open.
-- `delivery`: type=string — delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, no pane answer recorded through agent-director, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent and only a pane answer can close the request. Derived on every read; a request recorded before this release falls back by its relay window, as before.
+- `delivery`: type=string — delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request is open and only an answer at the pane, or record-pane-answer, closes it; with sent, outside or tool_ran it is closed. Derived on every read; a request recorded before this release falls back by its relay window, as before.
 - `confirm_by`: type=timestamp — RFC3339 time by which not_confirmed ends: the relay hook's kill instant plus 2 s, by when its hook has acked (delivered) or is gone (fallen_back). For a request recorded before this release: requested_at plus the relay window plus 2 s.
 - `hook_alive`: type=bool? — Whether the request's relay hook process runs, checked in the reader's pid namespace by its pid and start time: true; false (no such process, another start time, or a zombie); null when it cannot be checked (another or unreadable pid namespace, unreadable /proc, or a request recorded before this release).
 - `hook_gone_at`: type=timestamp? — When a reader first found the request fallen back; null until then. A reading verb (get, list, get-permission) records it only if the store's write lock is free at that moment, never waiting.
 - `attempted_decision`: type=string? — The verdict a decide refused as fallen back (ErrRelayFallenBack) tried to record, the latest one; null when none. Stored and shown, never acted on.
 - `attempted_at`: type=timestamp? — When that refused decide ran; null when none.
 - `tool_use_id`: type=string? — The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).
+- `pane_answer`: type=string — How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.
+- `pane_as`: type=string? — The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see the answer); null when none was recorded. The caller's claim, stored and never checked.
 
 ### Errors
 
 - `ErrPermissionRequestNotFound`
+
+## Tool: record-pane-answer
+
+Close a fallen-back request answered outside agent-director; types nothing. Needs read-pane's pane_sha256; too soon: ErrClaimTooSoon.
+
+### Input schema
+
+- `request_token`: type=string, required=true — Token of the permission request answered outside agent-director (as get, get-permission or ErrRelayFallenBack's err_details name it). Accepted only while it has fallen back (its relay hook gone, no verdict acked, no pane answer completed) and no pane answer through send-keys on it is still being sent (else ErrPaneAnswerInProgress); acked or answered at the pane: ErrAlreadyDecided; closed with its spawn: ErrNoOpenPermissionRequest. Its relay hook must have been gone at least 2 s, from the request's hook_gone_at (written now when it has none), or from its confirm_by when earlier and the hook is judged by time (it cannot be checked, or the request was recorded before this release): Claude Code draws a dialog only after the hook ends, so a pane read sooner may not show it yet; else ErrClaimTooSoon with err_details.not_before (null only while the hook is seen running). Once recorded, plain send-keys is no longer refused on its account.
+- `as`: type=string, required=true — How it was answered, as the caller claims: allow, deny, or unknown. Pass unknown unless the answer was seen. Recorded as pane_as, and as decision (null for unknown) with decision_reason pane_outside; never checked.
+- `expect_pane_sha256`: type=string, required=true — Required. The pane_sha256 read-pane returned for the pane the caller looked at (64 hex digits). Before acting, the agent's pane is captured with the same n_lines, ANSI stripped as read-pane gives it by default, and its SHA-256 compared byte for byte; a difference is ErrPaneChanged, nothing done, and the error does not carry the new hash: read the pane again. It means a person or LLM judged this exact screen: never pass it from an automatic flow.
+- `n_lines`: type=int, required=false — The n_lines of the read-pane expect_pane_sha256 came from. Defaults to 25 when 0/omitted.
+
+### Output schema
+
+- `request_token`: type=string — The request's token (echoed back).
+- `pane_answer`: type=string — Always outside: the request is closed as answered outside agent-director.
+- `pane_as`: type=string — The claim recorded.
+- `decision`: type=string? — The claim when allow or deny; null for unknown.
+- `decision_reason`: type=string — Always pane_outside.
+
+### Errors
+
+- `ErrInvalidFlags`
+- `ErrPermissionRequestNotFound`
+- `ErrSpawnNotFound`
+- `ErrNoOpenPermissionRequest`
+- `ErrAlreadyDecided`
+- `ErrClaimTooSoon`
+- `ErrPaneAnswerInProgress`
+- `ErrPaneChanged`
+- `ErrStoreBusy`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxCaptureFailed`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## Tool: resume
 
@@ -354,7 +407,7 @@ Enumerate rows. All filters AND together. Order is unspecified; callers sort.
 
 ### Output schema
 
-- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?). get and list never wait for the store's write lock.
+- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states (a row can read waiting while a request is still open: follow a tracked request with get-permission). Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request) and pane_as (string?). get and list never wait for the store's write lock.
 
 ### Errors
 

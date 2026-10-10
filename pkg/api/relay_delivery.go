@@ -17,9 +17,9 @@ const (
 	DeliveryNotConfirmed = "not_confirmed"
 	// DeliveryFallenBack: no ack, and the relay hook is gone (or cannot be
 	// checked and its settle instant has passed): no answer from the relay
-	// reached Claude Code, and no pane answer is recorded through
-	// agent-director. It stays fallen_back once a pane answer closes the
-	// request (b.146 step 2b).
+	// reached Claude Code. While pane_answer is none or intent no pane answer
+	// is recorded through agent-director. It stays fallen_back once a pane
+	// answer closes the request (b.146 step 2b), pane_answer telling how.
 	DeliveryFallenBack = "fallen_back"
 )
 
@@ -76,6 +76,18 @@ type RequestDelivery struct {
 	AttemptedAt *time.Time `json:"attempted_at"`
 	// ToolUseID is the hook input's tool_use_id; null when none was given.
 	ToolUseID *string `json:"tool_use_id"`
+	// PaneAnswer is how the request was answered at the pane (b.146 step
+	// 2b): none (no pane answer recorded through agent-director: something
+	// outside it, such as a person at tmux, may still have answered it),
+	// intent (a pane answer through send-keys was started; whether its key
+	// was typed is unknown), sent (its key was sent), outside (a caller
+	// recorded it answered outside agent-director) or tool_ran (Claude Code
+	// reported its tool ran).
+	PaneAnswer string `json:"pane_answer"`
+	// PaneAs is the verdict a pane answer claims: allow, deny, or unknown (an
+	// outside record that did not see the answer); null when none was
+	// recorded. It is the caller's claim, stored and never checked.
+	PaneAs *string `json:"pane_as"`
 }
 
 // hookVerdict is a reader's judgement of a request's relay hook (b.146
@@ -118,20 +130,27 @@ func (j relayJudge) now() time.Time {
 	return j.view.Now()
 }
 
-// hook judges pr's relay hook by rule 14's table: can't tell when the hook's
-// identity is not on record (no pid or start time: a hook records its pid
-// only with its start time and pid namespace), when there is no start-time
-// reader, or when the reader's own pid namespace is unknown or another than
-// the hook's (on darwin, which has no pid namespaces, both read ""); otherwise
-// one start-time read (tmux.JudgeProcess) decides: alive with the recorded
-// start time is alive (whatever the state but zombie), gone or a zombie or
-// another start time is gone, unreadable is can't tell.
-func (j relayJudge) hook(pr PermissionRow) hookVerdict {
-	h := pr.Hook
-	if h.PID <= 0 || h.Starttime == "" || j.view.Procs == nil || !j.nsKnown || j.ns != h.PIDNamespace {
+// hook judges pr's relay hook by rule 14's table (process).
+func (j relayJudge) hook(pr PermissionRow) hookVerdict { return j.process(pr.Hook) }
+
+// sender judges the process that recorded pr's pane-answer intent (b.146
+// problem 2) by rule 14's table, as a relay hook is judged (process).
+func (j relayJudge) sender(pr PermissionRow) hookVerdict { return j.process(pr.PaneSender) }
+
+// process judges the recorded process id by rule 14's table: can't tell when
+// its identity is not on record (no pid or start time: a relay hook, and a
+// pane answer's sender, records its pid only with its start time and pid
+// namespace), when there is no start-time reader, or when the reader's own pid
+// namespace is unknown or another than the recorded one (on darwin, which has
+// no pid namespaces, both read ""); otherwise one start-time read
+// (tmux.JudgeProcess) decides: alive with the recorded start time is alive
+// (whatever the state but zombie), gone or a zombie or another start time is
+// gone, unreadable is can't tell.
+func (j relayJudge) process(id ProcessIdentity) hookVerdict {
+	if id.PID <= 0 || id.Starttime == "" || j.view.Procs == nil || !j.nsKnown || j.ns != id.PIDNamespace {
 		return hookCantTell
 	}
-	switch tmux.JudgeProcess(j.view.Procs, tmux.ProcIdentity{PID: h.PID, Starttime: h.Starttime}) {
+	switch tmux.JudgeProcess(j.view.Procs, tmux.ProcIdentity{PID: id.PID, Starttime: id.Starttime}) {
 	case tmux.ProcAlive:
 		return hookAlive
 	case tmux.ProcGone:
@@ -160,6 +179,8 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 		AttemptedDecision: nullableString(pr.AttemptedDecision),
 		AttemptedAt:       nullableTime(pr.AttemptedAt),
 		ToolUseID:         nullableString(pr.ToolUseID),
+		PaneAnswer:        paneAnswerOf(pr),
+		PaneAs:            nullableString(pr.PaneAs),
 	}
 	switch v {
 	case hookAlive:
@@ -177,41 +198,45 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 // passed.
 //
 //   - Acked: delivered.
+//   - A completed pane answer is recorded (step 2b: sent, outside or
+//     tool_ran): fallen_back, its pane_answer telling how it closed. A pane
+//     answer is given only to a request that had fallen back, a request
+//     recorded before schema v7 included.
 //   - Recorded before schema v7 (no ack, no hook identity on record), by
 //     time as before the upgrade: until confirm_by not_confirmed; after it,
 //     delivered when a verdict was recorded (a relay hook from before v7
-//     delivered it with no ack), fallen_back when none was (find-missing's
-//     close of a missing row's request counts as none).
-//   - A completed pane answer is recorded (step 2b): fallen_back, its
-//     pane_answer telling how it closed.
+//     delivered it with no ack), fallen_back when none was (a close's deny
+//     of an undecided request, find-missing's or the ended row's, counts as
+//     none: PermissionRow.CloseDenied).
 //   - Otherwise by the hook: alive is not_confirmed; gone is fallen_back;
 //     can't tell is fallen_back once confirm_by has passed and
 //     not_confirmed before.
 //
-// A request find-missing's mark closed (b.146 rule 12; closed_at) is derived
-// by the same rules, so each value keeps its meaning and never goes back: it
-// is delivered only when its relay hook acked (a hook whose parent is still
-// alive may yet ack the verdict recorded on it, or the mark's deny of an
-// undecided one), not_confirmed while that hook may still run, and
-// fallen_back once it is gone or past confirm_by: no answer from the relay
-// reached the agent. A closed request no longer awaits an answer, so get and
-// list do not show it, and decide refuses it as closed
+// A request closed with its Spawn (b.146 rule 12; closed_at: find-missing's
+// mark, the terminal SessionEnd's move to ended, or resume's move to pending)
+// is derived by the same rules, so each value keeps its meaning and never
+// goes back: it is delivered only when its relay hook acked (a hook whose
+// parent is still alive may yet ack the verdict recorded on it, or the
+// close's deny of an undecided one), not_confirmed while that hook may still
+// run, and fallen_back once it is gone or past confirm_by: no answer from the
+// relay reached the agent. A closed request no longer awaits an answer, so
+// get and list do not show it, and decide refuses it as closed
 // (ErrNoOpenPermissionRequest, or ErrAlreadyDecided for the mark's deny),
-// never as fallen back; for a request recorded before schema v7 the mark's
+// never as fallen back; for a request recorded before schema v7 a close's
 // deny counts as no verdict, as above.
 func deliveryOf(pr PermissionRow, v hookVerdict, settled bool) string {
 	switch {
 	case !pr.DeliveredAt.IsZero():
 		return DeliveryDelivered
+	case pr.PaneAnswered():
+		return DeliveryFallenBack
 	case pr.PreV7():
 		switch {
 		case !settled:
 			return DeliveryNotConfirmed
-		case pr.Decision != "" && pr.DecisionReason != store.DecisionReasonFindMissing:
+		case pr.Decision != "" && !pr.CloseDenied():
 			return DeliveryDelivered
 		}
-		return DeliveryFallenBack
-	case pr.PaneAnswer != store.PaneAnswerNone && pr.PaneAnswer != store.PaneAnswerIntent:
 		return DeliveryFallenBack
 	case v == hookAlive:
 		return DeliveryNotConfirmed
@@ -304,6 +329,34 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) {
 			sl.d.HookGoneAt = &t
 		}
 	}
+}
+
+// paneAnswerOf is pr's pane_answer as the wire gives it: none for a row built
+// in memory with no value (the column itself is never empty).
+func paneAnswerOf(pr PermissionRow) string {
+	if pr.PaneAnswer == "" {
+		return store.PaneAnswerNone
+	}
+	return pr.PaneAnswer
+}
+
+// RelayHookGone reports whether pr's relay hook is gone at v's clock by
+// rule 5's hook clause (b.146 rules 5 and 14): its process is provably gone in
+// v's pid namespace, or it cannot be checked and pr's confirm_by (its settle
+// instant; for a request recorded before schema v7, its relay window plus the
+// margins) has passed. Call it BEFORE reading the record a decision rests on
+// (rule 5's check-before-read note): a gone hook writes nothing more. The
+// agent's PostToolUse close of a request whose tool ran judges the request's
+// hook with it (cmd/agent-director wires it into the hook verb).
+func RelayHookGone(v RelayView, pr PermissionRow) bool {
+	j := newRelayJudge(v)
+	switch j.hook(pr) {
+	case hookGone:
+		return true
+	case hookAlive:
+		return false
+	}
+	return !j.now().Before(j.confirmBy(pr))
 }
 
 // nullableTime maps a zero time to nil (JSON null) and any other to a pointer

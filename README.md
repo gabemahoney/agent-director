@@ -304,20 +304,23 @@ request can read `decision` `allow` with `delivery` `fallen_back`.
 `decide` records no verdict when it refuses with:
 
 - `ErrRelayFallenBack`: the request's relay hook is gone and took no verdict,
-  so no answer from the relay reached the agent. It comes within seconds of
-  the hook's end (after `confirm_by` when agent-director cannot check the
-  hook's process). Only an answer at the pane can close the request; the
+  and no pane answer is recorded on it through agent-director, so no answer
+  from the relay reached the agent. It comes within seconds of the hook's
+  end (after `confirm_by` when agent-director cannot check the hook's
+  process). Answer the request at the pane, or record that it was answered
+  outside agent-director (see
+  [Answer a request at the pane](#answer-a-request-at-the-pane)); the
   refused verdict is kept as `attempted_decision`.
 - `ErrStoreBusy`: the store stayed busy for longer than `--max-wait-ms`
   (another agent-director process held it, or another call in the same
   process did). Retry.
 - `ErrAlreadyDecided`: a verdict is already recorded (first `decide` wins, and
   the relay hook records a deny of its own when its time runs out,
-  `decision_reason` `timeout`).
+  `decision_reason` `timeout`), or the request was answered at the pane.
 - `ErrNoOpenPermissionRequest`: no open request by that token, or it is
-  closed. Do not answer it at the pane. A request is closed while its agent
-  is `ended` or `missing`, and one still awaiting an answer when
-  `find-missing` marked its agent `missing` stays closed after `resume`.
+  closed. Do not answer it at the pane. A request still awaiting an answer
+  when its agent ended, or when `find-missing` marked it `missing`, is
+  closed, and stays closed after `resume`.
 
 `--max-wait-ms` bounds the whole call, its reads and its write, and has
 no default. Without it,
@@ -349,9 +352,18 @@ The response is a single permission row:
   "hook_gone_at": null,
   "attempted_decision": null,
   "attempted_at": null,
-  "tool_use_id": "toolu_01ABCDEF"
+  "tool_use_id": "toolu_01ABCDEF",
+  "pane_answer": "none",
+  "pane_as": null
 }
 ```
+
+`decision_reason` says who recorded the verdict: `operator` (a `decide`
+deny; a `decide` allow has none), `timeout` (the relay hook's own deny),
+`find_missing` and `ended` (a deny written when the request was closed with
+its agent), `pane` (a pane answer through `send-keys`), `pane_outside`
+(`record-pane-answer`) and `tool_ran` (the request's tool ran, so it was
+allowed).
 
 `get` and `list` carry the same delivery fields on each request in a row's
 `permission_requests`; they list only requests that still await an answer,
@@ -363,6 +375,68 @@ the same way as any other's: `delivered` only if its relay hook confirmed a
 verdict. A row can read `waiting` while a request it recorded still awaits
 an answer, so follow each request you track with `get-permission`, not only
 rows in `check_permission`.
+
+### Answer a request at the pane
+
+No answer from the relay reached a request whose relay hook is gone
+(`delivery` `fallen_back`); only an answer at the agent's pane can close
+it. Look at the pane, then send the one key that answers it, naming the
+request:
+
+```sh
+pane=$(agent-director read-pane --claude-instance-id "$id")
+echo "$pane" | jq -r '.pane'
+hash=$(echo "$pane" | jq -r '.pane_sha256')
+
+agent-director send-keys --claude-instance-id "$id" \
+    --request-token "$token" --as deny --key Escape \
+    --expect-pane-sha256 "$hash"
+```
+
+With `--request-token`, `send-keys` sends exactly that one key (a named
+key `Escape`, `Enter`, `Up`, `Down`, `Tab`, or one character) and never
+Enter, then records the request answered: `pane_answer` `sent`, `decision`
+your `--as`, `decision_reason` `pane`. `--as`, `--key` and
+`--expect-pane-sha256` are required; pass the same `--n-lines` you read
+with. agent-director never reads the pane: it compares the hash byte for
+byte, and `--as` is stored as your claim. Nothing is sent when it refuses
+with:
+
+- `ErrPaneChanged`: the pane changed since you read it. Read it again; the
+  error does not carry the new hash.
+- `ErrPaneAnswerInProgress`: another pane answer to this request is still
+  being sent. Do nothing.
+- `ErrSendKeysWhileRelayed`: a relay hook of the agent may still answer
+  its request: answer the request it names with `decide`, or retry later.
+- `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest`: the request is no
+  longer open.
+
+If the request was answered outside agent-director, for example by a
+person at tmux, record that instead (it types nothing):
+
+```sh
+agent-director record-pane-answer --request-token "$token" \
+    --as unknown --expect-pane-sha256 "$hash"
+```
+
+Pass `--as unknown` unless you saw how it was answered. `ErrClaimTooSoon`
+means the relay hook may still answer or has not been gone for 2 s yet, so
+the prompt may not be drawn: retry at `err_details.not_before` (null only
+while the hook is seen running). A request whose tool then runs is closed
+on its own (`decision_reason` `tool_ran`). A closed request keeps
+`delivery` `fallen_back`; its `pane_answer` (`sent`, `outside` or
+`tool_ran`) says how it was closed.
+
+While a request of the agent is fallen back with no pane answer recorded, a
+plain `send-keys` (no `--request-token`) is refused with
+`ErrRelayFallenBack`, whose `err_details` name that request and the agent's
+other open requests; while a relay hook of the agent may still answer,
+every `send-keys` is refused with `ErrSendKeysWhileRelayed`. Plain
+`send-keys` also takes `--no-enter` (type `--text` with no Enter) and
+`--key` (send one key alone), and `--expect-pane-sha256` optionally.
+
+Never pass `--expect-pane-sha256` from an automatic flow: it says that a
+person or an LLM judged that exact screen.
 
 ### Templates
 
@@ -776,6 +850,18 @@ the class of every tmux error, is in
   read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
   minus 1 s; its `ErrStoreBusy` and `ErrRelayFallenBack` record nothing (see
   [Intercept permission prompts](#intercept-permission-prompts)).
+- `ErrRelayFallenBack` comes from `decide` and from a plain `send-keys`.
+  Close the request with a pane answer (`send-keys --request-token`) or
+  with `record-pane-answer` (see
+  [Answer a request at the pane](#answer-a-request-at-the-pane)).
+- Some errors carry their facts in an `err_details` object beside
+  `err_name` and `err_description` (in the CLI's error JSON, the MCP
+  error's `data`, and the TypeScript client's `errDetails`):
+  `ErrRelayFallenBack`, `ErrPaneAnswerInProgress`, `ErrClaimTooSoon`,
+  `ErrPaneChanged`, and an `ErrInternal` from a pane answer whose key was
+  sent (`key_sent` true: read the pane before you send anything again).
+  Read facts from it, never from the description; a caller that does not
+  use it ignores it.
 - `get`, `list` and `get-permission` never wait for the store's write lock.
 - A reused id starts with no memory of its earlier lives.
 - Detect features by the binary's version (`agent-director version`, the

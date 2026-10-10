@@ -215,10 +215,14 @@ encodes as `[]` when empty. Most-likely sentinel error:
 Send text into the agent's own pane. CR bytes (`\r`, `0x0D`) are
 stripped automatically before delivery to prevent premature buffer
 submission; LF bytes (`\n`, `0x0A`) are preserved as composed newlines
-in Claude's input box. A single Enter is always appended to submit the
-buffer; an empty `Text` sends that Enter only, submitting what is already
-typed. There is no flag to suppress CR stripping — the behavior is
-unconditional by design (SRD §4.3).
+in Claude's input box. A single Enter is appended to submit the buffer
+unless `NoEnter`; an empty `Text` sends that Enter only, submitting what
+is already typed. `Key` sends one key alone instead (a named key `Escape`,
+`Enter`, `Up`, `Down`, `Tab`, or one character), with no Enter. With
+`ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at, with
+its `NLines`) the pane is checked first and nothing is sent if it changed
+(`ErrPaneChanged`). There is no flag to suppress CR stripping — the
+behavior is unconditional by design (SRD §4.3).
 
 ```bash
 agent-director send-keys \
@@ -243,33 +247,29 @@ Most-likely sentinel errors:
 - `ErrSpawnNotInteractive`: the state is not `waiting/working/ask_user/
   check_permission` (a `pending` row needs `AllowPending`, below); nothing
   was sent.
-- `ErrSendKeysWhileRelayed`: relay_mode=on and state is `check_permission`
-  **and** at least one of the row's permission requests holds the relay
-  guard, or the row has zero request rows; the relay still owns the
-  answer and nothing was sent. The message names the
-  request holding the guard. If that request is pending, it says to
+- `ErrInvalidFlags`: the params' shape is refused (for example `Key` with
+  a non-empty `Text`, `NoEnter` with neither, `As` without
+  `RequestToken`, a malformed hash); nothing was read or sent.
+- `ErrSendKeysWhileRelayed`: relay_mode=on, in any live state, and a
+  relay hook of the row may still answer its request (its process runs,
+  or it cannot be checked and the request's `confirm_by` has not passed);
+  the relay still owns the answer and nothing was sent. The message names
+  that request and states no release time. If it is undecided, it says to
   answer it with decide (`… on request <request_token>; answer it with
   decide`), and `Decide` answers it. If its verdict is already recorded,
   it says to retry later (`… the relayed permission verdict on request
   <request_token> is recorded and its relay hook may still be delivering
   it; retry send-keys later`); `Decide` on it would return
-  `ErrAlreadyDecided`. With zero rows the message names none (`… whose
-  request is not yet recorded; answer it with decide once get lists
-  it`). This guard is **time-bounded**: a request holds it until 2 s
-  after its relay window ends, open or decided (a decided one no longer
-  once another of the row's requests is still open past that point), and
-  it releases once none holds, letting the caller recover the wedged row
-  through this sanctioned, audited surface. It judges every request by
-  its window, so it can still hold on account of a request `Decide` has
-  refused with `ErrRelayFallenBack` (its relay hook is gone and acked no
-  verdict), which `Decide` reports within seconds of the hook's end. For
-  a request recorded before this release, `Decide` refused near the
-  window's end first waits, at most 3 s, then returns
-  `ErrAlreadyDecided`, `ErrRelayFallenBack` (by then the guard has
-  released on that request's account) or `ErrNoOpenPermissionRequest`
-  (its dialog may have closed, so do not answer it at the pane); the
-  guard does not apply that check, so once it has released it accepts
-  such a send.
+  `ErrAlreadyDecided`.
+- `ErrRelayFallenBack`: a plain call (no `RequestToken`) while a request
+  of the row has fallen back with no pane answer recorded (its relay hook
+  is gone and acked no verdict); nothing was sent. `api.ErrDetails(err)`
+  is a `RelayFallenBackDetails` naming that request (the oldest) and the
+  row's other open requests. Close it with a pane answer or with
+  `RecordPaneAnswer` (see [Permission relay](#permission-relay)).
+- `ErrPaneChanged`: `ExpectPaneSHA256` no longer matches the pane;
+  nothing was sent. Read the pane again: the error does not carry the new
+  hash.
 - `ErrTmuxSendKeys`: the row's session or pane is not there.
 - `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
   earlier launch left behind is there on a live row, or tmux holds
@@ -322,25 +322,32 @@ hook clears it.
 #### Pure `SendKeys` function
 
 `(*Client).SendKeys` is a thin wrapper over a pure package-level function
-that takes the relay window and the clock as explicit inputs so the
-guard-release verdict is deterministic and testable:
+that takes how it judges the relay as an explicit `SendKeysEnv`, so the
+relay guard's verdict is deterministic and testable:
 
 ```go
-func SendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error)
+func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams) (SendKeysResult, error)
 ```
 
 `SendKeysStore` is the row read, the permission-request read, the
-conditional adoption write and the store id; `SendKeysTmux` is the lookup,
-the pane listing and the send by pane id; `ProcChecker` checks the agent
-process. The `Client` method passes its store, tmux client and process
-checker, resolves `effectiveWindow` via
-`cfg.Relay.EffectiveTimeoutSeconds()` (the single source for the window: a
-missing or 0 `relay.timeout_seconds` gives the default, and `New` refuses a
-config whose value is negative or above 2147483) and passes its own clock as
-`now`, then
-records the call on the `ad.send_keys.called` trail event. Most callers use
-the `Client` method; the pure function is for tests and callers that need to
-control the window and clock.
+conditional adoption write, the `hook_gone_at` write, a pane answer's three
+writes (`RecordPaneIntent`, `RecordPaneSent`, `ReleasePaneIntent`) and the
+store id; `SendKeysTmux` is the lookup, the pane listing, the text and the
+named-key sends by pane id and the capture `ExpectPaneSHA256` is checked
+against. `SendKeysEnv` holds a `RelayView` (the start-time reader, which
+also checks the agent process, the reader's own pid namespace, the clock
+and the relay window), `Self` (the identity a pane answer records as its
+sender) and `IntentHold` (how long an intent whose sender cannot be
+checked counts as in progress). The `Client` method passes its store, tmux
+client and its own env: its start-time reader, pid namespace and clock,
+the window from `cfg.Relay.EffectiveTimeoutSeconds()` (the single source
+for the window: a missing or 0 `relay.timeout_seconds` gives the default,
+and `New` refuses a config whose value is negative or above 2147483), its
+own process as sender, and the `[tmux]` action timeout plus the pipe-close
+wait plus 2 s as `IntentHold`; then it records the call on the
+`ad.send_keys.called` trail event. Most callers use the `Client` method;
+the pure function is for tests and callers that need to control the relay
+judgement.
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
@@ -368,7 +375,10 @@ agent-director read-pane \
 ```
 
 Call `c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id, NLines: 50})`.
-Returns `ReadPaneResult` (`.Pane` string). `ReadPane` reads only this
+Returns `ReadPaneResult` (`.Pane` string, and `.PaneSHA256`, the SHA-256 in
+lowercase hex of exactly the bytes of `.Pane`, which `SendKeys` and
+`RecordPaneAnswer` take back as `ExpectPaneSHA256` with the same `NLines`;
+the hash of an `ANSI: true` read never matches). `ReadPane` reads only this
 agent's pane (or, with no session of the current launch, the pane of the
 one session an earlier launch of this row left behind) and changes
 nothing. Most-likely sentinel errors:
@@ -490,15 +500,65 @@ call on the same `Client` (a `Client` uses one store connection).
 Once the verdict is recorded, `Decide` never returns `ErrStoreBusy`.
 
 `ErrNoOpenPermissionRequest` means no open request has that token, or the
-request is closed: do not answer it at the pane. A request is closed while
-its Spawn is `ended` or `missing`, and one still awaiting an answer when
-`find-missing` marked its Spawn `missing` stays closed after `Resume`;
-`Get` and `List` no longer show it. `GetPermission` still reads its
-delivery, which is `delivered` only if its relay hook confirmed a verdict.
+request is closed: do not answer it at the pane. A request still awaiting
+an answer when its Spawn ended (its agent's terminal SessionEnd) or when
+`find-missing` marked it `missing` is closed in the same write, an
+undecided one denied with `DecisionReason` `ended` or `find_missing`, and
+stays closed after `Resume`; `Get` and `List` no longer show it.
+`GetPermission` still reads its delivery, which is `delivered` only if its
+relay hook confirmed a verdict.
+
+`ErrRelayFallenBack` means the request's relay hook is gone and acked no
+verdict, and no pane answer is recorded on it through agent-director.
+`Decide` returns it for that request, and a plain `SendKeys` for the
+Spawn's oldest such request. `api.ErrDetails(err)` returns its facts as a
+`RelayFallenBackDetails`: the request's `PermissionRequestInfo`, the
+Spawn's `State`, and `OpenRequests`, the Spawn's other open requests. It
+is closed in one of three ways, each recorded in `PaneAnswer` (`PaneAs`
+holds the caller's claim, never checked):
+
+- **A pane answer**: `SendKeys` with `RequestToken`, `As` (`"allow"` or
+  `"deny"`), `Key` (the one key, sent with no Enter) and
+  `ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at;
+  never set it from an automatic flow). It records its intent before the
+  key and `PaneAnswer` `"sent"`, `Decision` `As` and `DecisionReason`
+  `"pane"` after it. `ErrPaneAnswerInProgress`: another pane answer to the
+  request is still being sent (do nothing). A retry after a sender that
+  died needs a fresh hash. An error classified `ErrInternal` whose
+  `ErrDetails` is a `PaneKeySentDetails` (`KeySent` true) means the key
+  was sent but not recorded: read the pane before you send anything
+  again, and close the request with `RecordPaneAnswer` if it shows the
+  request answered.
+- **`RecordPaneAnswer`**, when it was answered outside agent-director (it
+  types nothing): `RecordPaneAnswerParams{RequestToken, As, ExpectPaneSHA256,
+  NLines}`, `As` `"allow"`, `"deny"` or `"unknown"` (pass `"unknown"`
+  unless you saw the answer). It records `PaneAnswer` `"outside"`,
+  `Decision` the claim (nil for `"unknown"`) and `DecisionReason`
+  `"pane_outside"`. `ErrClaimTooSoon`: the relay hook may still answer or
+  has not been gone 2 s yet; retry at the `NotBefore` of its
+  `ClaimTooSoonDetails` (nil only while the hook is seen running).
+- **The agent's PostToolUse or PostToolUseFailure** for the request's
+  tool, which records
+  `PaneAnswer` `"tool_ran"`, `Decision` `"allow"`, `DecisionReason`
+  `"tool_ran"`.
+
+`api.DetailedError` is the error type that carries such facts: its `Err`
+holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
+the object; `api.ErrDetails(err)` returns the `Details` of the first one in
+`err`'s chain, or nil. `ErrPaneChanged` (`PaneChangedDetails`),
+`ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`) and
+`ErrClaimTooSoon` (`ClaimTooSoonDetails`) carry it too, and so does a
+pane answer's `ErrInternal` after its key was sent (`PaneKeySentDetails`).
+
+`Decide` on a request already answered at the pane (`PaneAnswer`
+`"sent"`, `"outside"` or `"tool_ran"`) returns `ErrAlreadyDecided`
+naming its `PaneAnswer`, as `SendKeys` and `RecordPaneAnswer` do, and
+records nothing.
 
 The exported functions `api.Decide`, `api.Get`, `api.List` and
-`api.GetPermission` take a `RelayView` (the `Client` methods pass their
-own), and `DecideResult` embeds `RequestDelivery`.
+`api.GetPermission` take a `RelayView`, and `api.SendKeys` and
+`api.RecordPaneAnswer` an env holding one (the `Client` methods pass their
+own); `DecideResult` embeds `RequestDelivery`.
 
 ---
 
@@ -551,7 +611,8 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | The relay path still owns the `check_permission` answer — answer the pending request the message names with `Decide`, or, when the message says its verdict is recorded, retry `SendKeys` later |
+| `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry `SendKeys` later |
+| `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

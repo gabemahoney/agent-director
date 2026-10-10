@@ -1,0 +1,20 @@
+{
+  "session_id": "c41f0a2e-5b7d-4e19-9a63-2d8e1f7b0c55",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/c41f0a2e-5b7d-4e19-9a63-2d8e1f7b0c55.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test",
+    "description": "Run the test suite"
+  },
+  "tool_use_id": "toolu_01JKL012",
+  "error": "Exit code 1\nError: Cannot find module 'express'",
+  "is_interrupt": false,
+  "duration_ms": 1840
+}

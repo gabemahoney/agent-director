@@ -27,6 +27,7 @@ import (
 	"io"
 	"log"
 
+	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -75,10 +76,14 @@ type ResponseError struct {
 
 // ToolErrorData is the structured payload attached to a tool-call
 // error response. Carries the SRD §13.1 err_name + a human-readable
-// description so MCP-aware clients can surface them programmatically.
+// description so MCP-aware clients can surface them programmatically, and
+// the optional err_details object of a refusal that carries facts (b.146
+// rule 15, decision 8 A; api.ErrDetails), omitted otherwise. A client that
+// does not know err_details ignores it.
 type ToolErrorData struct {
 	ErrName        string `json:"err_name"`
 	ErrDescription string `json:"err_description"`
+	ErrDetails     any    `json:"err_details,omitempty"`
 }
 
 // Dispatcher is the seam the server uses to route tool calls to
@@ -222,7 +227,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, respond func(
 		respond(nil, &ResponseError{
 			Code:    -32000,
 			Message: errDesc,
-			Data:    ToolErrorData{ErrName: errName, ErrDescription: errDesc},
+			Data:    ToolErrorData{ErrName: errName, ErrDescription: errDesc, ErrDetails: api.ErrDetails(err)},
 		})
 		return
 	}
@@ -358,4 +363,3 @@ func VerbNameFromTool(toolName string) string {
 	}
 	return string(out)
 }
-

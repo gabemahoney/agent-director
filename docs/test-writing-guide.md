@@ -173,6 +173,10 @@ Exported factories (in pkg/api/apitest/seeds.go):
   `WithLaunchStartedAt`, `WithNoLaunchToken`) set further spawn columns.
 - `SeedParentChild(dbPath, parentID, childID string) error`
 - `SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error)`
+- `AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error`
+  — backdates a seeded request's `created_at` (past the relay window it has
+  fallen back) and records its `hook_gone_at` in the past (old enough for
+  `record-pane-answer`); each only when positive.
 - `SeedTemplate(templatesDir, name, body string) (string, error)`
 - `InitStore(dbPath string) (string, error)`
 

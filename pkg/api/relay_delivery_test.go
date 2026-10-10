@@ -344,33 +344,57 @@ func TestReaderSkipsHookGoneWhileTheConnectionIsHeld(t *testing.T) {
 // the v6→v7 migration leaves one: internal/store's
 // TestV7MigrationKeepsV6Rows) is judged by its created_at and the relay window:
 // not_confirmed until created_at + window + 2 s (its confirm_by), then
-// fallen_back while undecided and delivered once decided; its hook is never
-// checked (hook_alive null).
+// fallen_back while undecided and delivered once decided; a close's deny
+// (find-missing's mark, the Spawn's SessionEnd) counts as no verdict, so it
+// reads fallen_back too; its hook is never checked (hook_alive null).
 func TestPreV7RequestsFallBackByTime(t *testing.T) {
 	t.Parallel()
+	decide := func(t *testing.T, s *store.Store, _ string) {
+		if ok, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !ok {
+			t.Fatalf("decide = %v, %v", ok, err)
+		}
+	}
+	end := func(t *testing.T, s *store.Store, dbPath string) {
+		if err := seedAgentState(s, dbPath, "id-d-1", store.StateEnded); err != nil {
+			t.Fatalf("SessionEnd: %v", err)
+		}
+	}
+	mark := func(t *testing.T, s *store.Store, _ string) {
+		sp, err := s.GetSpawn("id-d-1")
+		if err != nil {
+			t.Fatalf("GetSpawn: %v", err)
+		}
+		if _, res, err := s.MarkMissingIfSameLife("id-d-1", sp.Snapshot); err != nil || res != store.CondApplied {
+			t.Fatalf("mark = %v, %v", res, err)
+		}
+	}
 	for _, tc := range []struct {
-		name    string
-		decided bool
-		at      time.Duration // after confirm_by
-		want    string
+		name   string
+		after  func(t *testing.T, s *store.Store, dbPath string) // after the request is recorded; nil none
+		at     time.Duration                                     // after confirm_by
+		want   string
+		reason string // request A's decision_reason then
 	}{
-		{"undecided, before confirm_by", false, -time.Millisecond, api.DeliveryNotConfirmed},
-		{"undecided, at confirm_by", false, 0, api.DeliveryFallenBack},
-		{"decided, before confirm_by", true, -time.Millisecond, api.DeliveryNotConfirmed},
-		{"decided, at confirm_by", true, 0, api.DeliveryDelivered},
+		{"undecided, before confirm_by", nil, -time.Millisecond, api.DeliveryNotConfirmed, ""},
+		{"undecided, at confirm_by", nil, 0, api.DeliveryFallenBack, ""},
+		{"decided, before confirm_by", decide, -time.Millisecond, api.DeliveryNotConfirmed, ""},
+		{"decided, at confirm_by", decide, 0, api.DeliveryDelivered, ""},
+		{"the SessionEnd's deny, at confirm_by", end, 0, api.DeliveryFallenBack, store.DecisionReasonEnded},
+		{"find-missing's deny, at confirm_by", mark, 0, api.DeliveryFallenBack, store.DecisionReasonFindMissing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, _ := apitest.SeedDecideFixture(t, "on")
+			s, dbPath := apitest.SeedDecideFixture(t, "on")
 			apitest.SeedPermissionRow(t, s, "id-d-1")
 			pr, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
 			if err != nil || !pr.PreV7() {
 				t.Fatalf("seeded request = %+v, %v; want one recorded before v7", pr, err)
 			}
-			if tc.decided {
-				if ok, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !ok {
-					t.Fatalf("decide = %v, %v", ok, err)
-				}
+			if tc.after != nil {
+				tc.after(t, s, dbPath)
+			}
+			if got, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA); err != nil || got.DecisionReason != tc.reason {
+				t.Fatalf("request A's decision_reason = %q, %v; want %q", got.DecisionReason, err, tc.reason)
 			}
 			const window = time.Hour
 			confirmBy := pr.CreatedAt.Add(window + api.RelayKillSafetyMargin + api.CreatedAtResolution)
@@ -390,12 +414,14 @@ func TestPreV7RequestsFallBackByTime(t *testing.T) {
 
 // TestDeliveryFactsOnTheWire (b.146 rule 15): get-permission's result and each
 // element of get's and list's permission_requests carry every delivery fact
-// as a JSON key, null when unset, never omitted.
+// as a JSON key, null when unset, never omitted; pane_answer is none and
+// pane_as null before any pane answer (step 2b).
 func TestDeliveryFactsOnTheWire(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, store.ProcessIdentity{})
 	fromGet, fromList := e.listed(t)
-	facts := []string{"delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at", "tool_use_id"}
+	facts := []string{"delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at", "tool_use_id",
+		"pane_answer", "pane_as"}
 	for name, v := range map[string]any{"get-permission": e.getPermission(t, e.s), "get's request": fromGet, "list's request": fromList} {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(jsonOf(t, v)), &m); err != nil {
@@ -408,8 +434,10 @@ func TestDeliveryFactsOnTheWire(t *testing.T) {
 			}
 		}
 		sort.Strings(missing)
-		if len(missing) != 0 || m["delivery"] != api.DeliveryNotConfirmed || m["hook_alive"] != nil || m["attempted_decision"] != nil {
-			t.Errorf("%s JSON = %v; missing %v; want every delivery fact, hook_alive and attempted_decision null", name, m, missing)
+		if len(missing) != 0 || m["delivery"] != api.DeliveryNotConfirmed || m["hook_alive"] != nil || m["attempted_decision"] != nil ||
+			m["pane_answer"] != "none" || m["pane_as"] != nil {
+			t.Errorf("%s JSON = %v; missing %v; want every delivery fact, hook_alive, attempted_decision and pane_as null, pane_answer none",
+				name, m, missing)
 		}
 	}
 }

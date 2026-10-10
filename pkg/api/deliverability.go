@@ -4,12 +4,14 @@ import (
 	"time"
 )
 
-// This file holds the relay's time-based boundaries: the send-keys relay
-// guard's release, and the deliverability, settle instant and fallen-back
-// judgement of a permission request recorded before schema v7, whose relay
-// hook recorded neither its identity nor an ack. A request recorded from v7
-// on is judged by its relay hook process instead (relay_delivery.go; b.146
-// rules 5 and 14), except by the send-keys guard, which step 2b rewrites.
+// This file holds the relay's time-based boundaries: the deliverability,
+// settle instant and fallen-back judgement of a permission request recorded
+// before schema v7, whose relay hook recorded neither its identity nor an
+// ack. A request recorded from v7 on is judged by its relay hook process
+// instead (relay_delivery.go; b.146 rules 5 and 14). The send-keys relay
+// guard (b.146 rule 7, sendkeys_relay.go) judges both kinds through the
+// delivery derivation, so on a request recorded before v7 it holds until the
+// request's settle instant (relayHookSettledAt, its confirm_by).
 
 // RelayKillSafetyMargin is the epsilon subtracted from the effective relay
 // window when deciding whether a permission request recorded before schema v7
@@ -69,7 +71,8 @@ func RelayDeliverabilityCutoff(now time.Time, effectiveWindow time.Duration) tim
 // This function performs no I/O and no DB writes; it only reads its arguments.
 // The Decide contract consults this to refuse recording a success for a
 // request whose delivery is already unsafe (fail-early). The send_keys guard
-// does NOT use this function; it uses the guard-release sibling below.
+// does NOT use this function; it holds until the request's settle instant
+// (relayHookSettledAt, below).
 func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
 	return !createdAt.After(RelayDeliverabilityCutoff(now, effectiveWindow))
 }
@@ -88,13 +91,13 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 //
 //   - The send_keys guard must not release while the poller could still be
 //     alive and emit, so it releases LATE: at elapsed >= window + margin +
-//     createdAtResolution (RelayGuardReleaseCutoff /
-//     RelayRequestGuardReleasable; relayGuardHold), the instant a relay hook
-//     is presumed settled (relayHookSettledAt, below). Releasing at window -
-//     margin would free the guard while a live poller can still emit — the
-//     exact keystroke/envelope race the guard exists to prevent. Holding a
-//     hair too long is safe — the operator waits marginally longer to recover
-//     a genuinely-dead relay.
+//     createdAtResolution (relayGuardHold), the instant a relay hook is
+//     presumed settled (relayHookSettledAt, below; the request's confirm_by,
+//     until which the delivery derivation says not_confirmed). Releasing at
+//     window - margin would free the guard while a live poller can still emit
+//     — the exact keystroke/envelope race the guard exists to prevent.
+//     Holding a hair too long is safe — the operator waits marginally longer
+//     to recover a genuinely-dead relay.
 //
 // Both boundaries live in THIS file and share the SAME RelayKillSafetyMargin
 // constant, so SR-4.4's "single time-based authority" holds: one file, one
@@ -147,41 +150,21 @@ func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duratio
 //
 // The span is agent-director's to absorb, not the caller's to time (b.ah6):
 // no runtime caller-facing text (error messages, manifest Descriptions)
-// states either boundary or the margin. A send_keys refused while the open
-// request holds the guard names an open request (namedBefore) and is told to
-// answer it with decide. For a request recorded before v7, decide's wait ends
-// as the guard releases on that request's account, so a pane answer that
-// follows its ErrRelayFallenBack is not refused on that request's account,
-// nor on account of a decided request of the same Spawn
-// (relayRequestFallenBack, b.ceq). For a request recorded from v7 on, decide
-// reports it fallen back as soon as its relay hook is gone, while the guard
-// still holds on its account until its window ends (b.146 step 2b rewrites
-// the guard).
-
-// RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
-// whose delivery window has provably elapsed (guard may release) from rows that
-// might still be delivered (guard holds on their account, but for
-// evaluateRelayGuard's decided-row exception, b.ceq) at time now. A row is
-// guard-releasable iff its created_at is at or before this cutoff. The cutoff
-// is now less relayGuardHold (the effective relay window PLUS
-// RelayKillSafetyMargin plus createdAtResolution) — i.e. the created_at whose
-// relayHookSettledAt lands exactly at now. This is the deliberate mirror of
-// RelayDeliverabilityCutoff (which subtracts the margin); see the asymmetry
-// note above.
-//
-// It shares the single-authority contract of RelayDeliverabilityCutoff: any
-// caller applying this boundary MUST obtain the cutoff here rather than
-// restating the window +/- margin arithmetic elsewhere.
-func RelayGuardReleaseCutoff(now time.Time, effectiveWindow time.Duration) time.Time {
-	return now.Add(-relayGuardHold(effectiveWindow))
-}
+// states either boundary or the margin. A send_keys refused while a request
+// recorded before v7 may still be answered by its relay hook names that
+// request and is told to answer it with decide (b.146 rule 7). For such a
+// request, decide's wait ends as the guard releases on that request's
+// account. For a request recorded from v7 on, decide and the guard alike
+// judge it by its relay hook process, and report it fallen back as soon as
+// the hook is gone.
 
 // relayGuardHold is how long after a request's created_at its relay hook may
 // still answer it (see the asymmetry note above): the effective relay window
 // plus RelayKillSafetyMargin plus createdAtResolution. The send_keys relay
-// guard holds that long on the request's account (RelayGuardReleaseCutoff),
-// and Decide waits until then before it names a refusal (relayHookSettledAt),
-// so the arithmetic is stated once and the two cannot drift apart.
+// guard holds that long on the account of a request recorded before schema v7
+// (its confirm_by), and Decide waits until then before it names a refusal
+// (relayHookSettledAt), so the arithmetic is stated once and the two cannot
+// drift apart.
 func relayGuardHold(effectiveWindow time.Duration) time.Duration {
 	return effectiveWindow + RelayKillSafetyMargin + createdAtResolution
 }
@@ -206,9 +189,9 @@ const createdAtResolution = 1 * time.Second
 // presumed to have recorded its timeout deny, and a hook that never reached
 // it to have been killed by Claude Code (see the asymmetry note above), so a
 // row still open then is presumed to have no live poller left to answer it.
-// It is also the instant from which RelayRequestGuardReleasable holds for
-// the request. Decide waits until this instant before it names a refusal it
-// made earlier; from its own boundary that is at most twice
+// It is also the request's confirm_by, until which the send_keys relay guard
+// holds on its account. Decide waits until this instant before it names a
+// refusal it made earlier; from its own boundary that is at most twice
 // RelayKillSafetyMargin plus createdAtResolution (3 s).
 func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time.Time {
 	return createdAt.Add(relayGuardHold(effectiveWindow))
@@ -221,28 +204,9 @@ func relayHookSettledAt(createdAt time.Time, effectiveWindow time.Duration) time
 // one of a request recorded before schema v7, for which Decide returns
 // ErrRelayFallenBack only (after its wait), and only while the Spawn is still
 // shown sitting on it alone, otherwise ErrNoOpenPermissionRequest (decide.go's
-// fallenBackUnshown, b.t6e); and the send_keys guard's, which stops holding
-// on account of a decided request once another request of the same Spawn has
-// fallen back by it (b.ceq). A decided request has not fallen back. Like its
+// fallenBackUnshown, b.t6e). A decided request has not fallen back. Like its
 // siblings it is a pure function of the row, the resolved effective relay
 // window and the injected now.
 func relayRequestFallenBack(pr PermissionRow, effectiveWindow time.Duration, now time.Time) bool {
 	return pr.Decision == "" && !now.Before(relayHookSettledAt(pr.CreatedAt, effectiveWindow))
-}
-
-// RelayRequestGuardReleasable is the single authority (SR-4.4) answering, for a
-// permission-request row, whether the send_keys relay guard may RELEASE on that
-// row's account — i.e. whether the delivering poller is provably dead so a
-// pane-side keystroke can no longer race a decision write. It is the fail-late
-// mirror of RelayRequestUndeliverable: a row is guard-releasable once its
-// created_at is at or before the guard-release cutoff (now - (window + margin
-// + createdAtResolution)), that is from its relayHookSettledAt on.
-//
-// Like its sibling this is a pure function of the row's created_at, the
-// resolved effective relay window, and the injected now; it performs no I/O.
-// The send_keys guard MUST consult this (not RelayRequestUndeliverable) so it
-// holds through the full window plus the safety margin and created_at's
-// resolution.
-func RelayRequestGuardReleasable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
-	return !createdAt.After(RelayGuardReleaseCutoff(now, effectiveWindow))
 }

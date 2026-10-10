@@ -120,28 +120,46 @@ func newKeysRun(t keysTmux, pc ProcChecker, row Spawn, storeID, socket string, a
 // the text call went through, no description says nothing was sent. A
 // failed line clear types nothing, and nothing follows it.
 func (r *keysRun) deliver(text string) error {
-	r.found.Socket = r.socket
-	paneID, launch, err := r.target()
-	r.found.Listing, r.found.Adopted = r.listing, r.adoption.Applied
+	paneID, launch, err := r.targetPane()
 	if err != nil {
 		return err
 	}
+	return r.typeText(paneID, launch, text, true)
+}
 
+// targetPane is deliver's first phase: the lookup and, on Ours, the pane
+// listing and the adoption when due (target), recorded in r.found. It
+// returns the agent's pane id with the launch view a failed action's
+// follow-up lookup uses, or the verb error, with nothing sent.
+func (r *keysRun) targetPane() (string, tmux.Launch, error) {
+	r.found.Socket = r.socket
+	paneID, launch, err := r.target()
+	r.found.Listing, r.found.Adopted = r.listing, r.adoption.Applied
+	return paneID, launch, err
+}
+
+// typeText is deliver's second phase on the agent's pane paneID: with
+// r.clear set it first sends lineClearKey (b.9o4), then types text
+// literally, then Enter when enter is set (send-keys' no_enter clears it),
+// only if the text call succeeded. A failed call is mapped in the "keys may
+// have reached the pane" mode (sendFailed) with the verb's next step.
+func (r *keysRun) typeText(paneID string, launch tmux.Launch, text string, enter bool) error {
 	if r.clear != nil {
 		if err := r.clear.SendKeyPane(r.socket, paneID, lineClearKey); err != nil {
 			return r.sendFailed(err, tmux.CallSendKey, launch)
 		}
 	}
 	r.found.Sent = true
-	if err := r.kt.SendKeysPane(r.socket, paneID, text, true); err != nil {
+	if err := r.kt.SendKeysPane(r.socket, paneID, text, enter); err != nil {
 		r.found.SendErr = err
 		return r.sendFailed(err, tmux.CallSendText, launch)
 	}
 	return nil
 }
 
-// sendFailed maps err, the failure of the keys call call (the line clear, or
-// the text and Enter calls, named tmux.CallSendText), to the verb error
+// sendFailed maps err, the failure of the keys call call (the line clear or a
+// named key, tmux.CallSendKey, or the text and Enter calls, named
+// tmux.CallSendText), to the verb error
 // through paneActionFailureError in Keys mode with the verb's next step, and
 // keeps the follow-up lookup it made. launch is the follow-up's view of the
 // row (target's).

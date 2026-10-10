@@ -1,14 +1,11 @@
 package store
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
-	"time"
 )
 
 // liveStateGuardSQL is the WHERE fragment that confines a find-missing write
@@ -60,26 +57,6 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
-// denyOrphanedRequestsSQL is the first statement of the close
-// MarkMissingIfSameLife folds into its transaction (SR-5.4; b.146 rule 12):
-// every request of the row that still awaits an answer (awaitingAnswerSQL)
-// and is undecided is denied with reason find_missing and marked closed. It
-// returns what it closed for the trail.
-var denyOrphanedRequestsSQL = `UPDATE permission_requests AS pr
-    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, closed_at = ?
-  WHERE pr.claude_instance_id = ? AND pr.decision IS NULL AND ` + awaitingAnswerSQL + `
-  RETURNING request_id, request_token, tool_name`
-
-// closeDecidedRequestsSQL is the close's second statement: every request of
-// the row that still awaits an answer after the first, a decided one whose
-// relay hook has not acked its verdict, is marked closed, its decision,
-// decision_reason and decided_at kept. It returns what it closed for the
-// trail.
-var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
-    SET closed_at = ?
-  WHERE pr.claude_instance_id = ? AND ` + awaitingAnswerSQL + `
-  RETURNING request_id, request_token, tool_name`
-
 // MarkMissingIfSameLife is find-missing's mark (SR-11.3, SR-11.6; Appendix
 // F.4), with the close of the row's open permission requests (SR-5.4) in the
 // same transaction (b.146 rule 12): both or neither.
@@ -103,18 +80,19 @@ var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
 //     launch_token, tmux_socket, the server or pane identity columns or the
 //     launch owner. A row that exists but is terminal or holds another
 //     snapshot: CondChanged.
-//  3. The close (b.146 rule 12): every request of the row that still awaits
-//     an answer (awaitingAnswerSQL: not acked and not answered at the pane,
-//     or, recorded before schema v7, undecided) is closed, its closed_at set
-//     to the time of the close, so that no request of the row awaits an
-//     answer after the mark, and none holds the row's moves to working, shows
-//     on get and list, or blocks find-missing's check_permission repair once
-//     the row is resumed. An undecided one also gets decision deny,
-//     decision_reason find_missing and decided_at CURRENT_TIMESTAMP, as
-//     before, so a relay polling for the row reads a fail-closed deny rather
-//     than spinning to its own timeout. A decided one, whose relay hook has
-//     not acked its verdict, keeps its decision, decision_reason and
-//     decided_at. Two statements, the deny first.
+//  3. The close (b.146 rule 12; closeOrphanedRequests, which the ended
+//     transition and resume's move share): every request of the row that
+//     still awaits an answer (awaitingAnswerSQL: not acked and not answered
+//     at the pane, or, recorded before schema v7, undecided) is closed, its
+//     closed_at set to the time of the close, so that no request of the row
+//     awaits an answer after the mark, and none holds the row's moves to
+//     working, shows on get and list, or blocks find-missing's
+//     check_permission repair once the row is resumed. An undecided one also
+//     gets decision deny, decision_reason find_missing and decided_at
+//     CURRENT_TIMESTAMP, as before, so a relay polling for the row reads a
+//     fail-closed deny rather than spinning to its own timeout. A decided
+//     one, whose relay hook has not acked its verdict, keeps its decision,
+//     decision_reason and decided_at. Two statements, the deny first.
 //
 // Any failure in the read, the mark, the close or the commit rolls the whole
 // transaction back: the row keeps its state and snapshot, and its requests
@@ -183,7 +161,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 		return "", CondChanged, nil
 	}
 
-	closed, err := closeOrphanedRequests(ctx, conn, instanceID)
+	closed, err := closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonFindMissing)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: close permission requests: %w", errPrefix, err)
 	}
@@ -193,63 +171,10 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 	committed = true
 
 	for _, c := range closed {
-		if c.denied {
-			emitDecisionCommitted(instanceID, c.token, c.requestID, c.toolName, "deny", DecisionReasonFindMissing, WriterProcessFindMissing)
-		}
+		c.emitDeny(instanceID, DecisionReasonFindMissing, WriterProcessFindMissing)
 		emitOrphanCloseoutTick(instanceID, c.token)
 	}
 	return prior, CondApplied, nil
-}
-
-// closedRequest is one permission request closeOrphanedRequests closed;
-// denied when the close also denied it (it was undecided).
-type closedRequest struct {
-	requestID int64
-	token     string
-	toolName  string
-	denied    bool
-}
-
-// closeOrphanedRequests closes every request of instanceID that still awaits
-// an answer, on conn, inside the transaction its caller holds: the undecided
-// ones denied (denyOrphanedRequestsSQL), then the decided ones marked closed
-// (closeDecidedRequestsSQL), both with one closed_at. It returns the requests
-// it closed in request-id order and emits nothing.
-func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID string) ([]closedRequest, error) {
-	at := millisArg(time.Now())
-	denied, err := queryClosedRequests(ctx, conn, true, denyOrphanedRequestsSQL, "deny", DecisionReasonFindMissing, at, instanceID)
-	if err != nil {
-		return nil, err
-	}
-	kept, err := queryClosedRequests(ctx, conn, false, closeDecidedRequestsSQL, at, instanceID)
-	if err != nil {
-		return nil, err
-	}
-	closed := append(denied, kept...)
-	slices.SortFunc(closed, func(a, b closedRequest) int { return cmp.Compare(a.requestID, b.requestID) })
-	return closed, nil
-}
-
-// queryClosedRequests runs one of the close's statements, q with args, on
-// conn and returns the requests it returned, each marked denied as given.
-func queryClosedRequests(ctx context.Context, conn *sql.Conn, denied bool, q string, args ...any) ([]closedRequest, error) {
-	rows, err := conn.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var closed []closedRequest
-	for rows.Next() {
-		c := closedRequest{denied: denied}
-		if err := rows.Scan(&c.requestID, &c.token, &c.toolName); err != nil {
-			return nil, err
-		}
-		closed = append(closed, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return closed, nil
 }
 
 // The two liveness notes the store itself names (b.kdf, b.146 rule 10).

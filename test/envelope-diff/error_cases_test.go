@@ -125,8 +125,13 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 				t.Fatalf("normalize Client error envelope: %v", err)
 			}
 			// Ignore the err_description value; structural presence of the
-			// key is still verified (both envelopes must carry it).
-			diffs := structuralDiff(cliNorm, clientNorm, []string{"err_description"})
+			// key is still verified (both envelopes must carry it). The
+			// instants err_details records at the refusal (b.146 rule 15:
+			// a refused decide's attempt, the hook's first gone instant)
+			// differ between the two runs; every other err_details field,
+			// and the key's presence, must match.
+			diffs := structuralDiff(cliNorm, clientNorm, []string{"err_description",
+				".err_details.attempted_at", ".err_details.hook_gone_at"})
 			if len(diffs) > 0 {
 				t.Errorf("envelope-diff (error): %q/%q: %d structural field(s) differ:",
 					ec.verb, ec.errName, len(diffs))

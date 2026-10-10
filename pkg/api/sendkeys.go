@@ -1,9 +1,8 @@
 package api
 
 import (
+	"errors"
 	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -11,18 +10,14 @@ import (
 )
 
 // SendKeysStore is the narrow store surface SendKeys needs (SRD Appendix
-// F.3): the row read, the relay guard's permission-request read, the
-// adoption write of SR-3.6 (a lost create reply's server and pane identity,
-// applied only if the row still has the snapshot SendKeys examined) and this
+// F.3): the row read; the relay guard's read of every permission request of
+// the row (b.146 rule 7); the adoption write of SR-3.6 (a lost create reply's
+// server and pane identity, applied only if the row still has the snapshot
+// SendKeys examined); hook_gone_at, which a writing verb records on a request
+// it finds fallen back (b.146 rule 8); a pane answer's three writes (its
+// intent, sent, and the release of its intent; b.146 rule 8); and this
 // store's id, which every label the lookup accepts ends with (SR-3.4; WD
-// 2026-09-29 STORE). The adoption is the only write send-keys makes.
-// *store.Store satisfies it.
-//
-// PermissionRequestsForSpawn returns ALL of the Spawn's permission_requests
-// rows (decided and undecided) so the relay-guard release can evaluate
-// deliverability across every row, decided or not (SR-4.2); evaluateRelayGuard
-// describes the one exception, a decided row once another request of the
-// Spawn has fallen back.
+// 2026-09-29 STORE). *store.Store satisfies it.
 type SendKeysStore interface {
 	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound.
 	GetSpawn(instanceID string) (Spawn, error)
@@ -31,14 +26,30 @@ type SendKeysStore interface {
 	// AdoptIdentityIfUnchanged records a found launch identity when the
 	// row is still as examined (SR-3.6).
 	AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error)
+	// RecordHookGone records hook_gone_at on the requests with requestIDs
+	// that have none yet and returns each one's stored value.
+	RecordHookGone(at time.Time, maxWait time.Duration, requestIDs ...int64) (map[int64]time.Time, error)
+	// RecordPaneIntent runs check inside one write transaction, then records
+	// a pane answer's intent on the request, stamped with now read inside
+	// that transaction, and returns the intent as recorded
+	// (store.RecordPaneIntent).
+	RecordPaneIntent(instanceID, requestToken, as string, sender ProcessIdentity, now func() time.Time, maxWait time.Duration, check PaneCheck) (PaneIntent, bool, error)
+	// RecordPaneSent records sent on the request still carrying intent
+	// (store.RecordPaneSent).
+	RecordPaneSent(instanceID, requestToken string, intent PaneIntent, maxWait time.Duration) (bool, error)
+	// ReleasePaneIntent ends intent's claim on the request
+	// (store.ReleasePaneIntent).
+	ReleasePaneIntent(instanceID, requestToken string, intent PaneIntent, maxWait time.Duration) (bool, error)
 	// StoreID returns this store's store_meta.store_id.
 	StoreID() string
 }
 
 // SendKeysTmux is the narrow tmux surface SendKeys needs (Appendix F.3): the
-// lookup, the pane listing and the keys sent to one pane by its pane id.
-// TmuxClient, *tmux.Client and tmuxfix.Recorder satisfy it. Every method
-// takes the row's socket (SR-3.3) and reports a failure as *TmuxCallError.
+// lookup, the pane listing, the keys sent to one pane by its pane id (a
+// text, or one named key) and the capture of that pane, which
+// expect_pane_sha256 is compared with. TmuxClient, *tmux.Client and
+// tmuxfix.Recorder satisfy it. Every method takes the row's socket (SR-3.3)
+// and reports a failure as *TmuxCallError.
 type SendKeysTmux interface {
 	TmuxLookup
 	// ListPanes lists every pane of the server at socket.
@@ -47,6 +58,12 @@ type SendKeysTmux interface {
 	// then, only if that succeeded and pressEnter is set, sends Enter; the
 	// failed call is named on the *TmuxCallError (text send or Enter send).
 	SendKeysPane(socket, paneID, text string, pressEnter bool) error
+	// SendKeyPane sends one key, by its tmux key name and never typed
+	// literally, to the pane paneID on socket.
+	SendKeyPane(socket, paneID, key string) error
+	// CapturePaneID returns the last nLines lines of the pane paneID on
+	// socket; ansi keeps the escape sequences (tmux's -e flag).
+	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 }
 
 // The production types satisfy SendKeys' interfaces.
@@ -58,48 +75,98 @@ var (
 // SendKeysParams is the typed parameter shape for the send-keys verb.
 // JSON tags use snake_case so MCP clients can decode into the struct
 // directly via the dispatcher's decodeParams helper.
+//
+// A call is plain (no RequestToken) or a pane answer (RequestToken set; b.146
+// rule 8, decision 7 A). A pane answer needs As, Key and ExpectPaneSHA256,
+// takes no Text, and sends exactly one key with no Enter after it.
 type SendKeysParams struct {
-	// ClaudeInstanceID identifies the Spawn whose pane will receive the text.
+	// ClaudeInstanceID identifies the Spawn whose pane will receive the keys.
 	ClaudeInstanceID string `json:"claude_instance_id"`
-	// Text is the string to deliver to the agent's own pane. CR bytes (0x0D) are
-	// stripped before delivery; LF bytes (0x0A) are preserved as input newlines.
-	// A single Enter is always appended to submit the composed buffer. Empty
-	// text types nothing, so the call sends Enter only: it submits what is
-	// already typed, such as a text a failed send-keys left unsubmitted.
+	// Text is the string to deliver to the agent's own pane on a plain call.
+	// CR bytes (0x0D) are stripped before delivery; LF bytes (0x0A) are
+	// preserved as input newlines. A single Enter is appended to submit the
+	// composed buffer unless NoEnter. Empty text types nothing, so the call
+	// sends Enter only: it submits what is already typed, such as a text a
+	// failed send-keys left unsubmitted. Exclusive with Key; must be empty on
+	// a pane answer.
 	Text string `json:"text"`
 	// AllowPending also allows a pending row: a launch (spawn, reuse or
 	// resume) whose agent has not reported in yet. Keys are delivered only to
 	// a session started by the row's current launch. ended and missing rows
 	// are still rejected (SR-18.14).
 	AllowPending bool `json:"allow_pending"`
+	// NoEnter types Text with no Enter after it (plain calls; a pane answer
+	// never presses Enter).
+	NoEnter bool `json:"no_enter"`
+	// Key is one key to send instead of a text, never followed by Enter: a
+	// named key (Escape, Enter, Up, Down, Tab), sent by name, or a single
+	// character, typed literally. Required on a pane answer.
+	Key string `json:"key"`
+	// ExpectPaneSHA256 is the pane_sha256 read-pane returned for the pane the
+	// caller looked at: before typing, send-keys captures the pane with the
+	// same NLines (ANSI stripped, as read-pane by default), and refuses with
+	// ErrPaneChanged, sending nothing, when its SHA-256 differs. Required on a
+	// pane answer, optional on a plain call.
+	ExpectPaneSHA256 string `json:"expect_pane_sha256"`
+	// NLines is the number of trailing pane lines ExpectPaneSHA256 is over:
+	// read-pane's n_lines. 0 falls back to DefaultReadPaneLines (25).
+	NLines int `json:"n_lines"`
+	// RequestToken makes the call a pane answer to that permission request of
+	// the Spawn (b.146 rule 8): accepted only once the request has fallen
+	// back, while no relay hook of the Spawn may still answer and no other
+	// pane answer on it is still being sent.
+	RequestToken string `json:"request_token"`
+	// As is a pane answer's claimed verdict, allow or deny, recorded as the
+	// request's decision once its key is sent. It is the caller's claim:
+	// agent-director never checks it against the key.
+	As string `json:"as"`
 }
 
 // SendKeysResult is the typed return shape. Empty struct today; reserved
 // so future fields (e.g. truncated_count, dropped_cr_count) can be added
-// without breaking the JSON wire shape.
+// without breaking the wire shape.
 type SendKeysResult struct{}
 
+// SendKeysEnv is what SendKeys judges and records the relay with besides its
+// store and tmux surface (b.146 rules 7, 8 and 14). The Client builds it from
+// its own readers, clock and configuration.
+type SendKeysEnv struct {
+	// Relay judges the Spawn's relay hooks and a pane answer's sender: its
+	// start-time reader (which also judges the lookup's server and an adopted
+	// pane, SR-3.3, SR-3.6), its own pid namespace, its clock and the relay
+	// window.
+	Relay RelayView
+	// Self reads this process's identity, which a pane answer records as its
+	// sender; nil records none.
+	Self func() ProcessIdentity
+	// IntentHold is how long a pane answer's intent whose sender cannot be
+	// checked counts as in progress (paneIntentHold).
+	IntentHold time.Duration
+}
+
+// self is e.Self's identity, or the zero identity when it is nil.
+func (e SendKeysEnv) self() ProcessIdentity {
+	if e.Self == nil {
+		return ProcessIdentity{}
+	}
+	return e.Self()
+}
+
 // send-keys guard-evaluation outcomes, carried on the ad.send_keys.called
-// trail event so the relay-recovery path is distinguishable from ordinary
+// trail event so a send on a relayed Spawn is distinguishable from ordinary
 // sends and from guard refusals (SR-5.2). The values are:
 //
-//   - guardNotApplicable — the relay guard did not apply (relay_mode != on,
-//     or state != check_permission); this is the ordinary send path.
-//   - guardHeld — relay_mode=on + check_permission and at least one of the
-//     Spawn's permission-request rows holds the guard: its relay hook is not
-//     yet presumed settled (relayHookSettledAt) and it is open, or decided
-//     while no other request of the Spawn has fallen back (or there are zero
-//     rows). The send was refused with ErrSendKeysWhileRelayed.
-//   - guardReleased — relay_mode=on + check_permission and no row holds the
-//     guard: every open row's relay hook is presumed settled, and every
-//     decided row's too unless another request of the Spawn has fallen back.
-//     The guard released and keys were delivered. This is the audited
-//     recovery of a fallen-back relay.
-//   - guardError — relay_mode=on + check_permission but the store read that
-//     the guard needs (PermissionRequestsForSpawn) failed, so deliverability
-//     could not be evaluated. Distinct from guardNotApplicable so a store
-//     failure on a relayed Spawn is not misrecorded as an ordinary send. The
-//     send fails with the underlying store error.
+//   - guardNotApplicable — the relay guard did not apply (relay_mode != on);
+//     this is the ordinary send path.
+//   - guardHeld — relay_mode=on and b.146 rule 7 refused the send
+//     (ErrSendKeysWhileRelayed, ErrRelayFallenBack, ErrPaneAnswerInProgress,
+//     or a pane answer's request not open: ErrAlreadyDecided,
+//     ErrNoOpenPermissionRequest).
+//   - guardReleased — relay_mode=on and rule 7 let the send through: no
+//     relay hook of the Spawn may still answer, and no open request has
+//     fallen back (plain), or the named request has (pane answer).
+//   - guardError — relay_mode=on but the read the guard needs failed, so it
+//     could not be evaluated. The send fails with the underlying store error.
 const (
 	guardNotApplicable = "not-applicable"
 	guardHeld          = "held"
@@ -108,38 +175,34 @@ const (
 )
 
 // sendKeysGuard is the internal result of evaluating the relay guard: the
-// guard-evaluation outcome string (one of guardNotApplicable/guardHeld/
-// guardReleased/guardError), whether the send should be refused and, when the
-// guard is held, the request token the refusal names (holding; "" when the
-// Spawn has zero request rows, so no request is recorded to name) and whether
-// that request is decided (holdingDecided: its verdict is recorded, so the
-// refusal advises a later send-keys rather than decide, b.ceq).
+// guard-evaluation outcome string (guardNotApplicable, guardHeld,
+// guardReleased or guardError) and, when held, the refusal.
 type sendKeysGuard struct {
-	eval           string
-	refuse         bool
-	holding        string
-	holdingDecided bool
+	eval    string
+	refusal error
 }
 
 // SendKeys is the verb-handler entry point for `agent-director send-keys`
-// (SRD SR-7.1, SR-7.2, SR-7.3, SR-3.6, SR-3.7, SR-13.2, SR-22.7, SR-22.8).
-// It types text into the agent's own pane of the row's current launch, by
-// pane id, then submits it with Enter:
+// (SRD SR-7.1, SR-7.2, SR-7.3, SR-3.6, SR-3.7, SR-13.2, SR-22.7, SR-22.8;
+// b.146 rules 7 and 8). It types into the agent's own pane of the row's
+// current launch, by pane id.
 //
-//   - `\r` (CR, 0x0D) bytes in Text are STRIPPED before invoking tmux. CR
-//     submits the buffer at the position it appears, which would split
-//     one logical message into multiple submissions. The fix is per the
-//     research note: delete CR bytes from the input.
-//   - `\n` (LF, 0x0A) bytes are PRESERVED — Claude's input handler treats
-//     LF as "insert newline in input box", not as a submit. Multi-line
-//     prompts compose as one message.
-//   - The text is typed literally, then a single Enter is sent to the same
-//     pane as a separate call, only if the text call succeeded. That is the
-//     single submit.
-//   - Empty text types nothing, so the call is an Enter-only send, on a
-//     pending row too with AllowPending: it submits a line already typed,
-//     such as a text a failed send-keys left unsubmitted, and on an empty
-//     Claude Code input it submits nothing.
+// The params' shape is checked first (planSendKeys): a refusal is
+// ErrInvalidFlags with nothing read, sent or written. What a call sends:
+//
+//   - Plain, text: `\r` (CR, 0x0D) bytes are STRIPPED (CR would submit the
+//     buffer mid-message); `\n` (LF, 0x0A) bytes are PRESERVED (Claude's
+//     input treats LF as a newline in the input box). The text is typed
+//     literally, then a single Enter is sent to the same pane as a separate
+//     call, only if the text call succeeded, unless no_enter. Empty text
+//     types nothing, so the call is an Enter-only send, on a pending row too
+//     with AllowPending: it submits a line already typed, such as a text a
+//     failed send-keys left unsubmitted, and on an empty Claude Code input it
+//     submits nothing.
+//   - Plain, key: that one key alone (a named key by name, or one character
+//     typed literally), no Enter.
+//   - A pane answer (request_token; b.146 rule 8): exactly one key, never
+//     followed by Enter. See below.
 //
 // State precondition: the row must be in a live interactive state (waiting,
 // working, ask_user or check_permission). A finished row (ended or missing)
@@ -153,49 +216,34 @@ type sendKeysGuard struct {
 // label and launch token and the agent's pane is found; a leftover found for
 // a pending row is refused with ErrSpawnNotInteractive (Leftover, below). A
 // row that turns live between the read and the send still gets the keys in
-// the same pane; agent-director does not guarantee that the prompt the
-// caller saw is still showing (SR-22.7).
+// the same pane; without expect_pane_sha256 agent-director does not guarantee
+// that the prompt the caller saw is still showing (SR-22.7).
 //
-// Relay-mode guard (time-bounded): when relay_mode=on AND
-// state=check_permission, the permission relay normally owns the answer, so
-// SendKeys refuses with ErrSendKeysWhileRelayed to keep a pane-side keystroke
-// from racing the relay's decide() write. The refusal is NOT unconditional:
-// Claude Code kills the relay hook at its per-hook timeout, after which the
-// poller can no longer deliver a decision and the guard is pure denial of
-// service. The guard therefore consults the shared guard-release signal
-// (RelayRequestGuardReleasable, SR-4.4) across ALL of the Spawn's
-// permission_requests rows — each row's window measured from its own
-// created_at, decided or not (SR-4.2: a row decided in-window still has a
-// live poller about to deliver it), with the one exception below. It refuses
-// while ANY row holds the guard and RELEASES only once none does; a row holds
-// until its relay hook is presumed settled, its window plus the safety margin
-// plus created_at's 1 s resolution after its created_at (relayHookSettledAt,
-// the instant Decide's wait for a request recorded before schema v7 ends —
-// the deliberate fail-late mirror of Decide's fail-early refusal at window -
-// margin; same authority, asymmetric margin, both in deliverability.go). The
-// guard judges every request by this window, one recorded from v7 on too,
-// although Decide judges such a request by its relay hook process and can
-// report it fallen back within seconds of the hook's death (b.146 step 2b
-// rewrites the guard). The one exception is a decided row once another
-// request of the Spawn has fallen back by the window (still open after its
-// relay hook is presumed settled, relayRequestFallenBack): that request's
-// open record keeps the Spawn in check_permission and only a pane answer can
-// close it, so the decided row no longer holds (b.ceq; see
-// evaluateRelayGuard for the trade-off this accepts). A relay-on
-// check_permission Spawn with
-// zero rows keeps refusing: with no row there is no signal and no authority
-// to release, and the state is a real mid-insert transient. The refusal's message names the request
-// holding the guard (an open one in preference to a decided one, then the
-// oldest; none with zero rows) and states no release time (b.ah6). For an
-// open request it advises answering it with decide. For a request recorded
-// before v7, Decide absorbs the span between its own refusal and the guard's
-// release, and returns ErrRelayFallenBack only once the guard has released on
-// that request's account, and on account of every decided request of the
-// Spawn. For a decided request, named only when no open request holds, it
-// says the verdict is recorded and its relay hook may still be delivering it,
-// and advises retrying send-keys later (b.ceq): decide on it would return
-// ErrAlreadyDecided. With zero rows it advises decide once get lists the
-// request.
+// Relay guard (b.146 rule 7; evaluateRelayGuard): on a row with relay_mode
+// on, in any live state, the row's permission requests are read by the
+// check-before-read rule (each relay hook judged by pid, start time and pid
+// namespace, rule 14), and the call is refused, with no tmux call, in this
+// order:
+//
+//  1. Any relay hook of the row may still answer its request (its process
+//     runs; or, when it cannot be checked, its request is open and before
+//     its confirm_by): ErrSendKeysWhileRelayed, plain or pane answer, naming
+//     that request.
+//  2. Plain, any open request has fallen back (pane_answer none or intent):
+//     ErrRelayFallenBack with err_details (RelayFallenBackDetails), naming
+//     the oldest. Only a call that names the request it answers can type on
+//     such a row.
+//  3. A pane answer whose request is no request of the row:
+//     ErrNoOpenPermissionRequest; one not fallen back (acked, closed with its
+//     row or by find-missing, already answered at the pane):
+//     ErrAlreadyDecided or ErrNoOpenPermissionRequest; one whose earlier pane
+//     answer is still being sent (its intent's sender runs, or cannot be
+//     checked and the intent is younger than SendKeysEnv.IntentHold):
+//     ErrPaneAnswerInProgress with err_details.
+//
+// A refusal that finds a request fallen back records its hook_gone_at when it
+// has none (a writing verb always does, b.146 rule 8), waiting for the
+// store's write lock as any write does; that write is fail-open.
 //
 // After the state and relay guards, a row whose recorded name is unusable
 // (SR-3.2) is ErrInternal with no tmux call; a pending row with no launch
@@ -204,14 +252,13 @@ type sendKeysGuard struct {
 // Then the row's socket (SR-3.3; a resolution refusal is
 // ErrTmuxNotAvailable) and one lookup by the row's current label:
 //
-//   - Ours: one pane listing, then the text and Enter to the agent's pane
-//     (the entry with the row's recorded pane id and pid, wherever it now
-//     is). For a row that records no server identity or no pane (a lost
-//     create reply), what the lookup and the pane whose @ad_pane names the
-//     row's launch token show is used for this call and written once,
-//     guarded on the row as read; the write's outcome never changes the
-//     result (SR-3.6). No agent's pane: ErrTmuxSessionConflict ("the agent's
-//     pane was not found"), nothing sent.
+//   - Ours: one pane listing; the agent's pane is the entry with the row's
+//     recorded pane id and pid, wherever it now is. For a row that records
+//     no server identity or no pane (a lost create reply), what the lookup
+//     and the pane whose @ad_pane names the row's launch token show is used
+//     for this call and written once, guarded on the row as read; the write's
+//     outcome never changes the result (SR-3.6). No agent's pane:
+//     ErrTmuxSessionConflict ("the agent's pane was not found"), nothing sent.
 //   - Leftover: on a pending row ErrSpawnNotInteractive ("not this launch's
 //     session"), otherwise ErrTmuxSessionConflict; nothing sent.
 //   - Gone (another agent-director store's sessions included):
@@ -221,44 +268,66 @@ type sendKeysGuard struct {
 //     (ErrTmuxNotAvailable, ErrTmuxSessionConflict "conflicting labels",
 //     ErrTmuxUnresponsive), nothing sent. A listing that shows no server is
 //     Gone.
-//   - A failed text or Enter call: a timeout is ErrTmuxUnresponsive saying
-//     the keys may have been delivered, with no further call; any other
-//     failure makes one follow-up lookup, whose Gone or Leftover gives
-//     ErrTmuxSendKeys and whose other outcomes give ErrTmuxUnresponsive, or
-//     ErrTmuxNotAvailable for a different server or tmux unavailable
-//     (SR-7.3). Once the text call went through, every description says the
-//     text may be typed but not submitted, never that nothing was sent.
-//     Where the text may be in the pane, an ErrTmuxUnresponsive names the
-//     next step in place of "retry later", since a literal retry would type
-//     the text again after the unsubmitted copy (b.9o4): after a timed-out
-//     text call "read-pane; if the text is typed, send-keys with empty text,
-//     otherwise the same send-keys", and after a failed or timed-out Enter
-//     "send-keys with empty text submits it". A text call that failed other
-//     than by timing out typed nothing, and its refusals still end "retry
-//     later".
+//
+// With expect_pane_sha256 the agent's pane is then captured as read-pane
+// gives it by default (the last n_lines lines, ANSI stripped) and its SHA-256
+// compared byte for byte with the caller's; a difference is ErrPaneChanged
+// (with err_details, never the new hash), nothing sent. A failed capture maps
+// as read-pane's does, with the gone error ErrTmuxSendKeys, nothing sent.
+//
+// A pane answer (b.146 rule 8) then, under the store's write lock, in one
+// transaction: re-reads the row and its requests and applies the state and
+// relay guards again, captures and compares the pane, and records the intent
+// (pane_answer intent, pane_as, its sender's pid, start time and pid
+// namespace from SendKeysEnv.Self, pane_intent_at read on the call's clock
+// after the capture, and hook_gone_at when none); it commits before the key is
+// sent. It sends exactly one key, then records pane_answer sent, decision its
+// claimed verdict and decision_reason pane, unless the request was closed
+// meanwhile (the close wins; the call still succeeds, the key was sent). When
+// the key send fails, or that last write does, it releases its intent, a
+// failed release tried again a bounded number of times (releaseIntent; the
+// request stays pane_answer intent, the key may have been typed, and a retry
+// with a fresh hash is accepted at once). A lock not taken within the store's
+// busy timeout is ErrStoreBusy, nothing sent or recorded; a failed last write
+// after a sent key is ErrInternal, saying the key was sent, with err_details
+// PaneKeySentDetails (key_sent true).
+//
+// A failed text, Enter or key call: a timeout is ErrTmuxUnresponsive saying
+// the keys may have been delivered, with no further call; any other failure
+// makes one follow-up lookup, whose Gone or Leftover gives ErrTmuxSendKeys and
+// whose other outcomes give ErrTmuxUnresponsive, or ErrTmuxNotAvailable for a
+// different server or tmux unavailable (SR-7.3). Once the text call went
+// through, every description says the text may be typed but not submitted,
+// never that nothing was sent. Where the text may be in the pane after a plain
+// text call with Enter, an ErrTmuxUnresponsive names the next step in place of
+// "retry later", since a literal retry would type the text again after the
+// unsubmitted copy (b.9o4): after a timed-out text call "read-pane; if the
+// text is typed, send-keys with empty text, otherwise the same send-keys", and
+// after a failed or timed-out Enter "send-keys with empty text submits it". A
+// text or key call that failed other than by timing out typed nothing, and its
+// refusals still end "retry later"; so do a key's and a no_enter text's.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// The calls are at most one lookup, one pane listing, the text call, the
-// Enter call and, only after an action failure other than a timeout, one
-// follow-up lookup (SR-13.2). SendKeys never writes
-// the row's state; the adoption is its only store write.
+// The calls are at most one lookup, one pane listing, one capture, the text
+// or key call, the Enter call and, only after an action failure other than a
+// timeout, one follow-up lookup (SR-13.2). SendKeys never writes the row's
+// state.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
 // none in the normal case; Client.SendKeys writes the same records through
 // the same path, plus its one ad.send_keys.called. Each record's action is
-// what the call typed: keys_sent (the text and Enter both went through),
-// text_sent (the text call timed out, or the text went through and the Enter
-// call failed or timed out) or nothing_sent (no keys call, or the text call
-// failed other than by timing out).
+// what the call typed: keys_sent (the text and Enter, or the key, went
+// through), text_sent (the text or key call timed out, or the text went
+// through and the Enter call failed or timed out) or nothing_sent (no keys
+// call, or the text or key call failed other than by timing out). A pane
+// answer's sent write emits ad.row_mutation.committed (writer send_keys).
 //
-// pc is the start-time reader that judges the lookup's server (SR-3.3) and
-// an adopted pane (SR-3.6). effectiveWindow is the resolved relay window
-// (obtained by the caller via Epic 1's accessor and consumed only through the
-// shared deliverability function); now is the injected clock so the release
-// verdict is deterministic and testable.
-func SendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error) {
-	_, res, err := sendKeys(s, t, pc, effectiveWindow, now, params)
+// env carries the relay judge (its start-time reader judges the lookup's
+// server, SR-3.3, and an adopted pane, SR-3.6, too), the sender reader and
+// the intent hold.
+func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams) (SendKeysResult, error) {
+	_, res, err := sendKeys(s, t, env, params)
 	return res, err
 }
 
@@ -281,10 +350,14 @@ type sendKeysFacts struct {
 }
 
 // sendKeysRun is one SendKeys call: the keys verbs' tmux phase (keysRun)
-// with send-keys' pending-row Leftover refusal, and the facts the call keeps.
+// with send-keys' pending-row Leftover refusal, its own tmux surface (the
+// named key and the capture), its environment and the facts the call keeps.
 type sendKeysRun struct {
 	keysRun
 	s     SendKeysStore
+	t     SendKeysTmux
+	env   SendKeysEnv
+	j     relayJudge
 	facts sendKeysFacts
 }
 
@@ -294,15 +367,20 @@ type sendKeysRun struct {
 // and returns the call's facts alongside the result/error so the Client
 // wrapper can record them on the ad.send_keys.called trail event without
 // re-deriving them.
-func sendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (sendKeysFacts, SendKeysResult, error) {
-	r := &sendKeysRun{s: s, facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
-	err := r.run(t, pc, effectiveWindow, now, params)
+func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams) (sendKeysFacts, SendKeysResult, error) {
+	r := &sendKeysRun{s: s, t: t, env: env, j: newRelayJudge(env.Relay),
+		facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
+	err := r.run(params)
 	r.emitDisagree("send-keys", params.ClaudeInstanceID, r.facts.Caller)
 	return r.facts, SendKeysResult{}, err
 }
 
 // run is the send-keys flow; the returned error is SendKeys'.
-func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) error {
+func (r *sendKeysRun) run(params SendKeysParams) error {
+	plan, err := planSendKeys(params)
+	if err != nil {
+		return err
+	}
 	row, err := r.s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return err
@@ -313,13 +391,13 @@ func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.D
 		return err
 	}
 
-	guard, err := evaluateRelayGuard(r.s, effectiveWindow, now, row, params.ClaudeInstanceID)
+	guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, row, params)
 	r.facts.Guard = guard.eval
 	if err != nil {
 		return err
 	}
-	if guard.refuse {
-		return relayGuardRefusal(params.ClaudeInstanceID, guard.holding, guard.holdingDecided)
+	if guard.refusal != nil {
+		return guard.refusal
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
@@ -330,16 +408,191 @@ func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.D
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
 	}
-	r.keysRun = newKeysRun(t, pc, row, r.s.StoreID(), socket, r.s)
-	r.next = sendKeysNext
+	r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
+	if plan.enter {
+		// A literal retry after a text call with Enter would type the text
+		// again after its unsubmitted copy (b.9o4); without Enter, or for a
+		// key, "retry later" stands.
+		r.next = sendKeysNext
+	}
 	if row.State == store.StatePending {
 		r.leftover = func(leftovers []tmux.Session) error {
 			return pendingLeftoverError(row.ClaudeInstanceID, leftovers)
 		}
 	}
-	err = r.deliver(strings.ReplaceAll(params.Text, "\r", ""))
+	err = r.send(plan, params)
 	r.facts.keysFacts = r.found
 	return err
+}
+
+// send is the tmux phase: the agent's pane, then the pane answer
+// (paneAnswer), or the hash check when asked (paneMatches) and the plain
+// keys.
+func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
+	paneID, launch, err := r.targetPane()
+	if err != nil {
+		return err
+	}
+	if plan.answer {
+		return r.paneAnswer(paneID, launch, plan, params)
+	}
+	if plan.hash != "" {
+		if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+			return err
+		}
+	}
+	if plan.key != nil {
+		return r.sendKey(paneID, launch, *plan.key)
+	}
+	return r.typeText(paneID, launch, plan.text, plan.enter)
+}
+
+// paneMatches captures the agent's pane paneID as read-pane gives it by
+// default (plan.nLines lines, ANSI stripped) and compares its SHA-256 with
+// plan.hash, byte equality only (b.146 rules 7 and 8): ErrPaneChanged when
+// they differ, naming token when one is given. A failed capture is mapped as
+// read-pane's is (paneActionFailureError, not in Keys mode), with send-keys'
+// gone error and "nothing was sent"; its follow-up is kept for the trail.
+func (r *sendKeysRun) paneMatches(paneID string, launch tmux.Launch, plan sendKeysPlan, token string) error {
+	got, err := capturePaneHash(r.t, r.socket, paneID, plan.nLines)
+	if err != nil {
+		fu, verr := paneActionFailureError(err, paneActionFailure{
+			Call:    tmux.CallCapture,
+			Gone:    r.gone,
+			Pane:    r.refusal(r.row.TmuxSessionName),
+			Refusal: r.cantTellRefusal(tmux.CallCapture),
+		}, r.t, r.pc, launch)
+		r.found.FollowUp = fu
+		return verr
+	}
+	if got != plan.hash {
+		return paneChangedError(r.row.ClaudeInstanceID, token, plan.nLines, string(nothingSent))
+	}
+	return nil
+}
+
+// sendKey sends the one key k to the agent's pane paneID: a named key by its
+// tmux key name (SendKeyPane), a character typed literally with no Enter
+// (SendKeysPane). A failed call is mapped in the "keys may have reached the
+// pane" mode (sendFailed), its retry sentence "retry later".
+func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) error {
+	r.found.Sent = true
+	call, err := tmux.CallSendKey, error(nil)
+	if k.name != "" {
+		err = r.t.SendKeyPane(r.socket, paneID, k.name)
+	} else {
+		call = tmux.CallSendText
+		err = r.t.SendKeysPane(r.socket, paneID, k.char, false)
+	}
+	if err != nil {
+		r.found.SendErr = err
+		return r.sendFailed(err, call, launch)
+	}
+	return nil
+}
+
+// paneAnswer is a pane answer on the agent's pane paneID (b.146 rule 8):
+//
+//  1. Under the store's write lock (RecordPaneIntent, waiting the store's busy
+//     timeout): the row and its requests are read again, the state guard and
+//     rule 7 applied again (lockedRequests), the pane captured and compared
+//     with the caller's hash (paneMatches), and the intent recorded: as, the
+//     sender's identity (SendKeysEnv.Self) and the time, read on the call's
+//     clock only then, so an intent whose sender cannot be checked counts as
+//     in progress from its commit, not from before the wait for the lock
+//     (b.146 problem 2). It commits before any key is sent.
+//  2. The one key (sendKey), never followed by Enter.
+//  3. sent, decision as and decision_reason pane (RecordPaneSent), matched by
+//     the intent as recorded.
+//
+// When step 2 fails, or step 3 does, the intent is released (releaseIntent,
+// fail-open, a failed release tried again a bounded number of times). A
+// step-3 failure is an unnamed error (ErrInternal) saying the key was sent,
+// with err_details (paneKeySentError), so it never reads as a call that sent
+// nothing and invites a blind retry. A step 3 that matches nothing (the
+// request was closed meanwhile, as by its tool's PostToolUse or a close of
+// its Spawn's requests) changes nothing and the call succeeds: the key was
+// sent.
+func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKeysPlan, params SendKeysParams) error {
+	id, token := r.row.ClaudeInstanceID, params.RequestToken
+	intent, written, err := r.s.RecordPaneIntent(id, token, params.As, r.env.self(), r.j.now, store.DefaultLockWait,
+		func(sp Spawn, rows []PermissionRow) error {
+			if err := sendKeysStateGuard(sp, params); err != nil {
+				return err
+			}
+			if err := lockedRequests(r.j, sp, rows).sendKeysRefusal(params, r.env.IntentHold); err != nil {
+				return err
+			}
+			return r.paneMatches(paneID, launch, plan, token)
+		})
+	if err != nil {
+		return err
+	}
+	if !written {
+		return fmt.Errorf("%w: %s request %s no longer awaits an answer; nothing was sent",
+			store.ErrNoOpenPermissionRequest, id, token)
+	}
+	if err := r.sendKey(paneID, launch, *plan.key); err != nil {
+		r.releaseIntent(id, token, intent)
+		return err
+	}
+	if _, err := r.s.RecordPaneSent(id, token, intent, store.DefaultLockWait); err != nil {
+		return paneKeySentError(id, token, err, r.releaseIntent(id, token, intent))
+	}
+	return nil
+}
+
+// paneReleaseAttempts is the most times releaseIntent tries to release a pane
+// answer's intent, and paneReleaseBudget the most all its attempts wait for
+// the store (its connection and write lock), in all: the store's default busy
+// timeout, so a release never holds its call much past one ordinary wait.
+const (
+	paneReleaseAttempts = 3
+	paneReleaseBudget   = 10 * time.Second
+)
+
+// releaseIntent ends intent's claim on the request (store ReleasePaneIntent)
+// when a pane answer's call ends without recording sent (b.146 rule 8;
+// problem 2), and reports whether it did (or the request no longer carries
+// the intent). A sender that outlives its call (an MCP server, a Go caller)
+// would otherwise keep the request's pane answer in progress
+// (ErrPaneAnswerInProgress) until it exits, so a failed release is tried
+// again: at most paneReleaseAttempts times in all, each waiting for the store
+// at most what is left of paneReleaseBudget on the call's clock (with nothing
+// left, a last attempt goes ahead only if the lock is free at once). It never
+// lets the intent lapse by its age: while its sender runs the intent holds,
+// since its key may be on its way (control c_livesender). Fail-open: a
+// release that never succeeds leaves the request as it is.
+func (r *sendKeysRun) releaseIntent(id, token string, intent PaneIntent) bool {
+	end := r.j.now().Add(paneReleaseBudget)
+	for attempt := 1; ; attempt++ {
+		if _, err := r.s.ReleasePaneIntent(id, token, intent, max(end.Sub(r.j.now()), 0)); err == nil {
+			return true
+		}
+		if attempt == paneReleaseAttempts || !r.j.now().Before(end) {
+			return false
+		}
+	}
+}
+
+// paneKeySentError is a pane answer's error once its key was sent but its
+// sent write failed with err (b.146 rule 8, step 3): an unnamed error
+// (ErrInternal; err is formatted, never wrapped, so no catalogued name such
+// as ErrStoreBusy reads it as nothing recorded and safe to retry) whose
+// err_details (PaneKeySentDetails, key_sent true) tell it from a call that
+// sent nothing. released is whether the call's intent was released: when it
+// was not, a pane answer or a record on the request reads in progress until
+// this process exits.
+func paneKeySentError(id, token string, err error, released bool) error {
+	intent := "its intent is released"
+	if !released {
+		intent = "its intent could not be released, so it reads in progress (ErrPaneAnswerInProgress) until this process exits"
+	}
+	return &DetailedError{
+		Err: fmt.Errorf("send-keys: %s request %s: the key was sent (err_details.key_sent), but recording it failed (%v); the request still reads pane_answer intent and %s: do not send the key again unread; read-pane, then close it with record-pane-answer if the pane shows it answered",
+			id, token, err, intent),
+		Details: PaneKeySentDetails{KeySent: true, RequestToken: token},
+	}
 }
 
 // sendKeysStateGuard is send-keys' state guard (SR-7.1, SR-22.8): a live
@@ -362,167 +615,38 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 	return nil
 }
 
-// evaluateRelayGuard decides whether the time-bounded relay guard refuses the
-// send. It returns guardNotApplicable when the guard does not apply
-// (relay_mode != on or state != check_permission — the ordinary send path).
-// Otherwise it consults the guard-release signal across every one of the
-// Spawn's permission_requests rows and returns guardHeld (refuse) while any row
-// holds the guard (and in the zero-rows state), or guardReleased (deliver)
-// once none does. If the store read fails it returns guardError with the
-// underlying error (the send fails). A held guard carries the token of the
-// holding row its refusal names (namedBefore picks it when several hold), or
-// none with zero rows, and whether that row is decided, which selects the
-// refusal's wording (relayGuardRefusal).
+// evaluateRelayGuard is send-keys' relay guard (b.146 rule 7). It returns
+// guardNotApplicable when relay_mode is not on (no relay hook records a
+// request on such a row). Otherwise it reads every permission request of the
+// row by the check-before-read rule (judgedRequests: each relay hook judged by
+// pid, start time and pid namespace through j, rule 14), in whatever live
+// state the row is, and applies rule 7 (spawnRequests.sendKeysRefusal):
+// guardHeld with the refusal, or guardReleased. A refusal that finds a request
+// fallen back first records hook_gone_at on every such request with none
+// (recordFallenBackGone, waiting the store's busy timeout, fail-open), so its
+// err_details carry it. A failed read is guardError with the store's error.
 //
-// A row holds until its relay hook is presumed settled (relayHookSettledAt:
-// its window plus RelayKillSafetyMargin plus created_at's 1 s resolution
-// after its created_at), open or decided: an open row's verdict may still be
-// recorded by decide and delivered, or its live poller may still record and
-// return its timeout deny, and a decided row's live poller may still be about
-// to deliver its verdict. The guard releases LATE — at elapsed >= window +
-// margin + resolution, when Decide's wait ends too — so it does not free
-// while a live poller could still emit a decision on such a row, but for the
-// residual race deliverability.go describes (a hook whose delivery of its
-// verdict or timeout deny outlasts that slack and whose kill comes late).
-// That is the deliberate mirror of Decide's fail-early refusal; both
-// boundaries and the shared margin live in deliverability.go (SR-4.4). An
-// open row thus holds until it has fallen back.
-//
-// One exception (b.ceq): a decided row stops holding once another request of
-// the Spawn has fallen back by its window (relayRequestFallenBack: still open
-// after its relay hook is presumed settled). That request's open record holds
-// the Spawn in check_permission (the store holds the agent's move to working
-// while any request still awaits an answer), so without the exception the
-// decided row would hold until
-// its own relay hook is presumed settled, delivered or not, and a send-keys
-// retried later, as its refusal advises, would be refused alike for that
-// long.
-//
-// The exception rests on an assumption, accepted as its trade-off: Claude
-// Code shows the oldest pending permission dialog first. The fallen-back
-// request was recorded before every row still in its window, so under that
-// assumption its dialog is the one on screen, only a pane answer closes it,
-// and that answer is what the release lets through. The exception gives up
-// the span between a decide and Claude Code acting on the decided request's
-// hook output: up to one poll sleep of its live poller (poll_base_ms plus
-// jitter up to poll_jitter_ms; internal/hook's Poll) before it reads the
-// verdict, plus the hook writing that output and exiting. The assumption
-// fails when a fallen-back row's dialog is no longer on screen (its record
-// left open after the dialog closed, b.t6e): keys sent in that span can then
-// land in the decided request's still-pending dialog. Open rows in their
-// windows keep holding, so a pane answer never overtakes a verdict decide can
-// still record.
-//
-// The exception does not take Decide's test of whether the Spawn is shown
-// sitting on the fallen-back request alone (fallenBackUnshown, b.t6e), which
-// only Decide's ErrRelayFallenBack on a request recorded before schema v7
-// needs. Gated by it the exception would
-// never apply: a request that passes it is the Spawn's newest, so every
-// decided request is older, past its own window, and already released, and
-// the decided row the exception is for would again hold for up to its full
-// relay window. So the span above remains for a send-keys made while a stale
-// record and a just-decided request coexist; Decide no longer advises a pane
-// answer for that stale record (it is ErrNoOpenPermissionRequest, the decided
-// request being recorded after it).
-//
-// A request of an ended or missing row is closed (b.146 rule 12) and never
-// holds the guard: the guard reads requests only for a row read in
-// check_permission, and sendKeysStateGuard refuses a finished row before it
-// with ErrSpawnNotInteractive. find-missing's mark denies a missing row's open
-// requests in the mark's own transaction.
-//
-// All time arithmetic lives in deliverability.go (RelayRequestGuardReleasable,
-// relayRequestFallenBack); this function performs no independent
-// elapsed-vs-timeout computation.
-func evaluateRelayGuard(s SendKeysStore, effectiveWindow time.Duration, now time.Time, row Spawn, instanceID string) (sendKeysGuard, error) {
-	if !(row.RelayMode == "on" && row.State == store.StateCheckPermission) {
-		return sendKeysGuard{eval: guardNotApplicable, refuse: false}, nil
+// A request of an ended or missing row is closed (b.146 rule 12): the guard
+// runs only on a row the state guard let through, which is live.
+func evaluateRelayGuard(s SendKeysStore, j relayJudge, hold time.Duration, row Spawn, params SendKeysParams) (sendKeysGuard, error) {
+	if row.RelayMode != "on" {
+		return sendKeysGuard{eval: guardNotApplicable}, nil
 	}
-
-	rows, err := s.PermissionRequestsForSpawn(instanceID)
+	reqs, err := judgedRequests(func() ([]PermissionRow, error) {
+		return s.PermissionRequestsForSpawn(row.ClaudeInstanceID)
+	}, j, row)
 	if err != nil {
-		// Store failure on a relayed Spawn: record guardError (distinct from the
-		// ordinary-send guardNotApplicable) and fail the send with the error.
-		return sendKeysGuard{eval: guardError, refuse: false}, err
+		return sendKeysGuard{eval: guardError}, err
 	}
-
-	// Zero rows: no signal, no authority to release — keep refusing (PM-pinned).
-	if len(rows) == 0 {
-		return sendKeysGuard{eval: guardHeld, refuse: true}, nil
+	refusal := reqs.sendKeysRefusal(params, hold)
+	if errors.Is(refusal, ErrRelayFallenBack) {
+		reqs.recordFallenBackGone(s, store.DefaultLockWait)
+		refusal = reqs.sendKeysRefusal(params, hold)
 	}
-
-	// Refuse while ANY row holds; release only when none does. Each row's
-	// window is measured from its own created_at by the shared guard-release
-	// authority, decided or not, except that a decided row no longer holds
-	// once another request of the Spawn has fallen back (b.ceq).
-	fallenBack := slices.ContainsFunc(rows, func(pr PermissionRow) bool {
-		return relayRequestFallenBack(pr, effectiveWindow, now)
-	})
-	var named *PermissionRow
-	for i := range rows {
-		pr := &rows[i]
-		if RelayRequestGuardReleasable(pr.CreatedAt, effectiveWindow, now) {
-			continue
-		}
-		if fallenBack && pr.Decision != "" {
-			continue
-		}
-		if named == nil || namedBefore(*pr, *named) {
-			named = pr
-		}
+	if refusal != nil {
+		return sendKeysGuard{eval: guardHeld, refusal: refusal}, nil
 	}
-	if named == nil {
-		return sendKeysGuard{eval: guardReleased, refuse: false}, nil
-	}
-	return sendKeysGuard{eval: guardHeld, refuse: true, holding: named.RequestToken, holdingDecided: named.Decision != ""}, nil
-}
-
-// namedBefore reports whether holding row a, rather than b, is the request
-// the ErrSendKeysWhileRelayed refusal names: an open (undecided) row before a
-// decided one, as the open one is what decide can still answer, then the
-// older by created_at, then the lower request id, so the choice does not
-// depend on the order the store returned the rows in.
-func namedBefore(a, b PermissionRow) bool {
-	if aOpen, bOpen := a.Decision == "", b.Decision == ""; aOpen != bOpen {
-		return aOpen
-	}
-	if !a.CreatedAt.Equal(b.CreatedAt) {
-		return a.CreatedAt.Before(b.CreatedAt)
-	}
-	return a.RequestID < b.RequestID
-}
-
-// relayGuardRefusal is the ErrSendKeysWhileRelayed refusal for a held relay
-// guard on instanceID. Every refusal of that name is built here. It states no
-// release time or margin (b.ah6), and has three forms:
-//
-//   - An open holding request (decided false): it names the request's token
-//     and advises answering it with decide.
-//   - A decided holding request (decided true): it names the request's token,
-//     says its verdict is recorded and its relay hook may still be delivering
-//     it, and advises retrying send-keys later (b.ceq); decide on it would
-//     return ErrAlreadyDecided. Such a request is named only when no open
-//     request holds the guard (namedBefore) and none of the Spawn's requests
-//     has fallen back (evaluateRelayGuard), so the refusal stands until the
-//     Spawn leaves check_permission (normally once the verdict is delivered),
-//     another request of the Spawn falls back, or the named request's relay
-//     hook is presumed settled (relayHookSettledAt), whichever is first.
-//   - No token (zero request rows): it says the request is not yet recorded
-//     and to answer it with decide once get lists it.
-func relayGuardRefusal(instanceID, holding string, decided bool) error {
-	switch {
-	case holding == "":
-		return fmt.Errorf(
-			"%w: spawn %s is awaiting a relayed permission decision whose request is not yet recorded; answer it with decide once get lists it",
-			ErrSendKeysWhileRelayed, instanceID)
-	case decided:
-		return fmt.Errorf(
-			"%w: spawn %s: the relayed permission verdict on request %s is recorded and its relay hook may still be delivering it; retry send-keys later",
-			ErrSendKeysWhileRelayed, instanceID, holding)
-	}
-	return fmt.Errorf(
-		"%w: spawn %s is awaiting a relayed permission decision on request %s; answer it with decide",
-		ErrSendKeysWhileRelayed, instanceID, holding)
+	return sendKeysGuard{eval: guardReleased}, nil
 }
 
 // isInteractiveState returns true iff the supplied state value belongs to
@@ -538,12 +662,24 @@ func isInteractiveState(state string) bool {
 	return false
 }
 
-// SendKeys sends text into the agent's own pane: the row's pane, found by the
-// row's label on its recorded socket and targeted by pane id. CR bytes
-// (0x0D) are stripped before delivery to prevent premature submission; LF
-// bytes (0x0A) are preserved as composed newlines in Claude's input box. A
-// single Enter is always appended to submit the composed buffer; empty text
-// sends that Enter only.
+// SendKeys sends keys into the agent's own pane: the row's pane, found by the
+// row's label on its recorded socket and targeted by pane id.
+//
+// A plain call types Text (CR bytes (0x0D) stripped to prevent premature
+// submission; LF bytes (0x0A) preserved as composed newlines in Claude's
+// input box) and then one Enter, unless NoEnter (empty text with Enter sends
+// that Enter only); or, with Key, that one key alone. With ExpectPaneSHA256
+// it first checks that the pane still has the hash the caller read.
+//
+// A pane answer (RequestToken, As, Key and ExpectPaneSHA256; b.146 rule 8)
+// answers that permission request at the pane once it has fallen back: under
+// the store's write lock it checks the guards and the pane's hash and records
+// its intent, then sends exactly one key, never Enter, then records
+// pane_answer sent with decision As (the caller's claim, never checked) and
+// decision_reason pane. When that last write fails after the key was sent the
+// error is ErrInternal (an error matching no catalogued sentinel) with
+// err_details [PaneKeySentDetails] (key_sent true): the key reached the pane,
+// so read it before anything else is sent.
 //
 // After the state and relay refusals, a row whose recorded tmux session name
 // cannot be used (it is empty, contains a control character, or contains a
@@ -554,61 +690,81 @@ func isInteractiveState(state string) bool {
 // CLI: agent-director send-keys
 //
 // Errors:
+//   - [ErrInvalidFlags]: the params' shape is refused (a pane answer without
+//     As allow or deny, Key or ExpectPaneSHA256, or with Text; As without
+//     RequestToken; Key with Text; NoEnter with neither; a Key that is not a
+//     named key or one character; a malformed hash; a negative NLines);
+//     nothing was read or sent.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrSpawnNotInteractive]: the row is finished or otherwise not in a
 //     live interactive state, or pending without AllowPending, or pending
 //     with no launch start or launch token recorded, or pending and the
 //     lookup found only a session an earlier launch left behind; nothing was
 //     sent.
-//   - [ErrSendKeysWhileRelayed]: relay_mode is on, state is check_permission
-//     and the relay guard holds: at least one of the Spawn's permission
-//     requests holds the relay guard, or the Spawn has zero request rows;
-//     nothing was sent. The message names the holding
-//     request (an open one in preference to a decided one, then the oldest).
-//     For an open request it advises answering it with Decide. For a
-//     decided one, named only when no open request holds, it says the
-//     verdict is recorded and its relay hook may still be delivering it, and
-//     advises retrying SendKeys later: there is nothing left to answer, and
-//     Decide on it would return [ErrAlreadyDecided]. With zero rows the
-//     request is still being recorded, the message names none and advises
-//     Decide once Get lists it. The refusal is time-bounded: the guard
-//     releases once every request's relay hook is presumed, by its relay
-//     window, to have answered or died, letting the operator recover the
-//     wedged Spawn through this sanctioned surface. A request recorded before
-//     this release that Decide has refused with [ErrRelayFallenBack] no
-//     longer holds it, and while that request stays open no decided request
-//     of the Spawn does either. A request recorded from this release on holds
-//     it until its relay window has passed, even once Decide has refused it
-//     with [ErrRelayFallenBack].
+//   - [ErrSendKeysWhileRelayed]: relay_mode is on and a relay hook of the
+//     Spawn may still answer its request (its process runs, or cannot be
+//     checked and its request is open before its confirm_by); nothing was
+//     sent. The message names that request and advises Decide (undecided)
+//     or a later retry (verdict recorded).
+//   - [ErrRelayFallenBack]: a plain call while a request of the Spawn has
+//     fallen back with no pane answer recorded through agent-director
+//     (pane_answer none or intent); nothing was sent. Its err_details
+//     ([RelayFallenBackDetails]) name the request and the Spawn's other open
+//     requests. Answer it with a pane answer, or close it with
+//     RecordPaneAnswer.
+//   - [ErrNoOpenPermissionRequest]: a pane answer whose request is not one
+//     of the Spawn's, or is closed with its row or by find-missing; nothing
+//     was sent.
+//   - [ErrAlreadyDecided]: a pane answer whose request was acked, or already
+//     answered at the pane; nothing was sent.
+//   - [ErrPaneAnswerInProgress]: a pane answer while another pane answer on
+//     that request is still being sent; nothing was sent. err_details:
+//     [PaneAnswerInProgressDetails].
+//   - [ErrPaneChanged]: ExpectPaneSHA256 is not the hash of the pane as
+//     captured now; nothing was sent. err_details: [PaneChangedDetails],
+//     never the new hash.
+//   - [ErrStoreBusy]: a pane answer's intent could not take the store's
+//     write lock within its busy timeout; nothing was sent or recorded.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there.
 //   - [ErrTmuxSessionConflict]: the agent's pane was not found, a session an
 //     earlier launch left behind is there on a live row, or tmux holds
 //     conflicting labels; nothing was sent.
 //   - [ErrTmuxUnresponsive]: tmux did not answer, or gave a reply that could
-//     not be recognised; after a text or Enter call the keys may have been
-//     delivered. Where the text may be typed, the description names the
+//     not be recognised; after a text, Enter or key call the keys may have
+//     been delivered. Where the text may be typed, the description names the
 //     next step (read-pane, and send-keys with empty text, which sends Enter
 //     only) in place of a retry that would type the text twice.
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.
 //
-// Nondeterminism: none.
+// Nondeterminism: the relay guard depends on the clock and on whether each
+// relay hook, and a pane answer's sender, runs.
 func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SendKeysResult{}, err
 	}
 
-	// Effective relay window is resolved here via Epic 1's accessor (the single
-	// source for the non-positive→default fallback); the clock is the
-	// Client's own (c.now), so the guard-release verdict is deterministic at
-	// the API boundary and tests can step it. The start-time reader is the
-	// Client's too. The caller identity is collected inside agent-director,
-	// never from caller-asserted params (SR-5.2), once per call by sendKeys.
-	effectiveWindow := time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second
-	facts, result, err := sendKeys(c.st, c.tmuxClient, c.procChecker, effectiveWindow, c.now(), params)
+	// The relay view is the Client's own: its clock (c.now), start-time
+	// reader, pid namespace and the configured effective relay window. A pane
+	// answer's sender is this process (c.paneSelf), and an intent whose
+	// sender cannot be checked counts as in progress for the configured tmux
+	// action timeout plus the pipe-close wait plus 2 s. The caller identity
+	// is collected inside agent-director, never from caller-asserted params
+	// (SR-5.2), once per call by sendKeys.
+	facts, result, err := sendKeys(c.st, c.tmuxClient, c.sendKeysEnv(), params)
 	// Exactly one ad.send_keys.called per call past the closed check, on
 	// every outcome (SR-7.4, SR-5.2), fail-open.
 	emitSendKeysCalled(params, facts, err)
 	return result, err
+}
+
+// sendKeysEnv is the SendKeysEnv of the Client's send-keys and
+// record-pane-answer calls.
+func (c *Client) sendKeysEnv() SendKeysEnv {
+	return SendKeysEnv{
+		Relay:      c.relayView(),
+		Self:       c.paneSelf,
+		IntentHold: paneIntentHold(c.cfg.Tmux),
+	}
 }

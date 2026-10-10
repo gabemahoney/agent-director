@@ -37,6 +37,13 @@ type outcomeTransitioner interface {
 	ApplyHookTransitionResult(instanceID string, gate store.HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
 }
 
+// toolRanCloser is an optional extension of HookStore for the PostToolUse
+// close of a request whose tool ran (b.146 rule 13). *store.Store satisfies
+// it; a test double that does not closes nothing.
+type toolRanCloser interface {
+	CloseToolRanRequests(instanceID string, gate store.HookGate, toolUseID string, at time.Time, gone func(store.PermissionRow) bool) ([]string, error)
+}
+
 // waitingIfWorkingTransitioner is an optional extension of HookStore for the
 // main agent's idle-prompt Notification (ClassifyResult.WaitingIfWorking,
 // b.svb). *store.Store satisfies it; a test double that does not gets the
@@ -101,6 +108,15 @@ type HandleConfig struct {
 	// identity: readers then cannot tell whether the hook is gone and fall
 	// back to its settle instant.
 	Self func() store.ProcessIdentity
+	// RelayHookGone judges a permission request's relay hook by rule 5's hook
+	// clause (b.146 rules 5 and 14): true when its process is provably gone,
+	// or cannot be checked and the request's settle instant has passed. The
+	// PostToolUse close of a request whose tool ran calls it for each
+	// candidate before its guarded write (b.146 rule 13), so a request whose
+	// relay hook may still answer it is never closed. cmd/agent-director
+	// wires api.RelayHookGone with the per-OS readers; tests inject a double.
+	// A nil RelayHookGone closes no request.
+	RelayHookGone func(store.PermissionRow) bool
 	// PendingGrace is the effective pending grace period
 	// (config.Tmux.EffectivePendingGrace, SR-13.4): SessionStart waits for its
 	// launch's identity write until the row's launch start plus PendingGrace,
@@ -186,7 +202,10 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // still awaits an answer, returns to waiting, any other row is soft
 // refreshed, and
 // either way the row records idle_since (applyOrdinaryHook; b.svb, b.146
-// problem 3).
+// problem 3). On a relayed row, a PostToolUse or PostToolUseFailure carrying
+// a tool_use_id first closes the fallen-back request with that tool_use_id
+// (closeToolRan; b.146 rule 13: the tool ran, so its dialog was answered
+// allow), with the same gate, before its ordinary write.
 //
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow is fail-closed per SRD §6.4 and b.146
@@ -366,6 +385,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		}, fields, onIgnored)
 		return nil
 	default:
+		if relayActive && res.ToolRan() {
+			closeToolRan(st, hc, instanceID, gate, res.ToolUseID, logger)
+		}
 		var upsertOutcome store.UpsertOutcome
 		upsertOutcome, applied, err = applyOrdinaryHook(st, instanceID, gate, res, transcriptPath, jsonlPresent)
 		fields["upsert_outcome"] = string(upsertOutcome)
@@ -409,6 +431,31 @@ func applyOrdinaryHook(st HookStore, instanceID string, gate store.HookGate, res
 		return store.UpsertError, applied, err
 	}
 	return store.UpsertNoChange, applied, nil
+}
+
+// closeToolRan is the PostToolUse close (b.146 rule 13): a PostToolUse or
+// PostToolUseFailure for toolUseID on a relayed row closes the request of the
+// row carrying that tool_use_id that has fallen back (store
+// CloseToolRanRequests: pane_answer tool_ran, decision allow, decision_reason
+// tool_ran), each relay hook judged by hc.RelayHookGone before the guarded
+// write, which carries the hook's gate. It runs before the hook's ordinary
+// write, so that write's working transition is no longer held by the request
+// it closed. It is fail-open: a store without the close, or a failed close,
+// logs and changes nothing else. That hook can die too, so the close is a
+// help, not a guarantee: record-pane-answer is the other way to close such a
+// request.
+func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, toolUseID string, logger *log.Logger) {
+	c, ok := st.(toolRanCloser)
+	if !ok {
+		return
+	}
+	closed, err := c.CloseToolRanRequests(instanceID, gate, toolUseID, hc.clock()(), hc.RelayHookGone)
+	if err != nil {
+		logf(logger, "hook: tool-ran close (instance=%s, tool_use_id=%s): %v", instanceID, toolUseID, err)
+	}
+	for _, token := range closed {
+		logf(logger, "hook: request %s of %s closed: its tool ran (tool_use_id=%s)", token, instanceID, toolUseID)
+	}
 }
 
 // sessionStartWaitInterval is how often SessionStart re-reads its row while it
@@ -628,3 +675,4 @@ func logf(logger *log.Logger, format string, args ...any) {
 var _ HookStore = (*store.Store)(nil)
 var _ outcomeTransitioner = (*store.Store)(nil)
 var _ waitingIfWorkingTransitioner = (*store.Store)(nil)
+var _ toolRanCloser = (*store.Store)(nil)

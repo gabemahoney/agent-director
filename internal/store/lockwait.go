@@ -169,9 +169,44 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 	})
 }
 
+// inImmediateTx runs fn inside one BEGIN IMMEDIATE transaction on the store's
+// connection, waiting for the connection and the write lock as every other
+// write does (the store's busy timeout), as MarkMissingIfSameLife and
+// ResetForReuse begin theirs. Unlike inWriteTx, a lock not taken in that time
+// is returned as the driver's busy error, an unnamed store failure, never
+// ErrStoreBusy: it is for a write whose verb names no ErrStoreBusy (resume's
+// move to pending, a hook's ended transition). When fn returns an error, or
+// the commit fails, the transaction is rolled back and nothing is written;
+// fn's error is returned as it is. fn must use conn alone (see withConn).
+func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error) error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			rollbackConn(ctx, conn)
+		}
+	}()
+	if err := fn(ctx, conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // millisArg returns t as a bound argument of an integer-milliseconds column
-// (the v7 instants: delivered_at, settled_at, hook_gone_at, attempted_at), or
-// nil (SQL NULL) for the zero time.
+// (the v7 instants: delivered_at, settled_at, hook_gone_at, attempted_at,
+// pane_intent_at, closed_at), or nil (SQL NULL) for the zero time.
 func millisArg(t time.Time) any {
 	if t.IsZero() {
 		return nil

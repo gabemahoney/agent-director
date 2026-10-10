@@ -65,9 +65,12 @@ const (
 	// adoption writes (SR-3.6) have the same shape and would also match.
 	LaunchIdentityWrite Kind = 5
 	// PermissionDecision fails a write of a decision on one of the id's open
-	// permission requests: decide's, the relay hook's timeout deny, and
+	// permission requests: decide's, the relay hook's timeout deny,
 	// find-missing's close inside its mark's transaction (b.146 rule 12),
-	// which then rolls the mark back too. A delete of a request (the spawn
+	// which then rolls the mark back too, and the pane-answer writes that
+	// record one (b.146 step 2b: a pane answer's sent write after its key,
+	// record-pane-answer's outside record and the PostToolUse close), but not
+	// a pane answer's intent or its release. A delete of a request (the spawn
 	// delete cascade, the cap eviction) is not matched.
 	PermissionDecision Kind = 6
 )

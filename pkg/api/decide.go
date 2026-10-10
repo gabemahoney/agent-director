@@ -27,20 +27,34 @@ var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 // it the call is rejected at the API layer regardless of CLI gating.
 var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 
-// ErrRelayFallenBack is returned by Decide when the target permission request
-// has fallen back (b.146 rule 5): its relay hook has not acked a verdict, no
-// pane answer is recorded on it through agent-director, and the hook is gone:
-// provably (its process checked in the caller's pid namespace: no such
-// process, another start time, or a zombie), or, when its process cannot be
-// checked, past its settle instant (its kill instant plus a 2 s reserve).
-// Decide checks the hook process before it reads the request's record, so a
-// hook that acked and exited in between is never reported fallen back. It
-// returns this at once, not after the request's relay window (decision 1 A).
-// Nothing is recorded as the request's decision: the caller's verdict is
-// stored as the request's attempted_decision and attempted_at, shown and
-// never acted on. No answer from the relay reached Claude Code, so only an
-// answer at the pane can close the request; agent-director cannot know
-// whether something outside it (a person at tmux) already answered it.
+// ErrRelayFallenBack means a permission request has fallen back (b.146 rule
+// 5; decision 10 A): its relay hook is gone and acked no verdict, and no pane
+// answer is recorded on it through agent-director (pane_answer none or
+// intent). No answer from the relay reached Claude Code; agent-director
+// cannot know whether something outside it (a person at tmux) has answered
+// it since. "Gone" is provable (the hook's process checked in the caller's
+// pid namespace: no such process, another start time, or a zombie) or, when
+// the process cannot be checked, past the request's settle instant (its kill
+// instant plus a 2 s reserve), so the refusal arrives within seconds of the
+// hook's end, not after the request's relay window.
+//
+// Two verbs return it:
+//
+//   - Decide, for the request it was asked to decide (decision 1 A). It
+//     checks the hook process before it reads the record, so a hook that
+//     acked and exited in between is never reported fallen back. Nothing is
+//     recorded as the request's decision: the caller's verdict is stored as
+//     its attempted_decision and attempted_at, shown and never acted on.
+//   - SendKeys without a request token (b.146 rule 7), for the oldest open
+//     request of the Spawn that has fallen back: a plain send could land on
+//     that request's dialog. Nothing is sent.
+//
+// Its err_details (RelayFallenBackDetails) give the request's facts
+// (request_token, tool_name, tool_input, requested_at and its delivery
+// facts), the Spawn's state and its other open requests. The request is
+// closed by a pane answer through SendKeys with its request token, or, when
+// it was answered outside agent-director, by RecordPaneAnswer (or by the
+// agent's PostToolUse for its tool).
 //
 // A request recorded before schema v7 (no settle instant on record, its relay
 // hook's identity and ack not recorded) falls back by time, as before the
@@ -53,14 +67,7 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // and reads the request again: one decided meanwhile is ErrAlreadyDecided.
 // One still open is ErrRelayFallenBack only while the Spawn is still shown
 // sitting on it alone (fallenBackUnshown, b.t6e), otherwise
-// ErrNoOpenPermissionRequest, which advises no pane answer. By the time
-// Decide returns ErrRelayFallenBack for such a request, the send-keys relay
-// guard has already released on this request's account. If send-keys still
-// refuses with ErrSendKeysWhileRelayed, another of the Spawn's requests holds
-// it and the refusal names that request; answer that one with decide, as
-// that error says. For a request recorded from schema v7 on, the send-keys
-// relay guard still holds on its account until its relay window ends (b.146
-// step 2b rewrites the guard).
+// ErrNoOpenPermissionRequest, which advises no pane answer.
 //
 // Callers detect it with errors.Is.
 var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
@@ -147,19 +154,23 @@ const decideAckPoll = 50 * time.Millisecond
 //   - Unknown id → ErrSpawnNotFound from the store. relay_mode != "on" →
 //     ErrRelayModeOff.
 //   - Spawn ended or missing → nothing is recorded: a request of a finished
-//     Spawn is closed (b.146 rule 12). A decided request is
-//     ErrAlreadyDecided (recordedRefusal); an open or absent one
-//     ErrNoOpenPermissionRequest, which advises no pane answer
-//     (finishedRowRefusal).
+//     Spawn is closed (b.146 rule 12). A decided or closed request is
+//     recordedRefusal's; an open or absent one ErrNoOpenPermissionRequest,
+//     which advises no pane answer (finishedRowRefusal).
 //   - The request is read by the check-before-read rule (b.146 rule 5): read,
 //     judge its relay hook process, read again. Absent →
 //     ErrNoOpenPermissionRequest; decided (first call wins) →
-//     ErrAlreadyDecided; closed by find-missing's mark before its relay hook
-//     acked the verdict recorded on it (b.146 rule 12, the Spawn resumed
-//     since or not) → ErrNoOpenPermissionRequest, which advises no pane
-//     answer, never ErrRelayFallenBack (recordedRefusal). A request the mark
-//     denied because it was undecided stays ErrAlreadyDecided with
-//     decision_reason find_missing, as before.
+//     ErrAlreadyDecided; closed at the pane (pane_answer sent, outside or
+//     tool_ran, b.146 step 2b; decided or not) → ErrAlreadyDecided naming its
+//     pane_answer, nothing recorded, not even as attempted, in every path,
+//     before schema v7 included; closed with its Spawn (find-missing's mark,
+//     the terminal SessionEnd's move to ended, or resume's move to pending)
+//     before its relay hook acked a verdict recorded on it (b.146 rule 12,
+//     the Spawn resumed since or not) → ErrNoOpenPermissionRequest, which
+//     advises no pane answer, never ErrRelayFallenBack (recordedRefusal),
+//     the ended close's deny of an undecided request (decision_reason ended)
+//     included. A request the mark denied because it was undecided stays
+//     ErrAlreadyDecided with decision_reason find_missing, as before.
 //   - Under a max_wait_ms bound every read before the verdict commits waits
 //     for the store at most what is left of the bound; a read cut by it is
 //     ErrStoreBusy, with nothing recorded.
@@ -223,14 +234,14 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 	if err != nil {
 		return DecideResult{}, err
 	}
-	if pr.Decision != "" || pr.Closed() {
+	if pr.Decision != "" || pr.Closed() || pr.PaneAnswered() {
 		return DecideResult{}, recordedRefusal(params, pr)
 	}
 	if pr.PreV7() {
 		return c.decidePreV7(pr)
 	}
 	if c.j.delivery(pr, verdict, c.j.now()).Delivery == DeliveryFallenBack {
-		return DecideResult{}, c.refuseFallenBack(pr)
+		return DecideResult{}, c.refuseFallenBack(row, pr, verdict)
 	}
 	written, err := s.DecideRelayRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision,
 		c.dbReason(), store.WriterProcessDecide, time.Time{}, c.lockWait())
@@ -324,30 +335,63 @@ func (c *decideCall) writeError(err error) error {
 	return err
 }
 
-// refuseFallenBack is decide's refusal of pr, a request recorded from schema
-// v7 on that has fallen back: ErrRelayFallenBack. Before returning it stores
-// the verdict as attempted (RecordRefusedDecision), with hook_gone_at when
-// pr has none yet (a writing verb always writes it, b.146 rule 8), in a write
-// whose lock wait is bounded like the verdict's. The refusal stands whatever
-// that write does: a write cut by the bound or failing records nothing
-// (store-side, one transaction) and changes no answer.
-func (c *decideCall) refuseFallenBack(pr PermissionRow) error {
+// decideFallenBackWhat is what decide's ErrRelayFallenBack says it did not
+// do.
+const decideFallenBackWhat = "nothing was recorded as its decision (the verdict is kept as attempted_decision)"
+
+// refuseFallenBack is decide's refusal of pr, a request of sp recorded from
+// schema v7 on that has fallen back (its relay hook judged verdict before pr
+// was read): ErrRelayFallenBack. Before returning it stores the verdict as
+// attempted (RecordRefusedDecision), with hook_gone_at when pr has none yet
+// (a writing verb always writes it, b.146 rule 8), in a write whose lock wait
+// is bounded like the verdict's. The refusal stands whatever that write does:
+// a write cut by the bound or failing records nothing (store-side, one
+// transaction) and changes no answer. Its err_details (fallenBackDetails)
+// are read after that write.
+func (c *decideCall) refuseFallenBack(sp Spawn, pr PermissionRow, verdict hookVerdict) error {
 	now := c.j.now()
 	var goneAt time.Time
 	if pr.HookGoneAt.IsZero() {
 		goneAt = now
 	}
-	_ = c.s.RecordRefusedDecision(c.p.ClaudeInstanceID, c.p.RequestToken, c.p.Decision, now, goneAt, c.lockWait())
-	return fmt.Errorf("%w: %s request %s fell back: its relay hook is gone and acked no verdict, and no pane answer is recorded on it through agent-director; nothing was recorded as its decision (the verdict is kept as attempted_decision); only an answer at the pane can close it",
-		ErrRelayFallenBack, c.p.ClaudeInstanceID, c.p.RequestToken)
+	if err := c.s.RecordRefusedDecision(c.p.ClaudeInstanceID, c.p.RequestToken, c.p.Decision, now, goneAt, c.lockWait()); err == nil {
+		stored := time.UnixMilli(now.UnixMilli()).UTC()
+		pr.AttemptedDecision, pr.AttemptedAt = c.p.Decision, stored
+		if pr.HookGoneAt.IsZero() {
+			pr.HookGoneAt = stored
+		}
+	}
+	return relayFallenBackError(c.p.ClaudeInstanceID, c.p.RequestToken, decideFallenBackWhat,
+		c.fallenBackDetails(sp, pr, verdict))
+}
+
+// fallenBackDetails is ErrRelayFallenBack's err_details for pr, a request of
+// sp that decide found fallen back with its hook judged verdict (b.146 rule
+// 15): every request of sp is read again by the check-before-read rule (under
+// a max_wait_ms bound, waiting at most what is left of it), and the details
+// built from that read, the request's own facts as read then (pr's when it
+// is gone). A read that fails leaves pr's facts as decide found them and
+// open_requests null.
+func (c *decideCall) fallenBackDetails(sp Spawn, pr PermissionRow, verdict hookVerdict) RelayFallenBackDetails {
+	reqs, err := judgedRequests(c.readAllRequests, c.j, sp)
+	if err != nil {
+		return RelayFallenBackDetails{
+			PermissionRequestInfo: permissionRequestInfo(pr, c.j.delivery(pr, verdict, c.j.now())),
+			State:                 sp.State,
+		}
+	}
+	if found, ok := reqs.find(pr.RequestToken); ok {
+		pr = found
+	}
+	return reqs.fallenBackDetails(pr)
 }
 
 // notWritten names a verdict write that matched no request, from one read of
 // the request (and of the Spawn): absent → ErrNoOpenPermissionRequest;
-// decided or closed meanwhile → recordedRefusal; its Spawn finished meanwhile
-// → the closed-request refusal (b.146 rule 12); a pane answer recorded
-// meanwhile (b.146 step 2b) → ErrNoOpenPermissionRequest. Nothing was
-// recorded.
+// decided, closed or answered at the pane meanwhile → recordedRefusal; its
+// Spawn finished meanwhile → the closed-request refusal (b.146 rule 12); a
+// pane answer through send-keys begun meanwhile (pane_answer intent; b.146
+// step 2b) → ErrNoOpenPermissionRequest. Nothing was recorded.
 func (c *decideCall) notWritten() error {
 	id := c.p.ClaudeInstanceID
 	pr, err := c.readRequest()
@@ -356,7 +400,7 @@ func (c *decideCall) notWritten() error {
 		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, id)
 	case err != nil:
 		return err
-	case pr.Decision != "" || pr.Closed():
+	case pr.Decision != "" || pr.Closed() || pr.PaneAnswered():
 		return recordedRefusal(c.p, pr)
 	}
 	sp, err := c.getSpawn()
@@ -457,12 +501,12 @@ func (c *decideCall) decidePreV7(pr PermissionRow) (DecideResult, error) {
 // recorded nothing. fallenBackRefusal names a fallen-back row:
 // ErrRelayFallenBack only while the Spawn is still shown sitting on it alone,
 // otherwise ErrNoOpenPermissionRequest (b.t6e). An ErrRelayFallenBack stores
-// the verdict as attempted, as for any request.
+// the verdict as attempted, as for any request, and carries err_details.
 func (c *decideCall) refusePreV7() error {
 	window := c.j.view.Window
 	now := c.j.now()
 	pr, err := c.readRequest()
-	if err == nil && pr.Decision == "" && RelayRequestUndeliverable(pr.CreatedAt, window, now) {
+	if err == nil && pr.AwaitsAnswer() && RelayRequestUndeliverable(pr.CreatedAt, window, now) {
 		if settled := relayHookSettledAt(pr.CreatedAt, window); now.Before(settled) {
 			if c.bounded && c.deadline.Before(settled) {
 				return fmt.Errorf("%w: %s request %s was recorded before this release and its relay hook may still answer it until %s, after the call's max_wait_ms bound; nothing was recorded",
@@ -479,7 +523,7 @@ func (c *decideCall) refusePreV7() error {
 	if err != nil {
 		return err
 	}
-	if pr.Decision != "" || pr.Closed() {
+	if pr.Decision != "" || pr.Closed() || pr.PaneAnswered() {
 		return recordedRefusal(c.p, pr)
 	}
 	// Open row that the guarded write refused: skipped by the deliverability
@@ -489,11 +533,7 @@ func (c *decideCall) refusePreV7() error {
 	// fallenBackRefusal reads the Spawn again, and a finished one is not shown
 	// to be sitting on the request.
 	if relayRequestFallenBack(pr, window, now) {
-		err := c.fallenBackRefusal(pr)
-		if errors.Is(err, ErrRelayFallenBack) {
-			_ = c.s.RecordRefusedDecision(c.p.ClaudeInstanceID, c.p.RequestToken, c.p.Decision, c.j.now(), time.Time{}, c.lockWait())
-		}
-		return err
+		return c.fallenBackRefusal(pr)
 	}
 	return c.notWritten()
 }
@@ -509,10 +549,12 @@ func finishedState(state string) bool {
 // ended or missing (b.146 rule 12): such a request is closed, so decide
 // records nothing. It reads the request once and names the refusal with an
 // existing error name: no such request is ErrNoOpenPermissionRequest, as for
-// a live Spawn; a decided one is ErrAlreadyDecided (find-missing's mark
-// denies a missing Spawn's undecided requests, decision_reason find_missing),
-// except one the mark closed before its relay hook acked its verdict, which
-// is ErrNoOpenPermissionRequest (recordedRefusal); an open one is
+// a live Spawn; a decided or closed one is recordedRefusal's: ErrAlreadyDecided
+// (find-missing's mark denies a missing Spawn's undecided requests,
+// decision_reason find_missing), except one closed before its relay hook
+// acked a verdict find-missing did not write (the ended close's deny,
+// decision_reason ended, included), which is ErrNoOpenPermissionRequest; an
+// open one (left open by a release before the ended close) is
 // ErrNoOpenPermissionRequest (closedRequestError). Neither advises a pane
 // answer.
 func (c *decideCall) finishedRowRefusal(state string) error {
@@ -522,7 +564,7 @@ func (c *decideCall) finishedRowRefusal(state string) error {
 		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, c.p.ClaudeInstanceID)
 	case err != nil:
 		return err
-	case pr.Decision != "" || pr.Closed():
+	case pr.Decision != "" || pr.Closed() || pr.PaneAnswered():
 		return recordedRefusal(c.p, pr)
 	}
 	return closedRequestError(c.p, state)
@@ -538,24 +580,37 @@ func closedRequestError(params DecideParams, state string) error {
 }
 
 // recordedRefusal is decide's refusal of pr, a request with a verdict
-// recorded on it or closed by find-missing's mark (b.146 rule 12):
+// recorded on it, closed with its Spawn (closed_at; b.146 rule 12: by
+// find-missing's mark of the Spawn missing, by the terminal SessionEnd's move
+// of the Spawn to ended, or by resume's move of the finished Spawn to
+// pending) or closed at the pane (PermissionRow.PaneAnswered):
 //
-//   - Closed by the mark before its relay hook acked it, with a verdict the
-//     mark did not write (one recorded before the mark: decision_reason is not
-//     find_missing): ErrNoOpenPermissionRequest. The request is closed with
-//     the agent the mark judged gone, whose Spawn may have been resumed since,
-//     so neither "already decided" nor "fallen back" would tell the caller
-//     what happened to it; nothing was recorded and it is not to be answered
-//     at the pane. This also covers a closed request with no verdict, which
-//     the mark never leaves, so decide never reports a closed request fallen
-//     back.
+//   - Closed before its relay hook acked it, with a verdict find-missing's
+//     mark did not write (decision_reason is not find_missing: one recorded
+//     before the close, or the ended close's deny of an undecided request,
+//     decision_reason ended): ErrNoOpenPermissionRequest. The request is
+//     closed with the agent that asked it, gone or judged gone, whose Spawn
+//     may have been resumed since, so neither "already decided" nor "fallen
+//     back" would tell the caller what happened to it; nothing was recorded
+//     and it is not to be answered at the pane. This also covers a closed
+//     request with no verdict, which no close leaves, so decide never
+//     reports a closed request fallen back.
+//   - Closed by a completed pane answer (pane_answer sent, outside or
+//     tool_ran; b.146 step 2b), whatever its decision (an outside record
+//     claiming unknown leaves none): ErrAlreadyDecided naming its
+//     pane_answer (paneAnsweredError), as send-keys and record-pane-answer
+//     refuse it, never ErrRelayFallenBack. Nothing was recorded, not even
+//     the verdict as attempted.
 //   - Otherwise ErrAlreadyDecided (first call wins), a request the mark
-//     denied because it was undecided (decision_reason find_missing) and a
-//     closed request a live relay hook acked since included.
+//     denied because it was undecided (decision_reason find_missing, as
+//     before) and a closed request a live relay hook acked since included.
 func recordedRefusal(params DecideParams, pr PermissionRow) error {
-	if pr.Closed() && pr.DeliveredAt.IsZero() && pr.DecisionReason != store.DecisionReasonFindMissing {
-		return fmt.Errorf("%w: %s request %s is closed: find-missing marked the spawn missing before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
+	switch {
+	case pr.Closed() && pr.DeliveredAt.IsZero() && pr.DecisionReason != store.DecisionReasonFindMissing:
+		return fmt.Errorf("%w: %s request %s is closed: its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
 			store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID, params.RequestToken)
+	case pr.PaneAnswered():
+		return paneAnsweredError(params.ClaudeInstanceID, pr, "nothing was recorded")
 	}
 	return alreadyDecidedError(params.ClaudeInstanceID, pr)
 }
@@ -564,14 +619,16 @@ func recordedRefusal(params DecideParams, pr PermissionRow) error {
 // schema v7 that refusePreV7 found fallen back by time
 // (relayRequestFallenBack). It reads the Spawn, then every one of its
 // requests, the last read of pr included: pr removed meanwhile (with its
-// Spawn) is ErrNoOpenPermissionRequest and pr decided meanwhile is
-// recordedRefusal's. A pr still open is ErrRelayFallenBack ("answer at the
-// pane") only while the Spawn is still shown sitting on it alone
-// (fallenBackUnshown); otherwise it is ErrNoOpenPermissionRequest, whose
-// message says why, that the request's permission dialog cannot be shown to
-// be on screen, and not to answer it at the pane: a pane answer to a dialog
-// that has closed is typed into Claude's prompt as a user message (b.t6e).
-// Under a max_wait_ms bound its reads are bounded as decide's others.
+// Spawn) is ErrNoOpenPermissionRequest and pr decided, closed or answered at
+// the pane meanwhile is recordedRefusal's. A pr still open is ErrRelayFallenBack only while the
+// Spawn is still shown sitting on it alone (fallenBackUnshown): the verdict
+// is then stored as attempted, and the refusal carries err_details
+// (RelayFallenBackDetails) built from the requests read. Otherwise it is
+// ErrNoOpenPermissionRequest, whose message says why, that the request's
+// permission dialog cannot be shown to be on screen, and not to answer it at
+// the pane: a pane answer to a dialog that has closed is typed into Claude's
+// prompt as a user message (b.t6e). Under a max_wait_ms bound its reads are
+// bounded as decide's others.
 func (c *decideCall) fallenBackRefusal(pr PermissionRow) error {
 	params := c.p
 	id := params.ClaudeInstanceID
@@ -590,18 +647,25 @@ func (c *decideCall) fallenBackRefusal(pr PermissionRow) error {
 	if i < 0 {
 		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, id)
 	}
-	if pr = rows[i]; pr.Decision != "" || pr.Closed() {
+	if pr = rows[i]; pr.Decision != "" || pr.Closed() || pr.PaneAnswered() {
 		return recordedRefusal(params, pr)
 	}
 	if why := fallenBackUnshown(sp, rows, pr); why != "" {
 		return fmt.Errorf("%w: %s request %s is not shown to be awaiting an answer: its record is still open and its relay hook can no longer answer it, but %s, so its permission dialog cannot be shown to be on screen; do not answer it at the pane",
 			store.ErrNoOpenPermissionRequest, id, params.RequestToken, why)
 	}
-	// By now the send-keys relay guard has released on this request's
-	// account (refusePreV7 waited until relayHookSettledAt), so the advice
-	// names send-keys, as before the upgrade.
-	return fmt.Errorf("%w: %s request %s fell back — too late; its record is still open and its relay hook can no longer answer it; answer at the pane with send-keys",
-		ErrRelayFallenBack, id, params.RequestToken)
+	// The verdict is kept as attempted (a write bounded like the verdict's;
+	// the refusal stands whatever it does), then the refusal carries the
+	// request's facts and the Spawn's other open requests, from the read
+	// above (a request recorded before v7 has no relay hook identity to
+	// judge, so its facts are by time).
+	at := c.j.now()
+	if err := c.s.RecordRefusedDecision(id, params.RequestToken, params.Decision, at, time.Time{}, c.lockWait()); err == nil {
+		pr.AttemptedDecision, pr.AttemptedAt = params.Decision, time.UnixMilli(at.UnixMilli()).UTC()
+		rows[i] = pr
+	}
+	return relayFallenBackError(id, params.RequestToken, decideFallenBackWhat,
+		lockedRequests(c.j, sp, rows).fallenBackDetails(pr))
 }
 
 // fallenBackUnshown reports why the Spawn sp is not shown to be sitting on
@@ -622,9 +686,11 @@ func (c *decideCall) fallenBackRefusal(pr PermissionRow) error {
 //     while sp has one that still awaits an answer (store's
 //     evictClosedRequests), so a later request stays visible here for as
 //     long as pr is open.
-//   - No other request of sp is open. Claude Code shows the oldest pending
-//     dialog first, so an older open request's dialog, if it is still up, is
-//     the one a pane answer would reach.
+//   - No other request of sp is open (PermissionRow.AwaitsAnswer: not closed,
+//     not answered at the pane, and not acked or, recorded before schema v7,
+//     undecided). Claude Code shows the oldest pending dialog first, so an
+//     older open request's dialog, if it is still up, is the one a pane
+//     answer would reach.
 //
 // What it cannot show: a stale record (b.omt). While pr is open the store
 // holds the agent's moves to working, so a dialog answered at the pane, or
@@ -641,11 +707,21 @@ func fallenBackUnshown(sp Spawn, rows []PermissionRow, pr PermissionRow) string 
 		}
 	}
 	for _, r := range rows {
-		if r.RequestID != pr.RequestID && r.Decision == "" {
+		if r.RequestID != pr.RequestID && r.AwaitsAnswer() {
 			return fmt.Sprintf("the spawn's request %s is open too", r.RequestToken)
 		}
 	}
 	return ""
+}
+
+// paneAnsweredError is ErrAlreadyDecided for pr, a request a completed pane
+// answer closed (pane_answer sent, outside or tool_ran; b.146 step 2b), for a
+// call that would decide it, answer it at the pane or record it answered;
+// what says what the call did not do. It names pane_answer, never the
+// decision, which an outside record claiming unknown leaves null.
+func paneAnsweredError(instanceID string, pr PermissionRow, what string) error {
+	return fmt.Errorf("%w: %s request %s already has a pane answer recorded (pane_answer %q); %s",
+		store.ErrAlreadyDecided, instanceID, pr.RequestToken, pr.PaneAnswer, what)
 }
 
 // alreadyDecidedError is decide's ErrAlreadyDecided for the decided row pr.
@@ -717,21 +793,27 @@ func decideOutcome(err error) string {
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
 //   - [ErrNoOpenPermissionRequest]: no such request exists, or the request is
-//     closed: its Spawn is ended or missing, or find-missing marked the Spawn
-//     missing before the request's relay hook delivered the verdict recorded
-//     on it (the Spawn resumed since or not); nothing is recorded. Or a
+//     closed: its Spawn is ended or missing, or the Spawn ended, or
+//     find-missing marked it missing, before the request's relay hook
+//     delivered a verdict recorded on it (the Spawn resumed since or not);
+//     nothing is recorded. Or a
 //     request recorded before this release is still open past its relay
 //     window but the Spawn is not shown to be sitting on it alone. Do not
 //     answer it at the pane.
 //   - [ErrAlreadyDecided]: a verdict is already recorded: a concurrent
 //     caller's, or the relay hook's fail-closed deny (decision_reason
 //     "timeout") at its deadline, or find-missing's deny when it marked the
-//     Spawn missing (decision_reason "find_missing").
+//     Spawn missing (decision_reason "find_missing"). Or the request was
+//     answered at the pane (pane_answer "sent", "outside" or "tool_ran",
+//     with or without a decision); nothing is recorded.
 //   - [ErrRelayFallenBack]: the request's relay hook is gone (or cannot be
 //     checked and is past its settle instant) and acked no verdict, and no
-//     pane answer is recorded on it through agent-director: only an answer
-//     at the pane can close it. Returned at once; the verdict is kept as the
-//     request's attempted_decision.
+//     pane answer is recorded on it through agent-director: answer it at the
+//     pane (SendKeys with its RequestToken), or close it with
+//     RecordPaneAnswer if it was answered outside agent-director. Returned
+//     at once; the verdict is kept as the request's attempted_decision. Its
+//     err_details ([RelayFallenBackDetails]) give the request's facts and the
+//     Spawn's other open requests.
 //   - [ErrStoreBusy]: MaxWaitMs was reached before the verdict was recorded;
 //     nothing was recorded, so retry. The wait it cut was for the store's
 //     write lock, or for its connection while another call of this process

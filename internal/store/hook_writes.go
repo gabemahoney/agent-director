@@ -23,7 +23,9 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // InsertRelayRequest's transaction). The transition follows SRD §5.2:
 //   - When newState is non-empty, the row's state moves to newState and
 //     last_seen_at is bumped; a state other than ended clears ended_at.
-//   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP.
+//   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP,
+//     and the row's open permission requests are closed in the same
+//     transaction (applyEndedTransition; b.146 rule 12).
 //   - When softRefresh=true, state stays; last_seen_at is bumped.
 //
 // Each branch also clears the liveness_unverified_since/liveness_note markers
@@ -79,6 +81,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 			return outcome, applied, err
 		}
 	}
+	if !softRefresh && newState == StateEnded {
+		return s.applyEndedTransition(instanceID, gate, triggeringEventName, jsonlPath, jsonlPresent)
+	}
 
 	// Capture priorState for the trail before the UPDATE. SELECT and UPDATE
 	// are separate non-transactional statements (transactions cause
@@ -105,11 +110,6 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		set = `last_seen_at = CURRENT_TIMESTAMP, ` + idleClear
 		trailNew = priorState
 		errPrefix = "store: soft refresh"
-	case newState == StateEnded:
-		set = `state = ?, last_seen_at = CURRENT_TIMESTAMP,
-		       ended_at = CURRENT_TIMESTAMP, ` + launchStartClear + `, ` + idleClear
-		setArgs = []any{newState}
-		errPrefix = "store: ended transition"
 	default:
 		// Non-terminal transitions clear ended_at. A resumed row reports in
 		// from pending like a fresh spawn's (SR-22.3): resume's move to
@@ -189,6 +189,101 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 		"new_state":             trailNew,
 		"triggering_event_name": triggeringEventName,
 		"soft_refresh":          softRefresh,
+		"source":                "ad_spawn_store",
+	})
+	return UpsertUpdated, HookApplied{Applied: true}, nil
+}
+
+// endedTransitionSet is the ended transition's SET fragment (SRD §5.2): the
+// state (its one placeholder), last_seen_at and ended_at to
+// CURRENT_TIMESTAMP, and the launch-start and idle clears.
+const endedTransitionSet = `state = ?, last_seen_at = CURRENT_TIMESTAMP,
+       ended_at = CURRENT_TIMESTAMP, ` + launchStartClear + `, ` + idleClear
+
+// errEndedNotApplied rolls applyEndedTransition's transaction back when its
+// gated write matched no row; the caller then reads why.
+var errEndedNotApplied = errors.New("store: ended transition not applied")
+
+// applyEndedTransition is ApplyHookTransitionResult's move to ended (a
+// terminal SessionEnd: the row's own agent exited) with the close of the
+// row's open permission requests (b.146 rule 12), in ONE transaction, both or
+// neither. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
+// waiting the store's busy timeout for the write lock, as every hook write
+// does), so it holds the write lock before its first read. Inside it:
+//
+//  1. It reads the row's state, the trail's prior state. No row: not applied.
+//  2. The gated write (gatedHookUpdate with endedTransitionSet: the gate in
+//     its own WHERE, SR-22.9), as every ordinary hook write: state ended,
+//     last_seen_at and ended_at to CURRENT_TIMESTAMP, launch_started_at,
+//     idle_since and the liveness markers NULLed, the session record and the
+//     pane start time when NULL, row_version advanced by one. A gate that
+//     does not hold matches no row: not applied.
+//  3. The close (closeOrphanedRequests, as find-missing's mark closes a
+//     missing row's): every request of the row that still awaits an answer
+//     (awaitingAnswerSQL) gets closed_at, so none awaits an answer once the
+//     row is resumed (none holds its moves to working, shows on get and list,
+//     refuses send-keys or blocks the check_permission repair); an undecided
+//     one is also denied with decision_reason ended, so a relay hook still
+//     polling for it reads a fail-closed deny; a decided one whose relay hook
+//     has not acked its verdict keeps it.
+//
+// Not applied rolls back and is reported as ApplyHookTransitionResult's (one
+// read after the rollback, hookNotApplied). Any other failure rolls the whole
+// transaction back, the row and its requests as they were, and is returned
+// wrapped with a zero HookApplied and UpsertError. After the commit, and only
+// then, it emits, in request-id order, one ad.row_mutation.committed (writer
+// hook, decision_reason ended) per request it denied, then the
+// ad.spawn.state_transition (the prior state to ended), fail-open.
+func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
+	const errPrefix = "store: ended transition"
+	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, []any{StateEnded}, jsonlPath, jsonlPresent)
+	var (
+		prior  string
+		closed []closedRequest
+	)
+	err := s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&prior)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errEndedNotApplied
+		}
+		if err != nil {
+			return fmt.Errorf("prior state: %w", err)
+		}
+		res, err := conn.ExecContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		} else if n == 0 {
+			return errEndedNotApplied
+		}
+		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded)
+		if err != nil {
+			return fmt.Errorf("close permission requests: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(err, errEndedNotApplied) {
+		applied, err := s.hookNotApplied(instanceID, gate, errPrefix)
+		if err != nil {
+			return UpsertError, HookApplied{}, err
+		}
+		return UpsertNoChange, applied, nil
+	}
+	if err != nil {
+		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+
+	for _, c := range closed {
+		c.emitDeny(instanceID, DecisionReasonEnded, WriterProcessHook)
+	}
+	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+		"claude_instance_id":    instanceID,
+		"prior_state":           prior,
+		"new_state":             StateEnded,
+		"triggering_event_name": triggeringEventName,
+		"soft_refresh":          false,
 		"source":                "ad_spawn_store",
 	})
 	return UpsertUpdated, HookApplied{Applied: true}, nil

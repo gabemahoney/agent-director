@@ -38,6 +38,19 @@ test.each([
   // b.9o4: empty text is the Enter-only send, also on a pending row.
   ["send-keys: empty text, allow_pending", "send-keys", { claude_instance_id: "id-1", text: "", allow_pending: true },
     ["send-keys", ...ID, "--text", "", "--allow-pending"]],
+  // b.146 rule 8: plain no_enter, key and hash; text omitted sends no --text.
+  ["send-keys: no_enter, hash and n_lines", "send-keys", {
+    claude_instance_id: "id-1", text: "hi", no_enter: true, expect_pane_sha256: "ab", n_lines: 7,
+  }, ["send-keys", ...ID, "--text", "hi", "--no-enter", "--expect-pane-sha256", "ab", "--n-lines", "7"]],
+  ["send-keys: a key, no text", "send-keys", { claude_instance_id: "id-1", key: "Escape", no_enter: false },
+    ["send-keys", ...ID, "--key", "Escape"]],
+  ["send-keys: a pane answer", "send-keys", {
+    claude_instance_id: "id-1", request_token: "tok", as: "deny", key: "2", expect_pane_sha256: "ab",
+  }, ["send-keys", ...ID, "--key", "2", "--expect-pane-sha256", "ab", "--request-token", "tok", "--as", "deny"]],
+  ["record-pane-answer", "record-pane-answer", { request_token: "tok", as: "unknown", expect_pane_sha256: "ab" },
+    ["record-pane-answer", "--request-token", "tok", "--as", "unknown", "--expect-pane-sha256", "ab"]],
+  ["record-pane-answer: n_lines", "record-pane-answer", { request_token: "tok", as: "allow", expect_pane_sha256: "ab", n_lines: 30 },
+    ["record-pane-answer", "--request-token", "tok", "--as", "allow", "--expect-pane-sha256", "ab", "--n-lines", "30"]],
   ["read-pane: all options", "read-pane", { claude_instance_id: "id-1", n_lines: 50, ansi: true, allow_pending: true },
     ["read-pane", ...ID, "--n-lines", "50", "--ansi", "--allow-pending"]],
   ["read-pane: false booleans omitted", "read-pane", { claude_instance_id: "id-1", ansi: false, allow_pending: false },

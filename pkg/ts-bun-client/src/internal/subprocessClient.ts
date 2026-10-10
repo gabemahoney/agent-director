@@ -47,6 +47,7 @@ import type {
   KillParams, KillResult,
   DecideParams, DecideResult,
   GetPermissionParams, GetPermissionResult,
+  RecordPaneAnswerParams, RecordPaneAnswerResult,
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
   ExpireParams, ExpireResult,
@@ -410,7 +411,11 @@ export class SubprocessClient {
     return this.#enqueue<GetResult>("get", params);
   }
 
-  /** sendKeys — send keystrokes to a Spawn's tmux pane. */
+  /**
+   * sendKeys — send keystrokes to a Spawn's tmux pane: text (Enter appended unless no_enter) or
+   * one key; with request_token, a pane answer to a fallen-back permission request (one key, no
+   * Enter).
+   */
   async sendKeys(params: SendKeysParams): Promise<SendKeysResult> {
     this.#assertOpen();
     return this.#enqueue<SendKeysResult>("send-keys", params);
@@ -438,6 +443,17 @@ export class SubprocessClient {
   async getPermission(params: GetPermissionParams): Promise<GetPermissionResult> {
     this.#assertOpen();
     return this.#enqueue<GetPermissionResult>("get-permission", params);
+  }
+
+  /**
+   * recordPaneAnswer — record that a fallen-back permission request was answered outside
+   * agent-director (types nothing). Rejects with ErrClaimTooSoon (retry at errDetails.not_before)
+   * until its relay hook has been gone 2 s, and with ErrPaneChanged when the pane no longer has
+   * expect_pane_sha256.
+   */
+  async recordPaneAnswer(params: RecordPaneAnswerParams): Promise<RecordPaneAnswerResult> {
+    this.#assertOpen();
+    return this.#enqueue<RecordPaneAnswerResult>("record-pane-answer", params);
   }
 
   /** resume — relaunch a finished (ended or missing) row. */

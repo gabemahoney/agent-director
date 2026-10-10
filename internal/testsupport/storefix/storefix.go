@@ -288,7 +288,8 @@ type WriteFailureKind = writefailfix.Kind
 // writefailfix. WriteFailReuseRestore also makes a plain spawn's end write
 // after "duplicate session" (store.EndHeldLaunch, SR-5.8) fail;
 // WriteFailPermissionDecision makes find-missing's close, and so its whole
-// mark, fail.
+// mark, fail, and a pane answer's sent write (b.146 rule 8), which records
+// its decision once its key was sent.
 const (
 	WriteFailReuseArchive          = writefailfix.ReuseArchive
 	WriteFailReuseReset            = writefailfix.ReuseReset

@@ -1,12 +1,14 @@
 package smoke_test
 
 // Seeder entries for the verbs that reach the row's tmux session (send-keys,
-// read-pane, kill, pause); see seeders.go for the spec.
+// read-pane, record-pane-answer, kill, pause); see seeders.go for the spec.
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -51,6 +53,31 @@ func init() {
 		},
 		Pane: func(result any) string {
 			return result.(api.ReadPaneResult).Pane
+		},
+	}
+
+	// ── record-pane-answer ────────────────────────────────────────────────
+	//
+	// A fallen-back request whose hook was found gone a minute ago: the
+	// happy path reads the row's own pane for its hash, then records the
+	// request answered outside agent-director (b.146 rule 13). The error
+	// path's unknown token is ErrPermissionRequestNotFound before any tmux call.
+	seeders["record-pane-answer"] = seederSpec{
+		Manifest: mustVerb("record-pane-answer"),
+		SeedKind: seedFallenBack,
+		SeedID:   "smoke-record-pane-answer-id",
+		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
+			read, err := c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id})
+			if err != nil {
+				return nil, err
+			}
+			return c.RecordPaneAnswer(api.RecordPaneAnswerParams{RequestToken: storefix.TestRequestTokenA, As: "unknown",
+				ExpectPaneSHA256: read.PaneSHA256})
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			_, err := c.RecordPaneAnswer(api.RecordPaneAnswerParams{RequestToken: "deadbeef-dead-4dea-adea-deadbeefdead",
+				As: "unknown", ExpectPaneSHA256: strings.Repeat("0", 64)})
+			return err
 		},
 	}
 

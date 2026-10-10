@@ -1,7 +1,7 @@
 # Hooks
 
 How agent-director's per-Spawn state-tracking hooks coexist with the
-operator's own Claude Code hooks. Each Spawn gets eight hook entries
+operator's own Claude Code hooks. Each Spawn gets nine hook entries
 synthesized into its `--settings`; they fire on every Claude lifecycle
 event and write the row update that powers `status` / `get` / `list`,
 but only for the row's own agent (see "Only the row's own agent moves
@@ -10,7 +10,7 @@ the row" below).
 For Claude Code's own hooks reference, see:
 <https://docs.claude.com/en/docs/claude-code/hooks>.
 
-## The eight state-tracking hooks
+## The nine state-tracking hooks
 
 agent-director registers one entry per event listed below. Each entry
 is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
@@ -57,12 +57,13 @@ null.
 | `UserPromptSubmit` | — | `working` |
 | `PreToolUse` | `*` (all tools) | `working` |
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
-| `PostToolUse` | — | `working` |
+| `PostToolUse` | — | `working`; with `relay_mode=on`, it first closes a fallen-back permission request carrying the same `tool_use_id` (see "A request whose tool ran" below) |
+| `PostToolUseFailure` | — | as `PostToolUse`: the tool ran and failed |
 | `Stop` | — | `waiting` |
 | `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request still awaiting an answer; any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below) |
 | `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
-| `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`) |
+| `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, and closes the row's permission requests that still await an answer; see "The agent's end closes its requests" below) |
 | `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
 
 Unknown event names are treated as soft refreshes — the row's
@@ -94,8 +95,9 @@ Claude Code sends a `Notification` with `notification_type`
   `soft_refresh` false and `triggering_event_name` `Notification`;
 - so does a row with `relay_mode=on` in `check_permission` none of whose
   permission requests still awaits an answer (a request awaits one until
-  its relay hook confirms a verdict in the store, a pane answer is recorded
-  on it, or `find-missing` closes it): the agent's turn ended after its
+  its relay hook confirms a verdict in the store, it is closed at the pane,
+  or it is closed with the row by `find-missing`'s mark or the agent's
+  end): the agent's turn ended after its
   last request was answered, and the hook that would have moved the row
   (the turn's `Stop`, after a denied request) was lost. The trail records
   the move from `check_permission` to `waiting`;
@@ -670,12 +672,12 @@ is normally the turn's `Stop`. If that hook is lost:
   one guarded statement once none of its requests still awaits an answer
   and none has a relay hook that may still run (one whose `confirm_by` has
   not passed and that is not provably gone): to `waiting` when `idle_since`
-  is set, otherwise to `working`. A request `find-missing` closed when it
-  marked the row `missing` is not judged: the row is back in
-  `check_permission` only through a later hook (after a `resume`), and
-  that request's leftover hook cannot move the row, so a hook that cannot
-  be checked does not hold the row there until its `confirm_by`. The
-  statement applies only while the row
+  is set, otherwise to `working`. A request closed with the row (when
+  `find-missing` marked it `missing` or its agent ended it) is not judged:
+  the row is back in `check_permission` only through a later hook (after a
+  `resume`), and that request's leftover hook cannot move the row, so a
+  hook that cannot be checked does not hold the row there until its
+  `confirm_by`. The statement applies only while the row
   is still in `check_permission` with `relay_mode=on`, holds the snapshot
   the sweep read and has no request awaiting an answer, so a hook or a new
   request that lands first wins. It writes one `ad.find_missing.tick` with
@@ -684,6 +686,62 @@ is normally the turn's `Stop`. If that hook is lost:
 
 A row with the relay off is in `check_permission` while Claude Code's own
 prompt waits, with no request on record, so neither move applies to it.
+
+### A request whose tool ran
+
+A request whose relay hook ended without a confirmed verdict has fallen
+back: Claude Code asks in its own prompt, and nothing the relay records
+says how that prompt was answered. When the prompt is answered allow,
+Claude Code runs the tool, and the agent's `PostToolUse` (or, when the
+tool failed, `PostToolUseFailure`) hook carries the tool use's
+`tool_use_id`, the same one the relay hook recorded on the request.
+
+So on a relay-on agent (`AGENT_DIRECTOR_RELAY_MODE=on`), a `PostToolUse` or
+`PostToolUseFailure` with a `tool_use_id`, before its ordinary write:
+
+- reads the row's requests recorded from this release on that carry that
+  `tool_use_id` and still await an answer;
+- judges each one's relay hook as the readers do (its process provably
+  gone, or, when it cannot be checked, its `confirm_by` passed) and skips
+  one whose hook may still answer it;
+- closes each other one with one guarded statement, under the same gate as
+  every hook (only the row's own agent): `pane_answer` `tool_ran`,
+  `decision` `allow`, `decision_reason` `tool_ran`, and `hook_gone_at`
+  when not yet set, only while the request still awaits an answer. Each
+  close is written to the trail as one `ad.row_mutation.committed`
+  (`writer_process` `hook`).
+
+The close runs first so that the hook's own move to `working` is no longer
+held by the request it closed. It closes only allows: Claude Code runs no
+hook for a deny at its prompt, so a request denied at the pane outside
+agent-director is closed with `record-pane-answer` (see
+[permissions.md](permissions.md#a-request-answered-outside-agent-director)).
+The close is fail-open, and the hook that makes it can die like any other,
+so it is a help, not a guarantee. A hook with another `tool_use_id`, or
+none, closes nothing.
+
+### The agent's end closes its requests
+
+A request still awaiting an answer when its agent ends can never be
+answered by that agent. The terminal `SessionEnd` (cause `logout`,
+`prompt_input_exit` or `exit`) moves the row to `ended` and, in the same
+store transaction, closes every request of the row that still awaits an
+answer: both are written or neither is. Each gets `closed_at`; an
+undecided one is also denied with `decision_reason` `ended` (so a relay
+hook still polling for it reads a deny), and a decided one whose relay
+hook had not confirmed the verdict keeps it. Each deny is written to the
+trail as one `ad.row_mutation.committed` (`writer_process` `hook`), before
+the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
+`missing` row's requests the same way (`decision_reason` `find_missing`),
+and `resume`'s move to `pending` closes any request a release before this
+one left open on the finished row (`decision_reason` `ended`,
+`writer_process` `resume`).
+
+A closed request stays closed after a `resume`: it no longer holds the
+resumed agent's moves to `working`, is not listed by `get` or `list`,
+refuses no `send-keys`, and `decide` refuses it, never with
+`ErrRelayFallenBack` (see
+[permissions.md](permissions.md#a-request-of-a-finished-spawn-is-closed)).
 
 ## References
 

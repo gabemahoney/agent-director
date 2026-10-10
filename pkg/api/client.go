@@ -97,8 +97,14 @@ type Client struct {
 	// production. Tests replace it per Client. nil reads an unknown
 	// namespace, so every hook is judged "can't tell".
 	selfPIDNS func() (string, bool)
-	mu        sync.Mutex
-	closed    bool
+	// paneSelf reads this process's own identity (pid, start time, pid
+	// namespace), which a pane answer records as its sender (b.146 rule 8,
+	// problem 2): selfIdentity through the Client's start-time reader and pid
+	// namespace reader in production. Tests replace it per Client. nil
+	// records no sender, and the intent is then judged by its time.
+	paneSelf func() ProcessIdentity
+	mu       sync.Mutex
+	closed   bool
 }
 
 // relayView is the RelayView of the Client's reads and decide: its
@@ -127,9 +133,11 @@ func (c *Client) relayView() RelayView {
 //     the loaded config's [tmux] table at construction (SR-2.4, SR-4.1), so
 //     a changed value applies to the next Client built.
 //  6. Set the Client's clock (time.Now), its sleep (time.Sleep), the
-//     production start-time reader (probe.NewProcChecker) and its own pid
-//     namespace reader (probe.SelfPIDNamespace). This store's id is read
-//     once by the store's open (Store.StoreID) and used from there.
+//     production start-time reader (probe.NewProcChecker), its own pid
+//     namespace reader (probe.SelfPIDNamespace) and the reader of its own
+//     identity a pane answer records as its sender (through those two). This
+//     store's id is read once by the store's open (Store.StoreID) and used
+//     from there.
 //
 // On any error a nil *Client is returned together with a descriptive,
 // errors.Is-matchable error. The constructor never leaves partially-
@@ -227,7 +235,7 @@ func New(opts Options) (*Client, error) {
 		tc = tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))
 	}
 
-	return &Client{
+	c := &Client{
 		st:          st,
 		tmuxClient:  tc,
 		cfg:         cfg,
@@ -236,7 +244,9 @@ func New(opts Options) (*Client, error) {
 		procChecker: probe.NewProcChecker(),
 		sleep:       time.Sleep,
 		selfPIDNS:   probe.SelfPIDNamespace,
-	}, nil
+	}
+	c.paneSelf = func() ProcessIdentity { return selfIdentity(c.procChecker, c.selfPIDNS) }
+	return c, nil
 }
 
 // tmuxTimeouts returns the production tmux client's per-class timeouts and
