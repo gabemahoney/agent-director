@@ -129,15 +129,21 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-INSTALL_SH="${REPO_ROOT}/skills/install-agent-director/install.sh"
+INSTALL_SRC="${REPO_ROOT}/skills/install-agent-director/install.sh"
 FAKE_CURL="${HERE}/fake-curl.sh"
 ROOT="$(mktemp -d -t ad-install-retry.XXXXXX)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"; [[ -z "${SQLITERC_OURS:-}" ]] || rm -f "$PW_SQLITERC"' EXIT
 
 die() { echo "retry.sh: setup failed: $*" >&2; exit 1; }
 
-[[ -x "$INSTALL_SH" ]] || die "install.sh missing or not executable: $INSTALL_SH"
+[[ -x "$INSTALL_SRC" ]] || die "install.sh missing or not executable: $INSTALL_SRC"
 [[ -x "$FAKE_CURL" ]] || die "fake-curl.sh missing or not executable: $FAKE_CURL"
+
+# install.sh runs from a copy outside any git checkout, as from a release
+# tarball: from this checkout, a linked worktree too (b.go9), its source-tree
+# version check would refuse BIN, which no checkout's HEAD built.
+INSTALL_SH="$ROOT/loose/skills/install-agent-director/install.sh"
+mkdir -p "${INSTALL_SH%/*}" && cp "$INSTALL_SRC" "$INSTALL_SH" || die "copy install.sh to $INSTALL_SH"
 
 # Host gate — install.sh hard-refuses anything outside the supported set.
 case "$(uname -s)/$(uname -m)" in

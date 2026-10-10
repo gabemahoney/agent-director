@@ -787,6 +787,51 @@ test_J5_StaleBinaryFromRelease() {
     expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
+# j5_worktree <worktree> <what>: J5 from a git worktree of TREE, with the
+# in-repo build (b.go9). A stale pair in its bin/ is refused, naming the
+# worktree's own HEAD and path; after the advised make build there, the same
+# command installs the rebuilt pair.
+j5_worktree() {
+    local wt="$1" what="$2" h head cmd
+    local -a argv=(bash "$wt/skills/install-agent-director/install.sh" --no-hooks --no-symlink)
+    h="$(new_home)"
+    head="$(git -C "$wt" rev-parse HEAD)" || { bad "$what: git rev-parse HEAD"; return; }
+    mkdir -p "$wt/bin" && cp "$BIN" "$wt/bin/agent-director" && cp "$ADMIN" "$wt/bin/agent-director-admin" \
+        || { bad "$what: put the stale pair in bin/"; return; }
+    run_in "$h" "$wt" "${argv[@]}"
+    expect_rc 3 "$what: stale binary" || return
+    grep -qxF "install.sh: source-tree version check failed." "$ERR" || bad "$what: no check-failed line: $(flat "$ERR")"
+    grep -qxF "  HEAD    : $head ($wt)" "$ERR" \
+        || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($wt)\""
+    expect_nothing_installed "$h"
+    cmd="$(advice_after "rebuild it first:")" || { bad "$what: no advised command"; return; }
+    run_advised "$h" "$wt" "$cmd"
+    expect_rc 0 "$what: advised: $cmd" || return
+    run_in "$h" "$wt" "${argv[@]}"
+    expect_rc 0 "$what: re-run after make build" || return
+    grep -qxF "  version-check: binary commit matches HEAD ($head)" "$OUT" \
+        || bad "$what: no version-check line for $head: $(grep -F 'version-check' "$OUT")"
+    expect_installed "$h" "$wt/bin/agent-director" "$wt/bin/agent-director-admin"
+}
+
+# J5: "rebuild it first: make build", in a linked worktree outside any other
+# checkout, whose .git is a file (b.go9): the stale pair is refused, not skipped.
+test_J5_LinkedWorktreeMakeBuild() {
+    local wt="$ROOT/tree-linked"
+    git -C "$TREE" worktree add -q "$wt" || { bad "git worktree add $wt"; return; }
+    j5_worktree "$wt" "linked worktree"
+}
+
+# J5: "rebuild it first: make build", in a worktree nested inside TREE and one
+# commit ahead of it (b.go9): the check uses the worktree's HEAD, not TREE's.
+test_J5_NestedWorktreeMakeBuild() {
+    local wt="$TREE/.claude/worktrees/nested"
+    git -C "$TREE" worktree add -q "$wt" \
+        && git -C "$wt" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
+            commit -q --allow-empty -m nested || { bad "nested worktree $wt"; return; }
+    j5_worktree "$wt" "nested worktree"
+}
+
 # ---- J6: store open failed after install ------------------------------------------
 
 # j6_break_hop <state.db>: make the newest migration step, v5→v6

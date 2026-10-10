@@ -1471,11 +1471,14 @@ ad_arch_probe "$ADMIN_SRC" "--admin-binary"
 if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
     # Find the script's repo root (walking up from SCRIPT_DIR). The
     # script-path is what tells us "this checkout"; CWD might be
-    # somewhere unrelated.
+    # somewhere unrelated. The nearest folder with a `.git` entry is
+    # the root: a directory in a plain clone, a `gitdir:` file in a
+    # linked worktree (b.go9). Stopping at the nearest one keeps a
+    # worktree nested inside another checkout on its own HEAD.
     repo_root=""
     probe="$SCRIPT_DIR"
     while [[ "$probe" != "/" && -n "$probe" ]]; do
-        if [[ -d "$probe/.git" ]]; then
+        if [[ -e "$probe/.git" ]]; then
             repo_root="$probe"; break
         fi
         probe="$(dirname "$probe")"

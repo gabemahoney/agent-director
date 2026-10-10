@@ -83,6 +83,18 @@ expand its config path `~/.agent-director/config.toml`.
 
 Set them only when the consumer needs to override the CLI's default for that field.
 
+For `spawn`, `home` and `storePath` must name the store of the tmux server
+the spawn reaches. The agent's hooks open the store that
+`~/.agent-director/config.toml` under the pane's `HOME` names, and on a
+tmux server already running that is the server's `HOME`, not the one
+`home` sets, so a spawn into another store leaves its row `pending`. To
+spawn into another store, leave `storePath` unset (or set it to that
+store) and run the client's process with no `TMUX` and a `TMUX_TMPDIR`
+of its own that already exists, so the spawn starts a separate tmux
+server whose `HOME` is `home`. That `HOME` also needs Claude Code's own
+login and first-run setup; see
+[`../../docs/permissions.md`](../../docs/permissions.md#one-spawn-under-another-home-or-store).
+
 ## Verb examples
 
 ### spawn
