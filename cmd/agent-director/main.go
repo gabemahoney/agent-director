@@ -137,8 +137,10 @@ const hookExitCode = 0
 // busy timeout from config.Store.EffectiveBusyTimeoutMs (b.c7f).
 //
 // The relay hook's kill instant is its start plus the per-hook timeout spawn
-// wrote for it (b.146 rule 4), so the start is read first, and the timeout
-// comes from the hook's --timeout argument (hookTimeout).
+// wrote for it (b.146 rule 4), and the main agent's Stop or idle-prompt
+// Notification proves gone only the requests recorded before its start
+// (b.omt), so the start is read first, and the timeout comes from the hook's
+// --timeout argument (hookTimeout).
 //
 // The function never returns an error; it logs and returns.
 func runHook() int {
@@ -213,7 +215,8 @@ func runHook() int {
 	//
 	// The relay hook's timing and identity (b.146 rules 2, 4 and 14): Start,
 	// read above before anything else, and RelayTimeout, the --timeout spawn
-	// wrote, give its kill instant; Self reads its own pid, start time and
+	// wrote, give its kill instant; Start also cuts a Stop's or idle prompt's
+	// turn_end proof (b.omt); Self reads its own pid, start time and
 	// pid namespace once, when it records its request. RelayHookGone judges a
 	// request's relay hook for the PostToolUse close (b.146 rule 13), with
 	// the same readers and relay window the verbs judge it with.

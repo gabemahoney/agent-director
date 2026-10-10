@@ -375,9 +375,9 @@ the relay hook's process (for example from another pid namespace, or for a
 request recorded before you upgraded to this release); such a request
 falls back by time, at `confirm_by`. A closed request's `delivery` reads
 the same way as any other's: `delivered` only if its relay hook confirmed a
-verdict. A row can read `waiting` while a request it recorded still awaits
-an answer, so follow each request you track with `get-permission`, not only
-rows in `check_permission`.
+verdict. A row can read `waiting` or `working` while a request it recorded
+still awaits an answer, so follow each request you track with
+`get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how Claude Code itself
 showed the request's dialog gone: `tool_ran` (its tool ran), `turn_end`
@@ -752,14 +752,17 @@ sweep that finds the agent alive keeps the note; the agent's next hook
 clears it and moves the row on.
 
 A row with `relay_mode=on` stays in `check_permission` until the agent's
-next hook after its last permission request. When that hook is lost (for
-example the end of a turn after a denied request), the notification Claude
-Code sends while the agent sits idle at its prompt moves the row to
-`waiting` once none of its requests still awaits an answer. Failing that,
-`find-missing` moves the row out once none of its requests still awaits an
-answer and none of its relay hooks can still run: to `waiting` when that
-idle notification was the agent's last hook, otherwise to `working`. Such
-a row is in neither `ids` nor `unverified_ids`.
+next hook after its last permission request. A request answered at the
+pane outside agent-director stops holding the row once Claude Code shows
+its dialog gone: its tool runs, or, for the main agent's request (not a
+subagent's), the turn ends. When the agent's next hook is lost (for
+example the end of a turn after a denied request), the
+notification Claude Code sends while the agent sits idle at its prompt
+moves the row to `waiting` once none of its requests still holds it.
+Failing that, `find-missing` moves the row out once none of its requests
+still holds it and none of its relay hooks can still run: to `waiting`
+when that idle notification was the agent's last hook, otherwise to
+`working`. Such a row is in neither `ids` nor `unverified_ids`.
 
 Finished rows (`ended` or `missing`) are never removed on their own: no
 `agent-director` verb removes a row you name, and only an `expire` you

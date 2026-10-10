@@ -170,16 +170,25 @@ func toolRan(toolUseID string) store.RequestProof {
 	return store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: toolUseID}
 }
 
-var turnEnd = store.RequestProof{How: store.ProvenGoneTurnEnd}
+// turnEnd's hook started an hour after the test binary did, so after every
+// request a test records (b.omt: it covers only those recorded before its start).
+var turnEnd = store.RequestProof{How: store.ProvenGoneTurnEnd, RecordedBefore: time.Now().Add(time.Hour)}
 
-// proveGone records proof on id's requests as id's own agent's hook does
-// (store.ProveRequestsGone through the row's gate) and returns how many it proved.
+// proveGone is proveOn with e's store.
 func proveGone(t *testing.T, e *killEnv, id string, proof store.RequestProof) int64 {
 	t.Helper()
+	return proveOn(t, e.st, e.dbPath, id, proof)
+}
+
+// proveOn records proof on id's requests in s (at dbPath) as id's own agent's
+// hook does (store.ProveRequestsGone through the row's gate) and returns how
+// many it proved.
+func proveOn(t *testing.T, s *store.Store, dbPath, id string, proof store.RequestProof) int64 {
+	t.Helper()
 	var n int64
-	if err := storefix.WithSeedPane(e.dbPath, id, func(gate store.HookGate) error {
+	if err := storefix.WithSeedPane(dbPath, id, func(gate store.HookGate) error {
 		var err error
-		n, err = e.st.ProveRequestsGone(id, gate, proof)
+		n, err = s.ProveRequestsGone(id, gate, proof)
 		return err
 	}); err != nil {
 		t.Fatalf("ProveRequestsGone(%s): %v", proof.How, err)

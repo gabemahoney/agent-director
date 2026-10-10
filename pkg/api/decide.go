@@ -694,7 +694,8 @@ func (c *decideCall) fallenBackRefusal(pr PermissionRow) error {
 //     older open request's dialog, if it is still up, is the one a pane
 //     answer would reach.
 //
-// What it cannot show: a stale record (b.omt). While pr is open the store
+// What it cannot show: a stale record (b.omt). While pr is open and not
+// proven gone (a Stop or idle prompt after it proves it gone), the store
 // holds the agent's moves to working, so a dialog answered at the pane, or
 // closed by a timeout deny the relay hook returned without recording it,
 // changes nothing it reads until a later hook moves sp out of

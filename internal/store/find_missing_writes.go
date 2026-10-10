@@ -385,14 +385,15 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // statement: the move out of check_permission (waiting when idle_since is
 // set, working otherwise), the launch-start clear and the version advance,
 // guarded by check_permission, relay_mode on, the examined row snapshot and
-// no permission request of the row still awaiting an answer (b.146 rule 9).
+// no permission request of the row holding it (holdsRowSQL: still awaiting an
+// answer, b.146 rule 9, and not proven gone, b.omt).
 var repairCheckPermissionSQL = `UPDATE spawns
     SET state = CASE WHEN idle_since IS NOT NULL THEN ? ELSE ? END,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND state = ? AND relay_mode = 'on' AND ` + snapshotMatchSQL + `
     AND NOT EXISTS (SELECT 1 FROM permission_requests pr
-                     WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + awaitingAnswerSQL + `)
+                     WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + holdsRowSQL + `)
   RETURNING state`
 
 // RepairCheckPermissionIfSameLife is find-missing's repair of a stale
@@ -403,9 +404,12 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // relay_mode on (a row with the relay off is in check_permission while
 // Claude Code's own dialog waits, with no request on record), still holds
 // examined (the snapshot the sweep read; SR-5.3) and none of its permission
-// requests still awaits an answer (awaitingAnswerSQL: not closed by
-// find-missing's mark, and not acked and not answered at the pane, or,
-// recorded before schema v7, undecided).
+// requests holds it (holdsRowSQL: one that still awaits an answer, not closed
+// by a close of the row's requests, and not acked and not answered at the
+// pane, or, recorded before schema v7, undecided, and that Claude Code has
+// not proven gone; b.omt). A request proven gone does not hold the repair off
+// even while it awaits an answer in agent-director's records (one a person
+// answered at the pane): its dialog is gone (b.146 step 2c).
 // In the same statement it NULLs launch_started_at and advances row_version
 // by one (SR-5.2). It writes no other column: idle_since is kept until the
 // agent's next hook clears it, and last_seen_at is not bumped, since no hook
@@ -419,7 +423,7 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // It returns the state written and CondApplied when the write applied;
 // CondChanged, having written nothing, when the row exists but is not in
 // check_permission, has the relay off, holds another snapshot or has a
-// request that still awaits an answer; CondAbsent when no row has the id. A
+// request that holds it; CondAbsent when no row has the id. A
 // store failure is
 // returned as a wrapped error with a zero CondResult (SR-5.8). It emits no
 // trail event: the tick is the caller's.

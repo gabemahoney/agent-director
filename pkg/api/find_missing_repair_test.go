@@ -58,17 +58,18 @@ func relayRequestB(t *testing.T, s *store.Store, id string, settled time.Time) {
 }
 
 // TestRepairCheckPermission (rules 9, 12, problem 3): the repair moves a
-// relay-on check_permission row out only when no request awaits an answer and
-// no relay hook may still run (alive, or can't tell before its confirm_by): to
-// waiting when the idle Notification came last, to working otherwise. A
-// request the mark closed in the Spawn's earlier life does not hold it, its
-// hook gone, alive or not checkable.
+// relay-on check_permission row out only when no request awaits an answer
+// unproven (b.omt: one proven gone does not hold it) and no relay hook may
+// still run (alive, or can't tell before its confirm_by): to waiting when the
+// idle Notification came last, to working otherwise. A request the mark closed
+// in the Spawn's earlier life does not hold it, its hook gone, alive or not
+// checkable.
 func TestRepairCheckPermission(t *testing.T) {
 	t.Parallel()
 	closedThenB := []string{"decide", "mark", "resume", "relayB", "denyB"}
 	cases := []struct {
 		name      string
-		steps     []string // "idle" (the idle Notification), "deny" (A's timeout deny, delivered), "decide" (a verdict on A, not acked), "mark" (find-missing's mark), "resume" (the row resumed), "relayB" (request B recorded by relayHookB), "denyB" (its timeout deny, delivered)
+		steps     []string // "idle" (the idle Notification), "deny" (A's timeout deny, delivered), "decide" (a verdict on A, not acked), "mark" (find-missing's mark), "resume" (the row resumed), "relayB" (request B recorded by relayHookB), "denyB" (its timeout deny, delivered), "turnEnd" (the main agent's turn end proves A gone)
 		hook      string   // A's hook at the repair: "gone", "alive", "can't tell" (recorded in another pid namespace); B's is gone
 		past      bool     // the repair runs at the requests' confirm_by
 		wantState string
@@ -82,6 +83,11 @@ func TestRepairCheckPermission(t *testing.T) {
 		{"delivered, its hook can't be checked, at confirm_by", []string{"deny"}, "can't tell", true, store.StateWorking, false},
 		{"a verdict not acked, its hook gone", []string{"decide"}, "gone", false, store.StateCheckPermission, false},
 		{"undecided, its hook gone", nil, "gone", false, store.StateCheckPermission, false},
+		// b.omt: A answered at the pane outside agent-director, then proven gone.
+		{"undecided, proven gone by a turn end, its hook gone", []string{"turnEnd"}, "gone", false, store.StateWorking, false},
+		{"undecided, idle Notification while it awaited, then proven gone, its hook gone", []string{"idle", "turnEnd"}, "gone", false,
+			store.StateWaiting, true},
+		{"undecided, proven gone by a turn end, its hook still running", []string{"turnEnd"}, "alive", false, store.StateCheckPermission, false},
 		{"a verdict closed by the mark, then resumed and B delivered", closedThenB, "gone", false, store.StateWorking, false},
 		{"closed, its hook can't be checked, before confirm_by; resumed and B delivered", closedThenB, "can't tell", false,
 			store.StateWorking, false},
@@ -115,6 +121,10 @@ func TestRepairCheckPermission(t *testing.T) {
 					relayRequestB(t, e.s, e.id, e.settled)
 				case "denyB":
 					timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenB)
+				case "turnEnd":
+					if n := proveOn(t, e.s, e.dbPath, e.id, turnEnd); n != 1 {
+						t.Fatalf("the main agent's turn end proved %d; want request A", n)
+					}
 				}
 			}
 			if tc.hook == "gone" {
