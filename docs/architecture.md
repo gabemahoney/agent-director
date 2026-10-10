@@ -5944,8 +5944,10 @@ rule that the refusal has no catalog entry and no TS error class.
 
 **CLI-internal names (b.cm7).** `ErrUnknownVerb` (a verb the binary does
 not know), `ErrJSONMarshal` (the binary cannot write a verb's JSON result,
-after the verb ran; `help` and `version` also give it when `Help()` or
-`Version()` fails, which is no marshal failure, open as b.3jc) and
+after the verb ran: only a `json.Marshal` failure of that result gives it;
+a `Help()` failure in `help`, or a `Version()` failure in either binary's
+`version`, is named by `Classify`, as any verb's error is, `ErrInternal`
+when it is no catalogued error, b.3jc) and
 `ErrTrailWrite` (`agent-director trail-emit`
 cannot write its trail event) are written by the command binaries
 themselves as string literals, outside any verb handler; `Classify` never
