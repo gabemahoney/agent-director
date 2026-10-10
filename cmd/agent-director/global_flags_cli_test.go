@@ -1,12 +1,20 @@
 package main_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestGlobalFlagsOpenTheirStore: --store-path and --home (b.32k), in either
@@ -45,6 +53,68 @@ func TestGlobalFlagsOpenTheirStore(t *testing.T) {
 				assertHomeTree(t, home)
 			}
 		})
+	}
+}
+
+// TestGlobalFlagStorePathReachesServeMCPTools: with --store-path, serve's MCP
+// list reads that store and its expire deletes that store's row; serve creates
+// no store under HOME (b.wb7).
+func TestGlobalFlagStorePathReachesServeMCPTools(t *testing.T) {
+	storeHome, _ := seedExpireRows(t, []string{expireGoneID})
+	home := t.TempDir()
+	srv := startServeFlags(t, binaryPath, home, []string{"--store-path", stateDB(storeHome)},
+		fakeTmuxEnv(t, storeHome, buildFakeTmux(t))...)
+	t.Cleanup(srv.kill)
+	srv.initialize(t)
+
+	srv.listIncludes(t, expireGoneID)
+	text := srv.callToolOK(t, "expire", `{"older_than":"1h"}`)
+	srv.stop(t)
+
+	var res struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal([]byte(text), &res); err != nil || !slices.Equal(res.IDs, []string{expireGoneID}) {
+		t.Errorf("expire tool text = %q; want ids [%s]", text, expireGoneID)
+	}
+	if _, err := apitest.ReadSpawnColumns(stateDB(storeHome), expireGoneID); !errors.Is(err, store.ErrSpawnNotFound) {
+		t.Errorf("--store-path store's row after MCP expire: err = %v; want ErrSpawnNotFound", err)
+	}
+	if _, err := os.Stat(stateDB(home)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("serve created a store under HOME (stat: %v); want only the --store-path store", err)
+	}
+}
+
+// TestGlobalFlagTmuxCommandReachesServeMCPTools: with --tmux-command, serve's
+// MCP read-pane runs that tmux for every tmux call, not the tmux on PATH (b.wb7).
+func TestGlobalFlagTmuxCommandReachesServeMCPTools(t *testing.T) {
+	ansi := tmuxfix.Find(tmuxfix.Captures(), "capture/ansi").Stdout
+	home, id, socket := seedRowOnSocket(t, store.StateWaiting)
+	faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, ansi)))
+	tmuxCmd := filepath.Join(t.TempDir(), "other-tmux")
+	if err := os.Symlink(faketmuxfix.Binary(t), tmuxCmd); err != nil {
+		t.Fatalf("symlink the fake tmux: %v", err)
+	}
+	srv := startServeFlags(t, binaryPath, home, []string{"--tmux-command", tmuxCmd},
+		fakeTmuxEnv(t, home, buildFakeTmux(t))...)
+	t.Cleanup(srv.kill)
+	srv.initialize(t)
+
+	text := srv.callToolOK(t, "read-pane", fmt.Sprintf(`{"claude_instance_id":%q}`, id))
+	srv.stop(t)
+
+	var res map[string]string
+	if err := json.Unmarshal([]byte(text), &res); err != nil || res["pane"] != tmux.StripANSI(ansi) {
+		t.Errorf("read-pane tool text = %q; want {\"pane\":%q}", text, tmux.StripANSI(ansi))
+	}
+	recs := faketmuxfix.ReadLog(t, filepath.Join(home, "fake-tmux.log"))
+	if len(recs) == 0 {
+		t.Fatal("no tmux call logged")
+	}
+	for i, argv := range recs {
+		if argv[0] != tmuxCmd {
+			t.Errorf("tmux call %d ran %q; want --tmux-command's %q", i, argv[0], tmuxCmd)
+		}
 	}
 }
 

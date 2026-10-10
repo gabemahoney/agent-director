@@ -72,7 +72,9 @@ var verbAliases = map[string]string{
 // -h, --version, -v) are not in this table: run() has already replaced them
 // with their verbs (verbAliases). client and cfg are captured in closures so
 // each verb sees the same already-opened Client — construction is done once
-// in run() via setupClient().
+// in run() via setupClient(). o is the run's --store-path and --tmux-command
+// overrides setupClient opened client with; serve builds its separate MCP
+// Client from them too (b.wb7).
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
@@ -85,7 +87,7 @@ var verbAliases = map[string]string{
 // entries are never reached (SR-4.1/4.2, b.93m). Their
 // closures here are the store-backed fallback only and behave identically —
 // helpHandler ignores its client and versionHandler consults no store.
-func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
+func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":           func(args []string) error { return helpHandler(client, args) },
 		"version":        func(args []string) error { return versionHandler(client, args) },
@@ -103,7 +105,7 @@ func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string
 		"resume":         func(args []string) error { return resumeHandlerWith(client, args) },
 		"find-missing":   func(args []string) error { return findMissingHandlerWith(client, args) },
 		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
-		"serve":          func(args []string) error { return serveHandlerWith(cfg, args) },
+		"serve":          func(args []string) error { return serveHandlerWith(cfg, o, args) },
 		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
 	}
 }
@@ -365,7 +367,8 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 // b.32k: o carries the --store-path and --tmux-command overrides of the
 // global flags run() parsed and applied before dispatch; --home was applied
 // there (os.Setenv) BEFORE this function runs, so every "~/" expansion of the
-// config and store paths sees the override.
+// config and store paths sees the override. run() also hands o to serve,
+// whose MCP Client opens with the same overrides (b.wb7).
 //
 // On any error it writes the JSON envelope to stderr and returns errDispatch
 // so run() can exit non-zero without double-printing.
@@ -518,7 +521,7 @@ func run() int {
 	}
 	defer client.Close()
 
-	if err := dispatch(strippedArgv, handlers(client, cfg)); err != nil {
+	if err := dispatch(strippedArgv, handlers(client, cfg, overrides)); err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
 		}

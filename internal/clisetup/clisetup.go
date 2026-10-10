@@ -89,11 +89,28 @@ func (e *OpenError) Is(target error) bool {
 		(target == ErrSchemaMigrationRequired && e.Name == errSchemaMigrationRequired)
 }
 
-// Open constructs the pkg/api.Client every store-backed CLI verb uses, and
-// returns the loaded config with it. On failure the error is an *OpenError:
-// ErrConfigMalformed when the config cannot be loaded, ErrSchemaMismatch or
-// ErrSchemaMigrationRequired when the store's schema refuses the open, and
-// ErrStoreOpen otherwise.
+// APIOptions returns the pkg/api.Options every Client the command-line
+// binaries open is built from: the canonical config path, first-run store
+// creation (Pin 1 below) and o's store path and tmux command (Pin 2 below).
+// Logger is left nil: Open sets the recovery logger (Pin 3), and
+// agent-director serve keeps its MCP dispatcher's Client silent (Pin H4). One
+// builder for both means the MCP tools use the same store and tmux as
+// setupClient's Client, with or without overrides in o (b.wb7).
+func APIOptions(o Overrides) pkgapi.Options {
+	return pkgapi.Options{
+		ConfigPath:      ConfigPath,
+		CreateIfMissing: true, // Pin 1
+		// StorePath optionally set from o; otherwise Pin 2 applies.
+		StorePath:   o.StorePath,
+		TmuxCommand: o.TmuxCommand,
+	}
+}
+
+// Open constructs the pkg/api.Client every store-backed CLI verb uses, from
+// APIOptions(o) with the recovery logger, and returns the loaded config with
+// it. On failure the error is an *OpenError: ErrConfigMalformed when the
+// config cannot be loaded, ErrSchemaMismatch or ErrSchemaMigrationRequired
+// when the store's schema refuses the open, and ErrStoreOpen otherwise.
 //
 // Design pins:
 //   - Pin 1 (CreateIfMissing=true): the CLI is the one place that opts in to
@@ -117,14 +134,8 @@ func Open(o Overrides) (*pkgapi.Client, config.Config, error) {
 	if err != nil {
 		return nil, config.Config{}, &OpenError{Name: errConfigMalformed, Err: err}
 	}
-	apiOpts := pkgapi.Options{
-		ConfigPath:      ConfigPath,
-		CreateIfMissing: true, // Pin 1
-		// StorePath optionally set from o; otherwise Pin 2 applies.
-		StorePath:   o.StorePath,
-		TmuxCommand: o.TmuxCommand,
-		Logger:      NewRecoveryLogger(cfg), // Pin 3
-	}
+	apiOpts := APIOptions(o)
+	apiOpts.Logger = NewRecoveryLogger(cfg) // Pin 3
 	client, err := pkgapi.New(apiOpts)
 	if err != nil {
 		name := errStoreOpen

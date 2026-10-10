@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,14 @@ func startServe(t *testing.T, home string, env ...string) *serveSession {
 // startServeBin is startServe for the binary at bin.
 func startServeBin(t *testing.T, bin, home string, env ...string) *serveSession {
 	t.Helper()
-	s := &serveSession{cmd: exec.Command(bin, "serve", "--stdio"), lines: make(chan string, 8), nextID: 1}
+	return startServeFlags(t, bin, home, nil, env...)
+}
+
+// startServeFlags is startServeBin with the global flags put before `serve --stdio`.
+func startServeFlags(t *testing.T, bin, home string, flags []string, env ...string) *serveSession {
+	t.Helper()
+	argv := append(slices.Clone(flags), "serve", "--stdio")
+	s := &serveSession{cmd: exec.Command(bin, argv...), lines: make(chan string, 8), nextID: 1}
 	s.cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}, env...)
 	s.cmd.Stderr = &s.stderr
 	var err error
@@ -117,17 +125,34 @@ func (s *serveSession) initialize(t *testing.T) {
 	}
 }
 
+// callTool calls the MCP tool name with args, a JSON object, and returns its reply.
+func (s *serveSession) callTool(t *testing.T, name, args string) mcpReply {
+	t.Helper()
+	s.nextID++
+	return s.request(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`+"\n",
+		s.nextID, name, args))
+}
+
+// callToolOK is callTool failing the test unless the call succeeds with one
+// text part; it returns that text.
+func (s *serveSession) callToolOK(t *testing.T, name, args string) string {
+	t.Helper()
+	r := s.callTool(t, name, args)
+	if r.Error != nil {
+		t.Fatalf("%s tool err_name=%q message=%q; want success", name, r.Error.Data.ErrName, r.Error.Message)
+	}
+	if r.Result == nil || len(r.Result.Content) != 1 {
+		t.Fatalf("%s tool result = %+v; want one text part", name, r.Result)
+	}
+	return r.Result.Content[0].Text
+}
+
 // listIncludes calls the store-backed `list` tool and checks it succeeds and
 // names the seeded row.
 func (s *serveSession) listIncludes(t *testing.T, id string) {
 	t.Helper()
-	s.nextID++
-	r := s.request(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"list","arguments":{}}}`+"\n", s.nextID))
-	if r.Error != nil {
-		t.Fatalf("list tool err_name=%q message=%q; want success", r.Error.Data.ErrName, r.Error.Message)
-	}
-	if r.Result == nil || len(r.Result.Content) != 1 || !strings.Contains(r.Result.Content[0].Text, id) {
-		t.Fatalf("list tool result = %+v; want one text part naming %s", r.Result, id)
+	if text := s.callToolOK(t, "list", `{}`); !strings.Contains(text, id) {
+		t.Fatalf("list tool text = %q; want it to name %s", text, id)
 	}
 }
 
@@ -165,8 +190,7 @@ func refusalNamed(t *testing.T, name string) configRefusal {
 // hung lookup naming timeout.
 func (s *serveSession) killNamesTimeout(t *testing.T, id string, timeout time.Duration) {
 	t.Helper()
-	s.nextID++
-	r := s.request(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"kill","arguments":{"claude_instance_id":%q}}}`+"\n", s.nextID, id))
+	r := s.callTool(t, "kill", fmt.Sprintf(`{"claude_instance_id":%q}`, id))
 	if r.Error == nil {
 		t.Fatalf("kill tool result = %+v; want an error", r.Result)
 	}
