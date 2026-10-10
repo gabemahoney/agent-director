@@ -107,8 +107,8 @@ var packageOf = map[string]string{
 	"ErrMissingRequestToken":  "api",
 
 	// internal/clisetup (b.vma, b.cm7): named by clisetup.Open, before any verb
-	// runs. The schema names' sentinels are clisetup's, not the store's:
-	// clisetup.Open names the store's schema refusals.
+	// runs. The Catalog pairs the schema names with clisetup's sentinels,
+	// which re-export the store's (b.x8s).
 	"ErrConfigMalformed":         "clisetup",
 	"ErrStoreOpen":               "clisetup",
 	"ErrSchemaMismatch":          "clisetup",
