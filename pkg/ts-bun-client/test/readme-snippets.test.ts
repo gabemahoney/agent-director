@@ -6,6 +6,7 @@
 
 import { test, expect } from "bun:test";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 const PKG_DIR = path.resolve(import.meta.dir, "..");
@@ -43,7 +44,7 @@ test("README TS snippets typecheck", () => {
     `\n  }`
   ).join("\n");
   const source = [
-    `import { ${[...EXPORTS].join(", ")} } from "../src/index.js";`,
+    `import { ${[...EXPORTS].join(", ")} } from ${JSON.stringify(path.join(PKG_DIR, "src/index.js"))};`,
     "declare const binaryVersion: string; // the version-floor example's captured value",
     "async function _readme() {",
     "  const client = null as unknown as Client; // for snippets that omit construction",
@@ -53,19 +54,21 @@ test("README TS snippets typecheck", () => {
     "void _readme;",
   ].join("\n");
 
-  // Written beside this file so ../src/index.js resolves.
-  const tmpFile = path.join(import.meta.dir, `tmp-readme-check-${Date.now()}.ts`);
+  // Written under the OS temp dir, never the repo tree, which docker-epic gates collect as build context (b.1xi).
+  // --typeRoots lets tsc find bun-types (and its @types/node) from outside the package.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ad-readme-check-"));
+  const tmpFile = path.join(tmpDir, "readme-check.ts");
   try {
     fs.writeFileSync(tmpFile, source, "utf8");
     const r = Bun.spawnSync(
       [path.join(PKG_DIR, "node_modules/.bin/tsc"), "--noEmit", "--ignoreConfig", "--strict", "--target", "ES2022",
         "--module", "ESNext", "--moduleResolution", "bundler", "--lib", "ES2022,ESNext.Disposable",
-        "--types", "bun-types", "--skipLibCheck", tmpFile],
-      { cwd: PKG_DIR }
+        "--typeRoots", path.join(PKG_DIR, "node_modules"), "--types", "bun-types", "--skipLibCheck", tmpFile],
+      { cwd: tmpDir }
     );
     const out = `${new TextDecoder().decode(r.stdout)}${new TextDecoder().decode(r.stderr)}`;
     expect(r.exitCode, `README TS snippets failed typecheck:\n${out}\nsource:\n${source}`).toBe(0);
   } finally {
-    fs.rmSync(tmpFile, { force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
