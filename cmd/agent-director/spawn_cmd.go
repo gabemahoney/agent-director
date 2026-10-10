@@ -162,7 +162,7 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to read")
-	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "number of trailing pane lines to return")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return (a negative value is refused)")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
 	if err := fs.Parse(args); err != nil {
@@ -236,7 +236,7 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.Parent, "parent", "", "filter by parent_id exact match")
 	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
-	fs.IntVar(&p.Limit, "limit", 0, "cap result count (0 = no cap)")
+	fs.Var(newDecimalInt(&p.Limit, 0), "limit", "cap result count (0 = no cap; a negative value is refused)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}

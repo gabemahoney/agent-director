@@ -454,7 +454,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation, or `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f). |
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); or `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap). Nothing was changed. |
 
 **CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all four are in the "AD is sick" alert set):
 

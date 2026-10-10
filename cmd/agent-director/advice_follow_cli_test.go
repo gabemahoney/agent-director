@@ -302,11 +302,11 @@ func TestAdviceFollow_H5_ServeUsageRegister(t *testing.T) {
 }
 
 // TestAdviceFollow_H6_OlderThanDurationForm: H6 "--older-than: invalid duration:
-// %s (expected a non-negative Go duration like "12h" or trailing-d days like
-// "7d" up to "106751d")", ErrInvalidFlags with no tmux call and nothing deleted
-// (b.hxn, b.sgw). The row ended in January, so only "106751d" keeps it.
+// %s (expected a Go duration like "12h" or trailing-d days like "7d" up to
+// "106751d", with no sign)", ErrInvalidFlags with no tmux call and nothing
+// deleted (b.hxn, b.sgw, b.c4n). The row ended in January, so only "106751d" keeps it.
 func TestAdviceFollow_H6_OlderThanDurationForm(t *testing.T) {
-	const form = `a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"`
+	const form = `a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign`
 	follows := []struct{ value, wantIDs string }{
 		{"12h", `["` + expireGoneID + `"]`},
 		{"7d", `["` + expireGoneID + `"]`},
@@ -315,7 +315,7 @@ func TestAdviceFollow_H6_OlderThanDurationForm(t *testing.T) {
 	for _, follow := range follows {
 		t.Run(follow.value, func(t *testing.T) {
 			home, _ := seedExpireRows(t, []string{expireGoneID})
-			for _, bad := range []string{"-2h", "-7d", "soon", "106752d", "365000d"} {
+			for _, bad := range []string{"-2h", "-7d", "-0s", "+12h", "+7d", "soon", "106752d", "365000d"} {
 				stdout, stderr, code := advCLIRun(t, home, "expire", "--older-than", bad)
 				want := "--older-than: invalid duration: " + bad + " (expected " + form + ")"
 				if desc := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags").ErrDescription; desc != want {
@@ -339,6 +339,40 @@ func TestAdviceFollow_H6_OlderThanDurationForm(t *testing.T) {
 				t.Errorf("expire --older-than %s ids = %s; want %s", follow.value, got, follow.wantIDs)
 			}
 		})
+	}
+}
+
+// TestAdviceFollow_H7_TrailEmitNegativeBytes: H7 "--bytes-sent %d is negative;
+// pass 0 or a positive byte count" (and --bytes-received's), ErrInvalidFlags with
+// nothing written (b.c4n); re-issued each way, one line carries that count.
+func TestAdviceFollow_H7_TrailEmitNegativeBytes(t *testing.T) {
+	relay := []string{"trail-emit", "relay-attempt", "--token", "tok-c4n", "--endpoint", "http://127.0.0.1:9/r",
+		"--outcome", "200", "--instance-id", "inst-c4n"}
+	for _, flag := range []string{"bytes-sent", "bytes-received"} {
+		for _, follow := range []struct {
+			arg   string
+			bytes float64
+		}{{"0", 0}, {"1024", 1024}} {
+			t.Run(flag+" "+follow.arg, func(t *testing.T) {
+				home := t.TempDir()
+				stdout, stderr, code := advCLIRun(t, home, append(append([]string{}, relay...), "--"+flag, "-1")...)
+				want := "--" + flag + " -1 is negative; pass 0 or a positive byte count"
+				if desc := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags").ErrDescription; desc != want {
+					t.Fatalf("description = %q; want %q", desc, want)
+				}
+				if n := len(relayAttemptLines(trailOrNil(t, home))); n != 0 {
+					t.Fatalf("ad.relay_attempt.completed lines after the refusal = %d; want none", n)
+				}
+
+				if _, stderr, code := advCLIRun(t, home, append(append([]string{}, relay...), "--"+flag, follow.arg)...); code != 0 {
+					t.Fatalf("--%s %s: exit = %d, stderr = %q; want 0", flag, follow.arg, code, stderr)
+				}
+				ra := relayAttemptLines(readTrailLines(t, home))
+				if key := strings.ReplaceAll(flag, "-", "_"); len(ra) != 1 || ra[0][key] != follow.bytes {
+					t.Errorf("ad.relay_attempt.completed lines = %v; want one with %s %v", ra, key, follow.bytes)
+				}
+			})
+		}
 	}
 }
 

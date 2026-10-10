@@ -74,19 +74,21 @@ type failingListStore struct{}
 
 func (failingListStore) ListSpawns(api.ListFilters) ([]api.Spawn, error) { return nil, errSentinel }
 
-// TestListFailures: a label not in key=value form with a non-empty key is
-// refused before the store read, and every failure encodes spawns as [] (b.hbt).
+// TestListFailures: a negative limit (b.c4n) and a label not in key=value form
+// with a non-empty key are refused before the store read, and every failure
+// encodes spawns as [] (b.hbt).
 func TestListFailures(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		label string
-		want  error
+		p    api.ListParams
+		want error
 	}{
-		"label with no separator": {"foo", api.ErrListInvalidLabel},
-		"label with an empty key": {"=value", api.ErrListInvalidLabel},
-		"store read fails":        {"k=v", errSentinel},
+		"label with no separator": {api.ListParams{Labels: []string{"foo"}}, api.ErrListInvalidLabel},
+		"label with an empty key": {api.ListParams{Labels: []string{"=value"}}, api.ErrListInvalidLabel},
+		"negative limit":          {api.ListParams{Limit: -1}, api.ErrInvalidFlags},
+		"store read fails":        {api.ListParams{Labels: []string{"k=v"}}, errSentinel},
 	} {
-		res, err := api.List(failingListStore{}, api.ListParams{Labels: []string{tc.label}})
+		res, err := api.List(failingListStore{}, tc.p)
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: err = %v; want %v", name, err, tc.want)
 		}

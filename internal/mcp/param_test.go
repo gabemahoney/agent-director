@@ -5,7 +5,8 @@ package mcp_test
 // tool refuses a key that is not one of its params, a value of the wrong shape
 // and arguments that are not an object with ErrInvalidFlags, in one wording
 // each, and runs nothing; tools/list advertises exactly the params; spawn's
-// tmux_session_name and list's filters reach the verb; get_permission answers.
+// tmux_session_name and list's filters reach the verb; get_permission answers;
+// a negative read_pane n_lines or list limit is refused (b.c4n).
 
 import (
 	"bytes"
@@ -387,6 +388,30 @@ func TestMCPParamListFilters(t *testing.T) {
 	obj := callToolText(t, e.d, "list", `{"tmux_session_name":"beta","state":["waiting"]}`)
 	if err := json.Unmarshal(obj["spawns"], &rows); err != nil || len(rows) != 1 || rows[0].ID != "mcp-list-b2" {
 		t.Errorf("list = %s (%v); want only mcp-list-b2", obj["spawns"], err)
+	}
+}
+
+// TestMCPParamNegativeCountRefused: a negative read_pane n_lines or list limit
+// is ErrInvalidFlags with no tmux call; limit 0 is still no cap (b.c4n).
+func TestMCPParamNegativeCountRefused(t *testing.T) {
+	e := newEnv(t)
+	seedFinished(t, e, "mcp-count-a", store.StateWaiting)
+	seedFinished(t, e, "mcp-count-b", store.StateWaiting)
+	for _, tc := range []struct{ tool, args, want string }{
+		{"read_pane", `{"claude_instance_id":"mcp-count-a","n_lines":-1}`, "n_lines = -1 is negative"},
+		{"list", `{"limit":-1}`, "limit = -1 is negative"},
+	} {
+		data := toolErrorData(t, callTool(t, e.d, tc.tool, tc.args))
+		if data.ErrName != "ErrInvalidFlags" || !strings.Contains(data.ErrDescription, tc.want) {
+			t.Errorf("%s %s = %s: %q; want ErrInvalidFlags carrying %q", tc.tool, tc.args, data.ErrName, data.ErrDescription, tc.want)
+		}
+	}
+	if n := len(e.rec.Calls()) + len(e.rec.SocketCalls()); n != 0 {
+		t.Errorf("tmux calls after the refusals = %d; want none", n)
+	}
+	var rows []json.RawMessage
+	if err := json.Unmarshal(callToolText(t, e.d, "list", `{"limit":0}`)["spawns"], &rows); err != nil || len(rows) != 2 {
+		t.Errorf("list limit 0 = %d rows (%v); want both (no cap)", len(rows), err)
 	}
 }
 

@@ -47,8 +47,8 @@ func trailEmitRelayAttemptHandler(args []string) error {
 	fs.StringVar(&token, "token", "", "request_token (required)")
 	fs.StringVar(&endpoint, "endpoint", "", "target_endpoint URL or socket path (required)")
 	fs.StringVar(&outcomeStr, "outcome", "", "3-digit HTTP status code (100-599) or named class: connection_refused, timeout, dns_failure (required)")
-	fs.IntVar(&bytesSent, "bytes-sent", 0, "bytes sent")
-	fs.IntVar(&bytesReceived, "bytes-received", 0, "bytes received")
+	fs.Var(newDecimalInt(&bytesSent, 0), "bytes-sent", "bytes sent (a negative value is refused)")
+	fs.Var(newDecimalInt(&bytesReceived, 0), "bytes-received", "bytes received (a negative value is refused)")
 	fs.StringVar(&instanceID, "instance-id", "", "claude_instance_id (required)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
@@ -66,6 +66,13 @@ func trailEmitRelayAttemptHandler(args []string) error {
 	}
 	if instanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
+	}
+	// A byte count is never negative: refused, never clamped (b.c4n).
+	if bytesSent < 0 {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", fmt.Sprintf("--bytes-sent %d is negative; pass 0 or a positive byte count", bytesSent))
+	}
+	if bytesReceived < 0 {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", fmt.Sprintf("--bytes-received %d is negative; pass 0 or a positive byte count", bytesReceived))
 	}
 
 	// outcome is int for HTTP status codes, string for named classes.

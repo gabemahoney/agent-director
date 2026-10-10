@@ -291,7 +291,10 @@ function buildSendKeys(p: SendKeysParams): string[] {
 
 function buildReadPane(p: ReadPaneParams): string[] {
   const f: string[] = ["read-pane", "--claude-instance-id", p.claude_instance_id];
-  if (p.n_lines !== undefined && p.n_lines > 0)
+  // 0 means the default, which the CLI applies when the flag is absent; any
+  // other value goes through, so the CLI refuses a negative one (b.c4n)
+  // rather than this builder dropping it.
+  if (p.n_lines !== undefined && p.n_lines !== 0)
     f.push("--n-lines", String(p.n_lines));
   if (p.ansi === true) f.push("--ansi");
   if (p.allow_pending === true) f.push("--allow-pending");
@@ -385,7 +388,9 @@ function buildList(p: ListParams): string[] {
   if (p.cwd !== undefined) f.push("--cwd", p.cwd);
   if (p.tmux_session_name !== undefined)
     f.push("--tmux-session-name", p.tmux_session_name);
-  if (p.limit !== undefined && p.limit > 0)
+  // 0 is the CLI's default; any other value goes through, so the CLI refuses
+  // a negative one (b.c4n) rather than this builder dropping it.
+  if (p.limit !== undefined && p.limit !== 0)
     f.push("--limit", String(p.limit));
 
   return f;

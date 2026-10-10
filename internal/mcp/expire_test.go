@@ -65,16 +65,16 @@ func TestExpireMCP(t *testing.T) {
 	}
 }
 
-// TestExpireMCPOlderThanSign pins b.hxn on a row that finished a minute ago: a
-// negative older_than is ErrInvalidFlags with no tmux call and the row kept;
-// "0d" and "0s" delete it, as before the fix.
+// TestExpireMCPOlderThanSign pins b.hxn and b.c4n on a row that finished a
+// minute ago: an older_than with a leading - or + in either form is
+// ErrInvalidFlags with no tmux call and the row kept; "0d" and "0s" delete it.
 func TestExpireMCPOlderThanSign(t *testing.T) {
-	for _, olderThan := range []string{"-2h", "0d", "0s"} {
+	for _, olderThan := range []string{"-2h", "-0s", "-0d", "+2h", "+7d", "0d", "0s"} {
 		t.Run(olderThan, func(t *testing.T) {
 			d, rec, storePath := newExpireMCPServerEnded(t, false, time.Now().Add(-time.Minute))
 			resp := callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": olderThan}))
 			_, rowErr := apitest.ReadSpawnColumns(storePath, expireMCPID)
-			if olderThan[0] != '-' {
+			if olderThan[0] != '-' && olderThan[0] != '+' {
 				if got := string(expireToolResult(t, resp)["ids"]); got != `["`+expireMCPID+`"]` || !errors.Is(rowErr, store.ErrSpawnNotFound) {
 					t.Errorf("ids = %s, row read err %v; want the row deleted", got, rowErr)
 				}
@@ -93,5 +93,5 @@ func TestExpireMCPOlderThanSign(t *testing.T) {
 // olderThanRefusal is MCP expire's description refusing older_than value v.
 func olderThanRefusal(v string) string {
 	return `ErrInvalidFlags: expire: parameter "older_than" value ` + strconv.Quote(v) +
-		` must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"`
+		` must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign`
 }

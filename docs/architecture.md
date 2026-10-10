@@ -74,7 +74,7 @@ in `init`. The verb registry
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the four names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels are the store's own, `store.ErrSchemaMismatch` and `store.ErrSchemaMigrationRequired` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens, so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests in its own transaction, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s wait for a fallen-back request's relay hook) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests in its own transaction, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s wait for a fallen-back request's relay hook) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v6; see "Schema v6" below), exposes typed CRUD primitives (added in later Tasks). Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
@@ -1838,6 +1838,24 @@ checked.
   flags, parsed without the `flag` package, are outside its reach (see "The
   structural parity guard" under
   [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
+- Do not register a main-CLI integer flag with a `flag` package integer
+  helper (`IntVar`, `Int`, `Int64Var`, `UintVar`, `Uint64Var` and the
+  like). Those parse with base 0, so `--limit 010` would be 8 and `0x10`,
+  `0o7`, `0b1` and `1_000` would be accepted, values MCP's JSON integers
+  and the TypeScript client's `String(n)` cannot send. **Must use:** every
+  int flag in `cmd/agent-director` registers with
+  `fs.Var(newDecimalInt(&dst, def), name, usage)`, the shared
+  `decimalIntValue` in `cmd/agent-director/flags.go`, which sets `dst` to
+  the default `def` and parses base 10 only (`strconv.ParseInt(s, 10, 0)`):
+  `010` is 10, and a hex, octal or binary prefix, an underscore, a leading
+  `+` or a value out of range fails `fs.Parse`, which the verb's handler
+  reports as `ErrInvalidFlags` (b.c4n). A leading `-` parses; where a
+  negative value is not allowed, the verb refuses it (`list`'s `limit` and
+  `read-pane`'s `n_lines` in the shared verb layer, `trail-emit`'s byte
+  counts in its handler). `TestCLIIntFlagsAreDecimal`
+  (`cli_manifest_parity_test.go`) fails on a flag registered with a
+  `FlagSet` integer helper and on any call to a `flag` package integer
+  function.
 - Do not add an MCP-exposed param without decoding it in
   `LiveDispatcher.Call` through `decodeParams`: `TestMCPParamParity` fails
   for a param the dispatcher drops or whose wrongly typed value is not
@@ -2054,6 +2072,10 @@ hidden or CLI-only flag, and none of them can run either action.
   `handlers()` key counts as a main-CLI verb, so a verb alias (`--help`,
   `-h`, `--version`, `-v`) put there fails as a verb the manifest lacks;
   aliases live in `verbAliases` (b.fv2).
+  The same scan backs `TestCLIIntFlagsAreDecimal`, which fails on any flag
+  registered with a `flag` package integer helper, so every int flag reads
+  base 10 through `newDecimalInt` (b.c4n; see "Prohibitions" under
+  [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
   `TestMCPExposedVerbExceptions` pins `mcp.ExposedVerb`'s exception list:
   the only manifest verbs MCP does not expose are exactly `hook`, `serve`
   and `trail-emit`.
@@ -2391,6 +2413,14 @@ Every verb call from `Client` follows this four-step recipe inside
    rejects with `ErrInvalidFlags` (`<flag> requires a value`) and the
    CLI never falls back to its default (b.pu2). JSON-only
    fields go through `--params-json` for verbs that accept it.
+   An integer param goes as `String(n)`, which the CLI's int flags read in
+   base 10 (see "Prohibitions" under
+   [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
+   `read-pane`'s `n_lines` and `list`'s `limit` are left out only when 0 (0 and an
+   absent flag give the same default); any other value, a negative one
+   included, is passed, so the CLI refuses a negative count with
+   `ErrInvalidFlags` as MCP and Go do, rather than the builder dropping it
+   and the call running with the default (b.c4n).
    For `spawn` and `make-template`, an `extra_env` key that is empty or
    holds `=` or a NUL is refused here: the CLI splits each
    `--extra-env K=V` at its first `=`, so it could not carry such a key
@@ -4933,11 +4963,16 @@ then the row's socket and the one lookup.
 `pkg/api/readpane.go` holds the flow (`ReadPane`, unexported `readPane`
 and `readPaneRun`, built on `paneRun`). It captures the last N lines of
 the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
-Default `n=25`, no upper cap (SRD §12 explicitly leaves the bound to the
-caller). `n` counts lines of history before the visible pane, so
-`n_lines: 1` is the smallest capture.
+Default `n=25` (for `n_lines` 0 or omitted), no upper cap (SRD §12
+explicitly leaves the bound to the caller). `n` counts lines of history
+before the visible pane, so `n_lines: 1` is the smallest capture. A
+negative `n_lines` is refused, never read as the default (b.c4n).
 
-Order (`readPane`): the row read (unknown id → `ErrSpawnNotFound`); then,
+Order (`readPane`): a negative `n_lines` first → `ErrInvalidFlags`,
+before the row is read (so an unknown id gets it too), with no tmux call;
+as supplementary advice its description reads "n_lines = <n> is negative;
+pass 0 (or omit it) for the default of 25 lines, or a positive number of
+lines". Then the row read (unknown id → `ErrSpawnNotFound`); then,
 for a row in any state, the unusable-recorded-name check: a recorded
 session name that is empty, holds a control character, or holds a
 character tmux stores differently (`.`, `:`, invalid UTF-8) →
@@ -6361,8 +6396,9 @@ ErrInvalidFlags: spawn: arguments must be a JSON object
 ```
 
 `arguments` that is absent or JSON `null` is no arguments. No error name is
-added: `spawn` stays the only MCP tool whose `ErrorNames` lists
-`ErrInvalidFlags` (see the `ErrInvalidFlags` exclusion under
+added: these refusals add `ErrInvalidFlags` to no tool's `ErrorNames`, which
+list it only for `spawn`, `read_pane` and `list`, whose shared verb layer
+returns it (see the `ErrInvalidFlags` exclusion under
 [Err-name five-way coherence](#err-name-five-way-coherence)).
 `TestMCPParamUnknownRefused` and `TestMCPParamUnknownRefusalText`
 (`internal/mcp/param_test.go`) pin both refusals.
@@ -6391,22 +6427,22 @@ ErrInvalidFlags: list: parameter "limit" must be an integer
 
 The value reads "a string", "a boolean", "an integer", "an array of
 strings" or "an object with string values"; for a `duration` param
-(`expire`'s `older_than`) it reads "a string holding a non-negative Go
-duration like "12h" or trailing-d days like "7d" up to "106751d""
+(`expire`'s `older_than`) it reads "a string holding a Go duration like
+"12h" or trailing-d days like "7d" up to "106751d", with no sign"
 (`api.OlderThanForm`).
 Two value checks after the decode refuse the same way: a `label` entry
 with no `=` or an empty key on `spawn` and `make_template` (`labelMap`),
 and an `older_than` on `expire` that `api.ParseOlderThan` rejects, which
-is one in neither duration form, a negative Go duration such as `"-2h"`,
-or a day count above 106751 such as `"365000d"` (`Expire` would take a
-negative window, or the one such a count wraps to, as selecting every
-finished row):
+is one in neither duration form, one with a leading `+` or `-` in either
+form, such as `"-2h"`, `"-0s"` or `"+7d"` (b.c4n), or a day count above
+106751 such as `"365000d"` (`Expire` would take a negative window, or the
+one such a count wraps to, as selecting every finished row):
 
 ```
 ErrInvalidFlags: spawn: parameter "label" entry "nokv" must be key=value
-ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
-ErrInvalidFlags: expire: parameter "older_than" value "-2h" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
-ErrInvalidFlags: expire: parameter "older_than" value "365000d" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
+ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign
+ErrInvalidFlags: expire: parameter "older_than" value "-2h" must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign
+ErrInvalidFlags: expire: parameter "older_than" value "365000d" must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign
 ```
 
 Any other decode failure is agent-director's own fault and stays
@@ -6424,13 +6460,25 @@ does not decode, or decodes another way, fails the test.
 `TestAdviceFollow_I6_OlderThanDurationForm`
 (`internal/mcp/advice_follow_mcp_test.go`) pin the `label` and
 `older_than` refusals and follow them; the `older_than` one refuses, among
-others, `"-2h"`, `"106752d"` and `"365000d"` with nothing deleted and no
-tmux call, and its `"106751d"` follow keeps a row that `"12h"` and `"7d"`
-delete. `TestExpireMCPOlderThanSign` (`internal/mcp/expire_test.go`) pins
-that a negative `older_than` keeps a row that finished a minute ago, with
-no tmux call, while `"0d"` and `"0s"` still delete it. The refusal of a
+others, `"-2h"`, `"+12h"`, `"+7d"`, `"106752d"` and `"365000d"` with
+nothing deleted and no tmux call, and its `"106751d"` follow keeps a row
+that `"12h"` and `"7d"` delete. `TestExpireMCPOlderThanSign`
+(`internal/mcp/expire_test.go`) pins that an `older_than` with a leading
+`-` or `+` in either form (`"-2h"`, `"-0s"`, `"-0d"`, `"+2h"`, `"+7d"`)
+keeps a row that finished a minute ago, with no tmux call, while `"0d"`
+and `"0s"` still delete it. The refusal of a
 day count past an `int`'s range, such as `"9223372036854775808d"`, is
 pinned only by `TestParseOlderThan` (`pkg/api/older_than_test.go`).
+
+**A negative count is the verb's refusal, not the decode's.** A negative
+`read_pane` `n_lines` or `list` `limit` is a well-typed integer, so it
+decodes; the verb's shared layer then refuses it with `ErrInvalidFlags`,
+as it does on every surface, so those two tools list `ErrInvalidFlags` in
+their `ErrorNames` (b.c4n; see [`read-pane`](#read-pane) and the
+`ErrInvalidFlags` exclusion under
+[Err-name five-way coherence](#err-name-five-way-coherence)).
+`TestMCPParamNegativeCountRefused` (`internal/mcp/param_test.go`) pins
+both refusals with no tmux call, and `limit` 0 as no cap.
 
 **Declared, listed and decoded shapes agree.** `goTypeToJSONSchema`
 (`internal/mcp/schema.go`) turns each param's manifest `Type` into its
@@ -6662,23 +6710,29 @@ or catalog Go source requires regenerating the corresponding JSON file.
   `ErrorNames`. It is in `check3Exceptions`, so the (b) ⊆ (c) check skips it;
   `TestDiffExclusions` proves that the exception alone keeps that check quiet.
 - `ErrInvalidFlags` has four sources. First, CLI flag parsing emits it for every verb: the
-  `cmd/agent-director` flag handlers write it as a string literal in the error envelope.
+  `cmd/agent-director` flag handlers write it as a string literal in the error envelope,
+  for an undefined flag or a bad flag value, such as an integer flag value that is not
+  base-10 decimal (b.c4n).
   Second, the MCP server returns it for every tool whose `arguments` carry a key that is
   not one of the verb's manifest params or are not a JSON object (`checkParamNames`), or
   carry a param value of the wrong JSON type (`decodeParams`), and for a `label` entry
   that is not key=value (`spawn`, `make_template`) or an `older_than` that is in
-  neither duration form, is negative or is a day count above 106751 (`expire`); see
+  neither duration form, has a leading `+` or `-` or is a day count above 106751
+  (`expire`); see
   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments).
-  Third, the shared verb layer returns it for `spawn` only, from the explicit-id check in
-  `runSpawn` (see [Explicit-id check](#explicit-id-check)). Fourth, the exported Go
+  Third, the shared verb layer returns it on every surface for three verbs: `spawn`, from
+  the explicit-id check in `runSpawn` (see [Explicit-id check](#explicit-id-check));
+  `read-pane`, for a negative `n_lines` (see [`read-pane`](#read-pane)); and `list`, for a
+  negative `limit`, refused before the store is read (b.c4n). Fourth, the exported Go
   function `Expire` refuses a negative `retentionDays` or a negative `olderThan` with it
   before anything runs (b.f4v; see [`expire`](#expire)). `Client.Expire` passes the
   configured retention, 1 to 106751, so only a negative `olderThan` reaches that refusal
   through it, and the CLI, MCP and the TypeScript client never pass one: they parse
   `older_than` with `ParseOlderThan`, which refuses a negative value first (the first two
   sources). It is in the Catalog. It is
-  listed in `spawn`'s manifest `ErrorNames` and its Go "Errors:" list, because spawn is the
-  only verb whose shared verb layer emits it on every surface. No other callable verb lists it, because the
+  listed in the manifest `ErrorNames` and the Go "Errors:" lists of `spawn`, `read-pane` and
+  `list`, the verbs whose shared verb layer emits it on every surface (the rule: a
+  shared-layer emission is listed, b.f4v). No other callable verb lists it, because the
   CLI flag-parse and MCP argument emissions are the surfaces' checks of the caller's
   arguments, which every verb gets, not emissions of a verb's shared layer, and no
   `expire` surface reaches `Expire`'s refusal: only a Go caller passing a negative
@@ -6686,8 +6740,8 @@ or catalog Go source requires regenerating the corresponding JSON file.
   says "Errors: none" for the CLI, MCP and TypeScript client and states that Go-only
   refusal beside it. It stays in `check3Exceptions` in
   `pkg/api/errnames/coherence_diff_test.go`, next to `ErrInternal`; that list feeds the
-  (b) ⊆ (c) check ("Check 3" in that file). Because `spawn` lists it, that check passes
-  without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
+  (b) ⊆ (c) check ("Check 3" in that file). Because `spawn`, `read-pane` and `list` list
+  it, that check passes without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
 - The CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen` (b.vma), `ErrSchemaMismatch`
   and `ErrSchemaMigrationRequired` (b.cm7), and the CLI-internal names `ErrUnknownVerb`,
   `ErrJSONMarshal` and `ErrTrailWrite` (b.cm7), are in the Catalog but listed in no
@@ -9328,12 +9382,16 @@ is refused (b.f4v).
   reaches 0, a negative count or the cap.
 - **`older_than`.** The CLI and MCP parse it with `ParseOlderThan`
   (`pkg/api/older_than.go`): a Go duration, or decimal digits followed by
-  `d` for days. It rejects a value in neither form, a negative Go duration
-  and a day count above 106751 (checked digit by digit, so no count wraps,
-  however long), and each surface refuses such a value with
-  `ErrInvalidFlags` stating `OlderThanForm` before `Expire` runs, so a
-  sign slip such as `-2h` or a count such as `365000d` deletes nothing. A
-  caller that means every finished row passes `0d` or `0s`. The exported
+  `d` for days, either with no sign. It rejects a value in neither form,
+  a value with a leading `+` or `-` in either form (`-2h`, `-0s`, `-0d`,
+  `+2h` and `+7d` alike: one sign rule, b.c4n) and a day count above
+  106751 (checked digit by digit, so no count wraps, however long), and
+  each surface refuses such a value with `ErrInvalidFlags` stating
+  `OlderThanForm` before `Expire` runs, so a sign slip such as `-2h` or a
+  count such as `365000d` deletes nothing. A sign is refused, never
+  ignored: `older_than` is never negative, so a sign carries nothing, and
+  `-0s` reads like a sign slip. A caller that means every finished row
+  passes `0d` or `0s`. The exported
   `Expire` refuses a negative `olderThan` itself too (b.f4v), so a Go
   caller of `Expire` or `Client.Expire` that never calls `ParseOlderThan`
   gets the same protection.
@@ -10637,6 +10695,33 @@ meaning and links to the section that describes it in detail.
   is now `ErrInvalidFlags` on the CLI and over MCP, and nothing runs;
   before, the count wrapped to another window, which could select every
   finished row (see [`expire`](#expire)).
+- **A signed `older_than` is refused (b.c4n).** An `older_than`
+  (`--older-than` on the CLI) with a leading `+` or `-` in either form is
+  `ErrInvalidFlags` on the CLI and over MCP, and nothing runs. Before,
+  `-0s` selected every finished row like `0s` and `+2h` was read as `2h`,
+  while `-0d` and `+7d` were refused. Write zero as `0s` or `0d`. No error
+  name is new (see [`expire`](#expire)).
+- **A negative `read-pane` `n_lines` or `list` `limit` is refused
+  (b.c4n).** Each is `ErrInvalidFlags` on every surface, and nothing is
+  read: `read-pane` makes no tmux call, `list` reads no row. Before, a
+  negative `n_lines` captured the default 25 lines and a negative `limit`
+  meant no cap; 0 or an omitted value still gives the default 25 lines
+  and no cap. The TypeScript client now passes a
+  negative value to the CLI, so it rejects with `ErrInvalidFlags` too;
+  before, it left the flag out and the call ran with the default.
+  `read-pane`'s and `list`'s error lists gain `ErrInvalidFlags`; no error
+  name is new (see [`read-pane`](#read-pane) and the `ErrInvalidFlags`
+  exclusion under [Err-name five-way coherence](#err-name-five-way-coherence)).
+- **CLI integer flags are decimal only (b.c4n).** `--limit`, `--n-lines`
+  and `trail-emit relay-attempt`'s `--bytes-sent` and `--bytes-received`
+  read base 10: `--limit 010` is 10, where it was 8. A hex, octal or
+  binary prefix (`0x10`, `0o7`, `0b1`), an underscore (`1_000`) and a
+  leading `+` (`+5`) are refused with `ErrInvalidFlags`; before, they were
+  accepted. MCP and the TypeScript client could never send these forms, so
+  they are unchanged. `trail-emit relay-attempt` also refuses a negative
+  byte count with `ErrInvalidFlags` and writes no trail line (see
+  "Prohibitions" under
+  [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
 - **Go `api.Expire`'s `retentionDays` of 0 keeps 31 days.** The exported
   `Expire` reads a `retentionDays` of 0 as the default 31 days, as
   `[defaults] expire_retention_days = 0` does, and refuses a negative

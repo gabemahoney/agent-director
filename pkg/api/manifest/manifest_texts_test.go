@@ -44,9 +44,10 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 // (SR-8.3); get's tmux socket (SR-3.3, SR-16.1); the pane verbs' tmux error
 // classes (SR-18.1); missing is not proof of death (SR-18.2, AC-DOC-02: the
 // full sentence, or the short form, decision-0930e); make-template naming
-// spawn's per-call params by their manifest names, flag beside (b.c4u); and
+// spawn's per-call params by their manifest names, flag beside (b.c4u);
 // spawn's permission arrays and claude_args texts read right on every surface,
-// with no CLI-only spelling (b.ia3).
+// with no CLI-only spelling (b.ia3); and each integer count param stating that
+// a negative value is refused (b.c4n).
 func manifestTextCases() []textCase {
 	cases := []textCase{
 		{verb: "find-missing", own: true, c: apitest.DescFindMissingGrace()},
@@ -100,6 +101,11 @@ func manifestTextCases() []textCase {
 	}
 	for _, verb := range []string{"kill", "resume", "pause", "expire"} {
 		cases = append(cases, textCase{verb: verb, c: apitest.DescMissingNotProofShort()})
+	}
+	for _, s := range []struct{ verb, param string }{
+		{"read-pane", "n_lines"}, {"list", "limit"}, {"trail-emit", "bytes_sent"}, {"trail-emit", "bytes_received"},
+	} {
+		cases = append(cases, textCase{verb: s.verb, param: s.param, c: tokens("negative refused", "A negative value is refused (ErrInvalidFlags).")})
 	}
 	for _, v := range []apitest.PaneVerb{apitest.PaneReadPane, apitest.PaneSendKeys, apitest.PanePause} {
 		def, _ := manifest.Lookup(string(v)) // a missing verb fails at siteText

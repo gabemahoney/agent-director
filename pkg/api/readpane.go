@@ -46,12 +46,14 @@ const DefaultReadPaneLines = 25
 // ReadPaneParams is the typed parameter shape for the read-pane verb.
 // NLines=0 falls back to DefaultReadPaneLines so an MCP caller that
 // omits the field gets the documented default. There is no upper cap
-// (SRD §12 explicitly leaves the bound to the caller).
+// (SRD §12 explicitly leaves the bound to the caller); a negative NLines is
+// refused with ErrInvalidFlags.
 type ReadPaneParams struct {
 	// ClaudeInstanceID identifies the Spawn whose pane will be captured.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 	// NLines is the number of trailing pane lines to return. 0 falls back to
-	// [DefaultReadPaneLines] (25). There is no upper cap.
+	// [DefaultReadPaneLines] (25). There is no upper cap. A negative value is
+	// refused with [ErrInvalidFlags].
 	NLines int `json:"n_lines"`
 	// ANSI controls ANSI escape handling. When false (default) escape sequences
 	// are stripped while unicode TUI glyphs are preserved. When true raw bytes
@@ -76,6 +78,7 @@ type ReadPaneResult struct {
 // (SRD SR-7.1, SR-7.2, SR-7.3, SR-7.5, SR-3.7). It reads the agent's own
 // pane, or a lone leftover's, and changes nothing:
 //
+//   - A negative NLines: ErrInvalidFlags, before the row is read (b.c4n).
 //   - Unknown id: ErrSpawnNotFound. There is no state guard: a pending,
 //     live or finished row behaves alike, and a finished row whose own
 //     session runs returns its pane.
@@ -121,7 +124,8 @@ type ReadPaneResult struct {
 //
 //   - NLines=0 → DefaultReadPaneLines (25). No upper cap; callers asking
 //     for "all available scrollback" pass a large number themselves.
-//     NLines counts lines of history before the visible pane (-S -<n>).
+//     NLines counts lines of history before the visible pane (-S -<n>). A
+//     negative NLines is refused, never clamped.
 //   - ANSI=false (default) → strip ANSI escape sequences but preserve
 //     unicode TUI glyphs (❯, ⎿, 🐝, box-drawing). The caller reads glyphs
 //     as state signal; ASCII-mapping them would destroy that.
@@ -138,6 +142,10 @@ func ReadPane(s ReadPaneStore, t ReadPaneTmux, params ReadPaneParams) (ReadPaneR
 // lookup's and the follow-up's server (SR-3.3) and a pane taken for a lost
 // create reply (SR-3.6). Client.ReadPane passes the Client's own reader.
 func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPaneParams) (ReadPaneResult, error) {
+	if params.NLines < 0 {
+		return ReadPaneResult{}, fmt.Errorf("%w: n_lines = %d is negative; pass 0 (or omit it) for the default of %d lines, or a positive number of lines",
+			ErrInvalidFlags, params.NLines, DefaultReadPaneLines)
+	}
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return ReadPaneResult{}, err
@@ -160,7 +168,7 @@ func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPanePa
 	}
 
 	n := params.NLines
-	if n <= 0 {
+	if n == 0 {
 		n = DefaultReadPaneLines
 	}
 	pane, err := t.CapturePaneID(socket, paneID, n, params.ANSI)
@@ -226,8 +234,9 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 // ReadPane captures the last N lines of the agent's own pane: the row's pane,
 // found by the row's label on its recorded socket and targeted by pane id.
 // When NLines is 0 the default of [DefaultReadPaneLines] (25) is used; there
-// is no upper cap. By default ANSI escape sequences are stripped while
-// unicode TUI glyphs are preserved; set ANSI:true to receive raw bytes.
+// is no upper cap, and a negative NLines is refused. By default ANSI escape
+// sequences are stripped while unicode TUI glyphs are preserved; set
+// ANSI:true to receive raw bytes.
 //
 // The pane read is the agent's own pane in the tmux session that carries the
 // row's current launch label, on the row's recorded socket, found by its pane
@@ -253,6 +262,7 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 // CLI: agent-director read-pane
 //
 // Errors:
+//   - [ErrInvalidFlags]: NLines is negative; refused before the row is read.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent

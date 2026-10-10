@@ -592,9 +592,11 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	}
 }
 
-// TestListHasSRDErrorNames: list's label k=v parse rejection (SRD §13.1).
+// TestListHasSRDErrorNames pins list's, and Client.List's "Errors:" list, to
+// exactly its label k=v parse rejection (SRD §13.1) and ErrInvalidFlags, the
+// shared layer's refusal of a negative limit (b.c4n).
 func TestListHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "list", "", false, "ErrListInvalidLabel")
+	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel")
 }
 
 // TestKillHasSRDErrorNames pins kill's ErrorNames, and Client.Kill's "Errors:"
@@ -610,10 +612,11 @@ func TestPauseHasSRDErrorNames(t *testing.T) {
 		"ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
 }
 
-// TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five names.
+// TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five
+// names and ErrInvalidFlags, the shared layer's refusal of a negative n_lines (b.c4n).
 func TestReadPaneHasInteractErrorNames(t *testing.T) {
-	assertErrorNames(t, "read-pane", "ReadPane", true, "ErrSpawnNotFound", "ErrTmuxCaptureFailed", "ErrTmuxNotAvailable",
-		"ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
+	assertErrorNames(t, "read-pane", "ReadPane", true, "ErrInvalidFlags", "ErrSpawnNotFound", "ErrTmuxCaptureFailed",
+		"ErrTmuxNotAvailable", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
 }
 
 // TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names and

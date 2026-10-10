@@ -86,9 +86,10 @@ func computeCoherenceDiff(
 	//   • "ErrInternal"    — the Classify fallback; intentionally absent from manifest.
 	//   • "ErrInvalidFlags" — CLI flag parsing emits it for every verb, so it is
 	//                         listed only where the shared verb layer emits it
-	//                         (spawn), per SR-1.7. Check 3 requires a name in at
-	//                         least one callable verb's list, so spawn's listing
-	//                         already satisfies it; the exception stays per SR-1.7.
+	//                         (spawn, read-pane, list), per SR-1.7. Check 3
+	//                         requires a name in at least one callable verb's
+	//                         list, so those listings already satisfy it; the
+	//                         exception stays per SR-1.7.
 	//   • "ErrConfigMalformed", "ErrStoreOpen" — clisetup.Open names them before
 	//                         any verb runs, so no verb lists them (b.vma).
 	//   • "ErrSchemaMismatch", "ErrSchemaMigrationRequired" — the same, for the
@@ -250,9 +251,9 @@ func TestDiffExclusions(t *testing.T) {
 
 // TestDiffExclusionErrInvalidFlags — parallel to TestDiffExclusions: ErrInvalidFlags
 // is declared in pkg/api and present in the Catalog. CLI flag parsing emits it for
-// every verb, so it is listed only where the shared verb layer emits it (spawn),
-// per SR-1.7. Check 3 requires a name in at least one callable verb's list, so
-// spawn's listing already satisfies it; the exception stays per SR-1.7. This
+// every verb, so it is listed only where the shared verb layer emits it (spawn,
+// read-pane, list), per SR-1.7. Check 3 requires a name in at least one callable
+// verb's list, so those listings already satisfy it; the exception stays per SR-1.7. This
 // synthetic input leaves it out of every verb's ErrorNames to prove the exception
 // alone holds: check 3 must skip it.
 func TestDiffExclusionErrInvalidFlags(t *testing.T) {

@@ -498,7 +498,7 @@
         {
           "name": "n_lines",
           "type": "int",
-          "description": "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.",
+          "description": "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -534,6 +534,7 @@
         }
       ],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrSpawnNotFound",
         "ErrTmuxNotAvailable",
         "ErrTmuxCaptureFailed",
@@ -1045,7 +1046,7 @@
         {
           "name": "limit",
           "type": "int",
-          "description": "Cap result count. 0 / omitted means no cap.",
+          "description": "Cap result count. 0 / omitted means no cap. A negative value is refused (ErrInvalidFlags).",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -1063,6 +1064,7 @@
         }
       ],
       "error_names": [
+        "ErrInvalidFlags",
         "ErrListInvalidLabel"
       ]
     },
@@ -1187,7 +1189,7 @@
         {
           "name": "bytes_sent",
           "type": "int",
-          "description": "Bytes sent. Default 0.",
+          "description": "Bytes sent. Default 0. A negative value is refused (ErrInvalidFlags).",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -1196,7 +1198,7 @@
         {
           "name": "bytes_received",
           "type": "int",
-          "description": "Bytes received. Default 0.",
+          "description": "Bytes received. Default 0. A negative value is refused (ErrInvalidFlags).",
           "required": false,
           "nullable": false,
           "allow_empty": false,
