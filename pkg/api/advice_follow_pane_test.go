@@ -470,7 +470,8 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide(t *testing.T) {
 // <token> is recorded and its relay hook may still be delivering it; retry send-keys later" naming the one request,
 // recorded before schema v7 and allowed in its window (b.ceq). send-keys retried is refused alike until that relay
 // hook is presumed settled (b.z6g), whether the agent moved on (the hook delivered) or not (it died), since rule 7
-// reads the requests in every live state (b.146); then it delivers.
+// reads the requests in every live state (b.146). Then the recorded verdict is no proof its dialog is gone (b.146
+// step 2c): retried, it is ErrDialogMaybeOpen until the agent's next Stop proves the request gone; then it delivers.
 func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
@@ -515,6 +516,13 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 			e.assertNoTmuxCall(t)
 
 			now = now.Add(time.Nanosecond) // the request's relay hook is presumed settled
+			row, err := e.st.GetSpawn(r.ID)
+			if err != nil {
+				t.Fatalf("GetSpawn: %v", err)
+			}
+			assertDialogMaybeOpen(t, send(), tok, row.State)
+			e.assertNoTmuxCall(t)
+			proveGone(t, e, r.ID, turnEnd) // the agent's next Stop
 			if err := send(); err != nil {
 				t.Fatalf("send-keys retried later: %v; want delivery", err)
 			}
@@ -527,8 +535,9 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 // request_token, or, if it was answered outside agent-director, close it with record-pane-answer" (b.146 rules 8, 13;
 // decision 10 A), from decide and from a plain send-keys on a request whose relay hook is gone, followed both ways: a
 // pane answer sends one key and closes the request; a record after a person answered at tmux closes it too. Either
-// way plain send-keys types again. ErrRelayFallenBack's Go doc says it arrives within seconds, from either verb, and
-// no description says the dialog is on screen.
+// way plain send-keys is no longer ErrRelayFallenBack but ErrDialogMaybeOpen until the main agent's Stop proves the
+// request gone (b.146 step 2c), then types again. ErrRelayFallenBack's Go doc says it arrives within seconds, from
+// either verb, and no description says the dialog is on screen.
 func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "decide.go", "ErrRelayFallenBack", "so the refusal arrives within seconds of the hook's end")
@@ -569,8 +578,10 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 				if pr := p.request(t, tok); pr.AwaitsAnswer() {
 					t.Errorf("request A = %+v; want it closed", pr)
 				}
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
+				p.prove(t, turnEnd)
 				if err := p.sendKeys(p.plain("next")); err != nil {
-					t.Errorf("plain send-keys afterwards: %v; want it typed", err)
+					t.Errorf("plain send-keys once the main agent's Stop proved it gone: %v; want it typed", err)
 				}
 			})
 		}

@@ -138,6 +138,16 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 					}
 				}
 
+				// ── 5. Pin excluded fields non-null (decide's unproven_since) ─
+				for _, env := range []struct {
+					side string
+					norm []byte
+				}{{"CLI", cliNorm}, {"Client", clientNorm}} {
+					if err := nonNullMismatch(env.norm, sc.wantNonNull); err != nil {
+						t.Errorf("%s: %s envelope: %v\nraw: %s", verb.Name, env.side, err, env.norm)
+					}
+				}
+
 				// ── 5. Load ignore selectors ───────────────────────────────
 				sels, err := nonDet.Selectors(verb.Name)
 				if err != nil {

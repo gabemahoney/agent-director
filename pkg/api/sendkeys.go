@@ -159,12 +159,14 @@ func (e SendKeysEnv) self() ProcessIdentity {
 //   - guardNotApplicable — the relay guard did not apply (relay_mode != on);
 //     this is the ordinary send path.
 //   - guardHeld — relay_mode=on and b.146 rule 7 refused the send
-//     (ErrSendKeysWhileRelayed, ErrRelayFallenBack, ErrPaneAnswerInProgress,
-//     or a pane answer's request not open: ErrAlreadyDecided,
-//     ErrNoOpenPermissionRequest).
+//     (ErrSendKeysWhileRelayed, ErrRelayFallenBack, ErrDialogMaybeOpen,
+//     ErrPaneAnswerInProgress, or a pane answer's request not open:
+//     ErrAlreadyDecided, ErrNoOpenPermissionRequest).
 //   - guardReleased — relay_mode=on and rule 7 let the send through: no
 //     relay hook of the Spawn may still answer, and no open request has
-//     fallen back (plain), or the named request has (pane answer).
+//     fallen back and every request is proven gone or the call carries
+//     expect_pane_sha256 (plain), or the named request has fallen back (pane
+//     answer).
 //   - guardError — relay_mode=on but the read the guard needs failed, so it
 //     could not be evaluated. The send fails with the underlying store error.
 const (
@@ -233,7 +235,16 @@ type sendKeysGuard struct {
 //     ErrRelayFallenBack with err_details (RelayFallenBackDetails), naming
 //     the oldest. Only a call that names the request it answers can type on
 //     such a row.
-//  3. A pane answer whose request is no request of the row:
+//  3. Plain without expect_pane_sha256, any request of the row is not proven
+//     gone (b.146 step 2c: no PostToolUse with its tool_use_id, no main-agent
+//     Stop or idle-prompt Notification after it for a request with no
+//     agent_id, and no end of the row's agent recorded), however
+//     agent-director's own records say it closed: ErrDialogMaybeOpen with
+//     err_details (DialogMaybeOpenDetails), naming the oldest. A plain call
+//     with expect_pane_sha256 is not held by this rule: its hash check below
+//     decides it (it means a person or LLM judged that exact screen). A row
+//     with no permission request is never held.
+//  4. A pane answer whose request is no request of the row:
 //     ErrNoOpenPermissionRequest; one not fallen back (acked, closed with its
 //     row or by find-missing, already answered at the pane):
 //     ErrAlreadyDecided or ErrNoOpenPermissionRequest; one whose earlier pane
@@ -621,7 +632,9 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 // row by the check-before-read rule (judgedRequests: each relay hook judged by
 // pid, start time and pid namespace through j, rule 14), in whatever live
 // state the row is, and applies rule 7 (spawnRequests.sendKeysRefusal):
-// guardHeld with the refusal, or guardReleased. A refusal that finds a request
+// guardHeld with the refusal, or guardReleased; rule 7 includes b.146 step
+// 2c's hold of a plain call without a pane hash while a request is not proven
+// gone (ErrDialogMaybeOpen). A refusal that finds a request
 // fallen back first records hook_gone_at on every such request with none
 // (recordFallenBackGone, waiting the store's busy timeout, fail-open), so its
 // err_details carry it. A failed read is guardError with the store's error.
@@ -669,7 +682,11 @@ func isInteractiveState(state string) bool {
 // submission; LF bytes (0x0A) preserved as composed newlines in Claude's
 // input box) and then one Enter, unless NoEnter (empty text with Enter sends
 // that Enter only); or, with Key, that one key alone. With ExpectPaneSHA256
-// it first checks that the pane still has the hash the caller read.
+// it first checks that the pane still has the hash the caller read. Without
+// it, a plain call on a relayed Spawn is refused while any of its permission
+// requests is not proven gone by Claude Code's own hooks (ErrDialogMaybeOpen;
+// b.146 step 2c); ExpectPaneSHA256 means a person or LLM judged that exact
+// screen, so never pass it from an automatic flow.
 //
 // A pane answer (RequestToken, As, Key and ExpectPaneSHA256; b.146 rule 8)
 // answers that permission request at the pane once it has fallen back: under
@@ -712,6 +729,14 @@ func isInteractiveState(state string) bool {
 //     ([RelayFallenBackDetails]) name the request and the Spawn's other open
 //     requests. Answer it with a pane answer, or close it with
 //     RecordPaneAnswer.
+//   - [ErrDialogMaybeOpen]: a plain call without ExpectPaneSHA256 while a
+//     request of the Spawn is not proven gone by Claude Code's hooks (its
+//     tool's PostToolUse, the main agent's end of turn after it, or the
+//     agent's end), whatever agent-director's records say of it; nothing was
+//     sent. Its err_details ([DialogMaybeOpenDetails]) name the request,
+//     how agent-director's records say it closed, since when, and the
+//     Spawn's other such requests. A plain call whose ExpectPaneSHA256
+//     matches the pane is not refused with it.
 //   - [ErrNoOpenPermissionRequest]: a pane answer whose request is not one
 //     of the Spawn's, or is closed with its row or by find-missing; nothing
 //     was sent.

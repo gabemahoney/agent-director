@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // schemaDDL is the canonical schema v7 DDL (v-current: fresh DBs are stamped
@@ -53,8 +54,9 @@ import (
 // v7 changes vs v6 (b.146 steps 2, 2b and 2c, one release, one migration):
 // the columns v7Columns lists, in its order — on permission_requests,
 // appended after created_at, the relay hook's identity, its delivery and
-// settle instants, the reader and decide facts, the pane-answer columns and
-// the close marker closed_at; on spawns, idle_since after launch_owner_pidns. The column text matches
+// settle instants, the reader and decide facts, the pane-answer columns, the
+// close marker closed_at and the proof proven_gone_at, proven_gone_how; on
+// spawns, idle_since after launch_owner_pidns. The column text matches
 // v7Columns exactly (the two-places rule), so a fresh store and a migrated
 // store have identical column lists.
 const schemaDDL = `
@@ -126,6 +128,8 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     pane_sender_pidns     TEXT,
     pane_intent_at      INTEGER,
     closed_at           INTEGER,
+    proven_gone_at      INTEGER,
+    proven_gone_how     TEXT,
     UNIQUE(claude_instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(claude_instance_id, decision);
@@ -608,7 +612,19 @@ func migrateV5toV6(db *sql.DB) error {
 //     pending as a backstop; a request that still awaited an answer then,
 //     decided or not, one recorded before v7 included (milliseconds since the
 //     epoch). A closed request no longer awaits an answer. NULL on every
-//     request no close closed.
+//     request no close closed;
+//   - proven_gone_at, proven_gone_how (b.146 step 2c): when a hook of Claude
+//     Code, or its Spawn's end, proved the request's permission dialog gone
+//     (milliseconds since the epoch), and how: tool_ran (the PostToolUse or
+//     PostToolUseFailure with its tool_use_id), turn_end (the turn of the
+//     agent that asked ended after it: the main agent's Stop or idle-prompt
+//     Notification, for a request with no agent_id) or agent_gone (a close
+//     of its Spawn's requests, or the hop on a finished row). NULL until
+//     then; while NULL, plain send-keys to the Spawn is refused
+//     (ErrDialogMaybeOpen) unless it carries a matching pane hash. A request
+//     recorded before v7 has NULL in both until its next proof, except on a
+//     row already ended or missing, whose requests the hop proves agent_gone
+//     (migrateV6toV7's backfill).
 //
 // On spawns (b.146 problem 3): idle_since, the time the main agent's
 // idle-prompt Notification last landed, NULLed by any later hook.
@@ -630,26 +646,51 @@ var v7Columns = []struct{ table, name, ddl string }{
 	{"permission_requests", "pane_sender_pidns", "ALTER TABLE permission_requests ADD COLUMN pane_sender_pidns TEXT"},
 	{"permission_requests", "pane_intent_at", "ALTER TABLE permission_requests ADD COLUMN pane_intent_at INTEGER"},
 	{"permission_requests", "closed_at", "ALTER TABLE permission_requests ADD COLUMN closed_at INTEGER"},
+	{"permission_requests", "proven_gone_at", "ALTER TABLE permission_requests ADD COLUMN proven_gone_at INTEGER"},
+	{"permission_requests", "proven_gone_how", "ALTER TABLE permission_requests ADD COLUMN proven_gone_how TEXT"},
 	{"spawns", "idle_since", "ALTER TABLE spawns ADD COLUMN idle_since TEXT"},
 }
 
+// v7ProveFinishedSQL is migrateV6toV7's one backfill (phase 3): every request
+// of a finished row (ended or missing) not yet proven gone is proven gone,
+// agent_gone, at the migration's instant. Its placeholders are that instant,
+// ProvenGoneAgentGone, then finishedStateGuardArgs. It writes only where
+// proven_gone_at is NULL, so a second run rewrites nothing.
+const v7ProveFinishedSQL = `UPDATE permission_requests
+    SET proven_gone_at = ?, proven_gone_how = ?
+  WHERE proven_gone_at IS NULL
+    AND claude_instance_id IN (SELECT claude_instance_id FROM spawns WHERE ` + finishedStateGuardSQL + `)`
+
 // migrateV6toV7 upgrades a v6 database to v7 inside a single transaction
-// (b.146 steps 2, 2b and 2c): it adds v7Columns, in order, and stamps
+// (b.146 steps 2, 2b and 2c): it adds v7Columns, in order, proves the
+// requests of finished rows gone (v7ProveFinishedSQL) and stamps
 // user_version = 7 as the last statement.
 //
-// There is no phase 3 and no backfill: ADD COLUMN gives every existing
-// request NULL in every new column but pane_answer, which takes its default
-// 'none' (no pane answer recorded), and every row NULL idle_since. A request
-// recorded before the upgrade therefore has no hook identity and no
-// settled_at: readers fall back by its created_at and the relay window, as
-// before the upgrade. No existing value is rewritten, and store_meta and its
-// store id are kept.
+// ADD COLUMN gives every existing request NULL in every new column but
+// pane_answer, which takes its default 'none' (no pane answer recorded), and
+// every row NULL idle_since. A request recorded before the upgrade therefore
+// has no hook identity and no settled_at: readers fall back by its created_at
+// and the relay window, as before the upgrade.
+//
+// Phase 3 backfills one fact: the proof of a finished row's requests (b.146
+// step 2c). A row already ended or missing has no agent left, so no dialog of
+// it is on a pane: each of its requests is proven gone, proven_gone_how
+// agent_gone and proven_gone_at the migration's instant, as the close of a
+// Spawn's requests proves them when the row ends from v7 on. So a dead
+// agent's requests neither read unproven (get-permission's unproven_since)
+// nor pin the cap eviction, which keeps an unproven request of a live row. A
+// request of a live row keeps proven_gone_at NULL: it holds plain send-keys
+// to its Spawn until the next proof (its agent's next Stop or idle-prompt
+// Notification, as it has no agent_id, or the Spawn's end). No other existing
+// value is rewritten (an undecided request of a finished row stays undecided
+// until resume's move closes it), and store_meta and its store id are kept.
 //
 // SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER
 // is guarded by a pragma_table_info probe of its own table and skipped when
-// the column is already present, making the hop idempotent on re-entry. Any
-// probe or ALTER failure rolls the whole hop back, leaving user_version=6 and
-// none of the new columns.
+// the column is already present, and the backfill writes only unproven
+// requests, making the hop idempotent on re-entry. Any probe, ALTER or
+// backfill failure rolls the whole hop back, leaving user_version=6, none of
+// the new columns and no request proven.
 func migrateV6toV7(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -677,6 +718,11 @@ func migrateV6toV7(db *sql.DB) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("store: v6→v7 add %s.%s: %w", col.table, col.name, err)
 		}
+	}
+	proveArgs := append([]any{millisArg(time.Now()), ProvenGoneAgentGone}, finishedStateGuardArgs()...)
+	if _, err := tx.Exec(v7ProveFinishedSQL, proveArgs...); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v6→v7 prove finished rows' requests gone: %w", err)
 	}
 	if _, err := tx.Exec("PRAGMA user_version = 7"); err != nil {
 		_ = tx.Rollback()

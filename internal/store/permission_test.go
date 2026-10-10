@@ -313,9 +313,10 @@ func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
 }
 
 // seedClosedPermRequests inserts n requests for instanceID (and its row when
-// absent), decides each deny, and backdates decided_at to base+i*step through
-// a raw connection; it returns the tokens, oldest decided first
-// (storefix.SeedClosedPermissionRequests' white-box twin).
+// absent), decides each deny, and through a raw connection backdates decided_at
+// to base+i*step and proves it gone (turn_end, so the cap may evict it); it
+// returns the tokens, oldest decided first (storefix.SeedClosedPermissionRequests'
+// white-box twin).
 func seedClosedPermRequests(t *testing.T, s *Store, dbPath, instanceID string, n int, base time.Time, step time.Duration) []string {
 	t.Helper()
 	if _, err := s.GetSpawn(instanceID); errors.Is(err, ErrSpawnNotFound) {
@@ -334,16 +335,19 @@ func seedClosedPermRequests(t *testing.T, s *Store, dbPath, instanceID string, n
 	}
 	withRaw(t, dbPath, func(db *sql.DB) {
 		for i, tok := range tokens {
-			mustExec(t, db, `UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
-				base.Add(time.Duration(i)*step).UTC().Format("2006-01-02 15:04:05"), instanceID, tok)
+			at := base.Add(time.Duration(i) * step)
+			mustExec(t, db, `UPDATE permission_requests SET decided_at = ?, proven_gone_at = ?, proven_gone_how = ?
+				WHERE claude_instance_id = ? AND request_token = ?`,
+				at.UTC().Format("2006-01-02 15:04:05"), at.UnixMilli(), ProvenGoneTurnEnd, instanceID, tok)
 		}
 	})
 	return tokens
 }
 
 // TestPermissionRequestCapEviction pins SR-11.2 and SR-11.4: an insert over the
-// cap evicts the oldest decided rows (by decided_at) in one pass, never an open
-// row (no error when only open rows remain), and cap 0 disables eviction.
+// cap evicts the oldest decided, proven-gone rows (by decided_at) in one pass,
+// never an open row (no error when only open rows remain), and cap 0 disables
+// eviction. An unproven closed row is TestCapEvictionNeedsAProof's.
 func TestPermissionRequestCapEviction(t *testing.T) {
 	cases := []struct {
 		name               string
@@ -393,17 +397,19 @@ func TestPermissionRequestCapEvictionKeepsNewestWhileOpen(t *testing.T) {
 	const sid = "evict-s"
 	seedSpawnForPerm(t, s, sid, "on")
 	base := time.Now().UTC().Add(-2 * time.Hour)
-	decide := func(tok string, decidedAt time.Time) { // S's request tok, its decided_at set to decidedAt unless zero
+	decide := func(tok string, decidedAt time.Time) { // S's request tok, proven gone, its decided_at set to decidedAt unless zero
 		t.Helper()
 		if updated, err := s.DecidePermissionRequest(sid, tok, "allow", "", ""); err != nil || !updated {
 			t.Fatalf("decide %s = %v, %v", tok, updated, err)
 		}
-		if !decidedAt.IsZero() {
-			withRaw(t, path, func(db *sql.DB) {
+		withRaw(t, path, func(db *sql.DB) {
+			mustExec(t, db, `UPDATE permission_requests SET proven_gone_at = ?, proven_gone_how = ? WHERE claude_instance_id = ? AND request_token = ?`,
+				proofAt.UnixMilli(), ProvenGoneTurnEnd, sid, tok)
+			if !decidedAt.IsZero() {
 				mustExec(t, db, `UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
 					decidedAt.Format("2006-01-02 15:04:05"), sid, tok)
-			})
-		}
+			}
+		})
 	}
 	for _, tok := range []string{tokenA, tokenB} { // R = A, then B
 		if err := agentPermissionRequest(s, sid, tok, "Bash", `{}`, 0, ""); err != nil {

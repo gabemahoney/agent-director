@@ -6,12 +6,17 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// PermissionRequestInfo is the projection of an open permission request (one
-// that still awaits an answer, b.146 rule 9) surfaced on `get` and `list`
-// rows in state `check_permission`. ToolInput is the raw JSON string from the
-// DB column — callers parse it themselves; the verb MUST NOT re-encode it as
-// a nested object. The embedded RequestDelivery carries the request's
-// delivery facts (b.146 rule 15).
+// PermissionRequestInfo is the projection of one permission request with its
+// delivery facts: an open one (still awaiting an answer, b.146 rule 9) in the
+// permission_requests of a `get` or `list` row in state `check_permission`;
+// one Claude Code has not proven gone (b.146 step 2c), open or closed in
+// agent-director's own records, in `get`'s unproven_requests (a row in any
+// state but ended and missing); and the request an err_details names (the
+// base of RelayFallenBackDetails and DialogMaybeOpenDetails). ToolInput is
+// the raw JSON string from the DB column — callers parse it themselves; the
+// verb MUST NOT re-encode it as a nested object. The embedded RequestDelivery
+// carries the request's delivery facts (b.146 rule 15) and its proof (b.146
+// step 2c).
 type PermissionRequestInfo struct {
 	// RequestID is the autoincrement primary key of the permission_requests row.
 	RequestID int64 `json:"request_id"`
@@ -128,6 +133,17 @@ type SpawnRow struct {
 	// never null, never omitted). Callers use the request_token of each
 	// element to target a specific row with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
+	// UnprovenRequests is every permission request of the row that Claude
+	// Code has not proven gone (b.146 step 2c: proven_gone_at null), oldest
+	// first, each with its delivery facts, in any state but ended and missing
+	// (a finished row's agent is gone). It lists requests that still await an
+	// answer and, unlike PermissionRequests, those agent-director's own
+	// records read closed: acked (delivery delivered), answered at the pane or
+	// recorded answered outside it; such a request carries unproven_since.
+	// While it is not empty, plain send-keys without a pane hash is refused
+	// (ErrDialogMaybeOpen or an earlier relay refusal). Always a non-nil slice
+	// (encodes as [] when empty).
+	UnprovenRequests []PermissionRequestInfo `json:"unproven_requests"`
 	// TranscriptStatus is a derived, operator-facing summary of the current
 	// session's transcript state (b.v2c AC8). Session history belongs to a
 	// life; "never_written" and "rotated" are decided on the visible history
@@ -234,9 +250,10 @@ func launchStartedAt(state string, millis int64) *time.Time {
 // Get; one that does not reports the stored value only.
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	// OpenPermissionRequestsForSpawn reads the Spawn's permission requests
-	// that still await an answer (b.146 rule 9).
-	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
+	// PermissionRequestsForSpawn reads every permission request of the
+	// Spawn: Get reports, from that one read, those that still await an
+	// answer (b.146 rule 9) and those not proven gone (b.146 step 2c).
+	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 	// ListSessionHistory returns the instance's archived sessions of one
 	// life only — life is the LifeNumber of the row Get read — newest
 	// first. Session history belongs to a life: each entry is a session that
@@ -268,24 +285,28 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 // Get returns the full Spawn row for the given claude_instance_id. Missing
 // rows surface store.ErrSpawnNotFound for the CLI to translate.
 //
-// When the spawn's state is `check_permission`, its open permission requests
-// (those that still await an answer, b.146 rule 9;
-// OpenPermissionRequestsForSpawn) are fetched and projected into the
-// PermissionRequests slice, each with its delivery facts (b.146 rule 15)
-// judged through v. For all other states the slice is left as an empty
-// non-nil slice (encodes as []).
+// On a row in any state but ended and missing, every permission request of
+// the row is read once (PermissionRequestsForSpawn), by the check-before-read
+// rule (b.146 rule 5): read, judge each request's relay hook process, read
+// again, so a hook that acked and exited between a read and its check is
+// never reported fallen back. Both request lists are projected from that one
+// read, each request with its delivery facts (b.146 rule 15) judged through
+// v, oldest first:
 //
-// The requests are read by the check-before-read rule (b.146 rule 5): read,
-// judge each request's relay hook process, read again, so a hook that acked
-// and exited between a read and its check is never reported fallen back. Get
-// is a reading verb and never waits for the store's write lock (b.146
-// problem 4): it writes hook_gone_at on the requests it found fallen back
-// only if the lock is free at that moment, and otherwise reports them with
-// hook_gone_at as stored.
+//   - PermissionRequests, only when the row's state is `check_permission`:
+//     its open requests, those that still await an answer (b.146 rule 9).
+//     Closed requests (acked, answered at the pane, or closed with their
+//     Spawn by find-missing's mark, the ended transition or resume's move)
+//     are never visible in it. In other states it is an empty non-nil slice
+//     (encodes as []).
+//   - UnprovenRequests: every request Claude Code has not proven gone (b.146
+//     step 2c), closed in agent-director's records or not.
 //
-// Closed requests (acked, answered at the pane, or closed with their Spawn by
-// find-missing's mark, the ended transition or resume's move) are never
-// visible in the PermissionRequests output.
+// On an ended or missing row nothing is read and both are empty. Get is a
+// reading verb and never waits for the store's write lock (b.146 problem 4):
+// it writes hook_gone_at on the requests of either list it found fallen back,
+// in one write, only if the lock is free at that moment, and otherwise
+// reports them with hook_gone_at as stored.
 //
 // PriorSessions and TranscriptStatus cover the visible history only.
 // Session history belongs to a life: Get reads the entries of the life of
@@ -315,6 +336,7 @@ func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
 		LivenessNote:            nullableString(row.LivenessNote),
 		PermissionRequests:      []PermissionRequestInfo{},
+		UnprovenRequests:        []PermissionRequestInfo{},
 		PriorSessions:           []PriorSession{},
 	}
 
@@ -345,15 +367,19 @@ func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 		out.Labels = map[string]string{}
 	}
 
-	if out.State == store.StateCheckPermission {
-		j := newRelayJudge(v)
-		infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, instanceID)
+	j := newRelayJudge(v)
+	if !finishedState(out.State) {
+		open, unproven, err := spawnRequestInfos(s.PermissionRequestsForSpawn, j, instanceID)
 		if err != nil {
 			return SpawnRow{}, err
 		}
-		out.PermissionRequests = infos
-		recordGone(s, j.now(), readerLockWait, goneSlotsOf(nil, out.PermissionRequests))
+		if out.State == store.StateCheckPermission {
+			out.PermissionRequests = open
+		}
+		out.UnprovenRequests = unproven
 	}
+	slots := goneSlotsOf(nil, out.PermissionRequests)
+	recordGone(s, j.now(), readerLockWait, goneSlotsOf(slots, out.UnprovenRequests))
 
 	return out, nil
 }
@@ -362,8 +388,13 @@ func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 // name, relay mode, session id, labels, timestamps, and (when applicable) the
 // open permission-requests slice, each request with its delivery facts
 // (delivery, confirm_by, hook_alive, hook_gone_at, attempted_decision,
-// attempted_at, tool_use_id). On a pending row it also carries
-// launch_started_at, when the agent's launch began. When the row records
+// attempted_at, tool_use_id, pane_answer, pane_as, proven_gone_at,
+// proven_gone_how, unproven_since). On a row that is not ended or missing it
+// carries unproven_requests: every permission request Claude Code has not
+// proven gone, closed in agent-director's records or not, each with the same
+// facts; while one is listed, a plain send-keys without a pane hash is
+// refused. On a pending row it also carries launch_started_at, when the
+// agent's launch began. When the row records
 // one, it carries tmux_socket, the tmux socket the row's latest launch
 // uses, in any state. prior_sessions and transcript_status come from the
 // current life's history only: after a reuse (spawn with ReuseFinished),

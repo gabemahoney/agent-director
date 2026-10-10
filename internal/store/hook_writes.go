@@ -225,7 +225,9 @@ var errEndedNotApplied = errors.New("store: ended transition not applied")
 //     refuses send-keys or blocks the check_permission repair); an undecided
 //     one is also denied with decision_reason ended, so a relay hook still
 //     polling for it reads a fail-closed deny; a decided one whose relay hook
-//     has not acked its verdict keeps it.
+//     has not acked its verdict keeps it. Every request of the row not yet
+//     proven gone, closed now or before, is proven gone, agent_gone (b.146
+//     step 2c).
 //
 // Not applied rolls back and is reported as ApplyHookTransitionResult's (one
 // read after the rollback, hookNotApplied). Any other failure rolls the whole

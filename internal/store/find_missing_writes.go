@@ -92,7 +92,9 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
 //     CURRENT_TIMESTAMP, as before, so a relay polling for the row reads a
 //     fail-closed deny rather than spinning to its own timeout. A decided
 //     one, whose relay hook has not acked its verdict, keeps its decision,
-//     decision_reason and decided_at. Two statements, the deny first.
+//     decision_reason and decided_at. Two statements, the deny first; then
+//     a third proves every request of the row not yet proven gone, closed
+//     now or before, proven_gone_how agent_gone (b.146 step 2c).
 //
 // Any failure in the read, the mark, the close or the commit rolls the whole
 // transaction back: the row keeps its state and snapshot, and its requests

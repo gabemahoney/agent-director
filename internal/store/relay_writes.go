@@ -349,13 +349,17 @@ type contextExecer interface {
 }
 
 // evictClosedRequestsSQL deletes the oldest closed requests: those that no
-// longer await an answer (awaitingAnswerSQL), oldest decided_at first, except
-// each Spawn's newest request while the Spawn has a request that still awaits
-// one. Its one placeholder is the number to delete.
+// longer await an answer (awaitingAnswerSQL) and that Claude Code proved gone
+// (proven_gone_at set) or whose Spawn is finished (finishedStateGuardSQL),
+// oldest decided_at first, except each Spawn's newest request while the Spawn
+// has a request that still awaits one. Its placeholders are
+// finishedStateGuardArgs, then the number to delete.
 const evictClosedRequestsSQL = `DELETE FROM permission_requests
 	 WHERE rowid IN (
 	     SELECT pr.rowid FROM permission_requests pr
 	      WHERE NOT (` + awaitingAnswerSQL + `)
+	        AND (pr.proven_gone_at IS NOT NULL
+	             OR pr.claude_instance_id IN (SELECT claude_instance_id FROM spawns WHERE ` + finishedStateGuardSQL + `))
 	        AND pr.request_id NOT IN (
 	            SELECT MAX(pr.request_id) FROM permission_requests pr
 	             GROUP BY pr.claude_instance_id
@@ -369,16 +373,27 @@ const evictClosedRequestsSQL = `DELETE FROM permission_requests
 // transaction (UpsertOpenPermissionRequest, InsertRelayRequest). When cap > 0
 // and the table holds more than cap requests, the oldest closed requests (no
 // longer awaiting an answer, ordered by decided_at ASC) are deleted to bring
-// the count back to cap. One closed request per Spawn is exempt: the Spawn's
-// newest request (highest request_id) while the Spawn has a request that
-// still awaits an answer, which is then older than it. pkg/api's decide
-// refuses to advise a pane answer for a request recorded before schema v7
-// once a later request of its Spawn is recorded (b.t6e, see pkg/api
-// fallenBackUnshown), so evicting every later request would erase that
-// signal; keeping the newest one keeps it for as long as the older request
-// awaits an answer. Like requests awaiting an answer, an exempt request can
-// leave the count above cap; there is at most one per Spawn. cap <= 0
-// disables eviction (a negative cap is the call site's to handle).
+// the count back to cap.
+//
+// A closed request is evicted only once its dialog is proven gone (b.146
+// step 2c): proven_gone_at set, or its Spawn finished (ended or missing: its
+// agent is gone, the agent_gone proof). A request agent-director's own
+// records read closed (acked, answered at the pane, recorded answered
+// outside it) can still have its dialog on the pane; until a proof it holds
+// plain send-keys to its Spawn, and deleting it would end that hold with no
+// proof. Such a request is kept, past the cap if need be: the count can stay
+// above cap by the number of unproven closed requests of live Spawns.
+//
+// One closed request per Spawn is exempt as well: the Spawn's newest request
+// (highest request_id) while the Spawn has a request that still awaits an
+// answer, which is then older than it. pkg/api's decide refuses to advise a
+// pane answer for a request recorded before schema v7 once a later request of
+// its Spawn is recorded (b.t6e, see pkg/api fallenBackUnshown), so evicting
+// every later request would erase that signal; keeping the newest one keeps
+// it for as long as the older request awaits an answer. Like requests
+// awaiting an answer, an exempt request can leave the count above cap; there
+// is at most one per Spawn. cap <= 0 disables eviction (a negative cap is the
+// call site's to handle).
 func evictClosedRequests(ctx context.Context, ex contextExecer, cap int) error {
 	if cap <= 0 {
 		return nil
@@ -390,7 +405,7 @@ func evictClosedRequests(ctx context.Context, ex contextExecer, cap int) error {
 	if count <= cap {
 		return nil
 	}
-	if _, err := ex.ExecContext(ctx, evictClosedRequestsSQL, count-cap); err != nil {
+	if _, err := ex.ExecContext(ctx, evictClosedRequestsSQL, append(finishedStateGuardArgs(), count-cap)...); err != nil {
 		return fmt.Errorf("store: permission request evict: %w", err)
 	}
 	return nil

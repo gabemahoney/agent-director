@@ -1,7 +1,8 @@
 {
   "decide": [
     ".attempted_at",
-    ".hook_gone_at"
+    ".hook_gone_at",
+    ".unproven_since"
   ],
   "expire": [
     ".ids"

@@ -5,11 +5,12 @@ package store
 // ack and timeout deny and their precondition (rule 3, problem 7), decide's
 // guarded verdict, the readers' and decide's facts, every bounded wait for the
 // write lock or the store's connection (problem 1, problem 4, decision 9 B),
-// the "awaits an answer" rule (rule 9) and the remembered idle-prompt
-// Notification (problem 3). find-missing's check_permission repair is
-// find_missing_writes_test.go's and row_version_find_missing_test.go's; the
-// close of relay requests (find-missing's mark, the terminal SessionEnd,
-// resume's move) is relay_close_test.go's.
+// the "awaits an answer" rule (rule 9), the cap eviction's need of a proof
+// (step 2c, b.kxu) and the remembered idle-prompt Notification (problem 3).
+// find-missing's check_permission repair is find_missing_writes_test.go's and
+// row_version_find_missing_test.go's; the close of relay requests
+// (find-missing's mark, the terminal SessionEnd, resume's move) is
+// relay_close_test.go's.
 
 import (
 	"context"
@@ -56,6 +57,39 @@ func insertRelay(t *testing.T, s *Store, req RelayRequest) {
 	if _, applied, err := s.InsertRelayRequest(relayID, agentGate("PermissionRequest", ""), req, 0, DefaultLockWait); err != nil || !applied.Applied {
 		t.Fatalf("InsertRelayRequest(%s) = %+v, %v; want applied", req.RequestToken, applied, err)
 	}
+}
+
+// otherRelayID is a second relay row beside relayID; a write on one row must
+// leave the other's requests alone.
+const otherRelayID = "relay-other"
+
+// addOtherRelayRow adds otherRelayID with the relay on, its agent's pane
+// recorded, working.
+func addOtherRelayRow(t *testing.T, s *Store) {
+	t.Helper()
+	seedSpawnForPerm(t, s, otherRelayID, "on")
+	if err := agentHook(s, otherRelayID, StateWorking, false, "test_seed"); err != nil {
+		t.Fatalf("%s to working: %v", otherRelayID, err)
+	}
+}
+
+// insertOther records req on otherRelayID from its own agent, with cap; a
+// write that does not apply fails the test.
+func insertOther(t *testing.T, s *Store, req RelayRequest, cap int) {
+	t.Helper()
+	if _, applied, err := s.InsertRelayRequest(otherRelayID, agentGate("PermissionRequest", ""), req, cap, DefaultLockWait); err != nil || !applied.Applied {
+		t.Fatalf("InsertRelayRequest(%s, %s) = %+v, %v; want applied", otherRelayID, req.RequestToken, applied, err)
+	}
+}
+
+// otherRequest reads otherRelayID's request token.
+func otherRequest(t *testing.T, s *Store, token string) PermissionRow {
+	t.Helper()
+	pr, err := s.GetPermissionRequest(otherRelayID, token)
+	if err != nil {
+		t.Fatalf("GetPermissionRequest(%s, %s): %v", otherRelayID, token, err)
+	}
+	return pr
 }
 
 // holdStoreLock takes the write lock of the store at path on a connection of
@@ -272,6 +306,10 @@ func TestRelayAckAndTimeoutDeny(t *testing.T) {
 			}
 			if delivered := !pr.DeliveredAt.IsZero(); delivered != tc.wantDelivered || delivered && !pr.DeliveredAt.Equal(at) {
 				t.Errorf("delivered_at = %v; want set to %v: %v", pr.DeliveredAt, at, tc.wantDelivered)
+			}
+			// b.146 step 2c: an ack proves nothing; only the mark's close does (agent_gone).
+			if wantHow := map[bool]string{true: ProvenGoneAgentGone}[tc.mark]; pr.ProvenGoneHow != wantHow {
+				t.Errorf("proven_gone_how = %q; want %q (the ack is no proof)", pr.ProvenGoneHow, wantHow)
 			}
 			if tc.wantDone {
 				if _, _, again, err := s.AckRelayDecision(relayID, tokenA, at.Add(time.Second), DefaultLockWait, nil); err != nil || again {
@@ -850,29 +888,66 @@ func TestLaterHookClearsIdleSince(t *testing.T) {
 	}
 }
 
-// TestCapEvictionKeepsRequestsAwaitingAnAnswer (b.146 rule 9): the cap
-// eviction removes acked requests but never a verdict its hook has not acked.
-func TestCapEvictionKeepsRequestsAwaitingAnAnswer(t *testing.T) {
-	s, _ := newRelayRow(t, "on", StateWorking)
-	insertRelay(t, s, relayReq(tokenA))
-	decideA(t, s, "allow") // decided, not acked: awaits an answer
-	insertRelay(t, s, relayReq(tokenB))
-	if ok, err := s.DenyRelayTimeout(relayID, tokenB, time.Now(), DefaultLockWait, nil); err != nil || !ok {
-		t.Fatalf("timeout deny of B = %v, %v", ok, err)
+// awaitCaseNamed is the rule-9 table's case name.
+func awaitCaseNamed(t *testing.T, name string) awaitCase {
+	t.Helper()
+	i := slices.IndexFunc(awaitCases, func(c awaitCase) bool { return c.name == name })
+	if i < 0 {
+		t.Fatalf("no await case %q", name)
 	}
-	if _, applied, err := s.InsertRelayRequest(relayID, agentGate("PermissionRequest", ""), relayReq(tokenC), 2, DefaultLockWait); err != nil || !applied.Applied {
-		t.Fatalf("insert C with cap 2 = %+v, %v", applied, err)
+	return awaitCases[i]
+}
+
+// TestCapEvictionNeedsAProof (b.146 rule 9, step 2c; b.kxu): an over-cap
+// insert on another row evicts relayID's request A only once it no longer
+// awaits an answer and either a hook proved it gone or its row is finished (an
+// earlier release ended it, its requests left unproven). Acked, answered at the
+// pane or recorded answered outside, but unproven on a live row, A is kept and
+// the table stays over the cap; a verdict its hook never acked is kept whatever
+// its proof.
+func TestCapEvictionNeedsAProof(t *testing.T) {
+	proofs := []struct {
+		name  string
+		apply func(t *testing.T, s *Store, path string)
+		frees bool // A, closed, is evictable after it
+	}{
+		{"unproven", func(*testing.T, *Store, string) {}, false},
+		{"its tool ran", func(t *testing.T, s *Store, _ string) {
+			if n, err := s.ProveRequestsGone(relayID, agentGate("PostToolUse", ""),
+				RequestProof{How: ProvenGoneToolRan, ToolUseID: "toolu_" + tokenA[:8], At: proofAt}); err != nil || n != 1 {
+				t.Fatalf("A's tool ran = %d, %v; want A proven", n, err)
+			}
+		}, true},
+		{"its row ended before the close proved it", func(t *testing.T, s *Store, path string) {
+			endRelayRowUnclosed(t, path)
+			if mustRequest(t, s, tokenA).ProvenGone() {
+				t.Fatal("A proven by an unclosed end; want it unproven")
+			}
+		}, true},
 	}
-	var tokens []string
-	reqs, err := s.PermissionRequestsForSpawn(relayID)
-	if err != nil {
-		t.Fatalf("PermissionRequestsForSpawn: %v", err)
-	}
-	for _, r := range reqs {
-		tokens = append(tokens, r.RequestToken)
-	}
-	slices.Sort(tokens)
-	if want := []string{tokenA, tokenC}; !slices.Equal(tokens, want) {
-		t.Errorf("requests after the eviction = %v; want %v (B acked and evicted, A's unacked verdict kept)", tokens, want)
+	for _, name := range []string{"acked", "pane answer sent", "answered outside agent-director", "decided, not acked"} {
+		history := awaitCaseNamed(t, name)
+		for _, pf := range proofs {
+			t.Run(name+"/"+pf.name, func(t *testing.T) {
+				s, path := newRelayRow(t, "on", StateWorking)
+				recordAwaitCase(t, s, path, history)
+				addOtherRelayRow(t, s)
+				pf.apply(t, s, path)
+
+				insertOther(t, s, relayReq(tokenB), 1)
+
+				evicted := pf.frees && !history.awaits
+				if _, err := s.GetPermissionRequest(relayID, tokenA); errors.Is(err, sql.ErrNoRows) != evicted {
+					t.Errorf("A read after the insert: %v; want evicted %v", err, evicted)
+				}
+				wantRows := 2 // A kept: one over the cap
+				if evicted {
+					wantRows = 1
+				}
+				if n := countPermRows(t, s, "1"); n != wantRows {
+					t.Errorf("rows = %d with cap 1; want %d", n, wantRows)
+				}
+			})
+		}
 	}
 }

@@ -626,11 +626,12 @@ func TestResumeHasSRDErrorNames(t *testing.T) {
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven
 // names and b.146 rules 7 and 8's: the params' shape, the relay refusals, a
 // pane answer's request not open or still being answered, the pane's hash and
-// a pane answer's write lock.
+// a pane answer's write lock; and step 2c's hold of a plain call while a
+// request is not proven gone.
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
 		"ErrSpawnNotInteractive", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
-		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
+		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
 		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy")
 }
 

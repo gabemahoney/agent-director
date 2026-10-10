@@ -59,8 +59,8 @@ func TestPaneAnswerIntentThenSent(t *testing.T) {
 	}
 	pr = mustRequest(t, s, tokenA)
 	if pr.PaneAnswer != PaneAnswerSent || pr.Decision != "deny" || pr.DecisionReason != DecisionReasonPane ||
-		pr.DecidedAt.IsZero() || pr.AwaitsAnswer() {
-		t.Errorf("after sent: %+v; want sent, decision deny, decision_reason pane, decided_at set, closed", pr)
+		pr.DecidedAt.IsZero() || pr.AwaitsAnswer() || pr.ProvenGone() {
+		t.Errorf("after sent: %+v; want sent, decision deny, decision_reason pane, decided_at set, closed, not proven gone", pr)
 	}
 	if _, ok, err := s.RecordPaneIntent(relayID, tokenA, "allow", paneSender, nil, DefaultLockWait, nil); err != nil || ok {
 		t.Errorf("RecordPaneIntent on the closed request = %v, %v; want nothing written", ok, err)
@@ -173,8 +173,8 @@ func TestRecordPaneOutsideClaims(t *testing.T) {
 
 			pr := mustRequest(t, s, tokenA)
 			if pr.PaneAnswer != PaneAnswerOutside || pr.PaneAs != claim || pr.Decision != decision ||
-				pr.DecisionReason != DecisionReasonPaneOutside || pr.AwaitsAnswer() {
-				t.Errorf("request = %+v; want outside, pane_as %s, decision %q, pane_outside, closed", pr, claim, decision)
+				pr.DecisionReason != DecisionReasonPaneOutside || pr.AwaitsAnswer() || pr.ProvenGone() {
+				t.Errorf("request = %+v; want outside, pane_as %s, decision %q, pane_outside, closed, not proven gone", pr, claim, decision)
 			}
 			if ok, err := s.RecordPaneOutside(relayID, tokenA, "deny", DefaultLockWait, nil); err != nil || ok {
 				t.Errorf("a second RecordPaneOutside = %v, %v; want nothing written", ok, err)
@@ -186,7 +186,9 @@ func TestRecordPaneOutsideClaims(t *testing.T) {
 // TestCloseToolRanRequests (rule 13): the PostToolUse close closes the
 // request carrying the tool_use_id only when gone judges its hook gone, it
 // still awaits an answer and the hook's gate holds; it keeps an earlier
-// hook_gone_at.
+// hook_gone_at. The close also proves it gone, tool_ran at its instant
+// (b.146 step 2c), keeping an earlier proof; a request it leaves open keeps
+// its proof state.
 func TestCloseToolRanRequests(t *testing.T) {
 	gone := func(PermissionRow) bool { return true }
 	at := time.UnixMilli(time.Now().UnixMilli())
@@ -215,6 +217,12 @@ func TestCloseToolRanRequests(t *testing.T) {
 				t.Fatalf("ack = %v, %v", ok, err)
 			}
 		}, "toolu_" + tokenA[:8], agentGate("PostToolUse", ""), gone, false},
+		{"already proven gone", func(t *testing.T, s *Store) {
+			if _, err := s.ProveRequestsGone(relayID, agentGate("PostToolUse", ""),
+				RequestProof{How: ProvenGoneToolRan, ToolUseID: "toolu_" + tokenA[:8], At: proofAt}); err != nil {
+				t.Fatalf("ProveRequestsGone: %v", err)
+			}
+		}, "toolu_" + tokenA[:8], agentGate("PostToolUse", ""), gone, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,14 +237,21 @@ func TestCloseToolRanRequests(t *testing.T) {
 
 			pr := mustRequest(t, s, tokenA)
 			if !tc.want {
-				if err != nil || len(closed) != 0 || pr.PaneAnswer != before.PaneAnswer || pr.Decision != before.Decision {
-					t.Errorf("close = %v, %v; request %+v; want nothing closed", closed, err, pr)
+				if err != nil || len(closed) != 0 || pr.PaneAnswer != before.PaneAnswer || pr.Decision != before.Decision ||
+					!pr.ProvenGoneAt.Equal(before.ProvenGoneAt) {
+					t.Errorf("close = %v, %v; request %+v; want nothing closed or proven", closed, err, pr)
 				}
 				return
 			}
-			wantGone := at
+			wantGone, wantProven := at, at
 			if !before.HookGoneAt.IsZero() {
 				wantGone = before.HookGoneAt
+			}
+			if before.ProvenGone() {
+				wantProven = before.ProvenGoneAt
+			}
+			if pr.ProvenGoneHow != ProvenGoneToolRan || !pr.ProvenGoneAt.Equal(wantProven) {
+				t.Errorf("request proven_gone_how %q at %v; want tool_ran at %v", pr.ProvenGoneHow, pr.ProvenGoneAt, wantProven)
 			}
 			if err != nil || len(closed) != 1 || closed[0] != tokenA {
 				t.Fatalf("close = %v, %v; want [%s]", closed, err, tokenA)

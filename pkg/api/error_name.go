@@ -10,7 +10,7 @@ import (
 // errorName names a verb error as errnames.Classify would, for the trail
 // fields that carry an err_name: ad.resume.restored's and
 // ad.spawn.reuse_restored's launch_error, ad.kill.called's outcome,
-// ad.send_keys.called's outcome (b.146 step 2b's refusals included) and
+// ad.send_keys.called's outcome (b.146 step 2b's and 2c's refusals included) and
 // ad.launch.name_held's outcome (SR-6.4, SR-7.4, SR-10.6, SR-14). pkg/api cannot import
 // pkg/api/errnames (errnames imports pkg/api for its sentinels), so this is
 // the one pkg/api mapping of those verbs' names; extend it here when one of
@@ -44,6 +44,8 @@ func errorName(err error) string {
 		return "ErrRelayFallenBack"
 	case errors.Is(err, ErrPaneChanged):
 		return "ErrPaneChanged"
+	case errors.Is(err, ErrDialogMaybeOpen):
+		return "ErrDialogMaybeOpen"
 	case errors.Is(err, ErrPaneAnswerInProgress):
 		return "ErrPaneAnswerInProgress"
 	case errors.Is(err, ErrInvalidFlags):

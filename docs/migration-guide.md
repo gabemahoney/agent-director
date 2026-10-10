@@ -277,7 +277,7 @@ column is already there. Any probe or `ALTER` failure rolls the whole hop
 back: `user_version` stays 5 and none of the three columns exists.
 `migrateV6toV7` (b.146 step 2) is an additive `ADD COLUMN` hop across two
 tables, driven by one list, `v7Columns` (`schema.go`), that holds each
-column's table, name and exact `schemaDDL` text: seventeen `ALTER TABLE
+column's table, name and exact `schemaDDL` text: nineteen `ALTER TABLE
 permission_requests ADD COLUMN` (the relay hook's `hook_pid`,
 `hook_starttime` and `hook_pidns`; `tool_use_id`, `agent_id`,
 `delivered_at`, `settled_at`, `hook_gone_at`, `attempted_decision`,
@@ -286,12 +286,15 @@ pane-answer sender's `pane_sender_pid`, `pane_sender_starttime` and
 `pane_sender_pidns`, and `pane_intent_at` INTEGER, when a pane answer's
 intent was written; then `closed_at` INTEGER, when a close of the
 request's spawn closed it (find-missing's mark, the terminal SessionEnd's
-move to `ended`, or resume's move to `pending`); the instants in
+move to `ended`, or resume's move to `pending`); then `proven_gone_at`
+INTEGER and `proven_gone_how` TEXT, when and how Claude Code proved the
+request's permission dialog gone (b.146 step 2c: `tool_ran`, `turn_end`
+or `agent_gone`); the instants in
 milliseconds since the epoch), appended after `created_at`, then `ALTER
 TABLE spawns ADD COLUMN idle_since`, appended after `launch_owner_pidns`.
 Each is guarded by a `pragma_table_info` probe of its own table and skipped
 when the column is already there. Any probe or `ALTER` failure rolls the
-whole hop back: `user_version` stays 6 and none of the eighteen columns
+whole hop back: `user_version` stays 6 and none of the twenty columns
 exists.)
 
 **Phase 3 — data backfill/transform.** `UPDATE`/`INSERT … SELECT` to populate
@@ -318,18 +321,34 @@ no launch owner. A `pending` row is no special case: with no owner,
 `find-missing` judges it by its pending grace period alone, as it did before
 the upgrade. No existing value is rewritten: a `pending` row keeps its
 `launch_started_at` exactly as stored, and `store_meta` and its store id are
-kept. `migrateV6toV7` has no phase 3 either: its `ADD COLUMN`s give every
-existing permission request NULL in each new column but `pane_answer`, which
-takes its default `none`, and every row NULL `idle_since`. A request with no
-`settled_at` is one recorded before v7, so readers and `decide` judge it as
-before the upgrade, by its `created_at` and the relay window. A NULL
-`closed_at` means no close closed the request: an existing request that a
-pre-v7 mark denied keeps its `find_missing` deny, which already makes it no
-longer await an answer, so nothing needs backfilling. An existing request
-still undecided on a row that is already `ended` is not backfilled either:
-resume's move to `pending` closes it (denied, `decision_reason` `ended`)
-before the row's next launch. No existing value is rewritten, and
-`store_meta` and its store id are kept.
+kept. `migrateV6toV7` has a phase 3 of one statement. Its `ADD COLUMN`s
+give every existing permission request NULL in each new column but
+`pane_answer`, which takes its default `none`, and every row NULL
+`idle_since`. A request with no `settled_at` is one recorded before v7, so
+readers and `decide` judge it as before the upgrade, by its `created_at`
+and the relay window. A NULL `closed_at` means no close closed the
+request: an existing request that a pre-v7 mark denied keeps its
+`find_missing` deny, which already makes it no longer await an answer, so
+nothing needs backfilling. An existing request still undecided on a row
+that is already `ended` is not closed by the hop either: resume's move to
+`pending` closes it (denied, `decision_reason` `ended`) before the row's
+next launch. Then phase 3 (`v7ProveFinishedSQL`, after every column and
+before the stamp, in the same transaction) backfills one fact: every
+request of a row already `ended` or `missing` with NULL `proven_gone_at`
+is proven gone, `proven_gone_how` `agent_gone` and `proven_gone_at` the
+hop's one instant, as the close of a Spawn's requests proves them when a
+row ends from v7 on. A finished row has no agent left, so none of its
+dialogs is on a pane; without the backfill its requests would read
+unproven (`get-permission`'s `unproven_since`) until a resume of the row
+proved them. It writes only where `proven_gone_at`
+is NULL, so a second run rewrites nothing, and it sets nothing else: an
+undecided request of a finished row stays undecided. A request on a live
+row keeps NULL `proven_gone_at` and is proven by its agent's next `Stop`
+or idle-prompt Notification (it has no `agent_id`) or by the row's end.
+No other existing value is rewritten, and `store_meta` and its store id
+are kept. A failure of the backfill rolls the whole hop back, like a
+failed `ALTER`: `user_version` stays 6, none of the twenty columns exists
+and no request is proven.
 
 **What the upgrade changes for an existing request.** An undecided request
 recorded before v7 is judged by time, and from its relay window plus 2 s on
@@ -350,6 +369,22 @@ returns `ErrNoOpenPermissionRequest` for it ("do not answer it at the
 pane"), while plain `send-keys` is still refused with `ErrRelayFallenBack`
 on its account. Its PostToolUse does not close it either: no `tool_use_id`
 was recorded for it.
+
+Every request recorded before v7 on a live row, decided or not, also has
+no proof that its permission dialog is gone (`proven_gone_at` NULL). From
+v7 on, `send-keys` refuses a plain call without `--expect-pane-sha256`
+with `ErrDialogMaybeOpen` while any request of the agent is unproven, so
+once the store is migrated every live relay-on agent with a request from
+before the upgrade is held, until its main agent's next `Stop` or
+idle-prompt Notification (such a request has no `agent_id`) or the row's
+end. Closing the request with `record-pane-answer` does not lift this
+hold. An agent already idle at its prompt, its idle-prompt Notification
+already sent, sends neither until a new turn starts, so its first plain
+`send-keys` needs a person or an LLM to `read-pane` and send with that
+read's `pane_sha256` (never passed from an automatic flow). The requests
+of a row already `ended` or `missing` are proven gone (`agent_gone`) by
+the migration itself (phase 3 above), not later at its resume, so they
+never read unproven.
 
 Session history belongs to a life: each `session_history` entry carries the
 life of the id that was current when its session ran, and after the v5 hop
@@ -393,6 +428,10 @@ double-run test in §3 pass. The SQLite-specific idioms:
   pre-existing table.
 - **DROP … IF EXISTS** — `DROP TABLE IF EXISTS` / `DROP INDEX IF EXISTS` so a
   re-run does not error on an already-removed object.
+- **Backfill UPDATE** — select only rows not yet backfilled, so a re-run
+  rewrites nothing: `migrateV6toV7`'s `v7ProveFinishedSQL` sets
+  `proven_gone_at` only `WHERE proven_gone_at IS NULL`, and a second run
+  keeps the first run's instant.
 
 ## 3. Test by running the upgrade twice
 
@@ -445,8 +484,9 @@ bytes. What they cover, step by step:
   for v5→v6 and `preAddV7Columns` for v6→v7).
 - **A rollback row** in `TestMigrationRollback`: an arrangement that makes
   the hop fail part-way (as `breakV5SessionHistoryHop`,
-  `breakV5StoreMetaStep`, `breakV6PIDNSColumn` and `breakV7IdleSinceColumn`
-  do), and the text the open's error must name. The test asserts a migration
+  `breakV5StoreMetaStep`, `breakV6PIDNSColumn`, `breakV7IdleSinceColumn`
+  and, for a phase 3, `breakV7Backfill` do), and the text the open's error
+  must name. The test asserts a migration
   failure, not a refusal, and the version, schema, rows (`dbDump`) and
   sentinel kept. Only `from == 4`, `from == 5` and `from == 6` start with
   rows (`makeV4HistoryFixture`, `makeV5Fixture`, `makeV6Fixture`); every
@@ -499,14 +539,21 @@ owner (NULL in the three columns, read as the zero `LaunchOwner` by
 
 v7's data test, `TestV7MigrationKeepsV6Rows`, migrates `makeV6Fixture`: a
 genuine v6 store holding a relay row in `check_permission` with an open
-request (its `created_at` long past any relay window) and a decided one.
-After the hop every v6 value of the row and both requests reads back as
-seeded, the new columns hold their defaults (`assertV7Defaults`), and the
-store id is kept. Both requests read as recorded before v7 (no settle
+request (its `created_at` long past any relay window) and a decided one,
+and an `ended` and a `missing` row with the same two requests each. After
+the hop every v6 value of the live row and both its requests reads back
+as seeded, the new columns hold their defaults (`assertV7Defaults`), and
+the store id is kept. Both requests read as recorded before v7 (no settle
 instant, hook identity, ack or `tool_use_id`; `pane_answer` `none`), only the
 undecided one still awaits an answer, and `decide`'s guarded write still
 refuses it once its `created_at` is past the cutoff: a request from before
-the upgrade is judged by time, as before.
+the upgrade is judged by time, as before. Its phase 3 test,
+`TestV7MigrationProvesFinishedRowsRequests`, migrates the same fixture and
+checks that every request of the `ended` and `missing` rows is proven
+`agent_gone` at one instant within the hop, its v6 values kept (the
+undecided one still undecided and awaiting an answer), that the live
+row's requests stay unproven, and that a second run of the hop changes
+nothing (`dbDump` before and after).
 
 **Where these tests run:** `internal/store` carries the sandbox guard
 (`sandboxguard.Require()` in its `TestMain`). Run them only in the sandbox —
@@ -643,22 +690,24 @@ ALTER TABLE permission_requests DROP COLUMN pane_sender_starttime;
 ALTER TABLE permission_requests DROP COLUMN pane_sender_pidns;
 ALTER TABLE permission_requests DROP COLUMN pane_intent_at;
 ALTER TABLE permission_requests DROP COLUMN closed_at;
+ALTER TABLE permission_requests DROP COLUMN proven_gone_at;
+ALTER TABLE permission_requests DROP COLUMN proven_gone_how;
 ALTER TABLE spawns DROP COLUMN idle_since;
 PRAGMA user_version = 6;
 COMMIT;
 ```
 
-That is exactly what `migrateV6toV7` adds: seventeen columns on
-`permission_requests` and `idle_since` on `spawns`. Drop all eighteen and no
+That is exactly what `migrateV6toV7` adds: nineteen columns on
+`permission_requests` and `idle_since` on `spawns`. Drop all twenty and no
 other column or table; `store_meta` and its store id stay, so labels written
 before the rollback still read as this store's. `PRAGMA user_version = 6` is
 the last statement before `COMMIT`. `PRAGMA user_version;` should then print
 `6`, and `.schema permission_requests` and `.schema spawns` should show none
-of the eighteen columns. A v6 binary then opens the store.
+of the twenty columns. A v6 binary then opens the store.
 
 SQLite refuses `DROP COLUMN` on a column that is a PRIMARY KEY, has a UNIQUE
 constraint, is indexed, appears in a CHECK or foreign-key constraint, or is
-used by a generated column, trigger or view. None of the eighteen is any of
+used by a generated column, trigger or view. None of the twenty is any of
 these in the v7 DDL: each is a plain column, nullable or, for `pane_answer`,
 `NOT NULL DEFAULT 'none'`. The `permission_requests` UNIQUE constraint and
 its two indexes cover only `claude_instance_id`, `request_token`,
@@ -676,8 +725,10 @@ each permission request's relay hook identity, its ack (`delivered_at`) and
 settle instant, the facts readers and `decide` recorded on it
 (`hook_gone_at`, `attempted_decision`, `attempted_at`), its `tool_use_id` and
 `agent_id`, its pane answer (`pane_answer`, `pane_as`, the sender and
-`pane_intent_at`), when a close of its spawn closed it (`closed_at`), and
-each row's `idle_since`. A v6 binary judges every request by its
+`pane_intent_at`), when a close of its spawn closed it (`closed_at`), when
+and how its dialog was proven gone (`proven_gone_at`, `proven_gone_how`),
+and each row's `idle_since`. A v6 binary has no dialog hold, so the loss
+changes nothing it reads. A v6 binary judges every request by its
 `created_at` and the relay window, as it judged its own: a request with a
 recorded `decision` reads as decided, one without as open, fallen back once
 its relay window has ended. A request a close closed always has a
@@ -690,11 +741,14 @@ stopped (step 1) no relay hook is left to deliver one.
 
 **If the store is later migrated to v7 again**, the hop gives every request
 NULL in the new columns and `pane_answer` `none`, and every row NULL
-`idle_since` (no phase 3, §2): every request reads as one recorded before
-schema v7 and falls back by its `created_at` and the relay window, and an
-undecided one refuses plain `send-keys` until it is closed (see "What the
-upgrade changes for an existing request" in §2). The store id is kept, so
-no label changes owner.
+`idle_since`, then its phase 3 (§2) proves gone again (`agent_gone`, at the
+re-migration's instant) every request of a row that is `ended` or
+`missing` by then. Every request reads as one recorded before schema v7
+and falls back by its `created_at` and the relay window, an undecided one
+refuses plain `send-keys` until it is closed, and every one of a live row
+is unproven again, so it holds a plain `send-keys` without a pane hash to
+its agent until its next proof (see "What the upgrade changes for an
+existing request" in §2). The store id is kept, so no label changes owner.
 
 #### v6 → v5 (reverses `migrateV5toV6`)
 
@@ -874,7 +928,7 @@ installing.
   `migrationSteps`/`migrationStep`, `migrationStepFrom`, `createSchema`,
   `schemaDDL`, `migrateV1toV2`, `migrateV2toV3`, `migrateV3toV4`,
   `migrateV4toV5`, `migrateV5toV6`, `migrateV6toV7` with its column list
-  `v7Columns`, `buildMigrationRefusal`.
+  `v7Columns` and its phase 3 `v7ProveFinishedSQL`, `buildMigrationRefusal`.
 - `internal/store/migrate_auth.go` — the sentinel gate: `authorizeMigration`,
   `parseAuthorization`, `consumeAuthorization`, `sentinelPath`,
   `sentinelFilename` (`migrate-authorized`), the trail events.
@@ -919,9 +973,12 @@ installing.
   owner.
 - `internal/store/schema_v7_test.go` — v7's own cases (§3):
   `TestV7MigrationKeepsV6Rows` (`makeV6Fixture` migrated: every v6 value of
-  the row and its requests kept, the v7 columns at their defaults through
+  the live row and its requests kept, the v7 columns at their defaults through
   `assertV7Defaults`, the store id kept, and both requests judged as recorded
-  before v7) and `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which applies
+  before v7), `TestV7MigrationProvesFinishedRowsRequests` (phase 3: the
+  `ended` and `missing` rows' requests proven `agent_gone` at one instant,
+  the live row's unproven, a second run changing nothing) and
+  `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which applies
   `v7ToV6RecipeStatements` to a store holding a request the relay hook
   recorded with its identity, checks the v6 store has a v6 store's shape,
   keeps every other value of the row and the request and the store id, and
@@ -950,8 +1007,11 @@ installing.
   `schema_v5_test.go`). The v7 helpers: `v7ColumnSpecs`, `v7ColumnNames`,
   `assertNoV7Columns`, `preAddV7Columns`, `breakV7IdleSinceColumn` (an
   `IDLE_SINCE` column the hop's exact-name probe misses, so the hop fails at
-  its last column), `makeV6Fixture` (the v6 store with a relay row in
-  `check_permission`, an open request and a decided one, returned as a
+  its last column), `breakV7Backfill` (a trigger that fails every update of
+  a permission request, so the hop fails at its phase 3, after every
+  column), `makeV6Fixture` (the v6 store with a relay row in
+  `check_permission`, an open request and a decided one, and an `ended`
+  and a `missing` row with the same two requests, returned as a
   `v6Fixture`) and `v7ToV6RecipeStatements`, which must match the v7 → v6
   recipe statement for statement (checked by
   `TestDowngradeRecipe_MatchesGuide`).

@@ -206,7 +206,8 @@ func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error
 
 // millisArg returns t as a bound argument of an integer-milliseconds column
 // (the v7 instants: delivered_at, settled_at, hook_gone_at, attempted_at,
-// pane_intent_at, closed_at), or nil (SQL NULL) for the zero time.
+// pane_intent_at, closed_at, proven_gone_at), or nil (SQL NULL) for the zero
+// time.
 func millisArg(t time.Time) any {
 	if t.IsZero() {
 		return nil

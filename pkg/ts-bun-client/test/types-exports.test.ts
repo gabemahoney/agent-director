@@ -7,6 +7,7 @@
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { SpawnParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
+import type { DialogMaybeOpenDetails, ProvenGoneHow } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -62,3 +63,24 @@ function _assertRelayDeliveryTypes(get: GetResult, row: ListRow, decided: Decide
   void _delivery;
 }
 void _assertRelayDeliveryTypes;
+
+// Typecheck (b.146 step 2c): get's rows carry unproven_requests, list's do not; every request carries its
+// proof (proven_gone_at, proven_gone_how one of ProvenGoneHow, unproven_since); ErrDialogMaybeOpen's
+// errDetails name the Spawn's state and its other unproven requests; tsc reports an unused directive if
+// any of these loosens.
+function _assertUnprovenTypes(get: GetResult, row: ListRow, info: PermissionRequestInfo, d: DialogMaybeOpenDetails): void {
+  const _reqs: PermissionRequestInfo[] = [...get.unproven_requests, ...d.unproven_requests];
+  // @ts-expect-error — list rows carry no unproven_requests (get only)
+  void row.unproven_requests;
+  const _how: ProvenGoneHow | null = info.proven_gone_how;
+  // @ts-expect-error — proven_gone_how is one of tool_ran, turn_end, agent_gone
+  const _bad: ProvenGoneHow = "delivered";
+  const _times: (string | null)[] = [info.proven_gone_at, info.unproven_since, d.unproven_since];
+  const _state: string = d.state;
+  void _reqs;
+  void _how;
+  void _bad;
+  void _times;
+  void _state;
+}
+void _assertUnprovenTypes;

@@ -11,7 +11,7 @@ export { TS_ONLY_ERROR_NAMES } from "./internal/tsOnlyErrors.js";
  * `errDescription` is the human-readable description from the subprocess error envelope.
  * `errDetails` is the envelope's optional `err_details` object (b.146 rule 15): the facts of a
  * refusal that gives them as fields (ErrRelayFallenBack, ErrPaneAnswerInProgress,
- * ErrClaimTooSoon, ErrPaneChanged, and the ErrInternal of a pane answer whose key was sent; see
+ * ErrClaimTooSoon, ErrPaneChanged, ErrDialogMaybeOpen, and the ErrInternal of a pane answer whose key was sent; see
  * `RelayFallenBackDetails` and its siblings in types.ts), or null when the envelope carries none.
  * `message` is formatted as "${errName}: ${errDescription}".
  */
@@ -405,7 +405,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (54 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (55 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -504,6 +504,16 @@ export class ErrPaneAnswerInProgress extends AgentDirectorError {}
  * `ClaimTooSoonDetails`: retry at its `not_before`.
  */
 export class ErrClaimTooSoon extends AgentDirectorError {}
+/**
+ * Mirrors ErrDialogMaybeOpen (package: api): a plain `sendKeys` without `expect_pane_sha256`
+ * while a permission request of the Spawn is not proven gone by Claude Code's hooks (its tool's
+ * PostToolUse, the main agent's end of turn after it, or the agent's end), whatever
+ * agent-director's records say of it; its dialog may still be on the pane. Nothing was sent.
+ * `errDetails` is a `DialogMaybeOpenDetails`. A plain `sendKeys` whose `expect_pane_sha256`
+ * matches the pane is not rejected with it; pass that hash only from a pane a person or LLM
+ * judged, never from an automatic flow.
+ */
+export class ErrDialogMaybeOpen extends AgentDirectorError {}
 /** Mirrors ErrInvalidDecision (package: api) */
 export class ErrInvalidDecision extends AgentDirectorError {}
 /** Mirrors ErrNoOpenPermissionRequest (package: store) */
@@ -554,7 +564,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 54
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 55
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -603,6 +613,7 @@ const ERROR_TABLE = {
   ErrPaneChanged,
   ErrPaneAnswerInProgress,
   ErrClaimTooSoon,
+  ErrDialogMaybeOpen,
   ErrInvalidDecision,
   ErrMissingRequestToken,
   ErrInvalidFlags,

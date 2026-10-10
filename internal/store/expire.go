@@ -9,7 +9,8 @@ import (
 // write to a finished row: state ended or missing, whose arguments
 // finishedStateGuardArgs returns in order. Expire's read and delete (SR-12.1,
 // SR-12.3), resume's move to pending (SR-8.3) and reuse's reset (SR-10.3) use
-// it.
+// it, and so do the cap eviction and the v6 → v7 migration's backfill, on the
+// spawns a request belongs to (b.146 step 2c).
 const finishedStateGuardSQL = `state IN (?, ?)`
 
 // finishedStateGuardArgs returns the bound arguments for

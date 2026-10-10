@@ -139,7 +139,9 @@ func TestAdviceFollow_E11_PaneChangedReadPaneAgain(t *testing.T) {
 // then close it with record-pane-answer if the pane shows it answered"
 // (b.146 rule 8). A pane answer whose key was sent but whose sent write failed
 // leaves pane_answer intent, released; read-pane, then record-pane-answer
-// with its pane_sha256 closes the request, and plain send-keys types again.
+// with its pane_sha256 closes the request. Plain send-keys is then
+// ErrDialogMaybeOpen (the record is no proof, b.146 step 2c) until the tool's
+// PostToolUse proves the request gone, and types again.
 func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
@@ -162,7 +164,9 @@ func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 	if _, err := p.recordPaneAnswer(params); err != nil {
 		t.Fatalf("record-pane-answer: %v; want the request closed", err)
 	}
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
+	p.prove(t, toolRan(paToolUseID))
 	if err := p.sendKeys(p.plain("next")); err != nil {
-		t.Errorf("plain send-keys afterwards: %v; want it typed", err)
+		t.Errorf("plain send-keys once the tool's PostToolUse proved it gone: %v; want it typed", err)
 	}
 }

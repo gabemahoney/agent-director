@@ -22,9 +22,9 @@ import (
 )
 
 // mcpDeliveryKeys are a permission request's delivery facts (b.146 rule 15),
-// pane_answer and pane_as included (step 2b).
+// pane_answer and pane_as included (step 2b), and its proof (step 2c).
 var mcpDeliveryKeys = []string{"delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at", "tool_use_id",
-	"pane_answer", "pane_as"}
+	"pane_answer", "pane_as", "proven_gone_at", "proven_gone_how", "unproven_since"}
 
 // assertMCPDeliveryKeys fails unless obj carries every delivery fact.
 func assertMCPDeliveryKeys(t *testing.T, what string, obj map[string]json.RawMessage) {
@@ -133,6 +133,67 @@ func TestMCPPaneAnswerKeySent(t *testing.T) {
 	sent := e.rec.SocketCallsOf(tmux.CallSendText)
 	if len(sent) != 1 || sent[0].Text != "1" || sent[0].PressEnter || len(e.rec.SocketCallsOf(tmux.CallSendEnter)) != 0 {
 		t.Errorf("text calls = %+v, Enter calls %d; want the key 1 alone, no Enter", sent, len(e.rec.SocketCallsOf(tmux.CallSendEnter)))
+	}
+}
+
+// TestMCPDialogMaybeOpen (b.146 step 2c rules 2-4): a fallen-back request
+// closed through the record-pane-answer tool is not proven gone, so the
+// send-keys tool's plain call is ErrDialogMaybeOpen with err_details naming
+// it (pane_answer outside, unproven_since set, state, unproven_requests []),
+// nothing sent; get lists it in unproven_requests and get-permission gives
+// its unproven_since; the same call with read-pane's expect_pane_sha256 types.
+func TestMCPDialogMaybeOpen(t *testing.T) {
+	e := newEnv(t)
+	const id = "mcp-dialog-maybe-open"
+	if _, err := apitest.SeedSpawn(e.storePath, id, store.StateCheckPermission, t.TempDir(), "on", "", false); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	req, err := apitest.SeedPermissionRequest(e.storePath, id, "Bash")
+	if err == nil { // past the relay window, its hook gone a minute ago
+		err = apitest.AgePermissionRequest(e.storePath, req.RequestID, 48*time.Hour, time.Minute)
+	}
+	if err != nil {
+		t.Fatalf("seed a fallen-back request: %v", err)
+	}
+	e.rec.SeedRowSession(t, e.storePath, id)
+	const pane = "the dialog answered at tmux\n"
+	e.rec.SetCapture(apitest.TestSocket, apitest.TestPaneID, pane)
+	sum := sha256.Sum256([]byte(pane))
+	hash := hex.EncodeToString(sum[:])
+	callToolText(t, e.d, "record-pane-answer", paramJSON(t, map[string]any{"request_token": req.RequestToken, "as": "unknown",
+		"expect_pane_sha256": hash}))
+
+	data := toolErrorData(t, callTool(t, e.d, "send-keys", paramJSON(t, map[string]any{"claude_instance_id": id, "text": "hi"})))
+
+	details, _ := data.ErrDetails.(map[string]any)
+	if data.ErrName != "ErrDialogMaybeOpen" || details["request_token"] != req.RequestToken || details["pane_answer"] != "outside" ||
+		details["unproven_since"] == nil || details["proven_gone_at"] != nil || details["state"] != store.StateCheckPermission {
+		t.Fatalf("send-keys error = %q (%s), err_details %v; want ErrDialogMaybeOpen naming %s, outside, unproven",
+			data.ErrName, data.ErrDescription, data.ErrDetails, req.RequestToken)
+	}
+	if reqs, ok := details["unproven_requests"].([]any); !ok || len(reqs) != 0 {
+		t.Errorf("err_details.unproven_requests = %#v; want []", details["unproven_requests"])
+	}
+	if sent := e.rec.SocketCallsOf(tmux.CallSendText); len(sent) != 0 {
+		t.Errorf("text calls = %+v; want none", sent)
+	}
+	var row struct {
+		Unproven []map[string]json.RawMessage `json:"unproven_requests"`
+	}
+	got := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"claude_instance_id": id}))
+	if err := json.Unmarshal(got["unproven_requests"], &row.Unproven); err != nil || len(row.Unproven) != 1 ||
+		string(row.Unproven[0]["request_token"]) != `"`+req.RequestToken+`"` {
+		t.Fatalf("get unproven_requests = %s (%v); want the one request", got["unproven_requests"], err)
+	}
+	assertMCPDeliveryKeys(t, "get's unproven request", row.Unproven[0])
+	perm := callToolText(t, e.d, "get-permission", paramJSON(t, map[string]any{"request_token": req.RequestToken}))
+	if string(perm["unproven_since"]) == "null" || string(perm["proven_gone_at"]) != "null" {
+		t.Errorf("get-permission = unproven_since %s, proven_gone_at %s; want set, null", perm["unproven_since"], perm["proven_gone_at"])
+	}
+
+	callToolText(t, e.d, "send-keys", paramJSON(t, map[string]any{"claude_instance_id": id, "text": "hi", "expect_pane_sha256": hash}))
+	if sent := e.rec.SocketCallsOf(tmux.CallSendText); len(sent) != 1 || sent[0].Text != "hi" {
+		t.Errorf("text calls with the pane's hash = %+v; want hi typed", sent)
 	}
 }
 

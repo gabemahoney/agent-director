@@ -198,7 +198,9 @@ func TestSendKeysShapeRefusedBeforeAnything(t *testing.T) {
 // hook_gone_at read on the call's clock after the capture) before its key
 // goes out, sends exactly that one key and no Enter, then records sent with
 // decision as and decision_reason pane, one ad.row_mutation.committed (writer
-// send_keys). The request is closed: plain send-keys types again.
+// send_keys). The request is closed but not proven gone (b.146 step 2c):
+// plain send-keys is then ErrDialogMaybeOpen (the proofs that release it are
+// sendkeys_hold_test.go's).
 func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
@@ -240,9 +242,7 @@ func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 				committed[0]["decision_reason"] != store.DecisionReasonPane {
 				t.Errorf("ad.row_mutation.committed = %v; want one, writer send_keys, decision %s, reason pane", committed, tc.as)
 			}
-			if err := p.sendKeys(p.plain("next")); err != nil {
-				t.Errorf("plain send-keys after the pane answer: %v; want it typed", err)
-			}
+			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
 		})
 	}
 }

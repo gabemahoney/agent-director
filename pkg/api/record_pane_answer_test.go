@@ -31,8 +31,9 @@ func (p *paEnv) paGoneLongAgo(t *testing.T, token string) {
 // its hook gone long enough, record-pane-answer captures the pane (n_lines
 // lines, ANSI stripped), types nothing, and records pane_answer outside,
 // pane_as and decision the claim (null for unknown), decision_reason
-// pane_outside; plain send-keys then types, and a second record is
-// ErrAlreadyDecided.
+// pane_outside; a second record is ErrAlreadyDecided. The record is no proof
+// (b.146 step 2c): plain send-keys is then ErrDialogMaybeOpen (the proofs
+// that release it are sendkeys_hold_test.go's).
 func TestRecordPaneAnswerClaims(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
@@ -70,11 +71,9 @@ func TestRecordPaneAnswerClaims(t *testing.T) {
 				(tc.decision == nil) != (pr.Decision == "") || pr.AwaitsAnswer() {
 				t.Errorf("request A = %+v; want outside, pane_as %s, pane_outside, closed", pr, tc.as)
 			}
-			if err := p.sendKeys(p.plain("next")); err != nil {
-				t.Errorf("plain send-keys after the record: %v; want it typed", err)
-			}
 			_, err := p.recordPaneAnswer(p.outside(tok, "deny"))
 			assertOneSentinel(t, err, store.ErrAlreadyDecided)
+			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
 		})
 	}
 }
@@ -175,8 +174,9 @@ func TestRecordPaneAnswerRefusals(t *testing.T) {
 // TestRecordPaneAnswerClosesAPreV7Request (b.146 rule 13; the upgrade note): a
 // request recorded before schema v7 (no relay hook identity, no tool_use_id)
 // that fell back by its relay window refuses plain send-keys, which records
-// its hook_gone_at; 2 s later record-pane-answer closes it, and plain
-// send-keys types again.
+// its hook_gone_at; 2 s later record-pane-answer closes it. Plain send-keys is
+// then ErrDialogMaybeOpen until the agent's next Stop proves the request (no
+// tool_use_id, no agent_id) gone (b.146 step 2c rule 5), and types again.
 func TestRecordPaneAnswerClosesAPreV7Request(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
@@ -201,9 +201,16 @@ func TestRecordPaneAnswerClosesAPreV7Request(t *testing.T) {
 	if err != nil || res.Decision != nil || res.PaneAnswer != "outside" {
 		t.Fatalf("record-pane-answer = %+v, %v; want outside, decision null", res, err)
 	}
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tok, store.StateCheckPermission)
+	if n := p.prove(t, toolRan("toolu_01ANY")); n != 0 {
+		t.Fatalf("a PostToolUse proved %d; want none (the request has no tool_use_id)", n)
+	}
+	if n := p.prove(t, turnEnd); n != 1 {
+		t.Fatalf("the agent's next Stop proved %d; want the request", n)
+	}
 	p.rec.Reset()
 	if err := p.sendKeys(p.plain("hi")); err != nil {
-		t.Fatalf("plain send-keys after the record: %v; want it typed", err)
+		t.Fatalf("plain send-keys after the Stop: %v; want it typed", err)
 	}
 	p.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "hi")
 }

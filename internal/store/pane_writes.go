@@ -285,7 +285,9 @@ const toolRanCandidatesSQL = `SELECT ` + permissionColumns + `
 // closeToolRanSQL is CloseToolRanRequests' statement, run once per request.
 const closeToolRanSQL = `UPDATE permission_requests AS pr
 	   SET pane_answer = 'tool_ran', decision = 'allow', decision_reason = ?, decided_at = CURRENT_TIMESTAMP,
-	       hook_gone_at = COALESCE(pr.hook_gone_at, ?)
+	       hook_gone_at = COALESCE(pr.hook_gone_at, ?),
+	       proven_gone_how = CASE WHEN pr.proven_gone_at IS NULL THEN '` + ProvenGoneToolRan + `' ELSE pr.proven_gone_how END,
+	       proven_gone_at = COALESCE(pr.proven_gone_at, ?)
 	 WHERE pr.request_id = ? AND pr.claude_instance_id = ? AND pr.tool_use_id = ? AND ` + awaitingAnswerSQL + `
 	   AND EXISTS (SELECT 1 FROM spawns WHERE claude_instance_id = ? AND ` + hookGateSQL + `)
 	 RETURNING request_token, tool_name`
@@ -299,8 +301,10 @@ const closeToolRanSQL = `UPDATE permission_requests AS pr
 // process, or its settle instant when the process cannot be checked, BEFORE
 // the guarded write reads the record; a request whose hook may still answer
 // it is left alone) with one guarded statement: pane_answer tool_ran,
-// decision allow, decision_reason tool_ran, decided_at, and hook_gone_at at
-// unless already set, only while the request still awaits an answer and the
+// decision allow, decision_reason tool_ran, decided_at, hook_gone_at at
+// unless already set, and, unless it is already proven gone, proven_gone_at
+// at with proven_gone_how tool_ran (b.146 step 2c: the tool ran, so its
+// dialog is gone), only while the request still awaits an answer and the
 // hook's gate holds (hookGateSQL: the hook's parent is the row's recorded
 // pane process, SR-22.9). A nil gone closes nothing. An empty toolUseID
 // reads and closes nothing.
@@ -322,7 +326,7 @@ func (s *Store) CloseToolRanRequests(instanceID string, gate HookGate, toolUseID
 		if !gone(pr) {
 			continue
 		}
-		args := append([]any{DecisionReasonToolRan, millisArg(at), pr.RequestID, instanceID, toolUseID, instanceID},
+		args := append([]any{DecisionReasonToolRan, millisArg(at), millisArg(at), pr.RequestID, instanceID, toolUseID, instanceID},
 			hookGateArgs(gate)...)
 		var token, toolName string
 		err := s.db.QueryRow(closeToolRanSQL, args...).Scan(&token, &toolName)

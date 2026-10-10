@@ -124,7 +124,11 @@ func seedCloseRequests(t *testing.T, s *Store) {
 // an answer: an undecided one (from v7 on or before) is denied with the
 // close's reason, a verdict its relay hook has not acked keeps its decision,
 // reason and decided_at; an acked request and a decided one from before v7
-// are left as they were, and the row's version advances by one. After the
+// are left as they were, and the row's version advances by one. The same
+// close proves every request of the row gone (b.146 step 2c), closed now or
+// before, agent_gone at the close's instant, except C, whose tool ran before:
+// it keeps that proof. Another row's open request is left as it was,
+// unproven. After the
 // commit, in request-id order, each denied request gets one
 // ad.row_mutation.committed with the close's writer, the mark's ticks follow
 // each closed request, and the SessionEnd's state transition comes last; a
@@ -134,6 +138,13 @@ func TestCloseClosesRelayRequests(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s, path := newRelayRow(t, "on", StateWorking)
 			seedCloseRequests(t, s)
+			addOtherRelayRow(t, s)
+			insertOther(t, s, mainReq(tokenA), 0)
+			other := otherRequest(t, s, tokenA)
+			if n, err := s.ProveRequestsGone(relayID, agentGate("PostToolUse", ""),
+				RequestProof{How: ProvenGoneToolRan, ToolUseID: "toolu_" + tokenC[:8], At: proofAt}); err != nil || n != 1 {
+				t.Fatalf("C's tool ran = %d, %v; want C proven", n, err)
+			}
 			if c.unclosed {
 				endRelayRowUnclosed(t, path)
 			}
@@ -175,12 +186,24 @@ func TestCloseClosesRelayRequests(t *testing.T) {
 					t.Errorf("%s: decided_at %v -> %v, delivered_at %v -> %v; want a recorded verdict's kept, no ack written",
 						tok, was.DecidedAt, got.DecidedAt, was.DeliveredAt, got.DeliveredAt)
 				}
-				if !want.closed && !reflect.DeepEqual(got, was) {
-					t.Errorf("%s changed:\n before %+v\n after  %+v", tok, was, got)
+				wantHow, wantAt := ProvenGoneAgentGone, closedAt
+				if tok == tokenC {
+					wantHow, wantAt = ProvenGoneToolRan, proofAt
+				}
+				if got.ProvenGoneHow != wantHow || !got.ProvenGoneAt.Equal(wantAt) {
+					t.Errorf("%s = proven_gone_how %q at %v; want %q at %v", tok, got.ProvenGoneHow, got.ProvenGoneAt, wantHow, wantAt)
+				}
+				unproven := got
+				unproven.ProvenGoneAt, unproven.ProvenGoneHow = was.ProvenGoneAt, was.ProvenGoneHow
+				if !want.closed && !reflect.DeepEqual(unproven, was) {
+					t.Errorf("%s changed beyond its proof:\n before %+v\n after  %+v", tok, was, got)
 				}
 			}
 			if got := openTokens(t, s, relayID); len(got) != 0 {
 				t.Errorf("requests awaiting an answer = %v; want none", got)
+			}
+			if got := otherRequest(t, s, tokenA); !reflect.DeepEqual(got, other) || got.ProvenGone() {
+				t.Errorf("%s's request changed by the close:\n before %+v\n after  %+v", otherRelayID, other, got)
 			}
 
 			var want []string // event/token, in trail order

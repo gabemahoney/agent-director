@@ -44,6 +44,13 @@ type toolRanCloser interface {
 	CloseToolRanRequests(instanceID string, gate store.HookGate, toolUseID string, at time.Time, gone func(store.PermissionRow) bool) ([]string, error)
 }
 
+// requestProver is an optional extension of HookStore for a hook's proof that
+// permission requests' dialogs are gone (b.146 step 2c). *store.Store
+// satisfies it; a test double that does not proves nothing.
+type requestProver interface {
+	ProveRequestsGone(instanceID string, gate store.HookGate, proof store.RequestProof) (int64, error)
+}
+
 // waitingIfWorkingTransitioner is an optional extension of HookStore for the
 // main agent's idle-prompt Notification (ClassifyResult.WaitingIfWorking,
 // b.svb). *store.Store satisfies it; a test double that does not gets the
@@ -203,9 +210,12 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // refreshed, and
 // either way the row records idle_since (applyOrdinaryHook; b.svb, b.146
 // problem 3). On a relayed row, a PostToolUse or PostToolUseFailure carrying
-// a tool_use_id first closes the fallen-back request with that tool_use_id
-// (closeToolRan; b.146 rule 13: the tool ran, so its dialog was answered
-// allow), with the same gate, before its ordinary write.
+// a tool_use_id, and the main agent's Stop or idle-prompt Notification, first
+// prove permission requests' dialogs gone (proveRequestsGone; b.146 step 2c),
+// with the same gate; then such a PostToolUse or PostToolUseFailure closes the
+// fallen-back request with that tool_use_id (closeToolRan; b.146 rule 13: the
+// tool ran, so its dialog was answered allow), with the same gate, before its
+// ordinary write.
 //
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow is fail-closed per SRD §6.4 and b.146
@@ -385,6 +395,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		}, fields, onIgnored)
 		return nil
 	default:
+		if relayActive {
+			proveRequestsGone(st, hc, instanceID, gate, res, logger)
+		}
 		if relayActive && res.ToolRan() {
 			closeToolRan(st, hc, instanceID, gate, res.ToolUseID, logger)
 		}
@@ -455,6 +468,42 @@ func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.H
 	}
 	for _, token := range closed {
 		logf(logger, "hook: request %s of %s closed: its tool ran (tool_use_id=%s)", token, instanceID, toolUseID)
+	}
+}
+
+// proveRequestsGone is a hook's proof that permission requests' dialogs are
+// gone (b.146 step 2c; store ProveRequestsGone, with the hook's gate and
+// hc's clock): a PostToolUse or PostToolUseFailure carrying a tool_use_id
+// (ToolRan) proves the requests with that tool_use_id gone, tool_ran; the
+// main agent's Stop or idle-prompt Notification (TurnEnded) proves every
+// request with no agent_id recorded before it, turn_end. Any other hook
+// proves nothing. It runs first among the hook's writes, so the newest
+// request it may cover is read as near the hook's start as possible. It is
+// fail-open: a store without it, or a failed write, logs and changes nothing
+// else, and the requests stay unproven (plain send-keys stays refused) until
+// a later proof.
+func proveRequestsGone(st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
+	var proof store.RequestProof
+	switch {
+	case res.ToolRan():
+		proof = store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: res.ToolUseID}
+	case res.TurnEnded():
+		proof = store.RequestProof{How: store.ProvenGoneTurnEnd}
+	default:
+		return
+	}
+	p, ok := st.(requestProver)
+	if !ok {
+		return
+	}
+	proof.At = hc.clock()()
+	n, err := p.ProveRequestsGone(instanceID, gate, proof)
+	if err != nil {
+		logf(logger, "hook: prove requests gone (instance=%s, event=%s): %v", instanceID, res.EventName, err)
+		return
+	}
+	if n > 0 {
+		logf(logger, "hook: %d request(s) of %s proven gone (%s, event=%s)", n, instanceID, proof.How, res.EventName)
 	}
 }
 
@@ -676,3 +725,4 @@ var _ HookStore = (*store.Store)(nil)
 var _ outcomeTransitioner = (*store.Store)(nil)
 var _ waitingIfWorkingTransitioner = (*store.Store)(nil)
 var _ toolRanCloser = (*store.Store)(nil)
+var _ requestProver = (*store.Store)(nil)

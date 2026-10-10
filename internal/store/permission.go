@@ -131,6 +131,24 @@ const (
 	PaneAnswerToolRan = "tool_ran"
 )
 
+// The proven_gone_how values (schema v7; b.146 step 2c): how Claude Code, not
+// agent-director's own records, proved a request's permission dialog gone.
+// ProvenGoneToolRan: the agent's PostToolUse or PostToolUseFailure carried the
+// request's tool_use_id, so its tool ran. ProvenGoneTurnEnd: the turn of the
+// agent that asked ended after the request was written; the main agent's Stop
+// or idle-prompt Notification proves a request with no agent_id (a request
+// recorded before v7 included). ProvenGoneAgentGone: a close of its Spawn's
+// requests (closeOrphanedRequests: find-missing's mark, the terminal
+// SessionEnd, resume's backstop) ran while the request was not yet proven, or
+// the v6 → v7 migration found its row already ended or missing
+// (migrateV6toV7's backfill). A relay hook's ack, a pane answer and
+// record-pane-answer prove nothing.
+const (
+	ProvenGoneToolRan   = "tool_ran"
+	ProvenGoneTurnEnd   = "turn_end"
+	ProvenGoneAgentGone = "agent_gone"
+)
+
 // PermissionRow is the materialized shape returned by GetPermissionRequest,
 // GetPermissionRequestByToken, OpenPermissionRequestsForSpawn and
 // PermissionRequestsForSpawn. Empty Decision / DecisionReason mean "not yet
@@ -191,7 +209,17 @@ type PermissionRow struct {
 	// find_missing (the mark) or ended (the others), and keeps the verdict of
 	// one that was decided but not acked. Zero when no close closed it.
 	ClosedAt time.Time
+	// ProvenGoneAt is when Claude Code proved the request's permission dialog
+	// gone (b.146 step 2c), and ProvenGoneHow how (ProvenGoneToolRan,
+	// ProvenGoneTurnEnd or ProvenGoneAgentGone); zero and "" until then.
+	ProvenGoneAt  time.Time
+	ProvenGoneHow string
 }
+
+// ProvenGone reports whether Claude Code proved r's permission dialog gone
+// (ProvenGoneAt set; b.146 step 2c). Until it does, r holds plain send-keys
+// to its live Spawn, whatever agent-director's own records say of it.
+func (r PermissionRow) ProvenGone() bool { return !r.ProvenGoneAt.IsZero() }
 
 // PreV7 reports whether r was recorded before schema v7, by a relay hook that
 // records no settle instant: its relay hook's identity and delivery are not
@@ -257,7 +285,8 @@ const permissionColumns = `pr.request_id, pr.claude_instance_id, pr.tool_name, p
        COALESCE(pr.attempted_decision, ''), pr.attempted_at,
        pr.pane_answer, COALESCE(pr.pane_as, ''),
        COALESCE(pr.pane_sender_pid, 0), COALESCE(pr.pane_sender_starttime, ''), COALESCE(pr.pane_sender_pidns, ''),
-       pr.pane_intent_at, pr.closed_at`
+       pr.pane_intent_at, pr.closed_at,
+       pr.proven_gone_at, COALESCE(pr.proven_gone_how, '')`
 
 // scanPermissionRow scans one row selected with permissionColumns. The Scan
 // error is returned as is, so callers can still detect sql.ErrNoRows.
@@ -266,6 +295,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		r                                                                   PermissionRow
 		decidedAt                                                           sql.NullTime
 		deliveredAt, settledAt, hookGoneAt, attemptedAt, intentAt, closedAt sql.NullInt64
+		provenAt                                                            sql.NullInt64
 	)
 	err := sc.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
 		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt,
@@ -275,7 +305,8 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		&r.AttemptedDecision, &attemptedAt,
 		&r.PaneAnswer, &r.PaneAs,
 		&r.PaneSender.PID, &r.PaneSender.Starttime, &r.PaneSender.PIDNamespace,
-		&intentAt, &closedAt)
+		&intentAt, &closedAt,
+		&provenAt, &r.ProvenGoneHow)
 	if err != nil {
 		return PermissionRow{}, err
 	}
@@ -288,6 +319,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 	r.AttemptedAt = millisTime(attemptedAt)
 	r.PaneIntentAt = millisTime(intentAt)
 	r.ClosedAt = millisTime(closedAt)
+	r.ProvenGoneAt = millisTime(provenAt)
 	return r, nil
 }
 
@@ -329,8 +361,9 @@ func queryPermissionRows(query func(string, ...any) (*sql.Rows, error), q, errPr
 // test support and fixtures.
 //
 // cap controls post-INSERT eviction of closed requests (evictClosedRequests:
-// those no longer awaiting an answer, oldest decided_at first, with one
-// exempt request per Spawn). cap == 0 disables eviction entirely. cap < 0 is
+// those no longer awaiting an answer and proven gone or of a finished Spawn,
+// oldest decided_at first, with one exempt request per Spawn). cap == 0
+// disables eviction entirely. cap < 0 is
 // treated identically to cap == 0 (eviction disabled) — negative cap handling
 // belongs at the call site.
 //

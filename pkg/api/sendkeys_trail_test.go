@@ -76,6 +76,15 @@ func sktReleased(t *testing.T, e *killEnv, r *killRow) {
 		time.Since(e.clock.Now())+2*sendKeysWindow())
 }
 
+// sktUnproven gives r one permission request past its relay window, decided
+// and so read delivered, that no hook has proven gone (b.146 step 2c).
+func sktUnproven(t *testing.T, e *killEnv, r *killRow) {
+	sktReleased(t, e, r)
+	if ok, err := e.st.DecidePermissionRequest(r.ID, storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !ok {
+		t.Fatalf("DecidePermissionRequest = %v, %v", ok, err)
+	}
+}
+
 // sktLeftover replaces r's session with one carrying an earlier launch's label.
 func sktLeftover(t *testing.T, e *killEnv, r *killRow) {
 	e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
@@ -122,6 +131,8 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			outcome: "ErrSendKeysWhileRelayed", rowState: "check_permission", guard: "held"},
 		{name: "relay fallen back", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}, sktReleased),
 			outcome: "ErrRelayFallenBack", rowState: "check_permission", guard: "held"},
+		{name: "relay request not proven gone", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}, sktUnproven),
+			outcome: "ErrDialogMaybeOpen", rowState: "check_permission", guard: "held"},
 		{name: "relay released", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}),
 			outcome: "ok", rowState: "check_permission", guard: "released"},
 		{name: "ours, live row", seed: sktRow(killRowSpec{}), outcome: "ok", rowState: "waiting"},

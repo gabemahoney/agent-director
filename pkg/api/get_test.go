@@ -141,7 +141,7 @@ func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
 	return store.Spawn{}, store.ErrSpawnNotFound
 }
 
-func (r *recordingGetStore) OpenPermissionRequestsForSpawn(string) ([]store.PermissionRow, error) {
+func (r *recordingGetStore) PermissionRequestsForSpawn(string) ([]store.PermissionRow, error) {
 	r.permCalls++
 	return nil, r.permErr
 }
@@ -152,8 +152,10 @@ func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.Se
 }
 
 // TestGetReadsAndErrors pins SR-3.1 and SR-5.9 with a recording store: the
-// permission rows are read only in check_permission, history once for the
-// row's own life, and either read's error propagates (b.v2c AC6/AC8).
+// permission rows are read once in every state but ended and missing (b.146
+// step 2c: one read gives both permission_requests and unproven_requests),
+// history once for the row's own life, and either read's error propagates
+// (b.v2c AC6/AC8).
 func TestGetReadsAndErrors(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
@@ -163,9 +165,10 @@ func TestGetReadsAndErrors(t *testing.T) {
 		permErr, historyErr error
 		permCalls           int
 	}{
-		{"waiting skips the permission read", store.StateWaiting, nil, nil, 0},
+		{"waiting reads the permission requests once", store.StateWaiting, nil, nil, 1},
 		{"check_permission read error", store.StateCheckPermission, boom, nil, 1},
-		{"session history read error", store.StateEnded, nil, boom, 0},
+		{"missing skips the permission read", store.StateMissing, nil, nil, 0},
+		{"ended skips it; session history read error", store.StateEnded, nil, boom, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

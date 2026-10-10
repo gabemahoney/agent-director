@@ -127,11 +127,16 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
      independently. Oldest *closed* rows (those no longer awaiting an
      answer) are evicted in the same transaction when the table exceeds
      `relay.permission_request_cap` (default 1000; `0` disables
-     eviction). A spawn's newest request is kept while that spawn has a
+     eviction), but only once Claude Code has proven the request's dialog
+     gone (`proven_gone_at` set) or its spawn is `ended` or `missing`: a
+     closed request not yet proven gone on a live spawn still holds plain
+     `send-keys` (see "The dialog hold" below), so it is kept, and the
+     table can stay above the cap by the number of such requests. A
+     spawn's newest request is kept as well while that spawn has a
      request that still awaits an answer, because `decide` relies on it
      for a request recorded before this release (see "Requests recorded
      before this release" below), so the table can stay above the cap by
-     one closed row per such spawn.
+     one more closed row per such spawn.
    - Polls its own row at
      `max(50ms, relay.poll_base_ms + uniform(0, relay.poll_jitter_ms))`
      intervals, until 3 s before Claude Code ends it (see "Relay timeout
@@ -154,6 +159,12 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
    reached the agent, `decide` refuses it with `ErrRelayFallenBack`, and
    only an answer at the pane, or a record of one, closes it (see
    "Answering at the pane" below).
+7. From the request's first write until Claude Code's own hooks prove its
+   dialog gone (its tool ran, the agent's turn ended, or the agent
+   ended), a plain
+   `send-keys` without a pane hash to the spawn is refused with
+   `ErrDialogMaybeOpen`, whatever agent-director's records say of the
+   request (see "The dialog hold" below).
 
 ### Envelope wire format
 
@@ -397,6 +408,10 @@ transaction as its own change, so both are written or neither is:
 - `resume`'s move of the finished spawn to `pending`, as a backstop for a
   request left open by a release before this close.
 
+The same close proves every request of the spawn gone, closed now or
+before (`proven_gone_how` `agent_gone`; see "The dialog hold" below): its
+agent is gone, so no dialog of it is left on the pane.
+
 Every request that still awaits an answer is closed (`closed_at` is set),
 decided or not:
 
@@ -419,7 +434,8 @@ Each deny is written to the trail as one `ad.row_mutation.committed`
 
 A closed request stays closed after a `resume`: it no longer awaits an
 answer, so `get` and `list` do not show it, it no longer holds the spawn in
-`check_permission` or off `working`, it never refuses `send-keys`, and
+`check_permission` or off `working`, it is proven gone, so it never refuses
+`send-keys`, and
 `decide` refuses it as above, never with `ErrRelayFallenBack`.
 `get-permission` still reads it by its token, and its `delivery` follows
 the rules in "Delivery" below like any request's: `delivered` once its hook
@@ -431,7 +447,10 @@ spawn marked `missing` or ended by its agent never keeps an open request.
 
 Every relayed request carries its delivery facts. They are worked out each
 time the request is read, by `decide`, `get`, `list` and `get-permission`;
-nothing but `hook_gone_at` is written for them:
+nothing but `hook_gone_at` is written for them. `proven_gone_at` and
+`proven_gone_how` are written by the agent's own hooks, by the close of
+its spawn's requests and, for a spawn already finished, by the upgrade to
+this release, never by a reader (see "The dialog hold" below):
 
 | Field | Meaning |
 |---|---|
@@ -443,6 +462,9 @@ nothing but `hook_gone_at` is written for them:
 | `tool_use_id` | The `tool_use_id` of Claude Code's hook input; `null` when it gave none. |
 | `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported that its tool ran. `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
 | `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. It is the caller's claim, stored and never checked. |
+| `proven_gone_at` | When Claude Code proved the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`. |
+| `proven_gone_how` | `tool_ran`: a `PostToolUse` or `PostToolUseFailure` carried its `tool_use_id`. `turn_end`: the turn of the agent that asked ended after it was written; the main agent's `Stop` or idle-prompt Notification proves a request with no `agent_id`. `agent_gone`: its spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded to this release. `null` until proven. |
+| `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded before this release, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
 
 **`decision` is not the outcome.** `decision` is the verdict recorded,
 set before delivery is known: a request can read `decision` `allow` with
@@ -530,7 +552,10 @@ decided or not (a recorded verdict not yet confirmed has not reached the
 agent), and not closed with the spawn. A row can read `waiting` while
 one of its requests still awaits an answer, so a caller follows each
 request it tracks with `get-permission`, not only rows in
-`check_permission`.
+`check_permission`. `get` (not `list`) also carries `unproven_requests`:
+every request of the row not proven gone, in any state but `ended` and
+`missing`, with the same fields, including those agent-director's records
+read closed (see "The dialog hold" below).
 
 **The row after the last answer.** While any of its requests still awaits
 an answer, the row stays in `check_permission`. After that it moves on
@@ -564,6 +589,17 @@ before the upgrade:
   below), while plain `send-keys` is still refused with
   `ErrRelayFallenBack` on its account. Its PostToolUse does not close it
   (no `tool_use_id` is recorded for it).
+- Every such request of a live spawn, decided or not, has no proof that
+  its dialog is gone (`proven_gone_at` `null`), so it holds a plain
+  `send-keys` without a pane hash to its spawn (`ErrDialogMaybeOpen`; see
+  "The dialog hold" below) until the main agent's next `Stop` or
+  idle-prompt Notification, or the spawn's end. The upgrade itself proves
+  gone (`agent_gone`) every request of a spawn already `ended` or
+  `missing`. `record-pane-answer` does not lift that hold. An
+  agent already idle at its prompt when you upgrade, its idle-prompt
+  Notification already sent, sends neither until a new turn starts, so its
+  first plain `send-keys` needs a person or an LLM to read the pane and
+  send with that read's `pane_sha256`.
 - `decide` records a verdict on it only before its window less 1 s, and
   returns at once, with no wait for a confirmation such a hook never
   writes. Refused from then, it first waits until `confirm_by` (at most
@@ -590,24 +626,30 @@ refuses in this order, sending nothing:
 |---|---|---|
 | any | a relay hook of the spawn may still answer its request: its process runs, or it cannot be checked and the request is open before its `confirm_by` | `ErrSendKeysWhileRelayed` |
 | plain (no `request_token`) | a request of the spawn is fallen back with `pane_answer` `none` or `intent` | `ErrRelayFallenBack`, with `err_details`, naming the oldest such request |
+| plain, without `expect_pane_sha256` | a request of the spawn is not proven gone (`proven_gone_at` `null`), however agent-director's records say it closed | `ErrDialogMaybeOpen`, with `err_details`, naming the oldest such request (see "The dialog hold" below) |
 | pane answer (`request_token` T) | the spawn has no request T | `ErrNoOpenPermissionRequest` |
 | pane answer | T is not fallen back: confirmed by its relay hook, closed with its spawn, or already closed at the pane | `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest` |
 | pane answer | another pane answer to T is still being sent | `ErrPaneAnswerInProgress`, with `err_details` |
 | either, with `expect_pane_sha256` | the agent's pane no longer has that hash | `ErrPaneChanged`, with `err_details` |
 
 All but the last are decided from the store and process checks, before
-any tmux call; the last needs a capture of the pane. A closed request (one
-closed with its spawn, or closed at the pane: `pane_answer` `sent`,
-`outside` or `tool_ran`) never refuses anything, and a request its relay
-hook confirmed holds only while that hook's process is seen running (it is
-writing its verdict to Claude Code). There is no other time window: a hold
-ends when the relay hook does, and a request recorded before this release,
-whose hook recorded no identity, holds until its `confirm_by`, its relay
+any tmux call; the last needs a capture of the pane. A request closed with
+its spawn is proven gone with it and refuses nothing. A request closed at
+the pane (`pane_answer` `sent`, `outside` or `tool_ran`) refuses nothing
+but, until it is proven gone, a plain call without a pane hash
+(`ErrDialogMaybeOpen`). A request its relay hook confirmed is held by the
+first rule only while that hook's process is seen running (it is writing
+its verdict to Claude Code), then by the dialog hold until it is proven
+gone. There is no time window of the guard's own: the first rule ends when
+the relay hook does, and a request recorded before this release, whose
+hook recorded no identity, holds by it until its `confirm_by`, its relay
 window plus 2 s (see "Residual race" below).
 
 So only a call that names the request it answers can type on a spawn with
-an open fallen-back request, and a plain `send-keys` (an automatic command
-and its Enter, say) cannot land on that request's prompt.
+an open fallen-back request, a plain `send-keys` (an automatic command and
+its Enter, say) cannot land on that request's prompt, and a plain
+`send-keys` without a pane hash cannot land on a dialog agent-director
+believes answered until Claude Code shows it gone.
 
 `ErrSendKeysWhileRelayed`'s message (advice; the error name is the
 contract) names one request whose relay hook may still answer, one still
@@ -621,6 +663,11 @@ release time:
   delivering it; retry send-keys later`. There is nothing left to answer
   (`decide` on it returns `ErrAlreadyDecided`).
 
+A plain retry after the relay hook has ended can get `ErrDialogMaybeOpen`
+instead, until Claude Code proves the request gone: after an allow, when
+its tool has run; after a deny, when the main agent's turn ends (its
+`Stop` or idle-prompt Notification).
+
 `ErrRelayFallenBack` (from a plain `send-keys`, and from `decide`) carries
 `err_details`, an object with:
 
@@ -629,7 +676,7 @@ release time:
   `decision_reason` and its delivery facts (`delivery` `fallen_back`,
   `confirm_by`, `hook_alive`, `hook_gone_at`, `attempted_decision`,
   `attempted_at`, `tool_use_id`, `pane_answer` `none` or `intent`,
-  `pane_as`);
+  `pane_as`, `proven_gone_at`, `proven_gone_how`, `unproven_since`);
 - `state`: the spawn's state;
 - `open_requests`: every other request of the spawn that still awaits an
   answer, oldest first, each with `request_token`, `tool_name`,
@@ -659,9 +706,83 @@ a live hook's verdict or deny does only if both:
 
 A relay hook of this release commits its last store write at least 2 s
 before Claude Code ends it, and its `confirm_by` is that end plus 2 s.
-Nothing stored shows a hook stuck delivering, so this race is not closed.
-All of these instants assume the hook, the store and the caller share one
-wall clock.
+Nothing stored shows a hook stuck delivering, so this race is not closed
+for a call that carries a pane hash (a pane answer, or a plain call that
+passes the dialog hold). A plain call without one stays refused after
+`confirm_by` too, with `ErrRelayFallenBack` or `ErrDialogMaybeOpen`, until
+the request is closed and Claude Code proves it gone. All of these
+instants assume the hook, the store and the caller share one wall clock.
+
+### The dialog hold
+
+agent-director's own records of a request say what agent-director did,
+not what Claude Code shows. A request can read `delivered` while its
+dialog is still on the pane (its relay hook acked the verdict, then died
+before writing it), and so can one closed at the pane (the key landed on
+an identical dialog of another request) or recorded answered with
+`record-pane-answer` (its dialog was drawn late). An Enter typed then
+answers that dialog. So from a request's first write, agent-director
+treats its dialog as possibly on the pane until Claude Code's own hooks
+prove it gone:
+
+| `proven_gone_how` | Proof |
+|---|---|
+| `tool_ran` | The agent's `PostToolUse` or `PostToolUseFailure` carrying the request's `tool_use_id`: the tool ran, so its dialog was answered. Any request with that id, a subagent's included. |
+| `turn_end` | The turn of the agent that asked ended after the request was written. The main agent's `Stop`, or its idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`), proves it for every request with no `agent_id` recorded before it, one recorded before this release included. |
+| `agent_gone` | `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. The upgrade to this release proves every request of a spawn already `ended` or `missing` the same way. |
+
+The ack (`delivered`), a pane answer recorded `sent` and
+`record-pane-answer` prove nothing. A hook proves something only when it
+comes from the row's own agent (see
+[hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)) on a spawn with
+`relay_mode=on`. The proof is stored on the request as `proven_gone_at`
+and `proven_gone_how`.
+
+**The hold.** While any request of the spawn is not proven gone, a plain
+`send-keys` without `expect_pane_sha256` is refused with
+`ErrDialogMaybeOpen` and nothing is sent, in every live state of the
+spawn. `ErrSendKeysWhileRelayed` and `ErrRelayFallenBack` are checked
+first. In practice the hold lasts, after an allow, until the request's
+tool has run, and after a deny, until the main agent's turn ends. A spawn
+with no unproven permission request is never held (one that never asked
+for a permission included), and a spawn with the relay off never is.
+`pause` is not held (see "Known limitations" below).
+
+`ErrDialogMaybeOpen` carries `err_details`, an object with:
+
+- the oldest request not proven gone, with its fields as `get-permission`
+  gives them, how agent-director's records say it closed (`delivery`,
+  `pane_answer`) and since when (`unproven_since`, `null` while it still
+  awaits an answer);
+- `state`: the spawn's state;
+- `unproven_requests`: every other request of the spawn not proven gone,
+  oldest first, with the same fields (`[]` when there is none).
+
+Its description states those facts and that nothing was sent; it never
+says that a dialog is on screen.
+
+**The look-and-send path.** A plain `send-keys` whose
+`expect_pane_sha256` matches the pane as captured now is not held: the
+hash says that a person or an LLM judged this exact screen. A mismatch is
+`ErrPaneChanged`, and every other refusal still applies (a relay hook
+that may still answer, a fallen-back request, the pane-answer rules).
+**Never pass the hash from an automatic flow:** a program that reads the
+pane and passes its hash without judging it lets through exactly the
+Enter the hold exists to stop.
+
+**The unproven report.** `get` lists, in `unproven_requests`, every
+request of the row not proven gone (in any state but `ended` and
+`missing`), each with `unproven_since`; `get-permission`, `decide` and the
+`permission_requests` of `get` and `list` carry `proven_gone_at`,
+`proven_gone_how` and `unproven_since` on each request. A request that
+reads `delivered`, or closed at the pane, but stays unproven for a while
+is a reason to read the pane: its dialog may still be there.
+
+**What a caller does.** On `ErrDialogMaybeOpen`, keep the keys and retry
+later. If it is still held after some seconds, have a person or an LLM
+read the pane: if a dialog waits, answer it with a plain `send-keys --key`
+and that read's `pane_sha256`; if not, send the held keys with that
+`pane_sha256`.
 
 ### Answering at the pane
 
@@ -742,7 +863,8 @@ A plain call types `--text` and then presses Enter, as before. `--no-enter`
 types the text with no Enter (with neither text nor key it is
 `ErrInvalidFlags`), and `--key K` sends that one key alone, with no Enter
 and no text. `--expect-pane-sha256` is optional: given, the pane is
-compared as for a pane answer (`ErrPaneChanged`) before anything is typed.
+compared as for a pane answer (`ErrPaneChanged`) before anything is typed,
+and a match passes the dialog hold (see "The dialog hold" above).
 `--as` without `--request-token` is `ErrInvalidFlags`.
 
 **Never pass `expect_pane_sha256` from an automatic flow.** The hash says
@@ -753,7 +875,9 @@ through the keys the check exists to stop.
 
 A request answered at tmux by a person, or by anything else outside
 agent-director, stays fallen back, and a plain `send-keys` stays refused,
-until it is closed. Two ways close it:
+until it is closed. Once closed, a plain `send-keys` without a pane hash
+is still held (`ErrDialogMaybeOpen`) until Claude Code proves the request
+gone. Two ways close it:
 
 1. **`record-pane-answer`** (it types nothing):
 
@@ -797,7 +921,8 @@ until it is closed. Two ways close it:
    awaits an answer and its relay hook is judged gone (see
    [hooks.md](hooks.md#a-request-whose-tool-ran)). It closes only allows:
    Claude Code runs no hook for a deny at its prompt. That hook can fail
-   too, so this close is a help, not a guarantee.
+   too, so this close is a help, not a guarantee. The same hook proves the
+   request gone (`tool_ran`), whether or not it closes it.
 
 #### Recovering a wedged relayed spawn
 
@@ -826,6 +951,10 @@ raw tmux**:
 5. Both are audited: `ad.send_keys.called` (with `guard_evaluation`
    `released` for a pane answer let through) and the request's
    `ad.row_mutation.committed`.
+6. Neither proves the request gone: a plain `send-keys` without a pane
+   hash stays held (`ErrDialogMaybeOpen`) until Claude Code does (after a
+   deny, normally the turn's `Stop`). To type before that, read the pane
+   again and send with that read's `pane_sha256`.
 
 ### Known limitations
 
@@ -841,28 +970,64 @@ never Claude Code's screen. These cases are not covered:
   keeps listing it, a plain `send-keys` is refused, the spawn stays in
   `check_permission` until a later hook moves it out (the agent's `Stop`
   or `AskUserQuestion`), and `find-missing` does not repair the row.
+  Once it is closed, a plain `send-keys` without a pane hash stays held
+  until Claude Code proves it gone.
 - **A prompt agent-director has no record of.** A relay hook that dies, or
   is killed, before it records its request leaves a prompt that no request
   stands for, so a plain `send-keys` is not refused, and its Enter can
-  answer that prompt.
+  answer that prompt. The dialog hold starts at the request's first write,
+  so it does not cover this case.
 - **A confirmed answer not returned.** The relay hook confirms its verdict
   or its timeout deny at least 2 s before Claude Code ends it, then writes
   it. A hook that dies or stalls past Claude Code's kill between the two
   leaves the request reading `delivered` while Claude Code never received
   the answer: `decide` on it returns `ErrAlreadyDecided`, which advises no
-  pane answer, and the request refuses no `send-keys`.
+  pane answer. The request is not proven gone, so a plain `send-keys`
+  without a pane hash is held (`ErrDialogMaybeOpen`) and `get` lists it in
+  `unproven_requests` until someone looks at the pane.
 - **Between the capture and the key.** The pane can change between
   agent-director's capture and the moment Claude Code reads the key, a
-  window of milliseconds that no check closes.
+  window of milliseconds that no check closes. Likewise, a key already on
+  its way when a dialog appears, before its request's first write, lands
+  on that dialog.
 - **Identical prompts.** Two prompts whose captured bytes are the same
   (same tool, same input, same surrounding lines) cannot be told apart: a
   pane answer meant for one can close the other, and the record then names
-  the wrong request.
+  the wrong request. The other request stays unproven, so a plain
+  `send-keys` without a pane hash is held until someone looks.
 - **A prompt drawn more than 2 s late.** `record-pane-answer` waits 2 s
   after the relay hook was found gone (or after its `confirm_by`, for a
   hook judged by time). A Claude Code that stalls longer
   before drawing its prompt can let a caller record the request answered
-  before the prompt appears.
+  before the prompt appears. The request stays unproven, so a plain
+  `send-keys` without a pane hash is held until Claude Code proves it gone.
+- **A subagent's denied request.** A request carrying an `agent_id` (a
+  subagent's or an in-process teammate's) is proven gone only by its
+  tool's `PostToolUse` or by the spawn's end: the main agent's `Stop` and
+  idle-prompt Notification do not cover it, since a background subagent
+  can outlive the main turn, and agent-director does not register the
+  subagent's own stop hook. A deny runs no tool, so after a denied
+  subagent request a plain `send-keys` without a pane hash is held until
+  the spawn's agent ends; only a person or an LLM who looked, sending with
+  the pane's hash, gets keys through.
+- **Lost end-of-turn hooks.** After a denied request, if both the turn's
+  `Stop` and the idle-prompt Notification are lost, a plain `send-keys`
+  without a pane hash stays held until someone looks and sends with the
+  pane's hash, or the spawn ends.
+- **A key to stop a busy agent after a deny.** An `Escape` sent to stop the
+  agent is a plain `send-keys`: right after a deny it is held until the
+  turn ends, so it needs a person or an LLM to look and send it with the
+  pane's hash.
+- **`pause` is not held.** `pause` types `C-u`, `/exit` and Enter into a
+  `waiting` spawn with no relay check: neither the dialog hold nor
+  `ErrSendKeysWhileRelayed` or `ErrRelayFallenBack` refuses it. A spawn
+  can read `waiting` while one of its requests is not proven gone (a
+  subagent's request after the main agent's `Stop`, or a request recorded
+  before this release on an agent already idle at its prompt when you
+  upgraded), and if that request's dialog is still on the pane, `pause`'s
+  Enter answers it. Before pausing a relay-on spawn, read `get` and pause
+  only while its `unproven_requests` is empty, or have a person or an LLM
+  look at the pane first.
 - **A pane answer whose sender died.** It leaves `pane_answer` `intent`,
   its key possibly typed. The request stays open and fallen back, so plain
   `send-keys` stays refused, until a retry with a fresh hash or

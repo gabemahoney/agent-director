@@ -1,8 +1,9 @@
 package store
 
 // Schema v7 (b.146 steps 2, 2b and 2c): the v6 fixture's requests after the
-// hop (no relay hook identity, no settle instant: judged by time, as before)
-// and the v7 → v6 downgrade. The guide match of its recipe is
+// hop (no relay hook identity, no settle instant: judged by time, as before),
+// the hop's backfill proving finished rows' requests gone, and the v7 → v6
+// downgrade. The guide match of its recipe is
 // schema_v5_test.go's; the column specs, re-entry and rollback rows are
 // schema_test.go's; fixtures: migration_fixtures_test.go.
 
@@ -96,6 +97,70 @@ func TestV7MigrationKeepsV6Rows(t *testing.T) {
 	}
 	if ok, err := s.DecideRelayRequest(f.id, f.open, "allow", "", WriterProcessDecide, openCreated.Add(-time.Second), DefaultLockWait); err != nil || !ok {
 		t.Errorf("decide at a cutoff before created_at = %v, %v; want written", ok, err)
+	}
+}
+
+// TestV7MigrationProvesFinishedRowsRequests (b.146 step 2c; b.kxu): the hop
+// proves every request of a row already ended or missing gone, agent_gone at
+// one instant within the hop, its v6 values kept (an undecided one stays
+// undecided and awaits an answer); the live row's requests stay unproven. A
+// second run of the hop rewrites nothing.
+func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
+	f := makeV6Fixture(t, t.TempDir())
+	v6Values := map[string][]map[string]string{}
+	for _, id := range f.finished {
+		v6Values[id] = readQuotedRows(t, f.path, "permission_requests", id, "request_id", f.requestCols)
+	}
+	writeSentinel(t, f.dir, 6, schemaVersion)
+
+	from := time.Now().Truncate(time.Millisecond)
+	s, err := Open(f.path)
+	to := time.Now()
+
+	if err != nil {
+		t.Fatalf("Open (the hop): %v", err)
+	}
+	var at time.Time
+	for _, id := range f.finished {
+		for _, tok := range []string{f.open, f.decided} {
+			pr, err := s.GetPermissionRequest(id, tok)
+			if err != nil {
+				t.Fatalf("GetPermissionRequest(%s, %s): %v", id, tok, err)
+			}
+			if at.IsZero() {
+				at = pr.ProvenGoneAt
+			}
+			if pr.ProvenGoneHow != ProvenGoneAgentGone || !pr.ProvenGoneAt.Equal(at) || at.Before(from) || at.After(to) {
+				t.Errorf("%s/%s = proven_gone_how %q at %v; want agent_gone at the hop's one instant in [%v, %v]",
+					id, tok, pr.ProvenGoneHow, pr.ProvenGoneAt, from, to)
+			}
+			if tok == f.open && (pr.Decision != "" || !pr.AwaitsAnswer()) {
+				t.Errorf("%s/%s = decision %q, awaits an answer %v; want it undecided, still awaiting one", id, tok, pr.Decision, pr.AwaitsAnswer())
+			}
+		}
+		if got := readQuotedRows(t, f.path, "permission_requests", id, "request_id", f.requestCols); !reflect.DeepEqual(got, v6Values[id]) {
+			t.Errorf("%s's requests' v6 values changed:\n got  %v\n want %v", id, got, v6Values[id])
+		}
+	}
+	for _, tok := range []string{f.open, f.decided} {
+		if pr, err := s.GetPermissionRequest(f.id, tok); err != nil || pr.ProvenGone() {
+			t.Errorf("live row's %s = %+v, %v; want it unproven", tok, pr, err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	withRaw(t, f.path, func(db *sql.DB) { // a rewrite would stamp the second run's own instant
+		mustExec(t, db, `UPDATE permission_requests SET proven_gone_at = 1 WHERE proven_gone_at IS NOT NULL`)
+	})
+	before := dbDump(t, f.path)
+	step, _ := migrationStepFrom(6)
+	if err := step.apply(openRaw(t, f.path)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if after := dbDump(t, f.path); !reflect.DeepEqual(after, before) {
+		t.Errorf("the second run changed the store:\n before %v\n after  %v", before, after)
 	}
 }
 

@@ -34,7 +34,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (54 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (55 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -73,6 +73,7 @@ export {
   ErrPaneChanged,
   ErrPaneAnswerInProgress,
   ErrClaimTooSoon,
+  ErrDialogMaybeOpen,
   ErrInvalidDecision,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,
@@ -105,6 +106,7 @@ export type {
   Delivery,
   RequestDelivery,
   PaneAnswer,
+  ProvenGoneHow,
 } from "./types.js";
 
 // err_details shapes (b.146 rule 15), the values of AgentDirectorError.errDetails.
@@ -115,6 +117,7 @@ export type {
   ClaimTooSoonDetails,
   PaneChangedDetails,
   PaneKeySentDetails,
+  DialogMaybeOpenDetails,
 } from "./types.js";
 
 // Verb Params / Result interfaces.

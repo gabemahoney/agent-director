@@ -354,7 +354,10 @@ The response is a single permission row:
   "attempted_at": null,
   "tool_use_id": "toolu_01ABCDEF",
   "pane_answer": "none",
-  "pane_as": null
+  "pane_as": null,
+  "proven_gone_at": "2026-05-31T12:00:04.310Z",
+  "proven_gone_how": "tool_ran",
+  "unproven_since": null
 }
 ```
 
@@ -375,6 +378,16 @@ the same way as any other's: `delivered` only if its relay hook confirmed a
 verdict. A row can read `waiting` while a request it recorded still awaits
 an answer, so follow each request you track with `get-permission`, not only
 rows in `check_permission`.
+
+`proven_gone_at` and `proven_gone_how` say when and how Claude Code itself
+showed the request's dialog gone: `tool_ran` (its tool ran), `turn_end`
+(the turn of the agent that asked ended after it was written) or
+`agent_gone` (the agent ended).
+`delivered` and a pane answer are agent-director's own records, not proof.
+`get` lists every request not yet proven gone in `unproven_requests`, with
+`unproven_since`. A request that reads `delivered` or closed at the pane
+but stays unproven for a while is a reason to look at the pane: its dialog
+may still be there.
 
 ### Answer a request at the pane
 
@@ -407,7 +420,8 @@ with:
 - `ErrPaneAnswerInProgress`: another pane answer to this request is still
   being sent. Do nothing.
 - `ErrSendKeysWhileRelayed`: a relay hook of the agent may still answer
-  its request: answer the request it names with `decide`, or retry later.
+  its request: answer the request it names with `decide`, or retry later
+  (a plain retry can then get `ErrDialogMaybeOpen`, below).
 - `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest`: the request is no
   longer open.
 
@@ -435,8 +449,20 @@ every `send-keys` is refused with `ErrSendKeysWhileRelayed`. Plain
 `send-keys` also takes `--no-enter` (type `--text` with no Enter) and
 `--key` (send one key alone), and `--expect-pane-sha256` optionally.
 
+After a permission request, a plain `send-keys` without
+`--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until Claude
+Code shows the request's dialog gone: after an allow, once its tool has
+run; after a deny, once the agent's turn ends. Nothing is sent. Its
+`err_details` name the oldest such request, how agent-director's records
+say it closed and since when, and the agent's other such requests. Keep
+the keys and retry later. If it is still held after some seconds, have a
+person or an LLM read the pane and, having looked, send with that read's
+`pane_sha256`: a matching hash passes this hold (every other refusal still
+applies), and a changed pane is `ErrPaneChanged`.
+
 Never pass `--expect-pane-sha256` from an automatic flow: it says that a
-person or an LLM judged that exact screen.
+person or an LLM judged that exact screen, and passed blindly it lets
+through the Enter this hold exists to stop.
 
 ### Templates
 
@@ -854,12 +880,17 @@ the class of every tmux error, is in
   Close the request with a pane answer (`send-keys --request-token`) or
   with `record-pane-answer` (see
   [Answer a request at the pane](#answer-a-request-at-the-pane)).
+- `ErrDialogMaybeOpen` comes from a plain `send-keys` while Claude Code
+  has not shown a permission request's dialog gone. Retry later; if it
+  stays held, a person or an LLM looks at the pane and sends with its
+  `pane_sha256`. Never pass `--expect-pane-sha256` from an automatic flow.
 - Some errors carry their facts in an `err_details` object beside
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):
   `ErrRelayFallenBack`, `ErrPaneAnswerInProgress`, `ErrClaimTooSoon`,
-  `ErrPaneChanged`, and an `ErrInternal` from a pane answer whose key was
-  sent (`key_sent` true: read the pane before you send anything again).
+  `ErrPaneChanged`, `ErrDialogMaybeOpen`, and an `ErrInternal` from a pane
+  answer whose key was sent (`key_sent` true: read the pane before you
+  send anything again).
   Read facts from it, never from the description; a caller that does not
   use it ignores it.
 - `get`, `list` and `get-permission` never wait for the store's write lock.

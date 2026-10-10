@@ -190,6 +190,11 @@
     "description": ""
   },
   {
+    "name": "ErrDialogMaybeOpen",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrInvalidDecision",
     "package": "api",
     "description": ""

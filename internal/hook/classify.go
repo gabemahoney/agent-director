@@ -161,7 +161,7 @@ type ClassifyResult struct {
 	// ToolUseID is the payload's tool_use_id verbatim; empty when it carried
 	// none. A PostToolUse or PostToolUseFailure carrying it closes the
 	// fallen-back permission request with the same tool_use_id (ToolRan;
-	// b.146 rule 13).
+	// b.146 rule 13) and proves every request with it gone (b.146 step 2c).
 	ToolUseID string
 }
 
@@ -177,6 +177,19 @@ const (
 	EventNamePostToolUse        = "PostToolUse"
 	EventNamePostToolUseFailure = "PostToolUseFailure"
 )
+
+// EventNameStop is the main agent's end of turn.
+const EventNameStop = "Stop"
+
+// TurnEnded reports whether the result is the main agent's end of turn (b.146
+// step 2c): a Stop, or the idle-prompt Notification (WaitingIfWorking), with
+// no agent_id. Claude Code sends either only once the main agent's turn has
+// ended, so no permission dialog the main agent asked before it is still
+// waiting. A hook carrying an agent_id (a subagent or an in-process
+// teammate) is not one: a background subagent can outlive the main turn.
+func (r ClassifyResult) TurnEnded() bool {
+	return r.AgentID == "" && (r.EventName == EventNameStop || r.WaitingIfWorking)
+}
 
 // SubagentLifecycle reports whether the result is a SessionStart or
 // SessionEnd from a subagent or an in-process teammate (a non-empty
@@ -244,7 +257,7 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		// The tool ran (and, for PostToolUseFailure, failed): the turn goes
 		// on, as after PostToolUse.
 		res.NewState = store.StateWorking
-	case "Stop":
+	case EventNameStop:
 		res.NewState = store.StateWaiting
 	case "Notification":
 		// b.svb: the main agent's idle-prompt Notification returns a working

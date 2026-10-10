@@ -221,8 +221,10 @@ is already typed. `Key` sends one key alone instead (a named key `Escape`,
 `Enter`, `Up`, `Down`, `Tab`, or one character), with no Enter. With
 `ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at, with
 its `NLines`) the pane is checked first and nothing is sent if it changed
-(`ErrPaneChanged`). There is no flag to suppress CR stripping — the
-behavior is unconditional by design (SRD §4.3).
+(`ErrPaneChanged`); on a relayed Spawn a match also passes the dialog hold
+(`ErrDialogMaybeOpen`, below). Set it only for a pane a person or an LLM
+judged, never from an automatic flow. There is no flag to suppress CR
+stripping — the behavior is unconditional by design (SRD §4.3).
 
 ```bash
 agent-director send-keys \
@@ -260,13 +262,23 @@ Most-likely sentinel errors:
   it says to retry later (`… the relayed permission verdict on request
   <request_token> is recorded and its relay hook may still be delivering
   it; retry send-keys later`); `Decide` on it would return
-  `ErrAlreadyDecided`.
+  `ErrAlreadyDecided`. Once that hook has ended, a plain retry can get
+  `ErrDialogMaybeOpen` until Claude Code proves the request gone.
 - `ErrRelayFallenBack`: a plain call (no `RequestToken`) while a request
   of the row has fallen back with no pane answer recorded (its relay hook
   is gone and acked no verdict); nothing was sent. `api.ErrDetails(err)`
   is a `RelayFallenBackDetails` naming that request (the oldest) and the
   row's other open requests. Close it with a pane answer or with
   `RecordPaneAnswer` (see [Permission relay](#permission-relay)).
+- `ErrDialogMaybeOpen`: a plain call without `ExpectPaneSHA256` while a
+  permission request of the row is not proven gone by Claude Code's hooks
+  (its tool's PostToolUse, the main agent's end of turn after it, or the
+  agent's end), whatever agent-director's records say of it; nothing was
+  sent. `api.ErrDetails(err)` is a `DialogMaybeOpenDetails` naming that
+  request (the oldest), the row's `State` and its other
+  `UnprovenRequests`. Retry later; if it stays held, have a person or an
+  LLM look at the pane and send with its hash (see
+  [Permission relay](#permission-relay)).
 - `ErrPaneChanged`: `ExpectPaneSHA256` no longer matches the pane;
   nothing was sent. Read the pane again: the error does not carry the new
   hash.
@@ -542,12 +554,29 @@ holds the caller's claim, never checked):
   `PaneAnswer` `"tool_ran"`, `Decision` `"allow"`, `DecisionReason`
   `"tool_ran"`.
 
+None of these, nor the relay hook's ack (`Delivery` `delivered`), proves
+that Claude Code's dialog for the request is gone. Only Claude Code's own
+hooks do, recorded on the request as `ProvenGoneAt` and `ProvenGoneHow`
+(`"tool_ran"`: its tool's PostToolUse; `"turn_end"`: the turn of the agent
+that asked ended after it was written, which the main agent's Stop or idle
+prompt proves for a request with no agent id; `"agent_gone"`: the Spawn's
+end). Until then a plain `SendKeys` without `ExpectPaneSHA256`
+returns `ErrDialogMaybeOpen`: after an allow until the tool has run, after
+a deny until the main agent's turn ends. `Get`'s `SpawnRow.UnprovenRequests`
+lists every request not proven gone, each with `UnprovenSince` (when
+agent-director's records stopped awaiting an answer); one that stays
+unproven a while is a reason to read the pane. A plain `SendKeys` whose
+`ExpectPaneSHA256` matches the pane passes the hold: it means a person or
+an LLM judged that screen, so never set it from an automatic flow. A
+subagent's denied request is proven only by the Spawn's end.
+
 `api.DetailedError` is the error type that carries such facts: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
 the object; `api.ErrDetails(err)` returns the `Details` of the first one in
 `err`'s chain, or nil. `ErrPaneChanged` (`PaneChangedDetails`),
-`ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`) and
-`ErrClaimTooSoon` (`ClaimTooSoonDetails`) carry it too, and so does a
+`ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
+`ErrClaimTooSoon` (`ClaimTooSoonDetails`) and `ErrDialogMaybeOpen`
+(`DialogMaybeOpenDetails`) carry it too, and so does a
 pane answer's `ErrInternal` after its key was sent (`PaneKeySentDetails`).
 
 `Decide` on a request already answered at the pane (`PaneAnswer`
@@ -613,6 +642,7 @@ Common sentinels across verbs:
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
 | `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry `SendKeys` later |
 | `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |
+| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256` while a permission request of the Spawn is not proven gone by Claude Code's hooks; nothing was sent — retry later, or have a person or an LLM look and send with the pane's hash; `ErrDetails` gives its facts |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

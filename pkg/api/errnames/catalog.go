@@ -88,6 +88,7 @@ var Catalog = []Entry{
 	{Name: "ErrPaneChanged", Err: api.ErrPaneChanged},
 	{Name: "ErrPaneAnswerInProgress", Err: api.ErrPaneAnswerInProgress},
 	{Name: "ErrClaimTooSoon", Err: api.ErrClaimTooSoon},
+	{Name: "ErrDialogMaybeOpen", Err: api.ErrDialogMaybeOpen},
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
 	{Name: "ErrInvalidFlags", Err: api.ErrInvalidFlags},
 	{Name: "ErrMissingRequestToken", Err: api.ErrMissingRequestToken},

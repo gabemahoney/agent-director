@@ -132,7 +132,8 @@ export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
 
 /**
  * Mirrors pkg/api/relay_delivery.go::RequestDelivery — a permission request's delivery facts
- * (b.146 rule 15), on every `get` / `list` permission request, on `getPermission` and on
+ * (b.146 rule 15), with whether Claude Code proved its dialog gone (b.146 step 2c), on every
+ * `get` / `list` permission request and `get`'s `unproven_requests`, on `getPermission` and on
  * `decide`'s result. Derived on every read. A recorded `decision` is not the outcome:
  * `delivery` is.
  */
@@ -165,11 +166,41 @@ export interface RequestDelivery {
    * the answer); null when none was recorded. The caller's claim, stored and never checked.
    */
   pane_as: "allow" | "deny" | "unknown" | null;
+  /**
+   * When Claude Code proved the request's permission dialog gone (b.146 step 2c); null until
+   * then. agent-director's own records (`delivered`, a pane answer, `recordPaneAnswer`) are not
+   * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`
+   * rejects with `ErrDialogMaybeOpen`.
+   */
+  proven_gone_at: string | null;
+  /** How it was proven gone; see {@link ProvenGoneHow}. Null until proven. */
+  proven_gone_how: ProvenGoneHow | null;
+  /**
+   * For a request not proven gone that no longer awaits an answer in agent-director's records:
+   * when its record stopped awaiting one (its relay hook's ack, its pane answer's or
+   * `recordPaneAnswer`'s write, or the close of its Spawn's requests; a request recorded before
+   * this release: its recorded verdict). Null while it still awaits an answer, and once proven
+   * gone. A request that stays unproven a while after it is a reason to read the pane.
+   */
+  unproven_since: string | null;
 }
 
 /**
- * Mirrors pkg/api/get.go::PermissionRequestInfo — one open permission request (still awaiting
- * an answer) on a `get` or `list` row in state check_permission, with its delivery facts.
+ * How Claude Code proved a permission request's dialog gone (b.146 step 2c):
+ * - `"tool_ran"`: a PostToolUse or PostToolUseFailure carried its `tool_use_id`.
+ * - `"turn_end"`: the turn of the agent that asked ended after it was written; the main agent's
+ *   Stop or idle-prompt Notification proves a request with no agent_id (the main agent's, or one
+ *   recorded before this release).
+ * - `"agent_gone"`: its Spawn was marked missing, ended or resumed.
+ */
+export type ProvenGoneHow = "tool_ran" | "turn_end" | "agent_gone";
+
+/**
+ * Mirrors pkg/api/get.go::PermissionRequestInfo — one permission request with its delivery facts:
+ * an open one (still awaiting an answer) in the `permission_requests` of a `get` or `list` row in
+ * state check_permission; one not proven gone, open or read closed, in `get`'s
+ * `unproven_requests`; and the request an `errDetails` names (the base of
+ * `RelayFallenBackDetails` and `DialogMaybeOpenDetails`).
  */
 export interface PermissionRequestInfo extends RequestDelivery {
   /** Autoincrement primary key of the permission_requests row. */
@@ -414,6 +445,15 @@ export interface GetResult {
    * is still open: follow a tracked request with `getPermission`.
    */
   permission_requests: PermissionRequestInfo[];
+  /**
+   * Every permission request of the row that Claude Code has not proven gone (`proven_gone_at`
+   * null), oldest first, in any state but ended and missing (`[]` on those). Unlike
+   * `permission_requests` it also lists requests agent-director's records read closed
+   * (delivered, answered at the pane, or recorded answered outside it), each with
+   * `unproven_since`. While it is not empty, a plain `sendKeys` without `expect_pane_sha256`
+   * rejects (`ErrDialogMaybeOpen`, or an earlier relay refusal).
+   */
+  unproven_requests: PermissionRequestInfo[];
 }
 
 /**
@@ -448,8 +488,10 @@ export interface SendKeysParams {
   /**
    * The `pane_sha256` of the readPane the keys were chosen from: the pane is captured again
    * with the same `n_lines` (ANSI stripped) and compared byte for byte, `ErrPaneChanged` when it
-   * differs (the error does not carry the new hash). Required on a pane answer. Never pass it
-   * from an automatic flow: it means a person or LLM judged this exact screen.
+   * differs (the error does not carry the new hash). Required on a pane answer. On a plain call
+   * a matching hash also passes the hold of a request not proven gone (`ErrDialogMaybeOpen`);
+   * every other refusal still applies. Never pass it from an automatic flow: it means a person
+   * or LLM judged this exact screen.
    */
   expect_pane_sha256?: string;
   /** The `n_lines` of the readPane `expect_pane_sha256` came from. Defaults to 25. */
@@ -635,6 +677,18 @@ export interface OpenRequestFacts {
 export interface RelayFallenBackDetails extends PermissionRequestInfo {
   state: string;
   open_requests: OpenRequestFacts[] | null;
+}
+
+/**
+ * Mirrors pkg/api.DialogMaybeOpenDetails — ErrDialogMaybeOpen's errDetails (from a plain
+ * sendKeys without `expect_pane_sha256`): the oldest request of the Spawn that Claude Code has
+ * not proven gone (its fields and delivery facts: how agent-director's records say it closed,
+ * `delivery` and `pane_answer`, and since when, `unproven_since`), the Spawn's state, and the
+ * Spawn's other requests not proven gone, oldest first.
+ */
+export interface DialogMaybeOpenDetails extends PermissionRequestInfo {
+  state: string;
+  unproven_requests: PermissionRequestInfo[];
 }
 
 /**

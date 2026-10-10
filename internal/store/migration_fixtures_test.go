@@ -457,7 +457,7 @@ var v6ToV5RecipeStatements = []string{
 }
 
 // v7ColumnSpecs are the columns the v6→v7 step adds (b.146 steps 2, 2b and
-// 2c), in schema order: seventeen on permission_requests, after created_at,
+// 2c), in schema order: nineteen on permission_requests, after created_at,
 // and spawns.idle_since, after launch_owner_pidns.
 var v7ColumnSpecs = []columnSpec{
 	{"permission_requests", "hook_pid", "INTEGER", false, ""},
@@ -477,6 +477,8 @@ var v7ColumnSpecs = []columnSpec{
 	{"permission_requests", "pane_sender_pidns", "TEXT", false, ""},
 	{"permission_requests", "pane_intent_at", "INTEGER", false, ""},
 	{"permission_requests", "closed_at", "INTEGER", false, ""},
+	{"permission_requests", "proven_gone_at", "INTEGER", false, ""},
+	{"permission_requests", "proven_gone_how", "TEXT", false, ""},
 	{"spawns", "idle_since", "TEXT", false, ""},
 }
 
@@ -533,13 +535,26 @@ func breakV7IdleSinceColumn(t *testing.T, path string) {
 	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE spawns ADD COLUMN IDLE_SINCE TEXT") })
 }
 
+// breakV7Backfill makes every update of a permission request on a v6 store
+// fail: the hop adds every v7 column, then fails at its backfill, which
+// proves the finished rows' requests gone.
+func breakV7Backfill(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `CREATE TRIGGER ad_test_fail_backfill BEFORE UPDATE ON permission_requests
+			BEGIN SELECT RAISE(ABORT, 'test: the backfill fails'); END`)
+	})
+}
+
 // v6Fixture describes what makeV6Fixture seeded: a relay-on row in
 // check_permission with an open request and a decided one, recorded before
-// schema v7 (no relay hook identity, no settle instant). requests holds
-// quote() literals of every v6 permission_requests column, by token.
+// schema v7 (no relay hook identity, no settle instant), and the finished rows
+// (ended, missing), each with the same two requests. requests holds quote()
+// literals of every v6 permission_requests column of id's requests, by token.
 type v6Fixture struct {
 	dir, path        string
 	id               string
+	finished         []string
 	open, decided    string
 	requestCols      []string
 	requests         map[string]map[string]string
@@ -551,20 +566,27 @@ type v6Fixture struct {
 // makeV6Fixture builds a genuine v6 store under dir holding f.id in
 // check_permission with request f.open undecided (created_at
 // f.openCreatedAtSQL, long past any relay window) and request f.decided
-// decided allow, closed.
+// decided allow, closed; f.finished's rows, ended and missing, hold the same
+// two requests.
 func makeV6Fixture(t *testing.T, dir string) v6Fixture {
 	t.Helper()
-	f := v6Fixture{dir: dir, path: makeVersionedDB(t, dir, 6), id: "v6-relay",
+	f := v6Fixture{dir: dir, path: makeVersionedDB(t, dir, 6), id: "v6-relay", finished: []string{"v6-ended", "v6-missing"},
 		open: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", decided: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
 		openCreatedAtSQL: "2026-04-01 10:00:00"}
 	withRaw(t, f.path, func(db *sql.DB) {
 		mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, row_version)
 			VALUES (?, 'check_permission', '/work/relay', 'ad-relay', 'on', 4)`, f.id)
-		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input, created_at)
-			VALUES (?, ?, 'Bash', '{"command":"ls"}', ?)`, f.id, f.open, f.openCreatedAtSQL)
-		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input,
-			decision, decided_at, created_at) VALUES (?, ?, 'Read', '{}', 'allow', '2026-04-01 09:00:05', '2026-04-01 09:00:00')`,
-			f.id, f.decided)
+		for _, id := range f.finished {
+			mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, row_version)
+				VALUES (?, ?, '/work/relay', ?, 'on', 4)`, id, strings.TrimPrefix(id, "v6-"), "ad-"+id)
+		}
+		for _, id := range append([]string{f.id}, f.finished...) {
+			mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input, created_at)
+				VALUES (?, ?, 'Bash', '{"command":"ls"}', ?)`, id, f.open, f.openCreatedAtSQL)
+			mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input,
+				decision, decided_at, created_at) VALUES (?, ?, 'Read', '{}', 'allow', '2026-04-01 09:00:05', '2026-04-01 09:00:00')`,
+				id, f.decided)
+		}
 		f.requestCols = tableColumnNames(t, db, "permission_requests")
 		f.spawnCols = tableColumnNames(t, db, "spawns")
 	})
@@ -576,7 +598,7 @@ func makeV6Fixture(t *testing.T, dir string) v6Fixture {
 	return f
 }
 
-// v7ToV6RecipeStatements reverses migrateV6toV7: the eighteen v7 columns
+// v7ToV6RecipeStatements reverses migrateV6toV7: the twenty v7 columns
 // dropped in the order the hop adds them, then the version stamped back to 6.
 // It must match docs/migration-guide.md's "v7 → v6" recipe statement for
 // statement.
@@ -598,6 +620,8 @@ var v7ToV6RecipeStatements = []string{
 	"ALTER TABLE permission_requests DROP COLUMN pane_sender_pidns",
 	"ALTER TABLE permission_requests DROP COLUMN pane_intent_at",
 	"ALTER TABLE permission_requests DROP COLUMN closed_at",
+	"ALTER TABLE permission_requests DROP COLUMN proven_gone_at",
+	"ALTER TABLE permission_requests DROP COLUMN proven_gone_how",
 	"ALTER TABLE spawns DROP COLUMN idle_since",
 	"PRAGMA user_version = 6",
 }

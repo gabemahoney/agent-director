@@ -76,7 +76,9 @@ const moveToPendingSQL = `UPDATE spawns
 // already close a finished row's requests, so this finds one only on a row
 // that finished before they did (an earlier release, or any path that missed
 // them): no request of the row's earlier launch awaits an answer in the life
-// the resume begins. After the commit it emits one ad.row_mutation.committed
+// the resume begins. Every request of the row not yet proven gone is proven
+// gone, agent_gone (b.146 step 2c), so none of the earlier launch's holds
+// plain send-keys in the new one. After the commit it emits one ad.row_mutation.committed
 // (writer resume, decision_reason ended) per request it denied, in
 // request-id order, fail-open; nothing else.
 //

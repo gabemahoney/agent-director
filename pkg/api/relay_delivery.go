@@ -1,6 +1,8 @@
 package api
 
 import (
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -48,10 +50,11 @@ type RelayView struct {
 }
 
 // RequestDelivery is a permission request's delivery facts (b.146 rule 15),
-// on every request of get's and list's permission_requests, on
-// get-permission and on decide's result. They are derived from the record and
-// a check of the request's relay hook process each time they are read;
-// nothing but hook_gone_at is written for them.
+// with whether Claude Code proved its dialog gone (b.146 step 2c), on every
+// request of get's and list's permission_requests and get's
+// unproven_requests, on get-permission and on decide's result. They are
+// derived from the record and a check of the request's relay hook process
+// each time they are read; nothing but hook_gone_at is written for them.
 type RequestDelivery struct {
 	// Delivery is delivered, not_confirmed or fallen_back (DeliveryDelivered,
 	// DeliveryNotConfirmed, DeliveryFallenBack). decide's result is never
@@ -88,6 +91,25 @@ type RequestDelivery struct {
 	// outside record that did not see the answer); null when none was
 	// recorded. It is the caller's claim, stored and never checked.
 	PaneAs *string `json:"pane_as"`
+	// ProvenGoneAt is when Claude Code proved the request's permission dialog
+	// gone (b.146 step 2c); null until then. While it is null, the request
+	// holds plain send-keys to its live Spawn (ErrDialogMaybeOpen).
+	ProvenGoneAt *time.Time `json:"proven_gone_at"`
+	// ProvenGoneHow is how: tool_ran (its tool's PostToolUse or
+	// PostToolUseFailure, by tool_use_id), turn_end (the turn of the agent
+	// that asked ended after it: the main agent's Stop or idle-prompt
+	// Notification proves a request with no agent_id) or agent_gone (its
+	// Spawn was marked missing, ended or resumed); null until then.
+	ProvenGoneHow *string `json:"proven_gone_how"`
+	// UnprovenSince is, for a request not proven gone that no longer awaits
+	// an answer in agent-director's own records, when its record stopped
+	// awaiting one: its relay hook's ack, its pane answer's or
+	// record-pane-answer's write, or the close of its Spawn's requests (a
+	// request recorded before this release: its recorded verdict). From then
+	// agent-director reads it closed while Claude Code has not shown its
+	// dialog gone. Null while it still awaits an answer, and once it is
+	// proven gone.
+	UnprovenSince *time.Time `json:"unproven_since"`
 }
 
 // hookVerdict is a reader's judgement of a request's relay hook (b.146
@@ -181,6 +203,9 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 		ToolUseID:         nullableString(pr.ToolUseID),
 		PaneAnswer:        paneAnswerOf(pr),
 		PaneAs:            nullableString(pr.PaneAs),
+		ProvenGoneAt:      nullableTime(pr.ProvenGoneAt),
+		ProvenGoneHow:     nullableString(pr.ProvenGoneHow),
+		UnprovenSince:     nullableTime(unprovenSince(pr)),
 	}
 	switch v {
 	case hookAlive:
@@ -244,6 +269,30 @@ func deliveryOf(pr PermissionRow, v hookVerdict, settled bool) string {
 		return DeliveryFallenBack
 	}
 	return DeliveryNotConfirmed
+}
+
+// unprovenSince is pr's unproven_since (b.146 step 2c): for a request not
+// proven gone that no longer awaits an answer in agent-director's own records
+// (PermissionRow.AwaitsAnswer), the instant its record stopped awaiting one,
+// by the same clauses: its relay hook's ack (delivered_at); a completed pane
+// answer's write (decided_at of pane_answer sent, outside or tool_ran); a
+// close of its Spawn's requests (closed_at); recorded before schema v7, its
+// recorded verdict (decided_at). The zero time while it is proven gone or
+// still awaits an answer.
+func unprovenSince(pr PermissionRow) time.Time {
+	switch {
+	case pr.ProvenGone():
+		return time.Time{}
+	case !pr.DeliveredAt.IsZero():
+		return pr.DeliveredAt
+	case pr.PaneAnswered():
+		return pr.DecidedAt
+	case pr.Closed():
+		return pr.ClosedAt
+	case pr.PreV7() && pr.Decision != "":
+		return pr.DecidedAt
+	}
+	return time.Time{}
 }
 
 // readOneJudged reads one request by the check-before-read rule (rule 5's
@@ -399,6 +448,41 @@ func openRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge, 
 		infos = append(infos, permissionRequestInfo(pr, j.delivery(pr, verdicts[pr.RequestID], now)))
 	}
 	return infos, nil
+}
+
+// spawnRequestInfos reads every permission request of instanceID through
+// read, once, by the check-before-read rule, and projects from that one read,
+// oldest first (created_at, then request id), with their delivery facts at
+// j's now: open, the requests that still await an answer
+// (PermissionRow.AwaitsAnswer, as OpenPermissionRequestsForSpawn selects
+// them), and unproven, those Claude Code has not proven gone (b.146 step 2c).
+// A request in both lists is judged once and carries the same facts in each.
+// Both are non-nil. The caller collects those fallen back with no
+// hook_gone_at (goneSlotsOf) for its one recordGone.
+func spawnRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge, instanceID string) (open, unproven []PermissionRequestInfo, err error) {
+	prs, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return read(instanceID) }, j)
+	if err != nil {
+		return nil, nil, err
+	}
+	prs = slices.Clone(prs)
+	slices.SortStableFunc(prs, func(a, b PermissionRow) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.RequestID, b.RequestID)
+	})
+	now := j.now()
+	open, unproven = []PermissionRequestInfo{}, []PermissionRequestInfo{}
+	for _, pr := range prs {
+		info := permissionRequestInfo(pr, j.delivery(pr, verdicts[pr.RequestID], now))
+		if pr.AwaitsAnswer() {
+			open = append(open, info)
+		}
+		if !pr.ProvenGone() {
+			unproven = append(unproven, info)
+		}
+	}
+	return open, unproven, nil
 }
 
 // goneSlotsOf appends to slots those of infos fallen back with no

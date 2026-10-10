@@ -749,9 +749,14 @@ describe("decide", () => {
           decision: "allow",
         });
 
-        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+        const cliResult = JSON.parse(cli.stdout) as { unproven_since: string | null };
+        assertEnvelopesEqual(cliResult as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("decide"),
         });
+        // b.146 step 2c: unproven_since (the pre-v7 request's decided_at, written by each run) is excluded from
+        // the diff; both sides must still carry it.
+        expect(typeof cliResult.unproven_since).toBe("string");
+        expect(typeof ts.unproven_since).toBe("string");
       } finally {
         cleanup();
       }
@@ -965,7 +970,8 @@ describe("record-pane-answer", () => {
         const details = (JSON.parse(cli.stderr) as { err_details?: Record<string, unknown> }).err_details ?? {};
         const perm = runCli(["get-permission", "--request-token", requestToken], cliEnv(homeA));
         const confirmBy = (JSON.parse(perm.stdout) as { confirm_by: string }).confirm_by;
-        expect({ ...details, not_before: "" }).toEqual({ request_token: requestToken, hook_alive: null, hook_gone_at: null, not_before: "" });
+        const masked: Record<string, unknown> = { ...details, not_before: "" };
+        expect(masked).toEqual({ request_token: requestToken, hook_alive: null, hook_gone_at: null, not_before: "" });
         expect(Date.parse(details["not_before"] as string) - Date.parse(confirmBy)).toBe(2000);
         expect((tsErr as AgentDirectorError).errDetails).toEqual(details);
       } finally {

@@ -1,5 +1,6 @@
-// success_fields.go holds the success driver's check of fields a case pins
-// (successCase.want) and the kill case's seed (SR-6.6).
+// success_fields.go holds the success driver's checks of fields a case pins
+// (successCase.want, successCase.wantNonNull) and the kill case's seed
+// (SR-6.6).
 package envelope_diff
 
 import (
@@ -34,6 +35,22 @@ func fieldsMismatch(envelope []byte, want map[string]any) error {
 		}
 		if !reflect.DeepEqual(got, want[k]) {
 			return fmt.Errorf("%s = %v (%T); want %v (%T)", k, got, got, want[k], want[k])
+		}
+	}
+	return nil
+}
+
+// nonNullMismatch returns nil when the success envelope carries every key of
+// keys with a non-null value, and an error naming the first that is missing
+// or null.
+func nonNullMismatch(envelope []byte, keys []string) error {
+	var m map[string]any
+	if err := json.Unmarshal(envelope, &m); err != nil {
+		return fmt.Errorf("unmarshal envelope: %w", err)
+	}
+	for _, k := range keys {
+		if v, ok := m[k]; !ok || v == nil {
+			return fmt.Errorf("%s = %v (present %t); want a non-null value", k, v, ok)
 		}
 	}
 	return nil

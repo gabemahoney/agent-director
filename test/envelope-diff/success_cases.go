@@ -84,6 +84,12 @@ type successCase struct {
 	// values (success_fields.go).
 	want map[string]any
 
+	// wantNonNull, when set, names top-level fields both envelopes must
+	// carry with a non-null value: fields nondeterministic.json excludes
+	// from the diff, which would otherwise pass if they read null on both
+	// sides (success_fields.go).
+	wantNonNull []string
+
 	// tmuxTable, when set, writes the case's fake-tmux tables into each
 	// run's private tables (read-pane, send-keys), so both runners see the
 	// same tmux.
@@ -240,9 +246,12 @@ var successCases = append([]successCase{
 	// fixture-derived confirm_by.  The row must be in check_permission
 	// with relay_mode=on and an open permission request (ErrRelayModeOff
 	// guards the relay_mode=off path; ErrNoOpenPermissionRequest guards the
-	// missing-request path).
+	// missing-request path). Decided, the request reads unproven since its
+	// decided_at, written by each run (b.146 step 2c): excluded from the
+	// diff, it must be non-null on both sides.
 	{
-		verb: "decide",
+		verb:        "decide",
+		wantNonNull: []string{"unproven_since"},
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
 			s, dbPath := apitest.SeedDecideFixture(t, "on")

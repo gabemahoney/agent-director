@@ -127,7 +127,7 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
 	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
 	fs.StringVar(&p.Key, "key", "", "send this one key instead of text, no Enter: Escape, Enter, Up, Down, Tab, or one character")
-	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed")
+	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed; on a plain call a match also passes the hold of a permission request not proven gone (ErrDialogMaybeOpen); pass it only for a pane a person or LLM judged")
 	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
 	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
 	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")

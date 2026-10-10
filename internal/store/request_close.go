@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"fmt"
 	"slices"
 	"time"
 )
@@ -15,7 +16,9 @@ import (
 // find-missing's mark (MarkMissingIfSameLife, reason find_missing), the
 // terminal SessionEnd's move to ended (ApplyHookTransitionResult, reason
 // ended) and, as a backstop for a request an earlier release left open on a
-// finished row, resume's move to pending (MoveToPending, reason ended).
+// finished row, resume's move to pending (MoveToPending, reason ended). The
+// same close proves every request of the row gone (b.146 step 2c): its agent
+// is gone, so no dialog of it is left on the pane.
 
 // denyOrphanedRequestsSQL is the close's first statement: every request of
 // the row that still awaits an answer (awaitingAnswerSQL) and is undecided is
@@ -36,6 +39,13 @@ var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
   WHERE pr.claude_instance_id = ? AND ` + awaitingAnswerSQL + `
   RETURNING request_id, request_token, tool_name`
 
+// proveAgentGoneSQL is the close's third statement (b.146 step 2c): every
+// request of the row not yet proven gone, closed by the first two statements,
+// acked, answered at the pane or closed before, is proven gone, agent_gone.
+const proveAgentGoneSQL = `UPDATE permission_requests
+    SET proven_gone_at = ?, proven_gone_how = ?
+  WHERE claude_instance_id = ? AND proven_gone_at IS NULL`
+
 // closedRequest is one permission request closeOrphanedRequests closed;
 // denied when the close also denied it (it was undecided).
 type closedRequest struct {
@@ -49,8 +59,11 @@ type closedRequest struct {
 // an answer, on conn, inside the transaction its caller holds: the undecided
 // ones denied with decision_reason reason (denyOrphanedRequestsSQL), then the
 // decided ones marked closed (closeDecidedRequestsSQL), both with one
-// closed_at. It returns the requests it closed in request-id order and emits
-// nothing: its caller emits once its transaction commits (emitDeny).
+// closed_at. Then it proves every request of instanceID not yet proven gone,
+// whether it was just closed or no longer awaited an answer, with that same
+// instant and proven_gone_how agent_gone (proveAgentGoneSQL; b.146 step 2c).
+// It returns the requests it closed in request-id order and emits nothing:
+// its caller emits once its transaction commits (emitDeny).
 func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID, reason string) ([]closedRequest, error) {
 	at := millisArg(time.Now())
 	denied, err := queryClosedRequests(ctx, conn, true, denyOrphanedRequestsSQL, "deny", reason, at, instanceID)
@@ -60,6 +73,9 @@ func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID, reas
 	kept, err := queryClosedRequests(ctx, conn, false, closeDecidedRequestsSQL, at, instanceID)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, proveAgentGoneSQL, at, ProvenGoneAgentGone, instanceID); err != nil {
+		return nil, fmt.Errorf("prove requests gone: %w", err)
 	}
 	closed := append(denied, kept...)
 	slices.SortFunc(closed, func(a, b closedRequest) int { return cmp.Compare(a.requestID, b.requestID) })

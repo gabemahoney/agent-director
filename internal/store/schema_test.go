@@ -375,7 +375,7 @@ func TestMigrationStepReentry(t *testing.T) {
 		{"v6→v7 run twice", 6, nil, 2, ""},
 		{"v6→v7 after hook_pid", 6, preV7("permission_requests.hook_pid"), 1, ""},
 		{"v6→v7 after pane_answer and idle_since", 6, preV7("permission_requests.pane_answer", "spawns.idle_since"), 1, ""},
-		{"v6→v7 after all eighteen", 6, preV7(allV7...), 1, ""},
+		{"v6→v7 after all twenty", 6, preV7(allV7...), 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -412,7 +412,8 @@ func TestMigrationStepReentry(t *testing.T) {
 
 // TestMigrationRollback: a step failing part-way rolls back its whole hop: the
 // open fails as a migration failure (not a refusal), and the store keeps its
-// version, schema, rows and sentinel (SR-2.4, SR-5.4, SR-20.6).
+// version, schema, rows and sentinel (SR-2.4, SR-5.4, SR-20.6); a v6→v7 hop
+// failing at its backfill leaves no column added and no request proven.
 func TestMigrationRollback(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -429,6 +430,7 @@ func TestMigrationRollback(t *testing.T) {
 		{"v4→v5 at the store_id insert", 4, breakV5StoreMetaStep, ""},
 		{"v5→v6 at launch_owner_pidns, after the first two columns", 5, breakV6PIDNSColumn, "spawns.launch_owner_pidns"},
 		{"v6→v7 at idle_since, after every permission_requests column", 6, breakV7IdleSinceColumn, "spawns.idle_since"},
+		{"v6→v7 at the backfill, after every column", 6, breakV7Backfill, "prove finished rows' requests gone"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

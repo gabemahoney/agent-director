@@ -155,6 +155,27 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 // before any retry. Its err_details (PaneChangedDetails) give n_lines.
 var ErrPaneChanged = errors.New("ErrPaneChanged")
 
+// ErrDialogMaybeOpen is returned by a plain send-keys (no request token)
+// without expect_pane_sha256 while a permission request of the Spawn is not
+// proven gone (b.146 step 2c): no hook of Claude Code has shown its dialog
+// gone, so the dialog may still be on the pane, and typed keys, an Enter
+// above all, would land on it. A request is proven gone by its tool's
+// PostToolUse or PostToolUseFailure (the same tool_use_id), by the main
+// agent's Stop or idle-prompt Notification written after it (a request with
+// no agent_id: the main agent's, or one recorded before this release), or by
+// its Spawn's end (marked missing, ended, or resumed). agent-director's own
+// records prove nothing: a request whose relay hook acked its verdict
+// (delivery delivered), one answered at the pane through send-keys, and one
+// closed with record-pane-answer all stay unproven until then. The refusals
+// for a relay hook that may still answer (ErrSendKeysWhileRelayed) and a
+// fallen-back request (ErrRelayFallenBack) come first. A plain send-keys
+// whose expect_pane_sha256 matches the pane as captured now is not refused
+// with it (a mismatch is ErrPaneChanged). Nothing was sent. Its err_details
+// (DialogMaybeOpenDetails) give the oldest such request with its delivery
+// facts, pane_answer and unproven_since, the Spawn's state and the Spawn's
+// other requests not proven gone.
+var ErrDialogMaybeOpen = errors.New("ErrDialogMaybeOpen")
+
 // ErrPaneAnswerInProgress is returned by send-keys with a request token, and
 // by record-pane-answer, while another pane answer through send-keys on that
 // request is still being sent (b.146 problem 2): its intent is recorded

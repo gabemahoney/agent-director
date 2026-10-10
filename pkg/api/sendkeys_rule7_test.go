@@ -82,15 +82,20 @@ var (
 	r7Resume r7Step = func(t *testing.T, p *paEnv) { resumeFinishedRow(t, p.st, p.dbPath, p.r.ID) }
 )
 
+// advNotProvenGone is ErrDialogMaybeOpen's fact naming token (b.146 step 2c).
+func advNotProvenGone(token string) string { return "request " + token + " is not proven gone" }
+
 // TestSendKeysRule7 (b.146 rule 7, the round 3 §4.2 table, in its order; rule
 // 12): request A fallen back unless a case says otherwise. Plain: a relay hook
 // that may still answer is ErrSendKeysWhileRelayed (decide's advice for an
 // open request, a later retry for an acked one), first in the order, even
 // with A fallen back beside it; A fallen back is
-// ErrRelayFallenBack; A closed (acked and its hook gone, answered outside, its
-// tool ran, closed by find-missing's mark) holds nothing, nor does a request
-// of a row that ended or went missing once the row is resumed, undecided or
-// decided and not acked (b.59i, b.6qr). With A's token: another live relay
+// ErrRelayFallenBack; A closed in agent-director's records but not proven gone
+// (acked and its hook gone, answered outside) is ErrDialogMaybeOpen (step 2c;
+// the proofs that release it are sendkeys_hold_test.go's); A whose tool ran
+// holds nothing, nor does a request of a row that ended or went missing once
+// the row is resumed, undecided or decided and not acked (b.59i, b.6qr). With
+// A's token: another live relay
 // hook is ErrSendKeysWhileRelayed naming it; A acked or answered at the pane
 // is ErrAlreadyDecided, as is A denied by the mark; A closed by its row's
 // SessionEnd is ErrNoOpenPermissionRequest; an unknown token is
@@ -109,8 +114,8 @@ func TestSendKeysRule7(t *testing.T) {
 		{"plain, A's relay hook alive", []r7Step{r7HookAlive}, "", api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(tokA)},
 		{"plain, A fallen back, B's relay hook alive", []r7Step{r7OtherAlive}, "", api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(tokB)},
 		{"plain, A acked, its relay hook still running", []r7Step{r7Acked, r7HookAlive}, "", api.ErrSendKeysWhileRelayed, advSendKeysRetryLater(tokA)},
-		{"plain, A acked, its relay hook gone", []r7Step{r7Acked}, "", nil, ""},
-		{"plain, A answered outside agent-director", []r7Step{r7Outside}, "", nil, ""},
+		{"plain, A acked, its relay hook gone", []r7Step{r7Acked}, "", api.ErrDialogMaybeOpen, advNotProvenGone(tokA)},
+		{"plain, A answered outside agent-director", []r7Step{r7Outside}, "", api.ErrDialogMaybeOpen, advNotProvenGone(tokA)},
 		{"plain, A's tool ran", []r7Step{r7ToolRan}, "", nil, ""},
 		{"plain, A closed by find-missing's mark, the row resumed", []r7Step{r7Mark, r7Resume}, "", nil, ""},
 		{"plain, A open when the row ended, the row resumed", []r7Step{r7End, r7Resume}, "", nil, ""},
@@ -230,7 +235,7 @@ func TestPlainSendKeysRelayFallenBackDetails(t *testing.T) {
 	wantA := map[string]any{"tool_name": "Bash", "tool_input": `{"command":"ls"}`, "tool_use_id": paToolUseID,
 		"attempted_decision": "allow", "hook_alive": false, "pane_answer": "none", "pane_as": nil, "decision": nil,
 		"decision_reason": nil, "hook_gone_at": jsonTime(t, decidedAt), "attempted_at": jsonTime(t, decidedAt),
-		"confirm_by": jsonTime(t, decidedAt.Add(time.Hour))}
+		"confirm_by": jsonTime(t, decidedAt.Add(time.Hour)), "proven_gone_at": nil, "proven_gone_how": nil, "unproven_since": nil}
 	for k, v := range wantA {
 		if m[k] != v {
 			t.Errorf("err_details[%q] = %#v; want %#v", k, m[k], v)

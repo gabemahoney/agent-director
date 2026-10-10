@@ -12,7 +12,7 @@ import (
 // matches through DetailedError), or none for an unnamed error (ErrInternal),
 // and its text is the description. Details is the err_details object, one of
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
-// PaneChangedDetails and PaneKeySentDetails.
+// PaneChangedDetails, PaneKeySentDetails and DialogMaybeOpenDetails.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -75,6 +75,21 @@ type OpenRequestFacts struct {
 	HookAlive *bool `json:"hook_alive"`
 	// PaneAnswer is its pane_answer (none or intent on an open request).
 	PaneAnswer string `json:"pane_answer"`
+}
+
+// DialogMaybeOpenDetails is ErrDialogMaybeOpen's err_details (b.146 step 2c,
+// in decision 8's shape): the oldest request of the Spawn that no hook of
+// Claude Code has proven gone, with the same fields get's unproven_requests
+// give it (its delivery facts at the refusal: how agent-director's records
+// say it closed, delivery and pane_answer, and since when, unproven_since),
+// the Spawn's state, and every other request of the Spawn not proven gone.
+type DialogMaybeOpenDetails struct {
+	PermissionRequestInfo
+	// State is the Spawn's state when the refusal was made.
+	State string `json:"state"`
+	// UnprovenRequests is every other request of the Spawn not proven gone,
+	// oldest first, with the same fields; [] when none.
+	UnprovenRequests []PermissionRequestInfo `json:"unproven_requests"`
 }
 
 // PaneAnswerInProgressDetails is ErrPaneAnswerInProgress's err_details

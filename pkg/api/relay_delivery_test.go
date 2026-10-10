@@ -413,16 +413,23 @@ func TestPreV7RequestsFallBackByTime(t *testing.T) {
 }
 
 // TestDeliveryFactsOnTheWire (b.146 rule 15): get-permission's result and each
-// element of get's and list's permission_requests carry every delivery fact
-// as a JSON key, null when unset, never omitted; pane_answer is none and
-// pane_as null before any pane answer (step 2b).
+// element of get's and list's permission_requests and of get's
+// unproven_requests carry every delivery fact as a JSON key, null when unset,
+// never omitted; pane_answer is none and pane_as null before any pane answer
+// (step 2b); proven_gone_at, proven_gone_how and unproven_since are null on
+// an open request no hook has proven gone (step 2c).
 func TestDeliveryFactsOnTheWire(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, store.ProcessIdentity{})
 	fromGet, fromList := e.listed(t)
+	row, err := api.Get(e.s, e.view(), e.id)
+	if err != nil || len(row.UnprovenRequests) != 1 {
+		t.Fatalf("Get = unproven_requests %+v, %v; want request A", row.UnprovenRequests, err)
+	}
 	facts := []string{"delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at", "tool_use_id",
-		"pane_answer", "pane_as"}
-	for name, v := range map[string]any{"get-permission": e.getPermission(t, e.s), "get's request": fromGet, "list's request": fromList} {
+		"pane_answer", "pane_as", "proven_gone_at", "proven_gone_how", "unproven_since"}
+	for name, v := range map[string]any{"get-permission": e.getPermission(t, e.s), "get's request": fromGet, "list's request": fromList,
+		"get's unproven request": row.UnprovenRequests[0]} {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(jsonOf(t, v)), &m); err != nil {
 			t.Fatalf("%s: unmarshal: %v", name, err)
@@ -435,9 +442,10 @@ func TestDeliveryFactsOnTheWire(t *testing.T) {
 		}
 		sort.Strings(missing)
 		if len(missing) != 0 || m["delivery"] != api.DeliveryNotConfirmed || m["hook_alive"] != nil || m["attempted_decision"] != nil ||
-			m["pane_answer"] != "none" || m["pane_as"] != nil {
-			t.Errorf("%s JSON = %v; missing %v; want every delivery fact, hook_alive, attempted_decision and pane_as null, pane_answer none",
-				name, m, missing)
+			m["pane_answer"] != "none" || m["pane_as"] != nil || m["proven_gone_at"] != nil || m["proven_gone_how"] != nil ||
+			m["unproven_since"] != nil {
+			t.Errorf("%s JSON = %v; missing %v; want every delivery fact, hook_alive, attempted_decision, pane_as and the "+
+				"proof fields null, pane_answer none", name, m, missing)
 		}
 	}
 }

@@ -13,9 +13,11 @@ import (
 // Spawn's permission requests, with the facts and refusals send-keys,
 // record-pane-answer and decide share: whether a request's relay hook may
 // still answer it, whether it has fallen back, whether a pane answer on it is
-// still being sent (problem 2), and ErrRelayFallenBack's err_details (rule
-// 15). Every judgement rests on the store and on process checks; none reads
-// the pane.
+// still being sent (problem 2), ErrRelayFallenBack's err_details (rule 15),
+// and step 2c's hold of plain send-keys while a request is not proven gone
+// (ErrDialogMaybeOpen). Every judgement rests on the store, on Claude Code's
+// hooks as the store recorded them, and on process checks; none reads the
+// pane.
 
 // spawnRequests is one judged read of every permission request of a Spawn
 // (b.146 rules 5, 7, 12 and 14): the Spawn as read, its requests, each relay
@@ -133,6 +135,18 @@ func (r spawnRequests) oldestFallenBack() (PermissionRow, bool) {
 	return PermissionRow{}, false
 }
 
+// unproven returns every request that Claude Code has not proven gone (b.146
+// step 2c), oldest first.
+func (r spawnRequests) unproven() []PermissionRow {
+	var out []PermissionRow
+	for _, pr := range r.rows {
+		if !pr.ProvenGone() {
+			out = append(out, pr)
+		}
+	}
+	return out
+}
+
 // find returns the request with token.
 func (r spawnRequests) find(token string) (PermissionRow, bool) {
 	for _, pr := range r.rows {
@@ -152,7 +166,12 @@ func (r spawnRequests) find(token string) (PermissionRow, bool) {
 //     (hookMayAnswer): ErrSendKeysWhileRelayed, plain or with a token.
 //  2. Plain (no token), any open request has fallen back with pane_answer
 //     none or intent: ErrRelayFallenBack with err_details, naming the oldest.
-//  3. With a token T: no such request of the Spawn is
+//  3. Plain with no expect_pane_sha256, any request of the Spawn is not
+//     proven gone (b.146 step 2c): ErrDialogMaybeOpen with err_details,
+//     naming the oldest. With expect_pane_sha256 the call is not held here:
+//     its hash check, against the pane captured before the keys are sent,
+//     decides it (ErrPaneChanged on a mismatch).
+//  4. With a token T: no such request of the Spawn is
 //     ErrNoOpenPermissionRequest; T not fallen back (acked, closed, answered
 //     at the pane) is notFallenBackRefusal's; T's pane answer still being
 //     sent (paneInProgress) is ErrPaneAnswerInProgress.
@@ -167,6 +186,9 @@ func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration
 	if params.RequestToken == "" {
 		if pr, ok := r.oldestFallenBack(); ok {
 			return relayFallenBackError(id, pr.RequestToken, "nothing was sent", r.fallenBackDetails(pr))
+		}
+		if unproven := r.unproven(); len(unproven) > 0 && params.ExpectPaneSHA256 == "" {
+			return dialogMaybeOpenError(id, r.dialogMaybeOpenDetails(unproven))
 		}
 		return nil
 	}
@@ -282,6 +304,39 @@ func (r spawnRequests) fallenBackDetails(pr PermissionRow) RelayFallenBackDetail
 		})
 	}
 	return d
+}
+
+// dialogMaybeOpenDetails is ErrDialogMaybeOpen's err_details (b.146 step 2c)
+// for unproven, the Spawn's requests not proven gone, oldest first (at least
+// one): the oldest with its fields and delivery facts, the Spawn's state, and
+// the others, oldest first.
+func (r spawnRequests) dialogMaybeOpenDetails(unproven []PermissionRow) DialogMaybeOpenDetails {
+	d := DialogMaybeOpenDetails{
+		PermissionRequestInfo: permissionRequestInfo(unproven[0], r.delivery(unproven[0])),
+		State:                 r.sp.State,
+		UnprovenRequests:      make([]PermissionRequestInfo, 0, len(unproven)-1),
+	}
+	for _, pr := range unproven[1:] {
+		d.UnprovenRequests = append(d.UnprovenRequests, permissionRequestInfo(pr, r.delivery(pr)))
+	}
+	return d
+}
+
+// dialogMaybeOpenError is ErrDialogMaybeOpen for spawn instanceID, with d as
+// its err_details (b.146 step 2c): the request d names is not proven gone by
+// any hook of Claude Code, so its permission dialog may still be on the pane.
+// The description states facts only: the request, what agent-director's
+// records say of it, since when, and that nothing was sent.
+func dialogMaybeOpenError(instanceID string, d DialogMaybeOpenDetails) error {
+	since := "it still awaits an answer"
+	if d.UnprovenSince != nil {
+		since = "its record has read closed since " + d.UnprovenSince.UTC().Format(time.RFC3339Nano)
+	}
+	return &DetailedError{
+		Err: fmt.Errorf("%w: %s request %s is not proven gone (no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded), so its permission dialog may still be on the pane; agent-director's records give delivery %s and pane_answer %s, and %s; %d other request(s) of the spawn are not proven gone (err_details); nothing was sent",
+			ErrDialogMaybeOpen, instanceID, d.RequestToken, d.Delivery, d.PaneAnswer, since, len(d.UnprovenRequests)),
+		Details: d,
+	}
 }
 
 // recordFallenBackGone records hook_gone_at, at the judgement's time and

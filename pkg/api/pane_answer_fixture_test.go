@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,35 @@ func (p *paEnv) outside(token, as string) api.RecordPaneAnswerParams {
 	return api.RecordPaneAnswerParams{RequestToken: token, As: as, ExpectPaneSHA256: p.hash()}
 }
 
+// The hook proofs a test records (b.146 step 2c): the agent's PostToolUse or
+// PostToolUseFailure for toolUseID, and the main agent's Stop or idle prompt.
+func toolRan(toolUseID string) store.RequestProof {
+	return store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: toolUseID}
+}
+
+var turnEnd = store.RequestProof{How: store.ProvenGoneTurnEnd}
+
+// proveGone records proof on id's requests as id's own agent's hook does
+// (store.ProveRequestsGone through the row's gate) and returns how many it proved.
+func proveGone(t *testing.T, e *killEnv, id string, proof store.RequestProof) int64 {
+	t.Helper()
+	var n int64
+	if err := storefix.WithSeedPane(e.dbPath, id, func(gate store.HookGate) error {
+		var err error
+		n, err = e.st.ProveRequestsGone(id, gate, proof)
+		return err
+	}); err != nil {
+		t.Fatalf("ProveRequestsGone(%s): %v", proof.How, err)
+	}
+	return n
+}
+
+// prove is proveGone on p's row.
+func (p *paEnv) prove(t *testing.T, proof store.RequestProof) int64 {
+	t.Helper()
+	return proveGone(t, p.killEnv, p.r.ID, proof)
+}
+
 // request reads p's request token.
 func (p *paEnv) request(t *testing.T, token string) store.PermissionRow {
 	t.Helper()
@@ -180,14 +210,63 @@ func assertOneKey(t *testing.T, calls []tmuxfix.SocketCall, paneID, key string, 
 }
 
 // The keys of ErrRelayFallenBack's err_details (b.146 rule 15, the ticket's
-// rule 6): the request's facts as get-permission gives them, the Spawn's
+// rule 6): the request's facts as get-permission gives them (step 2c's
+// proven_gone_at, proven_gone_how and unproven_since included), the Spawn's
 // state and open_requests; and of each open_requests entry.
 var (
-	paFallenBackKeys = []string{"request_id", "request_token", "tool_name", "tool_input", "requested_at", "decision",
+	paRequestKeys = []string{"request_id", "request_token", "tool_name", "tool_input", "requested_at", "decision",
 		"decision_reason", "delivery", "confirm_by", "hook_alive", "hook_gone_at", "attempted_decision", "attempted_at",
-		"tool_use_id", "pane_answer", "pane_as", "state", "open_requests"}
+		"tool_use_id", "pane_answer", "pane_as", "proven_gone_at", "proven_gone_how", "unproven_since"}
+	paFallenBackKeys  = append(slices.Clone(paRequestKeys), "state", "open_requests")
 	paOpenRequestKeys = []string{"delivery", "hook_alive", "pane_answer", "request_token", "requested_at", "tool_name"}
+	// paDialogKeys are ErrDialogMaybeOpen's (b.146 step 2c): the oldest
+	// unproven request's fields, the Spawn's state and unproven_requests.
+	paDialogKeys = append(slices.Clone(paRequestKeys), "state", "unproven_requests")
 )
+
+// assertDialogMaybeOpen fails unless err is ErrDialogMaybeOpen alone, its
+// description facts only (naming token, "nothing was sent", no advice), and
+// its err_details exactly paDialogKeys: token unproven on a Spawn in state,
+// unproven_requests the others in order, each with paRequestKeys. It returns
+// the err_details.
+func assertDialogMaybeOpen(t *testing.T, err error, token, state string, others ...string) api.DialogMaybeOpenDetails {
+	t.Helper()
+	assertOneSentinel(t, err, api.ErrDialogMaybeOpen)
+	adviceAssertPhrase(t, err, "request "+token+" is not proven gone")
+	adviceAssertPhrase(t, err, "nothing was sent")
+	for _, advice := range []string{"retry", "read-pane", "answer it", "expect_pane_sha256", "on screen"} {
+		if strings.Contains(errText(err), advice) {
+			t.Errorf("description %q carries %q; want facts only", errText(err), advice)
+		}
+	}
+	d, ok := api.ErrDetails(err).(api.DialogMaybeOpenDetails)
+	if !ok {
+		t.Fatalf("err_details of %v = %#v; want DialogMaybeOpenDetails", err, api.ErrDetails(err))
+	}
+	m := paJSON(t, d)
+	if got := sortedKeys(m); !slices.Equal(got, sortedCopy(paDialogKeys)) {
+		t.Errorf("err_details keys = %v; want %v", got, sortedCopy(paDialogKeys))
+	}
+	if d.RequestToken != token || d.State != state || d.ProvenGoneAt != nil || d.ProvenGoneHow != nil {
+		t.Errorf("err_details = %s; want request %s unproven, state %s", jsonOf(t, d), token, state)
+	}
+	reqs, ok := m["unproven_requests"].([]any)
+	if !ok {
+		t.Fatalf("err_details unproven_requests = %#v; want a list", m["unproven_requests"])
+	}
+	var got []string
+	for _, o := range reqs {
+		om := o.(map[string]any)
+		if keys := sortedKeys(om); !slices.Equal(keys, sortedCopy(paRequestKeys)) {
+			t.Errorf("unproven_requests entry keys = %v; want %v", keys, sortedCopy(paRequestKeys))
+		}
+		got = append(got, om["request_token"].(string))
+	}
+	if !slices.Equal(got, others) {
+		t.Errorf("err_details unproven_requests = %v; want %v", got, others)
+	}
+	return d
+}
 
 // assertFallenBackDetails fails unless err's err_details are
 // ErrRelayFallenBack's, naming token, fallen back, on a Spawn in state, with

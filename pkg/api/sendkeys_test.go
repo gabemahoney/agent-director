@@ -218,8 +218,9 @@ func setRequestsCreatedAt(t *testing.T, e *killEnv, id string, at time.Time) {
 // under b.146 rule 7: a relay-on row whose open request fell out of its window
 // refuses Decide, and a plain SendKeys, with ErrRelayFallenBack (nothing
 // typed: a stray key could answer its dialog); a pane answer naming the
-// request delivers its one key into the agent's pane and closes it, after
-// which a plain SendKeys delivers again.
+// request delivers its one key into the agent's pane and closes it. A plain
+// SendKeys is then ErrDialogMaybeOpen until the agent's next Stop proves the
+// request (recorded before v7) gone (b.146 step 2c), and delivers again.
 func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
@@ -238,8 +239,12 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	e.assertNoTmuxCall(t)
 	advAssertPaneAnswered(t, e, r, storefix.TestRequestTokenA, advPaneAnswer(t, e, r, storefix.TestRequestTokenA, now))
 	e.rec.Reset()
+	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"})
+	assertDialogMaybeOpen(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
+	e.assertNoTmuxCall(t)
+	proveGone(t, e, r.ID, turnEnd)
 	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"}); err != nil {
-		t.Fatalf("plain SendKeys once the request is answered at the pane: %v", err)
+		t.Fatalf("plain SendKeys once the agent's Stop proved the request gone: %v", err)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "2")
 }
@@ -249,7 +254,9 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 // (SR-4.2, SR-7.3; b.146 rule 7): ErrSendKeysWhileRelayed while any request's
 // relay hook may still answer, until it has settled (window, margin and
 // created_at's resolution, b.z6g), decided or not; then ErrRelayFallenBack,
-// naming the oldest, while an undecided one has fallen back. With no request
+// naming the oldest, while an undecided one has fallen back; then, a decided
+// one being no proof that its dialog is gone, ErrDialogMaybeOpen (b.146 step
+// 2c), unproven since its decided_at. With no request
 // at all the guard does not hold (the relay hook records its request and the
 // row's move in one transaction, b.146 rule 1). A held guard refuses with no
 // tmux call, naming of the requests whose hook may still answer an open one
@@ -327,7 +334,8 @@ func TestSendKeysRelayGuard(t *testing.T) {
 		{"sole open request, as its relay hook settles, refuses as fallen back", tokens[:1], soleAt(settled, false), fellBack(tokens[0])},
 		{"sole request decided, just before its relay hook settles, refuses", tokens[:1],
 			soleAt(settled-time.Nanosecond, true), recorded(tokens[0])},
-		{"sole request decided, as its relay hook settles, delivers", tokens[:1], soleAt(settled, true), ""},
+		{"sole request decided, as its relay hook settles, is held unproven", tokens[:1], soleAt(settled, true),
+			advNotProvenGone(tokens[0])},
 		{"an open request is named before an older decided one", tokens[:2],
 			func(t *testing.T, e *killEnv, r killRow) time.Time {
 				backdated(10*time.Minute)(t, e, r)
@@ -360,11 +368,21 @@ func TestSendKeysRelayGuard(t *testing.T) {
 
 			if tc.advice != "" {
 				want := api.ErrSendKeysWhileRelayed
-				if strings.HasSuffix(tc.advice, " fell back") {
+				switch {
+				case strings.HasSuffix(tc.advice, " fell back"):
 					want = api.ErrRelayFallenBack
+				case strings.HasSuffix(tc.advice, " is not proven gone"):
+					want = api.ErrDialogMaybeOpen
 				}
 				adviceAssertAdvice(t, err, want, tc.advice)
 				e.assertNoTmuxCall(t)
+				if want == api.ErrDialogMaybeOpen { // a verdict recorded before v7 reads closed since its decided_at
+					d := assertDialogMaybeOpen(t, err, tc.tokens[0], store.StateCheckPermission)
+					pr, gerr := e.st.GetPermissionRequest(r.ID, tc.tokens[0])
+					if gerr != nil || d.UnprovenSince == nil || !d.UnprovenSince.Equal(pr.DecidedAt) {
+						t.Errorf("err_details unproven_since = %v (%v); want the request's decided_at %v", d.UnprovenSince, gerr, pr.DecidedAt)
+					}
+				}
 				return
 			}
 			if err != nil {

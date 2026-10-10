@@ -134,7 +134,10 @@ or omitted `text` sends the Enter only, submitting what is already typed.
 alone (`"Escape"`, `"Enter"`, `"Up"`, `"Down"`, `"Tab"`, or one character),
 never followed by Enter. With `expect_pane_sha256` (the `pane_sha256` of
 the `readPane` you looked at, with its `n_lines`), nothing is sent if the
-pane changed since (`ErrPaneChanged`).
+pane changed since (`ErrPaneChanged`); on a relayed Spawn a match also
+passes the dialog hold (`ErrDialogMaybeOpen`, see "Answering a request at
+the pane" below). Pass it only for a pane a person or an LLM judged, never
+from an automatic flow.
 
 ```sh
 agent-director send-keys --claude-instance-id <id> --text "what is 2+2?"
@@ -279,6 +282,15 @@ do not know, read the recorded verdict from `decision` (`null` for a
 `"pane_outside"` `"unknown"` claim) and the outcome from `delivery` and
 `pane_answer`; never read a reason as a verdict.
 
+`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, its
+tool ran; `"turn_end"`, the turn of the agent that asked ended after it was
+written; or `"agent_gone"`, the agent ended) say when and how Claude Code
+itself showed the request's dialog gone; `"delivered"` and a pane answer are
+agent-director's own records, not proof. `get`'s `unproven_requests` lists
+every request not yet proven gone, each with `unproven_since`. A request
+that reads `"delivered"` or closed at the pane but stays unproven for a
+while is a reason to read the pane: its dialog may still be there.
+
 ### Answering a request at the pane
 
 A request that fell back (`delivery` `"fallen_back"`) is closed only at the
@@ -330,6 +342,34 @@ rejects with `ErrRelayFallenBack`, whose `errDetails`
 requests. `ErrPaneChanged`: the pane changed since you read it; read it
 again (the error carries no new hash). `ErrPaneAnswerInProgress`: another
 pane answer to the request is still being sent; do nothing.
+
+After a permission request, a `sendKeys` without `request_token` and
+without `expect_pane_sha256` rejects with `ErrDialogMaybeOpen`, sending
+nothing, until Claude Code shows the request's dialog gone: after an
+allow, once its tool has run; after a deny, once the agent's turn ends. A
+request answered at the pane or recorded with `recordPaneAnswer` is held
+the same way. Keep the keys and retry later; if it is still held after
+some seconds, have a person or an LLM read the pane and, having looked,
+send with its `pane_sha256`, which passes this hold (every other rejection
+still applies):
+
+```ts
+try {
+  await client.sendKeys({ claude_instance_id: "<id>", text: "<text>" });
+} catch (e) {
+  if (e instanceof ErrDialogMaybeOpen) {
+    // errDetails is a DialogMaybeOpenDetails here: keep the keys, retry later.
+    console.log("held by", e.errDetails?.["request_token"], e.errDetails?.["unproven_since"]);
+  } else {
+    throw e;
+  }
+}
+```
+
+Never pass `expect_pane_sha256` from an automatic flow: passed without
+looking, it lets through the Enter this hold exists to stop. A Spawn with
+no unproven permission request is never held (one that never asked for a
+permission included).
 
 ## Consumption
 
@@ -414,11 +454,12 @@ try {
 ```
 
 Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
-the error envelope's optional `err_details` object, or `null`. Four errors
+the error envelope's optional `err_details` object, or `null`. Five errors
 carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
-(`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`)
-and `ErrPaneChanged` (`PaneChangedDetails`). So does the `ErrInternal` of a
+(`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
+`ErrPaneChanged` (`PaneChangedDetails`) and `ErrDialogMaybeOpen`
+(`DialogMaybeOpenDetails`). So does the `ErrInternal` of a
 pane answer whose key was sent but not recorded (`PaneKeySentDetails`:
 `key_sent` `true` and `request_token`). Read facts from `errDetails`, never
 from `errDescription`.
@@ -476,7 +517,7 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 54 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 55 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -536,8 +577,9 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrSendKeysWhileRelayed` | `sendKeys` (plain or a pane answer) on a spawn with `relay_mode=on`, in any live state, while a relay hook of the spawn may still answer its request (its process runs, or it cannot be checked and the request's `confirm_by` has not passed); nothing was sent. The message names that request. If it is undecided, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`); `decide` on it would throw `ErrAlreadyDecided`. |
+| `ErrSendKeysWhileRelayed` | `sendKeys` (plain or a pane answer) on a spawn with `relay_mode=on`, in any live state, while a relay hook of the spawn may still answer its request (its process runs, or it cannot be checked and the request's `confirm_by` has not passed); nothing was sent. The message names that request. If it is undecided, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`); `decide` on it would throw `ErrAlreadyDecided`. Once that hook has ended, a plain retry can throw `ErrDialogMaybeOpen` until Claude Code proves the request gone. |
 | `ErrRelayFallenBack` | A request's relay hook is gone and acked no verdict, with no pane answer recorded through agent-director: no answer from the relay reached the agent. Thrown by `decide` on that request, within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process); no verdict was recorded, the caller's is kept as the request's `attempted_decision`. Thrown by a `sendKeys` without `request_token` while any request of the spawn is so; nothing was sent. `errDetails` is a `RelayFallenBackDetails`: the request's facts, the spawn's `state` and its other `open_requests`. Answer the request at the pane with `sendKeys` and its `request_token`, or close it with `recordPaneAnswer`. For a request recorded before this release, `decide` throws it once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `ErrNoOpenPermissionRequest`. |
+| `ErrDialogMaybeOpen` | A `sendKeys` without `request_token` and without `expect_pane_sha256` on a spawn with `relay_mode=on`, while a permission request of the spawn is not proven gone by Claude Code's hooks (its tool's PostToolUse, the main agent's end of turn after it, or the agent's end), whatever agent-director's records say of it (`"delivered"`, a pane answer, `recordPaneAnswer`); nothing was sent. `errDetails` is a `DialogMaybeOpenDetails`: the oldest such request with its facts and `unproven_since`, the spawn's `state` and its other `unproven_requests`. Retry later; if it is still held, have a person or an LLM look at the pane and send with its `pane_sha256`, never from an automatic flow. A subagent's denied request holds until the agent ends. |
 | `ErrPaneChanged` | `sendKeys` or `recordPaneAnswer` with `expect_pane_sha256`: the agent's pane no longer has that hash; nothing was sent or recorded. Read the pane again; `errDetails` (`PaneChangedDetails`) never carries the new hash. |
 | `ErrPaneAnswerInProgress` | A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` while another pane answer to the request is still being sent; nothing was sent or recorded. `errDetails` is a `PaneAnswerInProgressDetails`. Do nothing; a retry after that sender has ended needs a fresh hash. |
 | `ErrClaimTooSoon` | `recordPaneAnswer` before the request's relay hook has been gone 2 s, or while it may still answer the request; nothing was recorded. Retry at the `not_before` of its `errDetails` (`ClaimTooSoonDetails`; `null` only while the hook is seen running). |

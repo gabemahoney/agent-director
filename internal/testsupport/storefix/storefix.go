@@ -131,9 +131,10 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 
 // SeedClosedPermissionRequests seeds n requests for instanceID (creating its
 // row when absent) through the agent's gated insert, denies each
-// (DecisionReasonOperator), and backdates row i's decided_at to
-// baseTime+i*step through a raw connection to dbPath, for cap-eviction tests.
-// It returns the tokens in insertion order.
+// (DecisionReasonOperator), and through a raw connection to dbPath backdates
+// row i's decided_at to baseTime+i*step and proves it gone (turn_end at that
+// instant: the cap evicts only proven requests of a live row), for
+// cap-eviction tests. It returns the tokens in insertion order.
 func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instanceID string, n int, baseTime time.Time, step time.Duration) []string {
 	t.Helper()
 
@@ -175,12 +176,13 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 	defer func() { _ = raw.Close() }()
 
 	for i, tok := range tokens {
-		decidedAt := baseTime.Add(time.Duration(i) * step).UTC().Format("2006-01-02 15:04:05")
+		at := baseTime.Add(time.Duration(i) * step)
 		if _, err := raw.Exec(
-			`UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
-			decidedAt, instanceID, tok,
+			`UPDATE permission_requests SET decided_at = ?, proven_gone_at = ?, proven_gone_how = ?
+			  WHERE claude_instance_id = ? AND request_token = ?`,
+			at.UTC().Format("2006-01-02 15:04:05"), at.UnixMilli(), store.ProvenGoneTurnEnd, instanceID, tok,
 		); err != nil {
-			t.Fatalf("storefix.SeedClosedPermissionRequests: backdate decided_at for (%q, %q): %v", instanceID, tok, err)
+			t.Fatalf("storefix.SeedClosedPermissionRequests: backdate decided_at and prove (%q, %q): %v", instanceID, tok, err)
 		}
 	}
 
