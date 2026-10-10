@@ -3342,6 +3342,25 @@ env the caller did not ask for. An absolute `CLAUDE_CONFIG_DIR` is the
 supported way to give an agent its own Claude Code config; it leaves the
 agent-director store alone.
 
+**The spawner's own `HOME` and store are not checked (b.3en).** The same
+split happens, unrefused, when the spawner's store is not the one the
+pane's `HOME` names: a spawn run with another `HOME`, `--home`
+(`GlobalFlags.Apply` sets the process `HOME`), `--store-path` or the
+TypeScript client's `home` / `storePath` writes its row to its own store,
+while the hook (no `--store-path`; config and `EffectiveDbPath` from the
+pane's `HOME`) opens the other. `composeEnv` puts no `HOME` in the `-e`
+env, and tmux's default `update-environment` does not carry the client's
+`HOME`, so on a running server the pane gets the server's global `HOME`.
+`ResolveSocket` picks the server from `TMUX`, then `TMUX_TMPDIR` or
+`/tmp` plus the uid, never from `HOME`; a spawn that starts the server
+gives it the spawner's `HOME` for every later pane. Nothing refuses or
+warns: agent-director makes no `show-environment` call, so it does not
+see the server's `HOME`. The contract is the caller's: `HOME`, `--home`,
+`--store-path` and the TypeScript `home` and `storePath` must name the
+store of the server the spawn reaches, and an alternate `HOME` is safe only with no
+`TMUX` and its own existing `TMUX_TMPDIR`, which starts a separate server
+([docs/permissions.md](permissions.md#one-spawn-under-another-home-or-store)).
+
 `resume` refuses a row whose stored extra env has a key that sets `HOME`
 (only a row spawned before this refusal can) with `ErrReservedEnvKey`,
 before any transcript lookup, tmux call or write (step 4 of
@@ -3989,7 +4008,10 @@ a sweep never builds the record or the holder facts another way.
 failed kill leaves an unlabelled session of agent-director's that may
 run; the error says so. A plain spawn's recorded socket comes from the
 caller's tmux environment (`TMUX`, `TMUX_TMPDIR`), so a caller with a
-different environment launches on a different server.
+different environment launches on a different server. A caller whose
+store is not the one the server's `HOME` names launches an agent whose
+hooks write to that other store, so its row stays `pending` (see
+[Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas), b.3en).
 
 **A launch onto an existing row** (`resume`, see [Resume](#resume); reuse,
 see [Reuse of a finished id](#reuse-of-a-finished-id)). Its socket comes from `spawn.ResolveRowLaunchSocket(recorded)`
