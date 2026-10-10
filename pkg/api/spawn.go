@@ -230,7 +230,7 @@ func hasControlChar(id string) bool {
 //     key whose name before the first '=' (the name tmux sets) is reserved:
 //     it starts with AGENT_DIRECTOR_, or it is HOME (the key HOME, or one
 //     such as "HOME=/x") with any value, an empty one included. The message
-//     quotes the key. An extra-env HOME would move the agent's hook to
+//     quotes the key. An extra_env HOME would move the agent's hook to
 //     another agent-director store, so set an absolute CLAUDE_CONFIG_DIR
 //     instead to give the agent its own Claude Code config. Also returned,
 //     after those checks, for a key that is not a valid env-var name: it is

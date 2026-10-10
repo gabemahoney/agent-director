@@ -284,7 +284,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "allow",
 				Type:          "[]string",
-				Description:   "Repeated permissions.allow entries concatenated with the user / project tiers.",
+				Description:   "permissions.allow entries, one per array element (on the CLI, a repeatable flag), concatenated with the user / project tiers.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -293,7 +293,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "deny",
 				Type:          "[]string",
-				Description:   "Repeated permissions.deny entries concatenated with the user / project tiers.",
+				Description:   "permissions.deny entries, one per array element (on the CLI, a repeatable flag), concatenated with the user / project tiers.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -302,7 +302,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "ask",
 				Type:          "[]string",
-				Description:   "Repeated permissions.ask entries concatenated with the user / project tiers.",
+				Description:   "permissions.ask entries, one per array element (on the CLI, a repeatable flag), concatenated with the user / project tiers.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -320,7 +320,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "extra_env",
 				Type:          "map[string]string",
-				Description:   "Env-var entries injected on the tmux session env, as an object mapping each variable name to its value (on the CLI, a repeatable KEY=VALUE flag). Keys rejected with ErrReservedEnvKey, a template's included, never rewritten: the reserved names AGENT_DIRECTOR_* and HOME with any value (an extra-env HOME would move the agent's hook to another agent-director store; set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte, which tmux would read as a different variable; the message says which); auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR included) are not set.",
+				Description:   "Env-var entries injected on the tmux session env, as an object mapping each variable name to its value (on the CLI, a repeatable KEY=VALUE flag). Keys rejected with ErrReservedEnvKey, a template's included, never rewritten: the reserved names AGENT_DIRECTOR_* and HOME with any value (an extra_env HOME would move the agent's hook to another agent-director store; set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte, which tmux would read as a different variable; the message says which); auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR included) are not set.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -464,7 +464,7 @@ var Verbs = []VerbDef{
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tmux_socket", Type: "string?", Description: "The tmux socket the row's launch uses; omitted for a row from before this release.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-			{Name: "claude_args", Type: "[]string", Description: "Verbatim argv passed through to claude after --settings.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "claude_args", Type: "[]string", Description: "Verbatim argv passed through to claude after the supervisor's own flags.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "relay_mode", Type: "string", Description: "on / off.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"on", "off"}},
 			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "claude_session_id", Type: "string", Description: "Claude Code session UUID, extracted from SessionStart hook's transcript_path.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
@@ -824,7 +824,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "claude_args",
 				Type:          "[]string",
-				Description:   "Bake default Claude argv. Per-call claude_args (--claude-args on the CLI) REPLACES the template's array wholesale (not concat).",
+				Description:   "Bake default Claude argv. Per-call claude_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,

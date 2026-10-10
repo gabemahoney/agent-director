@@ -18,7 +18,7 @@ import (
 // into relay mode for.
 var ErrRelayModeOff = errors.New("ErrRelayModeOff")
 
-// ErrInvalidDecision is returned by decide() when --decision is
+// ErrInvalidDecision is returned by decide() when the decision param is
 // neither "allow" nor "deny". SRD §6.3 pins the two-valued surface.
 var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 

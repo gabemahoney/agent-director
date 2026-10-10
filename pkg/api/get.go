@@ -54,7 +54,8 @@ type SpawnRow struct {
 	// from before this release, which records none. Display only: no verb
 	// reads it back (SR-3.3, SR-16.1).
 	TmuxSocket string `json:"tmux_socket,omitempty"`
-	// ClaudeArgs is the verbatim argv passed through to claude after --settings.
+	// ClaudeArgs is the verbatim argv passed through to claude after the
+	// supervisor's own flags.
 	// Always a non-nil slice (possibly empty) for JSON-stability.
 	ClaudeArgs []string `json:"claude_args"`
 	// RelayMode is "on" or "off" — whether this Spawn participates in the

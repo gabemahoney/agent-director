@@ -24,16 +24,16 @@ type MakeTemplateParams struct {
 	// no path separators, no leading dot, no "..". Required.
 	Name string
 	// CWD is an optional default working directory to bake into the template.
-	// Per-call --cwd overrides at spawn time.
+	// Per-call cwd overrides at spawn time.
 	CWD string
 	// RelayMode is an optional default relay mode: "on", "off", or "" (inherit
-	// config default). Per-call --relay-mode overrides at spawn time.
+	// config default). Per-call relay_mode overrides at spawn time.
 	RelayMode string
 	// ClaudeArgs is an optional default argv passed through to claude. Per-call
-	// --claude-args REPLACES the template array wholesale (not concatenated).
+	// claude_args REPLACES the template array wholesale (not concatenated).
 	ClaudeArgs []string
 	// ExtraEnv is an optional map of env-var overrides to bake in. Per-call
-	// --extra-env entries merge by key; per-call wins on collision. A key
+	// extra_env entries merge by key; per-call wins on collision. A key
 	// spawn would refuse is refused here, by spawn's own check
 	// (spawn.ValidateExtraEnv), with ErrReservedEnvKey, and nothing is
 	// written: a reserved key (AGENT_DIRECTOR_*, or HOME with any value), or
@@ -41,11 +41,11 @@ type MakeTemplateParams struct {
 	// byte; the description says which).
 	ExtraEnv map[string]string
 	// AgentDirectorLabels is an optional map of label k=v pairs to bake in.
-	// Per-call --label entries merge by key; per-call wins on collision.
+	// Per-call label entries merge by key; per-call wins on collision.
 	AgentDirectorLabels map[string]string
 	// Permissions is an optional permission overlay. Nil means no permissions
 	// baked in; a non-nil value with empty arrays serializes as explicit [].
-	// Per-call --allow/--deny/--ask entries CONCATENATE with the template's arrays.
+	// Per-call allow/deny/ask entries CONCATENATE with the template's arrays.
 	Permissions *MakeTemplatePermissions
 	// Overwrite selects the write algorithm at the final file-write step.
 	// When true, the encoded TOML body is written via an atomic

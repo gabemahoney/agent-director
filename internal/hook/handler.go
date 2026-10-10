@@ -400,7 +400,7 @@ const sessionStartWaitInterval = 250 * time.Millisecond
 // its launch: it may sit at a Claude Code startup screen or idle at its
 // prompt, and only something that reads the pane can tell which. The caller
 // looks (read-pane) and only a caller that looked types (send-keys
-// --allow-pending). The agent's next applied hook clears the note: a
+// with allow_pending). The agent's next applied hook clears the note: a
 // SessionStart that writes later still records the session identity and
 // moves the row to waiting, and a UserPromptSubmit moves it to working.
 const sessionStartWaitCap = 540 * time.Second

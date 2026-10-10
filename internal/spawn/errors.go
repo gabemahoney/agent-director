@@ -41,7 +41,7 @@ var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 // name, the part before the first '=' (the name tmux sets), matches the
 // AGENT_DIRECTOR_* prefix (case-sensitive) or is exactly HOME
 // (ReservedHomeEnvKey, so "HOME" and "HOME=/x" alike; ReservedHomeKey) with
-// any value, an empty one included (bug b.nas): an extra-env HOME would move
+// any value, an empty one included (bug b.nas): an extra_env HOME would move
 // the agent's hook to another agent-director store, and CLAUDE_CONFIG_DIR is
 // the supported way to give an agent its own Claude Code config. The message
 // quotes the key as given. Spawn returns it at validation, before anything is
@@ -88,14 +88,14 @@ var ErrInstanceIdCollision = errors.New("ErrInstanceIdCollision")
 var ErrTmuxSessionNameEmpty = errors.New("ErrTmuxSessionNameEmpty")
 
 // ErrTmuxSessionNameInvalid is returned when the caller-supplied
-// --tmux-session-name contains any of '#', ':', '.', '$', '\', an ASCII
+// tmux_session_name contains any of '#', ':', '.', '$', '\', an ASCII
 // control character (\x00-\x1f / \x7f), or is not valid UTF-8. The validator
 // does NOT silently rewrite — callers must pick a name they want
 // byte-for-byte.
 var ErrTmuxSessionNameInvalid = errors.New("ErrTmuxSessionNameInvalid")
 
 // ErrTmuxSessionNameTooLong is returned when the caller-supplied
-// --tmux-session-name exceeds MaxTmuxSessionNameBytes UTF-8 bytes.
+// tmux_session_name exceeds MaxTmuxSessionNameBytes UTF-8 bytes.
 // The cap is an app-layer convenience (operator readability + room for
 // the defaulted-name's 8-char id suffix), not a tmux-imposed limit.
 var ErrTmuxSessionNameTooLong = errors.New("ErrTmuxSessionNameTooLong")

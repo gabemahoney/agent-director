@@ -53,7 +53,7 @@ type GlobalFlags struct {
 //
 // Caveat: the pre-scan recognizes flag tokens anywhere in argv and does NOT
 // treat `--` as an end-of-options sentinel. If a caller intentionally passes
-// these flag names through `--` (e.g. `spawn --claude-args -- --store-path /x`),
+// these flag names through `--` (e.g. `spawn --cwd /w -- --store-path /x`),
 // the pre-scan will still consume them. The practical risk is low because the
 // recognized names (`--store-path`, `--home`, `--tmux-command`) are unlikely
 // to recur in legitimate passthrough argv, so threading `--`-awareness through
