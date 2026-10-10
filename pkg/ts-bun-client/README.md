@@ -311,9 +311,9 @@ before the verdict was recorded (retry), and with
 request is closed (do not answer it at the pane). The
 `permission_requests` of `get` and of each `list` row carry the same
 delivery fields, `pane_answer` and `pane_as` included, for requests that
-still await an answer only; a row can read `waiting` or `working` while a
-request is still open, so follow the requests you track with
-`getPermission`.
+still await an answer only; a row can read `waiting`, `working` or
+`ask_user` while a request is still open, so follow the requests you track
+with `getPermission`.
 `decision_reason` is one of `"operator"`, `"timeout"`, `"find_missing"`,
 `"ended"`, `"pane"`, `"pane_outside"` and `"tool_ran"`. For a reason you
 do not know, read the recorded verdict from `decision` (`null` for a

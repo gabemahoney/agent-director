@@ -290,10 +290,10 @@ export interface ListRow {
   /**
    * The row's open permission requests (those still awaiting an answer), each with its
    * delivery facts; populated only when the row's live state is check_permission, `[]`
-   * otherwise. A row can read waiting or working while a request is still open: follow a
-   * tracked request with `getPermission`. Requests are never delayed by `[state] settle_ms`,
-   * so with it set a row can also read any state (even ended or missing) with open requests
-   * listed, or check_permission with `[]`, for up to settle_ms.
+   * otherwise. A row can read waiting, working or ask_user while a request is still open:
+   * follow a tracked request with `getPermission`. Requests are never delayed by
+   * `[state] settle_ms`, so with it set a row can also read any state (even ended or missing)
+   * with open requests listed, or check_permission with `[]`, for up to settle_ms.
    */
   permission_requests: PermissionRequestInfo[];
 }
@@ -478,8 +478,9 @@ export interface GetResult {
   /**
    * The row's open permission requests (those still awaiting an answer: not acked by their relay
    * hook and not answered at the pane, decided or not), each with its delivery facts; populated
-   * only when the row's live state is check_permission, `[]` otherwise. A row can read waiting
-   * or working while a request is still open: follow a tracked request with `getPermission`.
+   * only when the row's live state is check_permission, `[]` otherwise. A row can read waiting,
+   * working or ask_user while a request is still open: follow a tracked request with
+   * `getPermission`.
    * Requests are never delayed by `[state] settle_ms`, so with it set a row can also read any
    * state (even ended or missing) with open requests listed, or check_permission with `[]`, for
    * up to settle_ms.

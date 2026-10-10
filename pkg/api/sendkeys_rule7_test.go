@@ -166,8 +166,8 @@ func TestSendKeysRule7(t *testing.T) {
 
 // TestSendKeysRule7EveryLiveState (b.146 rule 7): the guard reads a relay-on
 // row's requests in every live state, not only check_permission (a row can
-// read waiting or working while a request is still open), and on a relay-off
-// row it does not apply.
+// read waiting, working or ask_user while a request is still open), and on a
+// relay-off row it does not apply.
 func TestSendKeysRule7EveryLiveState(t *testing.T) {
 	t.Parallel()
 	p := newPAEnv(t)

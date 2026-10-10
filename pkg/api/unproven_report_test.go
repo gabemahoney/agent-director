@@ -2,7 +2,8 @@ package api_test
 
 // unproven_report_test.go — b.146 step 2c's report (rule 4): get's
 // unproven_requests, and proven_gone_at, proven_gone_how and unproven_since on
-// get-permission and on every reported request. Fixture:
+// get-permission and on every reported request; and a row read outside
+// check_permission while a request is still open (b.at1). Fixture:
 // pane_answer_fixture_test.go.
 
 import (
@@ -109,5 +110,46 @@ func TestGetReportsUnprovenRequests(t *testing.T) {
 		if pr := p.request(t, tok); pr.ProvenGoneHow != store.ProvenGoneAgentGone {
 			t.Errorf("request %s after the row ended = proven_gone_how %q; want agent_gone", tok, pr.ProvenGoneHow)
 		}
+	}
+}
+
+// TestAskUserRowWithRequestOpen (b.at1): with a background subagent's request
+// A open and not proven gone, the main agent's AskUserQuestion moves the row to
+// ask_user; get and list then give permission_requests [], while get's
+// unproven_requests and get-permission still report A, undecided.
+func TestAskUserRowWithRequestOpen(t *testing.T) {
+	t.Parallel()
+	tokA := storefix.TestRequestTokenA
+	p := newSubagentPAEnv(t)
+	pid, start, err := storefix.AgentHookParent(p.st, p.r.ID)
+	if err != nil {
+		t.Fatalf("AgentHookParent: %v", err)
+	}
+	gate := store.HookGate{Event: "PreToolUse", ParentPID: pid, ParentStart: start}
+	if applied, err := p.st.ApplyHookTransition(p.r.ID, gate, store.StateAskUser, false, "PreToolUse", "", false); err != nil || !applied.Applied {
+		t.Fatalf("AskUserQuestion's PreToolUse = %+v, %v; want applied", applied, err)
+	}
+
+	row, err := api.Get(p.st, p.view(), p.r.ID)
+
+	if err != nil || row.State != store.StateAskUser {
+		t.Fatalf("Get = state %q, %v; want ask_user", row.State, err)
+	}
+	if raw, _ := jsonField(t, row, "permission_requests"); string(raw) != "[]" {
+		t.Errorf("get permission_requests = %s; want []", raw)
+	}
+	if got := unprovenTokens(row.UnprovenRequests); len(got) != 1 || got[0] != tokA {
+		t.Errorf("get unproven_requests = %v; want [A]", got)
+	}
+	listed, err := api.List(p.st, p.view(), api.ListParams{})
+	if err != nil || len(listed.Spawns) != 1 || listed.Spawns[0].State != store.StateAskUser {
+		t.Fatalf("List = %+v, %v; want the one row, ask_user", listed.Spawns, err)
+	}
+	if raw, _ := jsonField(t, listed.Spawns[0], "permission_requests"); string(raw) != "[]" {
+		t.Errorf("list permission_requests = %s; want []", raw)
+	}
+	a, err := api.GetPermission(p.st, p.view(), api.GetPermissionParams{RequestToken: tokA})
+	if err != nil || a.Decision != nil || a.ProvenGoneAt != nil {
+		t.Errorf("get-permission A = %s, %v; want undecided, not proven gone", jsonOf(t, a), err)
 	}
 }

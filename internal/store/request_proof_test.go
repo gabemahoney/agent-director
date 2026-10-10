@@ -5,8 +5,10 @@ package store
 // tool_ran and a main-agent end of turn's turn_end cover, the hook gate,
 // "written before the hook" decided by the hook's start second and by the read
 // before the write, and what a proof releases: a request proven gone no
-// longer holds its row (b.omt). The close's agent_gone proof is
-// relay_close_test.go's. Seeds: relay_writes_test.go's relay rows.
+// longer holds its row (b.omt); of ApplyHookTransitionResult's hook moves, an
+// unproven one holds only the move to working, not ask_user or a Stop's
+// waiting (b.at1). The close's agent_gone proof is relay_close_test.go's.
+// Seeds: relay_writes_test.go's relay rows.
 
 import (
 	"context"
@@ -312,6 +314,42 @@ func TestProvenGoneRequestHoldsNothing(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestUnprovenRequestDoesNotHoldAskUserOrStop (b.at1): a background subagent's
+// request A, open and not proven gone. Of ApplyHookTransitionResult's hook
+// moves, only the main agent's move to working is held (the case that proves
+// the setup holds); AskUserQuestion's PreToolUse (ask_user) and Stop (waiting)
+// apply with A still open. The idle prompt's hold is
+// TestProvenGoneRequestHoldsNothing's.
+func TestUnprovenRequestDoesNotHoldAskUserOrStop(t *testing.T) {
+	cases := []struct {
+		event, target, want string
+	}{
+		{"PreToolUse", StateWorking, StateCheckPermission},
+		{"PreToolUse", StateAskUser, StateAskUser},
+		{"Stop", StateWaiting, StateWaiting},
+	}
+	for _, tc := range cases {
+		t.Run(tc.event+" to "+tc.target, func(t *testing.T) {
+			s, _ := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+
+			if err := agentHook(s, relayID, tc.target, false, tc.event); err != nil {
+				t.Fatalf("%s: %v", tc.event, err)
+			}
+
+			if got := mustGetSpawn(t, s, relayID).State; got != tc.want {
+				t.Errorf("state = %q; want %q", got, tc.want)
+			}
+			if got := openTokens(t, s, relayID); !slices.Equal(got, []string{tokenA}) {
+				t.Errorf("open requests = %v; want A listed (it still awaits an answer)", got)
+			}
+			if got := proven(t, s, tokenA)[tokenA]; got != "" {
+				t.Errorf("A proven_gone_how = %q; want unproven", got)
+			}
+		})
 	}
 }
 

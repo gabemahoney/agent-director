@@ -144,7 +144,7 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // zero-rows rule: the relay hook records its request and the Spawn's move to
 // check_permission in one transaction (b.146 rule 1). It reads requests of a
 // Spawn with relay_mode on in every live state, not only check_permission: a
-// Spawn can read waiting or working while a request is still open.
+// Spawn can read waiting, working or ask_user while a request is still open.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
 // ErrPaneChanged is returned by send-keys and record-pane-answer given

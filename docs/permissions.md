@@ -549,8 +549,8 @@ bound).
 lists, in `permission_requests`, the requests that still await an answer:
 not confirmed by their relay hook and with no pane answer recorded,
 decided or not (a recorded verdict not yet confirmed has not reached the
-agent), and not closed with the spawn. A row can read `waiting` or
-`working` while one of its requests still awaits an answer, so a caller
+agent), and not closed with the spawn. A row can read `waiting`, `working`
+or `ask_user` while one of its requests still awaits an answer, so a caller
 follows each request it tracks with `get-permission`, not only rows in
 `check_permission`. `get` (not `list`) also carries `unproven_requests`:
 every request of the row not proven gone, in any state but `ended` and
@@ -558,9 +558,12 @@ every request of the row not proven gone, in any state but `ended` and
 read closed (see "The dialog hold" below).
 
 **The row after the last answer.** While any of its requests still awaits
-an answer and is not proven gone (see "The dialog hold" below), the row
-stays in `check_permission`. After that it moves on
-with the agent's next hook; when that hook is lost, the idle-prompt
+an answer and is not proven gone (see "The dialog hold" below), the
+agent's moves to `working` are held, so the row stays in
+`check_permission` while the agent works. Its `AskUserQuestion` and `Stop`
+are not held: they move the row to `ask_user` and `waiting` with that
+request still open. Once no request holds the row, it moves on with the
+agent's next hook; when that hook is lost, the idle-prompt
 Notification or a scheduled `find-missing` moves it to `waiting` or
 `working` (see [hooks.md](hooks.md#a-relay-row-left-in-check_permission)).
 The relay hook's timeout deny itself leaves the row's state as it is. A
@@ -629,7 +632,8 @@ before the upgrade:
 ### Send-keys interaction
 
 On a spawn with `relay_mode=on`, in every live state (a row can read
-`waiting` or `working` while one of its requests is still open), `send-keys`
+`waiting`, `working` or `ask_user` while one of its requests is still
+open), `send-keys`
 first reads every permission request of the spawn, judging each relay hook
 as the readers do (see "How a reader judges the relay hook" above). It
 refuses in this order, sending nothing:

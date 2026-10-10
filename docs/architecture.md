@@ -7161,11 +7161,18 @@ raw state, never the settled one (see
 
 ### The row after the last answer (rule 9, problem 3)
 
-While any of its requests holds it, the row stays in `check_permission`:
-the working hold (`holdWorkingTransition`) writes no state for a hook that
-would move it to `working` (it clears `idle_since`). A request holds the
-row while it still awaits an answer (`awaitingAnswerSQL`) and Claude Code
-has not proven its dialog gone (`proven_gone_at` NULL): `holdsRowSQL`
+While any of its requests holds it, the row stays in `check_permission`
+while the agent works: the working hold (`holdWorkingTransition`) writes
+no state for a hook that would move it to `working` (it clears
+`idle_since`). No other target of `ApplyHookTransitionResult` is held
+(b.at1): `PreToolUse(AskUserQuestion)` moves the row to `ask_user`, and
+`Stop` to `waiting`, with that request still open. `get` and `list` then
+give `[]` in `permission_requests` (filled only while the raw state is
+`check_permission`), so a caller follows a tracked request with
+`get-permission`. Holding `ask_user` too would hide the agent's question
+from callers. A request holds the row while it still awaits an answer
+(`awaitingAnswerSQL`) and Claude Code has not proven its dialog gone
+(`proven_gone_at` NULL): `holdsRowSQL`
 (b.omt; see its "Must use" under [`internal/store`](#internalstore)).
 After the last answer, the row moves with the agent's next hook. The
 relay hook's timeout deny writes no row state, so after a deny that hook
@@ -8122,7 +8129,8 @@ docs/engineering-guide.md).
 with send-keys' own next step on a recorded verdict, `retrySendKeysLater`)
 applies to a row
 with `relay_mode=on` in every live state the state guard lets through (a
-row can read `waiting` or `working` while a request is still open): it
+row can read `waiting`, `working` or `ask_user` while a request is still
+open): it
 reads every request of the row by the check-before-read rule
 (`judgedRequests`) and applies `spawnRequests.sendKeysRefusal`
 (`pkg/api/sendkeys_relay.go`), in this order:
@@ -11518,12 +11526,12 @@ meaning and links to the section that describes it in detail.
   `record-pane-answer`, stops holding the row once the main agent's next
   `Stop` or idle-prompt Notification proves it gone, or its tool's
   `PostToolUse` does; before, it held every later move to `working` until
-  it was closed. So a row can now read `working`, as well as `waiting`,
-  while one of its requests still awaits an answer: follow a tracked
-  request with `get-permission`. Plain `send-keys` is still refused on its
-  account until it is closed, and a subagent's such request holds the row
-  until `record-pane-answer`, its tool's `PostToolUse` or the row's end
-  (see "The row after the last answer" under
+  it was closed. So a row can now read `working`, as well as `waiting` or
+  `ask_user`, while one of its requests still awaits an answer: follow a
+  tracked request with `get-permission`. Plain `send-keys` is still
+  refused on its account until it is closed, and a subagent's such request
+  holds the row until `record-pane-answer`, its tool's `PostToolUse` or the
+  row's end (see "The row after the last answer" under
   [Permission relay](#permission-relay)).
 - **`send-keys`' relay guard (b.146 step 2b, rule 7).** On a relay-on row
   the guard now applies in every live state, not only `check_permission`,

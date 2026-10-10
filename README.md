@@ -394,8 +394,8 @@ the relay hook's process (for example from another pid namespace, or for a
 request recorded before you upgraded to this release); such a request
 falls back by time, at `confirm_by`. A closed request's `delivery` reads
 the same way as any other's: `delivered` only if its relay hook confirmed a
-verdict. A row can read `waiting` or `working` while a request it recorded
-still awaits an answer, so follow each request you track with
+verdict. A row can read `waiting`, `working` or `ask_user` while a request
+it recorded still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how Claude Code itself

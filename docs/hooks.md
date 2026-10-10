@@ -680,10 +680,12 @@ it for a request recorded before this release; see
 
 ### A relay row left in `check_permission`
 
-While any of its requests holds it, a row stays in `check_permission`:
-the agent's moves to `working` are held (the hook is applied, writes no
-state, and clears `idle_since`). A request holds the row while it still
-awaits an answer and Claude Code has not proven its dialog gone (see
+While any of its requests holds it, a row stays in `check_permission`
+while the agent works: the agent's moves to `working` are held (the hook
+is applied, writes no state, and clears `idle_since`). `AskUserQuestion`'s
+`PreToolUse` and `Stop` are not held: they move the row to `ask_user` and
+`waiting` with the request still open. A request holds the row while it
+still awaits an answer and Claude Code has not proven its dialog gone (see
 "Hooks that prove a request's dialog gone" below). Once none does, the
 row stays there until the agent's next hook, which after a denied request
 is normally the turn's `Stop`.
@@ -694,8 +696,9 @@ since nothing recorded that answer. It holds the row only until Claude
 Code proves its dialog gone: the main agent's `Stop` or idle-prompt
 Notification after it, or its tool's `PostToolUse` (an allow). From then
 on the agent's moves to `working` apply again, though the request stays
-open until `record-pane-answer` closes it, so the row can read `working`
-or `waiting` while one of its requests still awaits an answer. Limits:
+open until `record-pane-answer` closes it, so the row can read `waiting`,
+`working` or `ask_user` while one of its requests still awaits an answer.
+Limits:
 
 - A subagent's request (`agent_id` set) is never proven by the main
   agent's turn end, since a background subagent can outlive it. Answered
