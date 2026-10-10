@@ -28,8 +28,8 @@
 #   initial prompt  UserPromptSubmit and PreToolUse, then stays in its turn
 #                   (the mid-turn cases)
 #   typed prompt    UserPromptSubmit, PreToolUse, PermissionRequest (blocks
-#                   while the relay waits for decide), PostToolUse, Stop,
-#                   Notification. With agent teams enabled in the generated
+#                   while the relay waits for decide), PostToolUse (the three
+#                   with one tool_use_id), Stop, Notification. With agent teams enabled in the generated
 #                   layer: teammateMode in-process fires one teammate's
 #                   SessionStart, PreToolUse and SessionEnd carrying agent_id
 #                   from this process; teammateMode tmux splits the window
@@ -268,16 +268,22 @@ splitpane_teammate() {
     done
 }
 
-# do_turn answers one typed prompt.
+# do_turn answers one typed prompt. Its tool use's PreToolUse,
+# PermissionRequest and PostToolUse carry one tool_use_id, new each turn, as
+# Claude Code's do: agent-director proves the request's dialog gone by its
+# PostToolUse (tool_ran), since the Stop and idle prompt fired at once after
+# it start in the request's second, which a turn_end proof does not cover.
 do_turn() {
+    local tu
     fire UserPromptSubmit '{"prompt": "stub prompt"}'
     case "$(team_mode)" in
         in-process) inprocess_teammate ;;
         tmux) splitpane_teammate ;;
         *)
-            fire PreToolUse '{"tool_name": "Bash", "tool_input": {"command": "date"}, "tool_use_id": "stub"}'
-            fire PermissionRequest '{"tool_name": "Bash", "tool_input": {"command": "date"}}'
-            fire PostToolUse '{"tool_name": "Bash", "tool_input": {"command": "date"}, "tool_response": {"stdout": "stub"}}'
+            tu="$(jq -cn --arg id "toolu_stub_$$_$n" '{tool_use_id: $id}')"
+            fire PreToolUse "$(jq -c '. + {tool_name: "Bash", tool_input: {command: "date"}}' <<<"$tu")"
+            fire PermissionRequest "$(jq -c '. + {tool_name: "Bash", tool_input: {command: "date"}}' <<<"$tu")"
+            fire PostToolUse "$(jq -c '. + {tool_name: "Bash", tool_input: {command: "date"}, tool_response: {stdout: "stub"}}' <<<"$tu")"
             ;;
     esac
     fire Stop '{"stop_hook_active": false}'
