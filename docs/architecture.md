@@ -5081,46 +5081,57 @@ map a tree by recursive listings.
 
 ## Install flows
 
-There are two complementary install surfaces, separated by what they
-touch on disk. **Pattern A** (the npm postinstall) ships
-`/install-agent-director` into Claude Code's skill registry so the
-operator can discover the install skill in one step; **Pattern B**
-(the install skill itself) is the only path that touches the CLI
-binary, state DB, and Claude Code hooks. Pattern A is silent; Pattern
-B is explicit and operator-confirmed.
+agent-director ships one installer, `install.sh`, the script of the
+`install-agent-director` skill
+([Pattern B](#pattern-b--installsh-the-install-skill)). It installs
+`agent-director` and `agent-director-admin`, brings `state.db` to the
+current schema, and merges the Claude Code hooks (unless `--no-hooks`).
+The npm package is not an installer: it installs nothing outside
+`node_modules/`, so it neither installs the CLI nor stages the skill
+(see [Staging the install skill](#staging-the-install-skill)).
 
-### Pattern A — Postinstall skill copy
+### Staging the install skill
 
-When the umbrella package is installed:
+The skill is `SKILL.md`, `install.sh` and `uninstall.sh` in
+`skills/install-agent-director/`. Claude Code finds personal skills in
+`~/.claude/skills/` and project skills in a project's `.claude/skills/`;
+the repo's top-level `skills/` is neither, and nothing in agent-director
+copies the skill into either. The npm package does not carry it:
 
-```
-bun add agent-director
-  → bun resolves umbrella + platform sub-package
-  → bun runs pkg/ts-bun-client/scripts/postinstall.ts
-      → host-pair gate (linux/x64 or darwin/arm64, else exit 1)
-      → ${HOME}/.claude/skills/install-agent-director/ atomic copy
-        of the bundled skill body
-  → claude /install-agent-director is now invokable in any Claude
-    Code session run by that operator
-```
+- `pkg/ts-bun-client/package.json` `files` lists only the `dist/` output
+  (`dist/**/*.js`, `dist/**/*.d.ts`, `dist/version-floor.json`) and
+  `README.md`.
+- Its `scripts` (build, lint, typecheck, the test runners and two release
+  helpers) include no lifecycle script a package manager runs on
+  install, so `bun add agent-director` runs no package code, with or
+  without `--ignore-scripts`. Installing the package writes nothing
+  under `~/.claude/`, `~/.agent-director/` or `~/.local/bin/`. See
+  [npm packaging and version scripts](#npm-packaging-and-version-scripts).
 
-The postinstall **only** writes under `${HOME}/.claude/skills/`
-(plus a sibling tmp dir and an optional timestamped backup). It does
-NOT touch `~/.local/bin/agent-director`, `~/.agent-director/`,
-`~/.claude/settings.json`, or `~/.claude/config.toml`. Those side
-effects are reserved for Pattern B's `install.sh`. Keeping
-postinstall narrow protects operators who install the library purely
-to import it from TypeScript code and never want the CLI / state DB
-/ hooks materialized.
+`install.sh` is reached three ways:
 
-The three-way decision (identical / older-or-absent / newer) is
-governed by the YAML frontmatter `version:` field on
-`SKILL.md`. Authoritative spec lives in SRD `t1.fg3.7i` SR-1.4.
+1. **The skill.** The operator copies or symlinks
+   `skills/install-agent-director/` into `~/.claude/skills/` (or a
+   project's `.claude/skills/`), then invokes `/install-agent-director`
+   in Claude Code. The skill runs the `install.sh` beside its `SKILL.md`.
+2. **A checkout.** `bash skills/install-agent-director/install.sh` with
+   its options.
+3. **The one-liner.** It fetches `install.sh` from `main` and installs
+   the latest release's binaries:
+
+   ```
+   curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+   ```
+
+Without `--binary` or `--from-release`, a symlinked skill directory
+installs the `bin/` build of the checkout it points into, held to that
+checkout's `HEAD`; a copy has no checkout behind it. See "The two
+binaries" and "The source-tree version check" under Pattern B.
 
 ### Pattern B — `install.sh` (the install skill)
 
 Invoked from inside Claude Code via `/install-agent-director` (which
-runs the skill body Pattern A copied), or directly via
+runs the skill body the operator staged; see [Staging the install skill](#staging-the-install-skill)), or directly via
 `bash skills/install-agent-director/install.sh`:
 
 ```
@@ -5903,19 +5914,6 @@ npm/customer README, the migration error message); those route the
 operator to *this install flow* and nowhere else. `architecture.md`,
 `install-agent-director/SKILL.md`, and docs/migration-guide.md are
 internal/admin-facing, which is why they may name it.
-
-### Pattern B fallback (postinstall skipped)
-
-When `bun add --ignore-scripts agent-director` (or any client that
-suppresses lifecycle scripts) is used, the postinstall does not run.
-Pattern B is still reachable two ways:
-
-1. Manual: `cp -r node_modules/agent-director/skills/install-agent-director ~/.claude/skills/` then invoke the skill.
-2. Direct: invoke `claude /install-agent-director` — the skill body
-   knows how to copy itself into `~/.claude/skills/` as a side
-   effect of running install.sh.
-
-Same end state in both cases.
 
 ## Install layout
 
