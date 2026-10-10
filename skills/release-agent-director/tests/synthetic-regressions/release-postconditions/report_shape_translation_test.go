@@ -5,8 +5,8 @@
 //
 // The coverage phase runs its gates through gates/lib/run-parallel.sh, whose
 // consolidated output shape differs from the report phase shape that
-// finalize/write-report.sh consumes. write-report.sh validates only that the
-// phases value is a JSON array — the LLM orchestrator performs the translation
+// finalize/write-report.sh consumes. write-report.sh validates only that its
+// phases file holds a JSON array — the LLM orchestrator performs the translation
 // at release time. This test is the only automated proof that the
 // README-documented mapping (gates/README.md "Field-mapping: executor output →
 // report phase object") actually produces a well-formed report when applied to
@@ -20,8 +20,9 @@
 //  2. Run run-parallel.sh DIRECTLY against it to obtain real consolidated
 //     output (tolerating the deliberately-failing toy gate's non-zero exit).
 //  3. Apply a codified copy of the README mapping table in test code.
-//  4. Feed the translated phases (and any spilled diagnostics) to a RUNTIME
-//     copy of write-report.sh staged in an isolated tree (stageWriteReport).
+//  4. Feed the translated phases (and any spilled diagnostics), as files, to a
+//     RUNTIME copy of write-report.sh staged in an isolated tree
+//     (stageWriteReport).
 //  5. Parse the produced report with parseReport and assert phase/sub-check
 //     values DERIVED from the executor run (SR-2.3 — not mere key presence).
 //
@@ -295,6 +296,7 @@ func TestReportShapeTranslationEndToEnd(t *testing.T) {
 	}
 
 	// ── 3. Feed the translated report through the staged write-report.sh ───
+	// The arrays go as files, never as arguments (b.2wr).
 	stagedScript, reportPath := stageWriteReport(t, root)
 	writeCmd := exec.Command("bash", stagedScript,
 		startedAt, // invocation_timestamp
@@ -302,8 +304,8 @@ func TestReportShapeTranslationEndToEnd(t *testing.T) {
 		"patch",   // bump_kind
 		"0.0.0",   // source_version
 		"0.0.1",   // target_version
-		string(phasesJSON),
-		string(diagJSON),
+		writeTempFile(t, string(phasesJSON)),
+		writeTempFile(t, string(diagJSON)),
 		"1", // elapsed_seconds
 	)
 	if out, err := writeCmd.CombinedOutput(); err != nil {

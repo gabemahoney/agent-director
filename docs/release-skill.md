@@ -150,8 +150,10 @@ inspection, CI upload, and audit trail.
 ```
 
 The report is written by
-`skills/release-agent-director/gates/finalize/write-report.sh`. See the inline
-comments in that file for the full positional argument contract.
+`skills/release-agent-director/gates/finalize/write-report.sh`. It takes the
+phases and diagnostics arrays as paths of files holding them, never as inline
+JSON, so they may be any size. See the inline comments in that file for the
+full positional argument contract.
 
 ---
 
@@ -330,10 +332,20 @@ the remote release branch. Skipped entirely in dry-run mode.
 ### Publish phase
 
 Before any substep runs, the orchestrator resolves every file-input argument
-(`--tarball`, `--notes`, and each `--binaries` element) to an absolute path
-against the caller's working directory, then runs an artifact preflight,
-`publish.preflight-publish-artifacts`. That preflight asserts every one of
-those paths is a readable regular file and halts the run before the first
+(`--tarball`, `--notes`, each `--binaries` element and `--prior-phases`) to
+an absolute path against the caller's working directory.
+
+It then reads the `--prior-phases` file, if one is given. The file holds the
+earlier phases' JSON array, which goes into the report's `phases`. It must be
+a readable regular file holding exactly one JSON array. Otherwise the
+orchestrator exits 2 naming the path, before the artifact preflight or any
+substep runs, and writes no report. The file is read once, at startup: the
+report and terminal summary use that copy, so a later change to the file, or
+its removal, does not reach them.
+
+Next it runs an artifact preflight, `publish.preflight-publish-artifacts`.
+That preflight asserts every `--tarball`, `--notes` and `--binaries` path
+is a readable regular file and halts the run before the first
 irreversible substep if any is not. It runs in **both** `--release` and
 `--dry-run` mode, so a bad artifact path is caught the same way regardless of
 mode. On failure it emits the SR-14 diagnostic, records the failed substep
@@ -371,6 +383,13 @@ AC-7 guarantee: dry-run mode has zero observable side effects on GitHub or
 npm. Every substep is recorded in `dist/release-report.json` under
 `publish_substeps` with `outcome: skipped` and the would-be command captured
 verbatim.
+
+Each time it writes the report, the orchestrator prints
+`release-report written → <path>` on stderr. If `jq` or the write fails, it
+removes the partial file and prints
+`publish-orchestrator.sh: ERROR: release-report NOT written: …` in that
+line's place. The exit code stays what the run's outcome sets, so that line
+is the only sign the report is missing.
 
 Subprocess: `skills/release-agent-director/gates/publish/publish-orchestrator.sh`.
 

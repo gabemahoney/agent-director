@@ -11131,24 +11131,23 @@ on stdin or in a file `jq` reads, never as an argument;
 `printf '%s' "$v" | jq -Rs .` turns a string into one JSON string with no
 change to its content. Only short values such as gate names, outcomes,
 paths built by the script and numbers go as `--arg` or `--argjson`. The
-values that follow this rule today (b.v46, b.nsa):
+values that follow this rule today (b.v46, b.nsa, b.2wr):
 
 - `emit_diagnostic`: the description.
 - `emit_publish_diagnostic`: the offending path, description, corrective
   action and `upstream_response_verbatim` (the failed command's last 50
   stderr lines).
 - The publish orchestrator's `record_substep` (`response_excerpt`) and
-  `write_report` (the substeps and diagnostics arrays).
+  `write_report` (the `--prior-phases` array, from the copy read once at
+  startup, and the substeps and diagnostics arrays).
+- `finalize/write-report.sh`: the phases and diagnostics arrays. The cap
+  also limits the script's own arguments, so its caller passes each array
+  as the path of a file holding it, never as the array itself.
 - `run-parallel.sh`: each sub-check's `stderr_excerpt` and `diagnostics`,
   and the combined `sub_checks`, which `jq` reads from the per-gate files.
 - `smoke/per-binary-smoke.sh`: a sub-check's `detail` (`ldd` or `help`
   output). `jq` is the only thing that escapes it, so the decoded value
   equals the raw output.
-
-Two inputs still go as arguments: the publish orchestrator passes its
-`--prior-phases` file's array to `jq` as one `--argjson`, and
-`finalize/write-report.sh` takes its phases and diagnostics arrays as
-positional arguments.
 
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,

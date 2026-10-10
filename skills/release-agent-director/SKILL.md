@@ -87,8 +87,10 @@ list below names each phase and its Epic owner.
    v<X.Y.Z>` + `gh release create` + fast-forward main + delete remote
    branch. Built in E9.
 
-8. **`finalize`** — Write `dist/release-report.json`. Print terminal summary.
-   Built incrementally; scaffolded in E4.
+8. **`finalize`** — Write `dist/release-report.json` with
+   `gates/finalize/write-report.sh`, passing the phases and diagnostics
+   arrays as file paths (see `gates/README.md` "Finalizing"). Print terminal
+   summary. Built incrementally; scaffolded in E4.
 
 ## Diagnostic shape
 
