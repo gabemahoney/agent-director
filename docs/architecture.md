@@ -5239,7 +5239,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrVersionUnreadable` | `ad_fail_unreadable_version`: step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
 | `ErrConfigMalformed` | pre-flight `ad_store_db_path`, `ad_store_busy_timeout_ms` and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run |
 | `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
-| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded, or a readable `user_version` that is not the target | a human |
+| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target | a human, following the advice (fix or check what it names, then re-run) |
 | any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
@@ -5818,6 +5818,35 @@ Drift guards and their matrix: see
 `~/.agent-director/state.db`; a change to the store-path rules on either
 side (`resolvePathField`, `EffectiveDbPath`, `resolveStorePath`,
 `sentinelPath`, or the reader) adds its cases to the `dbpathfix` matrix.
+
+**No store after the open (b.iks).** Step 5 first checks that
+`$state_db` exists. The open succeeded, so a missing one is exit 5
+`ErrSchemaVerifyFailed`, headline
+`install.sh: <$state_db_name> was not created by the store open`. The
+binary takes its store path only from `[store] db_path`
+(`resolveStorePath`; install.sh passes neither `--store-path` nor
+`--home`, and no `AGENT_DIRECTOR_*` variable moves it), which
+`ad_store_db_path` read in pre-flight. So a missing store means one of:
+`db_path` changed after pre-flight, something removed or moved the store
+after the open, or the installed binary resolves its store differently
+from `ad_store_db_path`. On an upgrade step 2 read `$state_db`, so there
+it was removed or moved: either of the other two causes would have left
+it in place. The report prints `state.db: <$state_db>` and
+`config  : <config.toml>`, then advises checking `db_path` and any
+cleanup, putting a moved store back at the `state.db:` path first (a
+re-run with no store there creates a new, empty one), and a re-run, which
+reads `db_path` again and opens the store there. That re-run finishes
+after the first two causes; one that fails the same way points to the
+third, and the advice is to contact the maintainers.
+`advice_follow.sh`'s J22 pins this in five cases. A `db_path` changed
+between pre-flight and the open, a store moved after the open and put
+back, the same with `db_path` set to `~/custom/s.db` before the first
+install (the headline and the `state.db:` line name that path, and the
+store put back there is the one the re-run installs over), and a moved
+store not put back each finish on the re-run (the last with a new store,
+the moved one unchanged). An open that makes no store at the `state.db:`
+path with `db_path` unset and nothing moved, standing in for a binary
+that resolves its store elsewhere, fails the re-run with the same stderr.
 
 **How long: `[store] busy_timeout_ms` (b.c7f).** Every `sqlite3` read of
 the store's `user_version` (`ad_user_version`) waits as long as the
