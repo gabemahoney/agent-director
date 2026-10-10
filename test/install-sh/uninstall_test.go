@@ -285,6 +285,57 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 	}
 }
 
+// TestUninstallLeavesSettingsWithoutOneDocument (b.zbg): a settings.json holding
+// no JSON document is left alone silently, one holding several, or one that is
+// not valid JSON, with a note, and the uninstall still exits 0 and removes the
+// binary.
+func TestUninstallLeavesSettingsWithoutOneDocument(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	cases := []struct {
+		name, settings string
+		note           string // the one output line naming settings.json ("" none)
+	}{
+		{"empty", "", ""},
+		{"only whitespace", " \n\t\n", ""},
+		{"two documents", "{} {}\n", "uninstall.sh: ~/.claude/settings.json holds 2 JSON documents, not one; leaving it alone"},
+		{"not valid JSON", "{\n", "uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
+			claude := filepath.Join(home, ".claude")
+			writeMode(t, bin, "binary", 0o755)
+			writeMode(t, filepath.Join(claude, "settings.json"), tc.settings, 0o600)
+			before := treeSnap(t, claude)
+
+			out := runUninstall(t, home, "")
+
+			var named, want []string
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "settings.json") {
+					named = append(named, line)
+				}
+			}
+			if tc.note != "" {
+				want = []string{tc.note}
+			}
+			if !slices.Equal(named, want) {
+				t.Errorf("output lines naming settings.json = %q; want %q:\n%s", named, want, out)
+			}
+			if after := treeSnap(t, claude); !maps.Equal(after, before) {
+				t.Errorf("uninstall.sh changed %s:\nbefore %v\nafter  %v", claude, before, after)
+			}
+			if _, err := os.Lstat(bin); !os.IsNotExist(err) {
+				t.Errorf("%s after uninstall.sh: %v; want it removed", bin, err)
+			}
+		})
+	}
+}
+
 // treeSnap maps each path under root to its mode, mtime, and contents or link target.
 func treeSnap(t *testing.T, root string) map[string]string {
 	t.Helper()

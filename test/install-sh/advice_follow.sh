@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J20). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J21). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -454,11 +454,12 @@ expect_installed() {
     [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
 }
 
-# hooks_injected <home>: home's settings.json holds both `agent-director help`
-# hooks, SessionStart and SessionEnd reason=compact.
+# hooks_injected <home>: home's settings.json is one JSON document holding both
+# `agent-director help` hooks, SessionStart and SessionEnd reason=compact.
 hooks_injected() {
-    jq -e --arg c "$1/.agent-director/bin/agent-director help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
-        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' \
+    jq -se --arg c "$1/.agent-director/bin/agent-director help" 'length == 1 and (.[0]
+        | any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
+        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c)))' \
         "$1/.claude/settings.json" >/dev/null 2>&1
 }
 
@@ -2224,13 +2225,16 @@ EOF
 # install over such a settings.json exits 4, the hook merge failure, with jq's
 # error on the line above its headline and no exit-5 cause line, and leaves the
 # file as it was; rewritten to that shape, the re-run injects both hooks. Per
-# case <settings.json>|<fixed>.
+# case <settings.json>|<fixed>, @CMD@ the help hook's command: a SessionStart
+# object holding that hook is not the hook already there (b.zbg).
 test_J18_SettingsShapeFixAndRerun() {
     local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
     local h sj settings fixed above
     local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
     while IFS='|' read -r settings fixed <&3; do
         h="$(new_home)" sj="$h/.claude/settings.json"
+        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
+        fixed="${fixed//@CMD@/$h/.agent-director/bin/agent-director help}"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 4 "settings.json $settings" || continue
@@ -2252,6 +2256,7 @@ test_J18_SettingsShapeFixAndRerun() {
 []|{}
 {"hooks":"x"}|{"hooks":{}}
 {"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}
+{"hooks":{"SessionStart":{"x":{"hooks":[{"type":"command","command":"@CMD@"}]}}}}|{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]}]}}
 EOF
 }
 
@@ -2378,6 +2383,45 @@ test_J20_LinkUnwritableFixOrNoHooks() {
             expect_rc 0 "$file: agent-director list after the advice's additions"
         done
     done
+}
+
+# ---- J21: settings.json holding several JSON documents, hooks on (b.zbg) -----------
+
+# J21: "Each is valid JSON, but the file must hold one JSON object, the shape
+# Claude Code reads. Fix it, then re-run this install." A hooks-on install over
+# a settings.json holding several JSON documents exits 4, naming how many, with
+# no exit-5 cause line and no "hooks : injected", and leaves the file byte for
+# byte with nothing beside it; rewritten as one object, the re-run injects both
+# hooks. Per case <settings.json>|<documents>|<fixed> (printf %b).
+test_J21_SettingsDocumentsFixAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings docs fixed want
+    while IFS='|' read -r settings docs fixed <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json"
+        want="install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds $docs JSON documents"
+        mkdir -p "$h/.claude" && printf '%b\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 4 "settings.json $settings" || continue
+        grep -qxF "$want" "$ERR" || bad "$settings: no stderr line \"$want\": $(paste -sd'|' "$ERR")"
+        expect_advice "$want Each is valid JSON, but the file must hold one JSON object, the shape Claude Code reads. Fix it, then re-run this install."
+        if grep -q '^install\.sh: err_name=' "$ERR"; then
+            bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
+        fi
+        if grep -q 'hooks   : injected' "$OUT"; then
+            bad "$settings: \"hooks : injected\" printed on the refusal"
+        fi
+        cmp -s "$sj" <(printf '%b\n' "$settings") || bad "$settings: settings.json changed: $(<"$sj")"
+        if compgen -G "$sj.*" >/dev/null; then
+            bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
+        fi
+        printf '%b\n' "$fixed" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "$settings fixed to $fixed: re-run" || continue
+        hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
+    done 3<<'EOF'
+{} {}|2|{}
+{"theme":"dark"}\n{"hooks":{}}\n{}|3|{"theme":"dark","hooks":{}}
+EOF
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"

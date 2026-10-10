@@ -4910,8 +4910,9 @@ claude /install-agent-director (or `bash install.sh`)
     under a one-shot migrate-authorized sentinel (full six-step flow in
     install-agent-director/SKILL.md)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
-    (not valid JSON, or valid JSON of another shape → exit 4, the file
-    left as it was)
+    (an empty or whitespace-only file is merged as {}; not valid JSON,
+    more than one JSON document, or valid JSON of another shape → exit
+    4, the file left as it was; see "The settings.json merge" below)
   → set inject_help_hook = true in config.toml's [defaults] table (see
     "The config.toml merge" below); --no-hooks skips this and the
     settings.json merge; both merges keep the file's mode and write
@@ -4958,6 +4959,43 @@ exits 5 on a runtime error, so the `settings.json` merge checks jq's status
 and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
 (jq's error is above)"); sqlite3 exits 5 on a busy database, and each
 caller of `ad_user_version` captures the read's status beside its output.
+
+**The settings.json merge (b.cfq, b.zbg).** With hooks on, step 6 merges
+both `agent-director help` entries into `~/.claude/settings.json` with one
+jq filter, and writes the result after the usual `.bak` (see "Merged files
+keep their mode" below). jq runs a filter once per JSON document it reads,
+so install.sh first counts the file's documents
+(`jq -n '[inputs] | length'`):
+
+- **jq fails** (not valid JSON): exit 4, `install.sh: ~/.claude/settings.json is not valid JSON`.
+- **None** (empty, or only whitespace, as `touch` leaves it): merged as
+  `{}`. Claude Code reads such a file as no settings. Without the count
+  the filter would print nothing, and the file would be rewritten with
+  no hooks under `hooks   : injected`.
+- **One:** merged.
+- **More than one:** exit 4, before the filter runs, with
+  `install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds <N> JSON documents`
+  and advice to make the file one JSON object and re-run. Without the
+  count, each document would be merged and written back.
+
+Every exit 4 here leaves the file as it was, byte for byte, with nothing
+written beside it, and comes after the binaries are installed (step 6).
+The filter's "already there" test reads only lists (`arrays`), where
+Claude Code reads hooks: an entry counts only when it sits in the event's
+list and holds the help command in its own `hooks` list. So an entry
+whose `hooks` is an object gets a proper entry appended beside it, and an
+event value that is not a list (an object, say) fails the append (jq's
+runtime error, exit 4 as above), never passing as already merged. A merge
+that succeeds therefore writes one object holding both entries in lists,
+and `hooks   : injected` is true. **Must use:** a jq rewrite of `settings.json` in either script
+counts the documents first and runs only on exactly one (uninstall.sh's
+side is in [Uninstall semantics](#uninstall-semantics)).
+`advice_follow.sh`'s J18 (valid JSON of another shape, an object-valued
+`SessionStart` holding the help hook among them) and J21 (several documents, each
+refusal followed by its fix and a re-run), `test/install-sh/retry.sh`'s
+`settings-empty-*`, `settings-whitespace-*` and
+`settings-entry-hooks-object-*` rows, and
+`TestUninstallLeavesSettingsWithoutOneDocument` pin this.
 
 **The two binaries (b.vqr).** Every install installs both
 `agent-director` and the operator tool `agent-director-admin` (see
@@ -5229,8 +5267,9 @@ Each script uses it as follows.
   agent-director's hook entries is left alone instead, and the uninstall
   goes on, with the stdout line
   `uninstall.sh: left <file> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
-  uninstall.sh rewrites every valid `settings.json`, so a refusal there
-  would stop every uninstall until the link went. A `config.toml` without
+  uninstall.sh rewrites every `settings.json` holding one JSON document,
+  so a refusal there would stop every uninstall until the link went. A
+  `config.toml` without
   the key needs no edit, so it is not checked.
   Under a confirmed `--purge`, a `config.toml` that cannot be written
   through is left alone instead of refused, with the stdout line
@@ -5679,6 +5718,17 @@ directory cannot be written in is refused (exit 2) before anything is
 removed or changed, except a `settings.json` holding none of
 agent-director's hook entries, and a `config.toml` under a confirmed
 `--purge`, each left alone with a note.
+Its `settings.json` filter, like install.sh's merge, runs once per JSON
+document it reads, so uninstall.sh counts the documents first, as
+install.sh does (b.zbg; see "The settings.json merge" above), and edits
+only a file holding exactly one. A file holding none (empty, or only
+whitespace) has no entries to remove and is left alone with no note and
+no `.bak`. One that is not valid JSON, or holds more than one document,
+is left alone with a stderr note
+(`uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
+or `uninstall.sh: ~/.claude/settings.json holds <N> JSON documents, not one; leaving it alone`).
+In each case the uninstall goes on and exits 0, and the file's symlink
+is not checked, as it is not edited.
 `~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.
 

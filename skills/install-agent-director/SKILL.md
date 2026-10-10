@@ -625,12 +625,29 @@ This skill runs `install.sh` from the same directory. The script:
 
    The merge is additive: existing user hooks are preserved. Re-running
    the install is idempotent — duplicate entries are detected and
-   skipped. The pre-edit contents of `settings.json` are snapshotted
-   to a timestamped `.bak` sibling before the merge writes.
+   skipped. An entry counts as already there only where Claude Code
+   runs it: in the event's list, with the hook in the entry's own
+   `hooks` list. An entry whose `hooks` is an object does not count, so
+   the install adds a proper entry beside it (b.zbg). The pre-edit
+   contents of `settings.json` are snapshotted to a timestamped `.bak`
+   sibling before the merge writes.
+
+   An empty `settings.json`, or one holding only whitespace (a file
+   made with `touch`, say), is merged as `{}`: it is backed up and gets
+   both hooks (b.zbg).
 
    A `settings.json` the merge cannot use stops the install with
    **exit 4** and is left as it was, with no `.bak`:
    - not valid JSON: `install.sh: ~/.claude/settings.json is not valid JSON`;
+   - more than one JSON document (`{} {}`, say), each valid JSON on
+     its own (b.zbg). `N` is how many:
+
+         install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds N JSON documents
+           Each is valid JSON, but the file must hold one JSON object, the shape
+           Claude Code reads. Fix it, then re-run this install.
+
+     To fix it, rewrite the file as one JSON object holding the keys
+     to keep from each document (ask the operator which);
    - valid JSON of another shape: not an object (an array, say), a
      `hooks` that is not an object, or a `SessionStart` or `SessionEnd`
      under it that is not a list. jq's error comes first, then:
@@ -793,7 +810,7 @@ install.sh exits 0 on success. Its own failures exit 2 to 5:
 |---|---|
 | 2 | Pre-flight: a bad flag or flag pair, whitespace in `$HOME`, an unsupported OS/CPU, a missing tool, or a binary built for another architecture. |
 | 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, or two version stamps that differ or carry no commit. |
-| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"), or, with hooks on, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). |
+| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). |
 | 5 | The config file, or the store open and schema migration. The cause line below names which. |
 | any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
 
@@ -938,7 +955,16 @@ destructive *additions*.
 
 - Removes the two help hook entries (only the entries this skill
   added; other user hooks are preserved), snapshotting
-  `settings.json` to a timestamped `.bak` first.
+  `settings.json` to a timestamped `.bak` first. A `settings.json`
+  that is empty or holds only whitespace has no entries to remove and
+  is left alone, with no `.bak` and no note. One that is not valid
+  JSON, or holds more than one JSON document, is left alone with a
+  note on stderr, and the uninstall goes on (b.zbg):
+  `uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
+  or
+  `uninstall.sh: ~/.claude/settings.json holds N JSON documents, not one; leaving it alone`.
+  Tell the operator: the file may still hold agent-director's hook
+  entries, to remove by hand.
 - Removes `inject_help_hook` from `config.toml`'s `[defaults]` table
   (the header and the key found however they are spaced and in any
   letter case, as install finds them), and the `[defaults]` header too

@@ -93,10 +93,11 @@
 #      --from-release release before 0.11.0, which has no
 #      agent-director-admin binary), or the two binaries' version
 #      stamps differ or carry no commit stamp
-#   4  hook merge failure (~/.claude/settings.json malformed), or (hooks
-#      on) a symlinked settings.json install.sh cannot resolve or write
-#      through: its links loop, or the file they resolve to sits in a
-#      directory that is missing or cannot be written in (refused in
+#   4  hook merge failure (~/.claude/settings.json malformed, or holding
+#      more than one JSON document; an empty one is merged as {}), or
+#      (hooks on) a symlinked settings.json install.sh cannot resolve or
+#      write through: its links loop, or the file they resolve to sits in
+#      a directory that is missing or cannot be written in (refused in
 #      pre-flight, before anything on disk changes)
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
@@ -2211,11 +2212,26 @@ if [[ "$NO_HOOKS" -eq 1 ]]; then
 else
     mkdir -p "$(dirname "$DEFAULT_SETTINGS_PATH")"
 
-    # Read existing settings or start from {}.
+    # Read existing settings or start from {}. The merge below writes one
+    # result per JSON document it reads, so the file's documents are
+    # counted first (b.zbg): with none it would write no hooks, and with
+    # several it would write several merged documents back. A file holding
+    # none (empty, or only whitespace: a touched file, say), which Claude
+    # Code reads as no settings, is merged as {}, after the usual backup. A
+    # file holding several is refused here, exit 4, and left as it was,
+    # as one that is not valid JSON is.
     if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         existing=$(<"$DEFAULT_SETTINGS_PATH")
-        if ! printf '%s' "$existing" | jq empty >/dev/null 2>&1; then
+        if ! settings_docs=$(printf '%s' "$existing" | jq -n '[inputs] | length' 2>/dev/null); then
             echo "install.sh: ~/.claude/settings.json is not valid JSON" >&2
+            exit 4
+        fi
+        if [[ "$settings_docs" -eq 0 ]]; then
+            existing='{}'
+        elif [[ "$settings_docs" -gt 1 ]]; then
+            echo "install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds $settings_docs JSON documents" >&2
+            echo "  Each is valid JSON, but the file must hold one JSON object, the shape" >&2
+            echo "  Claude Code reads. Fix it, then re-run this install." >&2
             exit 4
         fi
     else
@@ -2232,6 +2248,12 @@ else
     #     already there (matched by command).
     #   - Ensure hooks.SessionEnd is an array; append our compact-matcher
     #     entry if not already there.
+    # "Already there" reads only lists, where Claude Code reads hooks
+    # (b.zbg): []? would read an object's values too, and count an entry
+    # Claude Code never runs. So a merge that succeeds, of the one
+    # document counted above, is one object holding both entries in
+    # lists, and "hooks : injected" below is true; an event list that is
+    # an object fails the append instead.
     # Valid JSON of another shape (an array, or hooks a string, say) fails
     # the merge with jq's runtime-error status, 5, which set -e would make
     # the install's exit status: a hook merge failure is exit 4 (b.cfq).
@@ -2241,13 +2263,13 @@ else
             | .hooks.SessionStart //= []
             | .hooks.SessionEnd //= []
             | (
-                if any(.hooks.SessionStart[]?; .hooks[]?.command == $cmd)
+                if any(.hooks.SessionStart | arrays | .[]; .hooks | arrays | any(.[]; .command == $cmd))
                   then .
                   else .hooks.SessionStart += [{"hooks":[{"type":"command","command":$cmd}]}]
                 end
             )
             | (
-                if any(.hooks.SessionEnd[]?; .matcher == "compact" and (.hooks[]?.command == $cmd))
+                if any(.hooks.SessionEnd | arrays | .[]; .matcher == "compact" and (.hooks | arrays | any(.[]; .command == $cmd)))
                   then .
                   else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
                 end

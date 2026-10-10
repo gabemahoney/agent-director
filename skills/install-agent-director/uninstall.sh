@@ -144,6 +144,12 @@ ad_backup_keeping_mode() {
 # root, so the script only removes ITS entries — other user hooks
 # survive verbatim. The new contents are worked out here and written
 # after the symlink check below (b.nw5), as config.toml's are.
+#
+# The filter writes one result per JSON document it reads, so the file's
+# documents are counted first (b.zbg), as install.sh counts them. A file
+# holding none (empty, or only whitespace) holds no hooks to remove and is
+# left alone; one holding several is left alone with a note, as one that
+# is not valid JSON is, rather than written back as several documents.
 # --------------------------------------------------------------------
 
 hook_prefix="${DEFAULT_BIN_DIR}/agent-director"
@@ -154,9 +160,11 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         exit 2
     fi
     existing=$(<"$DEFAULT_SETTINGS_PATH")
-    if ! printf '%s' "$existing" | jq empty >/dev/null 2>&1; then
+    if ! settings_docs=$(printf '%s' "$existing" | jq -n '[inputs] | length' 2>/dev/null); then
         echo "uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone" >&2
-    else
+    elif [[ "$settings_docs" -gt 1 ]]; then
+        echo "uninstall.sh: ~/.claude/settings.json holds $settings_docs JSON documents, not one; leaving it alone" >&2
+    elif [[ "$settings_docs" -eq 1 ]]; then
         new=$(printf '%s' "$existing" | jq \
             --arg prefix "$hook_prefix" '
             .hooks //= {}
@@ -267,8 +275,9 @@ fi
 # directory, as each edited file resolved to a regular file (-f) above.
 # A settings.json that cannot be written through and holds none of
 # agent-director's hook entries is left alone instead: it would be
-# rewritten (every valid settings.json is) with nothing removed, and a
-# refusal would then stop every uninstall until the link went.
+# rewritten (every settings.json holding one JSON document is) with
+# nothing removed, and a refusal would then stop every uninstall until
+# the link went.
 # --------------------------------------------------------------------
 
 # ad_link_refuse <file> <what> <remedy>... — report a symlinked <file>

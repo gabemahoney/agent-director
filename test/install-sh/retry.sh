@@ -99,6 +99,13 @@
 # --no-hooks neither link is checked. A link into a directory it cannot write
 # in, and following that refusal's advice, is advice_follow.sh's J20.
 #
+# settings.json the merge once left without the hooks (b.zbg): a hooks-on
+# install over an empty or whitespace-only settings.json, or one whose
+# SessionStart or compact SessionEnd entry holds the help hook in an object,
+# backs it up and leaves one JSON document holding both hooks in lists. One
+# that is not valid JSON stops the install with exit 4, left as it was with
+# nothing beside it. Several documents, refused, are advice_follow.sh's J21.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -984,6 +991,61 @@ report_installed link-no-hooks
 report link-no-hooks-links-kept "$(readlink "$sj" "$H/dotfiles/settings.json" "$cfg" | paste -sd,)" \
     "../dotfiles/settings.json,../.claude/settings.json,$H/nowhere/config.toml"
 report link-no-hooks-not-checked "$(grep -c 'through its symlink' "$ERR")" "0"
+
+# A hooks-on install over a settings.json holding no JSON document (empty, or
+# only whitespace, as touch leaves it) merges it as {}, and one whose
+# SessionStart or compact SessionEnd entry holds the help hook in an object,
+# which Claude Code never runs, gets a runnable entry beside it (b.zbg). Each
+# prints "hooks : injected", backs the file up as it was, and leaves one
+# document whose SessionStart (<starts> entries) and compact SessionEnd lists
+# each hold the help hook once. Per case <name>|<settings.json> (printf %b,
+# @CMD@ the help hook's command)|<starts>.
+HOOKS=1
+while IFS='|' read -r -u 3 name settings starts; do
+    name="settings-$name"
+    new_home "$name"
+    sj="$H/.claude/settings.json" c="$H/.agent-director/bin/agent-director help"
+    mkdir -p "$H/.claude"
+    printf '%b' "${settings//@CMD@/$c}" >"$sj"
+    cp "$sj" "$ROOT/$name.before"
+    local_install
+    report "$name-exit-code" "$RC" "0"
+    report "$name-injected-line" "$(grep -cxF "  hooks   : injected into $sj" "$OUT")" "1"
+    report "$name-backup" "$(compgen -G "$sj.bak.*" | wc -l)|$(shown "$sj".bak.*)" "1|$(shown "$ROOT/$name.before")"
+    report "$name-merged" "$(jq -sc --arg c "$c" '[length, (.[0].hooks.SessionStart | length),
+        ([.[0].hooks.SessionStart[] | .hooks | arrays | .[].command] == [$c]),
+        ([.[0].hooks.SessionEnd[] | select(.matcher == "compact") | .hooks | arrays | .[].command] == [$c])]' "$sj" 2>&1)" \
+        "[1,$starts,true,true]"
+done 3<<'EOF'
+empty||1
+whitespace| \n\t\n|1
+entry-hooks-object|{"hooks":{"SessionStart":[{"hooks":{"x":{"type":"command","command":"@CMD@"}}}]}}\n|2
+end-entry-hooks-object|{"hooks":{"SessionEnd":[{"matcher":"compact","hooks":{"x":{"type":"command","command":"@CMD@"}}}]}}\n|1
+EOF
+
+# A hooks-on install over a settings.json that is not valid JSON, all of it or
+# after a first document, stops with exit 4 and says so on its last stderr line,
+# prints no "hooks : injected", and leaves the file byte for byte with nothing
+# beside it: no .bak, no .new (b.zbg: the document count is what reads it as
+# JSON now). Per case <name>|<settings.json> (printf %b).
+while IFS='|' read -r -u 3 name settings; do
+    name="settings-$name"
+    new_home "$name"
+    sj="$H/.claude/settings.json"
+    mkdir -p "$H/.claude"
+    printf '%b' "$settings" >"$sj"
+    cp "$sj" "$ROOT/$name.before"
+    local_install
+    report "$name-exit-code" "$RC" "4"
+    report "$name-last-stderr-line" "$(tail -n 1 "$ERR")" "install.sh: ~/.claude/settings.json is not valid JSON"
+    report "$name-not-injected" "$(grep -c 'hooks   : injected' "$OUT")" "0"
+    report "$name-unchanged" "$(cmp -s "$sj" "$ROOT/$name.before" && echo same)" "same"
+    report "$name-nothing-beside" "$(compgen -G "$sj.*")" ""
+done 3<<'EOF'
+invalid|{\n
+invalid-after-document|{"theme":"dark"}\n{\n
+EOF
+HOOKS=""
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 
