@@ -169,9 +169,11 @@ synthesizes for each spawn.
 Omitting per-call permissions inherits the template's entries
 unchanged.
 
-`spawn` validates the merged `extra_env`: an `AGENT_DIRECTOR_*` key, or
-`HOME` with any value, from the template or the call, returns
-`ErrReservedEnvKey` and launches nothing. `make-template` does not check
+`spawn` validates the merged `extra_env`: an `AGENT_DIRECTOR_*` key,
+`HOME` with any value, or a key that is not a valid env-var name (empty,
+or containing `=` or a NUL byte, such as `"CLAUDE_CONFIG_DIR=/x"`), from
+the template or the call, returns `ErrReservedEnvKey` and launches
+nothing; the description says which. `make-template` does not check
 these keys, so a template that sets one is refused at each `spawn` that
 uses it. To give a templated agent its own Claude Code config, set an
 absolute `CLAUDE_CONFIG_DIR` under `[extra_env]` instead of `HOME`.

@@ -232,8 +232,15 @@ func hasControlChar(id string) bool {
 //     such as "HOME=/x") with any value, an empty one included. The message
 //     quotes the key. An extra-env HOME would move the agent's hook to
 //     another agent-director store, so set an absolute CLAUDE_CONFIG_DIR
-//     instead to give the agent its own Claude Code config. Nothing is
-//     written or launched.
+//     instead to give the agent its own Claude Code config. Also returned,
+//     after those checks, for a key that is not a valid env-var name: it is
+//     empty, or it contains '=' or a NUL byte. tmux splits each KEY=VALUE
+//     entry at its first '=', so such a key would set a different variable
+//     (the key "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR). The key is
+//     refused, never rewritten; the message quotes it, says it is not a
+//     valid env-var name and says what is wrong with it. A key that is both
+//     reserved and malformed (such as "HOME=/x") gets the reserved-name
+//     message. Nothing is written or launched.
 //   - ErrInvalidFlags: ClaudeInstanceID contains an ASCII control character.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
 //     for the explicit ClaudeInstanceID, in any state (the pre-check refuses

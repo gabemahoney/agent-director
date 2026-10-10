@@ -617,7 +617,8 @@ func TestReadPaneHasInteractErrorNames(t *testing.T) {
 }
 
 // TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names and
-// b.nas's ErrReservedEnvKey (a row whose stored extra env has HOME).
+// ErrReservedEnvKey (a row whose stored extra env has HOME, b.nas, or a
+// malformed key, b.vpb).
 func TestResumeHasSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "resume", "Resume", true, "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
 		"ErrReservedEnvKey", "ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",

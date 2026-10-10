@@ -230,6 +230,15 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     validation refuses such a key in extra_env, so only a row spawned
 //     before that refusal can carry one; relaunching it would send the
 //     agent's hook events to another agent-director store. No transcript is
+//     looked up. Then the stored extra env must not have a key that is not a
+//     valid env-var name: empty, or holding '=' or a NUL byte
+//     (spawn.InvalidEnvKey, the rule spawn validation shares) → otherwise
+//     ErrReservedEnvKey too (invalidEnvKeyError, bug b.vpb), naming the
+//     first such key in sorted order and saying what is wrong with it. Only
+//     a row spawned before spawn refused such keys can carry one;
+//     relaunched, tmux would set a different variable than the one
+//     pre-trust and the transcript lookup below read (a key
+//     "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR). No transcript is
 //     looked up.
 //  5. JSONL transcript file must exist on disk → otherwise
 //     ErrJsonlMissing. Pure os.Stat pre-flight; no read. Candidate
@@ -305,6 +314,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 
 	if key, ok := spawn.ReservedHomeKey(row.ExtraEnv); ok {
 		return ResumeResult{}, homeInExtraEnvError(row.ClaudeInstanceID, key)
+	}
+	if key, ok := spawn.InvalidEnvKey(row.ExtraEnv); ok {
+		return ResumeResult{}, invalidEnvKeyError(row.ClaudeInstanceID, key)
 	}
 
 	// Resolve the transcript path against a strict precedence (bug b.1ba):
@@ -462,6 +474,21 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 func homeInExtraEnvError(id, key string) error {
 	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %s (a reused id starts a new life with no memory of this conversation), and %s",
 		spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, spawn.ReuseOptIn, spawn.ReservedHomeEnvKey, spawn.ReservedHomeAlternative)
+}
+
+// invalidEnvKeyError is resume's refusal of a row whose stored extra env has
+// key, a key that is not a valid env-var name (spawn.InvalidEnvKey: empty, or
+// holding '=' or a NUL byte; bug b.vpb): spawn.ErrReservedEnvKey, wrapped, the
+// one name for every refused extra_env key, naming the instance, quoting the
+// key as given (%q, so a key with '=' or a NUL byte stays on one line) and
+// saying it is not a valid env-var name and what is wrong with it
+// (spawn.EnvKeyProblem), that nothing was written or launched, and the way
+// on: the row cannot be resumed with its extra env, so the agent runs again
+// only through a spawn of the id with the reuse opt-in and an extra env
+// without that key, which starts a new life.
+func invalidEnvKeyError(id, key string) error {
+	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (a reused id starts a new life with no memory of this conversation), and %s",
+		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseOptIn, key, spawn.InvalidEnvKeyAlternative)
 }
 
 // jsonlAttempt records one candidate transcript path resume tried to
@@ -782,7 +809,12 @@ func launchInProgressError(row Spawn) error {
 // (only a row spawned before spawn refused such keys in extra_env can), is
 // refused with ErrReservedEnvKey before any transcript lookup, tmux call or
 // write: relaunched, its agent's hook would report to another agent-director
-// store (bug b.nas).
+// store (bug b.nas). Likewise a row whose stored extra env has a key that is
+// not a valid env-var name (empty, or holding '=' or a NUL byte; only a row
+// spawned before spawn refused such keys can) is refused, also with
+// ErrReservedEnvKey, before any transcript lookup, tmux call or write:
+// relaunched, tmux would set a different variable than the one pre-trust and
+// the transcript lookup read (bug b.vpb).
 //
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the
@@ -836,7 +868,16 @@ func launchInProgressError(row Spawn) error {
 //     with the same id, opting in to reuse (SpawnParams.ReuseFinished), with
 //     an ExtraEnv without HOME (an absolute CLAUDE_CONFIG_DIR gives the agent
 //     its own Claude Code config); the reused id starts a new life with no
-//     memory of the earlier one.
+//     memory of the earlier one. Also returned, when no key sets HOME, for a
+//     row whose stored extra env has a key that is not a valid env-var name:
+//     empty, or holding '=' or a NUL byte (the message quotes the first such
+//     key in sorted order, says it is not a valid env-var name and says what
+//     is wrong with it), which spawn now refuses too: relaunched, tmux would
+//     set a different variable than the one pre-trust and the transcript
+//     lookup read. Nothing was written and nothing was launched. Recourse: spawn
+//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished),
+//     with an ExtraEnv without that key; the reused id starts a new life with
+//     no memory of the earlier one.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
 //     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
 //     fallback, nor any transcript of the visible history (the message

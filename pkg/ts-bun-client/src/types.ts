@@ -212,7 +212,11 @@ export interface SpawnParams {
    * keys and `HOME` (any value) are refused with `ErrReservedEnvKey`, a template's
    * included: an extra-env `HOME` would move the agent's hook to another
    * agent-director store. Set an absolute `CLAUDE_CONFIG_DIR` to give the agent its
-   * own Claude Code config.
+   * own Claude Code config. A key that is not a valid env-var name (empty, or
+   * containing `=` or a NUL character, which tmux would read as a different
+   * variable) is refused with `ErrReservedEnvKey` too, a template's included,
+   * and never rewritten; the description says what is wrong with it, and
+   * nothing is launched.
    */
   extra_env?: Record<string, string>;
   /** Pass-through argv to `claude` after --settings. */

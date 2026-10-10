@@ -129,7 +129,12 @@ var errConfigDirNotAbsolute = errors.New("is not an absolute path")
 // The extra env's HOME is never consulted: no launch carries one, since spawn
 // validation refuses any extra_env key that sets HOME (ReservedHomeKey: HOME
 // itself or a key such as "HOME=/x") and resume refuses a row whose stored
-// extra env has one, both with ErrReservedEnvKey (bug b.nas).
+// extra env has one, both with ErrReservedEnvKey (bug b.nas). The exact-key
+// lookup of CLAUDE_CONFIG_DIR sees the variable the launch sets: no launch
+// carries a key such as "CLAUDE_CONFIG_DIR=/x", which tmux would read as
+// CLAUDE_CONFIG_DIR, since spawn validation refuses a key that is not a valid
+// env-var name (InvalidEnvKey) and resume refuses a row whose stored extra env
+// has one, both with ErrReservedEnvKey too (bug b.vpb).
 func claudeJSONFor(extraEnv map[string]string) (string, error) {
 	if dir := extraEnv["CLAUDE_CONFIG_DIR"]; dir != "" {
 		if !ConfigDirUsable(dir) {

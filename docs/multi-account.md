@@ -35,6 +35,18 @@ CLI) and an `extra_env` without
 `HOME` (a reused id starts a new life with no memory of the earlier
 conversation).
 
+Each `extra_env` key must be the variable's own name. A key that is
+empty or contains `=` or a NUL byte is refused with `ErrReservedEnvKey`
+too, a template's included, before anything is written or launched; the
+description says the key is not a valid env-var name. tmux splits each
+entry at its first `=`, so the key `CLAUDE_CONFIG_DIR=/x` would give the
+agent a `CLAUDE_CONFIG_DIR` that pretrust and `resume` never see; pass
+`{"CLAUDE_CONFIG_DIR": "/x"}` instead. `resume` refuses a row whose
+stored `extra_env` has such a key (a row spawned before this refusal)
+with `ErrReservedEnvKey`, writing and launching nothing; to run that
+agent again, spawn its id with `reuse_finished` and an `extra_env`
+without that key.
+
 For Claude Code's own auth reference, see:
 
 - API-key auth:
