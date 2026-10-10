@@ -24,6 +24,9 @@
 //	                     into test/fake-tmux's table for the row's socket
 //	                     (--capture sets the pane's capture text;
 //	                     --tables-dir defaults to $FAKE_TMUX_TABLES).
+//	seed-read-surface-store  Create a store holding the fixed rows the
+//	                     settle-off goldens pin status, get and list on
+//	                     (apitest.SeedReadSurfaceStore; b.3ie).
 //	json-schema          Print the result shapes of every subcommand.
 package main
 
@@ -53,6 +56,7 @@ var availableSubcmds = []string{
 	"seed-template",
 	"seed-empty-store",
 	"seed-row-session",
+	"seed-read-surface-store",
 	"json-schema",
 }
 
@@ -80,6 +84,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedEmptyStore(args[1:], stdout, stderr)
 	case "seed-row-session":
 		return cmdSeedRowSession(args[1:], stdout, stderr)
+	case "seed-read-surface-store":
+		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "json-schema":
 		return cmdJSONSchema(args[1:], stdout, stderr)
 	default:
@@ -353,6 +359,9 @@ var resultSchemas = map[string]map[string]string{
 		"session_id": "string",
 		"pane_id":    "string",
 		"table":      "string",
+	},
+	"seed-read-surface-store": {
+		"ids": "array",
 	},
 }
 

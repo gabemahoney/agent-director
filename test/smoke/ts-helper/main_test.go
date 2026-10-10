@@ -401,6 +401,7 @@ func TestDispatch(t *testing.T) {
 			"seed-template",
 			"seed-empty-store",
 			"seed-row-session",
+			"seed-read-surface-store",
 		}
 		for _, k := range wantKeys {
 			if _, ok := schema[k]; !ok {

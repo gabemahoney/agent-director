@@ -68,9 +68,9 @@ func callTool(t *testing.T, d mcp.Dispatcher, tool, args string) *mcp.Response {
 		Params: json.RawMessage(`{"name":"` + tool + `","arguments":` + args + `}`)})
 }
 
-// toolResult fails unless resp is a success with one text content part, and
-// returns that part's JSON object, each field raw.
-func toolResult(t *testing.T, resp *mcp.Response) map[string]json.RawMessage {
+// toolText fails unless resp is a success with one text content part, and
+// returns that part's text as sent.
+func toolText(t *testing.T, resp *mcp.Response) string {
 	t.Helper()
 	if resp == nil || resp.Error != nil {
 		t.Fatalf("tools/call failed: %+v", resp)
@@ -85,9 +85,16 @@ func toolResult(t *testing.T, resp *mcp.Response) map[string]json.RawMessage {
 	if err := json.Unmarshal(body, &env); err != nil || len(env.Content) != 1 || env.Content[0].Type != "text" {
 		t.Fatalf("tools/call result = %s; want one text content part", body)
 	}
+	return env.Content[0].Text
+}
+
+// toolResult is toolText's JSON object, each field raw.
+func toolResult(t *testing.T, resp *mcp.Response) map[string]json.RawMessage {
+	t.Helper()
+	text := toolText(t, resp)
 	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(env.Content[0].Text), &obj); err != nil {
-		t.Fatalf("parse result text %q: %v", env.Content[0].Text, err)
+	if err := json.Unmarshal([]byte(text), &obj); err != nil {
+		t.Fatalf("parse result text %q: %v", text, err)
 	}
 	return obj
 }

@@ -61,6 +61,16 @@
 //     sees how long a store connection waits for it ([store]
 //     busy_timeout_ms, b.c7f).
 //
+// # Read-surface goldens (b.3ie)
+//
+//   - SeedReadSurfaceStore seeds the fixed store (a row in every state, rows
+//     that flapped through hooks, permission requests, every shown time
+//     pinned) that the settle-off goldens pin status, get and list on.
+//     LoadReadSurfaceCases reads the case table those goldens belong to
+//     (variants of config.toml times status, get and list calls);
+//     ReadSurfaceCase.CLIArgs gives a case's CLI argv, SettleVariant.WriteConfig
+//     its config and ReadSurfaceCases.Golden its golden bytes.
+//
 // # Hooks through the gate (SR-22.9)
 //
 //   - Every hook write is gated on the hook's parent process being the row's
