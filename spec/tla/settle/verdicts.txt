@@ -30,3 +30,5 @@ red_samerestart | JOB-VERDICT red_samerestart=FAIL(Invariant_SettledIsSpec_is_vi
 red_stalebase | JOB-VERDICT red_stalebase=FAIL(Invariant_SettledIsSpec_is_violated)/656
 red_strictgt | JOB-VERDICT red_strictgt=FAIL(Invariant_ZeroIsRaw_is_violated)/110
 red_termsettles | JOB-VERDICT red_termsettles=FAIL(Invariant_ImmediateAtOnce_is_violated)/179
+pass_tchange_before (long rerun j20261010073940-8cae25) | JOB-VERDICT pass_tchange_before=PASS/118665346 (complete, depth 16)
+ALL 32 MATCH (2026-10-10 08:06Z)

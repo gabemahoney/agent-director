@@ -5,20 +5,25 @@ What this is
   list derive the settled state, and how each store write path sets the
   columns that derivation reads. The model is B3ieSettle.tla. With it come
   its 32 cfgs, the scripts that wrote and checked its scheduler jobs, the
-  job table, the job ids, the verdicts and one local sanity run. Bee b.3ie
-  owns the model and its results. The files are vendored as the record of
-  the model checking done before b.3ie's product code.
+  job table, the job ids, the verdicts, the job directory of the
+  pass_tchange_before rerun and one local sanity run. Bee b.3ie owns the
+  model and its results. The files are vendored as the record of the model
+  checking done before b.3ie's product code.
 
 Not wired into make tla
   Nothing in the repo runs these files. `make tla` runs ci/suite.tsv only,
   and ci/run_ci.sh never reads settle/. To run a cfg again, build a job
   context the way gen-jobs.sh does and submit it to the job scheduler.
+  job-pass_tchange_before-long/ is one such context, as it was submitted.
 
 Source
   Bee b.3ie, directory tickets/Bugs/b.3ie/ of the Apiary ticket tree
   (outside this repo). Copied byte for byte with cp on 2026-10-10. Each
-  file was checked equal to its source with diff at copy time. The pin
-  list below has their SHA-256s.
+  file was checked equal to its source with diff at copy time. After the
+  rerun came back, verdicts.txt was copied again (the bee folder's copy had
+  two new lines), and job-pass_tchange_before-long/ was copied whole with
+  cp -a and checked with diff -r. job-ids.txt and job-ids-long.txt were
+  diffed again and had not changed. The pin list below has their SHA-256s.
 
 Layout (the bee folder's relative layout)
   B3ieSettle.tla          the model
@@ -31,7 +36,11 @@ Layout (the bee folder's relative layout)
   job-Dockerfile          the job image file of each job
   job-ids.txt             the 32 scheduler job ids
   job-ids-long.txt        the job id of the pass_tchange_before rerun
-  verdicts.txt            the verdict line of each job
+  job-pass_tchange_before-long/
+                          the rerun's job directory, as submitted (see
+                          "The rerun's job directory")
+  verdicts.txt            the verdict line of each job, then the rerun's
+                          verdict line and the ALL 32 MATCH line
   tla-logs/sanity.cfg     the local sanity run's cfg
   tla-logs/runsanity.sh   the script that ran it
   tla-logs/sanity.log     its log
@@ -41,39 +50,46 @@ Layout (the bee folder's relative layout)
   as a record. They do not run from here as they are.
 
 Not vendored
-  The 33 job directories: job-<cfg>/ for each cfg, and
-  job-pass_tchange_before-long/ for the rerun. Each holds copies of files
-  vendored here or in spec/tla/, plus the two-line `runs` file gen-jobs.sh
-  writes. Also not vendored: b.3ie.md, impl-plan.md,
-  settling-state-decision.md and job-ids.txt.notes.
+  The 32 first-run job directories, job-<cfg>/ for each cfg. gen-jobs.sh
+  wrote them. Each holds copies of files vendored here or in spec/tla/,
+  plus the two-line `runs` file gen-jobs.sh writes. Also not vendored:
+  b.3ie.md, impl-plan.md, settling-state-decision.md and
+  job-ids.txt.notes.
 
 Job image files
   tlcjob.sh: the tlcjob.sh in every job directory is byte-identical to
-  spec/tla/jobs/lib/tlcjob.sh (cmp and sha256sum, 2026-10-10). So no copy
-  is vendored here; the jobs used spec/tla/jobs/lib/tlcjob.sh.
+  spec/tla/jobs/lib/tlcjob.sh (cmp and sha256sum, 2026-10-10). The
+  first-run job directories are not vendored, so their copies are not
+  either. The rerun's directory is vendored whole, its copy included.
   tla2tools.jar: the jar in every job directory is byte-identical to
   spec/tla/tla2tools.jar (cmp and sha256sum, 2026-10-10). Its SHA-256 is
   that jar's pin in spec/tla/PROVENANCE.txt. TLC2 Version
-  2026.09.23.154203 (rev: 4260e47).
+  2026.09.23.154203 (rev: 4260e47). The rerun's directory holds one copy.
   B3ieSettle.tla and the cfg in every job directory are byte-identical to
   the vendored B3ieSettle.tla and cfg/<cfg>.cfg. The Dockerfile in each of
   the 32 first-run job directories is byte-identical to job-Dockerfile.
+  The rerun's Dockerfile is not (see "The rerun's job directory").
+  Git stores a byte-identical file as one blob, so the rerun's copies of
+  the jar, tlcjob.sh, B3ieSettle.tla and the cfg add no new blobs. Only
+  its Dockerfile and `runs` do.
 
 Scheduler results
   32 jobs, submitted on 2026-10-10 from 05:08Z. Their ids are in
-  job-ids.txt. 31 of the 32 verdicts match the expected table in
-  job-README.md. Seven of the 8 green runs pass. The 11 red runs, the
-  control, the limit and the 11 probes each fail on the invariant the
-  table names. red_insertnobase fails in the initial state, so its verdict
-  has no state count ("?").
-  pass_tchange_before did not finish. Its verdict is INCOMPLETE(disk-cap)
-  at 113,590,337 distinct states, with no violation found. It is being
-  rerun as job j20261010073940-8cae25 (job-ids-long.txt) with a 60 GB disk
-  cap and a 5.5 h run cap. The rerun's context is the first run's, except
-  for the Dockerfile's ENV line (XMX=24g DIRECT=4g BUDGET=20000
-  DISKCAP_MB=60000) and a run cap of 19800 s in `runs`. Its result is
-  pending. It will be appended to this section when it is back.
-  The verdict lines, as in verdicts.txt (cfg | verdict/distinct states):
+  job-ids.txt. On the first run, 31 of the 32 verdicts matched the expected
+  table in job-README.md. Seven of the 8 green runs passed. The 11 red
+  runs, the control, the limit and the 11 probes each fail on the
+  invariant the table names. red_insertnobase fails in the initial state,
+  so its verdict has no state count ("?").
+  pass_tchange_before did not finish on the first run. Its verdict was
+  INCOMPLETE(disk-cap) at 113,590,337 distinct states, with no violation
+  found. It was rerun as job j20261010073940-8cae25 (job-ids-long.txt),
+  with a 60 GB disk cap and a 5.5 h run cap. The rerun passed: a complete
+  run, 118,665,346 distinct states, depth 16, no invariant violated.
+  So all 32 jobs now match the expected table (verdicts.txt, "ALL 32
+  MATCH", 2026-10-10 08:06Z): all 8 green runs pass.
+  The verdict lines, as in verdicts.txt (cfg | verdict/distinct states).
+  The first-run line of pass_tchange_before stays as it was; the rerun's
+  line and the ALL 32 MATCH line follow the first-run lines:
     ctl_today | JOB-VERDICT ctl_today=FAIL(Invariant_HeldOrLastSettled_is_violated)/94
     lim_tchange_bee | JOB-VERDICT lim_tchange_bee=FAIL(Invariant_BeeFormReaderT_is_violated)/279468
     pass_before | JOB-VERDICT pass_before=PASS/1565892
@@ -106,6 +122,31 @@ Scheduler results
     red_stalebase | JOB-VERDICT red_stalebase=FAIL(Invariant_SettledIsSpec_is_violated)/656
     red_strictgt | JOB-VERDICT red_strictgt=FAIL(Invariant_ZeroIsRaw_is_violated)/110
     red_termsettles | JOB-VERDICT red_termsettles=FAIL(Invariant_ImmediateAtOnce_is_violated)/179
+    pass_tchange_before (long rerun j20261010073940-8cae25) | JOB-VERDICT pass_tchange_before=PASS/118665346 (complete, depth 16)
+    ALL 32 MATCH (2026-10-10 08:06Z)
+
+The rerun's job directory (job-pass_tchange_before-long/)
+  The context the rerun was submitted from, copied whole from the bee
+  folder on 2026-10-10 (cp -a, then diff -r). Its six files, each checked
+  with cmp on 2026-10-10:
+    B3ieSettle.tla           equal to settle/B3ieSettle.tla
+    pass_tchange_before.cfg  equal to settle/cfg/pass_tchange_before.cfg
+    tla2tools.jar            equal to spec/tla/tla2tools.jar
+    tlcjob.sh                equal to spec/tla/jobs/lib/tlcjob.sh
+    Dockerfile               job-Dockerfile, except line 9
+    runs                     the first run's `runs`, except line 2
+  How it differs from the 32 generated job directories:
+  - Its name. gen-jobs.sh names each directory job-<cfg>/. This one is
+    job-pass_tchange_before-long/, and gen-jobs.sh does not write it.
+    job-ids-long.txt names the job pass_tchange_before_long.
+  - Its Dockerfile's ENV line (line 9) raises the caps:
+      generated  ENV XMX=8g DIRECT=1g BUDGET=3000 DISKCAP_MB=8000
+      rerun      ENV XMX=24g DIRECT=4g BUDGET=20000 DISKCAP_MB=60000
+  - Its run cap. `runs` line 2 is "B3ieSettle pass_tchange_before
+    @19800" (5.5 h). The first run's is "@2900".
+  Everything else in it is the same as in the first run's
+  job-pass_tchange_before/ (diff -r of the two bee-folder directories,
+  2026-10-10).
 
 Local sanity run (tla-logs/sanity.log)
   The design at T = 2, MaxTime 3, MaxWrites 3, with every invariant. It ran
@@ -163,8 +204,14 @@ ab0e3ee919bea0902b4f35a9abcd7e6c1a6c55ee3491c27fd48567e15d07d9b0  job-Dockerfile
 e9a973fbd3bee3687a9aa5a9630bcd6a0ba90398555e799dcbfb18ad1d6b096e  job-README.md
 b361e58a9afc6b143db4864de072dba78f59a36a891c192af29db0806e5bbec2  job-ids-long.txt
 8864f574f641b3586465ebf558536b6643298aaa23b086441f3884721baca992  job-ids.txt
+43d57a0a704e2d49e5d9568cdc9fd9f9e25eece8051e56ff83fa12aeecc091a4  job-pass_tchange_before-long/B3ieSettle.tla
+b3e55b04cc791ef02e4562b8b360137480f0c76d8475d27276a4fe85c1b58ec9  job-pass_tchange_before-long/Dockerfile
+187dba178e84cacdb8e33141857b4203936a82d96c814e3c5c2ee26a0df4d7bd  job-pass_tchange_before-long/pass_tchange_before.cfg
+0ab2ed01ee98e0e7914cf9e74c13052d0370015fecb313cbd839fa0f7ac20f1c  job-pass_tchange_before-long/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  job-pass_tchange_before-long/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-pass_tchange_before-long/tlcjob.sh
 00bdade7bdf41156d1c32eb4c04f5e62b98d6d6d440d2a1b49cf559a7206c2ed  tla-logs/runsanity.sh
 c7fe24adde64545089bc596b23dca2ff072384ba133f1560d1fb14de6572b8e9  tla-logs/sanity.cfg
 9d4f09773debdf067c09b35bb0808269fe188afce6f163e94ca33f6fb14259e8  tla-logs/sanity.log
-45e13272b3a107cd6fa79dd353aa17ac534dfae8f251ff61b5e29f4f8ba20d9a  verdicts.txt
+042dcc8e06fbaa3e090aee28df25a04770a329ada911246d127e783993a65506  verdicts.txt
 018bee820c6c4f2cab2838d55e7962c340f2523c26fc75f2df972c33c2baf9d3  verify-jobs.sh
