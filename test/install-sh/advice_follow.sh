@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J19). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J21). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -37,7 +37,7 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 INSTALL_SRC="$REPO_ROOT/skills/install-agent-director/install.sh"
 SQLITE="$(command -v sqlite3)"
 ROOT="$(mktemp -d -t ad-advice-install.XXXXXX)"
-trap 'rm -rf "$ROOT"' EXIT
+trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
 die() { echo "advice_follow.sh: setup failed: $*" >&2; exit 1; }
 
@@ -454,11 +454,12 @@ expect_installed() {
     [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
 }
 
-# hooks_injected <home>: home's settings.json holds both `agent-director help`
-# hooks, SessionStart and SessionEnd reason=compact.
+# hooks_injected <home>: home's settings.json is one JSON document holding both
+# `agent-director help` hooks, SessionStart and SessionEnd reason=compact.
 hooks_injected() {
-    jq -e --arg c "$1/.agent-director/bin/agent-director help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
-        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' \
+    jq -se --arg c "$1/.agent-director/bin/agent-director help" 'length == 1 and (.[0]
+        | any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
+        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c)))' \
         "$1/.claude/settings.json" >/dev/null 2>&1
 }
 
@@ -2224,13 +2225,16 @@ EOF
 # install over such a settings.json exits 4, the hook merge failure, with jq's
 # error on the line above its headline and no exit-5 cause line, and leaves the
 # file as it was; rewritten to that shape, the re-run injects both hooks. Per
-# case <settings.json>|<fixed>.
+# case <settings.json>|<fixed>, @CMD@ the help hook's command: a SessionStart
+# object holding that hook is not the hook already there (b.zbg).
 test_J18_SettingsShapeFixAndRerun() {
     local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
     local h sj settings fixed above
     local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
     while IFS='|' read -r settings fixed <&3; do
         h="$(new_home)" sj="$h/.claude/settings.json"
+        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
+        fixed="${fixed//@CMD@/$h/.agent-director/bin/agent-director help}"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 4 "settings.json $settings" || continue
@@ -2252,6 +2256,7 @@ test_J18_SettingsShapeFixAndRerun() {
 []|{}
 {"hooks":"x"}|{"hooks":{}}
 {"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}
+{"hooks":{"SessionStart":{"x":{"hooks":[{"type":"command","command":"@CMD@"}]}}}}|{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]}]}}
 EOF
 }
 
@@ -2302,6 +2307,120 @@ older|[defaults]\nrelay_mode = "off"\n[store]\nbusy_timeout_ms = 2500\nbusy_time
 older|[store]\nbusy_timeout_ms = "2500"|2 : busy_timeout_ms = "2500"|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500
 fresh|[store]\nbusy_timeout_ms = 2.5e3|2 : busy_timeout_ms = 2.5e3|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500
 fresh|[store]\nbusy_timeout_ms = 0x9c4 # ms|2 : busy_timeout_ms = 0x9c4 # ms|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500 # ms
+EOF
+}
+
+# ---- J20: a symlinked settings.json or config.toml install.sh cannot write through (b.nw5)
+
+# J20: "Fix the link so it reaches a file in a directory you can write in. Or
+# re-run this install with --no-hooks, which edits neither file, and add what
+# the merges add where the files come from ..." With hooks on, a settings.json
+# (exit 4) or config.toml (exit 5) linked to a file in a 0555 directory (a
+# stand-in for a read-only /nix/store) is refused, changing nothing under HOME.
+# Per file, each way out: fix-link points the link at a copy in a directory one
+# can write in, and the re-run merges through it, keeping the link; no-hooks
+# re-runs with --no-hooks, which leaves the link and its file alone, then adds
+# to that file what the advice names, after which a hooks-on install over it
+# finds nothing to add.
+test_J20_LinkUnwritableFixOrNoHooks() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local file follow h dir link store plain before added now
+    for file in settings.json config.toml; do
+        for follow in fix-link no-hooks; do
+            h="$(new_home)" store="$h/store" dir="$h/.claude" plain='{"theme":"dark"}'
+            [[ "$file" == settings.json ]] || dir="$h/.agent-director" plain='[defaults]\nrelay_mode = "off"'
+            link="$dir/$file"
+            mkdir -p "$dir" "$store" && printf '%b\n' "$plain" >"$store/$file" && ln -s "$store/$file" "$link" \
+                && chmod 0555 "$store" || { bad "$file, $follow: setup failed"; continue; }
+            before="$(j14_snap "$h")"
+            run "$h" "${argv[@]}"
+            if [[ "$file" == settings.json ]]; then
+                expect_rc 4 "$file linked into a read-only directory" || continue
+            else
+                expect_exit5 ErrConfigMalformed "$file linked into a read-only directory" || continue
+            fi
+            [[ "$(head -n 1 "$ERR")" == "install.sh: cannot merge into $link through its symlink; refusing to install." ]] \
+                || bad "$file: first stderr line \"$(head -n 1 "$ERR")\""
+            expect_advice "link : $link target : $store/$file The target's directory, $store, cannot be written in (a read-only file system, say, such as home-manager's /nix/store). With hooks on, install.sh writes its merges into the file a symlinked settings.json or config.toml resolves to, keeping the link. Fix the link so it reaches a file in a directory you can write in. Or re-run this install with --no-hooks, which edits neither file, and add what the merges add where the files come from (your dotfiles or home-manager configuration, say): in settings.json, a SessionStart hook and a SessionEnd hook with matcher \"compact\", each a command hook running \"$h/.agent-director/bin/agent-director help\"; in config.toml, inject_help_hook = true under [defaults]. Nothing was installed or changed. Re-run this install after the change."
+            [[ "$(j14_snap "$h")" == "$before" ]] || bad "$file: the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+            if [[ "$follow" == fix-link ]]; then
+                mkdir "$h/dotfiles" && cp "$store/$file" "$h/dotfiles/$file" && ln -sfn "$h/dotfiles/$file" "$link"
+                run "$h" "${argv[@]}"
+                expect_rc 0 "$file: re-run after fixing the link" || continue
+                expect_installed "$h" "$BIN" "$ADMIN"
+                [[ "$(readlink "$link")" == "$h/dotfiles/$file" ]] || bad "$file: the re-run left the link naming \"$(readlink "$link")\""
+                if [[ "$file" == settings.json ]]; then
+                    hooks_injected "$h" || bad "$file: hooks not merged through the fixed link: $(<"$h/dotfiles/$file")"
+                else
+                    grep -qx 'inject_help_hook = true' "$h/dotfiles/$file" || bad "$file: key not merged through the fixed link: $(<"$h/dotfiles/$file")"
+                fi
+                continue
+            fi
+            run "$h" "${argv[@]}" --no-hooks
+            expect_rc 0 "$file: re-run with --no-hooks" || continue
+            expect_installed "$h" "$BIN" "$ADMIN"
+            [[ "$(readlink "$link")" == "$store/$file" && "$(<"$store/$file")" == "$(printf '%b' "$plain")" ]] \
+                || bad "$file: --no-hooks changed the link or its file: $(readlink "$link"), $(<"$store/$file")"
+            # Add what the advice names where the file comes from: the store,
+            # rebuilt, and left writable so the install below can show it adds
+            # nothing (settings.json compared as JSON, as the merge rewrites it).
+            chmod 0755 "$store"
+            if [[ "$file" == settings.json ]]; then
+                added="$(jq --arg c "$h/.agent-director/bin/agent-director help" '
+                    .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]
+                    | .hooks.SessionEnd += [{matcher: "compact", hooks: [{type: "command", command: $c}]}]' "$store/$file")"
+                printf '%s\n' "$added" >"$store/$file"
+                added="$(jq -S . "$store/$file")"
+            else
+                printf 'inject_help_hook = true\n' >>"$store/$file"
+                added="$(<"$store/$file")"
+            fi
+            run "$h" "${argv[@]}"
+            expect_rc 0 "$file: hooks-on install over what the advice added" || continue
+            [[ "$file" == settings.json ]] && now="$(jq -S . "$store/$file")" || now="$(<"$store/$file")"
+            [[ "$now" == "$added" ]] || bad "$file: the merge added to what the advice named: $(<"$store/$file")"
+            run "$h" "$h/.agent-director/bin/agent-director" list
+            expect_rc 0 "$file: agent-director list after the advice's additions"
+        done
+    done
+}
+
+# ---- J21: settings.json holding several JSON documents, hooks on (b.zbg) -----------
+
+# J21: "Each is valid JSON, but the file must hold one JSON object, the shape
+# Claude Code reads. Fix it, then re-run this install." A hooks-on install over
+# a settings.json holding several JSON documents exits 4, naming how many, with
+# no exit-5 cause line and no "hooks : injected", and leaves the file byte for
+# byte with nothing beside it; rewritten as one object, the re-run injects both
+# hooks. Per case <settings.json>|<documents>|<fixed> (printf %b).
+test_J21_SettingsDocumentsFixAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings docs fixed want
+    while IFS='|' read -r settings docs fixed <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json"
+        want="install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds $docs JSON documents"
+        mkdir -p "$h/.claude" && printf '%b\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 4 "settings.json $settings" || continue
+        grep -qxF "$want" "$ERR" || bad "$settings: no stderr line \"$want\": $(paste -sd'|' "$ERR")"
+        expect_advice "$want Each is valid JSON, but the file must hold one JSON object, the shape Claude Code reads. Fix it, then re-run this install."
+        if grep -q '^install\.sh: err_name=' "$ERR"; then
+            bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
+        fi
+        if grep -q 'hooks   : injected' "$OUT"; then
+            bad "$settings: \"hooks : injected\" printed on the refusal"
+        fi
+        cmp -s "$sj" <(printf '%b\n' "$settings") || bad "$settings: settings.json changed: $(<"$sj")"
+        if compgen -G "$sj.*" >/dev/null; then
+            bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
+        fi
+        printf '%b\n' "$fixed" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "$settings fixed to $fixed: re-run" || continue
+        hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
+    done 3<<'EOF'
+{} {}|2|{}
+{"theme":"dark"}\n{"hooks":{}}\n{}|3|{"theme":"dark","hooks":{}}
 EOF
 }
 

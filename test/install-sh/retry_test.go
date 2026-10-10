@@ -14,7 +14,7 @@ import (
 var retrySkipLine = regexp.MustCompile(`(?m)^retry\.sh: SKIP: (.+)$`)
 
 // TestInstallShRetry runs retry.sh (b.kym, b.vqr, b.ady, b.hk7, b.7j2, b.2io,
-// b.onv, b.hhk, b.whe, b.ojn): install.sh's --from-release download retries
+// b.onv, b.hhk, b.whe, b.ojn, b.nw5, b.zbg): install.sh's --from-release download retries
 // for both release assets end in a full install, a wrong --sha256 or --admin-sha256
 // installs nothing, the PATH symlink is agent-director's only, an upgrade's
 // user_version reads wait out a brief store lock and ignore ~/.sqliterc, a
@@ -27,8 +27,12 @@ var retrySkipLine = regexp.MustCompile(`(?m)^retry\.sh: SKIP: (.+)$`)
 // is spelled, which uninstall.sh reverses, or stops before changing anything on a
 // config that sets defaults as a key before any header, and a hooks-on
 // re-install keeps the modes of the settings.json and config.toml it merges
-// into and of their .bak copies. On a host install.sh refuses, it skips with
-// the script's reason.
+// into and of their .bak copies, and writes through them when they are
+// symlinks, keeping the links, or stops before changing anything on a link it
+// cannot write through, and injects both hooks into an empty or whitespace-only
+// settings.json or one holding the help hook in an object, and leaves one that
+// is not valid JSON as it was, exit 4. On a host install.sh refuses, it skips
+// with the script's reason.
 func TestInstallShRetry(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("retry.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
