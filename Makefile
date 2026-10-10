@@ -31,13 +31,18 @@ GO_TEST_TIMEOUT ?= 30m
 # every non-release build stamps the dev sentinel literal `0.0.0-dev`.
 #
 # Release path: `make release-binaries` reads .version from
-#               pkg/ts-bun-client/package.json via jq.
+#               $(RELEASE_PKG_DIR)/package.json (default
+#               pkg/ts-bun-client/package.json) via jq. If it cannot (no
+#               jq, no readable package.json, no .version), it stops with
+#               an error and builds nothing (b.x7z).
 # Dev path:     `make build` (and all other targets) stamps 0.0.0-dev.
+#               Only release-binaries runs jq to read the version, and
+#               make never runs jq while reading this file.
 # Env override: set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z to stamp a custom
 #               value on any target; takes precedence over both paths.
 #               Any non-empty value is stamped verbatim; the caller is
 #               responsible for passing a value the discovery pipeline
-#               can parse.
+#               can parse. With it set, release-binaries runs no jq.
 VERSION_PKG     := github.com/gabemahoney/agent-director/internal/version
 ifneq ($(strip $(AGENT_DIRECTOR_BUILD_VERSION)),)
 VERSION_STR     := $(AGENT_DIRECTOR_BUILD_VERSION)
@@ -61,14 +66,29 @@ RELEASE_PKG_DIR ?= pkg/ts-bun-client
 # delete the dir) never collide on the shared repo-root dist/ (b.aur).
 RELEASE_DIST_DIR ?= dist
 
-# RELEASE_VERSION is lazily evaluated: only computed when a recipe expands it
-# (so `make build` never invokes jq).
-RELEASE_VERSION = $(shell jq -r .version $(RELEASE_PKG_DIR)/package.json)
+# RELEASE_VERSION is lazily evaluated (recursive `=`): jq runs only when a
+# recipe expands it, never while make reads this file. Only the
+# release-binaries recipe expands it, once per run, through its VERSION_LDFLAGS
+# below, so only release-binaries runs jq to read the version.
+RELEASE_VERSION = $(shell jq -r .version '$(RELEASE_PKG_DIR)/package.json')
+
+# _release_version_checked returns its argument, the version jq read, when it
+# is one word other than `null` (what jq -r prints for a missing .version).
+# Anything else stops make with an error before any binary is built: jq not
+# on PATH, a missing, unreadable or invalid package.json, or no .version all
+# leave it empty or `null`, and jq's or the shell's own message is printed
+# just above the error. Without this check release-binaries stamped an empty
+# version (b.x7z). Called with $(RELEASE_VERSION) as its argument, so jq runs
+# once however often the value is used here.
+_release_version_checked = $(if $(and $(filter 1,$(words $(1))),$(filter-out null,$(1))),$(1),$(error release-binaries: cannot read the release version: jq -r .version '$(RELEASE_PKG_DIR)/package.json' gave '$(1)', want one version string. Install jq and check that file has a .version field, or set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z. No binary was built))
 
 # Target-scoped override: make release-binaries stamps from package.json.
-# AGENT_DIRECTOR_BUILD_VERSION env still wins (env override is evaluated above).
-release-binaries: VERSION_STR := $(if $(strip $(AGENT_DIRECTOR_BUILD_VERSION)),$(AGENT_DIRECTOR_BUILD_VERSION),$(RELEASE_VERSION))
-release-binaries: VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
+# AGENT_DIRECTOR_BUILD_VERSION still wins, and then jq never runs: $(if)
+# expands only the branch it takes. Both lines must stay recursive (`=`). A
+# target-specific `:=` expands its right-hand side while make reads the line,
+# and so ran jq on every make invocation, whatever the target (b.x7z).
+release-binaries: VERSION_STR = $(if $(strip $(AGENT_DIRECTOR_BUILD_VERSION)),$(AGENT_DIRECTOR_BUILD_VERSION),$(call _release_version_checked,$(RELEASE_VERSION)))
+release-binaries: VERSION_LDFLAGS = -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
 
 all: generate build
 

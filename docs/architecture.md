@@ -1870,8 +1870,20 @@ agent-director ships a single Go build path:
 | Static CLI and operator tool (host) | `make build` | `CGO_ENABLED=0` | `bin/agent-director`, `bin/agent-director-admin` |
 | Release cross-compile (3 platforms, 6 binaries) | `make release-binaries` | `CGO_ENABLED=0` | `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}`, `dist/agent-director-admin-{linux-amd64,linux-arm64,darwin-arm64}` |
 
-Both binaries of a build carry the same version stamp. The CLI and the
-operator tool are statically linked everywhere (pure-Go SQLite via
+Both binaries of a build carry the same version stamp. `make build` stamps
+`0.0.0-dev`. `make release-binaries` stamps `.version` from
+`$(RELEASE_PKG_DIR)/package.json` (default `pkg/ts-bun-client`), read with
+jq. When it cannot read one version string (jq not on PATH,
+`package.json` missing or unreadable, `.version` missing, `null`, empty or
+more than one word), make stops with `release-binaries: cannot read the
+release version: …` and builds nothing, rather than stamping an empty
+version. `AGENT_DIRECTOR_BUILD_VERSION` overrides both, and then no jq runs.
+Only `release-binaries` runs jq to read the version, and make never runs
+jq while reading the Makefile (b.x7z; the Makefile comment on the
+`release-binaries:` assignments says why they must stay recursive).
+`test-image-smoke` and `release-binaries-smoke` run `jq -e` in their
+recipes to check `help` output, not to read the version. The CLI
+and the operator tool are statically linked everywhere (pure-Go SQLite via
 `modernc.org/sqlite`). Linux binaries pass an `ldd → "not a dynamic
 executable"` check in `make release-binaries-smoke`.
 
@@ -14846,7 +14858,7 @@ would also disable the guard on the self-hosted runner (b.175).
 
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
-`prebuild` b.2b3, `cigates` b.ug8). Those tests run `make` against the real
+`prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z). Those tests run `make` against the real
 repo Makefile with a fake container engine or tool on PATH, never a real
 container, and assert on what the recipe produced. They exec no built binary
 and open no store, so they carry no sandbox guard.
@@ -14862,6 +14874,14 @@ fake shellcheck, absent and present: with shellcheck present the target
 checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It reads `.github/workflows/`, or the directory in
 `WORKFLOWS_UNDER_TEST` (local to that package), to prove the fails-before
 direction against pre-fix workflows.
+
+`releaseversion` copies the Makefile into a temp tree and puts a logging jq
+wrapper first on PATH. It checks that a dry run of a non-release target
+(`build`, `all`, `lint`, `list-test-docker-epics`), with no
+`pkg/ts-bun-client/package.json`, runs no jq, and that `release-binaries`
+stamps the `package.json` version, takes `AGENT_DIRECTOR_BUILD_VERSION`
+without running jq, and, with no jq, no `package.json`, no `.version` or an
+empty one, exits non-zero with the version error and creates no `dist/`.
 
 - `RepoRoot(t)` returns the directory holding the root `go.mod`.
 - `MakefileUnderTest(t)` returns the repo Makefile, or the path in
