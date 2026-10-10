@@ -188,10 +188,17 @@ make list-test-docker-epics
 ```
 
 This prints one EPIC slug per line on stdout and exits zero on success. If the
-source file (`test/docker-epics.txt`) is missing or unreadable, the target exits
-non-zero. The caller (the /release skill's coverage gate) treats an empty
-output set as a release-blocker — a release that doesn't exercise any Docker
-EPICs is not a complete pre-publish run.
+source file (`test/docker-epics.txt`) is missing or lists no slug (its `grep`
+then selects no line), the target exits non-zero. The caller (the /release
+skill's coverage gate) treats an empty output set as a release-blocker — a
+release that doesn't exercise any Docker EPICs is not a complete pre-publish
+run.
+
+The `docker-epics` job of `.github/workflows/integration.yml` reads the same
+list through the same target to build its one-job-per-slug CI matrix, and
+fails the same way on an empty list. So CI after a merge to `main` and a
+release run the same groups; a pull request runs `harness-smoke` only. See
+`docs/architecture.md` "CI lane".
 
 Each slug can be invoked individually via `make test-docker EPIC=<slug>` to
 run that EPIC's testplan in the harness container.

@@ -267,8 +267,11 @@ test-docker: test-image
 # list-test-docker-epics emits one Docker harness EPIC slug per line on
 # stdout, reading from test/docker-epics.txt (blank lines and comments
 # stripped). Consumed by the /release skill's coverage gate (E5) to
-# discover the test-docker EPIC set programmatically. Exits zero on
-# success; non-zero only if the source file is missing.
+# discover the test-docker EPIC set programmatically, and by the
+# docker-epics job of .github/workflows/integration.yml, which builds its
+# one-job-per-slug matrix from it (b.ug8). Exits zero on success; non-zero
+# if the source file is missing or lists no slug (grep then selects no
+# line).
 .PHONY: list-test-docker-epics
 list-test-docker-epics:
 	@if [ ! -f test/docker-epics.txt ]; then \
@@ -333,6 +336,10 @@ SANDBOX_IMAGE ?= agent-director-sandbox
 
 # CONTAINER_ENGINE — prefer podman, else docker. Override to force one:
 #   make test-sandbox CONTAINER_ENGINE=docker
+# The `command -v` here only chooses an engine; it never skips anything. With
+# neither engine on PATH it picks docker, and _sandbox-preflight (the first
+# prerequisite of every sandbox target) then fails with exit 1 and names the
+# missing engine (b.ug8 audit).
 CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 # _SANDBOX_UIDMAP — uid-mapping flag(s), engine-specific:
@@ -859,17 +866,33 @@ envelope-diff-ts: agent-director ts-helper fake-tmux
 	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 
 # release-shellcheck runs shellcheck against gate scripts under
-# skills/release-agent-director/gates/. The target is a no-op when
-# shellcheck is not installed locally so that bare `make` runs do not
-# require it. Add `SC2086` etc. to the disable list inline in the
-# respective script rather than globally here.
+# skills/release-agent-director/gates/. Its automated caller is the lint
+# workflow (.github/workflows/lint.yml), on every PR and push to main.
+#
+# It FAILS (exit 1) when shellcheck is not on PATH. It used to print
+# "skipping" and exit 0, so a run without shellcheck looked the same as a
+# clean one, and the target had never really run (b.ug8). To skip on
+# purpose on a machine without shellcheck, set SHELLCHECK_OPTIONAL=1
+# (`make release-shellcheck SHELLCHECK_OPTIONAL=1`): it then prints that
+# nothing was checked and exits 0. No automated caller sets it.
+#
+# -x -P SCRIPTDIR makes shellcheck follow each script's
+# `# shellcheck source=` directive (b.zs6). Add `SC2086` etc. to the disable
+# list inline in the respective script, with a one-line reason, rather than
+# globally here.
+SHELLCHECK_OPTIONAL ?=
 release-shellcheck:
-	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/gates/**/*.sh"; \
-		find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -x -P SCRIPTDIR -s bash; \
-	else \
-		echo "[release-shellcheck] shellcheck not installed — skipping"; \
-	fi
+	@if ! command -v shellcheck >/dev/null 2>&1; then \
+		if [ "$(SHELLCHECK_OPTIONAL)" = 1 ]; then \
+			echo "[release-shellcheck] shellcheck not on PATH — SKIPPED, nothing was checked (SHELLCHECK_OPTIONAL=1)" >&2; \
+			exit 0; \
+		fi; \
+		echo "ERROR: release-shellcheck: shellcheck is not on PATH, so no gate script was checked." >&2; \
+		echo "       Install shellcheck, or set SHELLCHECK_OPTIONAL=1 to skip this check on purpose." >&2; \
+		exit 1; \
+	fi; \
+	echo "[release-shellcheck] shellcheck skills/release-agent-director/gates/**/*.sh"; \
+	find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -x -P SCRIPTDIR -s bash
 
 # release-smoke runs the synthetic-regression test suite that replaced the
 # legacy test-*.sh harnesses (E10 retirement). Each test covers one gate or
@@ -880,7 +903,9 @@ release-smoke:
 # release-bats was retired alongside the cabi-matrix removal — the only
 # bats tests under skills/release-agent-director/tests/ exercised the
 # deleted cabi-collection paths. The target is kept as a no-op so any
-# stale CI lane that still calls it stays green.
+# stale CI lane that still calls it stays green. It checks nothing, so it
+# must never count as a gate: no workflow under .github/workflows/ and no
+# /release phase calls it (checked for b.ug8).
 release-bats:
 	@echo "[release-bats] no release bats tests in tree — skipping"
 

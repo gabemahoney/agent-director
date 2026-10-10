@@ -31,6 +31,13 @@ Every gate script **must** adhere to the following contract:
   Any gate that needs to modify state should instead report a diagnostic
   and let the orchestrator decide whether to proceed.
 
+- Every `*.sh` under this directory must pass `make release-shellcheck`,
+  which the lint workflow (`.github/workflows/lint.yml`) runs on every PR
+  and push to `main`. That workflow is pinned to `ubuntu-24.04`, so CI
+  checks with shellcheck 0.9.0; a newer local shellcheck can report
+  findings CI does not. Disable a check inline in the script, with a
+  one-line reason, never globally.
+
 ## Helpers
 
 ### `lib/emit-diagnostic.sh`

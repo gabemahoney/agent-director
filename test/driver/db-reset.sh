@@ -25,7 +25,8 @@ rm -f "$STATE_DB" "${STATE_DB}-wal" "${STATE_DB}-shm"
 
 # Kill any leftover tmux sessions from a previous case. The `cd-` prefix is
 # the harness's reserved namespace; killing arbitrary sessions would risk
-# clobbering whatever the host operator is doing.
+# clobbering whatever the host operator is doing. Without tmux there is no
+# tmux server and so no session to kill, so skipping is correct (b.ug8 audit).
 if command -v tmux >/dev/null 2>&1; then
     if tmux ls 2>/dev/null | awk -F: '{print $1}' | grep -E '^cd-' >/tmp/.cd-sessions 2>/dev/null; then
         while IFS= read -r sess; do

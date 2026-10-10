@@ -289,7 +289,7 @@ built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
 `tools/measure-exit` and `tools/measure-exit/dryrun`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it, as do the `test/sandbox/` Makefile tests (`gitmount`, `cmdinject`,
-`prebuild`), which run only `make` and shell fakes. When you add a package that
+`prebuild`, `cigates`), which run only `make` and shell fakes. When you add a package that
 opens the store or execs a binary, add `sandboxguard.Require()` to its
 `TestMain`.
 

@@ -439,6 +439,13 @@ The driver does *not* read tier labels (the hive happens to use
 match (`title:.*<EPIC>`), then iterates t2 cases in the order from the
 t1's frontmatter `children:` list.
 
+A testplan runs automatically only once its slug is a line in
+`test/docker-epics.txt`. That line is all the wiring it needs: CI's Docker
+harness matrix (one job per slug on every push to `main`) and the `/release`
+coverage gate both read the list through `make list-test-docker-epics`. A
+pull request runs `harness-smoke` alone. Both run the shell driver, so every
+listed testplan's cases must pass under `DRIVER_MODE=shell`.
+
 ### t2 case body — required sections
 
 Each `t2.*.md` is plain English. The driver supports two modes:

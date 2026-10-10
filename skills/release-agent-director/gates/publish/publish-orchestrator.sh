@@ -172,7 +172,7 @@ CALLER_CWD="${PWD}"
 TARBALL="$(_resolve_abs_path "${TARBALL}")"
 NOTES="$(_resolve_abs_path "${NOTES}")"
 for _i in "${!BINARY_PATHS[@]}"; do
-  BINARY_PATHS[$_i]="$(_resolve_abs_path "${BINARY_PATHS[$_i]}")"
+  BINARY_PATHS[_i]="$(_resolve_abs_path "${BINARY_PATHS[_i]}")"
 done
 unset _i
 

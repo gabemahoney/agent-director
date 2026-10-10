@@ -69,10 +69,7 @@ fi
 # by bun's node_modules resolution walking upward from the repo root.
 INSTALL_DIR="$(mktemp -d)"
 
-cleanup_install() {
-  rm -rf "$INSTALL_DIR"
-}
-trap cleanup_install EXIT
+trap 'rm -rf "$INSTALL_DIR"' EXIT
 
 # ─── gate: install.clean-env ──────────────────────────────────────────────────
 # Minimal package.json required so `npm install` treats the dir as a package.

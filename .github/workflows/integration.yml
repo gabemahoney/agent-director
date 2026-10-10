@@ -4,9 +4,15 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Runs the full Docker-harness matrix on any branch on demand, e.g. a
+  # release branch before it merges. A pull_request run has harness-smoke
+  # only (see the docker-epics job).
+  workflow_dispatch:
 
 # Cancel in-flight runs of the same PR/branch when a new commit arrives —
-# the harness is the expensive lane so two stacked runs is wasteful.
+# the harness is the expensive lane so two stacked runs is wasteful. On
+# main the newer run tests the cancelled run's commits too, so a breaking
+# commit is still reported, by the newer run.
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
@@ -19,13 +25,91 @@ permissions:
   contents: read
 
 jobs:
-  linux-integration:
-    name: Docker harness — harness-smoke
+  # docker-epics turns `make list-test-docker-epics` into the JSON array of
+  # Docker-harness groups (EPIC slugs) that linux-integration's matrix
+  # expands, one job per slug. That target reads test/docker-epics.txt,
+  # the list the /release coverage gate
+  # (skills/release-agent-director/gates/coverage/docker-epics.sh) runs, so
+  # adding or dropping a slug there changes this matrix with no edit to
+  # this file (b.ug8).
+  #
+  # Groups per event:
+  #   push to main, workflow_dispatch: every slug in the list.
+  #   pull_request: harness-smoke only. The operator kept the Docker suite
+  #     off the pre-merge path (b.ug8: catching a broken group after merge or
+  #     at release time is acceptable, per-commit is not required), so a PR
+  #     keeps the single cheap, credential-free harness check it had before.
+  #     harness-smoke is taken from the list, so if a PR drops it from
+  #     test/docker-epics.txt this job fails instead of running a dropped
+  #     group.
+  docker-epics:
+    name: Docker harness — list groups
     runs-on: ubuntu-latest
-    # Hard cap on runtime; a hung Docker build or harness step otherwise
-    # consumes runner minutes indefinitely. 30m is well above the
-    # observed ~5–10m for harness-smoke under normal load.
+    # Reads one file with make and jq; 5m absorbs runner provisioning.
+    timeout-minutes: 5
+    outputs:
+      epics: ${{ steps.list.outputs.epics }}
+      # The group a pull_request runs (PR_EPIC); linux-integration passes
+      # the Claude credentials to that group's job only.
+      pr_epic: ${{ steps.list.outputs.pr_epic }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: List Docker harness groups
+        id: list
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_EPIC: harness-smoke
+        run: |
+          set -euo pipefail
+          # An empty list would run no group and pass: fail with an
+          # annotation instead, as the /release coverage gate does
+          # (SR-19.3). make list-test-docker-epics itself exits non-zero
+          # when test/docker-epics.txt is missing or has no slug line (its
+          # grep selects nothing). The length check catches a list whose
+          # lines are all whitespace jq trims but grep does not count as
+          # blank, such as a no-break space.
+          if ! all="$(make --no-print-directory -s list-test-docker-epics \
+              | jq -Rnc '[inputs | gsub("^\\s+|\\s+$"; "") | select(length > 0)]')" \
+            || [ "$(jq length <<<"$all")" -eq 0 ]; then
+            echo "::error::make list-test-docker-epics listed no Docker harness group: test/docker-epics.txt is missing or has no slug"
+            exit 1
+          fi
+          # A slug reaches a make command line and a job name: allow only
+          # the characters a slug uses.
+          bad="$(jq -r '.[] | select(test("^[A-Za-z0-9._-]+$") | not)' <<<"$all")"
+          if [ -n "$bad" ]; then
+            echo "::error::test/docker-epics.txt has slugs with characters outside [A-Za-z0-9._-]: $bad"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = pull_request ]; then
+            epics="$(jq -c --arg want "$PR_EPIC" 'map(select(. == $want))' <<<"$all")"
+            if [ "$(jq length <<<"$epics")" -eq 0 ]; then
+              echo "::error::$PR_EPIC, the group a pull_request runs, is not in test/docker-epics.txt; restore it or change PR_EPIC in .github/workflows/integration.yml"
+              exit 1
+            fi
+          else
+            epics="$all"
+          fi
+          echo "Docker harness groups for this $EVENT_NAME run: $epics"
+          echo "epics=$epics" >>"$GITHUB_OUTPUT"
+          echo "pr_epic=$PR_EPIC" >>"$GITHUB_OUTPUT"
+
+  linux-integration:
+    name: Docker harness — ${{ matrix.epic }}
+    needs: docker-epics
+    runs-on: ubuntu-latest
+    # Hard cap on runtime, per group; a hung Docker build or harness step
+    # otherwise consumes runner minutes indefinitely. 30m is well above the
+    # observed ~5–10m for harness-smoke under normal load. Each job builds
+    # the binary and the harness image itself.
     timeout-minutes: 30
+    strategy:
+      # Every group runs to the end and reports on its own: a failure in one
+      # does not cancel the others, and the failed job's name is its slug.
+      fail-fast: false
+      matrix:
+        epic: ${{ fromJSON(needs.docker-epics.outputs.epics) }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
@@ -36,17 +120,25 @@ jobs:
       - name: Build agent-director binary
         run: make build
 
-      - name: Run make test-docker EPIC=harness-smoke
+      - name: Run make test-docker EPIC=${{ matrix.epic }}
         env:
-          # Either env var is sufficient for the driver-Claude path
-          # (DRIVER_MODE=claude). The default DRIVER_MODE=shell does not
-          # need a credential, but we still wire them through so a PR
-          # author who opts into the credentialed lane gets it from CI
-          # secrets, never plaintext in the repo. See
-          # docs/architecture.md "Test Harness — CI auth".
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: make test-docker EPIC=harness-smoke
+          EPIC: ${{ matrix.epic }}
+          # DRIVER_MODE is left unset, so make test-docker runs the group
+          # in its default shell mode, as the /release coverage gate does;
+          # every listed testplan is written for DRIVER_MODE=shell, which
+          # needs no credential, and no run here sets DRIVER_MODE=claude.
+          #
+          # Either credential below is sufficient for the driver-Claude
+          # path (DRIVER_MODE=claude). They reach only the job for the
+          # group a pull_request runs (PR_EPIC, harness-smoke), the one
+          # job that had them before the matrix: a PR author who opts that
+          # lane into DRIVER_MODE=claude gets them from CI secrets, never
+          # plaintext in the repo. Every other group's job gets empty
+          # values, so the matrix does not widen secret exposure. See
+          # docs/architecture.md "Test Harness" > "Auth".
+          ANTHROPIC_API_KEY: ${{ matrix.epic == needs.docker-epics.outputs.pr_epic && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ matrix.epic == needs.docker-epics.outputs.pr_epic && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+        run: make test-docker EPIC="$EPIC"
 
   macos-probe:
     # Exercises internal/probe's sysctl-based readers (the start-time

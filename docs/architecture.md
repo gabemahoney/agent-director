@@ -10452,8 +10452,9 @@ research notes under `reference/`:
   `reference/max-account-auth-research.md`.
 
 `make test-docker` inherits both env vars from the calling process — never
-hard-coded in the Makefile. CI sources them from secrets (see
-`.github/workflows/integration.yml`).
+hard-coded in the Makefile. CI sources them from secrets and passes them
+only to the `harness-smoke` job of the Docker harness matrix (see
+[CI lane](#ci-lane)).
 
 Test credentials should be CI-secret-scoped, distinct from the operator's
 primary account.
@@ -11373,15 +11374,58 @@ test cache does not track files that only the runner subprocess reads.
 
 ### CI lane
 
-`.github/workflows/integration.yml` defines two jobs:
+`.github/workflows/integration.yml` runs on every PR, on push to `main`
+and on `workflow_dispatch`. It defines four jobs:
 
-- `linux-integration` — runs `make test-docker EPIC=harness-smoke` on
-  `ubuntu-latest` for every PR and push to `main`. Auth env vars come
-  from `${{ secrets.ANTHROPIC_API_KEY }}` and
-  `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
-- `macos-stub` — runs on `macos-latest`, exits 0 with a stub message.
-  Epic 8 (sysctl-based liveness probe) will swap this for a real macOS
-  test that exercises the sysctl path. SRD §19 Q7.
+- `docker-epics` — turns `make list-test-docker-epics` (which reads
+  `test/docker-epics.txt`) into a JSON array of Docker-harness slugs. On
+  push to `main` and on `workflow_dispatch` the array holds every listed
+  slug; on a PR it holds `harness-smoke` alone, because the Docker suite
+  is kept off the pre-merge path (b.ug8). The job also outputs `pr_epic`,
+  the group a PR runs (`PR_EPIC`, `harness-smoke`). The job fails when
+  the list is empty (or `make list-test-docker-epics` fails), when a slug
+  has a character outside `[A-Za-z0-9._-]`, or, on a PR, when
+  `harness-smoke` is not listed. An empty list fails with the annotation
+  `make list-test-docker-epics listed no Docker harness group:
+  test/docker-epics.txt is missing or has no slug`.
+- `linux-integration` — a matrix over that array, one job per slug, named
+  `Docker harness — <slug>`, with `fail-fast: false`, so a failed group is
+  named by its job and the other groups still run. Each job runs
+  `make build` and `make test-docker EPIC=<slug>` on `ubuntu-latest` in
+  the default `DRIVER_MODE=shell`, which needs no credential. Only the
+  job whose slug equals `pr_epic` gets `${{ secrets.ANTHROPIC_API_KEY }}`
+  and `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`, for `DRIVER_MODE=claude`
+  (see [Auth](#auth)). Every other group's job gets empty strings, so the
+  secrets still reach one job, as before the matrix. A new secret in this
+  job uses the same
+  `matrix.epic == needs.docker-epics.outputs.pr_epic && secrets.X || ''`
+  form; `cigates` fails on any other.
+- `macos-probe` — runs `go build ./...` and `go test ./internal/probe/...`
+  on `macos-latest`, against the darwin sysctl readers. SRD §19 Q7.
+- `envelope-diff` — see [Envelope-diff regression
+  harness](#envelope-diff-regression-harness).
+
+The `/release` coverage gate (`gates/coverage/docker-epics.sh`) reads the
+same list through the same target, so CI after a merge and a release run
+the same groups. Adding or dropping a slug in `test/docker-epics.txt`
+needs no workflow edit.
+
+`.github/workflows/lint.yml` runs static checks that build nothing, on
+every PR and push to `main`. Its one `lint` job runs
+`make release-shellcheck` (shellcheck over
+`skills/release-agent-director/gates/**/*.sh`), first installing
+shellcheck from apt if the runner image lacks it. The job runs on
+`ubuntu-24.04`, not `ubuntu-latest`, because the image's Ubuntu release
+fixes the shellcheck version (0.9.0, from apt). A newer shellcheck can
+add findings, so a move of `ubuntu-latest` would turn `main` red with no
+change to the scripts. Move the pin on purpose, with the new version's
+findings fixed. The job logs `shellcheck --version`. It is that target's
+only automated caller; no `/release` phase runs it. The target exits 1
+when shellcheck is not on PATH. `SHELLCHECK_OPTIONAL=1` makes it skip
+instead, printing that nothing was checked; no workflow sets it. A new
+lint check is one more step in the `lint` job, with
+`if: ${{ !cancelled() }}` so it still reports after an earlier check
+fails.
 
 The TLA+ model check has no workflow and no CI hook. It is an on-demand
 check that runs only through `make tla`, on the fast tier by default (see
@@ -14747,7 +14791,7 @@ Allow-list for (c): `version`, `expire`, `find-missing` — verbs whose
 manifests declare no verb-level ErrorNames (errors surface in result maps or are
 untriggerable on Linux).
 
-**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks (go-smoke, integration, mac pre-release verify); release-blocking gates run locally so they execute against exactly the tree being tagged.
+**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks: `go-smoke.yml`, `integration.yml` and `lint.yml` (see [CI lane](#ci-lane)), `doc-drift.yml` and `pre-release-verify-mac.yml`; release-blocking gates run locally so they execute against exactly the tree being tagged.
 
 **Gate — Go smoke.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
 
@@ -14791,10 +14835,22 @@ would also disable the guard on the self-hosted runner (b.175).
 
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
-`prebuild` b.2b3). Those tests run `make` against the real repo Makefile with a
-fake container engine or tool on PATH, never a real container, and assert on
-what the recipe produced. They exec no built binary and open no store, so they
-carry no sandbox guard.
+`prebuild` b.2b3, `cigates` b.ug8). Those tests run `make` against the real
+repo Makefile with a fake container engine or tool on PATH, never a real
+container, and assert on what the recipe produced. They exec no built binary
+and open no store, so they carry no sandbox guard.
+
+`cigates` also checks the CI workflows (see [CI lane](#ci-lane)): it runs
+`integration.yml`'s `docker-epics` list step against a scratch
+`test/docker-epics.txt` (including missing, empty and no-break-space-only
+lists, which must fail with the no-group annotation), checks that the
+harness matrix is that step's output, that each secret reaches only the
+`pr_epic` job, and that a workflow calls `make release-shellcheck` and none
+sets `SHELLCHECK_OPTIONAL`. It also runs `make release-shellcheck` with a
+fake shellcheck, absent and present: with shellcheck present the target
+checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It reads `.github/workflows/`, or the directory in
+`WORKFLOWS_UNDER_TEST` (local to that package), to prove the fails-before
+direction against pre-fix workflows.
 
 - `RepoRoot(t)` returns the directory holding the root `go.mod`.
 - `MakefileUnderTest(t)` returns the repo Makefile, or the path in
