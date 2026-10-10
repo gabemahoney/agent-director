@@ -11048,21 +11048,47 @@ gates/finalize/
 ```
 
 **Gate diagnostics.** A failing gate writes each SR-14 diagnostic to stderr
-as one JSON object per line. Gate scripts must build every diagnostic with
-`emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never by hand; the
-sole exception is the publish orchestrator, whose `emit_publish_diagnostic`
-adds the publish-only fields. Both build the object with `jq`, so the line
-is valid JSON whatever its fields carry, raw command output with TABs, CRs
-or other control characters included. `emit_diagnostic` feeds the
-description to `jq` on stdin, not as an argument, so it may be any size;
-Linux caps one argument at 128 KiB. The guard test
-`TestNoHandRolledDiagnosticJSON`
+as one compact JSON object per line. Gate scripts must build every
+diagnostic with `emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never
+by hand; the sole exception is the publish orchestrator, whose
+`emit_publish_diagnostic` adds the publish-only fields. Both build the
+object with `jq -c`, so the line is valid JSON whatever its fields carry,
+raw command output with TABs, CRs or other control characters included. The
+guard test `TestNoHandRolledDiagnosticJSON`
 (`skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars/`)
 fails on any `printf` of a `{"gate"` line in `gates/**/*.sh`. One invalid
 line costs a whole gate's diagnostics: the parallel executor
 (`gates/lib/run-parallel.sh`) parses every stderr line of a gate that
 starts with `{` in a single `jq -s`, and records an empty list if that
 fails.
+
+**Command output reaches `jq` on stdin.** Linux caps one argument at
+128 KiB (`MAX_ARG_STRLEN`). A larger `--arg` or `--argjson` makes the exec
+of `jq` fail with "Argument list too long", and the diagnostic, sub-check
+or report it was building is lost. So a script in `gates/` passes any value
+that can carry command output, or any collection of such values, to `jq`
+on stdin or in a file `jq` reads, never as an argument;
+`printf '%s' "$v" | jq -Rs .` turns a string into one JSON string with no
+change to its content. Only short values such as gate names, outcomes,
+paths built by the script and numbers go as `--arg` or `--argjson`. The
+values that follow this rule today (b.v46, b.nsa):
+
+- `emit_diagnostic`: the description.
+- `emit_publish_diagnostic`: the offending path, description, corrective
+  action and `upstream_response_verbatim` (the failed command's last 50
+  stderr lines).
+- The publish orchestrator's `record_substep` (`response_excerpt`) and
+  `write_report` (the substeps and diagnostics arrays).
+- `run-parallel.sh`: each sub-check's `stderr_excerpt` and `diagnostics`,
+  and the combined `sub_checks`, which `jq` reads from the per-gate files.
+- `smoke/per-binary-smoke.sh`: a sub-check's `detail` (`ldd` or `help`
+  output). `jq` is the only thing that escapes it, so the decoded value
+  equals the raw output.
+
+Two inputs still go as arguments: the publish orchestrator passes its
+`--prior-phases` file's array to `jq` as one `--argjson`, and
+`finalize/write-report.sh` takes its phases and diagnostics arrays as
+positional arguments.
 
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,

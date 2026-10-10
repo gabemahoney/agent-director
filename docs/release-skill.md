@@ -102,13 +102,16 @@ in the run report.
 
 Gate scripts produce diagnostics via
 `skills/release-agent-director/gates/lib/emit-diagnostic.sh`, which builds each
-object with `jq`. Every field is escaped as JSON requires, control characters
-such as TAB and CR included, so a field may carry raw command output. The
-description reaches `jq` on stdin, so it may be any size. Hand-rolling JSON in
-gate scripts is prohibited; the test `TestNoHandRolledDiagnosticJSON` fails on
-any gate script that `printf`s a `{"gate"` line. The publish phase's extended
-diagnostics (such as `upstream_response_verbatim`) come from the publish
-orchestrator's own `jq` builder, `emit_publish_diagnostic`.
+object with `jq` and writes it as one compact line. Every field is escaped as
+JSON requires, control characters such as TAB and CR included, so a field may
+carry raw command output. The description reaches `jq` on stdin, so it may be
+any size. Hand-rolling JSON in gate scripts is prohibited; the test
+`TestNoHandRolledDiagnosticJSON` fails on any gate script that `printf`s a
+`{"gate"` line. The publish phase's extended diagnostics (such as
+`upstream_response_verbatim`) come from the publish orchestrator's own `jq`
+builder, `emit_publish_diagnostic`, which keeps the same contract: one compact
+line per diagnostic, and the offending path, description, corrective action and
+upstream response all reach `jq` on stdin, so none of them has a size limit.
 
 ---
 
@@ -393,7 +396,10 @@ visibility into exactly what state the world is in.
 
 **Auth failures are surfaced verbatim.** A 401/403 from `git push`, `gh
 release create`, or `npm publish` appears in the diagnostic's
-`upstream_response_verbatim` field. The skill does NOT pre-verify
+`upstream_response_verbatim` field, which holds the last 50 lines of the
+failed command's stderr, however long those lines are (the substep's
+`response_excerpt` in `publish_substeps` holds the same text). The
+skill does NOT pre-verify
 publisher identity (the preflight gates check token presence + whoami
 but cannot guarantee the token has the right scopes).
 

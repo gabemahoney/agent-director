@@ -177,8 +177,8 @@ done
 unset _i
 
 # ─── emit_publish_diagnostic ──────────────────────────────────────────────────
-# Emits an extended SR-14 diagnostic (publish-phase fields) to stderr and
-# appends the JSON string to the DIAGNOSTICS array.
+# Emits an extended SR-14 diagnostic (publish-phase fields) to stderr as one
+# compact JSON line and appends the same line to the DIAGNOSTICS array.
 #
 # Usage: emit_publish_diagnostic <substep-short-name> <description> \
 #                                <corrective_action> <upstream_verbatim> \
@@ -188,6 +188,17 @@ unset _i
 # behaviour of every call site that does not pass it. Callers that know the
 # bad path (e.g. validate_publish_artifacts) pass the resolved absolute path so
 # operators can consult the recovery-cheatsheet field directly (b.mjd).
+#
+# The four caller-supplied strings reach jq on stdin, never as arguments (b.nsa,
+# the same rule emit_diagnostic follows since b.v46): upstream_verbatim is raw
+# npm/gh/git output and the description and corrective action can embed paths,
+# and one argument over Linux's MAX_ARG_STRLEN (128 KiB) makes the exec of jq
+# fail with "Argument list too long", so no diagnostic at all would be written.
+# Each string is turned into one JSON string by its own `jq -Rs .` (printf is a
+# bash builtin, so the pipe has no size limit; -Rs keeps the value unchanged,
+# trailing newlines included) and the final jq slurps the four of them as an
+# array. Only the gate name and the list of succeeded substep names, both
+# short, go as arguments.
 emit_publish_diagnostic() {
   local substep="$1"
   local description="$2"
@@ -195,36 +206,35 @@ emit_publish_diagnostic() {
   local upstream_verbatim="$4"
   local offending="${5:-}"
 
-  # Build prior_substeps_succeeded JSON array
+  # Build prior_substeps_succeeded JSON array (at most six substep names).
   local prior_json="[]"
   if [[ ${#SUCCEEDED_SUBSTEPS[@]} -gt 0 ]]; then
     prior_json="$(printf '%s\n' "${SUCCEEDED_SUBSTEPS[@]}" | jq -R . | jq -sc '.')"
   fi
 
-  # Empty → JSON null; non-empty → JSON string (jq --arg handles escaping).
-  local offending_json="null"
-  if [[ -n "${offending}" ]]; then
-    offending_json="$(jq -n --arg v "${offending}" '$v')"
-  fi
-
+  # offending_file_or_artifact: empty → JSON null; non-empty → JSON string.
   local diag
-  diag="$(jq -n \
-    --arg gate                    "publish.${substep}" \
-    --arg description             "$description" \
-    --arg corrective_action       "$corrective" \
-    --arg which_substep_failed    "publish.${substep}" \
-    --argjson prior_substeps_succeeded "$prior_json" \
-    --arg upstream_response_verbatim   "$upstream_verbatim" \
-    --argjson offending_file_or_artifact "$offending_json" \
-    '{
-      gate:                       $gate,
-      offending_file_or_artifact: $offending_file_or_artifact,
-      description:                $description,
-      corrective_action:          $corrective_action,
-      which_substep_failed:       $which_substep_failed,
-      prior_substeps_succeeded:   $prior_substeps_succeeded,
-      upstream_response_verbatim: $upstream_response_verbatim
-    }')"
+  diag="$(
+    {
+      printf '%s' "$offending"         | jq -Rs .
+      printf '%s' "$description"       | jq -Rs .
+      printf '%s' "$corrective"        | jq -Rs .
+      printf '%s' "$upstream_verbatim" | jq -Rs .
+    } | jq -cs \
+      --arg     gate                     "publish.${substep}" \
+      --arg     which_substep_failed     "publish.${substep}" \
+      --argjson prior_substeps_succeeded "$prior_json" \
+      '. as [$offending, $description, $corrective_action, $upstream_response_verbatim]
+      | {
+          gate:                       $gate,
+          offending_file_or_artifact: (if $offending == "" then null else $offending end),
+          description:                $description,
+          corrective_action:          $corrective_action,
+          which_substep_failed:       $which_substep_failed,
+          prior_substeps_succeeded:   $prior_substeps_succeeded,
+          upstream_response_verbatim: $upstream_response_verbatim
+        }'
+  )"
 
   printf '%s\n' "$diag" >&2
   DIAGNOSTICS+=("$diag")
@@ -234,6 +244,10 @@ emit_publish_diagnostic() {
 # Appends a substep result JSON object to SUBSTEP_RESULTS.
 #
 # Usage: record_substep <full-name> <outcome> <command> <started_at> <response_excerpt>
+#
+# response_excerpt is a substep's raw output (on failure, the same text as the
+# diagnostic's upstream_response_verbatim), so it reaches jq on stdin rather
+# than as an argument, which Linux caps at 128 KiB (b.nsa).
 record_substep() {
   local name="$1"
   local outcome="$2"
@@ -241,18 +255,17 @@ record_substep() {
   local started_at="$4"
   local response_excerpt="$5"
 
-  SUBSTEP_RESULTS+=("$(jq -n \
+  SUBSTEP_RESULTS+=("$(printf '%s' "$response_excerpt" | jq -Rs \
     --arg name             "$name" \
     --arg outcome          "$outcome" \
     --arg command          "$command" \
     --arg started_at       "$started_at" \
-    --arg response_excerpt "$response_excerpt" \
     '{
       name:             $name,
       outcome:          $outcome,
       command:          $command,
       started_at:       $started_at,
-      response_excerpt: $response_excerpt
+      response_excerpt: .
     }')")
 }
 
@@ -324,6 +337,10 @@ failure_description() {
 
 # ─── write_report ─────────────────────────────────────────────────────────────
 # Writes dist/release-report.json with all collected substep results.
+#
+# The substeps and diagnostics arrays carry substep output verbatim, so they
+# reach jq on stdin as two JSON values rather than as --argjson, which Linux
+# caps at 128 KiB per argument (b.nsa). Both are always exactly one array each.
 write_report() {
   local elapsed_seconds="$1"
 
@@ -342,17 +359,16 @@ write_report() {
     prior_phases_json="$(cat "${PRIOR_PHASES_FILE}")"
   fi
 
-  jq -n \
+  printf '%s\n%s\n' "${substeps_json}" "${diagnostics_json}" | jq -s \
     --arg      invocation_timestamp "${INVOCATION_TS}" \
     --arg      mode                 "${MODE}" \
     --arg      bump_kind            "${BUMP_KIND}" \
     --arg      source_version       "${SOURCE_VERSION}" \
     --arg      target_version       "${TARGET}" \
     --argjson  phases               "${prior_phases_json}" \
-    --argjson  publish_substeps     "${substeps_json}" \
-    --argjson  diagnostics          "${diagnostics_json}" \
     --argjson  elapsed_seconds      "${elapsed_seconds}" \
-    '{
+    '. as [$publish_substeps, $diagnostics]
+    | {
       invocation_timestamp: $invocation_timestamp,
       mode:                 $mode,
       bump_kind:            $bump_kind,
