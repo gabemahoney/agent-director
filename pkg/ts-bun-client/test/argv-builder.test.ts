@@ -92,6 +92,7 @@ test.each([
 });
 
 // b.32k: global flags precede the verb, in a stable order; an empty object adds none.
+// b.78b: createIfMissing false adds --create-if-missing false; true and undefined add nothing.
 test.each([
   [undefined, []],
   [{}, []],
@@ -100,6 +101,10 @@ test.each([
   [{ tmuxCommand: "/usr/bin/tmux" }, ["--tmux-command", "/usr/bin/tmux"]],
   [{ tmuxCommand: "/usr/bin/tmux", home: "/tmp/h", storePath: "/tmp/foo.db" },
     ["--store-path", "/tmp/foo.db", "--home", "/tmp/h", "--tmux-command", "/usr/bin/tmux"]],
-])("global options %p → %p before the verb (b.32k)", (globals, flags) => {
+  [{ createIfMissing: false }, ["--create-if-missing", "false"]],
+  [{ createIfMissing: true }, []],
+  [{ createIfMissing: undefined }, []],
+  [{ createIfMissing: false, storePath: "/tmp/foo.db" }, ["--store-path", "/tmp/foo.db", "--create-if-missing", "false"]],
+])("global options %p → %p before the verb (b.32k, b.78b)", (globals, flags) => {
   expect(buildArgv(CLI, "status", { claude_instance_id: "id-1" }, globals)).toEqual([CLI, ...flags, "status", ...ID]);
 });

@@ -72,9 +72,9 @@ var verbAliases = map[string]string{
 // -h, --version, -v) are not in this table: run() has already replaced them
 // with their verbs (verbAliases). client and cfg are captured in closures so
 // each verb sees the same already-opened Client — construction is done once
-// in run() via setupClient(). o is the run's --store-path and --tmux-command
-// overrides setupClient opened client with; serve builds its separate MCP
-// Client from them too (b.wb7).
+// in run() via setupClient(). o is the run's --store-path, --tmux-command and
+// --create-if-missing overrides setupClient opened client with; serve builds
+// its separate MCP Client from them too (b.wb7, b.78b).
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
@@ -364,11 +364,13 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 // through clisetup.Open (whose comment holds the design pins), which
 // agent-director-admin shares so both binaries open the store alike.
 //
-// b.32k: o carries the --store-path and --tmux-command overrides of the
-// global flags run() parsed and applied before dispatch; --home was applied
-// there (os.Setenv) BEFORE this function runs, so every "~/" expansion of the
-// config and store paths sees the override. run() also hands o to serve,
-// whose MCP Client opens with the same overrides (b.wb7).
+// b.32k: o carries the --store-path, --tmux-command and --create-if-missing
+// overrides of the global flags run() parsed and applied before dispatch;
+// --home was applied there (os.Setenv) BEFORE this function runs, so every
+// "~/" expansion of the config and store paths sees the override. With
+// --create-if-missing false a missing store is refused here (ErrStoreOpen)
+// before any verb runs, and none of it is created (b.78b). run() also hands o
+// to serve, whose MCP Client opens with the same overrides (b.wb7).
 //
 // On any error it writes the JSON envelope to stderr and returns errDispatch
 // so run() can exit non-zero without double-printing.
@@ -392,7 +394,8 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // os.Exit(run()) so deferred cleanup in run() still executes.
 //
 // Startup wiring (config + store) runs on every STORE-BACKED invocation to
-// satisfy Epic 1 AC #4 (idempotent dir/file creation) and AC #5
+// satisfy Epic 1 AC #4 (idempotent dir/file creation, which
+// --create-if-missing false turns off, b.78b) and AC #5
 // (ErrSchemaMismatch surfaces). The DB-free verbs below never reach it: help,
 // version (and their aliases --help, -h, --version and -v, b.fv2), the no-verb
 // run, and trail-emit are dispatched before setupClient so they neither open
@@ -417,13 +420,13 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // branch is keyed off os.Args[1] before anything else so a missing
 // config or broken DB cannot block Claude Code's hook fire — including
 // the global-flag parser below, which can return an error on a malformed
-// `--store-path`/`--home`/`--tmux-command` and would otherwise be a
-// blocking failure mode on the hook hot path.
+// `--store-path`/`--home`/`--tmux-command`/`--create-if-missing` and would
+// otherwise be a blocking failure mode on the hook hot path.
 //
-// b.32k: after the hook short-circuit, run() pre-scans argv for the three
-// global flags (--store-path, --home, --tmux-command) with
-// clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr), and
-// strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
+// b.32k: after the hook short-circuit, run() pre-scans argv for the four
+// global flags (--store-path, --home, --tmux-command, --create-if-missing)
+// with clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr),
+// and strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
 // HOME when --home is given, so config.Load's tilde-expansion picks it up —
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
@@ -442,8 +445,8 @@ func run() int {
 
 	// --home: set process HOME BEFORE config.Load runs (clisetup's
 	// GlobalFlags.Apply says why that covers every "~/" store/config path
-	// expansion); overrides carries --store-path and --tmux-command to
-	// setupClient. b.32k, b.hvf.
+	// expansion); overrides carries --store-path, --tmux-command and
+	// --create-if-missing to setupClient. b.32k, b.hvf, b.78b.
 	overrides, err := globals.Apply()
 	if err != nil {
 		if werr := writeError(os.Stderr, "ErrInvalidFlags", err.Error()); werr != nil {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -118,33 +119,90 @@ func TestGlobalFlagTmuxCommandReachesServeMCPTools(t *testing.T) {
 	}
 }
 
-// TestGlobalFlag_EmptyTwoTokenValue_Refused: `--flag ""` exits 1 with the
-// `--flag=` form's envelope and creates nothing under HOME (no store, config
-// or trail), on every dispatch path (b.pu2); so does a flag with no value at
-// all. The parse itself is internal/clisetup's TestParseGlobalFlagsMissingValue.
-func TestGlobalFlag_EmptyTwoTokenValue_Refused(t *testing.T) {
+// TestGlobalFlag_BadValue_Refused: `--flag ""` exits 1 with the `--flag=`
+// form's envelope and creates nothing under HOME (no store, config or trail),
+// on every dispatch path (b.pu2); so do a flag with no value at all and a
+// --create-if-missing value other than true or false (b.78b). The parse itself
+// is internal/clisetup's TestParseGlobalFlagsMissingValue and
+// TestParseGlobalFlagsCreateIfMissingInvalid.
+func TestGlobalFlag_BadValue_Refused(t *testing.T) {
 	relayAttempt := []string{"trail-emit", "relay-attempt", "--token", "5b3c8f0e-2d4a-4c6b-9e1f-7a8b9c0d1e2f",
 		"--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "pu2-x"}
+	notBool := `--create-if-missing must be true or false, got "no"`
 	for _, tc := range []struct {
-		name, flag string
+		name, want string
 		argv       []string
 	}{
 		// The hook payload runInDir pipes would make a no-verb run write a trail record.
-		{"no verb", "--store-path", []string{"--store-path", ""}},
-		{"help", "--home", []string{"--home", "", "help"}},
-		{"version", "--tmux-command", []string{"--tmux-command", "", "version"}},
-		{"list", "--home", []string{"--home", "", "list"}},
-		{"trail-emit", "--store-path", append([]string{"--store-path", ""}, relayAttempt...)},
-		{"no value at the tail", "--store-path", []string{"list", "--store-path"}},
+		{"no verb", "--store-path requires a value", []string{"--store-path", ""}},
+		{"help", "--home requires a value", []string{"--home", "", "help"}},
+		{"version", "--tmux-command requires a value", []string{"--tmux-command", "", "version"}},
+		{"list", "--home requires a value", []string{"--home", "", "list"}},
+		{"trail-emit", "--store-path requires a value", append([]string{"--store-path", ""}, relayAttempt...)},
+		{"no value at the tail", "--store-path requires a value", []string{"list", "--store-path"}},
+		{"list, --create-if-missing not a bool (b.78b)", notBool, []string{"--create-if-missing", "no", "list"}},
+		{"version, --create-if-missing not a bool (b.78b)", notBool, []string{"version", "--create-if-missing=no"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			stdout, stderr, code := runInDir(t, home, home, tc.argv...)
 			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
-			if want := tc.flag + " requires a value"; env.ErrDescription != want {
-				t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
+			if env.ErrDescription != tc.want {
+				t.Errorf("err_description = %q; want %q", env.ErrDescription, tc.want)
 			}
 			assertHomeTree(t, home)
+		})
+	}
+}
+
+// TestGlobalFlagCreateIfMissingFalse_MissingStoreRefused: with
+// --create-if-missing false, a store-opening verb and serve refuse a missing
+// store with ErrStoreOpen and create none of it, its parent dir included (b.78b).
+func TestGlobalFlagCreateIfMissingFalse_MissingStoreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv func(dir string) []string
+	}{
+		{"list, default store", func(string) []string { return []string{"--create-if-missing", "false", "list"} }},
+		{"list, --store-path in a missing dir", func(dir string) []string {
+			return []string{"--store-path", filepath.Join(dir, "sub", "s.db"), "list", "--create-if-missing=false"}
+		}},
+		{"serve", func(string) []string { return []string{"--create-if-missing", "false", "serve", "--stdio"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, dir := t.TempDir(), t.TempDir()
+			stdout, stderr, code := runInDir(t, home, home, tc.argv(dir)...)
+			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrStoreOpen")
+			if !strings.Contains(env.ErrDescription, "database not initialized") {
+				t.Errorf("err_description = %q; want the store's not-initialized cause", env.ErrDescription)
+			}
+			assertHomeTree(t, home)
+			assertHomeTree(t, dir)
+		})
+	}
+}
+
+// TestGlobalFlagCreateIfMissing_StoreOpened: --create-if-missing true creates
+// a missing store, as omitting the flag does, and false opens an existing one (b.78b).
+func TestGlobalFlagCreateIfMissing_StoreOpened(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		existing    bool
+	}{
+		{"true, missing store", "true", false},
+		{"false, existing store", "false", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tc.existing {
+				bootstrapDB(t, home)
+			}
+			if _, stderr, code := runCLIWithHome(t, home, "--create-if-missing", tc.value, "list"); code != 0 {
+				t.Fatalf("list: exit=%d want 0; stderr=%q", code, stderr)
+			}
+			if _, err := os.Stat(stateDB(home)); err != nil {
+				t.Errorf("no store at %s: %v", stateDB(home), err)
+			}
 		})
 	}
 }

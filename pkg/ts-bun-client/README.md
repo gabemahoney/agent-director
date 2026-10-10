@@ -67,14 +67,15 @@ try {
 
 All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.agent-director/state.db`) — the CLI is the single source of truth for defaults. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
 
-`ClientOptions` overrides forward verbatim to the CLI subprocess as global flags:
+`ClientOptions` overrides forward to the CLI subprocess as global flags:
 
 - `storePath` → `--store-path`
 - `home` → `--home`
 - `tmuxCommand` → `--tmux-command`
+- `createIfMissing: false` → `--create-if-missing false` (`true` forwards nothing)
 
-The CLI, not the client, expands a `~` in them, against `HOME` and nothing
-else (never the passwd entry's home). It applies `home` first, so with `home`
+The paths are forwarded verbatim. The CLI, not the client, expands a `~` in
+them, against `HOME` and nothing else (never the passwd entry's home). It applies `home` first, so with `home`
 set, a `~/` in `storePath` or `tmuxCommand` resolves under `home`. With
 `HOME` unset or empty, a `home` of `~` or `~/…` rejects every call with
 `ErrInvalidFlags`, and with no `home` either, every call that opens the store
@@ -82,6 +83,15 @@ is refused with `ErrStoreOpen`, whatever `storePath` is, because the CLI cannot
 expand its config path `~/.agent-director/config.toml`.
 
 Set them only when the consumer needs to override the CLI's default for that field.
+
+By default, the first call that opens the store creates it when it does not
+exist (parent directories, file and schema). With `createIfMissing: false`,
+such a call rejects with `ErrStoreOpen` (`database not initialized`) and
+creates none of it; an existing store opens as usual, and calls that open no
+store, such as `version`, are unaffected. `false` needs a CLI from this
+client's release or later: an older CLI, which the version floor still
+admits, rejects every call with `ErrUnknownVerb`, after creating a missing
+store.
 
 For `spawn`, `home` and `storePath` must name the store of the tmux server
 the spawn reaches. The agent's hooks open the store that
@@ -461,7 +471,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | Error | When it fires |
 |---|---|
 | `ErrConfigMalformed` | The CLI refused its config file, `~/.agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. Do not retry or act on any agent; alert an operator once, and never read it as an agent being dead. |
-| `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. It says nothing about any agent. |
+| `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. With `createIfMissing: false` it includes a store that does not exist (`database not initialized`); nothing was created. It says nothing about any agent. |
 | `ErrSchemaMismatch` | The CLI refused to open its store: the store was written by a newer agent-director than the binary (`found user_version=<N>, want <M>`), or it has no valid store id. The description says which. Nothing was written, and every call that opens the store fails this way until an operator acts: a newer store needs the agent-director release that wrote it. Do not retry or act on any agent, and never delete the store; alert an operator. It says nothing about any agent. |
 | `ErrSchemaMigrationRequired` | The CLI refused to open its store: the store is older than the binary and must be migrated first. The description gives both schema versions. Nothing was written, and every call that opens the store fails this way until an administrator migrates the store; no call through this client can. Do not retry or act on any agent; alert an operator. It says nothing about any agent. |
 
@@ -471,7 +481,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrInternal` | The CLI failed in a way it has no more specific name for: for example the store could not be read or written, or a row's recorded tmux session name cannot be used. The description says what failed and, where it matters, whether anything was changed; read it before you retry. An unusable recorded session name needs a human (see "Operator actions" in the agent-director README). It says nothing about whether an agent is alive. |
 | `ErrJSONMarshal` | The verb ran and succeeded, but the CLI could not write its JSON result, so the result is lost and whatever the call changes was changed (a `spawn` launched its agent). A bug in agent-director. Check with `get`, `status` or `list` before you repeat a call that changes something. |
-| `ErrUnknownVerb` | The binary does not know the verb this client called, so nothing ran: the binary is of a different version than this client, most often an older one that the version floor still admits. Version error — install the agent-director release that matches this client; do not retry. |
+| `ErrUnknownVerb` | The binary does not know the verb this client called, so no verb ran: the binary is of a different version than this client, most often an older one that the version floor still admits. Version error — install the agent-director release that matches this client; do not retry. With `createIfMissing: false`, such a binary gives it for every call (it takes `--create-if-missing` for the verb), after creating the store if it was missing. |
 | `ErrTrailWrite` | Only the CLI's internal `trail-emit` command gives it, when it cannot write its trail event. No method of this client runs `trail-emit`, so a call through this client does not get it. |
 
 ## Architecture

@@ -102,6 +102,7 @@ var GlobalFlags = []Flag{
 	{Name: "--store-path <path>", Description: "Open the store at <path> instead of the configured one ([store] db_path in ~/.agent-director/config.toml, by default ~/.agent-director/state.db)."},
 	{Name: "--home <dir>", Description: "Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it."},
 	{Name: "--tmux-command <path>", Description: "Run <path> as tmux instead of the tmux on PATH."},
+	{Name: "--create-if-missing <true|false>", Description: "With false, refuse a store that does not exist (ErrStoreOpen) and create none of it; with true, or when omitted, create a missing store (parent directories, file and schema)."},
 }
 
 // Verbs is agent-director-admin's verb list, in help order.

@@ -5,8 +5,9 @@
 // it at ~/.agent-director/admin/agent-director-admin and never on PATH.
 //
 // Like cmd/agent-director it is a thin shim: it parses and applies
-// agent-director's global flags (--store-path, --home, --tmux-command) with
-// the same code (clisetup.ParseGlobalFlags, GlobalFlags.Apply), parses the
+// agent-director's global flags (--store-path, --home, --tmux-command,
+// --create-if-missing) with the same code (clisetup.ParseGlobalFlags,
+// GlobalFlags.Apply), parses the
 // verb's flags, opens the pkg/api Client exactly as agent-director does
 // (clisetup.Open), calls through internal/adminapi and prints the result as
 // JSON on stdout, or one {err_name, err_description} envelope on stderr with

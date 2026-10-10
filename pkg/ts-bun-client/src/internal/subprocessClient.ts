@@ -121,7 +121,7 @@ export class SubprocessClient {
   readonly #logger: ClientOptions["logger"];
   /** Whether this client is still open. */
   #open: boolean;
-  /** Global flags forwarded to every spawn (--store-path / --home / --tmux-command). */
+  /** Global flags forwarded to every spawn (--store-path / --home / --tmux-command / --create-if-missing). */
   readonly #globalOpts: GlobalArgvOptions;
   /**
    * FFI-shape parity stub.  Always null in the subprocess model.
@@ -160,6 +160,8 @@ export class SubprocessClient {
     if (opts.storePath !== undefined) g.storePath = opts.storePath;
     if (opts.tmuxCommand !== undefined) g.tmuxCommand = opts.tmuxCommand;
     if (opts.home !== undefined) g.home = opts.home;
+    // buildArgv turns false into --create-if-missing false (b.78b).
+    if (opts.createIfMissing !== undefined) g.createIfMissing = opts.createIfMissing;
     this.#globalOpts = g;
 
     this.#open = true;

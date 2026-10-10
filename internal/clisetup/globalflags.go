@@ -6,25 +6,27 @@ import (
 	"strings"
 )
 
-// GlobalFlags holds the values of the three global flags agent-director and
-// agent-director-admin both take (b.32k, b.vqr), so that both binaries reach
-// the same store and tmux the same way:
+// GlobalFlags holds the values of the four global flags agent-director and
+// agent-director-admin both take (b.32k, b.vqr, b.78b), so that both binaries
+// reach the same store and tmux the same way:
 //
-//	--store-path <path>       overrides pkgapi.Options.StorePath
-//	--home <path>             overrides HOME for this invocation
-//	--tmux-command <path>     overrides pkgapi.Options.TmuxCommand
+//	--store-path <path>                overrides pkgapi.Options.StorePath
+//	--home <path>                      overrides HOME for this invocation
+//	--tmux-command <path>              overrides pkgapi.Options.TmuxCommand
+//	--create-if-missing <true|false>   overrides pkgapi.Options.CreateIfMissing
 //
 // They exist so the TS Client (pkg/ts-bun-client) can forward user-supplied
 // values verbatim instead of mimicking the CLI's default-resolution. Before
 // them, the TS Client derived a HOME override from the parent dirname of its
 // store path and prepended the tmux dirname to PATH, both of which encoded
 // CLI-internal assumptions that would silently drift if the CLI changed its
-// defaults (b.32k).
+// defaults (b.32k). --create-if-missing carries the TS Client's
+// createIfMissing option, which until then reached no binary (b.78b).
 //
 // A value is set iff its "<flag>Set" field is true, so callers can tell "not
 // provided" from "provided". A set value is never empty: ParseGlobalFlags
 // rejects an empty value in both the `--flag value` and `--flag=value` forms
-// (b.pu2).
+// (b.pu2), and a --create-if-missing value other than "true" or "false".
 type GlobalFlags struct {
 	// StorePath is --store-path's value, set when StorePathSet.
 	StorePath    string
@@ -35,9 +37,17 @@ type GlobalFlags struct {
 	// TmuxCommand is --tmux-command's value, set when TmuxCommandSet.
 	TmuxCommand    string
 	TmuxCommandSet bool
+	// CreateIfMissing is --create-if-missing's value ("true" is true,
+	// "false" false), set when CreateIfMissingSet.
+	CreateIfMissing    bool
+	CreateIfMissingSet bool
 }
 
-// ParseGlobalFlags pre-scans argv for the three global flags and returns
+// createIfMissingFlag is the global flag that sets
+// pkgapi.Options.CreateIfMissing; its value is "true" or "false".
+const createIfMissingFlag = "--create-if-missing"
+
+// ParseGlobalFlags pre-scans argv for the four global flags and returns
 // (parsed flags, argv with those flag tokens removed, error).
 //
 // Parsing model: rather than route every per-verb FlagSet through a parent
@@ -48,31 +58,50 @@ type GlobalFlags struct {
 // Errors are returned for malformed flag inputs: `--store-path` with no
 // following value, or an empty value in either form (`--store-path ""` or
 // `--store-path=`). Both forms give the same "<flag> requires a value" error
-// (b.pu2). Callers should write an ErrInvalidFlags envelope and exit non-zero
-// before any store, config or trail access.
+// (b.pu2). A --create-if-missing value other than "true" or "false" is an
+// error too, in any copy of a repeated flag (b.78b). Callers should write an
+// ErrInvalidFlags envelope and exit non-zero before any store, config or trail
+// access.
 //
 // Caveat: the pre-scan recognizes flag tokens anywhere in argv and does NOT
 // treat `--` as an end-of-options sentinel. If a caller intentionally passes
 // these flag names through `--` (e.g. `spawn --cwd /w -- --store-path /x`),
 // the pre-scan will still consume them. The practical risk is low because the
-// recognized names (`--store-path`, `--home`, `--tmux-command`) are unlikely
-// to recur in legitimate passthrough argv, so threading `--`-awareness through
-// the parser is not worth the added complexity. Revisit if a real collision is
-// reported. See bug b.32k.
+// recognized names (`--store-path`, `--home`, `--tmux-command`,
+// `--create-if-missing`) are unlikely to recur in legitimate passthrough
+// argv, so threading `--`-awareness through the parser is not worth the added
+// complexity. Revisit if a real collision is reported. See bug b.32k.
 func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 	var g GlobalFlags
 	out := make([]string, 0, len(argv))
 
 	// recognized maps each global-flag name to a pointer-pair that captures
-	// the parsed value and its "set" sentinel.
+	// the parsed value and its "set" sentinel. --create-if-missing's value is
+	// captured as text, checked by assign, and turned into g.CreateIfMissing
+	// after the scan.
 	type slot struct {
 		val    *string
 		setRef *bool
 	}
+	var createIfMissing string
 	recognized := map[string]slot{
-		"--store-path":   {&g.StorePath, &g.StorePathSet},
-		"--home":         {&g.Home, &g.HomeSet},
-		"--tmux-command": {&g.TmuxCommand, &g.TmuxCommandSet},
+		"--store-path":      {&g.StorePath, &g.StorePathSet},
+		"--home":            {&g.Home, &g.HomeSet},
+		"--tmux-command":    {&g.TmuxCommand, &g.TmuxCommandSet},
+		createIfMissingFlag: {&createIfMissing, &g.CreateIfMissingSet},
+	}
+
+	// assign stores one copy of flag name's value in s. It refuses a
+	// --create-if-missing value other than "true" or "false" at the copy that
+	// carries it, as the loop below refuses an empty value, so a repeated flag
+	// cannot pass a bad earlier value by ending on a good one (b.78b).
+	assign := func(name, val string, s slot) error {
+		if name == createIfMissingFlag && val != "true" && val != "false" {
+			return fmt.Errorf("%s must be true or false, got %q", createIfMissingFlag, val)
+		}
+		*s.val = val
+		*s.setRef = true
+		return nil
 	}
 
 	for i := 0; i < len(argv); i++ {
@@ -93,8 +122,9 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 				if val == "" {
 					return GlobalFlags{}, nil, fmt.Errorf("%s requires a value", name)
 				}
-				*s.val = val
-				*s.setRef = true
+				if err := assign(name, val, s); err != nil {
+					return GlobalFlags{}, nil, err
+				}
 				continue
 			}
 		}
@@ -105,8 +135,9 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 			if i+1 >= len(argv) || argv[i+1] == "" {
 				return GlobalFlags{}, nil, fmt.Errorf("%s requires a value", tok)
 			}
-			*s.val = argv[i+1]
-			*s.setRef = true
+			if err := assign(tok, argv[i+1], s); err != nil {
+				return GlobalFlags{}, nil, err
+			}
 			i++ // skip the value
 			continue
 		}
@@ -114,6 +145,9 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 		// Unknown token — pass through.
 		out = append(out, tok)
 	}
+
+	// assign let through only "true" or "false", and the last copy wins.
+	g.CreateIfMissing = createIfMissing == "true"
 
 	return g, out, nil
 }
@@ -138,6 +172,7 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 // --tmux-command tilde-expanded, after --home is applied, so a `~/bin/tmux`
 // argument works (pkg/api uses Options.TmuxCommand as given). A
 // --tmux-command ExpandTilde cannot expand is passed on unexpanded.
+// --create-if-missing is passed on as given; APIOptions applies it (b.78b).
 //
 // The errors are that --home refusal and a failure to set HOME; both binaries
 // print either as ErrInvalidFlags.
@@ -158,6 +193,9 @@ func (g GlobalFlags) Apply() (Overrides, error) {
 	if g.TmuxCommandSet {
 		// Not ok means no HOME: the value goes on unexpanded, as it always has.
 		o.TmuxCommand, _ = ExpandTilde(g.TmuxCommand)
+	}
+	if g.CreateIfMissingSet {
+		o.CreateIfMissing, o.CreateIfMissingSet = g.CreateIfMissing, true
 	}
 	return o, nil
 }

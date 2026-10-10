@@ -14,9 +14,10 @@
  *   - Optional fields are omitted when undefined / falsy.
  *   - Boolean flags (--no-pre-trust, --reuse-finished, --ansi, --overwrite)
  *     are only appended when the field is explicitly true.
- *   - Global flags (b.32k: --store-path, --home, --tmux-command) appear
- *     BEFORE the verb token so the CLI's global-flag parser in
- *     internal/clisetup/globalflags.go strips them prior to verb dispatch.
+ *   - Global flags (b.32k: --store-path, --home, --tmux-command; b.78b:
+ *     --create-if-missing) appear BEFORE the verb token so the CLI's
+ *     global-flag parser in internal/clisetup/globalflags.go strips them
+ *     prior to verb dispatch.
  *   - spawn's and make-template's extra_env keys that are not valid env-var
  *     names are refused with ErrReservedEnvKey, the name the CLI gives every
  *     refused extra_env key, thrown from buildArgv, so no subprocess runs
@@ -50,11 +51,11 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * GlobalArgvOptions — values for the three global CLI flags introduced by
- * bug b.32k. Each field is optional; when undefined the corresponding flag
- * is omitted from argv and the CLI's own default-resolution kicks in.
+ * GlobalArgvOptions — values for the global CLI flags (b.32k, b.78b). Each
+ * field is optional; when undefined the corresponding flag is omitted from
+ * argv and the CLI's own default-resolution kicks in.
  *
- * Values are forwarded verbatim; the CLI expands `~` in them (b.38a).
+ * Path values are forwarded verbatim; the CLI expands `~` in them (b.38a).
  */
 export interface GlobalArgvOptions {
   /** Path forwarded to the CLI as `--store-path`. */
@@ -63,6 +64,12 @@ export interface GlobalArgvOptions {
   home?: string;
   /** Path forwarded to the CLI as `--tmux-command`. */
   tmuxCommand?: string;
+  /**
+   * `false` is forwarded to the CLI as `--create-if-missing false`. `true`
+   * adds no flag: creating a missing store is already the CLI's default, and
+   * a binary older than the flag would reject every call that carries it.
+   */
+  createIfMissing?: boolean;
 }
 
 /**
@@ -79,9 +86,9 @@ export interface GlobalArgvOptions {
  * @param verb       The kebab-case verb name (must be a VerbName).
  * @param params     The typed params object for the verb.
  * @param globalOpts Optional global-flag values (--store-path / --home /
- *                   --tmux-command). When undefined or all-fields-omitted,
- *                   no global flags appear in argv and the CLI applies its
- *                   own default-resolution.
+ *                   --tmux-command / --create-if-missing). When undefined or
+ *                   all-fields-omitted, no global flags appear in argv and
+ *                   the CLI applies its own default-resolution.
  * @returns          The full argv array starting with cliPath.
  */
 export function buildArgv(
@@ -98,7 +105,8 @@ export function buildArgv(
 /**
  * buildGlobalFlags returns the global-flag tokens that go BEFORE the verb
  * name. Each flag is emitted in two-token `--flag value` form only when the
- * corresponding field on globalOpts is set.
+ * corresponding field on globalOpts is set; `--create-if-missing` only when
+ * createIfMissing is `false` (see GlobalArgvOptions.createIfMissing).
  */
 function buildGlobalFlags(opts: GlobalArgvOptions | undefined): string[] {
   if (!opts) return [];
@@ -106,6 +114,7 @@ function buildGlobalFlags(opts: GlobalArgvOptions | undefined): string[] {
   if (opts.storePath !== undefined) f.push("--store-path", opts.storePath);
   if (opts.home !== undefined) f.push("--home", opts.home);
   if (opts.tmuxCommand !== undefined) f.push("--tmux-command", opts.tmuxCommand);
+  if (opts.createIfMissing === false) f.push("--create-if-missing", "false");
   return f;
 }
 

@@ -1,7 +1,8 @@
 // Package clisetup opens the pkg/api Client for the command-line binaries
 // agent-director and agent-director-admin (b.vqr), so that both open the same
 // store with the same config, logger and schema checks, and parses and
-// applies the global flags (--store-path, --home, --tmux-command) both take.
+// applies the global flags (--store-path, --home, --tmux-command,
+// --create-if-missing) both take.
 // It also declares the sentinels pkg/api/errnames.Catalog pairs with the
 // err_names the binaries give outside any verb handler.
 package clisetup
@@ -56,13 +57,21 @@ var (
 	ErrTrailWrite  = errors.New("ErrTrailWrite")
 )
 
-// Overrides are one run's overrides of the store path and the tmux command,
-// from the global flags (GlobalFlags.Apply); an empty field is not set.
+// Overrides are one run's overrides of the store path, the tmux command and
+// first-run store creation, from the global flags (GlobalFlags.Apply); an
+// empty string field is not set, and CreateIfMissing is set only when
+// CreateIfMissingSet.
 type Overrides struct {
 	// StorePath replaces the configured store path; pkg/api.New tilde-expands it.
 	StorePath string
 	// TmuxCommand replaces the configured tmux command, used as given.
 	TmuxCommand string
+	// CreateIfMissing, when CreateIfMissingSet, replaces the CLI's first-run
+	// store creation (Pin 1): false refuses a missing store, which Open names
+	// ErrStoreOpen (cause store.ErrStoreNotInitialized), and creates none of
+	// it: no parent directory, file or schema (b.78b).
+	CreateIfMissing    bool
+	CreateIfMissingSet bool
 }
 
 // OpenError is why a command binary could not open a Client: Open's, or
@@ -92,15 +101,20 @@ func (e *OpenError) Is(target error) bool {
 
 // APIOptions returns the pkg/api.Options every Client the command-line
 // binaries open is built from: the canonical config path, first-run store
-// creation (Pin 1 below) and o's store path and tmux command (Pin 2 below).
-// Logger is left nil: Open sets the recovery logger (Pin 3), and
-// agent-director serve keeps its MCP dispatcher's Client silent (Pin H4). One
-// builder for both means the MCP tools use the same store and tmux as
-// setupClient's Client, with or without overrides in o (b.wb7).
+// creation unless o turns it off (Pin 1 below) and o's store path and tmux
+// command (Pin 2 below). Logger is left nil: Open sets the recovery logger
+// (Pin 3), and agent-director serve keeps its MCP dispatcher's Client silent
+// (Pin H4). One builder for both means the MCP tools use the same store, tmux
+// and store creation as setupClient's Client, with or without overrides in o
+// (b.wb7).
 func APIOptions(o Overrides) pkgapi.Options {
+	createIfMissing := true // Pin 1
+	if o.CreateIfMissingSet {
+		createIfMissing = o.CreateIfMissing
+	}
 	return pkgapi.Options{
 		ConfigPath:      ConfigPath,
-		CreateIfMissing: true, // Pin 1
+		CreateIfMissing: createIfMissing,
 		// StorePath optionally set from o; otherwise Pin 2 applies.
 		StorePath:   o.StorePath,
 		TmuxCommand: o.TmuxCommand,
@@ -132,8 +146,14 @@ func NewOpenError(err error) *OpenError {
 // the store's schema refuses the open, ErrStoreOpen otherwise).
 //
 // Design pins:
-//   - Pin 1 (CreateIfMissing=true): the CLI is the one place that opts in to
-//     first-run store creation; library callers get the strict default.
+//   - Pin 1 (CreateIfMissing=true by default): the CLI is the one place that
+//     opts in to first-run store creation; library callers get the strict
+//     default. The global --create-if-missing false (o.CreateIfMissingSet
+//     with o.CreateIfMissing false) turns it off for one run, giving the
+//     library's strict open: a missing store is refused, named ErrStoreOpen
+//     by NewOpenError (cause store.ErrStoreNotInitialized), and none of it
+//     is created (no parent directory, file or schema).
+//     --create-if-missing true keeps the default (b.78b).
 //   - Pin 2 (StorePath omitted by default): leaving StorePath="" lets the
 //     three-tier precedence in pkg/api.New honor cfg.Store.DbPath, so users
 //     who set a custom [store] db_path in their TOML get that path. When

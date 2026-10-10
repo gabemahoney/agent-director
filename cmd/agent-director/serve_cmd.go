@@ -38,13 +38,17 @@ import (
 // caller in the envelope and its audit is the ad.kill.called trail event.
 // The two Clients have distinct logger ownership.
 //
-// o is the run's global --store-path and --tmux-command overrides, the same
-// ones setupClient opened run()'s Client with (b.32k). The MCP Client is built
-// from them too (mcpClientOptions), so the MCP tools use the same store and
-// tmux as setupClient's Client: the store serve opened and checked at startup
-// (b.wb7). With no overrides both fall back alike, to the config's db_path or
-// the default store (Pin 2) and to the tmux on PATH. --home needs no
-// threading: run() set HOME before either Client expands a "~/" path.
+// o is the run's global --store-path, --tmux-command and --create-if-missing
+// overrides, the same ones setupClient opened run()'s Client with (b.32k). The
+// MCP Client is built from them too (mcpClientOptions), so the MCP tools use
+// the same store and tmux as setupClient's Client: the store serve opened and
+// checked at startup (b.wb7). With no overrides both fall back alike, to the
+// config's db_path or the default store (Pin 2) and to the tmux on PATH.
+// serve honours --create-if-missing false like every store-backed verb: on a
+// missing store setupClient refuses it (ErrStoreOpen) before serve starts, and
+// the MCP Client would refuse it alike, so serve never creates it (b.78b).
+// --home needs no threading: run() set HOME before either Client expands a
+// "~/" path.
 //
 // newClient opens the MCP Client: pkg/api.New in production (handlers()); a
 // test passes a stand-in to reach the failure path. A failed open is named
@@ -107,11 +111,11 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 
 // mcpClientOptions returns the pkg/api.Options of the MCP dispatcher's Client:
 // clisetup.APIOptions(o), the options setupClient's Client is built from, so
-// the --store-path and --tmux-command overrides in o reach the MCP tools
-// (b.wb7), and CreateIfMissing is true so serve can create the store on first
-// run. Logger stays nil so the verbs that still log (Spawn, Resume,
-// FindMissing, Expire) are silent for MCP; Kill has no logger path at all
-// (SR-6.3).
+// the --store-path, --tmux-command and --create-if-missing overrides in o
+// reach the MCP tools (b.wb7, b.78b), and CreateIfMissing is true unless o
+// turns it off, so serve can create the store on first run. Logger stays nil
+// so the verbs that still log (Spawn, Resume, FindMissing, Expire) are silent
+// for MCP; Kill has no logger path at all (SR-6.3).
 func mcpClientOptions(o clisetup.Overrides) pkgapi.Options {
 	opts := clisetup.APIOptions(o)
 	opts.Logger = nil // intentional: logging verbs are silent on MCP; kill has no logger path (Pin H4)

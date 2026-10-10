@@ -66,9 +66,21 @@ export interface ClientOptions {
    */
   home?: string;
   /**
-   * When `true`, create the store and initialize the database schema if the
-   * store file does not yet exist. When `false` (the default), opening a
-   * non-existent store returns an error. Mirrors `pkg/api.Options.CreateIfMissing`.
+   * Whether a call that opens the store creates it when it does not exist.
+   *
+   * - Omitted: the CLI's default, which creates a missing store.
+   * - `true`: a missing store is created (parent directories, file and
+   *   schema) by the first call that opens it. No flag is forwarded, since
+   *   this is the CLI's default.
+   * - `false`: forwarded as `--create-if-missing false`. A call that opens a
+   *   missing store rejects with `ErrStoreOpen` (its cause: the store is not
+   *   initialized) and creates none of it. Calls that open no store, such as
+   *   `version`, are unaffected.
+   *
+   * `true` and `false` mirror `pkg/api.Options.CreateIfMissing`; unlike that
+   * field, omitting this one keeps the CLI's default, which creates the store.
+   * `false` needs a CLI binary that knows `--create-if-missing`: an older
+   * binary rejects every call made with it. b.78b.
    */
   createIfMissing?: boolean;
   /** Optional logger for client-side warnings (e.g., non-fatal close errors). */

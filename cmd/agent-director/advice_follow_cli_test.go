@@ -190,8 +190,9 @@ func TestAdviceFollow_H3_FlagIsRequired(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_H4_FlagValueShape: H4 "%s requires a value" and
-// "%s expects KEY=VALUE, got %q". Re-issuing with the value runs the verb.
+// TestAdviceFollow_H4_FlagValueShape: H4 "%s requires a value",
+// "%s expects KEY=VALUE, got %q" and "%s must be true or false, got %q".
+// Re-issuing with a valid value runs the verb.
 func TestAdviceFollow_H4_FlagValueShape(t *testing.T) {
 	fakeTmux := filepath.Join(buildFakeTmux(t), "tmux")
 	cases := []struct {
@@ -199,30 +200,43 @@ func TestAdviceFollow_H4_FlagValueShape(t *testing.T) {
 		argv   []string
 		want   string
 		follow func(t *testing.T, argv []string, scratch string) []string
-		check  func(t *testing.T, scratch string)
+		check  func(t *testing.T, home, scratch string)
 	}{
 		{
 			name: "store-path last", argv: []string{"list", "--store-path"}, want: "--store-path requires a value",
 			follow: func(_ *testing.T, argv []string, s string) []string {
 				return append(argv, filepath.Join(s, "alt.db"))
 			},
-			check: func(t *testing.T, s string) { advCLIExists(t, filepath.Join(s, "alt.db")) },
+			check: func(t *testing.T, _, s string) { advCLIExists(t, filepath.Join(s, "alt.db")) },
 		},
 		{
 			name: "store-path empty", argv: []string{"--store-path=", "list"}, want: "--store-path requires a value",
 			follow: func(_ *testing.T, argv []string, s string) []string {
 				return []string{"--store-path=" + filepath.Join(s, "alt.db"), "list"}
 			},
-			check: func(t *testing.T, s string) { advCLIExists(t, filepath.Join(s, "alt.db")) },
+			check: func(t *testing.T, _, s string) { advCLIExists(t, filepath.Join(s, "alt.db")) },
 		},
 		{
 			name: "home last", argv: []string{"list", "--home"}, want: "--home requires a value",
 			follow: func(_ *testing.T, argv []string, s string) []string { return append(argv, s) },
-			check:  func(t *testing.T, s string) { advCLIExists(t, filepath.Join(s, ".agent-director", "state.db")) },
+			check:  func(t *testing.T, _, s string) { advCLIExists(t, filepath.Join(s, ".agent-director", "state.db")) },
 		},
 		{
 			name: "tmux-command last", argv: []string{"list", "--tmux-command"}, want: "--tmux-command requires a value",
 			follow: func(_ *testing.T, argv []string, _ string) []string { return append(argv, fakeTmux) },
+		},
+		{
+			name: "create-if-missing last (b.78b)", argv: []string{"list", "--create-if-missing"},
+			want:   "--create-if-missing requires a value",
+			follow: func(_ *testing.T, argv []string, _ string) []string { return append(argv, "true") },
+			check:  func(t *testing.T, home, _ string) { advCLIExists(t, stateDB(home)) },
+		},
+		{
+			name: "create-if-missing not a bool (b.78b)", argv: []string{"--create-if-missing", "no", "list"},
+			want: `--create-if-missing must be true or false, got "no"`,
+			follow: func(_ *testing.T, _ []string, _ string) []string {
+				return []string{"--create-if-missing", "true", "list"}
+			},
 		},
 		{
 			name: "label", argv: []string{"make-template", "--name", "advcli-label", "--label", "foo"},
@@ -247,7 +261,7 @@ func TestAdviceFollow_H4_FlagValueShape(t *testing.T) {
 				t.Fatalf("followed argv %q exit=%d stderr=%q", argv, code, stderr)
 			}
 			if tc.check != nil {
-				tc.check(t, scratch)
+				tc.check(t, home, scratch)
 			}
 		})
 	}

@@ -33,13 +33,21 @@ func TestNewSignalCtxCancels(t *testing.T) {
 }
 
 // TestMCPClientOptions: serve's MCP Client opens with run()'s --store-path and
-// --tmux-command overrides, creates a missing store and has no logger (b.wb7, Pin H4).
+// --tmux-command overrides, creates a missing store unless --create-if-missing
+// false (b.78b) and has no logger (b.wb7, Pin H4).
 func TestMCPClientOptions(t *testing.T) {
-	for _, o := range []clisetup.Overrides{{}, {StorePath: "/stores/s.db", TmuxCommand: "/opt/bin/other-tmux"}} {
-		want := pkgapi.Options{ConfigPath: clisetup.ConfigPath, CreateIfMissing: true,
-			StorePath: o.StorePath, TmuxCommand: o.TmuxCommand}
-		if got := mcpClientOptions(o); got != want {
-			t.Errorf("mcpClientOptions(%+v) = %+v; want %+v", o, got, want)
+	for _, tc := range []struct {
+		o      clisetup.Overrides
+		create bool
+	}{
+		{clisetup.Overrides{}, true},
+		{clisetup.Overrides{StorePath: "/stores/s.db", TmuxCommand: "/opt/bin/other-tmux"}, true},
+		{clisetup.Overrides{StorePath: "/stores/s.db", CreateIfMissingSet: true}, false},
+	} {
+		want := pkgapi.Options{ConfigPath: clisetup.ConfigPath, CreateIfMissing: tc.create,
+			StorePath: tc.o.StorePath, TmuxCommand: tc.o.TmuxCommand}
+		if got := mcpClientOptions(tc.o); got != want {
+			t.Errorf("mcpClientOptions(%+v) = %+v; want %+v", tc.o, got, want)
 		}
 	}
 }
