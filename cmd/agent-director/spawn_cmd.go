@@ -194,7 +194,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off)")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")

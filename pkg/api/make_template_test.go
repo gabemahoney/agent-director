@@ -113,6 +113,53 @@ func TestMakeTemplateRefusals(t *testing.T) {
 	assertNoOrphanTempfile(t, "taken")
 }
 
+// TestMakeTemplateRefusesSpawnRefusedEnvKey (b.66q): an extra_env key spawn refuses gets spawn's own
+// error, ErrReservedEnvKey whose description (start: text) tells the cases apart, writing nothing: Overwrite
+// leaves the existing template as it was, and without it no templates dir appears.
+func TestMakeTemplateRefusesSpawnRefusedEnvKey(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
+	const setsHome, malformed = " sets HOME, which is reserved: ", " is not a valid env-var name: "
+	cases := []struct {
+		name, key, text string
+		overwrite       bool // an existing template of that name, which Overwrite would replace
+	}{
+		{"HOME", "HOME", `ErrReservedEnvKey: extra_env key "HOME"` + setsHome, false},
+		{"key HOME=/x", "HOME=/x", `ErrReservedEnvKey: extra_env key "HOME=/x"` + setsHome, true},
+		{"AGENT_DIRECTOR_ prefix", "AGENT_DIRECTOR_X", `ErrReservedEnvKey: "AGENT_DIRECTOR_X"`, true},
+		{"empty key", "", `ErrReservedEnvKey: extra_env key ""` + malformed + "it is empty", false},
+		{"key CLAUDE_CONFIG_DIR=/x", "CLAUDE_CONFIG_DIR=/x", `ErrReservedEnvKey: extra_env key "CLAUDE_CONFIG_DIR=/x"` + malformed + "it contains '='", true},
+		{"key with a NUL byte", "A\x00B", `ErrReservedEnvKey: extra_env key "A\x00B"` + malformed + "it contains a NUL byte", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newSpawnEnv(t)
+			extra := map[string]string{tc.key: "/tmp/v", "TEAM": "core"}
+			var target string
+			if tc.overwrite {
+				target = seedTemplateFile(t, "refused")
+			}
+
+			_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "refused", ExtraEnv: extra, Overwrite: tc.overwrite})
+
+			assertOneName(t, err, "ErrReservedEnvKey")
+			if !strings.HasPrefix(errText(err), tc.text) {
+				t.Errorf("description %q\nwant it to start %q", errText(err), tc.text)
+			}
+			if tc.overwrite {
+				if body, err := os.ReadFile(target); err != nil || string(body) != seedTemplateBody {
+					t.Errorf("existing template = %q, %v; want it untouched", body, err)
+				}
+				assertNoOrphanTempfile(t, "refused")
+			} else if _, err := os.Stat(filepath.Join(env.home, ".agent-director", "templates")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("templates dir: %v; want none created", err)
+			}
+			if _, spawnErr := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ExtraEnv: extra}); errText(err) != errText(spawnErr) {
+				t.Errorf("description %q\nwant spawn's for that extra_env, %q", errText(err), errText(spawnErr))
+			}
+		})
+	}
+}
+
 // TestMakeTemplateOverwrite: Overwrite replaces an existing template with the
 // call's body, or creates an absent one, leaving no temp file.
 func TestMakeTemplateOverwrite(t *testing.T) {

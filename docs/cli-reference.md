@@ -307,7 +307,7 @@ Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invoc
 - `cwd` (string, optional): Bake a default cwd into the template. Per-call cwd overrides.
 - `relay_mode` (string, optional): Bake a default relay_mode (on/off). Per-call relay_mode (--relay-mode on the CLI) overrides.
 - `claude_args` ([]string, optional): Bake default Claude argv. Per-call claude_args (--claude-args on the CLI) REPLACES the template's array wholesale (not concat).
-- `extra_env` (map[string]string, optional): Bake env-var entries. Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision.
+- `extra_env` (map[string]string, optional): Bake env-var entries. Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision. A key spawn would refuse is refused here by the same check with ErrReservedEnvKey, never rewritten, and no file is written: the reserved names AGENT_DIRECTOR_* and HOME with any value (set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config), and a key that is not a valid env-var name (empty, or containing '=' or a NUL byte; the message says which).
 - `label` ([]string, optional): Bake label k=v entries. Per-call label merges by key; per-call wins on collision.
 - `allow` ([]string, optional): Bake permissions.allow entries. Per-call allow CONCATENATES (does not replace).
 - `deny` ([]string, optional): Bake permissions.deny entries. Per-call deny CONCATENATES.
@@ -323,6 +323,7 @@ Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invoc
 - `ErrTemplateNameUnsafe`
 - `ErrTemplateExists`
 - `ErrTemplateMalformed`
+- `ErrReservedEnvKey`
 
 ## list
 

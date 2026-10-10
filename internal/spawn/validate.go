@@ -47,13 +47,13 @@ const reservedEnvKeyPrefix = "AGENT_DIRECTOR_"
 // agent-director store and leave the spawner's row pending until
 // find-missing marks it missing. It is matched against the name tmux sets
 // (envVarName), not the raw key, so a key such as "HOME=/x" is refused too
-// (ReservedHomeKey). Spawn validation (validateExtraEnv) refuses it, and
-// resume refuses a row whose stored extra env has it (a row spawned before
-// the refusal), both with ErrReservedEnvKey.
+// (ReservedHomeKey). The extra_env check (ValidateExtraEnv) refuses it at
+// spawn and at make-template, and resume refuses a row whose stored extra env
+// has it (a row spawned before the refusal), all with ErrReservedEnvKey.
 const ReservedHomeEnvKey = "HOME"
 
 // ReservedHomeReason is why HOME is refused in extra_env, the one text
-// spawn's and resume's ErrReservedEnvKey descriptions share.
+// spawn's, make-template's and resume's ErrReservedEnvKey descriptions share.
 const ReservedHomeReason = "the agent's hook resolves agent-director's config and store from HOME, so its events would reach another agent-director store and the row would stay pending until find-missing marks it missing"
 
 // ReservedHomeAlternative is what a caller who set HOME in extra_env sets
@@ -61,8 +61,9 @@ const ReservedHomeReason = "the agent's hook resolves agent-director's config an
 const ReservedHomeAlternative = "to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead"
 
 // InvalidEnvKeyAlternative is what a caller whose extra_env key is not a valid
-// env-var name (EnvKeyProblem) does instead, the one text spawn's and resume's
-// malformed-key ErrReservedEnvKey descriptions share (bug b.vpb).
+// env-var name (EnvKeyProblem) does instead, the one text spawn's,
+// make-template's and resume's malformed-key ErrReservedEnvKey descriptions
+// share (bug b.vpb).
 const InvalidEnvKeyAlternative = "give each variable its own name as the key (not empty, with no '=' and no NUL byte) and its value as the value"
 
 // Validate runs the SRD §7.2 checks in order and short-circuits on the
@@ -94,7 +95,7 @@ func Validate(r *Resolved) error {
 	if err := validateClaudeArgs(r.ClaudeArgs); err != nil {
 		return err
 	}
-	if err := validateExtraEnv(r.ExtraEnv); err != nil {
+	if err := ValidateExtraEnv(r.ExtraEnv); err != nil {
 		return err
 	}
 	if r.TmuxSessionNameSupplied {
@@ -217,7 +218,11 @@ func validateClaudeArgs(args []string) error {
 	return nil
 }
 
-// validateExtraEnv applies SRD §7.2 step 4. Both reserved-key rules apply to
+// ValidateExtraEnv is the whole extra_env check, SRD §7.2 step 4. Spawn
+// validation (Validate) and make-template (pkg/api MakeTemplate, bug b.66q)
+// both call it, so make-template refuses a template's extra_env with the same
+// error spawn would give for it, instead of saving a template every spawn that
+// uses it is refused for. Both reserved-key rules apply to
 // each key's env-var name (envVarName), the name tmux actually sets, not the
 // raw key. The checks are case-sensitive (POSIX env vars are case-sensitive)
 // and match the SRD §14.4 carve-out for auth env vars — those do NOT carry
@@ -237,9 +242,12 @@ func validateClaudeArgs(args []string) error {
 // by its exact key. A key that is both reserved and malformed, such as
 // "HOME=/x", gets the reserved-name message.
 // Each rule names the first matching key in sorted order, so the error is
-// stable. env is the merged extra env (a template's keys included), so a
-// template that sets HOME, or has a malformed key, is refused too.
-func validateExtraEnv(env map[string]string) error {
+// stable. At spawn, env is the merged extra env (a template's keys included),
+// so a template that sets HOME, or has a malformed key (one saved before
+// make-template checked its keys), is refused too. make-template passes the
+// template's own extra_env, before it creates the templates directory or
+// writes anything, so a refused template leaves no file, new or replaced.
+func ValidateExtraEnv(env map[string]string) error {
 	if k, ok := ReservedHomeKey(env); ok {
 		return fmt.Errorf("%w: extra_env key %q sets %s, which is reserved: %s; remove %q from extra_env, and %s",
 			ErrReservedEnvKey, k, ReservedHomeEnvKey, ReservedHomeReason, k, ReservedHomeAlternative)
@@ -259,8 +267,9 @@ func validateExtraEnv(env map[string]string) error {
 // (ReservedHomeEnvKey), and true; "" and false when no key sets HOME. The
 // exact key HOME matches, and so does any key such as "HOME=/x", which tmux
 // would launch with HOME set to "/x=<value>". It is the one HOME rule for
-// spawn validation (validateExtraEnv) and resume's refusal of a stored row
-// (pkg/api), so both refuse the same keys and name the same one.
+// the extra_env check (ValidateExtraEnv: spawn validation and make-template)
+// and resume's refusal of a stored row (pkg/api), so all refuse the same keys
+// and name the same one.
 func ReservedHomeKey(env map[string]string) (string, bool) {
 	return firstEnvKey(env, func(key string) bool { return envVarName(key) == ReservedHomeEnvKey })
 }
@@ -272,16 +281,17 @@ func ReservedHomeKey(env map[string]string) (string, bool) {
 // key would set a different variable than the one pre-trust and resume look
 // up by its exact key (the key "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR
 // to "/x=<value>", which neither sees). It is the one malformed-key rule for
-// spawn validation (validateExtraEnv) and resume's refusal of a stored row
-// (pkg/api), so both refuse the same keys and name the same one.
+// the extra_env check (ValidateExtraEnv: spawn validation and make-template)
+// and resume's refusal of a stored row (pkg/api), so all refuse the same keys
+// and name the same one.
 func InvalidEnvKey(env map[string]string) (string, bool) {
 	return firstEnvKey(env, func(key string) bool { return EnvKeyProblem(key) != "" })
 }
 
 // EnvKeyProblem says why key is not a valid env-var name for extra_env, or
 // returns "" when it is: it is empty, it contains '=', or it contains a NUL
-// byte. Nothing else is checked. It is the reason spawn's and resume's
-// malformed-key ErrReservedEnvKey descriptions share (InvalidEnvKey).
+// byte. Nothing else is checked. It is the reason spawn's, make-template's and
+// resume's malformed-key ErrReservedEnvKey descriptions share (InvalidEnvKey).
 func EnvKeyProblem(key string) string {
 	switch {
 	case key == "":

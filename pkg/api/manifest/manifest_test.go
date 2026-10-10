@@ -625,6 +625,14 @@ func TestResumeHasSRDErrorNames(t *testing.T) {
 		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
 }
 
+// TestMakeTemplateHasErrorNames pins make-template's to exactly its three
+// template names and ErrReservedEnvKey, spawn's one name for every refused
+// extra_env key, reserved or malformed (b.66q).
+func TestMakeTemplateHasErrorNames(t *testing.T) {
+	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrTemplateNameUnsafe", "ErrTemplateExists",
+		"ErrTemplateMalformed", "ErrReservedEnvKey")
+}
+
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven names.
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",

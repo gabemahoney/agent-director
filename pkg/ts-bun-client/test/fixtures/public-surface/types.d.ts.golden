@@ -529,7 +529,12 @@ export interface MakeTemplateParams {
     relay_mode?: string;
     /** Default claude argv. Per-call --claude-args replaces wholesale. */
     claude_args?: string[];
-    /** Env-var overrides to bake in. */
+    /**
+     * Env-var overrides to bake in. A key spawn would refuse is refused here with
+     * `ErrReservedEnvKey` and nothing is written: `AGENT_DIRECTOR_*` keys, `HOME`
+     * (any value), and a key that is not a valid env-var name (empty, or
+     * containing `=` or a NUL character); the description says which.
+     */
     extra_env?: Record<string, string>;
     /** Label k=v entries to bake in. */
     label?: string[];

@@ -45,7 +45,9 @@ var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 // the agent's hook to another agent-director store, and CLAUDE_CONFIG_DIR is
 // the supported way to give an agent its own Claude Code config. The message
 // quotes the key as given. Spawn returns it at validation, before anything is
-// written or launched; resume returns it, wrapped, for a row whose stored
+// written or launched; make-template returns it for the template's extra_env
+// (the same check, ValidateExtraEnv; bug b.66q), before any template file is
+// written or replaced; resume returns it, wrapped, for a row whose stored
 // extra env has a key that sets HOME (spawned before the refusal), also
 // before anything is written or launched. Auth env vars (ANTHROPIC_API_KEY,
 // CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
@@ -60,10 +62,12 @@ var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 // message quotes it (%q), says it is not a valid env-var name and says which
 // of the three it is. A key that is both reserved and malformed, such as
 // "HOME=/x", gets the reserved-name message. Spawn returns it at validation;
-// resume returns it, wrapped, for a row whose stored extra env has such a key
-// (spawned before the refusal); both before anything is written or launched.
-// One error name covers every refused extra_env key, so callers match one
-// name.
+// make-template returns it for the template's extra_env (the same check,
+// ValidateExtraEnv; bug b.66q), before any template file is written or
+// replaced; resume returns it, wrapped, for a row whose stored extra env has
+// such a key (spawned before the refusal); spawn and resume before anything
+// is written or launched. One error name covers every refused extra_env key,
+// so callers match one name.
 var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 
 // ErrInstanceIdCollision is returned when the caller supplied an explicit

@@ -10,6 +10,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 )
 
 // MakeTemplateParams is the typed parameter shape for the
@@ -32,7 +33,12 @@ type MakeTemplateParams struct {
 	// --claude-args REPLACES the template array wholesale (not concatenated).
 	ClaudeArgs []string
 	// ExtraEnv is an optional map of env-var overrides to bake in. Per-call
-	// --extra-env entries merge by key; per-call wins on collision.
+	// --extra-env entries merge by key; per-call wins on collision. A key
+	// spawn would refuse is refused here, by spawn's own check
+	// (spawn.ValidateExtraEnv), with ErrReservedEnvKey, and nothing is
+	// written: a reserved key (AGENT_DIRECTOR_*, or HOME with any value), or
+	// a key that is not a valid env-var name (empty, or holding '=' or a NUL
+	// byte; the description says which).
 	ExtraEnv map[string]string
 	// AgentDirectorLabels is an optional map of label k=v pairs to bake in.
 	// Per-call --label entries merge by key; per-call wins on collision.
@@ -48,8 +54,9 @@ type MakeTemplateParams struct {
 	// existing file. When false (the Go zero value), the existing
 	// O_EXCL create-only path is used and a pre-existing target yields
 	// ErrTemplateExists. All precondition checks (name safety, relay-mode
-	// validation, templates-dir creation, TOML encode) run identically on
-	// both branches; Overwrite is consulted only at the write step.
+	// validation, extra_env validation, templates-dir creation, TOML encode)
+	// run identically on both branches; Overwrite is consulted only at the
+	// write step, so a refused template never replaces an existing one.
 	Overwrite bool
 }
 
@@ -80,6 +87,15 @@ type MakeTemplateResult struct {
 //
 //   - Name safety: validated via config.ValidateTemplateName.
 //   - RelayMode (when non-empty) must be "on" or "off".
+//   - ExtraEnv: spawn's whole extra_env check (spawn.ValidateExtraEnv, bug
+//     b.66q), in spawn's order: a key that sets HOME, then one with the
+//     AGENT_DIRECTOR_ prefix, then one that is not a valid env-var name, all
+//     ErrReservedEnvKey, the description saying which. The key is refused,
+//     never rewritten, so no template is saved that every spawn using it
+//     would refuse.
+//   - These checks run before the templates dir is created and before any
+//     write, so a refused call creates, writes and replaces nothing,
+//     whatever Overwrite is.
 //   - Templates dir is lazy-created (mode 0700) if missing.
 //   - Write step branches on params.Overwrite:
 //   - Overwrite == true: the encoded body is written to a sibling
@@ -96,6 +112,9 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 		return MakeTemplateResult{}, err
 	}
 	if err := validateTemplateRelayMode(params.RelayMode); err != nil {
+		return MakeTemplateResult{}, err
+	}
+	if err := spawn.ValidateExtraEnv(params.ExtraEnv); err != nil {
 		return MakeTemplateResult{}, err
 	}
 
@@ -200,6 +219,18 @@ func validateTemplateRelayMode(m string) error {
 //     separators, leading dot, or "..").
 //   - ErrTemplateExists: a template with that name already exists.
 //   - ErrTemplateMalformed: RelayMode is not "on", "off", or "".
+//   - ErrReservedEnvKey: ExtraEnv contains a key whose name before the
+//     first '=' (the name tmux sets) is reserved: it starts with
+//     AGENT_DIRECTOR_, or it is HOME (the key HOME, or one such as
+//     "HOME=/x") with any value. The message quotes the key. Set an absolute
+//     CLAUDE_CONFIG_DIR instead to give the agent its own Claude Code
+//     config. Also returned, after those checks, for a key that is not a
+//     valid env-var name: it is empty, or it contains '=' or a NUL byte. The
+//     key is refused, never rewritten; the message quotes it, says it is not
+//     a valid env-var name and says what is wrong with it. A key that is both
+//     reserved and malformed (such as "HOME=/x") gets the reserved-name
+//     message. It is spawn's own check, so no template is saved that spawn
+//     would refuse; nothing is written or replaced.
 //
 // Nondeterminism: .path — the absolute path reflects the host's templates
 // directory (~/.agent-director/templates/) and varies across environments.

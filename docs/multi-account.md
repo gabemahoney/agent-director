@@ -20,7 +20,8 @@ relative dir unless the row's recorded `jsonl_path` (or a
 
 `extra_env` may not set `HOME`, whatever its value (an empty one
 included): `spawn` refuses it with `ErrReservedEnvKey`, a template's
-`extra_env` included, before anything is written or launched. A key
+`extra_env` included, before anything is written or launched, and
+`make-template` refuses it the same way, saving no template. A key
 such as `HOME=/x` is refused too, since tmux sets the variable named by
 the part of the key before its first `=`. The
 agent's hooks find agent-director's config and store from the pane's
@@ -37,7 +38,8 @@ conversation).
 
 Each `extra_env` key must be the variable's own name. A key that is
 empty or contains `=` or a NUL byte is refused with `ErrReservedEnvKey`
-too, a template's included, before anything is written or launched; the
+too, a template's included, before anything is written or launched, and
+`make-template` refuses it the same way, saving no template; the
 description says the key is not a valid env-var name. tmux splits each
 entry at its first `=`, so the key `CLAUDE_CONFIG_DIR=/x` would give the
 agent a `CLAUDE_CONFIG_DIR` that pretrust and `resume` never see; pass
