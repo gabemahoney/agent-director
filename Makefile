@@ -111,56 +111,16 @@ build:
 test: _require-sandbox envelope-diff-ts test-install-sh
 	go test -timeout $(GO_TEST_TIMEOUT) ./...
 
-# test-install-sh runs test/install-sh/retry.sh, which checks install.sh's:
-#   - --from-release download retries against a fake curl (b.kym), for both
-#     release assets (b.vqr); a release before 0.11.0 is refused at once
-#     (exit 3, no retry; b.vqr)
-#   - --sha256 and --admin-sha256 checks; either flag without --from-release
-#     exits 2 (b.vqr)
-#   - PATH symlink: agent-director only, never agent-director-admin (b.vqr)
-#   - user_version reads in an upgrade: they wait out a held store lock
-#     (b.ady), and a ~/.sqliterc that changes sqlite3's output (.headers on,
-#     .mode json) still lets the migration run and verify (b.hk7)
-#   - umask: installs and upgrades succeed under 0777 and 0222, and a hooks-on
-#     install's new ~/.claude and settings.json get the owner's access and the
-#     umask's group/other bits (b.7j2)
-#   - step-3 sentinel: a failed mv leaves no temp file behind (b.hk7)
-#   - [store] db_path: with the store moved out of ~/.agent-director (written
-#     with ~/, as an unclean absolute path, or relative), a fresh install and
-#     an upgrade that migrates read, authorize and verify that store, the
-#     sentinel beside it; a stale default state.db beside a moved store is
-#     left alone; the default store reads and is named as before; a db_path
-#     install.sh cannot read stops the install in pre-flight (exit 5), on a
-#     fresh HOME and over an installed store, before anything on disk changes
-#     (b.2io)
-#   - config.toml merge: a hooks-on install, run twice, sets
-#     inject_help_hook = true inside the [defaults] table whether its header
-#     has blanks inside or before the brackets, a trailing comment, a CRLF or
-#     a UTF-8 BOM, rewriting an existing line, ending the table at an
-#     indented next header and appending no second [defaults];
-#     agent-director list then loads the config, and uninstall.sh takes the
-#     key out again (b.onv); the header and the key match in any letter case
-#     ([Defaults], INJECT_HELP_HOOK), leaving the key set once, in the table
-#     that set it, else in the first defaults table; INJECT_HELP_HOOKS is not
-#     the key (b.hhk)
-#   - config.toml merge pre-check: a hooks-on install over a config that sets
-#     defaults as a key before any header (an inline table, in any letter
-#     case, also after a BOM with CRLF line ends) stops in pre-flight (exit 5),
-#     on a fresh HOME and over an installed store, before anything on disk
-#     changes; with --no-hooks the same config installs, left as it was, and
-#     agent-director list loads it; defaults in a comment, in a longer key or
-#     under another table merges as before (b.whe)
-#   - merge modes: a hooks-on re-install under umask 022 or 000 keeps the
-#     modes of the settings.json (a symlinked one too) and config.toml it
-#     merges into and gives their .bak copies the same, also over an earlier
-#     run's .new and .bak leftovers; each .new and .bak is owner-only until
-#     its chmod, each new file already has its mode when moved into place,
-#     and no backup uses cp -p (a cp that fails on it, as on NFS) (b.ojn)
-# It builds and runs agent-director and agent-director-admin binaries, so it
-# runs in the sandbox only (retry.sh refuses anywhere else, b.8dr); no
-# network. test-sandbox runs it too, through test/install-sh/retry_test.go.
-# This target runs the script alone. Fast — a fake sleep makes the backoffs
-# cost no wall time, and the scenarios pick small fail-first counts.
+# test-install-sh runs test/install-sh/retry.sh, install.sh's regression
+# script: --from-release installs and their download retries (b.kym), upgrades
+# that migrate the store, and the hooks-on merge into settings.json and
+# config.toml. The list of what it checks is retry.sh's header comment, beside
+# the cases; it is not repeated here, so it cannot drift (b.s4h). It builds
+# and runs agent-director and agent-director-admin binaries, so it runs in the
+# sandbox only (retry.sh refuses anywhere else, b.8dr); no network.
+# test-sandbox runs it too, through test/install-sh/retry_test.go. This target
+# runs the script alone. Fast — a fake sleep makes the backoffs cost no wall
+# time, and the scenarios pick small fail-first counts.
 test-install-sh: _sandbox-build
 	$(_SANDBOX_RUN) bash test/install-sh/retry.sh
 
