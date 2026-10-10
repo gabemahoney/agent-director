@@ -43,12 +43,6 @@ import { loadIgnorePathsForVerb } from "./internal/loadIgnorePaths.js";
 
 const TIMEOUT = 20_000;
 
-// Capture real HOME at module load (before any per-test env changes).
-// The FFI worker inherits the OS HOME at its spawn time and does NOT see
-// per-test HOME overrides, so resume/make-template tests write JSONL /
-// templates to REAL_HOME for the Client side.
-const REAL_HOME = process.env.HOME ?? "/home/horde";
-
 // Fake-tmux directory (built by `make fake-tmux`, exported by setup.ts).
 const FAKE_TMUX_DIR =
   process.env.FAKE_TMUX_DIR ??
@@ -1135,21 +1129,11 @@ describe("make-template", () => {
   test(
     "success path",
     async () => {
-      // Use a timestamp-unique name to avoid ErrTemplateExists across runs.
-      const templateName = `envdiff-tmpl-${Date.now()}`;
+      const templateName = "envdiff-tmpl";
 
-      const { homeA, storeB, cleanup } = prepareStores((store) => {
+      const { homeA, homeB, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-empty-store", { store });
       });
-
-      // The TS Client's FFI worker uses REAL_HOME for os.UserHomeDir() so the
-      // template lands at REAL_HOME/.agent-director/templates/<name>.toml.
-      const clientTemplatePath = path.join(
-        REAL_HOME,
-        ".agent-director",
-        "templates",
-        `${templateName}.toml`
-      );
 
       try {
         const cli = runCli(
@@ -1158,20 +1142,22 @@ describe("make-template", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        // home: homeB puts the Client's template under
+        // homeB/.agent-director/templates, which cleanup() removes.
+        using client = await Client.create({
+          storePath: storeB,
+          home: homeB,
+          _cliPath: process.env.CLI_PATH
+        } as any);
         const ts = await client.makeTemplate({ name: templateName });
 
-        // .path is in ignorePaths (embeds the ephemeral homeDir / REAL_HOME).
+        // .path is in ignorePaths (embeds each side's temp HOME).
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("make-template"),
         });
+        // The Client wrote under homeB, not the developer's real HOME.
+        expect(fs.existsSync(path.join(homeB, ".agent-director", "templates", `${templateName}.toml`))).toBe(true);
       } finally {
-        // Clean up the template written to REAL_HOME by the Client.
-        try {
-          fs.unlinkSync(clientTemplatePath);
-        } catch {
-          /* best-effort */
-        }
         cleanup();
       }
     },
