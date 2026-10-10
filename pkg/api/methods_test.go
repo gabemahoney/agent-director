@@ -64,9 +64,9 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 }
 
 // TestAllVerbsReturnErrClientClosedAfterClose: every verb on a closed Client
-// returns ErrClientClosed before any param is read; the List, FindMissing and
-// Expire results still encode their lists as [] (b.hbt). Get and Delete are
-// not covered here.
+// returns ErrClientClosed before any param is read; the Get, List,
+// FindMissing, Expire and Delete results still encode their lists as [] and
+// maps as {}, never null (b.hbt, b.4nt).
 func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	if api.ErrClientClosed == nil {
@@ -78,9 +78,11 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	}
 	ctx := context.Background()
 	emptyJSON := map[string]string{
+		"Get":         emptyGetJSON,
 		"List":        `{"spawns":[]}`,
 		"FindMissing": `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
 		"Expire":      `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`,
+		"Delete":      `{"results":{}}`,
 	}
 	for name, call := range map[string]func() (any, error){
 		"Version":      func() (any, error) { return c.Version() },
@@ -116,7 +118,8 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 }
 
 // TestAdminHooksRefuseNonClient: pkg/api sets internal/adminapi's hooks, and
-// each refuses any value but a non-nil *api.Client without running (b.vqr).
+// each refuses any value but a non-nil *api.Client without running (b.vqr);
+// Delete's refusal still encodes results as {}, never null (b.4nt).
 func TestAdminHooksRefuseNonClient(t *testing.T) {
 	t.Parallel()
 	if adminapi.KillFinished == nil || adminapi.Delete == nil {
@@ -127,8 +130,9 @@ func TestAdminHooksRefuseNonClient(t *testing.T) {
 			if _, err := adminapi.KillFinished(c, "id"); err == nil {
 				t.Error("KillFinished: nil error; want a refusal")
 			}
-			if res, err := adminapi.Delete(c, []string{"id"}); err == nil || res.Results != nil {
-				t.Errorf("Delete = %v, %v; want a refusal and no results", res, err)
+			res, err := adminapi.Delete(c, []string{"id"})
+			if got := jsonOf(t, res); err == nil || got != `{"results":{}}` {
+				t.Errorf("Delete = %s, %v; want a refusal and {\"results\":{}}", got, err)
 			}
 		})
 	}

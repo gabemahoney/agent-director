@@ -249,8 +249,28 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 	}
 }
 
+// emptySpawnRow is the SpawnRow every failure of Get and (c *Client).Get
+// returns: every field is zero except ClaudeArgs, Labels, PermissionRequests
+// and PriorSessions, which are non-nil and empty, as SpawnRow documents, so
+// the result encodes them as [] and {} rather than null (b.4nt). It builds a
+// fresh value on each call, so no two results share a slice or map.
+func emptySpawnRow() SpawnRow {
+	return SpawnRow{
+		ClaudeArgs:         []string{},
+		Labels:             map[string]string{},
+		PermissionRequests: []PermissionRequestInfo{},
+		PriorSessions:      []PriorSession{},
+	}
+}
+
 // Get returns the full Spawn row for the given claude_instance_id. Missing
 // rows surface store.ErrSpawnNotFound for the CLI to translate.
+//
+// Every failure (the row read's ErrSpawnNotFound or other error, the
+// session-history read's, the permission-request read's, and ErrClientClosed
+// from (c *Client).Get) returns emptySpawnRow: ClaudeArgs, Labels,
+// PermissionRequests and PriorSessions non-nil and empty, every other field
+// zero (b.4nt).
 //
 // When the spawn's state is `check_permission`, all open (undecided)
 // permission_requests rows are fetched and projected into the
@@ -268,7 +288,7 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	row, err := s.GetSpawn(instanceID)
 	if err != nil {
-		return SpawnRow{}, err
+		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
 		ClaudeInstanceID:        row.ClaudeInstanceID,
@@ -299,7 +319,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	// id".
 	lifeHistory, err := s.ListSessionHistory(instanceID, row.LifeNumber)
 	if err != nil {
-		return SpawnRow{}, err
+		return emptySpawnRow(), err
 	}
 	history := visibleHistory(row, lifeHistory)
 	for _, h := range history {
@@ -322,7 +342,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	if out.State == "check_permission" {
 		prs, err := s.OpenPermissionRequestsForSpawn(instanceID)
 		if err != nil {
-			return SpawnRow{}, err
+			return emptySpawnRow(), err
 		}
 		for _, pr := range prs {
 			out.PermissionRequests = append(out.PermissionRequests, PermissionRequestInfo{
@@ -355,7 +375,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 // Nondeterminism: none.
 func (c *Client) Get(claudeInstanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
-		return SpawnRow{}, err
+		return emptySpawnRow(), err
 	}
 	return Get(c.st, claudeInstanceID)
 }
