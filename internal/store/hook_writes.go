@@ -53,8 +53,13 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // (proven_gone_at set: its tool ran, its agent's turn ended after it, or its
 // agent is gone; b.146 step 2c) does not hold it, though it may still await
 // an answer in agent-director's records (one a person answered at the pane).
-// The hold checks the gate first: a hook whose gate holds is applied
-// (HookApplied.Applied) with UpsertNoChange and a no-op
+// A read (holdWorkingTransition) picks the branch, and the UPDATE to working
+// carries the same condition in its own WHERE (noRequestHoldsRowSQL), so a
+// request recorded between the two (InsertRelayRequest, which moves the row
+// to check_permission in its own transaction) is never overwritten with
+// working (b.36h); a move to working that loses that race is held too. A
+// held transition checks the gate first (reportWorkingHeld): a hook whose
+// gate holds is applied (HookApplied.Applied) with UpsertNoChange and a no-op
 // ad.spawn.state_transition (prior == new, SR-A-2.2), and its only write is
 // clearing idle_since when it is set (any later hook clears it, b.146
 // problem 3); one whose gate does not hold reports its reason and emits
@@ -64,9 +69,13 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // reason (notAppliedReason): no row with the id yields HookApplied{} and no
 // trail event (state-tracking hooks fail open per SRD §3.2, so a hook racing
 // `delete` produces no visible error); a row with no pane_pid yields
-// HookReasonNoPaneRecorded; any other row yields HookReasonPIDMismatch. A
-// write that did not apply changes nothing: no state, no last_seen_at, no
-// liveness-note clear.
+// HookReasonNoPaneRecorded; any other row yields HookReasonPIDMismatch,
+// except that a move to working on a row for which the gate holds at that
+// read is reported held, as above. Usually a request recorded after the
+// hold's read stopped its UPDATE; rarely the gate came to hold only after the
+// UPDATE (e.g. the pane recorded between the two statements). The read does
+// not tell the two apart, and neither writes the state. A write that did not
+// apply changes nothing: no state, no last_seen_at, no liveness-note clear.
 //
 // triggeringEventName is a free-form string identifying what caused this
 // transition: the canonical Claude Code lifecycle event name (e.g.
@@ -79,7 +88,8 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // write (including a same-state transition, SR-A-2.2); a trail-emit failure
 // does not fail the store call (SR-A-3.2).
 func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
-	if !softRefresh && newState == StateWorking {
+	working := !softRefresh && newState == StateWorking
+	if working {
 		held, outcome, applied, err := s.holdWorkingTransition(instanceID, gate, triggeringEventName)
 		if held || err != nil {
 			return outcome, applied, err
@@ -130,6 +140,10 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		}
 		setArgs = []any{newState}
 		errPrefix = "store: state transition"
+	}
+	if working {
+		return s.applyWorkingWrite(instanceID, gate, set, setArgs, priorState, triggeringEventName,
+			jsonlPath, jsonlPresent, errPrefix)
 	}
 	return s.applyGatedHookWrite(instanceID, gate, set, setArgs, priorState, trailNew, softRefresh,
 		triggeringEventName, jsonlPath, jsonlPresent, errPrefix)
@@ -197,6 +211,47 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 	})
 	return UpsertUpdated, HookApplied{Applied: true}, nil
 }
+
+// applyWorkingWrite is applyGatedHookWrite for a move to working that
+// holdWorkingTransition's read did not hold: gatedHookUpdate's statement for
+// set, with noRequestHoldsRowSQL joined to its WHERE, so a request recorded
+// after that read (InsertRelayRequest's transaction, which moves the row to
+// check_permission) still holds the row and is never overwritten with working
+// (b.36h). Applied: UpsertUpdated and one ad.spawn.state_transition from
+// priorState to working. Matched no row: reportWorkingHeld, whose gate read
+// tells a write that did not apply (no row, or a gate that does not hold:
+// notAppliedReason, nothing emitted) from one reported held (the gate holds:
+// usually a request held the row at the UPDATE, rarely the gate came to hold
+// only after it, e.g. the pane recorded in between). A failure: UpsertError
+// with an error wrapped by errPrefix.
+func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
+	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
+	moved, err := s.execGuarded(q+` AND `+noRequestHoldsRowSQL, args, errPrefix)
+	if err != nil {
+		return UpsertError, HookApplied{}, err
+	}
+	if !moved {
+		return s.reportWorkingHeld(instanceID, gate, triggeringEventName)
+	}
+	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+		"claude_instance_id":    instanceID,
+		"prior_state":           priorState,
+		"new_state":             StateWorking,
+		"triggering_event_name": triggeringEventName,
+		"soft_refresh":          false,
+		"source":                "ad_spawn_store",
+	})
+	return UpsertUpdated, HookApplied{Applied: true}, nil
+}
+
+// noRequestHoldsRowSQL is the WHERE fragment, on a spawns row, that holds
+// while none of the row's permission requests holds it (holdsRowSQL). Two
+// hook writes join it to their own UPDATE's WHERE: the move to working
+// (applyWorkingWrite; b.36h) and the idle-prompt Notification's move from
+// check_permission to waiting (ApplyHookWaitingIfWorking). It has no
+// placeholders.
+const noRequestHoldsRowSQL = `NOT EXISTS (SELECT 1 FROM permission_requests pr
+     WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + holdsRowSQL + `)`
 
 // endedTransitionSet is the ended transition's SET fragment (SRD §5.2): the
 // state (its one placeholder), last_seen_at and ended_at to
@@ -347,9 +402,7 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 	set := `state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `, ` + idleSet
 	for _, from := range []struct{ state, cond string }{
 		{StateWorking, `state = '` + StateWorking + `'`},
-		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND NOT EXISTS (
-		     SELECT 1 FROM permission_requests pr
-		      WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + holdsRowSQL + `)`},
+		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND ` + noRequestHoldsRowSQL},
 	} {
 		q, args := gatedHookUpdate(instanceID, gate, set, []any{StateWaiting}, jsonlPath, jsonlPresent)
 		moved, err := s.execGuarded(q+` AND `+from.cond, args, errPrefix)
@@ -380,16 +433,15 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 }
 
 // holdWorkingTransition is the multi-row retention guard of a working
-// transition (ApplyHookTransitionResult). held is false when no permission
-// request of the Spawn holds the row (holdingRequestSQL: none still awaits an
-// answer, or every one that does is proven gone; holdsRowSQL, b.omt), and the
-// caller writes the transition. When one does, the transition is held and the
-// state is not written: the gate is read first (readHookGateRow), and only a
-// hook whose gate holds gets its one write, idle_since cleared when it is set
-// (clearIdleSinceSQL; any later hook clears it, b.146 problem 3), the no-op
-// ad.spawn.state_transition (prior == new, SR-A-2.2) and an applied result; a
-// missing row or a gate that does not hold reports notAppliedReason and emits
-// nothing.
+// transition (ApplyHookTransitionResult): its read picks the branch. held is
+// false when no permission request of the Spawn holds the row at the read
+// (holdingRequestSQL: none still awaits an answer, or every one that does is
+// proven gone; holdsRowSQL, b.omt), and the caller writes the transition
+// (applyWorkingWrite). The read alone does not keep the row from working: a
+// request recorded after it would be overwritten, so the caller's UPDATE
+// carries the same condition (noRequestHoldsRowSQL; b.36h). When a request
+// holds the row at the read, the transition is held and the state is not
+// written (reportWorkingHeld).
 //
 // A request proven gone is left out because Claude Code itself has shown its
 // dialog is no longer up (its tool ran, its agent's turn ended after it, or
@@ -405,16 +457,33 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 	if !holding {
 		return false, "", HookApplied{}, nil
 	}
+	outcome, applied, err = s.reportWorkingHeld(instanceID, gate, triggeringEventName)
+	return true, outcome, applied, err
+}
+
+// reportWorkingHeld is the report of a held working transition: one that
+// holdWorkingTransition's read held, or one whose UPDATE (applyWorkingWrite)
+// matched no row while the gate holds at this function's read: usually a
+// request recorded after the hold's read stopped the UPDATE, rarely the gate
+// came to hold only after it (e.g. the pane recorded between the two
+// statements). The state is not written: the gate is read first
+// (readHookGateRow), and only a hook whose gate holds gets its one write,
+// idle_since cleared when it is set (clearIdleSinceSQL; any later hook clears
+// it, b.146 problem 3), the no-op ad.spawn.state_transition (prior == new ==
+// the state the gate read saw, soft_refresh false, SR-A-2.2) and
+// UpsertNoChange with an applied result; a missing row or a gate that does
+// not hold reports notAppliedReason and emits nothing.
+func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEventName string) (UpsertOutcome, HookApplied, error) {
 	r, err := s.readHookGateRow(instanceID, gate, "store: working transition hold")
 	if err != nil {
-		return true, UpsertError, HookApplied{}, err
+		return UpsertError, HookApplied{}, err
 	}
 	if !r.found || !r.gateMatches {
-		return true, UpsertNoChange, notAppliedReason(r), nil
+		return UpsertNoChange, notAppliedReason(r), nil
 	}
 	if _, err := s.execGuarded(clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...),
 		"store: working transition hold idle clear"); err != nil {
-		return true, UpsertError, HookApplied{}, err
+		return UpsertError, HookApplied{}, err
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 		"claude_instance_id":    instanceID,
@@ -424,12 +493,14 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 		"soft_refresh":          false,
 		"source":                "ad_spawn_store",
 	})
-	return true, UpsertNoChange, HookApplied{Applied: true}, nil
+	return UpsertNoChange, HookApplied{Applied: true}, nil
 }
 
 // holdingRequestSQL is holdWorkingTransition's read: whether a permission
 // request of one Spawn (its one placeholder) holds the row (holdsRowSQL),
-// scanned as a bool.
+// scanned as a bool. It only picks the branch: the UPDATE to working carries
+// the same condition (noRequestHoldsRowSQL), so a request recorded after the
+// read still holds the row (b.36h).
 const holdingRequestSQL = `SELECT EXISTS (SELECT 1 FROM permission_requests pr
      WHERE pr.claude_instance_id = ? AND ` + holdsRowSQL + `)`
 

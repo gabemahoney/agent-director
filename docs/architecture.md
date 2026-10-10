@@ -1017,11 +1017,18 @@ columns to this same list. None has a CHECK constraint or an index.
 - **Must use:** `holdsRowSQL` (`internal/store/permission.go`) is the one
   statement of "a request holds its Spawn's row" (b.omt):
   `awaitingAnswerSQL` and `proven_gone_at IS NULL`. Exactly three writes
-  read it: the working hold (`holdWorkingTransition`, through its read
-  `holdingRequestSQL`), the idle-prompt Notification's move from
+  read it: the working hold, the idle-prompt Notification's move from
   `check_permission` to `waiting` (`ApplyHookWaitingIfWorking`) and
-  `find-missing`'s repair (`repairCheckPermissionSQL`), the last two in a
-  `NOT EXISTS` of their own statement. A request proven gone holds none of
+  `find-missing`'s repair (`repairCheckPermissionSQL`). The working hold
+  reads it twice: its read `holdingRequestSQL` (`holdWorkingTransition`)
+  picks the held branch, and the move to `working`'s own UPDATE
+  (`applyWorkingWrite`) carries it in a `NOT EXISTS`, so a request recorded
+  between the read and the UPDATE still holds the row (b.36h). The other
+  two carry it in a `NOT EXISTS` of their own statement. The move to
+  `working` and the idle-prompt Notification's move share that `NOT
+  EXISTS` as one fragment, `noRequestHoldsRowSQL`
+  (`internal/store/hook_writes.go`); `repairCheckPermissionSQL` spells out
+  its own. A request proven gone holds none of
   them, whatever agent-director's records say of it: one a person answered
   at the pane, which nothing records, still awaits an answer, and once the
   main agent's turn end after it (`turn_end`) or its tool's `PostToolUse`
@@ -1031,7 +1038,10 @@ columns to this same list. None has a CHECK constraint or an index.
   closes, the cap eviction) reads `awaitingAnswerSQL` alone, so such a
   request is still listed, decided, refused and closed as before. A new
   write that a request should hold off reads `holdsRowSQL`, never
-  `awaitingAnswerSQL` with a proof test of its own.
+  `awaitingAnswerSQL` with a proof test of its own, and carries it in the
+  WHERE of the statement that writes (a hook write joins
+  `noRequestHoldsRowSQL`), never in a separate read alone: a request's
+  first write can commit between the read and the write.
 - **Must use: a request's proof (b.146 step 2c).** A hook's proof that
   requests' dialogs are gone is written only by `ProveRequestsGone`
   (`internal/store/request_proof.go`, with a `RequestProof`: `How`
@@ -1145,7 +1155,9 @@ still the one it read, so it knows the row has not changed since. As built:
   `ApplyHookWaitingIfWorking`, `RecordSessionStartIdentity`, `SetParentID`,
   `HealJsonlPath`, the relay hook's first write `InsertRelayRequest` (its
   move to `check_permission`), the working hold's clearing of `idle_since`
-  (`clearIdleSinceSQL`, only on a row that has it set), and
+  (`clearIdleSinceSQL`, only on a row that has it set and whose gate holds,
+  whether the hold's read held the move or the move's own UPDATE matched
+  no row), and
   `RecordLaunchIdentity`, `ReleaseLaunchOwner`, `MoveToPending`,
   `RestoreAfterFailedResume`, `ResetForReuse`'s reset,
   `RestoreAfterFailedReuse`, `EndHeldLaunch`, `AdoptIdentityIfUnchanged`
@@ -1162,8 +1174,9 @@ still the one it read, so it knows the row has not changed since. As built:
   move) advances the version once.
 - `InsertPending` starts a row at 0 (the column default). A path that writes
   nothing advances nothing. Examples are the `working`-transition hold path
-  (a permission request holding the row, `holdsRowSQL`; a row with no
-  `idle_since` set), a write whose `WHERE` matches no row (a
+  (a permission request holding the row, `holdsRowSQL`, at the hold's read
+  or at the move's own UPDATE; a row with no `idle_since` set), a write
+  whose `WHERE` matches no row (a
   hook the gate did not apply included), and `HealJsonlPath` or any
   guarded write (`find-missing`'s five, resume's, the end write, the
   adoption, the release of a launch's hold) when its guard misses. `DeleteSpawn` removes the row, and so
@@ -6886,6 +6899,31 @@ After the last answer, the row moves with the agent's next hook. The
 relay hook's timeout deny writes no row state, so after a deny that hook
 is normally the turn's `Stop`.
 
+**The move to `working` carries the hold's condition (b.36h).** The
+hold's read (`holdingRequestSQL`) only picks the branch. The move to
+`working` carries the same condition in its own UPDATE
+(`applyWorkingWrite`, joining `noRequestHoldsRowSQL` to the gated
+statement's `WHERE`), so a request whose first write
+(`InsertRelayRequest`, which records it and moves the row to
+`check_permission` in one transaction) commits between the read and the
+UPDATE is never overwritten with `working`. That UPDATE then matches no
+row, and the move is reported as held, through the same tail as a move
+the read held (`reportWorkingHeld`): one gate read, then, when the gate
+holds, `idle_since` cleared, the no-op `ad.spawn.state_transition` (prior
+== new == the state the gate read saw, `soft_refresh` false),
+`UpsertNoChange` and an applied result. A missing row or a gate that does
+not hold reports its reason (`notAppliedReason`) and emits nothing. A held
+report after a missed UPDATE is usually such a request; rarely the gate
+came to hold only after the UPDATE (the pane recorded between the two
+statements, say). The gate read does not tell the two apart, and neither
+writes the state. Only
+the move to `working` is held, so no other target of
+`ApplyHookTransitionResult` carries the condition. A move the read held
+writes no state even when its request stops holding before the gate read;
+the row then moves with the agent's next hook, as after any last answer.
+Bee b.36h's model, `spec/tla/hold36h/`, checks this design (see
+[Model check (`make tla`)](#model-check-make-tla)).
+
 **A request proven gone holds nothing (b.omt).** A request a person
 answered at the pane outside agent-director still awaits an answer, since
 nothing records that answer, until `record-pane-answer` or a close of the
@@ -7310,9 +7348,10 @@ before the upgrade (rule 5's compatibility clause), through
   - `OpenPermissionRequestsForSpawn`: the Spawn's requests that still
     await an answer (`awaitingAnswerSQL`), decided or not, oldest first,
     a request proven gone included; `list` reads it. The working hold does
-    not: it reads `holdsRowSQL` (through `holdingRequestSQL`,
-    `internal/store/hook_writes.go`), which leaves a proven request out
-    (b.omt). `PermissionRequestsForSpawn`:
+    not: it reads `holdsRowSQL` (through its read `holdingRequestSQL` and
+    the move to `working`'s own UPDATE, `noRequestHoldsRowSQL`, both in
+    `internal/store/hook_writes.go`; b.36h), which leaves a proven request
+    out (b.omt). `PermissionRequestsForSpawn`:
     every request of the Spawn (`get`'s one read for both of its lists,
     the send-keys guard, `record-pane-answer`, `decide`'s pre-v7 path and
     its `err_details`, `find-missing`'s repair);
@@ -7653,7 +7692,8 @@ before the upgrade (rule 5's compatibility clause), through
   - **A record that outlives its dialog (b.omt).** While a request awaits
     an answer and is not proven gone, the store's working hold
     (`holdWorkingTransition` in `internal/store/hook_writes.go`, reading
-    `holdsRowSQL`) writes no state for the agent's moves to `working`. So
+    `holdsRowSQL`, which the move to `working`'s own UPDATE also carries;
+    b.36h) writes no state for the agent's moves to `working`. So
     after an answer at the pane made outside agent-director, or a timeout
     deny returned but not recorded by a hook of an earlier release, the
     spawn still reads `check_permission` until a later hook moves it out
@@ -12790,6 +12830,21 @@ is written here and not pinned. Its runs are not in `ci/suite.tsv`, so a
 plain `make tla` does not run them; `make tla
 TLA_SUITE=spec/tla/launch/suite.tsv` does.
 
+[`spec/tla/hold36h/`](../spec/tla/hold36h/PROVENANCE.txt) holds bee
+b.36h's model of the store's working hold as a read followed by a
+separate write, with the store's write lock (`tla/Hold36h.tla`, built on
+b.omt's `OmtHold`). `Write = "split"` is the write before b.36h's fix and
+fails `WorkingTrue` (the row never reads `working` while a dialog may be
+up or a relay hook may answer); `Write = "cond"` is the fix (see "The
+move to `working` carries the hold's condition" under
+[Permission relay](#permission-relay)). Every `cond_*` run passes; the
+red runs, the probes and b.omt's accepted residual
+(`lim_cond_sub_noclaim`) fail on their target, as expected. The directory
+is the record of the model checking done before b.36h's code, vendored
+under its own pin list (`hold36h/PROVENANCE.txt`, which records the
+contents, the verdicts and how to run a job again), and is not wired into
+`make tla`: `ci/run_ci.sh` never reads it.
+
 **What the suite checks.** The threat model is accidents only. Respawn and
 `remain-on-exit` are out of scope. The model's three actors are named here
 as follows:
@@ -13073,9 +13128,12 @@ scheduler. The suite's files:
 - **`props_test.go`** covers the props column: the shipped launch suite,
   with its cfgs packed from `launch/cfg/`, the props ok rule, and the
   preflight refusals for bad props or an ambiguous or missing cfg.
-- **`provenance_test.go`** has four tests:
+- **`provenance_test.go`** has five tests:
   - every pin matches its file, and only `.gitattributes`,
-    `PROVENANCE.txt`, `ci/run_ci.sh` and `launch/` are unpinned;
+    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/` and `hold36h/` are
+    unpinned by `spec/tla/PROVENANCE.txt`;
+  - `hold36h/PROVENANCE.txt` pins every other file under `hold36h/`, and
+    each of its pins names one of those files (`TestHold36hProvenance`);
   - `launch/cfg/` holds exactly the cfgs `launch/suite.tsv` names;
   - the runner names no checker or container command;
   - `make -n tla` and `make -n tla-print` run only the runner, none of
