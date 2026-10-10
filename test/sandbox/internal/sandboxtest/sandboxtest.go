@@ -1,11 +1,12 @@
 // Package sandboxtest holds helpers shared by the Makefile-plumbing regression
-// tests under test/sandbox/ (gitmount → b.kbe, cmdinject → b.ay3).
+// tests under test/sandbox/ (gitmount → b.kbe, cmdinject → b.ay3, prebuild →
+// b.2b3).
 //
-// Both suites exercise the real repo Makefile by running `make` against it (or
+// The suites exercise the real repo Makefile by running `make` against it (or
 // a throwaway copy) with a fake tool on PATH, then asserting on what the recipe
-// produced. They independently grew the same three helpers — locating the repo
-// root, skipping when a required tool is missing, and scrubbing inherited make
-// state out of the child `make`'s environment — so those live here once.
+// produced. They share the helpers for locating the repo root and the Makefile
+// under test, skipping when a required tool is missing, and scrubbing inherited
+// make state out of the child `make`'s environment.
 //
 // This package holds no tests of its own: it is exercised transitively by every
 // consumer, which is the signal the guide asks for (a break here fails a real
@@ -37,6 +38,20 @@ func RepoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
+}
+
+// MakefileUnderTest returns the Makefile a test drives: the repo Makefile, or
+// MAKEFILE_UNDER_TEST=<path> to prove the fails-before direction against a
+// pre-fix copy without editing the real Makefile.
+func MakefileUnderTest(t *testing.T) string {
+	t.Helper()
+	if p := os.Getenv("MAKEFILE_UNDER_TEST"); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("MAKEFILE_UNDER_TEST=%q: %v", p, err)
+		}
+		return p
+	}
+	return filepath.Join(RepoRoot(t), "Makefile")
 }
 
 // RequireTools skips the test (with skipMsg) if any of bins is not on PATH.

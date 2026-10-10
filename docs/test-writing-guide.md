@@ -148,6 +148,23 @@ This is about the bun suite. Go tests in `pkg/api` run in parallel; see
 
 The `/release` skill invokes `bun test --parallel=1` as the coverage gate because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
 
+### Bun tests that read `dist/`
+
+`make test-sandbox` builds `pkg/ts-bun-client/dist/` before either suite
+(b.2b3), so no test may rely on another test file having built it. A bun test
+that reads or packs the live `pkg/ts-bun-client/dist/` without building it
+itself calls `requireBuiltDist()` from
+`pkg/ts-bun-client/test/internal/builtDist.ts` first: a missing build then fails
+with a message naming the missing files, not an ENOENT or a short tarball list.
+Use it rather than writing your own check. A test that builds the output it
+reads does not need it: `public-surface.test.ts` emits its own `.d.ts` files
+and `release-version-coherence.test.ts` builds in a staged copy. To run a test
+that calls `requireBuiltDist()` alone, install and build first, in the sandbox:
+
+```sh
+make sandbox CMD='cd pkg/ts-bun-client && bun install --frozen-lockfile && bun run build && bun test test/packaging.test.ts'
+```
+
 ### Documentation belongs in docs
 
 Fixture docstrings stay 1-2 lines. Test docstrings stay 1-2 lines. Long-form explanations of test architecture, fixture selection, or mocking strategy go in a dedicated testing doc — not buried inside the code.

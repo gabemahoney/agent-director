@@ -285,11 +285,13 @@ built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
 `internal/testsupport/storefix`, `internal/testsupport/tmuxfix`,
 `test/smoke/go`, `test/smoke/ts-helper`, `test/envelope-diff`,
 `test/grounding-replay`, `test/realtmux`, `test/reboot-recovery`,
-`test/sandbox/cmdinject`, `test/tla`, `test/driver-scripts`,
+`test/tla`, `test/driver-scripts`,
 `tools/measure-exit` and `tools/measure-exit/dryrun`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
-it. When you add a package that opens the store or execs a binary, add
-`sandboxguard.Require()` to its `TestMain`.
+it, as do the `test/sandbox/` Makefile tests (`gitmount`, `cmdinject`,
+`prebuild`), which run only `make` and shell fakes. When you add a package that
+opens the store or execs a binary, add `sandboxguard.Require()` to its
+`TestMain`.
 
 **CI:** run the suite via `make test-sandbox` (which sets the marker), or — on a
 GitHub-**hosted**, ephemeral runner only — set
@@ -316,11 +318,19 @@ workflow runs it on every PR and push to `main`.
 ### Targets
 
 ```
-make test-sandbox        # full suite: go test ./... AND bun test
+make test-sandbox        # full suite: build pkg/ts-bun-client, then go test ./... AND bun test
 make sandbox-shell       # interactive bash inside the container + mounts
 make sandbox CMD="…"     # run an arbitrary command in the container + mounts
 make test-install-sh-advice  # install.sh's literal-follow tests alone (test-sandbox runs them too)
 ```
+
+Before either suite, `make test-sandbox` runs `bun install --frozen-lockfile`
+and `bun run build` in `pkg/ts-bun-client` (b.2b3). Its `node_modules/` and
+`dist/` are gitignored, so a fresh worktree or clone has neither, and tests in
+both suites read `dist/`. If either step fails, the target fails (non-zero
+exit) with `ERROR: test-sandbox: …; no tests ran.` and runs no tests. A
+`make sandbox CMD="…"` run does not install or build; do both first when
+running a test that reads `dist/` on its own.
 
 Every `go test` the Makefile runs (`test`, `test-sandbox`, `err-coherence`,
 `release-smoke`) passes `-timeout $(GO_TEST_TIMEOUT)`, 30m by default, instead

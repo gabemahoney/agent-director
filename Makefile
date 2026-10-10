@@ -322,7 +322,7 @@ test-docker-install-mode: test-image
 # docs/engineering-guide.md "Sandboxed execution" for the per-host rationale.
 #
 # Targets:
-#   test-sandbox        full suite (go test ./... AND bun test)
+#   test-sandbox        full suite (build pkg/ts-bun-client, then go test ./... AND bun test)
 #   sandbox-shell       interactive bash in the container+mounts
 #   sandbox CMD="…"     run an arbitrary command in the container+mounts
 # ─────────────────────────────────────────────────────────────────────────
@@ -475,9 +475,21 @@ _sandbox-build: _sandbox-preflight
 # Both suites always run (the go result does NOT short-circuit bun, so one
 # invocation reports both), and the combined exit is non-zero if EITHER fails.
 # Each Go package gets GO_TEST_TIMEOUT, not Go's 10m default (see above).
+#
+# Before either suite it runs `bun install --frozen-lockfile` and `bun run
+# build` in pkg/ts-bun-client (b.2b3). node_modules/ and dist/ are gitignored,
+# so a fresh worktree or clone has neither, yet both suites read dist/: the
+# packaging and version-floor bun tests, and the Go synthetic-regression tests
+# that pack the package (verify-restage and others). Building it first means no
+# test depends on another test having built it. If either step fails, the target
+# stops with an error before any test runs.
 test-sandbox: _sandbox-build
 	$(_SANDBOX_RUN) \
-		bash -c 'rc=0; (cd /work && go test -timeout $(GO_TEST_TIMEOUT) ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
+		bash -c 'cd /work/pkg/ts-bun-client || exit 1; \
+			echo "[test-sandbox] bun install --frozen-lockfile and bun run build in pkg/ts-bun-client"; \
+			bun install --frozen-lockfile || { echo "ERROR: test-sandbox: bun install --frozen-lockfile failed in pkg/ts-bun-client; no tests ran. If package.json changed, run bun install there (make sandbox CMD=...) and commit bun.lock." >&2; exit 1; }; \
+			bun run build || { echo "ERROR: test-sandbox: bun run build failed in pkg/ts-bun-client; no tests ran. Both suites need its dist/; fix the build errors above." >&2; exit 1; }; \
+			rc=0; (cd /work && go test -timeout $(GO_TEST_TIMEOUT) ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
 
 # sandbox-shell drops you into an interactive bash inside the container with the
 # same mounts as the test targets — the place to run builds, `go generate`,

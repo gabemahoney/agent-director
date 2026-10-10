@@ -14593,6 +14593,7 @@ test/
     tempHome.ts              # withTempHome() helper
     helper.ts                # runHelper() wrapper for ts-helper subprocess; openClient(), homeStore(), FAKE_TMUX_BIN, PKG_VERSION; privateTmuxSocket(); fakeTmuxCalls(), withProcessEnv(), withCwd(), withDeletedCwd(), rejection(), thrownBy(), CLAUDE_JSON, trustEntry(), seedOuterParent()
     stagedScript.ts          # stageScript(), runScript(), removeStaged(): a package script run in a staged copy
+    builtDist.ts             # requireBuiltDist(): fail clearly when dist/ is not built
 ```
 
 **`withTempHome` helper.**
@@ -14722,6 +14723,15 @@ Its other shared helpers, each with its must-use rule:
   as `parent_id`), so the foreign key holds; it does nothing otherwise.
   **Must use:** a TS test that launches into a fresh store seeds the outer
   parent through it, never its own seed.
+- `requireBuiltDist()` (`test/internal/builtDist.ts`) throws, naming the
+  missing `dist/index.js`, `dist/index.d.ts` or `dist/version-floor.json`,
+  when `dist/` is not built. `make test-sandbox` builds `dist/` before
+  either suite (b.2b3); a bare `bun test` does not. **Must use:** a test
+  that reads or packs the live `pkg/ts-bun-client/dist/` without building
+  it itself calls it first, and never relies on another test file having
+  built `dist/`. A test that builds the output it reads does not call it:
+  `public-surface.test.ts` emits its own `.d.ts` files and
+  `release-version-coherence.test.ts` builds in a staged copy.
 
 **`smoke-invariants.test.ts` meta-test.**
 
@@ -14776,6 +14786,29 @@ latter by grep; it also fails if the mac workflow file is missing, so the check
 cannot pass vacuously. Deliberately **not** implemented: a store-presence probe
 or any `CI` / `GITHUB_ACTIONS` / `$HOME`-derived discriminator — ambient signals
 would also disable the guard on the self-hosted runner (b.175).
+
+### sandboxtest: Makefile-plumbing test helpers (reusable test fixture)
+
+`test/sandbox/internal/sandboxtest` holds the helpers shared by the
+`test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
+`prebuild` b.2b3). Those tests run `make` against the real repo Makefile with a
+fake container engine or tool on PATH, never a real container, and assert on
+what the recipe produced. They exec no built binary and open no store, so they
+carry no sandbox guard.
+
+- `RepoRoot(t)` returns the directory holding the root `go.mod`.
+- `MakefileUnderTest(t)` returns the repo Makefile, or the path in
+  `MAKEFILE_UNDER_TEST`, so a reviewer can prove the fails-before direction
+  against a pre-fix copy without editing the real Makefile.
+- `RequireTools(t, skipMsg, bins...)` skips the test when a tool is not on PATH.
+- `ScrubbedMakeEnv(extra...)` returns the environment with `MAKEFLAGS`,
+  `MFLAGS` and `MAKELEVEL` emptied, so an outer `make` cannot leak overrides
+  into the child `make`.
+
+**Must use:** a new `test/sandbox/` test drives the Makefile through
+`MakefileUnderTest` and `ScrubbedMakeEnv`, never its own path lookup or
+environment. `cmdinject` still joins `RepoRoot(t)` and `Makefile` itself, so
+`MAKEFILE_UNDER_TEST` does not reach it.
 
 ### TS envelope-diff regression
 

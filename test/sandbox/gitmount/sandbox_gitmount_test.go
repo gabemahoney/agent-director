@@ -69,21 +69,6 @@ import (
 	"github.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest"
 )
 
-// makefilePath returns the Makefile whose logic is under test. It defaults to
-// the repo Makefile but honors MAKEFILE_UNDER_TEST so a reviewer can point the
-// suite at a pre-fix copy to prove the fails-before direction WITHOUT editing
-// (and thereby breaking `make sandbox` on) the real Makefile.
-func makefilePath(t *testing.T) string {
-	t.Helper()
-	if p := os.Getenv("MAKEFILE_UNDER_TEST"); p != "" {
-		if _, err := os.Stat(p); err != nil {
-			t.Fatalf("MAKEFILE_UNDER_TEST=%q: %v", p, err)
-		}
-		return p
-	}
-	return filepath.Join(sandboxtest.RepoRoot(t), "Makefile")
-}
-
 // captureLines returns the exact Makefile lines matching pattern, in file
 // order. It fails the test if none match (the Makefile no longer contains the
 // logic this test anchors to and must be re-anchored).
@@ -175,7 +160,7 @@ func makePlainClone(t *testing.T) string {
 func realLogicLines(t *testing.T) []string {
 	t.Helper()
 	pat := regexp.MustCompile(`^(_GIT_COMMON_DIR_RAW|GIT_COMMON_DIR|_SANDBOX_GIT_MOUNT)\s*:?=`)
-	return captureLines(t, makefilePath(t), pat)
+	return captureLines(t, sandboxtest.MakefileUnderTest(t), pat)
 }
 
 // TestGitMount_RealMakefileLogic evaluates the repo Makefile's actual capture
@@ -263,7 +248,7 @@ func TestGitMount_PreFixLineWouldRegress(t *testing.T) {
 	}
 
 	// Reconstruct the PRE-FIX logic: capture WITHOUT $(abspath), same guard.
-	mountLine := captureLines(t, makefilePath(t),
+	mountLine := captureLines(t, sandboxtest.MakefileUnderTest(t),
 		regexp.MustCompile(`^_SANDBOX_GIT_MOUNT\s*:?=`))[0]
 	preFix := []string{
 		`GIT_COMMON_DIR := $(shell git rev-parse --git-common-dir 2>/dev/null)`,
