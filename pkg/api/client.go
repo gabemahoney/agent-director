@@ -119,6 +119,20 @@ func (c *Client) relayView() RelayView {
 	}
 }
 
+// settleRead is the settle time and clock of one status, get or list call
+// (b.3ie): the loaded config's [state] settle_ms, read once at New (a
+// long-lived Client, such as the MCP server's, keeps the value it started
+// with), and the Client's clock, read now, before the call's store read. With
+// no settle time it is the zero store.SettleRead and reads no clock, so the
+// call is exactly the one without settling.
+func (c *Client) settleRead() store.SettleRead {
+	ms := int64(c.cfg.State.EffectiveSettleMs())
+	if ms <= 0 {
+		return store.SettleRead{}
+	}
+	return store.SettleRead{SettleMs: ms, NowMs: c.now().UnixMilli()}
+}
+
 // New constructs a Client from opts, wiring config, store, and tmux.
 //
 // Startup sequence:
@@ -126,7 +140,10 @@ func (c *Client) relayView() RelayView {
 //  2. Load config from the resolved ConfigPath.
 //  3. Resolve StorePath via three-tier precedence.
 //  4. Open (or init) the store according to opts.CreateIfMissing, with the
-//     loaded config's [store] busy timeout (Store.EffectiveBusyTimeoutMs).
+//     loaded config's [store] busy timeout (Store.EffectiveBusyTimeoutMs),
+//     and hand it the loaded config's [state] settle time
+//     (State.EffectiveSettleMs, b.3ie), which status, get and list also read
+//     from the loaded config.
 //  5. Construct the tmux client: an injected Options.TmuxClient as given,
 //     otherwise the production client for Options.TmuxCommand with the
 //     query, action and create timeouts and the pipe-close wait taken from
@@ -222,6 +239,10 @@ func New(opts Options) (*Client, error) {
 		// because %w preserves the chain.
 		return nil, fmt.Errorf("api: open store: %w", err)
 	}
+	// The configured settle time (b.3ie), handed to the store as every opener
+	// that loads the config hands it; the Client's reads take theirs from
+	// settleRead.
+	st.SetSettleMs(int64(cfg.State.EffectiveSettleMs()))
 
 	// Step 5 — resolve tmux client.
 	// opts.TmuxClient is an opt-in injection seam for tests (e.g. a

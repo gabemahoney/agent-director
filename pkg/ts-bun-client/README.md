@@ -111,6 +111,14 @@ const result = await client.status({ claude_instance_id: "<id>" });
 console.log(result.state);
 ```
 
+With `[state] settle_ms` set in the CLI's `~/.agent-director/config.toml`,
+`status`, `get` and `list` report the settled state: a state a hook wrote
+shows only once it has held that long, the last settled state until then;
+`ended`, `missing` and a state a verb wrote show at once, and `list`'s
+`state` filter matches the settled state. Every verb that acts on a Spawn
+judges its live state, which can be newer. The client adds no field and
+no state value for it.
+
 ### list
 
 Query Spawns with optional filters.

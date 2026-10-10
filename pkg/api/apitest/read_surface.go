@@ -92,8 +92,10 @@ var readSurfaceSettledAt = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 // raw state flapped through hooks and came back. Every time the read surfaces
 // show is pinned last (started_at, last_seen_at, ended_at, requested_at,
 // hook_gone_at), and no read of the store writes, so each read gives the same
-// bytes on every run. It returns the row ids in seeding order and fails when
-// a row does not end in its intended raw state.
+// bytes on every run. Last, every row's settle columns are scrambled
+// (ReadSurfaceSettled, ReadSurfaceStampMs), which status, get and list with
+// no settle time must ignore. It returns the row ids in seeding order and
+// fails when a row does not end in its intended raw state.
 func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 	rows := readSurfaceRows()
 	ids := make([]string, 0, len(rows))
@@ -137,8 +139,35 @@ func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 		if cols.State != r.state {
 			return nil, fmt.Errorf("SeedReadSurfaceStore: %s ended in state %v; want %s", r.id, cols.State, r.state)
 		}
+		// The scramble (b.3ie): a settled state other than the raw one, stamped
+		// far ahead (a negative age never settles), so every read with a
+		// settle time reports ReadSurfaceSettled(state) and one without must
+		// report the raw state, byte for byte as the goldens pin it.
+		if err := SetSettle(dbPath, r.id, ReadSurfaceSettled(r.state), ReadSurfaceStampMs); err != nil {
+			return nil, fmt.Errorf("SeedReadSurfaceStore: scramble %s: %w", r.id, err)
+		}
 	}
 	return ids, nil
+}
+
+// ReadSurfaceStampMs is the state_changed_ms SeedReadSurfaceStore gives every
+// row: 2099-01-01, ahead of any clock a test runs on.
+var ReadSurfaceStampMs = readSurfaceSettledAt.UnixMilli()
+
+// readSurfaceStates are the seven states, in the order ReadSurfaceSettled
+// rotates them.
+var readSurfaceStates = []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser,
+	store.StateCheckPermission, store.StateEnded, store.StateMissing}
+
+// ReadSurfaceSettled is the settled state SeedReadSurfaceStore gives a row
+// whose raw state is state: the next state of the seven, never state itself.
+func ReadSurfaceSettled(state string) string {
+	for i, s := range readSurfaceStates {
+		if s == state {
+			return readSurfaceStates[(i+1)%len(readSurfaceStates)]
+		}
+	}
+	return store.StateWaiting
 }
 
 // fireReadSurfaceHooks fires each event at id's row as its own agent, in order.

@@ -107,8 +107,9 @@ type ListRow struct {
 	LivenessNote *string `json:"liveness_note,omitempty"`
 	// PermissionRequests is, as SpawnRow.PermissionRequests, the row's open
 	// permission requests (those that still await an answer), each with its
-	// delivery facts (b.146 rule 15). Populated only when state is
-	// check_permission; always a non-nil slice (encodes as [] when empty).
+	// delivery facts (b.146 rule 15). Populated only when the row's live
+	// (raw) state is check_permission, as SpawnRow.PermissionRequests; always
+	// a non-nil slice (encodes as [] when empty).
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
 }
 
@@ -142,7 +143,21 @@ type ListResult struct {
 // waits for the store's write lock (b.146 problem 4): it writes hook_gone_at
 // on every request it found fallen back, in one write, only if the lock is
 // free at that moment.
+//
+// List reads with no settle time; the Client applies its [state] settle_ms
+// (listSettled).
 func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
+	return listSettled(s, v, store.SettleRead{}, params)
+}
+
+// listSettled is List with the reader's settle time and clock settle (b.3ie),
+// passed to the store as ListFilters.Settle: each row's state field is its
+// settled state, and the State filter matches the settled state in the
+// store's statement, ahead of its LIMIT. launch_started_at and whether a
+// row's permission requests are read and shown key on the raw state, as
+// before (permission requests are never debounced). With no settle time it
+// is List exactly as before b.3ie. It never waits for a state to settle.
+func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListParams) (ListResult, error) {
 	labels := make(map[string]string, len(params.Labels))
 	for _, raw := range params.Labels {
 		idx := strings.IndexByte(raw, '=')
@@ -159,6 +174,7 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 		Cwd:             params.Cwd,
 		TmuxSessionName: params.TmuxSessionName,
 		Limit:           params.Limit,
+		Settle:          settle,
 	})
 	if err != nil {
 		return ListResult{}, err
@@ -167,10 +183,14 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 	j := newRelayJudge(v)
 	out := make([]ListRow, 0, len(rows))
 	for _, r := range rows {
+		reported := r.State
+		if settle.SettleMs > 0 {
+			reported = r.ReportedState
+		}
 		row := ListRow{
 			ClaudeInstanceID:        r.ClaudeInstanceID,
 			ParentID:                r.ParentID,
-			State:                   r.State,
+			State:                   reported,
 			CWD:                     r.CWD,
 			TmuxSessionName:         r.TmuxSessionName,
 			RelayMode:               r.RelayMode,
@@ -206,8 +226,13 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 // rows match, ListResult.Spawns is a non-nil empty slice. Returned order is
 // unspecified. A pending row also carries launch_started_at, when the agent's
 // launch began. A row in check_permission carries its open permission
-// requests with their delivery facts, as Get does. List never waits for the
-// store's write lock.
+// requests with their delivery facts, as Get does. With [state] settle_ms
+// set, each row's state is its settled state, and State filters on it: a
+// hook-written change shows only once it has held that long, the last
+// settled state until then; terminal states and command-driven changes show
+// at once. The permission requests and launch_started_at follow the live
+// state. List never waits for the store's write lock, nor for a state to
+// settle.
 //
 // CLI: agent-director list
 //
@@ -215,10 +240,11 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 //   - [ErrListInvalidLabel]: a Labels entry is not in "key=value" form.
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether each
-// request's relay hook process runs.
+// request's relay hook process runs; with a settle time, so do the states and
+// the rows State selects.
 func (c *Client) List(params ListParams) (ListResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ListResult{}, err
 	}
-	return List(c.st, c.relayView(), params)
+	return listSettled(c.st, c.relayView(), c.settleRead(), params)
 }

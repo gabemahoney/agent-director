@@ -54,7 +54,7 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // dbFileMode is the mode the SQLite file itself is forced to on every Open.
 // 0600 = owner read/write only.
@@ -76,6 +76,19 @@ type Store struct {
 	// shorter one on the connection for its own transaction and puts this
 	// one back afterwards (lockwait.go).
 	busyTimeoutMs int
+	// settleMs is the settle time, in whole milliseconds, this process's hook
+	// writes judge the raw value they replace with ([state] settle_ms, b.3ie;
+	// settle.go): 0 until SetSettleMs, which every opener that loads the
+	// config calls once right after the open.
+	settleMs int64
+	// hookBeforeUpdateForTest is a test seam, nil in production: when set,
+	// ApplyHookTransitionResult calls it after its Go-side read of the prior
+	// state and before its UPDATE, so a test can write the row in that window
+	// (b.3ie) and prove the UPDATE decides the same-value test and the settle
+	// base itself, never from that read. Set only by this package's tests,
+	// on their own Store and before the call; a hook that writes through the
+	// same Store must clear it first or it runs again on the inner call.
+	hookBeforeUpdateForTest func()
 }
 
 // DefaultBusyTimeoutMs is the busy timeout, in whole milliseconds (10000),

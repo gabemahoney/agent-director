@@ -274,6 +274,25 @@ Tool arguments are the parameter names with underscores
 `reuse_finished`). A tool refuses any other argument, or a value of the
 wrong type, with `ErrInvalidFlags` and does nothing.
 
+### Watch a Spawn's state
+
+With a [settle time](#settle-time-state) set, `state` ignores flips shorter
+than it, so a script that polls `status` can act on the first change it
+sees, with no count of identical polls:
+
+```sh
+last=""
+while sleep 1; do
+  state=$(agent-director status --claude-instance-id "$id" | jq -r .state)
+  if [ "$state" != "$last" ]; then
+    last=$state
+    case "$state" in waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;; esac
+  fi
+done
+```
+
+It never sees a turn shorter than the settle time.
+
 ### Intercept permission prompts
 
 ```sh
@@ -502,6 +521,9 @@ lock_wait_seconds = 12   # 1 to 9223372036; 0 = use default (12)
 db_path = "~/.agent-director/state.db"
 busy_timeout_ms = 10000   # 1 to 2147483647; 0 = use default (10000)
 
+[state]
+settle_ms = 0   # 0 to 60000; 0 = off
+
 [log]
 error_log_path = "~/.agent-director/errors.log"
 
@@ -598,6 +620,49 @@ shown; `install.sh` refuses anything else and says what to fix.
 Env vars passed at spawn time (via `--extra-env`) are stored in
 `state.db` so `resume` can restore them. The file is owner-only (`0600`
 in a `0700` directory).
+
+### Settle time (`[state]`)
+
+While an agent uses tools, its state can flip between `working` and
+`waiting` several times a second. `[state] settle_ms` makes `status`,
+`get` and `list` (CLI, MCP and the TypeScript client) show a new state only
+once it has held:
+
+- **Range.** Whole milliseconds from 0 to 60000. A missing key, or 0, turns
+  it off: every read shows the latest state, as without the key. A negative
+  value or one above 60000 is refused, never capped, with the same effect
+  as a refused timing setting (see **Validation** under
+  [Timing settings](#timing-settings-tmux)).
+- **What `state` shows.** With a settle time T, `state` moves to a new
+  value only once that value has held for T; until then it shows the last
+  settled value. Every change of value restarts the wait; a repeat of the
+  same state does not. No field or state value is added, and nothing marks
+  a state as late. `list --state` filters on the state `list` shows.
+- **Flaps never show.** A change that comes back within T is never seen: a
+  working agent that reads `waiting` for a moment reads `working` throughout.
+- **At once.** `ended` and `missing`, and a state a command sets (`spawn`,
+  `resume`, `find-missing`), show at once. A row that its own agent moves
+  out of `missing` or `ended` waits like any other change: it reads
+  `missing` or `ended` for T, then the new state.
+- **Short turns are invisible.** A settled `waiting` agent that gets a
+  message and replies in less than T reads `waiting` throughout. Keep T at
+  1 to 2 s (1000 to 2000), shorter than a real turn; most flips come back
+  within 1 s.
+- **Every caller on the host.** The setting covers every caller on the
+  host, programs that never asked for it included, and each can see a
+  state up to T late: for example, a new agent reads `pending`, without
+  `launch_started_at`, for up to T after it reports in.
+- **Verbs act on the live state.** `send-keys`, `decide`, `pause`,
+  `resume`, `kill`, `find-missing`, `expire` and `spawn` judge a row's
+  latest state, which can be newer than what `status` shows, so a verb can
+  refuse on a state `status` does not show yet; the refusal is a named
+  error. Permission requests are never delayed: a row can read `waiting`
+  while `get` lists an open request, or `check_permission` with none, for
+  up to T.
+- **Reads never wait** for a state to settle. A change of the key takes
+  effect for the CLI, the TypeScript client and each hook on their next
+  call, for the MCP server after a restart, and for a Go `Client` when it
+  is built.
 
 ### Timing settings (`[tmux]`)
 
@@ -894,6 +959,10 @@ the class of every tmux error, is in
   Read facts from it, never from the description; a caller that does not
   use it ignores it.
 - `get`, `list` and `get-permission` never wait for the store's write lock.
+- With a [settle time](#settle-time-state) set, `status`, `get` and `list`
+  show the settled state, up to the settle time behind, and nothing marks
+  it as late; verbs act on the live state, so a verb can refuse, with a
+  named error, on a state `status` does not show yet.
 - A reused id starts with no memory of its earlier lives.
 - Detect features by the binary's version (`agent-director version`, the
   MCP `version` tool, or the TypeScript client's `binaryVersion`); a

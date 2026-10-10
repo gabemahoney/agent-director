@@ -25,9 +25,10 @@ type ResumePrior struct {
 
 // moveToPendingSQL is MoveToPending's one statement (SR-8.3, SR-5.6): the
 // move to pending with its cleared and set columns and the version advance,
-// guarded by a finished state and the examined row snapshot (SR-5.3).
+// guarded by a finished state and the examined row snapshot (SR-5.3). pending
+// is an immediate write (immediateStateSet, b.3ie): it reports at once.
 const moveToPendingSQL = `UPDATE spawns
-    SET state                     = ?,
+    SET ` + immediateStateSet + `,
         pid                       = NULL,
         proc_starttime            = NULL,
         ended_at                  = NULL,
@@ -58,7 +59,9 @@ const moveToPendingSQL = `UPDATE spawns
 // The move is one conditional statement (SR-5.6) that applies only while the
 // row is ended or missing and its row snapshot equals examined, compared on
 // the values exactly as stored (SR-5.3). In that statement it sets state
-// pending; clears pid, proc_starttime, ended_at, liveness_unverified_since,
+// pending as an immediate write (settled_state pending, state_changed_ms the
+// statement's clock; b.3ie: a caller that has just resumed never reads the
+// row ended for the settle time); clears pid, proc_starttime, ended_at, liveness_unverified_since,
 // liveness_note and the six server and pane identity columns; sets
 // launch_started_at to launchStartedAtMillis (the caller's clock; the store
 // reads none), launch_token to token, tmux_socket to socket, parent_id to
@@ -91,12 +94,11 @@ const moveToPendingSQL = `UPDATE spawns
 // the row and its requests as they were (SR-5.8).
 func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
-	args := []any{
-		StatePending,
+	args := append(immediateStateArgs(StatePending),
 		positiveInt64Arg(launchStartedAtMillis),
 		nullableStringArg(token), nullableStringArg(socket),
 		nullableStringArg(parentID),
-	}
+	)
 	args = append(args, launchOwnerArgs(owner)...)
 	args = append(args, instanceID)
 	args = append(args, finishedStateGuardArgs()...)
@@ -143,9 +145,10 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 // restoreAfterFailedResumeSQL is RestoreAfterFailedResume's one statement
 // (SR-8.5, SR-5.6): what the move cleared or overwrote, written back, the
 // launch start cleared and the version advanced, guarded by pending and the
-// move's version.
+// move's version. The prior state is an immediate write (immediateStateSet,
+// b.3ie): it reports at once, never the move's pending for the settle time.
 const restoreAfterFailedResumeSQL = `UPDATE spawns
-    SET state                     = ?,
+    SET ` + immediateStateSet + `,
         ended_at                  = ?,
         pid                       = ?,
         proc_starttime            = ?,
@@ -167,7 +170,8 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
 // other than by a timeout (SR-8.5). It is one conditional statement (SR-5.6)
 // that applies only while the row is pending with row_version equal to
 // movedVersion, the version MoveToPending produced. In that statement it sets
-// state to prior.State; writes ended_at, pid, proc_starttime,
+// state to prior.State as an immediate write (settled_state prior.State,
+// state_changed_ms the statement's clock; b.3ie); writes ended_at, pid, proc_starttime,
 // liveness_unverified_since and liveness_note from prior, and launch_token,
 // tmux_socket and the six server and pane identity columns from
 // prior.Identity, each zero value as NULL; sets launch_started_at to NULL; and
@@ -196,8 +200,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		return 0, fmt.Errorf("%s: prior state %q is not %s or %s", errPrefix, prior.State, StateEnded, StateMissing)
 	}
 	id := prior.Identity
-	r, err := s.db.Exec(restoreAfterFailedResumeSQL,
-		prior.State,
+	args := append(immediateStateArgs(prior.State),
 		nullableStringArg(prior.EndedAtText),
 		positiveIntArg(prior.PID),
 		nullableStringArg(prior.ProcStarttime),
@@ -209,6 +212,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
 		instanceID, StatePending, movedVersion,
 	)
+	r, err := s.db.Exec(restoreAfterFailedResumeSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}

@@ -25,6 +25,12 @@
 // busy_timeout_ms (b.c7f), with DefaultStoreBusyTimeoutMs and
 // MaxStoreBusyTimeoutMs.
 //
+// [state] settle_ms (b.3ie), the settle time of the state status, get and list
+// report, is refused the same way: a negative value and one above
+// MaxStateSettleMs. Unlike those keys, 0 is a value of its own, not the
+// default's stand-in: a missing key, or 0, turns the settle time off
+// (DefaultStateSettleMs).
+//
 // Load also refuses a file that sets one key under names differing only in
 // letter case ([Store] and [store] both setting db_path), whose value the
 // decoder would otherwise pick at random (b.p8n); LoadTemplate refuses a
@@ -52,6 +58,7 @@ type Config struct {
 	Pause    Pause    `toml:"pause"`
 	PreTrust PreTrust `toml:"pre_trust"`
 	Store    Store    `toml:"store"`
+	State    State    `toml:"state"`
 	Log      Log      `toml:"log"`
 	Tmux     Tmux     `toml:"tmux"`
 }
@@ -342,6 +349,59 @@ func (s Store) refusals() []string {
 	return nil
 }
 
+// State holds the settings of the state status, get and list report (b.3ie).
+type State struct {
+	// SettleMs is the settle time, in whole milliseconds: with a positive
+	// value, the state status, get and list report (and list --state filters
+	// on) moves to a new value only once a hook-written raw state has held
+	// that long, and reads the last settled value until then; terminal states
+	// and command-written states report at once. 0, or a missing key, turns
+	// it off: the reported state is the raw state, as before b.3ie. Read it
+	// only through EffectiveSettleMs. Load refuses a negative value and one
+	// above MaxStateSettleMs, never clamps it.
+	//
+	// Each process reads it once, when it loads its config: a hook process
+	// for its write, a verb's Client for its reads (an MCP serve keeps the
+	// value it started with). The setting covers every caller on the host.
+	SettleMs int `toml:"settle_ms"`
+}
+
+// DefaultStateSettleMs is the default of [state] settle_ms, in whole
+// milliseconds (0: off). It is the value Default() seeds into State.SettleMs
+// AND the value EffectiveSettleMs returns for a missing key, 0 or a negative
+// value, so the two never drift.
+const DefaultStateSettleMs = 0
+
+// MaxStateSettleMs is the largest [state] settle_ms Load accepts, in whole
+// milliseconds (60000, one minute): far above the recommended 1 to 2 s. A
+// longer settle time would hide whole turns of an agent from every polling
+// caller on the host.
+const MaxStateSettleMs = 60000
+
+// EffectiveSettleMs returns the settle time every reader and hook writer uses,
+// in whole milliseconds ([state] settle_ms): the configured value when
+// positive, otherwise DefaultStateSettleMs (0, off). It never returns a
+// negative value. It performs no maximum check; Load refuses a value above
+// MaxStateSettleMs.
+func (s State) EffectiveSettleMs() int {
+	if s.SettleMs > 0 {
+		return s.SettleMs
+	}
+	return DefaultStateSettleMs
+}
+
+// refusals returns the description of each refused [state] value, in table
+// order, or nil when every value loads. Only settle_ms is checked: a negative
+// value and one above MaxStateSettleMs are refused, never replaced by the
+// default or capped; 0 turns the settle time off (b.3ie).
+func (s State) refusals() []string {
+	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
+		return []string{fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
+			v, MaxStateSettleMs)}
+	}
+	return nil
+}
+
 // DefaultDbPath is the default of [store] db_path. It is the value Default()
 // seeds into Store.DbPath AND the fallback EffectiveDbPath returns for an
 // empty db_path, so the two never drift.
@@ -399,6 +459,9 @@ func Default() Config {
 		Store: Store{
 			DbPath:        DefaultDbPath,
 			BusyTimeoutMs: DefaultStoreBusyTimeoutMs,
+		},
+		State: State{
+			SettleMs: DefaultStateSettleMs,
 		},
 		Log: Log{
 			ErrorLogPath: "~/.agent-director/errors.log",
@@ -458,11 +521,12 @@ func (e *ConfigError) Unwrap() error {
 // STOPPING_WINDOW_SECONDS, b.g7h), as the decoder reads it in any. It validates
 // [defaults] expire_retention_days the same way (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds too (b.8q2), [pre_trust]
-// lock_wait_seconds (b.kr4) and [store] busy_timeout_ms (b.c7f): a negative
-// value and one above the key's maximum (MaxExpireRetentionDays,
-// MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds, MaxPreTrustLockWaitSeconds,
-// MaxStoreBusyTimeoutMs) are refused, never replaced by the default or
-// capped. A refusal behaves exactly like a malformed file: Load returns a
+// lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
+// settle_ms (b.3ie): a negative value and one above the key's maximum
+// (MaxExpireRetentionDays, MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds,
+// MaxPreTrustLockWaitSeconds, MaxStoreBusyTimeoutMs, MaxStateSettleMs) are
+// refused, never replaced by the default or capped. A refusal behaves exactly
+// like a malformed file: Load returns a
 // *ConfigError for the file whose Err describes every refused key
 // (validate). A value that is not a TOML integer already fails the parse.
 // The Config returned alongside any *ConfigError exists only to mirror the
@@ -638,7 +702,8 @@ func keyName(k toml.Key) string {
 // as a list (nameList: "refused [tmux] values: ", "refused [defaults] and
 // [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
 // every refused key's description, tables in the order [defaults], [relay],
-// [pause], [pre_trust], [store], [tmux] and each table in its own order, then
+// [pause], [pre_trust], [store], [state], [tmux] and each table in its own
+// order, then
 // missingKeyAdvice. A file refused only for [tmux] values gets the SR-4.1
 // description unchanged. Values are never changed.
 //
@@ -659,6 +724,7 @@ func validate(cfg Config, meta toml.MetaData) error {
 		{"[pause]", cfg.Pause.refusals()},
 		{"[pre_trust]", cfg.PreTrust.refusals()},
 		{"[store]", cfg.Store.refusals()},
+		{"[state]", cfg.State.refusals()},
 		{"[tmux]", tmuxRefused},
 	} {
 		if len(t.refusals) > 0 {

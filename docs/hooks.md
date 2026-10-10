@@ -71,6 +71,14 @@ Unknown event names are treated as soft refreshes — the row's
 name so operators can spot new Claude Code events that need a classifier
 update.
 
+These are the states the hooks write, and what every verb that acts on a
+row judges. With `[state] settle_ms` set in `config.toml`, `status`, `get`
+and `list` show a state a hook wrote only once it has held that long, and
+the previous settled state until then. A hook's `ended` shows at once; a
+hook that moves a row out of `missing` or `ended` waits like any other
+change. Each hook reads the setting when it fires, to judge whether the
+state it replaces had settled. See the README's settle time section.
+
 ### The idle-prompt Notification
 
 A turn's `Stop` sets `waiting`. A hook that fires after `Stop`, with no

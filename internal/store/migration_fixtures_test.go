@@ -626,6 +626,140 @@ var v7ToV6RecipeStatements = []string{
 	"PRAGMA user_version = 6",
 }
 
+// v8ColumnSpecs are the two spawns columns the v7→v8 step adds (b.3ie), in
+// schema order, after idle_since.
+var v8ColumnSpecs = []columnSpec{
+	{"spawns", "settled_state", "TEXT", true, "''"},
+	{"spawns", "state_changed_ms", "INTEGER", true, "0"},
+}
+
+// v8ColumnNames are v8ColumnSpecs' column names, in order.
+func v8ColumnNames() []string {
+	var names []string
+	for _, c := range v8ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// v8ToV7RecipeStatements reverses migrateV7toV8: the two v8 columns dropped
+// in the order the hop adds them, then the version stamped back to 7. It must
+// match docs/migration-guide.md's "v8 → v7" recipe statement for statement.
+var v8ToV7RecipeStatements = []string{
+	"ALTER TABLE spawns DROP COLUMN settled_state",
+	"ALTER TABLE spawns DROP COLUMN state_changed_ms",
+	"PRAGMA user_version = 7",
+}
+
+// assertV8Defaults checks id's v8 columns hold what the hop gives an existing
+// row: settled_state its own state and state_changed_ms 0, so it reads settled
+// at once for every settle time.
+func assertV8Defaults(t *testing.T, path, id string) {
+	t.Helper()
+	got := readRawSpawn(t, path, id, []string{"state", "settled_state", "state_changed_ms"})
+	if got["settled_state"] != got["state"] || got["state_changed_ms"] != "0" {
+		t.Errorf("%s: state %s, settled_state %s, state_changed_ms %s; want settled_state the state and 0",
+			id, got["state"], got["settled_state"], got["state_changed_ms"])
+	}
+}
+
+// assertNoV8Columns fails if any v8 column is present, in any letter case.
+func assertNoV8Columns(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, name := range tableColumnNames(t, db, "spawns") {
+			for _, want := range v8ColumnSpecs {
+				if strings.EqualFold(name, want.name) {
+					t.Errorf("%s present; want absent", want.key())
+				}
+			}
+		}
+	})
+}
+
+// preAddV8Columns adds the named v8 spawns columns with their definitions: a
+// v7→v8 hop that stopped part-way (before its backfill).
+func preAddV8Columns(t *testing.T, path string, names ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, n := range names {
+			for _, spec := range v8ColumnSpecs {
+				if spec.name == n {
+					mustExec(t, db, spec.addColumnDDL())
+				}
+			}
+		}
+	})
+}
+
+// breakV8StateChangedColumn adds STATE_CHANGED_MS to a v7 store: the hop's
+// probe compares names exactly, so it adds settled_state and then fails at
+// state_changed_ms, its last column, as a duplicate column.
+func breakV8StateChangedColumn(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, "ALTER TABLE spawns ADD COLUMN STATE_CHANGED_MS INTEGER NOT NULL DEFAULT 0")
+	})
+}
+
+// breakV8Backfill makes every update of a spawns row on a v7 store fail: the
+// hop adds both v8 columns, then fails at its backfill of the settled state.
+func breakV8Backfill(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `CREATE TRIGGER ad_test_fail_settle_backfill BEFORE UPDATE ON spawns
+			BEGIN SELECT RAISE(ABORT, 'test: the settle backfill fails'); END`)
+	})
+}
+
+// v7Fixture describes what makeV7Fixture seeded: one row per state, in
+// v7States order (ids "v7-<state>"), and quote() literals of every v7 spawns
+// column of each and of the check_permission row's open request, read before
+// the hop.
+type v7Fixture struct {
+	dir, path   string
+	spawnCols   []string
+	rows        map[string]map[string]string
+	requestCols []string
+	requests    []map[string]string
+}
+
+// v7States are the states makeV7Fixture seeds a row in.
+var v7States = []string{StatePending, StateWaiting, StateWorking, StateAskUser, StateCheckPermission, StateEnded, StateMissing}
+
+// v7ID is makeV7Fixture's row in state.
+func v7ID(state string) string { return "v7-" + state }
+
+// makeV7Fixture builds a genuine v7 store under dir holding a row in every
+// state, relay on: the pending row in the middle of a launch (launch start,
+// token, socket), the check_permission row with an open relay request, every
+// row at row_version 4 with a liveness note.
+func makeV7Fixture(t *testing.T, dir string) v7Fixture {
+	t.Helper()
+	f := v7Fixture{dir: dir, path: makeVersionedDB(t, dir, 7), rows: map[string]map[string]string{}}
+	withRaw(t, f.path, func(db *sql.DB) {
+		for _, st := range v7States {
+			var launch any
+			if st == StatePending {
+				launch = int64(1_790_000_000_123)
+			}
+			mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, row_version,
+				launch_started_at, launch_token, tmux_socket, liveness_note) VALUES (?, ?, '/work/v7', ?, 'on', 4, ?,
+				'0123456789abcdef', '/tmp/ad-v7/sock', 'probe_eacces')`, v7ID(st), st, "ad-"+v7ID(st), launch)
+		}
+		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input,
+			hook_pid, hook_starttime, tool_use_id, settled_at) VALUES (?, 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 'Bash', '{}',
+			4321, '777', 'toolu_v7', 1790000000000)`, v7ID(StateCheckPermission))
+		f.spawnCols = tableColumnNames(t, db, "spawns")
+		f.requestCols = tableColumnNames(t, db, "permission_requests")
+	})
+	for _, st := range v7States {
+		f.rows[v7ID(st)] = readRawSpawn(t, f.path, v7ID(st), f.spawnCols)
+	}
+	f.requests = readQuotedRows(t, f.path, "permission_requests", v7ID(StateCheckPermission), "request_id", f.requestCols)
+	return f
+}
+
 // applyRecipe runs stmts on the closed store at path in one transaction.
 func applyRecipe(t *testing.T, path string, stmts []string) {
 	t.Helper()

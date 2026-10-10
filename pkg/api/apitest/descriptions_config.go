@@ -10,12 +10,12 @@ import (
 // descriptions_config.go holds the shared description helper's case for a
 // config file refused for its [tmux] values (SR-4.1), its [defaults]
 // expire_retention_days (b.sgw), its [relay] or [pause] timeout_seconds
-// (b.8q2), its [pre_trust] lock_wait_seconds (b.kr4) or its [store]
-// busy_timeout_ms (b.c7f): ErrConfigMalformed's description names the file
-// and lists the refused tables, states each refused value, then that a
-// missing key, or 0, gives the default, adding, beside a refused key whose
-// derived minimum is above its default, that it gives that key's safe minimum
-// when that is larger (b.9e1). No refused value's text contains "; ", the
+// (b.8q2), its [pre_trust] lock_wait_seconds (b.kr4), its [store]
+// busy_timeout_ms (b.c7f) or its [state] settle_ms (b.3ie):
+// ErrConfigMalformed's description names the file and lists the refused
+// tables, states each refused value, then that a missing key, or 0, gives the
+// default, adding, beside a refused key whose derived minimum is above its
+// default, that it gives that key's safe minimum when that is larger (b.9e1). No refused value's text contains "; ", the
 // separator between them. A file setting one key under names that differ only
 // in letter case has its own case, DescConfigCaseVariant (b.p8n).
 
@@ -26,8 +26,9 @@ import (
 // refused [defaults] expire_retention_days Value, with RelayTimeout or
 // PauseTimeout set the refused [relay] or [pause] timeout_seconds Value
 // (b.8q2), with PreTrustLockWait set the refused [pre_trust]
-// lock_wait_seconds Value (b.kr4), and with StoreBusyTimeout set the refused
-// [store] busy_timeout_ms Value (b.c7f); Key is then unused.
+// lock_wait_seconds Value (b.kr4), with StoreBusyTimeout set the refused
+// [store] busy_timeout_ms Value (b.c7f), and with StateSettle set the refused
+// [state] settle_ms Value (b.3ie); Key is then unused.
 type ConfigRefusal struct {
 	Key              config.TmuxKey
 	Value            int64
@@ -39,10 +40,11 @@ type ConfigRefusal struct {
 	PauseTimeout     bool
 	PreTrustLockWait bool
 	StoreBusyTimeout bool
+	StateSettle      bool
 }
 
 // configTables are the tables a refusal description lists, in its order.
-var configTables = []string{"[defaults]", "[relay]", "[pause]", "[pre_trust]", "[store]", "[tmux]"}
+var configTables = []string{"[defaults]", "[relay]", "[pause]", "[pre_trust]", "[store]", "[state]", "[tmux]"}
 
 // table is the table r's key is in.
 func (r ConfigRefusal) table() string {
@@ -57,6 +59,8 @@ func (r ConfigRefusal) table() string {
 		return "[pre_trust]"
 	case r.StoreBusyTimeout:
 		return "[store]"
+	case r.StateSettle:
+		return "[state]"
 	}
 	return "[tmux]"
 }
@@ -115,6 +119,9 @@ func DescConfigRefused(path string, refusals ...ConfigRefusal) DescCase {
 		case r.StoreBusyTimeout:
 			msg = fmt.Sprintf("[store] busy_timeout_ms = %d, outside its range 1 to %d milliseconds",
 				r.Value, config.MaxStoreBusyTimeoutMs)
+		case r.StateSettle:
+			msg = fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
+				r.Value, config.MaxStateSettleMs)
 		case r.Minimum == 0:
 			msg = fmt.Sprintf("[tmux] %s = %d, which must be positive", k.Name(), r.Value)
 		default:

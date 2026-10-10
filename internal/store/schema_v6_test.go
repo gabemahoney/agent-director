@@ -62,7 +62,7 @@ func TestV6MigrationKeepsV5Rows(t *testing.T) {
 }
 
 // TestDowngradeV6ToV5_KeepsRowsThenRemigrates: on a store taken back to v6
-// first (the v7 → v6 recipe), the v6 → v5 statements
+// first (the v8 → v7 and v7 → v6 recipes), the v6 → v5 statements
 // (v6ToV5RecipeStatements) leave a v5 store with no v6 column, every other
 // value of a pending row that recorded an owner kept and the store id kept;
 // this binary refuses it until an authorised re-migration, which gives the
@@ -82,7 +82,8 @@ func TestDowngradeV6ToV5_KeepsRowsThenRemigrates(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	applyRecipe(t, path, v7ToV6RecipeStatements) // a current store is past v6: back to v6 first
+	applyRecipe(t, path, v8ToV7RecipeStatements) // a current store is past v6: back to v6 first
+	applyRecipe(t, path, v7ToV6RecipeStatements)
 	var v5Cols []string
 	withRaw(t, path, func(db *sql.DB) {
 		for _, c := range tableColumnNames(t, db, "spawns") {

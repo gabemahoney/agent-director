@@ -230,6 +230,13 @@ export interface ListRow {
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history.
+   *
+   * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
+   * off), this is the settled state: a state a hook wrote shows only once it has held for
+   * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
+   * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * Nothing marks a state as late. The row's other fields, and the verbs that act on it, follow
+   * its live state, which can be newer: a refusal can name a state this field does not show yet.
    */
   state: string;
   /** Canonicalized working directory. */
@@ -246,7 +253,11 @@ export interface ListRow {
   last_seen_at: string;
   /** Set when state moves to ended (omitted while live). */
   ended_at?: string | null;
-  /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
+  /**
+   * Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a
+   * pending row, omitted otherwise. It follows the row's live state: with `[state] settle_ms`
+   * set, a row whose agent has reported in can read pending without it for up to settle_ms.
+   */
   launch_started_at?: string | null;
   /**
    * RFC3339 timestamp of the first sweep that noted this live row (left it
@@ -278,7 +289,9 @@ export interface ListRow {
   liveness_note?: string | null;
   /**
    * The row's open permission requests (those still awaiting an answer), each with its
-   * delivery facts; populated only when state is check_permission, `[]` otherwise.
+   * delivery facts; populated only when the row's live state is check_permission, `[]`
+   * otherwise. Requests are never delayed by `[state] settle_ms`, so with it set a row can read
+   * waiting with open requests, or check_permission with `[]`, for up to settle_ms.
    */
   permission_requests: PermissionRequestInfo[];
 }
@@ -369,9 +382,20 @@ export interface StatusResult {
    * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history; a caller tells it
    * from a fresh one by its non-empty `claude_session_id`, shown by `get`.
+   *
+   * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
+   * off), this is the settled state: a state a hook wrote shows only once it has held for
+   * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
+   * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * Nothing marks a state as late. The verbs that act on the Spawn follow its live state, which
+   * can be newer: a refusal can name a state status does not show yet.
    */
   state: string;
-  /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
+  /**
+   * Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a
+   * pending row, omitted otherwise. It follows the row's live state: with `[state] settle_ms`
+   * set, a row whose agent has reported in can read pending without it for up to settle_ms.
+   */
   launch_started_at?: string | null;
 }
 
@@ -391,6 +415,13 @@ export interface GetResult {
    * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history; a non-empty
    * `claude_session_id` tells it from a fresh one.
+   *
+   * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
+   * off), this is the settled state: a state a hook wrote shows only once it has held for
+   * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
+   * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * Nothing marks a state as late. The row's other fields, and the verbs that act on it, follow
+   * its live state, which can be newer: a refusal can name a state this field does not show yet.
    */
   state: string;
   cwd: string;
@@ -408,7 +439,11 @@ export interface GetResult {
   last_seen_at: string;
   /** Set when state moves to ended; omitted while live. */
   ended_at?: string | null;
-  /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
+  /**
+   * Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a
+   * pending row, omitted otherwise. It follows the row's live state: with `[state] settle_ms`
+   * set, a row whose agent has reported in can read pending without it for up to settle_ms.
+   */
   launch_started_at?: string | null;
   /**
    * RFC3339 timestamp of the first sweep that noted this live row (left it
@@ -441,17 +476,21 @@ export interface GetResult {
   /**
    * The row's open permission requests (those still awaiting an answer: not acked by their relay
    * hook and not answered at the pane, decided or not), each with its delivery facts; populated
-   * only when state is check_permission, `[]` otherwise. A row can read waiting while a request
-   * is still open: follow a tracked request with `getPermission`.
+   * only when the row's live state is check_permission, `[]` otherwise. A row can read waiting
+   * while a request is still open: follow a tracked request with `getPermission`. Requests are
+   * never delayed by `[state] settle_ms`, so with it set a row can also read waiting with open
+   * requests, or check_permission with `[]`, for up to settle_ms.
    */
   permission_requests: PermissionRequestInfo[];
   /**
    * Every permission request of the row that Claude Code has not proven gone (`proven_gone_at`
-   * null), oldest first, in any state but ended and missing (`[]` on those). Unlike
+   * null), oldest first, in any live state but ended and missing (`[]` on those). Unlike
    * `permission_requests` it also lists requests agent-director's records read closed
    * (delivered, answered at the pane, or recorded answered outside it), each with
    * `unproven_since`. While it is not empty, a plain `sendKeys` without `expect_pane_sha256`
-   * rejects (`ErrDialogMaybeOpen`, or an earlier relay refusal).
+   * rejects (`ErrDialogMaybeOpen`, or an earlier relay refusal). It follows the row's live
+   * state and is never delayed by `[state] settle_ms`, so with it set it can disagree with
+   * `state` for up to settle_ms.
    */
   unproven_requests: PermissionRequestInfo[];
 }
@@ -888,7 +927,10 @@ export interface MakeTemplateResult {
 
 /** Mirrors pkg/api.ListParams (json tags). */
 export interface ListParams {
-  /** Filter by state (multiple values OR together). */
+  /**
+   * Filter by state (multiple values OR together). With `[state] settle_ms` set it matches the
+   * settled state each row's `state` shows, before `limit` applies.
+   */
   state?: string[];
   /** Filter by label k=v pairs (multiple entries AND together). */
   label?: string[];

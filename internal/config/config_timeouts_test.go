@@ -2,13 +2,14 @@ package config_test
 
 // config_timeouts_test.go pins the keys outside [tmux] with a range:
 // [defaults] expire_retention_days (b.sgw), [relay] and [pause]
-// timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4) and [store]
-// busy_timeout_ms (b.c7f). A missing key or 0 gives the default (31, 86400,
-// 30, 12, 10000); 1 to the key's largest value (106751 days; 2147483, the
-// largest per-hook timeout Claude Code honours; 9223372036, the largest a
-// Duration holds; 2147483647, the largest busy timeout SQLite holds) loads as
+// timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4), [store]
+// busy_timeout_ms (b.c7f) and [state] settle_ms (b.3ie). A missing key or 0
+// gives the default (31, 86400, 30, 12, 10000; settle_ms 0, off); 1 to the
+// key's largest value (106751 days; 2147483, the largest per-hook timeout
+// Claude Code honours; 9223372036, the largest a Duration holds; 2147483647,
+// the largest busy timeout SQLite holds; 60000 ms, MaxStateSettleMs) loads as
 // written; Load refuses a negative value and one above the largest, the way
-// it refuses a [tmux] value, so no value wraps into a different window.
+// it refuses a [tmux] value, never clamping it.
 
 import (
 	"testing"
@@ -58,6 +59,10 @@ func busyTimeoutRefusal(v string) string {
 	return "[store] busy_timeout_ms = " + v + ", outside its range 1 to 2147483647 milliseconds"
 }
 
+func settleRefusal(v string) string {
+	return "[state] settle_ms = " + v + ", outside its range 0 to 60000 milliseconds"
+}
+
 // TestRangeKeysLoad checks the values Load accepts: the file's value is kept
 // as written and the effective value is never 0. The pause and pre_trust
 // values are int64 so the file builds where int is 32 bits (GOARCH=386).
@@ -70,16 +75,19 @@ func TestRangeKeysLoad(t *testing.T) {
 		pause, pauseEffective       int64
 		preTrust, preTrustEffective int64
 		busy, busyEffective         int
+		settle, settleEffective     int // 0 is off, its own value (b.3ie)
 	}{
-		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000},
-		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0", busyTimeout: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12,
-			0, 10000},
-		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1", busyTimeout: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0},
+		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0", busyTimeout: "0", settle: "0"}, 0, 31, 0, 86400,
+			0, 30, 0, 12, 0, 10000, 0, 0},
+		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1", busyTimeout: "1", settle: "1"}, 1, 1, 1, 1, 1, 1,
+			1, 1, 1, 1, 1, 1},
 		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12", busyTimeout: "10000"}, 31, 31, 86400, 86400,
-			30, 30, 12, 12, 10000, 10000},
+			30, 30, 12, 12, 10000, 10000, 0, 0},
+		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500},
 		{"largest", rangeKeys{days: "106751", relay: "2147483", pause: "9223372036", preTrust: "9223372036",
-			busyTimeout: "2147483647"}, 106751, 106751, 2147483, 2147483, 9223372036, 9223372036, 9223372036, 9223372036,
-			2147483647, 2147483647},
+			busyTimeout: "2147483647", settle: "60000"}, 106751, 106751, 2147483, 2147483, 9223372036, 9223372036, 9223372036,
+			9223372036, 2147483647, 2147483647, 60000, 60000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +110,8 @@ func TestRangeKeysLoad(t *testing.T) {
 					int64(cfg.PreTrust.EffectiveLockWaitSeconds()), tc.preTrustEffective},
 				{"Store.BusyTimeoutMs", int64(cfg.Store.BusyTimeoutMs), int64(tc.busy),
 					int64(cfg.Store.EffectiveBusyTimeoutMs()), int64(tc.busyEffective)},
+				{"State.SettleMs", int64(cfg.State.SettleMs), int64(tc.settle),
+					int64(cfg.State.EffectiveSettleMs()), int64(tc.settleEffective)},
 			} {
 				if c.stored != c.written || c.eff != c.wantEff {
 					t.Errorf("%s = %d (effective %d); want %d as written (effective %d)", c.name, c.stored, c.eff, c.written, c.wantEff)
@@ -124,6 +134,9 @@ func TestRangeKeysLoad(t *testing.T) {
 	}
 	if got := (config.Store{BusyTimeoutMs: -1}).EffectiveBusyTimeoutMs(); got != 10000 {
 		t.Errorf("Store.EffectiveBusyTimeoutMs() of -1 = %d; want 10000", got)
+	}
+	if got := (config.State{SettleMs: -1}).EffectiveSettleMs(); got != config.DefaultStateSettleMs {
+		t.Errorf("State.EffectiveSettleMs() of -1 = %d; want %d (off)", got, config.DefaultStateSettleMs)
 	}
 }
 
@@ -194,6 +207,18 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 			"refused [pre_trust] and [store] values: " + preTrustRefusal("-1") + "; " + busyTimeoutRefusal("-1") + refusalTail},
 		{"busy_timeout_and_tmux", rangeKeys{busyTimeout: "2147483648"}, killNegativeTmux,
 			"refused [store] and [tmux] values: " + busyTimeoutRefusal("2147483648") + "; " + killNegative + refusalTail},
+		// b.3ie: named and refused, never clamped to 0 or to MaxStateSettleMs.
+		{"settle_negative", rangeKeys{settle: "-1"}, nil, "refused [state] values: " + settleRefusal("-1") + refusalTail},
+		{"settle_above_largest", rangeKeys{settle: "60001"}, nil,
+			"refused [state] values: " + settleRefusal("60001") + refusalTail},
+		{"settle_int64_min", rangeKeys{settle: "-9223372036854775808"}, nil,
+			"refused [state] values: " + settleRefusal("-9223372036854775808") + refusalTail},
+		{"settle_int64_max", rangeKeys{settle: "9223372036854775807"}, nil,
+			"refused [state] values: " + settleRefusal("9223372036854775807") + refusalTail},
+		{"busy_timeout_and_settle", rangeKeys{busyTimeout: "-1", settle: "-1"}, nil,
+			"refused [store] and [state] values: " + busyTimeoutRefusal("-1") + "; " + settleRefusal("-1") + refusalTail},
+		{"settle_and_tmux", rangeKeys{settle: "60001"}, killNegativeTmux,
+			"refused [state] and [tmux] values: " + settleRefusal("60001") + "; " + killNegative + refusalTail},
 		{"defaults_and_relay", rangeKeys{days: "-1", relay: "-1"}, nil,
 			"refused [defaults] and [relay] values: " + retentionRefusal("-1") + "; " + relayRefusal("-1") + refusalTail},
 		{"pause_and_tmux", rangeKeys{pause: "-1"}, killNegativeTmux,
@@ -201,11 +226,12 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 		{"three_tables", rangeKeys{relay: "-1", pause: "9223372037"}, killNegativeTmux,
 			"refused [relay], [pause] and [tmux] values: " + relayRefusal("-1") + "; " + pauseRefusal("9223372037") +
 				"; " + killNegative + refusalTail},
-		{"every_table", rangeKeys{days: "106752", relay: "2147484", pause: "-1", preTrust: "-1", busyTimeout: "-1"},
-			killNegativeTmux,
-			"refused [defaults], [relay], [pause], [pre_trust], [store] and [tmux] values: " + retentionRefusal("106752") +
-				"; " + relayRefusal("2147484") + "; " + pauseRefusal("-1") + "; " + preTrustRefusal("-1") + "; " +
-				busyTimeoutRefusal("-1") + "; " + killNegative + refusalTail},
+		{"every_table", rangeKeys{days: "106752", relay: "2147484", pause: "-1", preTrust: "-1", busyTimeout: "-1",
+			settle: "-1"}, killNegativeTmux,
+			"refused [defaults], [relay], [pause], [pre_trust], [store], [state] and [tmux] values: " +
+				retentionRefusal("106752") + "; " + relayRefusal("2147484") + "; " + pauseRefusal("-1") + "; " +
+				preTrustRefusal("-1") + "; " + busyTimeoutRefusal("-1") + "; " + settleRefusal("-1") + "; " + killNegative +
+				refusalTail},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

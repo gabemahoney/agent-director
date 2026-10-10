@@ -175,6 +175,14 @@ the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
+With `[state] settle_ms` set in the config the `Client` loaded when it was
+built, `Status`, `Get` and `List` report the settled state: a state a hook
+wrote shows only once it has held that long, the last settled state until
+then; `ended`, `missing` and a state a verb wrote show at once. The other
+fields, and every verb that acts on a row, follow its live state. The
+package-level `api.Status`, `api.Get` and `api.List` functions use no
+settle time.
+
 ---
 
 ### List
@@ -204,7 +212,9 @@ for _, row := range res.Spawns {
 ```
 
 Returns `ListResult` (`.Spawns []ListRow`). `Spawns` is never nil —
-encodes as `[]` when empty. Most-likely sentinel error:
+encodes as `[]` when empty. With `[state] settle_ms` set, `State` filters
+on the settled state each row reports (see Status). Most-likely sentinel
+error:
 `ErrListInvalidLabel` (label not in `key=value` form). See
 `(*Client).List` godoc.
 

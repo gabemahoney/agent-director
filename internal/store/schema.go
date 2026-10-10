@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v7 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v8 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -59,6 +59,16 @@ import (
 // spawns, idle_since after launch_owner_pidns. The column text matches
 // v7Columns exactly (the two-places rule), so a fresh store and a migrated
 // store have identical column lists.
+//
+// v8 changes vs v7 (b.3ie, the settle time): the columns v8Columns lists, in
+// its order, on spawns after idle_since — settled_state (TEXT NOT NULL,
+// default the empty string), the last settled state as of the row's last raw
+// state change,
+// and state_changed_ms (INTEGER NOT NULL DEFAULT 0), when the raw state last
+// changed, in milliseconds since the epoch. state stays the raw state. Every
+// write of state sets both in its own statement (settle.go), and status, get
+// and list derive the state they report from the three (SettleRead). The
+// column text matches v8Columns exactly (the two-places rule).
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     claude_instance_id         TEXT PRIMARY KEY,
@@ -94,7 +104,9 @@ CREATE TABLE IF NOT EXISTS spawns (
     launch_owner_pid           INTEGER,
     launch_owner_starttime     TEXT,
     launch_owner_pidns         TEXT,
-    idle_since                 TEXT
+    idle_since                 TEXT,
+    settled_state              TEXT NOT NULL DEFAULT '',
+    state_changed_ms           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -175,6 +187,7 @@ var migrationSteps = []migrationStep{
 	{from: 4, apply: migrateV4toV5},
 	{from: 5, apply: migrateV5toV6},
 	{from: 6, apply: migrateV6toV7},
+	{from: 7, apply: migrateV7toV8},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -730,6 +743,87 @@ func migrateV6toV7(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v6→v7 migration tx: %w", err)
+	}
+	return nil
+}
+
+// v8Columns is every column migrateV7toV8 adds (b.3ie, the settle time), in
+// order, with the exact column text schemaDDL uses (the two-places rule), both
+// on spawns after idle_since:
+//   - settled_state: the last settled state as of the row's last raw state
+//     change (the base a hook write keeps while its change has not settled);
+//     the empty string only on a row no write has given one, which every
+//     reader takes as its raw state;
+//   - state_changed_ms: when the row's raw state last changed, in
+//     milliseconds since the epoch, from SQLite's own clock inside the
+//     writing statement; 0 is older than any settle time.
+var v8Columns = []struct{ table, name, ddl string }{
+	{"spawns", "settled_state", "ALTER TABLE spawns ADD COLUMN settled_state TEXT NOT NULL DEFAULT ''"},
+	{"spawns", "state_changed_ms", "ALTER TABLE spawns ADD COLUMN state_changed_ms INTEGER NOT NULL DEFAULT 0"},
+}
+
+// v8BackfillSQL is migrateV7toV8's one backfill (phase 3): every row gets its
+// own state as its settled state. With state_changed_ms at its default 0 a row
+// then reads settled at once for every settle time, as it did before the hop.
+// It writes only where settled_state is still the empty string, so a second
+// run rewrites nothing.
+const v8BackfillSQL = `UPDATE spawns SET settled_state = state WHERE settled_state = ''`
+
+// migrateV7toV8 upgrades a v7 database to v8 inside a single transaction
+// (b.3ie): it adds v8Columns, in order, backfills every row's settled state
+// (v8BackfillSQL) and stamps user_version = 8 as the last statement.
+//
+// ADD COLUMN gives every existing row an empty settled_state and
+// state_changed_ms 0; the backfill then sets settled_state to the row's
+// state. So every row
+// that existed at the migration reads as settled: status, get and list report
+// its raw state at once whatever [state] settle_ms is, until its next raw
+// change. No other existing value is rewritten (row_version included), and
+// store_meta and its store id are kept.
+//
+// SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER
+// is guarded by a pragma_table_info probe and skipped when the column is
+// already present, and the backfill writes only rows not yet backfilled,
+// making the hop idempotent on re-entry. Any probe, ALTER or backfill failure
+// rolls the whole hop back, leaving user_version=7 and neither column.
+func migrateV7toV8(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v7→v8 migration tx: %w", err)
+	}
+	for _, col := range v8Columns {
+		// The table name comes from the trusted literal list above, never
+		// from input; pragma_table_info takes it as a bound argument.
+		var exists int
+		err := tx.QueryRow(
+			"SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+			col.table, col.name,
+		).Scan(&exists)
+		switch {
+		case err == nil:
+			// Column already present — skip to stay idempotent.
+			continue
+		case errors.Is(err, sql.ErrNoRows):
+			// Column absent — add it below.
+		default:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v7→v8 probe %s.%s: %w", col.table, col.name, err)
+		}
+		if _, err := tx.Exec(col.ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v7→v8 add %s.%s: %w", col.table, col.name, err)
+		}
+	}
+	if _, err := tx.Exec(v8BackfillSQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v7→v8 backfill settled state: %w", err)
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 8"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v7→v8 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v7→v8 migration tx: %w", err)
 	}
 	return nil
 }

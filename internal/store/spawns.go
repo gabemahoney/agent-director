@@ -163,6 +163,14 @@ type Spawn struct {
 	// (ApplyHookWaitingIfWorking), NULLed by any later hook. find-missing's
 	// repair of a stale check_permission row picks waiting when it is set.
 	IdleSince string
+
+	// ReportedState is the state status, get and list report (b.3ie): the
+	// settled state a read with a SettleRead that settles derives
+	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
+	// ListFilters.Settle), and State itself for every other read. Every read
+	// fills it, so it is never "" on a row a read returned. Guards never read
+	// it: they act on State, the raw state.
+	ReportedState string
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -191,7 +199,10 @@ type Spawn struct {
 // create (SR-3.6). The launch owner columns (launch_owner_pid,
 // launch_owner_starttime, launch_owner_pidns) take sp.LaunchOwner, a zero
 // value as NULL (b.kdf): the spawn records itself as the owner of the launch
-// it begins. The new row starts at row_version 0 (the column default).
+// it begins. The new row starts at row_version 0 (the column default). It is
+// an immediate write (b.3ie): settled_state is pending and state_changed_ms
+// the statement's own clock, so the new row reports pending at once whatever
+// the settle time.
 func (s *Store) InsertPending(sp Spawn) error {
 	argsJSON, err := encodeArgs(sp.ClaudeArgs)
 	if err != nil {
@@ -206,13 +217,16 @@ func (s *Store) InsertPending(sp Spawn) error {
 		return fmt.Errorf("store: encode extra_env: %w", err)
 	}
 
+	// The insert is an immediate write (settle.go, b.3ie): pending is the
+	// row's settled state at once, stamped with the statement's own clock.
 	const stmt = `
         INSERT INTO spawns (
             claude_instance_id, parent_id, state, cwd, tmux_session_name,
             claude_args, relay_mode, labels, extra_env,
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
-            launch_owner_pid, launch_owner_starttime, launch_owner_pidns
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
+            settled_state, state_changed_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -233,6 +247,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
+	args = append(args, StatePending)
 	_, err = s.db.Exec(stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
@@ -276,6 +291,27 @@ func (s *Store) GetSpawnWithin(instanceID string, maxWait time.Duration) (Spawn,
 		sp, err = scanSpawn(conn.QueryRowContext(ctx, getSpawnSQL, instanceID), getSpawnErrs)
 		return err
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return Spawn{}, err
+	}
+	return sp, nil
+}
+
+// GetSpawnSettled is GetSpawn with the state get reports (b.3ie): the row's
+// ReportedState as r derives it (SettleRead.stateExpr), in the same
+// statement, from r's clock, which the caller took before this read. With no
+// settle time it is GetSpawn exactly, the same statement, and ReportedState is
+// State. It never waits for a state to settle. Guards read GetSpawn instead.
+func (s *Store) GetSpawnSettled(instanceID string, r SettleRead) (Spawn, error) {
+	if !r.on() {
+		return s.GetSpawn(instanceID)
+	}
+	expr, args := r.stateExpr()
+	q := `SELECT ` + spawnColumns + `, ` + expr + ` FROM spawns WHERE claude_instance_id = ?`
+	sp, err := scanSpawnRow(s.db.QueryRow(q, append(args, instanceID)...), getSpawnErrs, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
@@ -331,8 +367,16 @@ var (
 // pre-v5 fields and failures are exactly as before (an unparseable
 // started_at/ended_at or malformed labels, claude_args or extra_env fails the
 // read); the SR-5.5 columns never fail it. The Scan error is wrapped with %w,
-// so callers can still detect sql.ErrNoRows.
+// so callers can still detect sql.ErrNoRows. ReportedState is State.
 func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
+	return scanSpawnRow(sc, errs, false)
+}
+
+// scanSpawnRow is scanSpawn, with ReportedState scanned from one more column
+// after spawnColumns, the reported state (SettleRead.stateExpr; b.3ie), when
+// reported is set, and taken from State otherwise. The reported state comes
+// last, so every other column keeps its index (and its scan-error text).
+func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, error) {
 	var (
 		sp              Spawn
 		argsJSON        string
@@ -356,9 +400,15 @@ func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
 	dest = append(dest, &sp.IdleSince)
+	if reported {
+		dest = append(dest, &sp.ReportedState)
+	}
 	err := sc.Scan(dest...)
 	if err != nil {
 		return Spawn{}, fmt.Errorf("%s: %w", errs.scan, err)
+	}
+	if !reported {
+		sp.ReportedState = sp.State
 	}
 	if endedAt.Valid {
 		t := endedAt.Time
@@ -401,18 +451,42 @@ func (s *Store) GetSpawnState(instanceID string) (string, error) {
 // (0 = absent) in one read by primary key, for status (SR-22.2, SR-16.1).
 // It decodes no structured column and never fails because of a stored
 // launch start value: NULL, a non-integer and an integer outside the years 0
-// to 9999 UTC all read as 0 (decodeLaunchStartedAt, SR-5.5).
+// to 9999 UTC all read as 0 (decodeLaunchStartedAt, SR-5.5). The state is the
+// raw state: SpawnStatusSettled with no settle time.
 func (s *Store) SpawnStatus(instanceID string) (state string, launchStartedAtMillis int64, err error) {
-	const q = `SELECT state, launch_started_at FROM spawns WHERE claude_instance_id = ?`
-	var launchStartedAt any
-	err = s.db.QueryRow(q, instanceID).Scan(&state, &launchStartedAt)
+	_, state, launchStartedAtMillis, err = s.SpawnStatusSettled(instanceID, SettleRead{})
+	return state, launchStartedAtMillis, err
+}
+
+// SpawnStatusSettled is SpawnStatus with the state status reports (b.3ie):
+// reported is the row's state as r derives it (SettleRead.stateExpr), in the
+// same statement, from r's clock, which the caller took before this read; raw
+// is the row's raw state. With no settle time the statement is SpawnStatus's
+// exactly and reported is raw. It never waits for a state to settle.
+func (s *Store) SpawnStatusSettled(instanceID string, r SettleRead) (reported, raw string, launchStartedAtMillis int64, err error) {
+	var (
+		launchStartedAt any
+		q               = `SELECT state, launch_started_at FROM spawns WHERE claude_instance_id = ?`
+		args            = []any{instanceID}
+		dest            = []any{&raw, &launchStartedAt}
+	)
+	if r.on() {
+		expr, exprArgs := r.stateExpr()
+		q = `SELECT state, launch_started_at, ` + expr + ` FROM spawns WHERE claude_instance_id = ?`
+		args = append(exprArgs, instanceID)
+		dest = append(dest, &reported)
+	}
+	err = s.db.QueryRow(q, args...).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", 0, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+		return "", "", 0, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
 	if err != nil {
-		return "", 0, fmt.Errorf("store: spawn status: %w", err)
+		return "", "", 0, fmt.Errorf("store: spawn status: %w", err)
 	}
-	return state, decodeLaunchStartedAt(launchStartedAt), nil
+	if !r.on() {
+		reported = raw
+	}
+	return reported, raw, decodeLaunchStartedAt(launchStartedAt), nil
 }
 
 // SpawnState returns the state of the row with the given claude_instance_id
@@ -597,11 +671,12 @@ func storeTimestamp(t time.Time) string {
 	return t.UTC().Format(storeTimestampLayout)
 }
 
-// endHeldLaunchSQL is EndHeldLaunch's one statement: the move to ended, the
-// launch start cleared and the version advance, guarded by the insert's
-// state, version and launch start (SR-5.3, SR-5.6, SR-22.3).
+// endHeldLaunchSQL is EndHeldLaunch's one statement: the move to ended, an
+// immediate write (immediateStateSet, b.3ie), the launch start cleared and the
+// version advance, guarded by the insert's state, version and launch start
+// (SR-5.3, SR-5.6, SR-22.3).
 const endHeldLaunchSQL = `UPDATE spawns
-    SET state    = ?,
+    SET ` + immediateStateSet + `,
         ended_at = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -615,7 +690,9 @@ const endHeldLaunchSQL = `UPDATE spawns
 // insertLaunchStartedAtMillis, the launch start InsertPending wrote (SR-5.3; a
 // delete followed by a fresh insert restarts the version at 0, and the launch
 // start tells the two lives apart). It then sets state to ended (pending,
-// version 0, to ended; SR-22.3), ended_at to endedAt in the store's
+// version 0, to ended; SR-22.3) as an immediate write (settled_state ended and
+// state_changed_ms the statement's clock, so ended reports at once; b.3ie),
+// ended_at to endedAt in the store's
 // CURRENT_TIMESTAMP layout (UTC, whole seconds, so expire's text comparison
 // selects it as it does a row the ended hook transition wrote),
 // launch_started_at to NULL, and advances row_version by one (SR-5.2). It
@@ -643,10 +720,9 @@ const endHeldLaunchSQL = `UPDATE spawns
 // writes emit one, SR-14) and makes no tmux call. It is on the concrete
 // *Store only, like InsertPending and RecordLaunchIdentity (Appendix F.4).
 func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
-	res, err := s.db.Exec(endHeldLaunchSQL,
-		StateEnded, storeTimestamp(endedAt),
-		instanceID, StatePending, insertLaunchStartedAtMillis,
-	)
+	args := append(immediateStateArgs(StateEnded), storeTimestamp(endedAt),
+		instanceID, StatePending, insertLaunchStartedAtMillis)
+	res, err := s.db.Exec(endHeldLaunchSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("store: end held launch: %w", err)
 	}

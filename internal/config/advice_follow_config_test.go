@@ -85,6 +85,7 @@ func advRangeFollow(desc string, keys rangeKeys, value string) rangeKeys {
 		{"[pause] timeout_seconds ", &keys.pause},
 		{"[pre_trust] lock_wait_seconds ", &keys.preTrust},
 		{"[store] busy_timeout_ms ", &keys.busyTimeout},
+		{"[state] settle_ms ", &keys.settle},
 	} {
 		if strings.Contains(desc, k.name) {
 			*k.key = value
@@ -105,6 +106,7 @@ func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 		{"pause timeout_seconds", cfg.Pause.EffectiveTimeoutSeconds(), config.DefaultPauseTimeoutSeconds},
 		{"pre_trust lock_wait_seconds", cfg.PreTrust.EffectiveLockWaitSeconds(), config.DefaultPreTrustLockWaitSeconds},
 		{"store busy_timeout_ms", cfg.Store.EffectiveBusyTimeoutMs(), config.DefaultStoreBusyTimeoutMs},
+		{"state settle_ms", cfg.State.EffectiveSettleMs(), config.DefaultStateSettleMs},
 	} {
 		if k.got != k.want {
 			t.Errorf("effective %s = %d after the follow; want its default %d", k.name, k.got, k.want)
@@ -227,8 +229,8 @@ func TestAdviceFollow_G2_RaisedGraceMinimumMissingOrZeroGivesIt(t *testing.T) {
 // TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault: G2 "refused
 // [defaults] values: ... . A missing key, or 0, gives the default." (b.sgw),
 // and the same for [relay] and [pause] timeout_seconds (b.8q2), [pre_trust]
-// lock_wait_seconds (b.kr4) and [store] busy_timeout_ms (b.c7f), alone or
-// listed with other tables. Each refused file is rewritten as the tail says
+// lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
+// settle_ms (b.3ie, whose default is off), alone or listed with other tables. Each refused file is rewritten as the tail says
 // and must then load with the defaults.
 func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 	cases := []struct {
@@ -246,8 +248,10 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 		{"pre_trust lock wait above the largest", rangeKeys{preTrust: "9223372037"}, nil},
 		{"store busy timeout negative", rangeKeys{busyTimeout: "-5"}, nil},
 		{"store busy timeout above the largest", rangeKeys{busyTimeout: "2147483648"}, nil},
-		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", preTrust: "-1", busyTimeout: "-1"},
-			killNegativeTmux},
+		{"state settle time negative", rangeKeys{settle: "-1"}, nil},
+		{"state settle time above the largest", rangeKeys{settle: "60001"}, nil},
+		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", preTrust: "-1", busyTimeout: "-1",
+			settle: "60001"}, killNegativeTmux},
 	}
 	for _, tc := range cases {
 		for _, f := range advPaneFollows {

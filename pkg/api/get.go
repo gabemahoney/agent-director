@@ -128,10 +128,12 @@ type SpawnRow struct {
 	// PermissionRequests is the slice of open permission requests: those that
 	// still await an answer (not acked by their relay hook and not answered
 	// at the pane, decided or not; one recorded before schema v7 while
-	// undecided), each with its delivery facts. Populated only when state is
-	// check_permission; always a non-nil slice (encodes as [] when empty,
-	// never null, never omitted). Callers use the request_token of each
-	// element to target a specific row with the decide verb.
+	// undecided), each with its delivery facts. Populated only when the row's
+	// live (raw) state is check_permission, which with [state] settle_ms set
+	// State may not show yet (requests are never debounced, b.3ie); always a
+	// non-nil slice (encodes as [] when empty, never null, never omitted).
+	// Callers use the request_token of each element to target a specific row
+	// with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
 	// UnprovenRequests is every permission request of the row that Claude
 	// Code has not proven gone (b.146 step 2c: proven_gone_at null), oldest
@@ -312,15 +314,49 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 // Session history belongs to a life: Get reads the entries of the life of
 // the row it read, then drops the entry for the row's current session id
 // (a row with no current session id drops nothing).
+//
+// Get reads with no settle time; the Client applies its [state] settle_ms
+// (getSettled).
 func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
+	return getSettled(s, v, store.SettleRead{}, instanceID)
+}
+
+// settledSpawnReader is the optional read get uses with a settle time
+// (b.3ie): the row with its reported state. *store.Store satisfies it; a
+// GetStore without it reports the raw state.
+type settledSpawnReader interface {
+	GetSpawnSettled(instanceID string, r store.SettleRead) (Spawn, error)
+}
+
+// readSpawnSettled reads instanceID's row and the state get reports: with a
+// settle time, and a store that provides the settled read, the row's
+// ReportedState (store.SettleRead's derivation, in the read's own statement);
+// otherwise the row GetSpawn returns and its raw state, exactly as before
+// b.3ie.
+func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (Spawn, string, error) {
+	if sr, ok := s.(settledSpawnReader); ok && settle.SettleMs > 0 {
+		row, err := sr.GetSpawnSettled(instanceID, settle)
+		return row, row.ReportedState, err
+	}
 	row, err := s.GetSpawn(instanceID)
+	return row, row.State, err
+}
+
+// getSettled is Get with the reader's settle time and clock settle (b.3ie):
+// the row's state field is the settled state. Everything else keys on the
+// raw state, as before: launch_started_at, and whether the permission
+// requests are read and shown (permission requests are never debounced). With
+// no settle time it is Get exactly as before b.3ie. It never waits for a state
+// to settle.
+func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
+	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
 		return SpawnRow{}, err
 	}
 	out := SpawnRow{
 		ClaudeInstanceID:        row.ClaudeInstanceID,
 		ParentID:                row.ParentID,
-		State:                   row.State,
+		State:                   reported,
 		CWD:                     row.CWD,
 		TmuxSessionName:         row.TmuxSessionName,
 		TmuxSocket:              row.Identity.Socket,
@@ -367,13 +403,16 @@ func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 		out.Labels = map[string]string{}
 	}
 
+	// The raw state decides the request lists: permission requests are not
+	// debounced (b.3ie), so a settled state can read waiting while the raw
+	// check_permission shows its open requests.
 	j := newRelayJudge(v)
-	if !finishedState(out.State) {
+	if !finishedState(row.State) {
 		open, unproven, err := spawnRequestInfos(s.PermissionRequestsForSpawn, j, instanceID)
 		if err != nil {
 			return SpawnRow{}, err
 		}
-		if out.State == store.StateCheckPermission {
+		if row.State == store.StateCheckPermission {
 			out.PermissionRequests = open
 		}
 		out.UnprovenRequests = unproven
@@ -399,7 +438,11 @@ func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 // uses, in any state. prior_sessions and transcript_status come from the
 // current life's history only: after a reuse (spawn with ReuseFinished),
 // which starts a new life, Get shows none of the earlier lives' history.
-// Get never waits for the store's write lock.
+// With [state] settle_ms set, state is the settled state: a hook-written
+// change shows only once it has held that long, the last settled state until
+// then; terminal states and command-driven changes show at once. The
+// permission requests and launch_started_at follow the live state.
+// Get never waits for the store's write lock, nor for a state to settle.
 //
 // CLI: agent-director get
 //
@@ -407,10 +450,14 @@ func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 //   - [ErrSpawnNotFound]: no row exists for claudeInstanceID.
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether each
-// request's relay hook process runs.
+// request's relay hook process runs; with a settle time, so does the state.
 func (c *Client) Get(claudeInstanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnRow{}, err
 	}
-	return Get(c.st, c.relayView(), claudeInstanceID)
+	return getSettled(c.st, c.relayView(), c.settleRead(), claudeInstanceID)
 }
+
+// Compile-time assertion that *store.Store provides the settled read the
+// Client's get uses with a settle time.
+var _ settledSpawnReader = (*store.Store)(nil)

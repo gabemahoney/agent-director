@@ -16,6 +16,11 @@ import (
 // tmux_session_name column exact-byte; "" means no filter (the
 // filter is correlation across live/ended rows, not uniqueness
 // enforcement). Limit caps the result count; 0 means no limit.
+//
+// Settle is the reader's settle time and clock (b.3ie): with a settle time,
+// each row's ReportedState is its settled state and State filters on it; the
+// zero value is no settle time, and ListSpawns runs exactly the query it ran
+// before b.3ie, State filtering on the raw state.
 type ListFilters struct {
 	State           []string
 	Labels          map[string]string
@@ -23,6 +28,7 @@ type ListFilters struct {
 	Cwd             string
 	TmuxSessionName string
 	Limit           int
+	Settle          SettleRead
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified
@@ -33,17 +39,34 @@ type ListFilters struct {
 // SQL composition: each non-zero filter contributes one AND clause
 // with positional `?` placeholders so the driver handles quoting. No
 // caller string ever lands in the SQL text.
+//
+// With f.Settle settling (b.3ie), the reported state (SettleRead.stateExpr) is
+// selected after spawnColumns into ReportedState, and the state filter is on
+// that same expression, in the statement, ahead of LIMIT, so a limited list
+// is the first rows whose reported state matches. With no settle time the
+// statement is exactly the one before b.3ie: the bare `state IN (...)` filter
+// and no extra column, so the query plan, row order and LIMIT subset are
+// unchanged, and ReportedState is State. It never waits for a state to settle.
 func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 	var where []string
 	var args []any
 
+	stateExpr, stateArgs := f.Settle.stateExpr()
+	selectCols := spawnColumns
+	if f.Settle.on() {
+		// The select list comes first in the statement, so its arguments do.
+		selectCols += `, ` + stateExpr
+		args = append(args, stateArgs...)
+	}
+
 	if len(f.State) > 0 {
 		placeholders := make([]string, len(f.State))
+		args = append(args, stateArgs...)
 		for i, st := range f.State {
 			placeholders[i] = "?"
 			args = append(args, st)
 		}
-		where = append(where, "state IN ("+strings.Join(placeholders, ",")+")")
+		where = append(where, stateExpr+" IN ("+strings.Join(placeholders, ",")+")")
 	}
 
 	// Label filters are sorted by key so the generated SQL is
@@ -76,7 +99,7 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 		args = append(args, f.TmuxSessionName)
 	}
 
-	q := `SELECT ` + spawnColumns + ` FROM spawns`
+	q := `SELECT ` + selectCols + ` FROM spawns`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -93,7 +116,7 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 
 	var out []Spawn
 	for rows.Next() {
-		sp, err := scanSpawn(rows, listSpawnsErrs)
+		sp, err := scanSpawnRow(rows, listSpawnsErrs, f.Settle.on())
 		if err != nil {
 			return nil, err
 		}

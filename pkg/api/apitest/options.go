@@ -265,6 +265,17 @@ func WithIdleSince(ts string) SpawnOption {
 	return func(o *spawnOpts) { o.set("idle_since", ts) }
 }
 
+// WithSettle stores the row's schema-v8 settle columns (b.3ie): settled as
+// settled_state (the last settled state) and stampMs as state_changed_ms (when
+// the raw state last changed, in Unix milliseconds). Without it SeedSpawn
+// seeds the row settled: settled_state its state and state_changed_ms 0.
+func WithSettle(settled string, stampMs int64) SpawnOption {
+	return func(o *spawnOpts) {
+		o.set("settled_state", settled)
+		o.set("state_changed_ms", stampMs)
+	}
+}
+
 // WithRelayMode stores mode as the row's relay_mode in place of SeedSpawn's
 // relayMode argument, for seeders that take no relay mode of their own.
 func WithRelayMode(mode string) SpawnOption {

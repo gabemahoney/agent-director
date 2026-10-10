@@ -12,7 +12,8 @@ import (
 // TestSeedSpawn_Defaults pins SeedSpawn's empty-argument defaults (id a new
 // UUID, state waiting, cwd /tmp, relay_mode off), the optional columns an
 // unseeded row reads back as (ExtraEnv an empty non-nil map, WithExtraEnv(nil)
-// too; the rest zero), and its refusal of a missing store unless createStore.
+// too; the rest zero; settled at once), and its refusal of a missing store
+// unless createStore.
 func TestSeedSpawn_Defaults(t *testing.T) {
 	t.Parallel()
 	if _, err := SeedSpawn(filepath.Join(t.TempDir(), "absent", "state.db"), "x", "", "", "", "", false); err == nil {
@@ -40,6 +41,9 @@ func TestSeedSpawn_Defaults(t *testing.T) {
 			len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" || sp.JSONLPath != "" ||
 			sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" {
 			t.Errorf("%s: row = %+v; want waiting, /tmp, off, an empty non-nil extra env and the rest unset", tc.name, sp)
+		}
+		if settled, stamp, err := ReadSettle(dbPath, id); err != nil || settled != store.StateWaiting || stamp != 0 {
+			t.Errorf("%s: settle columns = %q, %d, %v; want the row settled (waiting, 0; b.3ie)", tc.name, settled, stamp, err)
 		}
 	}
 }

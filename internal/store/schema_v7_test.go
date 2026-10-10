@@ -164,7 +164,8 @@ func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
 	}
 }
 
-// TestDowngradeV7ToV6_KeepsRowsThenRemigrates: the v7 → v6 statements
+// TestDowngradeV7ToV6_KeepsRowsThenRemigrates: on a store taken back to v7
+// first (the v8 → v7 recipe), the v7 → v6 statements
 // (v7ToV6RecipeStatements) leave a v6 store with no v7 column, every other
 // value of a row and of a relay request recorded with its hook's identity
 // kept, and the store id kept; this binary refuses it until an authorised
@@ -186,6 +187,7 @@ func TestDowngradeV7ToV6_KeepsRowsThenRemigrates(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	applyRecipe(t, path, v8ToV7RecipeStatements) // a current store is past v7: back to v7 first
 	var spawnCols, requestCols []string
 	withRaw(t, path, func(db *sql.DB) {
 		spawnCols = v6Columns("spawns", tableColumnNames(t, db, "spawns"))

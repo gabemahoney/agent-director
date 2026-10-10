@@ -119,13 +119,21 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		// other process), so a row a hook moves to a live state never keeps
 		// its old ended_at. A target other than pending clears the launch
 		// start in the same statement; a pending target (no hook passes one
-		// today) leaves it (SR-5.2).
-		set = `state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + idleClear
+		// today) leaves it (SR-5.2). The state is written with its settle
+		// columns (hookWriteStateSet, b.3ie): decided in this one statement,
+		// never from priorState, which feeds the trail only.
+		stateSet, stateArgs := s.hookWriteStateSet(newState)
+		set = stateSet + `, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + idleClear
 		if newState != StatePending {
 			set += `, ` + launchStartClear
 		}
-		setArgs = []any{newState}
+		setArgs = stateArgs
 		errPrefix = "store: state transition"
+	}
+	// Test seam (Store.hookBeforeUpdateForTest; nil in production): runs
+	// between the read above and the UPDATE.
+	if s.hookBeforeUpdateForTest != nil {
+		s.hookBeforeUpdateForTest()
 	}
 	return s.applyGatedHookWrite(instanceID, gate, set, setArgs, priorState, trailNew, softRefresh,
 		triggeringEventName, jsonlPath, jsonlPresent, errPrefix)
@@ -195,9 +203,11 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 }
 
 // endedTransitionSet is the ended transition's SET fragment (SRD §5.2): the
-// state (its one placeholder), last_seen_at and ended_at to
-// CURRENT_TIMESTAMP, and the launch-start and idle clears.
-const endedTransitionSet = `state = ?, last_seen_at = CURRENT_TIMESTAMP,
+// state as an immediate write (immediateStateSet, its placeholders
+// immediateStateArgs(StateEnded); b.3ie: a terminal state reports at once),
+// last_seen_at and ended_at to CURRENT_TIMESTAMP, and the launch-start and
+// idle clears.
+const endedTransitionSet = immediateStateSet + `, last_seen_at = CURRENT_TIMESTAMP,
        ended_at = CURRENT_TIMESTAMP, ` + launchStartClear + `, ` + idleClear
 
 // errEndedNotApplied rolls applyEndedTransition's transaction back when its
@@ -238,7 +248,7 @@ var errEndedNotApplied = errors.New("store: ended transition not applied")
 // ad.spawn.state_transition (the prior state to ended), fail-open.
 func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	const errPrefix = "store: ended transition"
-	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, []any{StateEnded}, jsonlPath, jsonlPresent)
+	q, args := gatedHookUpdate(instanceID, gate, endedTransitionSet, immediateStateArgs(StateEnded), jsonlPath, jsonlPresent)
 	var (
 		prior  string
 		closed []closedRequest
@@ -336,14 +346,17 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 // The outcome and errors are ApplyHookTransitionResult's.
 func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	const errPrefix = "store: waiting-if-working transition"
-	set := `state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `, ` + idleSet
+	// Each statement writes waiting with its settle columns (b.3ie); its
+	// WHERE already guarantees a change of value.
+	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
+	set := stateSet + `, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, ` + launchStartClear + `, ` + idleSet
 	for _, from := range []struct{ state, cond string }{
 		{StateWorking, `state = '` + StateWorking + `'`},
 		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND NOT EXISTS (
 		     SELECT 1 FROM permission_requests pr
 		      WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + awaitingAnswerSQL + `)`},
 	} {
-		q, args := gatedHookUpdate(instanceID, gate, set, []any{StateWaiting}, jsonlPath, jsonlPresent)
+		q, args := gatedHookUpdate(instanceID, gate, set, stateArgs, jsonlPath, jsonlPresent)
 		moved, err := s.execGuarded(q+` AND `+from.cond, args, errPrefix)
 		if err != nil {
 			return UpsertError, HookApplied{}, err
@@ -429,7 +442,9 @@ type sessionStartPrior struct {
 
 // RecordSessionStartIdentity is the gated SessionStart write (SR-22.9,
 // SR-5.3): the row's own agent reporting in. It sets state waiting whatever
-// the prior state, and in the same statement records the payload's Claude
+// the prior state, as a hook write (its settle columns by hookWriteStateSet,
+// b.3ie: the move settles, out of pending, missing or ended too), and in the
+// same statement records the payload's Claude
 // session id (gate.SessionID; "" keeps the column), the transcript path under
 // the presence rule, pid and proc_starttime as the hook's parent
 // (gate.ParentPID, gate.ParentStart: the pane process, SR-3.8), pane_starttime
@@ -489,8 +504,11 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	case jsonlPath != "":
 		jsonlSet, jsonlArgs = `jsonl_path = NULL`, nil
 	}
+	// waiting with its settle columns (b.3ie): a hook write, so a move out of
+	// any prior state, pending, missing and ended included, settles.
+	stateSet, stateArgs := s.hookWriteStateSet(StateWaiting)
 	q := `UPDATE spawns
-	         SET state                     = ?,
+	         SET ` + stateSet + `,
 	             last_seen_at              = CURRENT_TIMESTAMP,
 	             ended_at                  = NULL,
 	             claude_session_id         = COALESCE(?, claude_session_id),
@@ -504,7 +522,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	             ` + launchStartClear + `,
 	             ` + rowVersionAdvance + `
 	       WHERE claude_instance_id = ? AND ` + hookGateSQL + ` AND ` + snapshotMatchSQL
-	args := append([]any{StateWaiting, nullableStringArg(gate.SessionID)}, jsonlArgs...)
+	args := append(append(stateArgs, nullableStringArg(gate.SessionID)), jsonlArgs...)
 	args = append(args, positiveIntArg(gate.ParentPID), nullableStringArg(gate.ParentStart),
 		gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)

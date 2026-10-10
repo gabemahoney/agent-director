@@ -40,7 +40,7 @@ type configRefusal struct {
 }
 
 // configRefusals is the one table of refused [tmux], [defaults], [relay],
-// [pause], [pre_trust] and [store] values driving every surface check: a minimum, the
+// [pause], [pre_trust], [store] and [state] values driving every surface check: a minimum, the
 // derived grace rule, every table at once, a malformed type and db_path set
 // under two letter cases of [store] (b.p8n). The per-key refusals are
 // internal/config's config_errors_test.go and config_timeouts_test.go.
@@ -72,12 +72,12 @@ func configRefusals() []configRefusal {
 			name: "every_table_refused",
 			keys: apitest.ConfigKeys{RetentionDays: -1, RelayTimeoutSeconds: -1,
 				PauseTimeoutSeconds: int64(config.MaxPauseTimeoutSeconds) + 1, PreTrustLockWaitSeconds: -1,
-				StoreBusyTimeoutMs: int64(config.MaxStoreBusyTimeoutMs) + 1},
+				StoreBusyTimeoutMs: int64(config.MaxStoreBusyTimeoutMs) + 1, StateSettleMs: int64(config.MaxStateSettleMs) + 1},
 			bad: []apitest.TmuxSetting{apitest.TmuxInt(kill, -1)},
 			refused: []apitest.ConfigRefusal{{Retention: true, Value: -1}, {RelayTimeout: true, Value: -1},
 				{PauseTimeout: true, Value: int64(config.MaxPauseTimeoutSeconds) + 1},
 				{PreTrustLockWait: true, Value: -1}, {StoreBusyTimeout: true, Value: int64(config.MaxStoreBusyTimeoutMs) + 1},
-				{Key: kill, Value: -1}},
+				{StateSettle: true, Value: int64(config.MaxStateSettleMs) + 1}, {Key: kill, Value: -1}},
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(kill, 0)},
 		},
 		{

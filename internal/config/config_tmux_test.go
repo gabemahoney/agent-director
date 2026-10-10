@@ -71,9 +71,9 @@ func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 // rangeKeys are the TOML integers a config file sets for the keys outside
 // [tmux] with a range: [defaults] expire_retention_days (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds (b.8q2), [pre_trust]
-// lock_wait_seconds (b.kr4) and [store] busy_timeout_ms (b.c7f). "" leaves
-// the table out.
-type rangeKeys struct{ days, relay, pause, preTrust, busyTimeout string }
+// lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
+// settle_ms (b.3ie). "" leaves the table out.
+type rangeKeys struct{ days, relay, pause, preTrust, busyTimeout, settle string }
 
 // keysFile writes a config file setting k's keys, then a [tmux] table holding settings.
 func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
@@ -85,6 +85,7 @@ func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
 		{"pause", "timeout_seconds", k.pause},
 		{"pre_trust", "lock_wait_seconds", k.preTrust},
 		{"store", "busy_timeout_ms", k.busyTimeout},
+		{"state", "settle_ms", k.settle},
 	} {
 		if kv.value != "" {
 			fmt.Fprintf(&b, "[%s]\n%s = %s\n", kv.table, kv.key, kv.value)

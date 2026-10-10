@@ -199,6 +199,10 @@ func runHook() int {
 		return hookExitCode
 	}
 	defer st.Close()
+	// The settle time this hook's state write judges the value it replaces
+	// with (b.3ie), from the config loaded above: part of the hook's one
+	// UPDATE, so no extra read, statement or wait.
+	st.SetSettleMs(int64(cfg.State.EffectiveSettleMs()))
 
 	// The hook gate's parent process (SR-22.9): with exec-form hooks
 	// getppid() is the agent process; its start time comes from the

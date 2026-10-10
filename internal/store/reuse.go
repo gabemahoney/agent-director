@@ -42,7 +42,9 @@ type ReuseRow struct {
 
 // RawLife is a row's pre-reuse life exactly as stored (SR-5.3, SR-5.5,
 // SR-10.3, SR-10.4): every spawns column except claude_instance_id,
-// row_version and launch_started_at, each with its stored value and SQLite
+// row_version, launch_started_at and the settle columns settled_state and
+// state_changed_ms (the restore writes those as an immediate write of the
+// prior state, b.3ie), each with its stored value and SQLite
 // storage class, NULL distinct from an empty value. Its fields are unexported:
 // only ReadForReuse fills it, and only RestoreAfterFailedReuse reads it. The
 // zero RawLife was not produced by ReadForReuse, and the restore refuses it.
@@ -220,9 +222,10 @@ const resetForReuseReadSQL = `SELECT COALESCE(claude_session_id, ''), COALESCE(j
 
 // resetForReuseSQL is ResetForReuse's reset: the finished row set to pending
 // in a new life, guarded by the finished state and the examined snapshot
-// (SR-10.3, SR-5.3).
+// (SR-10.3, SR-5.3). pending is an immediate write (immediateStateSet,
+// b.3ie): it reports at once.
 const resetForReuseSQL = `UPDATE spawns
-    SET state                     = ?,
+    SET ` + immediateStateSet + `,
         claude_session_id         = NULL,
         jsonl_path                = NULL,
         pid                       = NULL,
@@ -285,7 +288,9 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE cl
 //     the current path exactly, NULL included. Entries stay keyed on (instance
 //     id, session id) and are never duplicated.
 //   - Reset, one UPDATE still guarded on the finished state and examined, and
-//     required to change exactly one row: state pending; claude_session_id,
+//     required to change exactly one row: state pending, an immediate write
+//     (settled_state pending, state_changed_ms the statement's clock; b.3ie);
+//     claude_session_id,
 //     jsonl_path, pid, proc_starttime, liveness_unverified_since,
 //     liveness_note, ended_at and the six server and pane identity columns
 //     NULL, whatever fresh.Identity carries; started_at and last_seen_at
@@ -375,8 +380,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 	}
 
 	startedAt := storeTimestamp(fresh.StartedAt)
-	resetArgs := []any{
-		StatePending,
+	resetArgs := append(immediateStateArgs(StatePending),
 		startedAt, startedAt,
 		positiveInt64Arg(fresh.LaunchStartedAtMillis),
 		fresh.CWD, fresh.TmuxSessionName,
@@ -384,7 +388,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		nullableStringArg(fresh.ParentID),
 		noPreTrust,
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
-	}
+	)
 	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
 	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
@@ -422,7 +426,11 @@ func restoredVerbatim(name string) bool {
 // (SR-10.4, SR-5.6): the pre-reuse life written back, ended_at and parent_id
 // by their rules, the launch start cleared and the version advanced, guarded
 // by pending and the reset's version. The verbatim columns' placeholders come
-// first, in rawLifeColumns' order.
+// first, in rawLifeColumns' order. The prior state is an immediate write
+// (b.3ie): the generated list writes state, and immediateSettleSet, whose
+// placeholders follow parent_id's, writes the settle columns, so the old
+// life's state reports at once, never the reset's pending for the settle
+// time. The settle columns are never part of RawLife.
 var restoreAfterFailedReuseSQL = func() string {
 	var set []string
 	for _, c := range rawLifeColumns {
@@ -434,6 +442,7 @@ var restoreAfterFailedReuseSQL = func() string {
     SET ` + strings.Join(set, ",\n        ") + `,
         ended_at  = ?,
         parent_id = (SELECT claude_instance_id FROM spawns WHERE claude_instance_id = ?),
+        ` + immediateSettleSet + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND state = ? AND row_version = ?`
@@ -455,7 +464,9 @@ var restoreAfterFailedReuseSQL = func() string {
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
 // row with that id still exists, otherwise NULL, decided in the same
 // statement, so the restore never fails on the foreign key.
-// launch_started_at is set to NULL and row_version advanced by one. It never
+// launch_started_at is set to NULL and row_version advanced by one. The prior
+// state is an immediate write (b.3ie): settled_state takes it too and
+// state_changed_ms the statement's clock, so it reports at once. It never
 // touches session_history or permission_requests: the reuse's archived entry
 // stays, and the deleted requests stay deleted. It emits no trail event.
 //
@@ -475,7 +486,7 @@ func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, p
 	if st, _ := prior.state.v.(string); st != StateEnded && st != StateMissing {
 		return 0, fmt.Errorf("%s: prior state %v is not %s or %s", errPrefix, prior.state.v, StateEnded, StateMissing)
 	}
-	args := make([]any, 0, len(rawLifeColumns)+3)
+	args := make([]any, 0, len(rawLifeColumns)+5)
 	for _, c := range rawLifeColumns {
 		if restoredVerbatim(c.name) {
 			args = append(args, c.field(&prior).arg())
@@ -485,7 +496,8 @@ func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, p
 	if prior.endedAt.class == "null" {
 		endedAt = storeTimestamp(failedAt)
 	}
-	args = append(args, endedAt, prior.parentID.arg(), instanceID, StatePending, resetVersion)
+	args = append(args, endedAt, prior.parentID.arg(), prior.state.arg(), prior.state.arg(),
+		instanceID, StatePending, resetVersion)
 	applied, err := s.execGuarded(restoreAfterFailedReuseSQL, args, errPrefix)
 	if err != nil {
 		return 0, err

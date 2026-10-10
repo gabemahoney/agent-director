@@ -73,7 +73,9 @@ import (
 // (after WithStartedAt) in whole seconds as milliseconds (none when
 // started_at does not parse as a time), and a row in any other state has
 // none. WithLaunchIdentity and WithNoLaunchToken override the pane default
-// with the other launch-identity columns.
+// with the other launch-identity columns. Every seeded row is settled
+// (b.3ie): settled_state is its state and state_changed_ms 0, so status, get
+// and list report its state at once whatever the settle time.
 //
 // Seeding and row_version: InsertPending starts the row at 0, and the gated
 // soft refresh that records the session id (when sessionID is non-empty) and
@@ -166,6 +168,12 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		"pane_starttime":        nil,
 		"pid":                   nil,
 		"proc_starttime":        nil,
+		// Settled (b.3ie): the seeding hook writes run with no settle time,
+		// which leaves the previous raw value as settled_state and stamps
+		// the change now, so a read with a settle time would report the
+		// seed's pending; the seeded row reads its state at once instead.
+		"settled_state":    state,
+		"state_changed_ms": int64(0),
 	}
 	if store.IsLiveState(state) {
 		defaults["pane_id"], defaults["pane_pid"] = TestPaneID, int64(TestPanePID)

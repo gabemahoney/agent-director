@@ -22,7 +22,8 @@
 //     WriteRetentionConfig adds [defaults] expire_retention_days, and
 //     WriteKeysConfig the keys outside [tmux] with a range (ConfigKeys:
 //     that one, [relay] and [pause] timeout_seconds, [pre_trust]
-//     lock_wait_seconds and [store] busy_timeout_ms).
+//     lock_wait_seconds, [store] busy_timeout_ms and [state] settle_ms).
+//     SettleOnConfig is a whole config.toml with the largest settle_ms.
 //
 // # Schema-v5 seeding and store reads (SR-20.2, SR-20.3)
 //
@@ -69,7 +70,16 @@
 //     LoadReadSurfaceCases reads the case table those goldens belong to
 //     (variants of config.toml times status, get and list calls);
 //     ReadSurfaceCase.CLIArgs gives a case's CLI argv, SettleVariant.WriteConfig
-//     its config and ReadSurfaceCases.Golden its golden bytes.
+//     its config and ReadSurfaceCases.Golden its golden bytes. Its last step
+//     scrambles every row's settle columns (a settled_state other than its
+//     state, stamped ahead of any clock), which a read with no settle time
+//     must ignore; ReadSurfaceCases.CheckSettleOn checks a case's output with
+//     a settle time against its golden (only the state read as settled,
+//     ReadSurfaceSettled), and SeedSettleFilterRows / SettleFilterIDs seed
+//     and select the rows that pin list --state on the settled state.
+//   - The settle columns (schema v8): WithSettle seeds a row's settled_state
+//     and state_changed_ms (SeedSpawn otherwise seeds every row settled);
+//     SetSettle writes them on an existing row and ReadSettle reads them back.
 //
 // # Hooks through the gate (SR-22.9)
 //

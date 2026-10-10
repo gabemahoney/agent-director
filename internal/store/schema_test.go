@@ -5,7 +5,7 @@ package store
 // refusals, step re-entry (b.93m), rollback and the consume. Fixtures:
 // migration_fixtures_test.go; v5 data, store id and downgrade cases:
 // schema_v5_test.go; v6 data and downgrade cases: schema_v6_test.go; v7's:
-// schema_v7_test.go.
+// schema_v7_test.go; v8's (b.3ie): schema_v8_test.go.
 
 import (
 	"bytes"
@@ -52,7 +52,7 @@ func columnsByName(shape map[string]any) map[string]any {
 }
 
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
-// schemaVersion, every table and index, the v3, v5, v6 and v7 columns (in
+// schemaVersion, every table and index, the v3, v5, v6, v7 and v8 columns (in
 // order, last on their tables), store_meta, WAL and foreign keys on, no
 // sentinel, and a 0700 parent and 0600 file that a second open does not widen.
 func TestFreshStoreSchema(t *testing.T) {
@@ -108,12 +108,13 @@ func TestFreshStoreSchema(t *testing.T) {
 		"claude_session_id", "jsonl_path", "recorded_at", "life_number"}; !slices.Equal(got, want) {
 		t.Errorf("session_history columns = %v; want %v", got, want)
 	}
-	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs))
-	// spawns ends with the v6 columns then v7's idle_since; permission_requests
-	// with the v7 columns after created_at (the two-places rule's order).
-	wantSpawnsTail := append(v6ColumnNames(), v7ColumnNames("spawns")...)
+	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs, v8ColumnSpecs))
+	// spawns ends with the v6 columns, v7's idle_since, then the v8 columns;
+	// permission_requests with the v7 columns after created_at (the
+	// two-places rule's order).
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames())
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
-		t.Errorf("spawns columns = %v; want the v6 then v7 columns last, in order %v", cols, wantSpawnsTail)
+		t.Errorf("spawns columns = %v; want the v6, v7 then v8 columns last, in order %v", cols, wantSpawnsTail)
 	}
 	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
 	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
@@ -204,6 +205,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertV5Defaults(t, path, "pre", 0)
 			assertV6Defaults(t, path, "pre")
 			assertV7Defaults(t, path, "pre")
+			assertV8Defaults(t, path, "pre")
 			if raw := assertOneStoreID(t, path); raw != id {
 				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
 			}
@@ -349,6 +351,9 @@ func TestMigrationStepReentry(t *testing.T) {
 	meta := func(id string) func(*testing.T, string) {
 		return func(t *testing.T, path string) { preAddStoreMeta(t, path, id) }
 	}
+	preV8 := func(names ...string) func(*testing.T, string) {
+		return func(t *testing.T, path string) { preAddV8Columns(t, path, names...) }
+	}
 	cases := []struct {
 		name   string
 		from   int
@@ -376,6 +381,9 @@ func TestMigrationStepReentry(t *testing.T) {
 		{"v6→v7 after hook_pid", 6, preV7("permission_requests.hook_pid"), 1, ""},
 		{"v6→v7 after pane_answer and idle_since", 6, preV7("permission_requests.pane_answer", "spawns.idle_since"), 1, ""},
 		{"v6→v7 after all twenty", 6, preV7(allV7...), 1, ""},
+		{"v7→v8 run twice", 7, nil, 2, ""},
+		{"v7→v8 after settled_state", 7, preV8("settled_state"), 1, ""},
+		{"v7→v8 after both columns, before the backfill", 7, preV8(v8ColumnNames()...), 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -431,6 +439,8 @@ func TestMigrationRollback(t *testing.T) {
 		{"v5→v6 at launch_owner_pidns, after the first two columns", 5, breakV6PIDNSColumn, "spawns.launch_owner_pidns"},
 		{"v6→v7 at idle_since, after every permission_requests column", 6, breakV7IdleSinceColumn, "spawns.idle_since"},
 		{"v6→v7 at the backfill, after every column", 6, breakV7Backfill, "prove finished rows' requests gone"},
+		{"v7→v8 at state_changed_ms, after settled_state", 7, breakV8StateChangedColumn, "spawns.state_changed_ms"},
+		{"v7→v8 at the backfill, after both columns", 7, breakV8Backfill, "backfill settled state"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -442,6 +452,8 @@ func TestMigrationRollback(t *testing.T) {
 				path = makeV5Fixture(t, t.TempDir()).path
 			case 6:
 				path = makeV6Fixture(t, t.TempDir()).path
+			case 7:
+				path = makeV7Fixture(t, t.TempDir()).path
 			default:
 				path = makeVersionedDB(t, t.TempDir(), tc.from)
 			}

@@ -37,11 +37,35 @@ type statusReader interface {
 	SpawnStatus(instanceID string) (state string, launchStartedAtMillis int64, err error)
 }
 
+// settledStatusReader is the optional read status uses with a settle time
+// (b.3ie): the reported state, the raw state and the launch start in one
+// read. *store.Store satisfies it; a store without it reports the raw state.
+type settledStatusReader interface {
+	SpawnStatusSettled(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, err error)
+}
+
 // Status returns the current state column for the given claude_instance_id,
 // with launch_started_at on a pending row when s provides the narrow read.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
-// the canonical err_name envelope.
+// the canonical err_name envelope. It reads with no settle time; the Client
+// applies its [state] settle_ms.
 func Status(s StatusStore, instanceID string) (StatusResult, error) {
+	return statusSettled(s, store.SettleRead{}, instanceID)
+}
+
+// statusSettled is Status with the reader's settle time and clock settle
+// (b.3ie). With a settle time, and a store that provides the settled read,
+// the state is the settled state (store.SettleRead's derivation, in the
+// read's own statement); launch_started_at still keys on the raw state. With
+// no settle time it is Status exactly as before b.3ie. It never waits.
+func statusSettled(s StatusStore, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
+		reported, raw, launchMillis, err := sr.SpawnStatusSettled(instanceID, settle)
+		if err != nil {
+			return StatusResult{}, err
+		}
+		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis)}, nil
+	}
 	if r, ok := s.(statusReader); ok {
 		state, launchMillis, err := r.SpawnStatus(instanceID)
 		if err != nil {
@@ -59,20 +83,29 @@ func Status(s StatusStore, instanceID string) (StatusResult, error) {
 // Status returns the current state column (pending/waiting/working/ask_user/
 // check_permission/ended/missing) for the identified Spawn. On a pending row
 // the result also carries launch_started_at, when the agent's launch began.
+// With [state] settle_ms set, the state is the settled state: a hook-written
+// change shows only once it has held that long, the last settled state until
+// then; terminal states and command-driven changes show at once. The read
+// never waits.
 //
 // CLI: agent-director status
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for claudeInstanceID.
 //
-// Nondeterminism: none.
+// Nondeterminism: none with no settle time; with one, the state depends on
+// the clock.
 func (c *Client) Status(claudeInstanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
 	}
-	return Status(c.st, claudeInstanceID)
+	return statusSettled(c.st, c.settleRead(), claudeInstanceID)
 }
 
 // Compile-time assertion that *store.Store provides the optional narrow read
-// Status uses, so the production wiring keeps showing the launch start.
-var _ statusReader = (*store.Store)(nil)
+// Status uses, so the production wiring keeps showing the launch start, and
+// the settled read the Client's status uses with a settle time.
+var (
+	_ statusReader        = (*store.Store)(nil)
+	_ settledStatusReader = (*store.Store)(nil)
+)

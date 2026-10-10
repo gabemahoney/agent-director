@@ -95,9 +95,12 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 		prior     string
 		requestID int64
 	)
+	// check_permission with its settle columns (b.146's request rows are
+	// never debounced; only the row's reported state settles, b.3ie).
+	stateSet, stateArgs := s.hookWriteStateSet(StateCheckPermission)
 	q, args := gatedHookUpdate(instanceID, gate,
-		`state = ?, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, `+launchStartClear+`, `+idleClear,
-		[]any{StateCheckPermission}, req.TranscriptPath, req.TranscriptPresent)
+		stateSet+`, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, `+launchStartClear+`, `+idleClear,
+		stateArgs, req.TranscriptPath, req.TranscriptPresent)
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&prior)
 		if errors.Is(err, sql.ErrNoRows) {

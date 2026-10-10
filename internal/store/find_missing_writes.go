@@ -27,9 +27,10 @@ func liveStateGuardArgs() []any {
 // markMissingIfSameLifeSQL is MarkMissingIfSameLife's one statement: the mark
 // with the liveness-field clear and the launch-start clear folded in, and the
 // version advance, guarded by a live state and the examined row snapshot
-// (SR-5.2, SR-5.3, SR-11.3, SR-11.6).
+// (SR-5.2, SR-5.3, SR-11.3, SR-11.6). missing is an immediate write
+// (immediateStateSet, b.3ie): it reports at once.
 var markMissingIfSameLifeSQL = `UPDATE spawns
-    SET state                     = ?,
+    SET ` + immediateStateSet + `,
         ended_at                  = CURRENT_TIMESTAMP,
         last_seen_at              = CURRENT_TIMESTAMP,
         liveness_unverified_since = NULL,
@@ -147,7 +148,8 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 		return "", 0, fmt.Errorf("%s: prior state: %w", errPrefix, err)
 	}
 
-	args := append([]any{StateMissing, instanceID}, liveStateGuardArgs()...)
+	args := append(immediateStateArgs(StateMissing), instanceID)
+	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
 	r, err := conn.ExecContext(ctx, markMissingIfSameLifeSQL, args...)
 	if err != nil {
@@ -386,8 +388,13 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // set, working otherwise), the launch-start clear and the version advance,
 // guarded by check_permission, relay_mode on, the examined row snapshot and
 // no permission request of the row still awaiting an answer (b.146 rule 9).
+// The move is an immediate write (b.3ie): settled_state takes the same value
+// as state, and state_changed_ms the statement's clock (the WHERE pins
+// check_permission, so the value always changes).
 var repairCheckPermissionSQL = `UPDATE spawns
     SET state = CASE WHEN idle_since IS NOT NULL THEN ? ELSE ? END,
+        settled_state = CASE WHEN idle_since IS NOT NULL THEN ? ELSE ? END,
+        state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE claude_instance_id = ? AND state = ? AND relay_mode = 'on' AND ` + snapshotMatchSQL + `
@@ -406,8 +413,10 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // requests still awaits an answer (awaitingAnswerSQL: not closed by
 // find-missing's mark, and not acked and not answered at the pane, or,
 // recorded before schema v7, undecided).
-// In the same statement it NULLs launch_started_at and advances row_version
-// by one (SR-5.2). It writes no other column: idle_since is kept until the
+// In the same statement it NULLs launch_started_at, advances row_version by
+// one (SR-5.2) and writes the settle columns of an immediate write (b.3ie:
+// the new state reports at once). It writes no other column: idle_since is
+// kept until the
 // agent's next hook clears it, and last_seen_at is not bumped, since no hook
 // reported.
 //
@@ -425,7 +434,8 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // trail event: the tick is the caller's.
 func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowSnapshot) (newState string, res CondResult, err error) {
 	const errPrefix = "store: repair check_permission if same life"
-	args := append([]any{StateWaiting, StateWorking, instanceID, StateCheckPermission}, snapshotMatchArgs(examined)...)
+	args := append([]any{StateWaiting, StateWorking, StateWaiting, StateWorking, instanceID, StateCheckPermission},
+		snapshotMatchArgs(examined)...)
 	err = s.db.QueryRow(repairCheckPermissionSQL, args...).Scan(&newState)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

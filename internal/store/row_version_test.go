@@ -708,9 +708,13 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 			f := newV5Store(t)
 			id := seedCase(t, f, c)
 			before := f.rawColumns(id)
+			settled, stamp := settleOf(t, f, id) // the settle columns (b.3ie) too
 			c.write(t, f, id)
 			if after := f.rawColumns(id); !reflect.DeepEqual(after, before) {
 				t.Errorf("row changed:\nbefore %+v\nafter  %+v", before, after)
+			}
+			if s, ms := settleOf(t, f, id); s != settled || ms != stamp {
+				t.Errorf("settle columns %q, %d -> %q, %d; want both unchanged", settled, stamp, s, ms)
 			}
 			assertStoreIDKept(t, f)
 		})

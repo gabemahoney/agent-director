@@ -788,19 +788,20 @@ test_J5_StaleBinaryFromRelease() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: make the newest migration step, v6→v7
-# (migrateV6toV7, b.146 step 2), fail part-way on a store stamped v6 that
-# keeps its v7 columns: idle_since, the step's last column, is re-added as
-# IDLE_SINCE, a name SQLite's columns treat as the same but the step's probe
-# does not, so the step's ADD COLUMN idle_since fails as a duplicate and rolls
-# the step back. j6_repair_hop removes that cause. Both name the v6→v7 step:
-# give them the next step's failure when the schema moves on.
+# j6_break_hop <state.db>: make the newest migration step, v7→v8
+# (migrateV7toV8, b.3ie), fail part-way on a store stamped v7 that keeps its
+# v8 columns: state_changed_ms, the step's last column, is re-added as
+# STATE_CHANGED_MS, a name SQLite's columns treat as the same but the step's
+# probe does not, so the step's ADD COLUMN state_changed_ms fails as a
+# duplicate and rolls the step back. j6_repair_hop removes that cause. Both
+# name the v7→v8 step: give them the next step's failure when the schema
+# moves on.
 j6_break_hop() {
-    [[ "$SCHEMA" == 7 ]] || { bad "j6_break_hop breaks the v6→v7 step; update it for v$SCHEMA"; return 1; }
-    "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN idle_since;
-        ALTER TABLE spawns ADD COLUMN IDLE_SINCE TEXT;"
+    [[ "$SCHEMA" == 8 ]] || { bad "j6_break_hop breaks the v7→v8 step; update it for v$SCHEMA"; return 1; }
+    "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN state_changed_ms;
+        ALTER TABLE spawns ADD COLUMN STATE_CHANGED_MS INTEGER NOT NULL DEFAULT 0;"
 }
-j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN IDLE_SINCE;"; }
+j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN STATE_CHANGED_MS;"; }
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
