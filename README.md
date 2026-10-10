@@ -41,6 +41,8 @@ SQLite file; everything else is tmux.
 
 ### Prerequisites
 
+- A Linux x86_64 or Apple Silicon (arm64) macOS host. Other hosts,
+  Linux arm64 included, are not supported.
 - `claude` (Claude Code) 2.1.280 or later on PATH — install per
   <https://claude.com/claude-code>. agent-director launches only
   Claude Code; other agent CLIs are unsupported in this release. With an
@@ -103,9 +105,6 @@ the installer at them), grab both assets for your platform from the
 # Linux amd64:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-amd64
 curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-linux-amd64
-# Linux arm64:
-curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-arm64
-curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-linux-arm64
 # macOS Apple Silicon:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-arm64
 curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-darwin-arm64
@@ -135,19 +134,25 @@ Optional flags:
 
 #### From inside Claude Code
 
-If you already have Claude Code running, just say:
+The `install-agent-director` skill ships in this repo at
+[`skills/install-agent-director/`](skills/install-agent-director/SKILL.md).
+Claude Code loads skills only from `~/.claude/skills/` (or a project's
+`.claude/skills/`), not from a clone's `skills/`, so link the skill
+there once, from the root of your clone:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
+```
+
+Then, in Claude Code, say:
 
 > **install agent-director**
 
-That triggers the `install-agent-director` skill, which walks you
-through four choices interactively (binary source, PATH symlink,
-MCP registration, persistent help hooks) and then runs `install.sh`
-with the resolved flags.
-
-The skill ships in this repo at
-[`skills/install-agent-director/`](skills/install-agent-director/SKILL.md)
-and is auto-discoverable by Claude Code if you've cloned the repo
-under a directory it indexes.
+That triggers the skill, which walks you through four choices
+interactively (binary source, PATH symlink, MCP registration,
+persistent help hooks) and then runs `install.sh` with the resolved
+flags.
 
 Upgrading is the same skill: re-running the install brings an
 existing `state.db` up to the current schema automatically. If a

@@ -38,9 +38,9 @@ locally-staged artifacts, or any drop-in copy onto `$PATH` — are documented in
 - `linux/x64` (Linux on x86_64)
 - `darwin/arm64` (Apple Silicon Mac)
 
-The library's published npm package admits installs on any host (no
-`os`/`cpu` restrictions on the library itself); the platform gate is
-the CLI binary's own platform coverage. The CLI must be installed
+The package's `package.json` declares `"os": ["linux", "darwin"]` and
+`"cpu": ["x64", "arm64"]`, so it also installs on `linux/arm64` and
+`darwin/x64`, which the CLI does not support. The CLI must be installed
 separately per the platform list above.
 
 ## Quick start

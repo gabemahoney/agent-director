@@ -159,11 +159,21 @@ fires (SR-8.11):
    `MIN_BINARY_VERSION` are in lockstep; `dist/index.js` carries no
    `NPM_PACKAGE_VERSION` identifier or `"0.0.0"` placeholder. (The
    `SKILL.md` frontmatter site is no longer checked — it has been
-   removed from the version-site inventory.)
+   removed from the version-site inventory.) **Not wired as a gate:**
+   no `/release` gate, Makefile target, CI workflow or `package.json`
+   script runs this script against the release tree. Only the bun suite
+   (gate 1) runs it, on a staged copy of the package
+   (`test/check-version-coherence.test.ts`,
+   `test/release-version-coherence.test.ts`). The release checks the
+   stamped version with its `coherence` gates
+   (`skills/release-agent-director/gates/coherence/binary-version.sh`,
+   `tarball-and-bump.sh`).
 5. `scripts/check-version-coherence.ts --scope publish` — re-runs the
    verify checks and additionally SHA-256-rounds-trips every staged
    tarball. (Same scope caveat as gate 4: `SKILL.md` frontmatter is no
-   longer a tracked site.)
+   longer a tracked site.) Not wired as a gate either: only
+   `test/check-version-coherence.test.ts` runs this scope, on a staged
+   copy.
 6. **Source-of-truth invariant** (`pkg/ts-bun-client/scripts/check-source-of-truth.ts`,
    SR-16) — confirms that `pkg/ts-bun-client/package.json` is the only
    authoritative version string in the repo; fails if any other

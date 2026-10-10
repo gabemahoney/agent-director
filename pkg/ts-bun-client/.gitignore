@@ -2,14 +2,16 @@ dist/
 node_modules/
 *.tsbuildinfo
 
-# CLI binary staged by the /release skill / prepare-platforms / test/setup.ts —
-# never committed.
+# CLI binary the Makefile stages under platforms/: verify-installed-pkg-full
+# into platforms/<host>/bin/, verify-prerelease-linux always into
+# platforms/linux-x64/bin/ (b.1ce tracks dropping that step; the platforms/
+# sub-packages are gone) — never committed.
 platforms/*/bin/
 
 # Temp dirs created by install-resolution test
 test/.tmp-*
 
-# Skill body staged at pack time by scripts/stage-skill.ts (the prepack
-# hook). Source of truth lives at ${REPO_ROOT}/skills/install-agent-director/;
-# the staged copy is purely a packaging artifact and must never be committed.
+# A skill copy left in older checkouts by the removed stage-skill.ts
+# prepack hook (b.w3q). Nothing creates it now and package.json `files`
+# does not ship it; ignored so a leftover is never committed.
 skills/

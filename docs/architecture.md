@@ -33,14 +33,21 @@ See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 
-The v1 supported-platform set is **`linux/amd64`**, **`linux/arm64`**,
-and **`darwin/arm64`**. `darwin/amd64` (Intel Mac) was **dropped on
-2026-05-24** (no Intel Mac users to serve). The CLI is released for
-all three. The TS Client's npm package ships no CLI binary: it drives
-the CLI installed on the host (see
+The supported install hosts are **`linux/amd64`** and **`darwin/arm64`**.
+`install.sh`'s pre-flight host check (`uname -s` / `uname -m`) admits
+only `Linux/x86_64` and `Darwin/arm64` and exits 2 on any other host,
+`Linux/aarch64` included, before it downloads or writes anything. The
+release builds the CLI for three targets, those two and
+**`linux/arm64`** (see [Build paths](#build-paths)), but no installer
+admits a `linux/arm64` host: b.fg3 deferred it. `darwin/amd64` (Intel
+Mac) was **dropped on 2026-05-24** (no Intel Mac users to serve). The
+TS Client's npm package ships no CLI binary: it drives the CLI installed
+on the host (see
 [System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)),
 and its `package.json` declares `"os": ["linux", "darwin"]` and
-`"cpu": ["x64", "arm64"]`.
+`"cpu": ["x64", "arm64"]`. That pair also admits `linux/arm64` and
+`darwin/x64`, where the package installs but `install.sh` installs no
+CLI for it to drive.
 
 Each target gets two binaries, `agent-director` and `agent-director-admin`
 (six in all). All are pure `CGO_ENABLED=0` cross-compiles (pure-Go
@@ -11036,7 +11043,7 @@ steps and says when to escalate to a human.
 
 Pre-release operator checklist: see bee `b.dc1` in the `Release` hive.
 
-### Supported platforms
+### Release build targets
 
 agent-director ships as six pre-built static binaries, two per target
 tuple: `agent-director-<os>-<arch>` and the operator tool
@@ -11052,7 +11059,10 @@ both built by `make release-binaries` with the same version stamp
 | linux | arm64 | ELF 64 LE | yes (no libc dep) |
 | darwin | arm64 | Mach-O 64 LE | n/a (no system linker) |
 
-Windows is not supported (SRD §16.1).
+A build target is not a supported install host. `linux/arm64` is
+built and shipped, but `install.sh`, the only installer, exits 2 on
+`Linux/aarch64` (b.fg3 deferred it); the supported install hosts are
+`linux/amd64` and `darwin/arm64`. Windows is not supported (SRD §16.1).
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
