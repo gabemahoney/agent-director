@@ -357,7 +357,7 @@ export interface SendKeysResult {
 export interface ReadPaneParams {
     /** Id of the Spawn whose pane will be captured. */
     claude_instance_id: string;
-    /** Trailing lines to return. Defaults to 25 when 0/omitted. */
+    /** Trailing lines to return. Defaults to 25 when 0/omitted. A negative value is refused (ErrInvalidFlags). */
     n_lines?: number;
     /** When true return raw bytes (ANSI preserved); when false strip ANSI (default). */
     ansi?: boolean;
@@ -580,7 +580,7 @@ export interface ListParams {
     cwd?: string;
     /** Filter by tmux session name exact match. */
     tmux_session_name?: string;
-    /** Cap result count. 0/omitted means no cap. */
+    /** Cap result count. 0/omitted means no cap. A negative value is refused (ErrInvalidFlags). */
     limit?: number;
 }
 /** Mirrors pkg/api/list.go::ListResult */

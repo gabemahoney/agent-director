@@ -61,6 +61,41 @@ func TestReadPaneParameters(t *testing.T) {
 	}
 }
 
+// TestReadPaneNegativeNLinesRefused: a negative n_lines is ErrInvalidFlags from
+// ReadPane and Client.ReadPane, before the row is read and with no tmux call (b.c4n).
+func TestReadPaneNegativeNLinesRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		client  bool
+		unknown bool // an id with no row: still ErrInvalidFlags, not ErrSpawnNotFound
+	}{
+		{"ReadPane", false, false},
+		{"Client.ReadPane", true, false},
+		{"Client.ReadPane, unknown id", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{})
+			e.setPaneTexts(r.Socket)
+			p := api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: -1}
+			if tc.unknown {
+				p.ClaudeInstanceID = "no-such-row"
+			}
+			read := e.readPane
+			if tc.client {
+				read = func(p api.ReadPaneParams) (api.ReadPaneResult, error) { return e.readPaneClient(t, p) }
+			}
+			res, err := read(p)
+			assertOneSentinel(t, err, api.ErrInvalidFlags)
+			if res.Pane != "" {
+				t.Errorf("Pane = %q; want none", res.Pane)
+			}
+			e.assertNoTmuxCall(t)
+		})
+	}
+}
+
 // TestReadPaneNoStateGuard: a pending, live or finished row's agent pane is
 // read by pane id, allow_pending or not (SR-7.1; read-pane never reads it).
 func TestReadPaneNoStateGuard(t *testing.T) {

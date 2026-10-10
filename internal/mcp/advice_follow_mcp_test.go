@@ -174,9 +174,9 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 }
 
 // TestAdviceFollow_I6_OlderThanDurationForm: I6 "expire: parameter "older_than"
-// value %q must be a non-negative Go duration like "12h" or trailing-d days like
-// "7d" up to "106751d"", ErrInvalidFlags with nothing deleted (b.anw, b.hxn,
-// b.sgw). The row ended past the default retention, so only "106751d" keeps it.
+// value %q must be a Go duration like "12h" or trailing-d days like "7d" up to
+// "106751d", with no sign", ErrInvalidFlags with nothing deleted (b.anw, b.hxn,
+// b.sgw, b.c4n). The row ended past the default retention, so only "106751d" keeps it.
 func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
 	follows := []struct{ value, wantIDs string }{
 		{"12h", `["` + expireMCPID + `"]`},
@@ -186,7 +186,7 @@ func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
 	for _, follow := range follows {
 		t.Run(follow.value, func(t *testing.T) {
 			d, rec, storePath := newExpireMCPServer(t, false)
-			for _, bad := range []string{"soon", "7days", "-2h", "106752d", "365000d"} {
+			for _, bad := range []string{"soon", "7days", "-2h", "+12h", "+7d", "106752d", "365000d"} {
 				data := toolErrorData(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": bad})))
 				if want := olderThanRefusal(bad); data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
 					t.Errorf("older_than %q = %s: %q\nwant ErrInvalidFlags: %q", bad, data.ErrName, data.ErrDescription, want)

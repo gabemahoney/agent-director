@@ -38,7 +38,8 @@ type ListParams struct {
 	// TmuxSessionName filters by tmux session name exact match. Empty means
 	// no filter. Matches both live and ended rows.
 	TmuxSessionName string
-	// Limit caps the number of rows returned. 0 means no cap.
+	// Limit caps the number of rows returned. 0 means no cap. A negative
+	// value is refused with [ErrInvalidFlags].
 	Limit int
 }
 
@@ -118,15 +119,20 @@ type ListResult struct {
 //   - Returned order is unspecified. Callers wanting stable order
 //     sort the slice themselves (e.g. via jq).
 //
-// Validation: every Labels entry must contain a literal `=`. A label
-// of the form `foo` (no separator) yields ErrListInvalidLabel; the
-// store is never reached. Empty key (`=v`) is also rejected so the
-// json_extract path never receives an empty key string.
+// Validation: a negative Limit yields ErrInvalidFlags, refused rather than
+// read as "no cap" (b.c4n). Every Labels entry must contain a literal `=`.
+// A label of the form `foo` (no separator) yields ErrListInvalidLabel. Empty
+// key (`=v`) is also rejected so the json_extract path never receives an
+// empty key string. On either refusal the store is never reached.
 //
-// Every failure (an invalid label, the store read's error, or
-// ErrClientClosed from (c *Client).List) returns Spawns as a non-nil empty
-// slice, as ListResult documents (b.hbt).
+// Every failure (a negative limit, an invalid label, the store read's error,
+// or ErrClientClosed from (c *Client).List) returns Spawns as a non-nil
+// empty slice, as ListResult documents (b.hbt).
 func List(s ListStore, params ListParams) (ListResult, error) {
+	if params.Limit < 0 {
+		return ListResult{Spawns: []ListRow{}}, fmt.Errorf("%w: limit = %d is negative; pass 0 (or omit it) for no cap, or a positive number of rows",
+			ErrInvalidFlags, params.Limit)
+	}
 	labels := make(map[string]string, len(params.Labels))
 	for _, raw := range params.Labels {
 		idx := strings.IndexByte(raw, '=')
@@ -178,6 +184,7 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 // CLI: agent-director list
 //
 // Errors:
+//   - [ErrInvalidFlags]: Limit is negative; refused before the store is read.
 //   - [ErrListInvalidLabel]: a Labels entry is not in "key=value" form.
 //
 // Nondeterminism: none.

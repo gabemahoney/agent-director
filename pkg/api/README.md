@@ -203,9 +203,10 @@ for _, row := range res.Spawns {
 ```
 
 Returns `ListResult` (`.Spawns []ListRow`). `Spawns` is never nil —
-encodes as `[]` when empty. Most-likely sentinel error:
-`ErrListInvalidLabel` (label not in `key=value` form). See
-`(*Client).List` godoc.
+encodes as `[]` when empty. `Limit` caps the rows returned; 0 means no
+cap. Sentinel errors, each returned before the store is read:
+`ErrListInvalidLabel` (label not in `key=value` form) and
+`ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.
 
 ---
 
@@ -354,9 +355,9 @@ if err != nil {
 
 ### ReadPane
 
-Capture the last N lines of the agent's own pane. Default 25 lines;
-no upper cap. ANSI escape codes are stripped by default (pass `ANSI: true`
-to get raw bytes).
+Capture the last N lines of the agent's own pane. Default 25 lines
+(`NLines` 0); no upper cap. ANSI escape codes are stripped by default
+(pass `ANSI: true` to get raw bytes).
 
 ```bash
 agent-director read-pane \
@@ -370,6 +371,8 @@ agent's pane (or, with no session of the current launch, the pane of the
 one session an earlier launch of this row left behind) and changes
 nothing. Most-likely sentinel errors:
 
+- `ErrInvalidFlags`: `NLines` is negative; refused before the row is read,
+  with no tmux call.
 - `ErrSpawnNotFound`: no row has this id.
 - `ErrTmuxCaptureFailed`: no session of this agent is there.
 - `ErrTmuxSessionConflict`: the agent's pane was not found, more than one

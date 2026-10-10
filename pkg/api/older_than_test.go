@@ -9,9 +9,8 @@ import (
 )
 
 // TestParseOlderThan pins the older_than forms the CLI and MCP share (b.hxn):
-// trailing-d days and Go durations at or above zero parse; a negative value,
-// which Expire would read as "every finished row", and junk are refused, and
-// so is a day count above 106751, which would wrap the window (b.sgw).
+// unsigned trailing-d days and Go durations parse; any leading + or -, in
+// either form (b.c4n), junk and a day count above 106751 (b.sgw) are refused.
 func TestParseOlderThan(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -32,6 +31,11 @@ func TestParseOlderThan(t *testing.T) {
 		{"-1h30m", 0, false},
 		{"-7d", 0, false},
 		{"-0d", 0, false},
+		{"-0s", 0, false},
+		{"+2h", 0, false},
+		{"+0s", 0, false},
+		{"+7d", 0, false},
+		{"+0d", 0, false},
 		{"7.5d", 0, false},
 		{"7xd", 0, false},
 		{"", 0, false},

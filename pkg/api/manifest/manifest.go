@@ -546,7 +546,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "n_lines",
 				Type:          "int",
-				Description:   "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.",
+				Description:   "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -582,6 +582,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxCaptureFailed",
@@ -949,7 +950,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "limit",
 				Type:          "int",
-				Description:   "Cap result count. 0 / omitted means no cap.",
+				Description:   "Cap result count. 0 / omitted means no cap. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -960,6 +961,7 @@ var Verbs = []VerbDef{
 			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
+			"ErrInvalidFlags",
 			"ErrListInvalidLabel",
 		},
 	},
@@ -1080,7 +1082,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "bytes_sent",
 				Type:          "int",
-				Description:   "Bytes sent. Default 0.",
+				Description:   "Bytes sent. Default 0. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -1089,7 +1091,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "bytes_received",
 				Type:          "int",
-				Description:   "Bytes received. Default 0.",
+				Description:   "Bytes received. Default 0. A negative value is refused (ErrInvalidFlags).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,

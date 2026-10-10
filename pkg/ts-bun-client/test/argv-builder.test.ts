@@ -20,6 +20,10 @@ test.each([
   ["list: every filter", "list", {
     state: ["waiting", "working"], label: ["a=b"], parent: "p", cwd: "/c", tmux_session_name: "s", limit: 10,
   }, ["list", "--state", "waiting,working", "--label", "a=b", "--parent", "p", "--cwd", "/c", "--tmux-session-name", "s", "--limit", "10"]],
+  // b.c4n: 0 is the CLI's default (no cap) and is omitted; any other value,
+  // a negative one too, goes through for the CLI to refuse.
+  ["list: limit 0 omitted", "list", { limit: 0 }, ["list"]],
+  ["list: negative limit passed through", "list", { limit: -1 }, ["list", "--limit", "-1"]],
   ["spawn: cwd only", "spawn", { cwd: "/ws" }, ["spawn", "--cwd", "/ws"]],
   ["spawn: every option", "spawn", {
     cwd: "/ws", template: "default", claude_instance_id: "id-1", tmux_session_name: "s", relay_mode: "on",
@@ -48,6 +52,10 @@ test.each([
     ["read-pane", ...ID, "--n-lines", "50", "--ansi", "--allow-pending"]],
   ["read-pane: false booleans omitted", "read-pane", { claude_instance_id: "id-1", ansi: false, allow_pending: false },
     ["read-pane", ...ID]],
+  // b.c4n: 0 is the CLI's default of 25 and is omitted; a negative goes through for the CLI to refuse.
+  ["read-pane: n_lines 0 omitted", "read-pane", { claude_instance_id: "id-1", n_lines: 0 }, ["read-pane", ...ID]],
+  ["read-pane: negative n_lines passed through", "read-pane", { claude_instance_id: "id-1", n_lines: -3 },
+    ["read-pane", ...ID, "--n-lines", "-3"]],
   ["decide: token and reason", "decide", { claude_instance_id: "id-1", decision: "allow", request_token: "tok", reason: "safe" },
     ["decide", ...ID, "--decision", "allow", "--request-token", "tok", "--reason", "safe"]],
   ["decide: no token or reason", "decide", { claude_instance_id: "id-1", decision: "deny" },

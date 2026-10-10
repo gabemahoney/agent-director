@@ -148,7 +148,7 @@ Capture the last N lines of the agent's own pane (default 25, no upper cap). ANS
 ### Input schema
 
 - `claude_instance_id`: type=string, required=true — Id of the Spawn to read.
-- `n_lines`: type=int, required=false — Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.
+- `n_lines`: type=int, required=false — Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap. A negative value is refused (ErrInvalidFlags).
 - `ansi`: type=bool, required=false — When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.
 - `allow_pending`: type=bool, required=false — Accepted for surface symmetry with send-keys. ReadPane has no state guard (pending/ended/missing are all readable), so this flag has no behavioral effect.
 
@@ -158,6 +158,7 @@ Capture the last N lines of the agent's own pane (default 25, no upper cap). ANS
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrSpawnNotFound`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxCaptureFailed`
@@ -336,7 +337,7 @@ Enumerate rows. All filters AND together. Order is unspecified; callers sort.
 - `parent`: type=string, required=false — Filter by parent_id exact match.
 - `cwd`: type=string, required=false — Filter by canonicalized cwd exact match.
 - `tmux_session_name`: type=string, required=false — Filter by tmux session name exact match. Returns any live or ended row whose tmux_session_name equals the value byte-for-byte; correlation across re-uses, not uniqueness enforcement. Over MCP, a serve process from before the fix (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0) silently ignores this parameter under either spelling, so list is not filtered by session name.
-- `limit`: type=int, required=false — Cap result count. 0 / omitted means no cap.
+- `limit`: type=int, required=false — Cap result count. 0 / omitted means no cap. A negative value is refused (ErrInvalidFlags).
 
 ### Output schema
 
@@ -344,6 +345,7 @@ Enumerate rows. All filters AND together. Order is unspecified; callers sort.
 
 ### Errors
 
+- `ErrInvalidFlags`
 - `ErrListInvalidLabel`
 
 ## Tool: pause

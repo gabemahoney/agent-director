@@ -38,7 +38,7 @@ func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 
 // expireHandlerWith implements `agent-director expire`. --older-than is
 // parsed by pkgapi.ParseOlderThan, the parser MCP's older_than shares, and a
-// value it rejects (neither form, negative, or a day count above
+// value it rejects (neither form, a leading + or -, or a day count above
 // config.MaxExpireRetentionDays, 106751) is refused with ErrInvalidFlags
 // before Expire runs. Absent flag → cfg default.
 func expireHandlerWith(client *pkgapi.Client, args []string) error {

@@ -609,6 +609,36 @@ describe("read-pane", () => {
     },
     TIMEOUT
   );
+
+  test(
+    "error path: ErrInvalidFlags for a negative n_lines, before the row is read (b.c4n)",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(
+          ["read-pane", "--claude-instance-id", "nonexistent-id", "--n-lines", "-1"],
+          cliEnv(homeA)
+        );
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        let tsErr: unknown;
+        try {
+          await client.readPane({ claude_instance_id: "nonexistent-id", n_lines: -1 });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+        expect((tsErr as AgentDirectorError).errName).toBe("ErrInvalidFlags");
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
 });
 
 // ── kill ──────────────────────────────────────────────────────────────────────
@@ -1251,6 +1281,33 @@ describe("list", () => {
         }
 
         assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrInvalidFlags for a negative limit (b.c4n)",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["list", "--limit", "-1"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        let tsErr: unknown;
+        try {
+          await client.list({ limit: -1 });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+        expect((tsErr as AgentDirectorError).errName).toBe("ErrInvalidFlags");
       } finally {
         cleanup();
       }
