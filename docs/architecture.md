@@ -1656,13 +1656,26 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
 
 **Consumers of `Verbs`.**
 
-1. CLI dispatch table in `cmd/agent-director/main.go`.
+1. The CLI's `help` output: `helpHandler` in
+   `cmd/agent-director/main.go` prints `pkg/api.Help()`, which lists each
+   verb's name and description from `Verbs`. The rest of the CLI does not
+   read `Verbs`. No non-test file under `cmd/agent-director` imports
+   `pkg/api/manifest`; the `handlers()` dispatch table and each verb's
+   `flag.FlagSet` are written by hand. `cli_manifest_parity_test.go`
+   checks that hand-wired CLI against `Verbs` (see "The structural parity
+   guard" under
+   [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
 2. MCP tool schema served in `mcp` mode (Epic 11).
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
-Verb additions/edits go in `pkg/api/manifest` only; the CI doc-drift
-gate re-runs `go generate` and fails if any tracked file changes.
+Verb additions/edits start in `pkg/api/manifest`, but it is not the only
+place to change. A new verb also needs its hand-written `handlers()`
+entry and, unless `ExposedVerb` excludes it, a `LiveDispatcher.Call`
+case. A new param also needs its CLI flag and, on an MCP-exposed verb,
+its `LiveDispatcher.Call` decoding. Make these in the same change (see "How to add a verb" and
+"Prohibitions" below). The CI doc-drift gate re-runs `go generate` and
+fails if any tracked file changes.
 
 **Help size guard.** `TestHelpSizeGuard` in
 `cmd/agent-director/help_size_test.go` measures `agent-director help`'s
@@ -1796,8 +1809,16 @@ checked.
 
 - Do not hand-edit `docs/cli-reference.md` or `docs/mcp-reference.md`.
   They are auto-generated; the CI drift gate will fail.
-- Do not define CLI flags outside the manifest. New params go in the
-  matching `VerbDef.Params` literal, named with underscores, never a dash.
+- Do not register a main-CLI flag that is not one of its verb's manifest
+  params. Each verb's flags are registered by hand on its own
+  `flag.FlagSet`, not generated from the manifest. A new param goes in the
+  matching `VerbDef.Params` literal, named with underscores, never a dash,
+  and its verb registers it as the dashed flag in the same change.
+  `TestCLIFlagsAreManifestParams` fails on a flag that is not a param and
+  on a param with no flag, bar the three a verb takes otherwise; the global
+  flags, parsed without the `flag` package, are outside its reach (see "The
+  structural parity guard" under
+  [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
 - Do not add an MCP-exposed param without decoding it in
   `LiveDispatcher.Call` through `decodeParams`: `TestMCPParamParity` fails
   for a param the dispatcher drops or whose wrongly typed value is not
