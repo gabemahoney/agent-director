@@ -1323,9 +1323,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_CHECK_REQUIRED=1
 
 # Prefer the in-repo builds (skills/install-agent-director sits two
-# levels under the repo root; bin/ is at the root).
-candidate="${SCRIPT_DIR}/../../bin/agent-director"
-admin_candidate="${SCRIPT_DIR}/../../bin/agent-director-admin"
+# levels under the repo root; bin/ is at the root). The root is resolved
+# here, physically as the kernel resolves ../.., so every message names
+# <root>/bin/... with no ../.. (b.j6w); a failed cd keeps the raw path.
+candidate_bin="$(cd -P "${SCRIPT_DIR}/../.." 2>/dev/null && pwd -P)/bin" \
+    || candidate_bin="${SCRIPT_DIR}/../../bin"
+candidate="${candidate_bin}/agent-director"
+admin_candidate="${candidate_bin}/agent-director-admin"
 
 if [[ -z "$BINARY_SRC" ]]; then
     if [[ -x "$candidate" ]]; then
