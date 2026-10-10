@@ -4,6 +4,8 @@
 // (`go test` FAIL lines, compiler errors) made the SR-14 line invalid JSON and
 // run-parallel.sh's `grep '^{' | jq -sc .` dropped every diagnostic of the gate.
 // gate_diagnostics_test.go covers the gates that printf'd their own line.
+// publish_diagnostic_test.go and smoke_detail_test.go cover b.nsa: the publish
+// phase's own diagnostic and the smoke gate's detail field.
 package emitdiagnosticcontrolchars_test
 
 import (
@@ -46,29 +48,46 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// gatesDir is the release skill's gates/ directory in this worktree.
+func gatesDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repoRoot(t), "skills", "release-agent-director", "gates")
+}
+
+// requireJQ skips the test when jq, which every diagnostic builder runs, is absent.
+func requireJQ(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH — the diagnostic builders need it")
+	}
+}
+
 // emitDecoded calls emit_diagnostic with args as its four arguments.
 func emitDecoded(t *testing.T, args ...string) map[string]any {
 	t.Helper()
 	return runEmit(t, `emit_diagnostic "$@"`, "", args...)
 }
 
-// runEmit sources the real emit-diagnostic.sh, runs call under bash with args
-// and stdin, requires nothing on stdout and one JSON line on stderr, and decodes it.
+// runEmit sources the real emit-diagnostic.sh and runs call (see runLoaded).
 func runEmit(t *testing.T, call, stdin string, args ...string) map[string]any {
 	t.Helper()
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not on PATH — emit_diagnostic needs it")
-	}
-	lib := filepath.Join(repoRoot(t), "skills", "release-agent-director", "gates", "lib", "emit-diagnostic.sh")
-	cmd := exec.Command("bash", append([]string{"-c", `source "$0" && ` + call, lib}, args...)...)
+	return runLoaded(t, `source "$0"`, filepath.Join("lib", "emit-diagnostic.sh"), call, stdin, args...)
+}
+
+// runLoaded runs `load && call` under bash with $0 set to the gates/ script rel,
+// args and stdin, requires nothing on stdout and one JSON line on stderr, and decodes it.
+func runLoaded(t *testing.T, load, rel, call, stdin string, args ...string) map[string]any {
+	t.Helper()
+	requireJQ(t)
+	cmd := exec.Command("bash", append([]string{"-c", load + " && " + call, filepath.Join(gatesDir(t), rel)}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("emit_diagnostic: %v\nstderr: %.2000q", err, stderr.String())
+		t.Fatalf("%s: %v\nstderr: %.2000q", call, err, stderr.String())
 	}
 	if stdout.Len() != 0 {
-		t.Errorf("emit_diagnostic wrote to stdout: %q", stdout.String())
+		t.Errorf("%s wrote to stdout: %q", call, stdout.String())
 	}
 	return decodeOneLine(t, stderr.String())
 }

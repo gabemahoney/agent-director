@@ -532,27 +532,61 @@ _sandbox-build: _sandbox-preflight
 #     check-doccomments, err-coherence, surface-json, errnames-json and
 #     nondet-coverage) on its GitHub-hosted runner.
 # Anywhere else, such as a development host, it exits 2 and names the command
-# that runs the same goals in the sandbox: _REQUIRE_SANDBOX_ADVICE. It is
-# built from all the goals, never from the target that reached the guard
-# first, so it is the same whatever their order and under -j:
-#   - make sandbox CMD="make <goals>" when test is not a goal;
-#   - make test-sandbox when test is the only goal: make test cannot run in
-#     the sandbox (see test);
-#   - both, joined by &&, when test comes with other goals:
-#     make test-sandbox for test and make sandbox CMD="make <the others>" for
-#     the rest, test's first when test is the first goal, else last.
+# that runs the same goals in the sandbox: _REQUIRE_SANDBOX_ADVICE, which works
+# when followed as printed. It is built from all the goals, never from the
+# target that reached the guard first, so it is the same whatever their order
+# and under -j. The goals that cannot run in the sandbox never go in a
+# make sandbox CMD= (b.4a1); they run on the host: test as make test-sandbox
+# (make test cannot run in the sandbox, see test), and each goal in
+# _REQUIRE_SANDBOX_HOST_GOALS (below) as itself. All the other goals run in one
+# make sandbox CMD="make <those goals>". The host goals that come before the
+# first sandbox goal run in one make <goals> before that sandbox command, the
+# rest in one make <goals> after it, each in goal order, and the commands are
+# joined by &&. So the sandbox still runs once, and each host goal keeps its
+# place before or after it (with test alone among them: test-sandbox first
+# when test is the first goal, else last):
+#   make generate surface-json    make sandbox CMD="make generate surface-json"
+#   make test                     make test-sandbox
+#   make test generate            make test-sandbox && make sandbox CMD="make generate"
+#   make generate test surface-json
+#                                 make sandbox CMD="make generate surface-json" && make test-sandbox
+#   make generate test-docker     make sandbox CMD="make generate" && make test-docker
+#   make test-image generate test test-docker
+#                                 make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker
 # Like AGENT_DIRECTOR_TEST_SANDBOX itself it is an accident-prevention gate,
 # not a security boundary: it keeps the rule that nothing runs on the host.
 _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
-_REQUIRE_SANDBOX_OTHERS = $(filter-out test,$(_REQUIRE_SANDBOX_GOALS))
-_REQUIRE_SANDBOX_TEST_CMD = $(if $(filter test,$(_REQUIRE_SANDBOX_GOALS)),make test-sandbox)
-_REQUIRE_SANDBOX_OTHERS_CMD = $(if $(_REQUIRE_SANDBOX_OTHERS),make sandbox CMD="make $(_REQUIRE_SANDBOX_OTHERS)")
+# _REQUIRE_SANDBOX_HOST_GOALS are the goals that work only on the host (b.4a1),
+# so the advice never puts one in a make sandbox CMD=. Each one runs a
+# container engine, itself or through a prerequisite (_sandbox-build or
+# test-image), and the sandbox image has none; or runs a host tool the image
+# lacks (shellcheck, the TLA job scheduler CLI); or checks or prints the
+# host's own setup (tla-print, measure-exit-print, _measure-exit-credentials).
+# Must use: a new target like these joins this list. A goal that runs the
+# same in either place (build, lint, list-test-docker-epics, …) stays out of
+# it and runs in the sandbox with the guarded goals.
+_REQUIRE_SANDBOX_HOST_GOALS := test-sandbox sandbox sandbox-shell \
+	_sandbox-preflight _sandbox-build test-install-sh test-install-sh-advice \
+	test-image test-image-smoke test-docker test-docker-install-mode \
+	verify-prerelease-linux measure-exit-dryrun measure-exit-print \
+	measure-image measure-exit _measure-exit-credentials \
+	release-shellcheck tla tla-print
+_REQUIRE_SANDBOX_ON_HOST = test $(_REQUIRE_SANDBOX_HOST_GOALS)
+# _require_sandbox_lead returns the goals of $(1) that come before the first
+# one that runs in the sandbox: all of them when none does.
+_require_sandbox_lead = $(if $(filter $(_REQUIRE_SANDBOX_ON_HOST),$(firstword $(1))),$(firstword $(1)) $(call _require_sandbox_lead,$(wordlist 2,$(words $(1)),$(1))))
+_REQUIRE_SANDBOX_LEAD = $(call _require_sandbox_lead,$(_REQUIRE_SANDBOX_GOALS))
+_REQUIRE_SANDBOX_REST = $(wordlist $(words x $(_REQUIRE_SANDBOX_LEAD)),$(words $(_REQUIRE_SANDBOX_GOALS)),$(_REQUIRE_SANDBOX_GOALS))
+_REQUIRE_SANDBOX_IN = $(filter-out $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
+_REQUIRE_SANDBOX_TAIL = $(filter $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
+# _require_sandbox_host_cmd returns make <the goals of $(1)>, run on the host,
+# with test as test-sandbox; nothing when $(1) is empty.
+_require_sandbox_host_cmd = $(if $(strip $(1)),make $(patsubst test,test-sandbox,$(strip $(1))))
+_REQUIRE_SANDBOX_IN_CMD = $(if $(_REQUIRE_SANDBOX_IN),make sandbox CMD="make $(_REQUIRE_SANDBOX_IN)")
 # _require_sandbox_and joins two commands with &&, or returns the one that is
 # not empty.
-_require_sandbox_and = $(if $(and $(1),$(2)),$(1) && $(2),$(1)$(2))
-_REQUIRE_SANDBOX_ADVICE = $(strip $(if $(filter test,$(firstword $(_REQUIRE_SANDBOX_GOALS))), \
-	$(call _require_sandbox_and,$(_REQUIRE_SANDBOX_TEST_CMD),$(_REQUIRE_SANDBOX_OTHERS_CMD)), \
-	$(call _require_sandbox_and,$(_REQUIRE_SANDBOX_OTHERS_CMD),$(_REQUIRE_SANDBOX_TEST_CMD))))
+_require_sandbox_and = $(if $(strip $(1)),$(if $(strip $(2)),$(strip $(1)) && $(strip $(2)),$(strip $(1))),$(strip $(2)))
+_REQUIRE_SANDBOX_ADVICE = $(call _require_sandbox_and,$(call _require_sandbox_and,$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_LEAD)),$(_REQUIRE_SANDBOX_IN_CMD)),$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_TAIL)))
 _require-sandbox:
 	@if [ -z "$$AGENT_DIRECTOR_TEST_SANDBOX" ] && [ -z "$$BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS" ]; then \
 		echo 'ERROR: make $(_REQUIRE_SANDBOX_GOALS) runs go or bun tools, which run only in the sandbox, never on the host (b.8yq).' >&2; \

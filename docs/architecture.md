@@ -11108,21 +11108,47 @@ gates/finalize/
 ```
 
 **Gate diagnostics.** A failing gate writes each SR-14 diagnostic to stderr
-as one JSON object per line. Gate scripts must build every diagnostic with
-`emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never by hand; the
-sole exception is the publish orchestrator, whose `emit_publish_diagnostic`
-adds the publish-only fields. Both build the object with `jq`, so the line
-is valid JSON whatever its fields carry, raw command output with TABs, CRs
-or other control characters included. `emit_diagnostic` feeds the
-description to `jq` on stdin, not as an argument, so it may be any size;
-Linux caps one argument at 128 KiB. The guard test
-`TestNoHandRolledDiagnosticJSON`
+as one compact JSON object per line. Gate scripts must build every
+diagnostic with `emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never
+by hand; the sole exception is the publish orchestrator, whose
+`emit_publish_diagnostic` adds the publish-only fields. Both build the
+object with `jq -c`, so the line is valid JSON whatever its fields carry,
+raw command output with TABs, CRs or other control characters included. The
+guard test `TestNoHandRolledDiagnosticJSON`
 (`skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars/`)
 fails on any `printf` of a `{"gate"` line in `gates/**/*.sh`. One invalid
 line costs a whole gate's diagnostics: the parallel executor
 (`gates/lib/run-parallel.sh`) parses every stderr line of a gate that
 starts with `{` in a single `jq -s`, and records an empty list if that
 fails.
+
+**Command output reaches `jq` on stdin.** Linux caps one argument at
+128 KiB (`MAX_ARG_STRLEN`). A larger `--arg` or `--argjson` makes the exec
+of `jq` fail with "Argument list too long", and the diagnostic, sub-check
+or report it was building is lost. So a script in `gates/` passes any value
+that can carry command output, or any collection of such values, to `jq`
+on stdin or in a file `jq` reads, never as an argument;
+`printf '%s' "$v" | jq -Rs .` turns a string into one JSON string with no
+change to its content. Only short values such as gate names, outcomes,
+paths built by the script and numbers go as `--arg` or `--argjson`. The
+values that follow this rule today (b.v46, b.nsa):
+
+- `emit_diagnostic`: the description.
+- `emit_publish_diagnostic`: the offending path, description, corrective
+  action and `upstream_response_verbatim` (the failed command's last 50
+  stderr lines).
+- The publish orchestrator's `record_substep` (`response_excerpt`) and
+  `write_report` (the substeps and diagnostics arrays).
+- `run-parallel.sh`: each sub-check's `stderr_excerpt` and `diagnostics`,
+  and the combined `sub_checks`, which `jq` reads from the per-gate files.
+- `smoke/per-binary-smoke.sh`: a sub-check's `detail` (`ldd` or `help`
+  output). `jq` is the only thing that escapes it, so the decoded value
+  equals the raw output.
+
+Two inputs still go as arguments: the publish orchestrator passes its
+`--prior-phases` file's array to `jq` as one `--argjson`, and
+`finalize/write-report.sh` takes its phases and diagnostics arrays as
+positional arguments.
 
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,
@@ -15679,18 +15705,47 @@ prerequisite, and `all` (the default goal) reaches it through `generate`.
 It passes, printing
 nothing, when `AGENT_DIRECTOR_TEST_SANDBOX` or
 `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is set. Otherwise it exits 2
-before anything runs, and its stderr names the goals and the command that
-runs them in the sandbox, built from all the goals whatever their order
-and under `-j`: `make sandbox CMD="make <goals>"`, or, for `test`,
+before the guarded goals' recipes run, and its stderr names the goals and
+a command that runs them and works when run as printed. The command is
+built from all the goals, so it is the same whatever their order and
+under `-j`.
+
+A goal that cannot run in the sandbox never goes in a
+`make sandbox CMD=` (b.4a1); it runs on the host. `test` runs there as
 `make test-sandbox` (`test-install-sh` starts a container, and the
-sandbox has no container engine). With `test` and other goals it joins
-the two with `&&`, `make test-sandbox` first only if `test` is the first
-goal: `make generate test` gives
-`make sandbox CMD="make generate" && make test-sandbox`. When `test`,
+sandbox image has no container engine). Each goal in the Makefile's
+`_REQUIRE_SANDBOX_HOST_GOALS` runs there as itself. Those goals start a
+container, themselves or through `_sandbox-build` or `test-image`
+(`sandbox`, `test-sandbox`, `test-image`, `test-docker`, `measure-exit`,
+`verify-prerelease-linux`, …), run a host tool the image lacks
+(`release-shellcheck`, `tla`), or check or print the host's own setup
+(`tla-print`, `measure-exit-print`, `_measure-exit-credentials`). Every
+other goal runs in one `make sandbox CMD="make <those goals>"`, so the
+sandbox starts once. The host goals before the first sandbox goal run in
+one `make <goals>` ahead of it, the rest in one `make <goals>` after it,
+each in goal order, joined by `&&`:
+
+| Goals | Advice |
+| --- | --- |
+| `generate surface-json` | `make sandbox CMD="make generate surface-json"` |
+| `test` | `make test-sandbox` |
+| `test generate` | `make test-sandbox && make sandbox CMD="make generate"` |
+| `generate test surface-json` | `make sandbox CMD="make generate surface-json" && make test-sandbox` |
+| `generate test-docker` | `make sandbox CMD="make generate" && make test-docker` |
+| `test-image generate test test-docker` | `make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker` |
+
+The advice names the goals only: variables given on the command line
+(`EPIC=…`, `CMD=…`) are not carried into it.
+
+When `test`,
 `all` or `envelope-diff-ts` is a goal, the build prerequisites that do work of
 their own (`build`, `bin/ts-helper`, `test/fake-tmux/tmux` and the
 sandbox image's `_sandbox-preflight`) take the guard as an order-only
-prerequisite, so nothing runs before it, also under `make -j`.
+prerequisite, so none of that work runs before it, also under `make -j`.
+The guard stops only the goals that reach it: a host goal given before
+the guarded goals (`make test-docker generate`), or one whose work does not
+wait for the guard under `-j`, can run before the refusal, which still
+says `Nothing was run.`
 `make build`, `make test-image` and the `make sandbox*` targets still run
 on the host, and `make -n` still exits 0.
 
@@ -15699,6 +15754,15 @@ on the host, and `make -n` still exits 0.
 as its first prerequisite. Never write another environment check in a
 recipe. `test/sandbox/requiresandbox` scans the Makefile's recipes for
 such targets, so a new one is checked without editing the test.
+
+**Must use:** a new make target that cannot run in the sandbox (it starts
+a container, itself or through a prerequisite or sub-make; runs a host
+tool the sandbox image lacks; or checks or prints the host's own setup)
+joins `_REQUIRE_SANDBOX_HOST_GOALS`, so the advice keeps it out of the
+`CMD=`. A target that runs the same in either place (`build`, `lint`,
+`list-test-docker-epics`, …) stays out of the list. `requiresandbox` also
+scans for targets that start a container and fails when one is missing
+from the list; the host-tool and host-setup kinds are not scanned.
 
 The guard defends against b.8dr: a host-side `go test` can rewrite the real
 store no matter how `HOME` is set. Redirecting `HOME` does not hold as a
@@ -15728,7 +15792,7 @@ would also disable the guard on the self-hosted runner (b.175).
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq). Those tests run `make` against the real
+b.8yq and b.4a1). Those tests run `make` against the real
 repo Makefile with a fake container engine or tool on PATH, never a real
 container, and assert on what the recipe produced. They exec no built binary
 and open no store, so they carry no sandbox guard.
@@ -15760,10 +15824,19 @@ set. It finds every target whose recipe runs `go generate`, `go run`,
 one, `all`, the default goal, two goals at once and `test` with other
 goals in either order exit 2 with the refusal and its advice and run
 nothing, also under `-j8` for `test`, `all`, the default goal,
-`envelope-diff-ts` and the mixed-goal cells. It checks that the guard
-passes with the sandbox marker or the bypass, that `make -n` and the
-build-only targets still run outside the sandbox, and that the advice, run
-as printed through a fake engine, runs `go generate` in the "container".
+`envelope-diff-ts` and the mixed-goal cells. It also finds every target
+that starts a container (in its recipe, or through a prerequisite or
+sub-make goal that does) and checks `make generate <that target>`, and it
+mixes `test`, `generate` and container goals (`test-docker generate test`,
+`test-image generate test test-docker`, `test test-docker`, also under
+`-j8`): no container goal goes in the advice's `CMD=` (b.4a1). It checks
+that the guard passes with the sandbox marker or the bypass, that
+`make -n` and the build-only targets still run outside the sandbox, and
+that the advice, run as printed, exits 0: for `make generate` it runs
+`go generate` in the "container", and for `make generate test-docker` also
+`test-docker`'s go builds on the host. The fake engine runs a sandbox-image
+command with docker and podman on its PATH that fail, as the real image has
+no container engine.
 
 - `RepoRoot(t)` returns the directory holding the root `go.mod`.
 - `MakefileUnderTest(t)` returns the repo Makefile, or the path in

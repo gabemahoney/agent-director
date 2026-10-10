@@ -14,12 +14,19 @@ import (
 // quote, a backslash, a TAB, a C0 control and a CR before the newline.
 const oddLine = "E401 \"auth failed\"\tC:\\token\x01 here\r"
 
-// fakeFailingBin writes name into dir as a command that writes "args=[<args>] ",
-// then oddLine and a second line, to stderr and exits 1.
-func fakeFailingBin(t *testing.T, dir, name string) {
+// longTail is raw output over Linux's 128 KiB single-argument limit in three
+// lines, so even a 50-line tail of it is over the limit (b.nsa).
+var longTail = func() string {
+	chunk := "npm ERR! \"x\"\t\\ "
+	return oddLine + "\n" + strings.Repeat(chunk, (200<<10)/len(chunk)) + "\nfatal: rejected"
+}()
+
+// fakeFailingBin writes name into dir as a command that writes "args=[<args>] "
+// and then out to stderr, and exits 1.
+func fakeFailingBin(t *testing.T, dir, name, out string) {
 	t.Helper()
 	errFile := filepath.Join(dir, name+".stderr")
-	if err := os.WriteFile(errFile, []byte(oddLine+"\nsecond\tline\n"), 0o644); err != nil {
+	if err := os.WriteFile(errFile, []byte(out), 0o644); err != nil {
 		t.Fatalf("write %s: %v", errFile, err)
 	}
 	script := "#!/bin/sh\nprintf 'args=[%s] ' \"$*\" >&2\ncat '" + errFile + "' >&2\nexit 1\n"
@@ -31,9 +38,7 @@ func fakeFailingBin(t *testing.T, dir, name string) {
 // TestConvertedGatesEmitValidJSON (b.v46): gates that hand-rolled their SR-14
 // line now emit, through emit_diagnostic, one valid line with these fields.
 func TestConvertedGatesEmitValidJSON(t *testing.T) {
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not on PATH — emit_diagnostic needs it")
-	}
+	requireJQ(t)
 	cases := []struct {
 		name     string
 		script   string   // under gates/
@@ -71,13 +76,13 @@ func TestConvertedGatesEmitValidJSON(t *testing.T) {
 			wantDiag: map[string]any{"gate": "branch.worktree-create", "description": "target version  is not strict SemVer"},
 		},
 	}
-	gates := filepath.Join(repoRoot(t), "skills", "release-agent-director", "gates")
+	gates := gatesDir(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			bin := t.TempDir()
 			if tc.fakeBin != "" {
-				fakeFailingBin(t, bin, tc.fakeBin)
+				fakeFailingBin(t, bin, tc.fakeBin, oddLine+"\nsecond\tline\n")
 			}
 			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + t.TempDir()}
 			for _, e := range os.Environ() {
@@ -123,7 +128,7 @@ func TestConvertedGatesEmitValidJSON(t *testing.T) {
 // itself; each goes through emit_diagnostic, which escapes with jq.
 func TestNoHandRolledDiagnosticJSON(t *testing.T) {
 	handRolled := regexp.MustCompile(`printf.*\{\\?"gate\\?"`)
-	gates := filepath.Join(repoRoot(t), "skills", "release-agent-director", "gates")
+	gates := gatesDir(t)
 	err := filepath.WalkDir(gates, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".sh") {
 			return err

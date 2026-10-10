@@ -33,6 +33,18 @@ Every gate script **must** adhere to the following contract:
   Any gate that needs to modify state should instead report a diagnostic
   and let the orchestrator decide whether to proceed.
 
+- Command output, and any JSON that holds it (diagnostics, sub-checks,
+  excerpts), reaches `jq` on stdin or in a file `jq` reads, never as
+  `--arg` or `--argjson`. Linux caps one argument at 128 KiB; over that the
+  exec of `jq` fails with "Argument list too long" and the JSON it was
+  building is lost. `printf '%s' "$out" | jq -Rs .` turns raw output into
+  one JSON string with no change to its content. Two places still pass a
+  JSON array as `--argjson`: `finalize/write-report.sh`'s phases and
+  diagnostics arrays (its positional arguments, below) and the publish
+  orchestrator's `--prior-phases` array. See docs/architecture.md "Command
+  output reaches `jq` on stdin" for where the rule applies today and for
+  these two exceptions.
+
 - Every `*.sh` under this directory must pass `make release-shellcheck`,
   which the lint workflow (`.github/workflows/lint.yml`) runs on every PR
   and push to `main`. That workflow is pinned to `ubuntu-24.04`, so CI
