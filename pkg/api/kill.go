@@ -297,48 +297,93 @@ func (k *killRun) killPane(paneID string) {
 // check is SR-6.1 step 4 after a kill was sent: the first reading of the
 // agent process decides whether it can be checked. Checkable (alive or gone):
 // the process wait over it and listed. Not (none recorded, or unreadable):
-// one follow-up lookup of launch, no wait, judging the current label (ended
-// nil) or the sessions of this id's own abandoned launch the kill sequence
-// ended (ended, their tmux ids; killRun.abandonedLaunch).
+// one follow-up lookup of launch, made right after the kills, with no pause,
+// judging the current label (ended nil) or the sessions of this id's
+// own abandoned launch the kill sequence ended (ended, their tmux ids;
+// killRun.abandonedLaunch). On the current label that lookup alone decides
+// and listed is not waited for (the wait or the follow-up, never both). On
+// the abandoned launch a follow-up that answers with none of those sessions
+// still there is followed by the process wait over listed alone (waitListed;
+// b.myx), so every process endAbandoned listed, an older session's agent
+// whose pane was moved out included, is waited for as on the checkable path;
+// a follow-up that fails returns its error with no wait.
 func (k *killRun) check(agent tmux.AgentProcess, listed []tmux.ProcIdentity, launch tmux.Launch, ended []string) error {
 	first := tmux.JudgeProcess(k.pc, agent.Identity)
 	k.noteCheck(agent, first)
-	if first == tmux.ProcNone || first == tmux.ProcUnknown {
-		return k.followUp(launch, ended)
+	if first != tmux.ProcNone && first != tmux.ProcUnknown {
+		return k.wait(agent.Identity, first, listed)
 	}
-	return k.wait(agent.Identity, first, listed)
+	if err := k.followUp(launch, ended); err != nil {
+		return err
+	}
+	if len(ended) == 0 { // the current label: the follow-up alone decides
+		return nil
+	}
+	return k.waitListed(listed)
 }
 
-// wait polls the agent process and the listed pane processes every
-// killPollInterval for up to exitWait, reading now at each poll and pausing
-// through sleep; the last pause is cut to end exactly at exitWait. A zombie
-// counts as gone; a reading that cannot tell counts as still running. All
-// gone: success. Otherwise ErrTmuxKillFailed naming every pid still running.
+// wait is the process wait over the checkable agent process, first read as
+// state, and the listed processes (pollExit). All gone: success. Otherwise
+// ErrTmuxKillFailed naming every pid still running (waitOutcome).
+// process_check records the agent's last reading, alive or gone.
 func (k *killRun) wait(agent tmux.ProcIdentity, state tmux.ProcState, listed []tmux.ProcIdentity) error {
+	state, running := k.pollExit(agent, state, listed)
+	agentRuns := state != tmux.ProcGone
+	k.processCheck = processCheckGone
+	if agentRuns {
+		k.processCheck = processCheckAlive
+	}
+	return k.waitOutcome(agentRuns, running)
+}
+
+// waitListed is the process wait over the listed processes alone, run by
+// check when the agent process cannot be checked and the follow-up lookup on
+// this id's own abandoned launch succeeded (b.myx): all gone is success, any
+// still running once exitWait has passed is ErrTmuxKillFailed naming each
+// (waitOutcome). With nothing listed it returns at once, with no pause.
+// process_check keeps the agent's first reading (unreadable or not_recorded),
+// since the agent itself is never polled.
+func (k *killRun) waitListed(listed []tmux.ProcIdentity) error {
+	_, running := k.pollExit(tmux.ProcIdentity{}, tmux.ProcGone, listed)
+	return k.waitOutcome(false, running)
+}
+
+// pollExit polls the agent process (unless state, its last reading, is
+// already gone) and the listed processes every killPollInterval for up to
+// exitWait, reading now at each poll and pausing through sleep; the last
+// pause is cut to end exactly at exitWait. A zombie counts as gone; a reading
+// that cannot tell counts as still running. It returns once the agent and
+// every listed process are gone, or once exitWait has passed, with the
+// agent's last reading and the listed processes still running.
+func (k *killRun) pollExit(agent tmux.ProcIdentity, state tmux.ProcState, listed []tmux.ProcIdentity) (tmux.ProcState, []tmux.ProcIdentity) {
 	start := k.now()
 	for {
 		listed = slices.DeleteFunc(listed, func(p tmux.ProcIdentity) bool {
 			return tmux.JudgeProcess(k.pc, p) == tmux.ProcGone
 		})
 		if state == tmux.ProcGone && len(listed) == 0 {
-			k.processCheck = processCheckGone
-			return nil
+			return state, nil
 		}
 		elapsed := k.now().Sub(start)
 		if elapsed >= k.exitWait {
-			break
+			return state, listed
 		}
 		k.sleep(min(killPollInterval, k.exitWait-elapsed))
 		if state != tmux.ProcGone {
 			state = tmux.JudgeProcess(k.pc, agent)
 		}
 	}
-	agentRuns := state != tmux.ProcGone
-	k.processCheck = processCheckGone
-	if agentRuns {
-		k.processCheck = processCheckAlive
+}
+
+// waitOutcome is a process wait's answer: nil when neither the agent
+// (agentRuns) nor any process of running still runs; otherwise
+// ErrTmuxKillFailed (waitExpiredError), with each pid of running recorded as
+// a survivor.
+func (k *killRun) waitOutcome(agentRuns bool, running []tmux.ProcIdentity) error {
+	if !agentRuns && len(running) == 0 {
+		return nil
 	}
-	for _, p := range listed {
+	for _, p := range running {
 		k.survivorPIDs = append(k.survivorPIDs, p.PID)
 	}
 	return k.waitExpiredError(agentRuns)
@@ -348,8 +393,9 @@ func (k *killRun) wait(agent tmux.ProcIdentity, state tmux.ProcState, listed []t
 // checked after a kill (SR-6.1, SR-3.11). An answer that shows what the kill
 // sequence ended still there (stillThere: the current label, or with ended
 // set one of those sessions) is ErrTmuxKillFailed; any other Ours, Leftover or
-// Gone is success; Can't tell is its error, saying the kill may or may not
-// have taken effect.
+// Gone is nil, after which check, on this id's own abandoned launch (ended
+// set), waits for the listed processes (waitListed); Can't tell is its error,
+// saying the kill may or may not have taken effect.
 func (k *killRun) followUp(launch tmux.Launch, ended []string) error {
 	res := tmux.Lookup(k.t, k.pc, launch, "")
 	k.followup = res.Token()

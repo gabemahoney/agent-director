@@ -45,12 +45,15 @@ func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 func keyCode(k config.TmuxKey) string { return "`" + k.Name() + "`" }
 
 // worstCases recomputes, at the defaults, SR-13.2's two kill paths, (i)
-// 2Q + 2A + E + 4W and (ii) 3Q + 2A + 5W, and pause's tmux phase 3Q + 3A + 6W
-// (its line clear, C-u, b.9o4, one action call more than kill's path (ii)).
-func worstCases() (kill1, kill2, pause time.Duration) {
+// 2Q + 2A + E + 4W and (ii) 3Q + 2A + 5W; kill-finished on this id's own
+// abandoned launch, its follow-up then its wait, 3Q + 2A + E + 5W for one
+// session and 2A + 2W for each more (b.myx); and pause's tmux phase
+// 3Q + 3A + 6W (its line clear, C-u, b.9o4, one action call more than kill's
+// path (ii)).
+func worstCases() (kill1, kill2, abandoned, perSession, pause time.Duration) {
 	q, a := tmuxDefault(config.TmuxQueryTimeoutMs), tmuxDefault(config.TmuxActionTimeoutMs)
 	e, w := tmuxDefault(config.TmuxKillExitWaitMs), tmuxDefault(config.TmuxPipeCloseWaitMs)
-	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 3*a + 6*w
+	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 2*a + e + 5*w, 2*a + 2*w, 3*q + 3*a + 6*w
 }
 
 // normalised collapses each run of whitespace in text to one space, so a
@@ -107,7 +110,7 @@ func docTimingStatements() []docStatement {
 	grace := config.TmuxPendingGraceSeconds
 	create, pipe, exitWait := config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
 	fixed := func(vals ...string) func([]string) []string { return func([]string) []string { return vals } }
-	p1, p2, pause := worstCases()
+	p1, p2, abandoned, perSession, pause := worstCases()
 	arch, readme := mdArchitecture, mdTopREADME
 	return []docStatement{
 		{"architecture Stop semantics: kill exit wait default", arch, stopSemanticsTitle,
@@ -121,6 +124,8 @@ func docTimingStatements() []docStatement {
 			}},
 		{"architecture Stop semantics: kill's time on tmux alone", arch, stopSemanticsTitle,
 			[]string{"at most 3Q + 2A + 5W"}, fixed(docSeconds(p2))},
+		{"architecture Stop semantics: kill-finished on this id's own abandoned launch, one session and each more", arch,
+			stopSemanticsTitle, []string{"3Q + 2A + E + 5W (", "2A + 2W ("}, fixed(docSeconds(abandoned), docSeconds(perSession))},
 		{"architecture Stop semantics: pause's tmux phase", arch, stopSemanticsTitle,
 			[]string{"3Q + 3A + 6W,"}, fixed(docSeconds(pause))},
 		{"architecture Stop semantics: pause wait default", arch, stopSemanticsTitle,
