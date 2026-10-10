@@ -97,8 +97,12 @@ type HandleConfig struct {
 	Now func() time.Time
 	// Start is the instant the hook process started, on Now's clock:
 	// cmd/agent-director reads time.Now first thing in the hook verb. The
-	// relay hook's kill instant is Start plus RelayTimeout (b.146 rule 4).
-	// The zero time reads Now at Handle's entry.
+	// relay hook's kill instant is Start plus RelayTimeout (b.146 rule 4),
+	// and the main agent's Stop or idle-prompt Notification proves gone only
+	// the requests recorded before the second of Start (the turn_end proof's
+	// cut, store.RequestProof.RecordedBefore; b.omt), so Start must be the
+	// wall clock the store's created_at is written on. The zero time reads
+	// Now at Handle's entry.
 	Start time.Time
 	// RelayTimeout is the per-hook timeout spawn wrote for the relay hook in
 	// the agent's settings, its --timeout argument (b.146 rule 4): Claude Code
@@ -206,13 +210,15 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // recorded, never a gate. The main agent's idle-prompt Notification is
 // ApplyHookWaitingIfWorking instead, with the same gate and records: a row
 // working, or relayed and in check_permission with no permission request that
-// still awaits an answer, returns to waiting, any other row is soft
-// refreshed, and
+// holds it (one that still awaits an answer and is not proven gone; b.omt),
+// returns to waiting, any other row is soft refreshed, and
 // either way the row records idle_since (applyOrdinaryHook; b.svb, b.146
 // problem 3). On a relayed row, a PostToolUse or PostToolUseFailure carrying
 // a tool_use_id, and the main agent's Stop or idle-prompt Notification, first
 // prove permission requests' dialogs gone (proveRequestsGone; b.146 step 2c),
-// with the same gate; then such a PostToolUse or PostToolUseFailure closes the
+// with the same gate, the Stop or idle prompt only those recorded before the
+// hook's start; a request proven gone no longer holds the row's move to
+// working (b.omt). Then such a PostToolUse or PostToolUseFailure closes the
 // fallen-back request with that tool_use_id (closeToolRan; b.146 rule 13: the
 // tool ran, so its dialog was answered allow), with the same gate, before its
 // ordinary write.
@@ -237,7 +243,8 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // (everything except an on-relay PermissionRequest) leave it empty.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
 	// The hook's start, from which the relay hook's kill instant is counted
-	// (b.146 rule 4).
+	// (b.146 rule 4), and before which a turn_end proof's requests were
+	// recorded (b.omt).
 	start := hc.Start
 	if start.IsZero() {
 		start = hc.clock()()
@@ -396,7 +403,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		return nil
 	default:
 		if relayActive {
-			proveRequestsGone(st, hc, instanceID, gate, res, logger)
+			proveRequestsGone(st, hc, start, instanceID, gate, res, logger)
 		}
 		if relayActive && res.ToolRan() {
 			closeToolRan(st, hc, instanceID, gate, res.ToolUseID, logger)
@@ -422,8 +429,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 // and a relayed PermissionRequest, with ad.hook.fired's upsert_outcome. The
 // main agent's idle-prompt Notification (res.WaitingIfWorking) is
 // ApplyHookWaitingIfWorking: a row working, or relayed and in
-// check_permission with no permission request that still awaits an answer,
-// returns to waiting, any other row is soft refreshed, and the row records
+// check_permission with no permission request that holds it (one that still
+// awaits an answer and is not proven gone; b.omt), returns to waiting, any
+// other row is soft refreshed, and the row records
 // idle_since (b.svb, b.146
 // problem 3). Every other event is one ApplyHookTransitionResult. A
 // store without those (a test double) gets ApplyHookTransition, which for the
@@ -476,19 +484,26 @@ func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.H
 // hc's clock): a PostToolUse or PostToolUseFailure carrying a tool_use_id
 // (ToolRan) proves the requests with that tool_use_id gone, tool_ran; the
 // main agent's Stop or idle-prompt Notification (TurnEnded) proves every
-// request with no agent_id recorded before it, turn_end. Any other hook
-// proves nothing. It runs first among the hook's writes, so the newest
-// request it may cover is read as near the hook's start as possible. It is
-// fail-open: a store without it, or a failed write, logs and changes nothing
-// else, and the requests stay unproven (plain send-keys stays refused) until
-// a later proof.
-func proveRequestsGone(st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
+// request with no agent_id recorded before start, the hook's start (Handle's,
+// from HandleConfig.Start), turn_end: one whose created_at is strictly before
+// start's whole second (store.RequestProof.RecordedBefore; b.omt). The cut is
+// the hook's start, not its read: an idle-prompt Notification whose read
+// lands after the next turn's PermissionRequest must not prove that request
+// gone while its dialog is up, since a request proven gone no longer holds
+// the row's move to working. Any other hook proves nothing. It runs first
+// among the hook's writes, so the newest request it may cover is read as near
+// the hook's start as possible, and before the hook's own write, which a
+// request it proves no longer holds. It is fail-open: a store without it, or
+// a failed write, logs and changes nothing else, and the requests stay
+// unproven (plain send-keys stays refused, and one still awaiting an answer
+// keeps holding the row) until a later proof.
+func proveRequestsGone(st HookStore, hc HandleConfig, start time.Time, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	var proof store.RequestProof
 	switch {
 	case res.ToolRan():
 		proof = store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: res.ToolUseID}
 	case res.TurnEnded():
-		proof = store.RequestProof{How: store.ProvenGoneTurnEnd}
+		proof = store.RequestProof{How: store.ProvenGoneTurnEnd, RecordedBefore: start}
 	default:
 		return
 	}

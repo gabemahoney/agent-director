@@ -13,7 +13,7 @@
 import { test, expect } from "bun:test";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, privateTmuxSocket, fakeTmuxCalls, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
+import { runHelper, seedFallenBackRelayRow, paneSends, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
 import { ErrClaimTooSoon, ErrPermissionRequestNotFound, type AgentDirectorError, type ClaimTooSoonDetails } from "../../src/index.js";
 
 const ZERO_HASH = "0".repeat(64);
@@ -23,11 +23,7 @@ test("record-pane-answer: happy path — closes a fallen-back request, typing no
     const store = homeStore(homeDir);
     const id = "smoke-rpa-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    runHelper("seed-spawn", { store, state: "check_permission", id, "relay-mode": "on", "create-store": true,
-      socket: privateTmuxSocket(homeDir) });
-    const token = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
-      "created-ago-seconds": "172800", "hook-gone-ago-seconds": "60" })["request_token"] as string;
-    runHelper("seed-row-session", { store, id, capture: "answered at tmux\n" });
+    const { token } = seedFallenBackRelayRow(homeDir, id, "check_permission");
 
     const result = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
@@ -37,7 +33,7 @@ test("record-pane-answer: happy path — closes a fallen-back request, typing no
 
     expect(result).toEqual({ request_token: token, pane_answer: "outside", pane_as: "unknown", decision: null,
       decision_reason: "pane_outside" });
-    expect(fakeTmuxCalls(logPath).filter((argv) => argv.includes("send-keys"))).toEqual([]);
+    expect(paneSends(logPath)).toEqual([]);
   });
 }, 15_000);
 

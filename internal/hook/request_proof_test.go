@@ -3,8 +3,9 @@ package hook_test
 // request_proof_test.go — b.146 step 2c through Handle on a real store: which
 // hooks of a relayed row's own agent prove its permission requests' dialogs
 // gone (a PostToolUse or PostToolUseFailure by tool_use_id, the main agent's
-// Stop or idle prompt after the request) and which do not. The store's rules
-// are internal/store/request_proof_test.go's.
+// Stop or idle prompt started after the request) and which do not, and the
+// row's release once a request answered at the pane is proven gone (b.omt).
+// The store's rules are internal/store/request_proof_test.go's.
 
 import (
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // proofUseID is the tool_use_id of the request the proof tests record.
@@ -44,11 +46,12 @@ func payloadWith(t *testing.T, fixture string, fields map[string]any) []byte {
 // proves it gone (tool_ran), a subagent's request included, whatever
 // agent-director's records say (here its relay hook may still answer, so it is
 // not closed); the main agent's Stop or idle-prompt Notification proves every
-// request with no agent_id recorded before it (turn_end), one recorded before
-// v7 included. Another tool_use_id, a PreToolUse, a hook that came before the
-// request, a subagent's request at the end of the main turn, a subagent's
-// idle prompt or a teammate's Stop (an agent_id), another Notification, a
-// relay-off hook or another process's hook proves nothing.
+// request with no agent_id recorded before the second it started (turn_end;
+// b.omt), one recorded before v7 included. Another tool_use_id, a PreToolUse,
+// a hook that came before the request or started in its second, a subagent's
+// request at the end of the main turn, a subagent's idle prompt or a
+// teammate's Stop (an agent_id), another Notification, a relay-off hook or
+// another process's hook proves nothing.
 func TestHookProvesRequestsGone(t *testing.T) {
 	const subagent = "a5b92f0e7d3c6184"
 	post := func(fixture, id string) func(t *testing.T) []byte {
@@ -59,13 +62,14 @@ func TestHookProvesRequestsGone(t *testing.T) {
 		return func(t *testing.T) []byte { return notificationPayload(t, ntype, agentID) }
 	}
 	cases := []struct {
-		name     string
-		request  string // "main", "subagent" or "pre-v7"
-		payload  func(t *testing.T) []byte
-		first    bool // the hook fires before the request is recorded
-		relayOff bool
-		foreign  bool
-		want     string // proven_gone_how; "" unproven
+		name       string
+		request    string // "main", "subagent" or "pre-v7"
+		payload    func(t *testing.T) []byte
+		first      bool // the hook fires before the request is recorded
+		sameSecond bool // the hook started in the second the request was recorded, not a second after
+		relayOff   bool
+		foreign    bool
+		want       string // proven_gone_how; "" unproven
 	}{
 		{name: "PostToolUse, its tool_use_id", request: "main", payload: post("post-tool-use.json", proofUseID), want: store.ProvenGoneToolRan},
 		{name: "PostToolUseFailure, its tool_use_id", request: "main", payload: post("post-tool-use-failure.json", proofUseID),
@@ -81,6 +85,7 @@ func TestHookProvesRequestsGone(t *testing.T) {
 			want: store.ProvenGoneTurnEnd},
 		{name: "Stop before a main-agent request", request: "main", payload: stop, first: true},
 		{name: "idle prompt before a main-agent request", request: "main", payload: notify("idle_prompt", ""), first: true},
+		{name: "Stop started in a main-agent request's second", request: "main", payload: stop, sameSecond: true},
 		{name: "Stop after a subagent's request", request: "subagent", payload: stop},
 		{name: "idle prompt after a subagent's request", request: "subagent", payload: notify("idle_prompt", "")},
 		{name: "a subagent's idle prompt after a main-agent request", request: "main", payload: notify("idle_prompt", subagent)},
@@ -121,6 +126,10 @@ func TestHookProvesRequestsGone(t *testing.T) {
 			hc.RelayHookGone = func(store.PermissionRow) bool { return false } // its relay hook may still answer
 			if !tc.first {
 				record()
+				hc.Start = onlyRequest(t, st, id).CreatedAt.Add(time.Second)
+				if tc.sameSecond {
+					hc.Start = onlyRequest(t, st, id).CreatedAt.Add(999 * time.Millisecond)
+				}
 			}
 
 			ssgHandleWith(t, st, hc, string(tc.payload(t)), newSilentLogger())
@@ -143,6 +152,71 @@ func TestHookProvesRequestsGone(t *testing.T) {
 			}
 			if pr.PaneAnswer != store.PaneAnswerNone || pr.Decision != "" {
 				t.Errorf("request = pane_answer %q, decision %q; want it as recorded (the proof closes nothing)", pr.PaneAnswer, pr.Decision)
+			}
+		})
+	}
+}
+
+// TestTurnEndReleasesARequestAnsweredAtThePane (b.omt): main-agent request A,
+// answered at the pane outside agent-director (no ack, no pane answer on
+// record), stays open, but a Stop or idle prompt that started a second after
+// it proves it gone, the row leaves check_permission and the next move to
+// working applies. A subagent's request is not proven and keeps holding; nor
+// is one recorded after a slow idle prompt started.
+func TestTurnEndReleasesARequestAnsweredAtThePane(t *testing.T) {
+	const subagent = "a5b92f0e7d3c6184"
+	stop := readPayloadFixture(t, "stop.json")
+	idle := notificationPayload(t, "idle_prompt", "")
+	prompt := readPayloadFixture(t, "user-prompt-submit.json")
+	cases := []struct {
+		name     string
+		agentID  string // A's agent_id
+		turnEnd  []byte
+		slow     bool   // the turn end started before A was recorded
+		afterEnd string // the row's state after the turn end
+		next     []byte // the next hook, a move to working
+		want     string // the row's state after it
+		proven   bool
+	}{
+		{"Stop, then UserPromptSubmit", "", stop, false, store.StateWaiting, prompt, store.StateWorking, true},
+		{"Stop, then PreToolUse", "", stop, false, store.StateWaiting, readPayloadFixture(t, "pre-tool-use-bash.json"),
+			store.StateWorking, true},
+		{"idle prompt, then UserPromptSubmit", "", idle, false, store.StateWaiting, prompt, store.StateWorking, true},
+		{"a subagent's request: Stop, then UserPromptSubmit", subagent, stop, false, store.StateWaiting, prompt, store.StateWaiting, false},
+		{"a slow idle prompt started before A, then a subagent's PreToolUse", "", idle, true, store.StateCheckPermission,
+			readPayloadFixture(t, "pre-tool-use-subagent.json"), store.StateCheckPermission, false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "omt-pane-answered-" + string(rune('a'+i))
+			st, _ := seedAgentRow(t, id, store.StateWorking, apitest.WithRelayMode("on"))
+			fire := func(payload []byte, start time.Time) {
+				hc := hookConfig(envWith(id), agentParent(t, st, id))
+				hc.Start = start
+				ssgHandleWith(t, st, hc, string(payload), newSilentLogger())
+			}
+			slowStart := time.Now()
+			storefix.SeedRelayRequest(t, st, id, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash",
+				ToolInput: `{}`, ToolUseID: proofUseID, AgentID: tc.agentID, Hook: relayHookSelf, SettledAt: time.Now().Add(time.Hour)})
+			start := onlyRequest(t, st, id).CreatedAt.Add(time.Second)
+			if tc.slow {
+				start = slowStart
+			}
+
+			fire(tc.turnEnd, start)
+
+			if got := mustGetSpawn(t, st, id).State; got != tc.afterEnd {
+				t.Fatalf("state after the turn end = %q; want %q", got, tc.afterEnd)
+			}
+			if pr := onlyRequest(t, st, id); pr.ProvenGone() != tc.proven || !pr.AwaitsAnswer() {
+				t.Errorf("request A = proven %v (%q), awaits an answer %v; want proven %v, still awaiting",
+					pr.ProvenGone(), pr.ProvenGoneHow, pr.AwaitsAnswer(), tc.proven)
+			}
+
+			fire(tc.next, time.Time{})
+
+			if got := mustGetSpawn(t, st, id).State; got != tc.want {
+				t.Errorf("state after the next move to working = %q; want %q", got, tc.want)
 			}
 		})
 	}

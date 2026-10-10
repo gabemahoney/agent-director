@@ -111,14 +111,14 @@ func DescCleanupGuidance() DescCase {
 
 // DescCleanupPointer is SR-18.7's cleanup guidance as the short pointer the
 // kill and find-missing Descriptions carry (Epic 15 build-lead decision 1):
-// agents never run expire, an operator-scheduled cleanup. It must not carry
-// the full sentence's phrases (DescCleanupGuidance) instead or as well, nor a
-// schedule claim. Check it with AssertAgentTextCase (find-missing's on
-// FindMissingOwnText).
+// agents never run expire, an operator-scheduled finished-row cleanup. It
+// must not carry the full sentence's phrases (DescCleanupGuidance) instead or
+// as well, nor a schedule claim. Check it with AssertAgentTextCase
+// (find-missing's on FindMissingOwnText).
 func DescCleanupPointer() DescCase {
 	return DescCase{
 		Name:    "SR-18.7, cleanup guidance (pointer)",
-		Require: []string{agentsNeverRun + " expire", operatorScheduled},
+		Require: []string{agentsNeverRun + " expire", operatorScheduled + " finished-row cleanup"},
 		MustNot: append([]string{"at the default retention", keepsUncheckable, "zero window"}, scheduleClaims...),
 	}
 }

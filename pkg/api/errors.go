@@ -120,9 +120,10 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 
 // ErrSendKeysWhileRelayed is returned by send-keys, plain or a pane answer
-// (with a request token), while a relay hook of the Spawn may still answer its
-// request (b.146 rule 7): the relay owns that answer, and keys typed now would
-// race it. A relay hook may still answer while its process runs (judged by
+// (with a request token), and by pause, which is held as a plain send-keys
+// (b.zdz), while a relay hook of the Spawn may still answer its request
+// (b.146 rule 7): the relay owns that answer, and keys typed now would race
+// it. A relay hook may still answer while its process runs (judged by
 // pid, start time and pid namespace, b.146 rule 14), or, when its process
 // cannot be checked, until its request's confirm_by (its kill instant plus a
 // 2 s reserve); a request recorded before schema v7 holds by its relay window,
@@ -135,8 +136,9 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // answer in preference to an acked one, then the oldest — and states no
 // release time (b.ah6). For an undecided request it advises answering it with
 // decide. For one whose verdict is recorded it says the relay hook may still
-// be delivering it and advises retrying send-keys later: decide on it would
-// return ErrAlreadyDecided.
+// be delivering it and advises retrying later ("retry send-keys later" from
+// send-keys, "retry later" from pause): decide on it would return
+// ErrAlreadyDecided.
 //
 // The guard holds for no time window beyond the relay hook's own, and has no
 // zero-rows rule: the relay hook records its request and the Spawn's move to
@@ -156,10 +158,11 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 var ErrPaneChanged = errors.New("ErrPaneChanged")
 
 // ErrDialogMaybeOpen is returned by a plain send-keys (no request token)
-// without expect_pane_sha256 while a permission request of the Spawn is not
-// proven gone (b.146 step 2c): no hook of Claude Code has shown its dialog
-// gone, so the dialog may still be on the pane, and typed keys, an Enter
-// above all, would land on it. A request is proven gone by its tool's
+// without expect_pane_sha256, and by pause, which types `/exit` and Enter as
+// such a send-keys would (b.zdz), while a permission request of the Spawn is
+// not proven gone (b.146 step 2c): no hook of Claude Code has shown its
+// dialog gone, so the dialog may still be on the pane, and typed keys, an
+// Enter above all, would land on it. A request is proven gone by its tool's
 // PostToolUse or PostToolUseFailure (the same tool_use_id), by the main
 // agent's Stop or idle-prompt Notification written after it (a request with
 // no agent_id: the main agent's, or one recorded before this release), or by
@@ -170,7 +173,9 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // for a relay hook that may still answer (ErrSendKeysWhileRelayed) and a
 // fallen-back request (ErrRelayFallenBack) come first. A plain send-keys
 // whose expect_pane_sha256 matches the pane as captured now is not refused
-// with it (a mismatch is ErrPaneChanged). Nothing was sent. Its err_details
+// with it (a mismatch is ErrPaneChanged). Pause takes no pane hash: a caller
+// that has read the pane and answered any dialog on it types `/exit` with
+// such a send-keys, or kills the Spawn. Nothing was sent. Its err_details
 // (DialogMaybeOpenDetails) give the oldest such request with its delivery
 // facts, pane_answer and unproven_since, the Spawn's state and the Spawn's
 // other requests not proven gone.

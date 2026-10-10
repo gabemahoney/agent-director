@@ -693,9 +693,9 @@ const v7ProveFinishedSQL = `UPDATE permission_requests
 // agent's requests neither read unproven (get-permission's unproven_since)
 // nor pin the cap eviction, which keeps an unproven request of a live row. A
 // request of a live row keeps proven_gone_at NULL: it holds plain send-keys
-// to its Spawn until the next proof (its agent's next Stop or idle-prompt
-// Notification, as it has no agent_id, or the Spawn's end). No other existing
-// value is rewritten (an undecided request of a finished row stays undecided
+// and pause to its Spawn until the next proof (its agent's next Stop or
+// idle-prompt Notification, as it has no agent_id, or the Spawn's end). No
+// other existing value is rewritten (an undecided request of a finished row stays undecided
 // until resume's move closes it), and store_meta and its store id are kept.
 //
 // SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER

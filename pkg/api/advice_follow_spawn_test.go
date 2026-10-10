@@ -387,7 +387,7 @@ func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
 }
 
 // TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse: A7 "ending the session is a human's decision, ..." / "a human must look, ..." and spawn's
-// "then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)".
+// "then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)".
 func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const (
@@ -418,8 +418,8 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 				arrange = advSpawnEndWriteFails
 			}
 			advSpawnHeldTrigger(t, e, id, p, arrange, api.ErrTmuxSessionConflict, tc.phrase)
-			adviceAssertManifest(t, "spawn", "", "a leftover of an earlier life, or a session with no valid instance id, is a human's to end "+
-				`(see the README's "Operator actions"); then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)`)
+			adviceAssertManifest(t, "spawn", "", "a leftover of an earlier life or a session with no valid instance id is a human's to end "+
+				`(see the README's "Operator actions"); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)`)
 			advSpawnFreeName(t, e)
 			before := e.readRow(t, id)
 			if tc.failEnd {

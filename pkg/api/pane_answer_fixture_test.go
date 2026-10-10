@@ -4,11 +4,15 @@ package api_test
 // row with the relay on whose agent pane shows a known text, request A
 // recorded by a relay hook (relayEnvHook) that has exited, judged in relayNS
 // on a settable clock, and a pane answer's sender (paSender) alive in the
-// process fake; with the err_details and tmux-call assertions the send-keys
-// and record-pane-answer tests share. It holds no tests.
+// process fake; its requests a background subagent's (newSubagentPAEnv), the
+// main agent's Stop, and pause judged as send-keys is (b.zdz); with the
+// err_details and tmux-call assertions the send-keys, pause and
+// record-pane-answer tests share. It holds no tests.
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -21,6 +25,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // paSender is the process a paEnv's pane answer records as its sender.
@@ -33,22 +38,34 @@ const paToolUseID = "toolu_01PANE"
 // showing text, request A fallen back (its relay hook gone), the relay judged
 // in relayNS at now, a pane answer recording self as its sender and counting an
 // intent whose sender cannot be checked as in progress for hold, through sks
-// (e.store unless replaced).
+// (e.store unless replaced); agentID is the agent_id its requests record
+// ("" the main agent's).
 type paEnv struct {
 	*killEnv
-	r    killRow
-	text string
-	now  time.Time
-	self api.ProcessIdentity
-	hold time.Duration
-	sks  api.SendKeysStore
+	r       killRow
+	text    string
+	now     time.Time
+	self    api.ProcessIdentity
+	hold    time.Duration
+	sks     api.SendKeysStore
+	agentID string
 }
 
-// newPAEnv seeds a paEnv: request A recorded by relayEnvHook, which is gone.
-func newPAEnv(t *testing.T) *paEnv {
+// paSubagentID is the agent_id of a background subagent's requests (newSubagentPAEnv).
+const paSubagentID = "a1b2c3d4e5f6a7b8c"
+
+// newPAEnv seeds a paEnv: request A, the main agent's, recorded by relayEnvHook, which is gone.
+func newPAEnv(t *testing.T) *paEnv { return newPAEnvOf(t, "") }
+
+// newSubagentPAEnv is newPAEnv with every request it records, A included, a
+// background subagent's (agent_id paSubagentID): the main agent's Stop proves none gone.
+func newSubagentPAEnv(t *testing.T) *paEnv { return newPAEnvOf(t, paSubagentID) }
+
+// newPAEnvOf seeds a paEnv whose requests record agentID.
+func newPAEnvOf(t *testing.T, agentID string) *paEnv {
 	t.Helper()
 	e := newKillEnv(t)
-	p := &paEnv{killEnv: e, r: seedRelayRow(t, e), now: e.clock.Now(), self: paSender, sks: e.store}
+	p := &paEnv{killEnv: e, r: seedRelayRow(t, e), now: e.clock.Now(), self: paSender, sks: e.store, agentID: agentID}
 	e.pc.Set(paSender.PID, procfix.Alive(paSender.Starttime))
 	p.seedRequest(t, storefix.TestRequestTokenA, paToolUseID, relayEnvHook)
 	p.setPane("pane of request A\n")
@@ -56,11 +73,46 @@ func newPAEnv(t *testing.T) *paEnv {
 }
 
 // seedRequest records token on p's row as a relay hook with identity hook
-// does, with toolUseID and a settle instant an hour after p.now.
+// does, with toolUseID, p.agentID and a settle instant an hour after p.now.
 func (p *paEnv) seedRequest(t *testing.T, token, toolUseID string, hook api.ProcessIdentity) {
 	t.Helper()
 	storefix.SeedRelayRequest(t, p.st, p.r.ID, store.RelayRequest{RequestToken: token, ToolName: "Bash",
-		ToolInput: `{"command":"ls"}`, ToolUseID: toolUseID, Hook: hook, SettledAt: p.now.Add(time.Hour)})
+		ToolInput: `{"command":"ls"}`, ToolUseID: toolUseID, AgentID: p.agentID, Hook: hook, SettledAt: p.now.Add(time.Hour)})
+}
+
+// mainAgentStop applies the main agent's Stop to p's row as the hook handler
+// does: its turn_end proof (requests with no agent_id), then the move to waiting.
+func (p *paEnv) mainAgentStop(t *testing.T) {
+	t.Helper()
+	p.prove(t, turnEnd)
+	if a := apitest.ApplyAgentHook(t, p.dbPath, p.r.ID, "Stop", ""); !a.Applied {
+		t.Fatalf("the main agent's Stop not applied: %s", a.Reason)
+	}
+}
+
+// pauseRun runs pause on p's row with its relay guard judged as p.sendKeys
+// judges it: api.Pause with p's relay view and hold, or, when client,
+// Client.Pause at p.now in relayNS, with p's relay window as its [relay]
+// timeout_seconds (a request recorded before v7 is judged by it). It returns
+// the tmux calls it made.
+func (p *paEnv) pauseRun(t *testing.T, client bool) verbRun[api.PauseResult] {
+	t.Helper()
+	call := func() (api.PauseResult, error) {
+		return api.Pause(context.Background(), p.store, p.rec, api.PauseEnv{Relay: p.view(), IntentHold: p.hold},
+			pauseTimeoutSeconds, pauseParams(p.r))
+	}
+	if client {
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		apitest.WriteKeysConfig(t, cfgPath, apitest.ConfigKeys{RelayTimeoutSeconds: int64(p.view().Window / time.Second)})
+		c, _, err := p.clientFor(t, cfgPath)
+		if err != nil {
+			t.Fatalf("api.New: %v", err)
+		}
+		api.SetClockForTest(c, func() time.Time { return p.now })
+		api.SetSelfPIDNSForTest(c, func() (string, bool) { return relayNS, true })
+		call = func() (api.PauseResult, error) { return c.Pause(context.Background(), pauseParams(p.r)) }
+	}
+	return runVerb(p.killEnv, call)
 }
 
 // setPane makes the agent's pane show text (no escapes: read-pane gives it as is).
@@ -118,16 +170,25 @@ func toolRan(toolUseID string) store.RequestProof {
 	return store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: toolUseID}
 }
 
-var turnEnd = store.RequestProof{How: store.ProvenGoneTurnEnd}
+// turnEnd's hook started an hour after the test binary did, so after every
+// request a test records (b.omt: it covers only those recorded before its start).
+var turnEnd = store.RequestProof{How: store.ProvenGoneTurnEnd, RecordedBefore: time.Now().Add(time.Hour)}
 
-// proveGone records proof on id's requests as id's own agent's hook does
-// (store.ProveRequestsGone through the row's gate) and returns how many it proved.
+// proveGone is proveOn with e's store.
 func proveGone(t *testing.T, e *killEnv, id string, proof store.RequestProof) int64 {
 	t.Helper()
+	return proveOn(t, e.st, e.dbPath, id, proof)
+}
+
+// proveOn records proof on id's requests in s (at dbPath) as id's own agent's
+// hook does (store.ProveRequestsGone through the row's gate) and returns how
+// many it proved.
+func proveOn(t *testing.T, s *store.Store, dbPath, id string, proof store.RequestProof) int64 {
+	t.Helper()
 	var n int64
-	if err := storefix.WithSeedPane(e.dbPath, id, func(gate store.HookGate) error {
+	if err := storefix.WithSeedPane(dbPath, id, func(gate store.HookGate) error {
 		var err error
-		n, err = e.st.ProveRequestsGone(id, gate, proof)
+		n, err = s.ProveRequestsGone(id, gate, proof)
 		return err
 	}); err != nil {
 		t.Fatalf("ProveRequestsGone(%s): %v", proof.How, err)

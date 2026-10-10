@@ -44,17 +44,21 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // used here.
 //
 // Multi-row retention (SR-5.1/SR-5.2): when newState is `working` and a
-// permission request of this Spawn still awaits an answer
-// (OpenPermissionRequestsForSpawn; b.146 rule 9: not closed by find-missing's
-// mark, and not acked and not answered at the pane, or, recorded before
-// schema v7, undecided), the transition is
-// held and the state is not written; the Spawn stays at check_permission
-// until no request awaits an answer. The hold checks the gate first: a hook
-// whose gate holds is applied (HookApplied.Applied) with UpsertNoChange and a
-// no-op ad.spawn.state_transition (prior == new, SR-A-2.2), and its only
-// write is clearing idle_since when it is set (any later hook clears it,
-// b.146 problem 3); one whose gate does not hold reports its reason and
-// emits nothing.
+// permission request of this Spawn holds the row (holdsRowSQL: it still
+// awaits an answer, b.146 rule 9: not closed by a close of the Spawn's
+// requests, and not acked and not answered at the pane, or, recorded before
+// schema v7, undecided; and Claude Code has not proven its dialog gone,
+// b.omt), the transition is held and the state is not written; the Spawn
+// stays at check_permission until no request holds it. A request proven gone
+// (proven_gone_at set: its tool ran, its agent's turn ended after it, or its
+// agent is gone; b.146 step 2c) does not hold it, though it may still await
+// an answer in agent-director's records (one a person answered at the pane).
+// The hold checks the gate first: a hook whose gate holds is applied
+// (HookApplied.Applied) with UpsertNoChange and a no-op
+// ad.spawn.state_transition (prior == new, SR-A-2.2), and its only write is
+// clearing idle_since when it is set (any later hook clears it, b.146
+// problem 3); one whose gate does not hold reports its reason and emits
+// nothing.
 //
 // Not applied: when the UPDATE matched no row, one read after it decides the
 // reason (notAppliedReason): no row with the id yields HookApplied{} and no
@@ -307,11 +311,15 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 // still working then was left there by a hook with no Stop after it (a
 // background fork's PreToolUse after the turn's Stop): the row returns to
 // waiting. So does a row with relay_mode on in check_permission none of whose
-// permission requests still awaits an answer (OpenPermissionRequestsForSpawn's
-// rule): the agent's turn ended after its last request was answered, and its
-// Stop was lost (b.146 problem 3). A row in any other state, a row with the
-// relay off in check_permission (no request records its dialog), or one with
-// a request that still awaits an answer, gets a soft refresh. Idle is the main agent's alone: before Claude Code 2.1.288
+// permission requests holds it (holdsRowSQL: still awaits an answer and is
+// not proven gone; b.omt): the agent's turn ended after its last request was
+// answered, and its Stop was lost (b.146 problem 3). The hook's own turn_end
+// proof runs before this write (the hook package's proveRequestsGone), so a
+// request recorded before the hook started, answered at the pane by a person
+// and so still awaiting an answer in agent-director's records, is proven gone
+// by then and holds nothing. A row in any other state, a row with the relay
+// off in check_permission (no request records its dialog), or one with a
+// request that holds it, gets a soft refresh. Idle is the main agent's alone: before Claude Code 2.1.288
 // (anthropics/claude-code#93672) the Notification also fires while a
 // background subagent is still running, and a row that subagent's hook moved
 // to working then reads waiting, its tool possibly still running, until the
@@ -324,7 +332,7 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 //
 // Each return to waiting is one statement whose WHERE carries the state
 // condition (state working, or state check_permission with relay_mode on and
-// no request that still awaits an answer) with the gate (hookGateSQL), so it
+// no request that holds the row) with the gate (hookGateSQL), so it
 // applies only to
 // such a row, for the row's own agent, at the moment it runs; no read
 // decides it. The working statement runs first, then the check_permission
@@ -354,7 +362,7 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 		{StateWorking, `state = '` + StateWorking + `'`},
 		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND NOT EXISTS (
 		     SELECT 1 FROM permission_requests pr
-		      WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + awaitingAnswerSQL + `)`},
+		      WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + holdsRowSQL + `)`},
 	} {
 		q, args := gatedHookUpdate(instanceID, gate, set, stateArgs, jsonlPath, jsonlPresent)
 		moved, err := s.execGuarded(q+` AND `+from.cond, args, errPrefix)
@@ -386,7 +394,8 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 
 // holdWorkingTransition is the multi-row retention guard of a working
 // transition (ApplyHookTransitionResult). held is false when no permission
-// request still awaits an answer (OpenPermissionRequestsForSpawn), and the
+// request of the Spawn holds the row (holdingRequestSQL: none still awaits an
+// answer, or every one that does is proven gone; holdsRowSQL, b.omt), and the
 // caller writes the transition. When one does, the transition is held and the
 // state is not written: the gate is read first (readHookGateRow), and only a
 // hook whose gate holds gets its one write, idle_since cleared when it is set
@@ -394,12 +403,19 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 // ad.spawn.state_transition (prior == new, SR-A-2.2) and an applied result; a
 // missing row or a gate that does not hold reports notAppliedReason and emits
 // nothing.
+//
+// A request proven gone is left out because Claude Code itself has shown its
+// dialog is no longer up (its tool ran, its agent's turn ended after it, or
+// its agent is gone; b.146 step 2c), so a working write after it cannot put
+// the row at working while that dialog may be on screen. Without that, a
+// request a person answered at the pane, which nothing records, would hold
+// every later move to working for the rest of the Spawn's life.
 func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeringEventName string) (held bool, outcome UpsertOutcome, applied HookApplied, err error) {
-	openRows, err := s.OpenPermissionRequestsForSpawn(instanceID)
-	if err != nil {
-		return false, UpsertError, HookApplied{}, fmt.Errorf("store: working transition open-row check: %w", err)
+	var holding bool
+	if err := s.db.QueryRow(holdingRequestSQL, instanceID).Scan(&holding); err != nil {
+		return false, UpsertError, HookApplied{}, fmt.Errorf("store: working transition hold check: %w", err)
 	}
-	if len(openRows) == 0 {
+	if !holding {
 		return false, "", HookApplied{}, nil
 	}
 	r, err := s.readHookGateRow(instanceID, gate, "store: working transition hold")
@@ -423,6 +439,12 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 	})
 	return true, UpsertNoChange, HookApplied{Applied: true}, nil
 }
+
+// holdingRequestSQL is holdWorkingTransition's read: whether a permission
+// request of one Spawn (its one placeholder) holds the row (holdsRowSQL),
+// scanned as a bool.
+const holdingRequestSQL = `SELECT EXISTS (SELECT 1 FROM permission_requests pr
+     WHERE pr.claude_instance_id = ? AND ` + holdsRowSQL + `)`
 
 // clearIdleSinceSQL is a held working transition's one write: idle_since
 // NULLed, with the version advance, only on a row that has it set and for

@@ -27,9 +27,10 @@ const reasonStaleCheckPermission = "stale_check_permission"
 // rows (b.146 rule 9, problem 3); Client.FindMissing runs it after the sweep
 // (FindMissing), on a fresh read of the live rows. A row in check_permission
 // with relay_mode on is moved out of it when none of its permission requests
-// still awaits an answer (not acked and not answered at the pane, or,
-// recorded before schema v7, undecided) and none has a relay hook that may
-// still run: to waiting when the main agent's idle-prompt Notification is the
+// holds it (one that still awaits an answer, not acked and not answered at
+// the pane, or, recorded before schema v7, undecided, and that Claude Code
+// has not proven gone; b.omt) and none has a relay hook that may still run:
+// to waiting when the main agent's idle-prompt Notification is the
 // last hook it recorded (idle_since set), to working otherwise. Such a row's
 // agent moved on from its last permission dialog and the hook that would have
 // moved the row was lost (a lost Stop after a delivered timeout deny, for
@@ -42,13 +43,15 @@ const reasonStaleCheckPermission = "stale_check_permission"
 // judged alive or can't tell may still run, and the row is left as it is for
 // a later run. A closed request is not judged (mayHaveLiveHook says why), so
 // after a close and a resume a closed request whose hook cannot be checked
-// does not hold the repair off until its confirm_by. Otherwise one guarded
+// does not hold the repair off until its confirm_by. A request proven gone is
+// judged as any other no close has closed: the proof leaves it out of the
+// statement's check below only. Otherwise one guarded
 // statement (RepairCheckPermissionIfSameLife) writes the repair, only while
 // the row is in check_permission with relay_mode on, still holds the snapshot
-// read here and has no request that still awaits an answer, so a request
-// recorded or a hook that wrote after this read (either advances the row's
-// snapshot) wins. The hooks are judged before that statement reads the
-// requests (the check-before-read rule).
+// read here and has no request that holds it (still awaits an answer and is
+// not proven gone), so a request recorded or a hook that wrote after this
+// read (either advances the row's snapshot) wins. The hooks are judged before
+// that statement reads the requests (the check-before-read rule).
 //
 // An applied repair writes one ad.find_missing.tick (prior_state
 // check_permission, new_state the state written, reconciliation_reason
@@ -107,7 +110,7 @@ func RepairCheckPermission(s CheckPermissionRepairStore, v RelayView, lg FindMis
 // request's delivered_at, never the row, and reads a verdict at once (no
 // close leaves a closed request undecided), so it ends within one poll. The closed request no
 // longer awaits an answer, and the repair statement ignores it already
-// (awaitingAnswerSQL). Judging it would let a hook that cannot be checked
+// (holdsRowSQL). Judging it would let a hook that cannot be checked
 // (another or unreadable pid namespace, unreadable /proc) hold the row in
 // check_permission until its confirm_by, up to a relay window later.
 func mayHaveLiveHook(j relayJudge, reqs []PermissionRow) bool {

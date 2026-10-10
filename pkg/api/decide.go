@@ -38,7 +38,7 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // instant plus a 2 s reserve), so the refusal arrives within seconds of the
 // hook's end, not after the request's relay window.
 //
-// Two verbs return it:
+// Three verbs return it:
 //
 //   - Decide, for the request it was asked to decide (decision 1 A). It
 //     checks the hook process before it reads the record, so a hook that
@@ -48,6 +48,8 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 //   - SendKeys without a request token (b.146 rule 7), for the oldest open
 //     request of the Spawn that has fallen back: a plain send could land on
 //     that request's dialog. Nothing is sent.
+//   - Pause, held as a plain SendKeys (b.zdz), for the same request: its
+//     `/exit` and Enter could land on that dialog. Nothing is sent.
 //
 // Its err_details (RelayFallenBackDetails) give the request's facts
 // (request_token, tool_name, tool_input, requested_at and its delivery
@@ -692,7 +694,8 @@ func (c *decideCall) fallenBackRefusal(pr PermissionRow) error {
 //     older open request's dialog, if it is still up, is the one a pane
 //     answer would reach.
 //
-// What it cannot show: a stale record (b.omt). While pr is open the store
+// What it cannot show: a stale record (b.omt). While pr is open and not
+// proven gone (a Stop or idle prompt after it proves it gone), the store
 // holds the agent's moves to working, so a dialog answered at the pane, or
 // closed by a timeout deny the relay hook returned without recording it,
 // changes nothing it reads until a later hook moves sp out of

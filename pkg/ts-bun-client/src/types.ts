@@ -169,8 +169,8 @@ export interface RequestDelivery {
   /**
    * When Claude Code proved the request's permission dialog gone (b.146 step 2c); null until
    * then. agent-director's own records (`delivered`, a pane answer, `recordPaneAnswer`) are not
-   * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`
-   * rejects with `ErrDialogMaybeOpen`.
+   * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`,
+   * and a `pause`, reject with `ErrDialogMaybeOpen`.
    */
   proven_gone_at: string | null;
   /** How it was proven gone; see {@link ProvenGoneHow}. Null until proven. */
@@ -487,10 +487,10 @@ export interface GetResult {
    * null), oldest first, in any live state but ended and missing (`[]` on those). Unlike
    * `permission_requests` it also lists requests agent-director's records read closed
    * (delivered, answered at the pane, or recorded answered outside it), each with
-   * `unproven_since`. While it is not empty, a plain `sendKeys` without `expect_pane_sha256`
-   * rejects (`ErrDialogMaybeOpen`, or an earlier relay refusal). It follows the row's live
-   * state and is never delayed by `[state] settle_ms`, so with it set it can disagree with
-   * `state` for up to settle_ms.
+   * `unproven_since`. While it is not empty, a plain `sendKeys` without `expect_pane_sha256`,
+   * and a `pause`, reject (`ErrDialogMaybeOpen`, or an earlier relay refusal). It follows the
+   * row's live state and is never delayed by `[state] settle_ms`, so with it set it can disagree
+   * with `state` for up to settle_ms.
    */
   unproven_requests: PermissionRequestInfo[];
 }
@@ -709,8 +709,8 @@ export interface OpenRequestFacts {
 }
 
 /**
- * Mirrors pkg/api.RelayFallenBackDetails — ErrRelayFallenBack's errDetails (from decide and from
- * a plain sendKeys): the request that fell back (its fields and delivery facts), the Spawn's
+ * Mirrors pkg/api.RelayFallenBackDetails — ErrRelayFallenBack's errDetails (from decide, a plain
+ * sendKeys and pause): the request that fell back (its fields and delivery facts), the Spawn's
  * state and its other open requests (null when they could not be read).
  */
 export interface RelayFallenBackDetails extends PermissionRequestInfo {
@@ -720,10 +720,10 @@ export interface RelayFallenBackDetails extends PermissionRequestInfo {
 
 /**
  * Mirrors pkg/api.DialogMaybeOpenDetails — ErrDialogMaybeOpen's errDetails (from a plain
- * sendKeys without `expect_pane_sha256`): the oldest request of the Spawn that Claude Code has
- * not proven gone (its fields and delivery facts: how agent-director's records say it closed,
- * `delivery` and `pane_answer`, and since when, `unproven_since`), the Spawn's state, and the
- * Spawn's other requests not proven gone, oldest first.
+ * sendKeys without `expect_pane_sha256`, and from pause): the oldest request of the Spawn that
+ * Claude Code has not proven gone (its fields and delivery facts: how agent-director's records
+ * say it closed, `delivery` and `pane_answer`, and since when, `unproven_since`), the Spawn's
+ * state, and the Spawn's other requests not proven gone, oldest first.
  */
 export interface DialogMaybeOpenDetails extends PermissionRequestInfo {
   state: string;

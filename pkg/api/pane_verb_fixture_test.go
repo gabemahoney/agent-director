@@ -771,14 +771,19 @@ func fastPausePolls(t *testing.T) {
 func pauseParams(r killRow) api.PauseParams { return api.PauseParams{ClaudeInstanceID: r.ID} }
 
 // pause runs the exported api.Pause with a background context, e.store,
-// e.rec, e.pc (its server and pane checks) and pauseTimeoutSeconds.
+// e.rec, e.pc (its server and pane checks), the relay guard judged as
+// e.sendKeys judges it (sendKeysWindow and e.clock.Now) and
+// pauseTimeoutSeconds.
 func (e *killEnv) pause(p api.PauseParams) (api.PauseResult, error) {
 	return e.pauseWithin(context.Background(), pauseTimeoutSeconds, p)
 }
 
 // pauseWithin is pause with ctx and the wait's timeout given.
 func (e *killEnv) pauseWithin(ctx context.Context, timeoutSeconds int, p api.PauseParams) (api.PauseResult, error) {
-	return api.Pause(ctx, e.store, e.rec, e.pc, timeoutSeconds, p)
+	now := e.clock.Now()
+	return api.Pause(ctx, e.store, e.rec, api.PauseEnv{
+		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: sendKeysWindow()},
+	}, timeoutSeconds, p)
 }
 
 // pauseClient runs Client.Pause (background context, config's pause timeout)

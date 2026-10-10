@@ -14,7 +14,8 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, privateTmuxSocket, fakeTmuxCalls, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
+import { runHelper, privateTmuxSocket, seedFallenBackRelayRow, paneSends, withProcessEnv, homeStore, openClient,
+  rejection } from "../internal/helper.js";
 import { ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
   type PaneKeySentDetails } from "../../src/index.js";
 
@@ -30,10 +31,7 @@ test("send-keys: happy path — sends the text, then Enter, to the row's pane by
       using client = await openClient(store);
       expect(await client.sendKeys({ claude_instance_id: id, text: "hello smoke" })).toEqual({});
     });
-    const sends = fakeTmuxCalls(logPath)
-      .filter((argv) => argv.includes("send-keys"))
-      .map((argv) => argv.slice(argv.indexOf("send-keys")));
-    expect(sends).toEqual([
+    expect(paneSends(logPath)).toEqual([
       ["send-keys", "-t", paneId, "-l", "--", "hello smoke"],
       ["send-keys", "-t", paneId, "Enter"],
     ]);
@@ -67,10 +65,7 @@ test("send-keys: error — a pane answer whose sent write fails after its key �
     expect(err).toBeInstanceOf(ErrInternal);
     const details: PaneKeySentDetails = { key_sent: true, request_token: token };
     expect(err.errDetails).toEqual(details as unknown as Record<string, unknown>);
-    const sends = fakeTmuxCalls(logPath)
-      .filter((argv) => argv.includes("send-keys"))
-      .map((argv) => argv.slice(argv.indexOf("send-keys")));
-    expect(sends).toEqual([["send-keys", "-t", paneId, "-l", "--", "1"]]);
+    expect(paneSends(logPath)).toEqual([["send-keys", "-t", paneId, "-l", "--", "1"]]);
   });
 }, 10_000);
 
@@ -80,12 +75,7 @@ test("send-keys: error — a request not proven gone → ErrDialogMaybeOpen with
     const store = homeStore(homeDir);
     const id = "smoke-send-keys-hold-id";
     const logPath = path.join(homeDir, "fake-tmux.log");
-    runHelper("seed-spawn", { store, state: "check_permission", id, "relay-mode": "on", "create-store": true,
-      socket: privateTmuxSocket(homeDir) });
-    // Past its relay window (fallen back), its hook gone a minute ago.
-    const token = runHelper("seed-permission-request", { store, "spawn-id": id, tool: "Bash",
-      "created-ago-seconds": "172800", "hook-gone-ago-seconds": "60" })["request_token"] as string;
-    const paneId = runHelper("seed-row-session", { store, id, capture: "answered at tmux\n" })["pane_id"] as string;
+    const { token, paneId } = seedFallenBackRelayRow(homeDir, id, "check_permission");
 
     const got = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
@@ -106,10 +96,7 @@ test("send-keys: error — a request not proven gone → ErrDialogMaybeOpen with
     expect(got.row.unproven_requests.map((r) => [r.request_token, r.unproven_since])).toEqual([[token, details.unproven_since]]);
     expect([got.perm.proven_gone_at, got.perm.proven_gone_how, got.perm.unproven_since]).toEqual([null, null, details.unproven_since]);
     expect(got.passed).toEqual({});
-    const sends = fakeTmuxCalls(logPath)
-      .filter((argv) => argv.includes("send-keys"))
-      .map((argv) => argv.slice(argv.indexOf("send-keys")));
-    expect(sends).toEqual([
+    expect(paneSends(logPath)).toEqual([
       ["send-keys", "-t", paneId, "-l", "--", "hi"],
       ["send-keys", "-t", paneId, "Enter"],
     ]);

@@ -451,7 +451,10 @@ export class ErrTmuxSessionConflict extends AgentDirectorError {}
 export class ErrTmuxKillFailed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export class ErrSpawnNotInteractive extends AgentDirectorError {}
-/** Mirrors ErrSendKeysWhileRelayed (package: api) */
+/**
+ * Mirrors ErrSendKeysWhileRelayed (package: api): from `sendKeys` and `pause` while a relay hook
+ * of the Spawn may still answer its request; nothing was sent.
+ */
 export class ErrSendKeysWhileRelayed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotPausable (package: api) */
 export class ErrSpawnNotPausable extends AgentDirectorError {}
@@ -482,9 +485,10 @@ export class ErrRelayModeOff extends AgentDirectorError {}
 /**
  * Mirrors ErrRelayFallenBack (package: api): a permission request's relay hook is gone and acked
  * no verdict, and no pane answer is recorded on it through agent-director. It arrives within
- * seconds of the hook's end, from `decide` (for its request) and from a plain `sendKeys` (for the
- * Spawn's oldest such request). `errDetails` is a `RelayFallenBackDetails`: answer the request
- * with `sendKeys` and its `request_token`, or close it with `recordPaneAnswer`.
+ * seconds of the hook's end, from `decide` (for its request) and from a plain `sendKeys` and
+ * `pause` (for the Spawn's oldest such request). `errDetails` is a `RelayFallenBackDetails`:
+ * answer the request with `sendKeys` and its `request_token`, or close it with
+ * `recordPaneAnswer`.
  */
 export class ErrRelayFallenBack extends AgentDirectorError {}
 /**
@@ -505,9 +509,9 @@ export class ErrPaneAnswerInProgress extends AgentDirectorError {}
  */
 export class ErrClaimTooSoon extends AgentDirectorError {}
 /**
- * Mirrors ErrDialogMaybeOpen (package: api): a plain `sendKeys` without `expect_pane_sha256`
- * while a permission request of the Spawn is not proven gone by Claude Code's hooks (its tool's
- * PostToolUse, the main agent's end of turn after it, or the agent's end), whatever
+ * Mirrors ErrDialogMaybeOpen (package: api): a plain `sendKeys` without `expect_pane_sha256`, or
+ * a `pause`, while a permission request of the Spawn is not proven gone by Claude Code's hooks
+ * (its tool's PostToolUse, the main agent's end of turn after it, or the agent's end), whatever
  * agent-director's records say of it; its dialog may still be on the pane. Nothing was sent.
  * `errDetails` is a `DialogMaybeOpenDetails`. A plain `sendKeys` whose `expect_pane_sha256`
  * matches the pane is not rejected with it; pass that hash only from a pane a person or LLM

@@ -81,7 +81,7 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 		tool            string // the tool whose tools/list description carries phrase; "" for the error's description
 	}{
 		{"spawn description",
-			"then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)",
+			"then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)",
 			false, "ErrTmuxSessionConflict", "spawn"},
 		{"kill description's live-row step 6",
 			"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " +

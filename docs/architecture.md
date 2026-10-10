@@ -71,7 +71,7 @@ in `init`. The verb registry
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`) and returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the four names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels are not `store.ErrSchemaMismatch` and `store.ErrSchemaMigrationRequired`, which an `OpenError`'s cause still wraps: only an `OpenError` matches them, so `Classify` still names any other error that wraps a store schema sentinel, such as `pkg/api.New`'s own, `ErrInternal` (open as b.x8s). `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup or flag parser. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests in its own transaction, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `Pause` takes the start-time reader `ProcChecker`, and `SendKeys` and `RecordPaneAnswer` the one in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`. **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests in its own transaction, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v8; see "Schema v8" below), exposes typed CRUD primitives (added in later Tasks). Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. **Must use:** read it only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
@@ -80,7 +80,7 @@ in `init`. The verb registry
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; its read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: the server identity read `display-message -p 'ad-server<TAB>#{pid}<TAB>#{start_time}'`, then the session listing with labels, then the three `@ad_owner` scope reads; LFR H5; b.47f. The identity read answers on a server with no sessions too (tmux's `exit-empty` off), so every answer names the server that gave it. `parseLookup` takes the first line as the identity line, exactly `ad-server`, the decimal pid and the decimal start time, tab separated; then the session lines, whose pid and start time must equal the identity line's; then the scope section (LFR H6). A first line that is not an identity line, empty output included, or a session line that disagrees with it makes the answer malformed, `FailUnrecognized`), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`, and `send-keys`' named keys, b.146 rule 8; the key is always a fixed name from the calling code, `pause`'s constant or `pkg/api`'s `paneKeyNames` table, never caller text passed through). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the identity read's, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests still awaits an answer, to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, and proves every request of the row gone, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self`, and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; its only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only those recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, and proves every request of the row gone, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; its only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`). |
 
 ### `[tmux]` timing settings
 
@@ -1005,7 +1005,7 @@ columns to this same list. None has a CHECK constraint or an index.
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
 | `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed, every request recorded before v7 included. |
-| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When Claude Code proved the request's permission dialog gone (b.146 step 2c), and how: `tool_ran` (a `PostToolUse` or `PostToolUseFailure` with its `tool_use_id`), `turn_end` (the turn of the agent that asked ended after it was written; the main agent's `Stop` or idle-prompt Notification proves a request with no `agent_id`), `agent_gone` (a close of its Spawn's requests, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live Spawn, the request holds plain `send-keys` without a pane hash (`ErrDialogMaybeOpen`) and is never evicted at the cap (see "Cap-based GC"). |
+| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When Claude Code proved the request's permission dialog gone (b.146 step 2c), and how: `tool_ran` (a `PostToolUse` or `PostToolUseFailure` with its `tool_use_id`), `turn_end` (the turn of the agent that asked ended after it was written; the main agent's `Stop` or idle-prompt Notification proves a request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (a close of its Spawn's requests, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`) and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
 - **Readers.** Every read returning a `PermissionRow` selects
@@ -1019,21 +1019,41 @@ columns to this same list. None has a CHECK constraint or an index.
   12): a request no close has closed (`closed_at IS NULL`) with no
   completed pane answer (`pane_answer` `none` or `intent`) that, recorded
   from v7 on, is not acked, decided or not, or, recorded before v7, is
-  undecided. The working hold, `OpenPermissionRequestsForSpawn` (`list`'s
-  requests), the idle-prompt Notification's move, the cap
+  undecided. `OpenPermissionRequestsForSpawn` (`list`'s
+  requests), the cap
   eviction, the close of a Spawn's requests (`closeOrphanedRequests`),
-  `find-missing`'s repair, the pane writes (a pane answer's intent,
-  `record-pane-answer`'s record) and the PostToolUse close all use it;
+  the pane writes (a pane answer's intent,
+  `record-pane-answer`'s record) and the PostToolUse close all use it,
+  and so does `holdsRowSQL` (below);
   never restate it. In Go, `PermissionRow.AwaitsAnswer()` states the same
   rule for a row already read (`get` picks its `permission_requests` out
   of its one read of every request with it), `Closed()` reports a closed request,
   `PaneAnswered()` a completed pane answer, and `CloseDenied()` a deny a
   close wrote (`decision_reason` `find_missing` or `ended`, no verdict a
   caller or relay hook chose).
+- **Must use:** `holdsRowSQL` (`internal/store/permission.go`) is the one
+  statement of "a request holds its Spawn's row" (b.omt):
+  `awaitingAnswerSQL` and `proven_gone_at IS NULL`. Exactly three writes
+  read it: the working hold (`holdWorkingTransition`, through its read
+  `holdingRequestSQL`), the idle-prompt Notification's move from
+  `check_permission` to `waiting` (`ApplyHookWaitingIfWorking`) and
+  `find-missing`'s repair (`repairCheckPermissionSQL`), the last two in a
+  `NOT EXISTS` of their own statement. A request proven gone holds none of
+  them, whatever agent-director's records say of it: one a person answered
+  at the pane, which nothing records, still awaits an answer, and once the
+  main agent's turn end after it (`turn_end`) or its tool's `PostToolUse`
+  (`tool_ran`) proves it gone it no longer keeps the row in
+  `check_permission`. Every other reader of a request that awaits an answer
+  (`get` and `list`, `decide`, `send-keys` and its pane answers, the
+  closes, the cap eviction) reads `awaitingAnswerSQL` alone, so such a
+  request is still listed, decided, refused and closed as before. A new
+  write that a request should hold off reads `holdsRowSQL`, never
+  `awaitingAnswerSQL` with a proof test of its own.
 - **Must use: a request's proof (b.146 step 2c).** A hook's proof that
   requests' dialogs are gone is written only by `ProveRequestsGone`
   (`internal/store/request_proof.go`, with a `RequestProof`: `How`
-  `tool_ran` and its `ToolUseID`, or `turn_end`), the end of a Spawn's
+  `tool_ran` and its `ToolUseID`, or `turn_end` and its `RecordedBefore`,
+  the hook's start; b.omt), the end of a Spawn's
   agent only by `closeOrphanedRequests`' third statement
   (`proveAgentGoneSQL`) and, for a row already finished when the store
   is migrated, `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`), and the
@@ -1229,7 +1249,7 @@ still the one it read, so it knows the row has not changed since. As built:
   move) advances the version once.
 - `InsertPending` starts a row at 0 (the column default). A path that writes
   nothing advances nothing. Examples are the `working`-transition hold path
-  (a permission request still awaiting an answer; a row with no
+  (a permission request holding the row, `holdsRowSQL`; a row with no
   `idle_since` set), a write whose `WHERE` matches no row (a
   hook the gate did not apply included), and `HealJsonlPath` or any
   guarded write (`find-missing`'s five, resume's, the end write, the
@@ -1603,15 +1623,16 @@ still the one it read, so it knows the row has not changed since. As built:
   - `RepairCheckPermissionIfSameLife(instanceID, examined) (newState,
     CondResult, error)` (b.146 rule 9, problem 3; `repairCheckPermissionSQL`):
     one UPDATE guarded on `state = 'check_permission'`, `relay_mode = 'on'`,
-    the snapshot and no permission request of the row still awaiting an
-    answer (`awaitingAnswerSQL`), that sets `state` to `waiting` when
+    the snapshot and no permission request of the row holding it
+    (`holdsRowSQL`: still awaiting an answer and not proven gone; b.omt),
+    that sets `state` to `waiting` when
     `idle_since` is set and to `working` otherwise, NULLs
     `launch_started_at` (`launchStartClear`) and advances `row_version`,
     returning the state it wrote. It writes no other column: `idle_since`
     stays until the agent's next hook, and `last_seen_at` is not bumped.
     Whether a request's relay hook may still run is the caller's to check
     first (`RepairCheckPermission`, which skips a request a close
-    closed); a request recorded after that check
+    closed, and judges a proven one as any other); a request recorded after that check
     advances the snapshot, so the guard refuses. It emits no trail event.
 
   The note write, the clear, the adoption and the `unreported` note leave
@@ -1868,7 +1889,7 @@ see "v7 columns" above):
    request of a finished row stays undecided until resume's move closes
    it. Every request recorded before v7 on a live row, decided or not,
    stays unproven, so it holds a plain `send-keys` without a pane hash
-   (`ErrDialogMaybeOpen`) until the main agent's next `Stop` or
+   and `pause` (`ErrDialogMaybeOpen`) until the main agent's next `Stop` or
    idle-prompt Notification (it has no `agent_id`) or the Spawn's end. No
    other existing value is rewritten; `store_meta` and its store id are
    kept.
@@ -2085,14 +2106,19 @@ stdout and runs two checks. Both must pass:
 1. **Hard cap.** The test fails when help stdout is larger than
    `helpHardCap`, the user's cap of 15160 B. There is no slack: 15160 B
    passes and 15161 B fails. The failure message says to trim help.
-2. **Baseline.** The test fails when help stdout grows more than 10% past
-   the byte count recorded in `helpStdoutBytes` (SR-20.6). This check
-   catches growth relative to the last recorded size.
+2. **Baseline.** The test fails when help stdout is larger than the byte
+   count recorded in `helpStdoutBytes` (SR-20.6). There is no slack:
+   one byte of growth over the recorded count fails, even while help is
+   still under the cap. A shrink passes, and the test logs that the
+   count should be re-recorded down to the measured size.
 
-The hard cap is the binding limit: while the baseline sits near the cap,
-baseline + 10% is well above it, so a growth that the baseline check
-allows still fails on the cap. The test logs the measured size, the
-baseline, the baseline limit and the cap on every run.
+The baseline check binds first: the recorded count sits at or under the
+cap (`TestHelpSizeOver` fails if it does not), so any growth fails on the
+baseline before it can reach the cap. The hard cap is the absolute
+ceiling: an approved upward re-record can raise the baseline to the cap
+but never past it. The test logs the measured size, the recorded count
+and the cap on every run. The rule itself is `helpSizeOver(got, recorded,
+hardCap)`, which `TestHelpSizeOver` pins.
 
 **Approval rule for the cap.** `helpHardCap` moves only with the user's
 approval. The change is recorded in the constant's doc comment in the
@@ -2101,9 +2127,10 @@ help must trim other description text to fit at or under the cap, with no
 change in meaning. If it cannot fit, the Task stops and reports the
 measured size; it never raises the cap on its own.
 
-**Re-recording the baseline.** `helpStdoutBytes` is re-recorded to the
-newly measured count in the same commit that changes the size (SR-20.6,
-decision-0930e):
+**Re-recording the baseline.** `helpStdoutBytes` must be re-recorded to
+the newly measured count in the same commit that changes the size
+(SR-20.6, decision-0930e), and its doc comment records each new value
+with the date and the reason:
 
 - Downward, after a trim: free, no approval needed.
 - Upward: only with the user's approval given before the commit,
@@ -2929,7 +2956,7 @@ pending  ──spawn() inserts the row, then launches its tmux session
   │   plus the pending grace period or 540 s after it began waiting,
   │   whichever comes first)
 waiting  ◄─── Stop; from working, or from a relayed check_permission none of
-  │           whose requests awaits an answer, the main agent's idle-prompt
+  │           whose requests holds it, the main agent's idle-prompt
   │           Notification (which records idle_since)
   │           (soft refreshes only, no transition: SessionEnd reason=clear|compact,
   │           every other Notification)
@@ -2941,8 +2968,9 @@ working  ───────────────────────�
   ▼                                            ▼ request and the move in one transaction)
 ask_user                                  check_permission
   │                                            │   the agent's next hook once no request
-  │   send-keys, etc.                          │   awaits an answer (moves to working
-  └────────────►  working / waiting   ◄────────┘   are held until then); lost: the
+  │   send-keys, etc.                          │   holds it: awaits an answer, not proven
+  └────────────►  working / waiting   ◄────────┘   gone (moves to working are held until
+                                                   then); lost: the
                                                    idle-prompt Notification, or
                                                    find-missing's repair (waiting when
                                                    idle_since is set, else working)
@@ -3026,9 +3054,9 @@ unchanged   (nothing written; one ad.hook.ignored)
 | `UserPromptSubmit` | — | `working` |
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working` |
-| `PostToolUse`, `PostToolUseFailure` | — | `working`; with relay on and a `tool_use_id` in the payload, the ordinary write is preceded by the proof of the row's requests with that `tool_use_id` (`tool_ran`; see "The dialog hold" under [Permission relay](#permission-relay)), then the close of the row's fallen-back request with that `tool_use_id` (see "The PostToolUse close" under [Permission relay](#permission-relay)) |
-| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's requests with no `agent_id` recorded before it (`turn_end`) |
-| `Notification` | `notification_type = idle_prompt` and no `agent_id` (the main agent idle at the prompt) | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request still awaiting an answer, as the write lands (`ApplyHookWaitingIfWorking`); any other state: soft refresh — no state change; bumps `last_seen_at`. Every applied write sets `idle_since` (see "The idle-prompt Notification" below). With relay on, preceded by the same proof as `Stop` |
+| `PostToolUse`, `PostToolUseFailure` | — | `working`; with relay on and a `tool_use_id` in the payload, the ordinary write is preceded by the proof of the row's requests with that `tool_use_id` (`tool_ran`; see "The dialog hold" under [Permission relay](#permission-relay)), then the close of the row's fallen-back request with that `tool_use_id` (see "The PostToolUse close" under [Permission relay](#permission-relay)); a request the proof covers no longer holds the `working` write, closed or not (b.omt) |
+| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt) |
+| `Notification` | `notification_type = idle_prompt` and no `agent_id` (the main agent idle at the prompt) | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (one still awaiting an answer and not proven gone; b.omt), as the write lands (`ApplyHookWaitingIfWorking`); any other state: soft refresh — no state change; bumps `last_seen_at`. Every applied write sets `idle_since` (see "The idle-prompt Notification" below). With relay on, preceded by the same proof as `Stop` |
 | `Notification` | any other `notification_type` (`permission_prompt`, `auth_success`, `elicitation_dialog`, missing or unknown), or an idle prompt with `agent_id` | soft refresh — no state change; bumps `last_seen_at` |
 | `PermissionRequest` | — | `check_permission`; with relay on, written by the relay hook's first write (`InsertRelayRequest`) in one transaction with the request (see [Permission relay](#permission-relay)) |
 | `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — no state change; bumps `last_seen_at` |
@@ -3069,10 +3097,16 @@ finished (see the residual windows below):
   return to `waiting` is up to two `UPDATE`s, each whose `WHERE` carries
   its state condition with the gate (`hookGateSQL`), so no read decides it:
   first `state = 'working'`, then `state = 'check_permission'` with
-  `relay_mode = 'on'` and no permission request of the row still awaiting
-  an answer (`awaitingAnswerSQL`; b.146 problem 3: the agent's turn ended
+  `relay_mode = 'on'` and no permission request of the row holding it
+  (`holdsRowSQL`: still awaiting an answer and not proven gone; b.146
+  problem 3: the agent's turn ended
   after its last request was answered, and its `Stop` was lost, which after
-  a denied request is the hook that would have moved the row). When one
+  a denied request is the hook that would have moved the row). The
+  Notification's own `turn_end` proof runs before this write (see "The
+  dialog hold" under [Permission relay](#permission-relay)), so a main-agent
+  request recorded before the hook started, answered at the pane by a person
+  and so still awaiting an answer in agent-director's records, is proven
+  gone by then and holds nothing (b.omt). When one
   applies it writes what a non-terminal `ApplyHookTransitionResult`
   transition writes (state `waiting`; `last_seen_at` bumped; `ended_at`,
   `launch_started_at` and the liveness markers NULLed; the session record;
@@ -3081,8 +3115,8 @@ finished (see the residual windows below):
   with `soft_refresh` false and `triggering_event_name` `Notification`;
   `ad.hook.fired` carries `upsert_outcome` `updated`.
 - **Neither.** When neither statement matches a row (the row is in another
-  state, a relayed `check_permission` row has a request that still awaits
-  an answer, the relay is off, the gate does not hold, or no row has the
+  state, a relayed `check_permission` row has a request that holds it, the
+  relay is off, the gate does not hold, or no row has the
   id), the write is a soft refresh that also sets `idle_since`, reported
   exactly as `ApplyHookTransitionResult`'s soft refresh reports (a hook the
   gate does not apply writes its one `ad.hook.ignored`). A row that becomes
@@ -3094,8 +3128,8 @@ finished (see the residual windows below):
   repair of a relayed row left in `check_permission` reads it: `waiting`
   when it is set, `working` otherwise (see "The row after the last answer"
   under [Permission relay](#permission-relay)).
-- The `working`-transition hold for requests that still await an answer
-  does not apply (it holds transitions to `working` only).
+- The `working`-transition hold for requests that hold the row does not
+  apply (it holds transitions to `working` only).
 
 Residual windows: the row reads `working` until the Notification arrives,
 about 60 s after the turn ended. A stray hook whose write lands after the
@@ -3609,26 +3643,37 @@ reported that held less than the new T (`lim_tchange_bee`), but never one
 the raw history did not hold (`NeverUnsupported`).
 
 **Guards act on the live state.** The settle time is a reporting layer
-only. The raw `state` stays what every guard reads: `send-keys`' state and
-relay guards (and the `state` in `ErrRelayFallenBack`'s and
-`ErrDialogMaybeOpen`'s `err_details`), `decide` (its `ErrRelayFallenBack`
-`err_details.state` included), `find-missing`'s live-row read, mark and
-repair, `resume`, `pause`, `kill`, `expire`, spawn's collision pre-check
-and reuse, and the hook path. So a guard can refuse on a state `status`
-does not show yet (`send-keys` refusing a raw `working` row while `status`
-reads `waiting`); the refusal is a named error, so the outcome stays
-machine-readable. `ad.spawn.state_transition` records raw transitions.
+only. The raw `state` stays what every guard reads: `send-keys`' and
+`pause`'s state and relay guards (`pause` runs `send-keys`' `relayGuard`,
+b.zdz; the `state` in either verb's `ErrRelayFallenBack` and
+`ErrDialogMaybeOpen` `err_details` included), `decide` (its
+`ErrRelayFallenBack` `err_details.state` included), `find-missing`'s
+live-row read, mark and repair, `resume`, `kill`, `expire`, spawn's
+collision pre-check and reuse, and the hook path. So a guard can refuse on
+a state `status` does not show yet (`send-keys` refusing a raw `working`
+row while `status` reads `waiting`); the refusal is a named error, so the
+outcome stays machine-readable. `ad.spawn.state_transition` records raw transitions.
 
 **Not settled (accepted).**
 
 - Permission requests are never delayed: `get`'s and `list`'s
-  `permission_requests` and `get`'s `unproven_requests` follow the raw
-  state, and `get-permission` and the relay's delivery states never read
-  the settled state, so a caller learns of a permission request at once. A
-  row can read `waiting` with an open request, or `check_permission` with
-  `[]`, for up to T, and a row its agent moved out of `ended` or `missing`
-  can read `ended` or `missing` with requests in `unproven_requests`, also
-  for up to T.
+  `permission_requests` (listed while the raw state is `check_permission`)
+  and `get`'s `unproven_requests` (listed while the raw state is neither
+  `ended` nor `missing`) follow the raw state, and `get-permission` and the
+  relay's delivery states never read the settled state, so a caller learns
+  of a permission request at once. The settle time changes neither when
+  the lists are shown nor which requests they hold: `unproven_requests` is
+  every request Claude Code's hooks have not proven gone, by the proof
+  rules of "The dialog hold" under [Permission relay](#permission-relay)
+  (a `turn_end` proof covers only requests recorded before the second its
+  hook started, b.omt). A row can read `waiting` with an open request, or
+  `check_permission` with `[]`, for up to T, and a row its agent moved out
+  of `ended` or `missing` can read `ended` or `missing` with requests in
+  `unproven_requests`, also for up to T. And since a request proven gone no
+  longer holds the row (b.omt), the raw state can leave `check_permission`
+  while such a request still awaits an answer; the row can then read
+  `check_permission` for up to T with that request in neither list
+  (`get-permission` still reads it).
 - `launch_started_at` follows the raw state: a row whose agent has reported
   in can read `pending` without it for up to T.
 - A row with no recorded settled value (`settled_state` `''`, which only a
@@ -4416,11 +4461,10 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
   only as `reuse-finished`: it silently ignores `reuse_finished`, and the
   version check cannot tell it from 0.11.0.
 - Same environment (SR-18.7): use it as the same user and in the same
-  tmux environment as the agents. Two consequences: `kill`'s success on a
-  finished row is not verification that the agent exited; and on the
-  wrong tmux server, a row wrongly marked `missing`, `kill`'s no-op
-  success and a reuse together start a second agent for the same id (see
-  [Same environment](#same-environment)).
+  tmux environment as the agents. So `kill`'s success on a finished row
+  is not verification of exit; on the wrong tmux server, a row wrongly
+  marked `missing`, `kill`'s no-op success and a reuse together start a
+  second agent for the same id (see [Same environment](#same-environment)).
 
 **Gating.** The explicit-id control-character check runs first, then
 `Resolve` and `Validate` (the new cwd is checked before anything
@@ -5255,7 +5299,9 @@ involved: the first rule holds exactly as long as a relay hook may still
 answer, and the dialog hold exactly until a hook proves the request gone.
 A pane answer applies the guard again under the store's write lock
 before its key (see "Send-keys interaction" and "The dialog hold" in the
-relay chapter for the rules, the pane answer and the messages).
+relay chapter for the rules, the pane answer and the messages). `pause`
+runs the same guard, as a plain call without a pane hash (b.zdz; see
+[`pause`](#pause)).
 
 Order of the refusals before any tmux call (`sendKeysRun.run`): the shape
 of the params (`planSendKeys`), the state guard (which also refuses a
@@ -5362,8 +5408,10 @@ ANSI handling:
   `record-pane-answer`: one capture; `pause`: the line clear, the text and
   Enter) and at most one follow-up lookup after an action failure. They
   call `internal/store` for the row read (and, for `send-keys` and
-  `pause`, the adoption write; for `send-keys` and `record-pane-answer`,
-  the permission-request reads and writes) and `internal/tmux` through the
+  `pause`, the adoption write; for `send-keys`, `pause` and
+  `record-pane-answer`, the permission-request reads and writes, `pause`'s
+  being its relay guard's read and `hook_gone_at` write) and
+  `internal/tmux` through the
   id-based client methods (`Lookup`'s session listing, `ListPanes`,
   `SendKeysPane`, `SendKeyPane`, `CapturePaneID`), each on the row's
   socket. A pane answer's capture, and `record-pane-answer`'s, runs inside
@@ -6479,11 +6527,11 @@ CLI's stderr envelope (`errorEnvelope.ErrDetails`, written by
 MCP error's `data` (`ToolErrorData.ErrDetails`) and the TypeScript
 client's `AgentDirectorError.errDetails` (`null` when absent). A client
 that does not know the key ignores it. Five named errors carry it today:
-`ErrRelayFallenBack` (`RelayFallenBackDetails`, from `decide` and
-`send-keys`), `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
+`ErrRelayFallenBack` (`RelayFallenBackDetails`, from `decide`, `send-keys`
+and `pause`), `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
 `ErrClaimTooSoon` (`ClaimTooSoonDetails`), `ErrPaneChanged`
 (`PaneChangedDetails`) and `ErrDialogMaybeOpen` (`DialogMaybeOpenDetails`,
-from a plain `send-keys`). One unnamed error does too: the `ErrInternal` of a
+from a plain `send-keys` and `pause`). One unnamed error does too: the `ErrInternal` of a
 pane answer through `send-keys` whose key was sent but whose `sent` write
 failed (`PaneKeySentDetails`: `key_sent` true and `request_token`), so a
 caller tells it from an error that sent nothing and reads the pane before
@@ -7098,17 +7146,65 @@ raw state, never the settled one (see
 
 ### The row after the last answer (rule 9, problem 3)
 
-While any of its requests still awaits an answer, the row stays in
-`check_permission`: the working hold (`holdWorkingTransition`) writes no
-state for a hook that would move it to `working` (it clears `idle_since`).
+While any of its requests holds it, the row stays in `check_permission`:
+the working hold (`holdWorkingTransition`) writes no state for a hook that
+would move it to `working` (it clears `idle_since`). A request holds the
+row while it still awaits an answer (`awaitingAnswerSQL`) and Claude Code
+has not proven its dialog gone (`proven_gone_at` NULL): `holdsRowSQL`
+(b.omt; see its "Must use" under [`internal/store`](#internalstore)).
 After the last answer, the row moves with the agent's next hook. The
 relay hook's timeout deny writes no row state, so after a deny that hook
-is normally the turn's `Stop`. When it is lost:
+is normally the turn's `Stop`.
+
+**A request proven gone holds nothing (b.omt).** A request a person
+answered at the pane outside agent-director still awaits an answer, since
+nothing records that answer, until `record-pane-answer` or a close of the
+row's requests closes it. Claude Code's own hooks end its hold instead:
+the main agent's `Stop` or idle-prompt Notification after it proves it
+gone (`turn_end`, a request with no `agent_id` recorded before the hook
+started), and its tool's `PostToolUse` or `PostToolUseFailure` does
+(`tool_ran`, an allow). Each proof is the hook's first write, so the
+hook's own write is not held by it, and from then on the agent's moves to
+`working` apply though the request stays open. A `PostToolUse` whose tool
+ran therefore moves the row to `working` even when the PostToolUse close
+leaves the request open because its relay hook may still answer it: the
+tool ran, so its dialog is gone. Such a request
+is still open everywhere else (`awaitingAnswerSQL`): `get-permission`
+reads it, `get` and `list` list it while the row's raw state is
+`check_permission` (not once the row has moved on, though with `[state]
+settle_ms` set `state` can still read `check_permission` for up to the
+settle time; see [Settle time (b.3ie)](#settle-time-b3ie)), `decide`
+judges it, and rule 7 refuses
+plain `send-keys` on its account until it is closed.
+
+Residuals, accepted:
+
+- **A subagent's request.** A request with an `agent_id` answered at the
+  pane outside agent-director is never proven by the main agent's turn
+  end (a background subagent can outlive the main turn), so it holds the
+  row's moves to `working` until `record-pane-answer`, its tool's
+  `PostToolUse`, or the row's end. The main agent's `Stop` still moves the
+  row to `waiting` (only moves to `working` are held), so the row can read
+  `waiting` through later turns until one of those.
+- **A turn interrupted by a pane deny.** Claude Code sends no `Stop` on a
+  user interrupt, so after a deny at the pane that interrupts the turn the
+  hold lasts until the idle-prompt Notification, once the agent idles, or
+  the next turn's `Stop`.
+- **The hook's start second.** A `turn_end` proof covers only requests
+  created before the second its hook process started (see "The `turn_end`
+  ordering rule" under "The dialog hold" below). A request recorded in the
+  second a `Stop` or idle prompt started is therefore not proven by it and
+  holds until a later turn-end proof. And the hook process starts a little
+  after Claude Code sends the hook, so a next-turn request recorded in that
+  gap, in an earlier second, could still be proven (very unlikely).
+
+When the hook that would move the row is lost:
 
 - the idle-prompt Notification moves a relay-on `check_permission` row
-  with no request awaiting an answer to `waiting`, and records
-  `idle_since` either way (see "The idle-prompt Notification" in
-  [Event → state mapping](#event--state-mapping-srd-52));
+  with no request holding it to `waiting`, and records `idle_since` either
+  way (see "The idle-prompt Notification" in
+  [Event → state mapping](#event--state-mapping-srd-52)); its own
+  `turn_end` proof runs first;
 - `find-missing`'s repair, `RepairCheckPermission`
   (`pkg/api/find_missing_repair.go`), which `Client.FindMissing` runs
   after the sweep on a fresh read of the live rows. For each row in
@@ -7122,12 +7218,14 @@ is normally the turn's `Stop`. When it is lost:
   can write only
   its own request's `delivered_at`, never the row; judging it would let a
   hook that cannot be checked hold the row until its `confirm_by`, up to a
-  relay window later. Otherwise one
+  relay window later. A request proven gone is judged as any other no
+  close has closed, so a live relay hook of one still holds the repair
+  off; the proof leaves it out of the statement's guard only. Otherwise one
   guarded statement, `RepairCheckPermissionIfSameLife`
   (`internal/store/find_missing_writes.go`), moves the row to `waiting`
   when `idle_since` is set and to `working` otherwise, only while the row
   is still in `check_permission` with `relay_mode` on, holds the snapshot
-  the read gave, and has no request awaiting an answer. It NULLs
+  the read gave, and has no request holding it (`holdsRowSQL`). It NULLs
   `launch_started_at`, advances `row_version` and writes no other column
   (`idle_since` stays until the agent's next hook; `last_seen_at` is not
   bumped, since no hook reported). A request recorded after the read
@@ -7194,6 +7292,10 @@ permission dialog is answered allow, and the agent's `PostToolUse` (or
 - **The close.** On a relay-on agent (`AGENT_DIRECTOR_RELAY_MODE=on`),
   `Handle` calls `closeToolRan` before the hook's ordinary write, so the
   write's `working` transition is no longer held by the request it closed.
+  The hook's `tool_ran` proof, written just before the close, already ends
+  that hold for every request it covers, so a request the close leaves
+  open (its relay hook may still answer it) does not hold the write either
+  (b.omt; see "The row after the last answer" above).
   `CloseToolRanRequests` (`internal/store/pane_writes.go`) reads the row's
   requests recorded from v7 on (`settled_at` set) with that `tool_use_id`
   that still await an answer, judges each one's relay hook with
@@ -7237,7 +7339,8 @@ docs/engineering-guide.md).
   proves nothing); `turn_end` means the turn of the agent that asked ended
   after the request was written, and the main agent's `Stop` or idle
   prompt, the only `turn_end` hooks today, cover the requests with no
-  `agent_id`, the main agent's and every one recorded before v7 (the
+  `agent_id` recorded before the hook started, the main agent's and every
+  one recorded before v7 (the
   value is defined by the asking agent's turn, not by the hook, so a
   subagent's own stop hook, if one is ever registered, records it too).
   One read first takes the
@@ -7245,23 +7348,43 @@ docs/engineering-guide.md).
   covers the unproven matching requests up to that id, with the hook gate
   in an `EXISTS` over the row (`hookGateSQL`), waiting for the write lock
   as every hook write does. It emits no trail event (the hook's
-  `ad.hook.fired` records the hook) and returns how many it proved.
-- **The `turn_end` ordering rule.** "Written before the hook" is decided
-  by that read, taken before the write waits for the lock: a request
-  recorded while a `Stop` or idle prompt waits for the lock (a later
-  turn's) has a higher id and is not proven by it. The rule relies on
-  Claude Code sending a turn's `Stop` before it takes the next prompt, so
-  a `Stop` never arrives after the next turn's permission request; request
-  ids order the requests by their first write.
+  `ad.hook.fired` records the hook) and returns how many it proved. A
+  request it proves no longer holds the row (`holdsRowSQL`; see "The row
+  after the last answer" above), whatever agent-director's records say of
+  it.
+- **The `turn_end` ordering rule.** "Written before the hook started" is
+  two cuts, both applied by the write. The first is the hook's
+  start (b.omt): `RequestProof.RecordedBefore`, `HandleConfig.Start` (the
+  hook process's first clock reading, in `runHook`), passed to SQL as the
+  store's `CURRENT_TIMESTAMP` text (`storeTimestamp`: UTC, whole seconds,
+  the form every request's `created_at` takes), so `pr.created_at < ?`
+  covers only a request created before the second the hook started. One
+  created in that second or later stays unproven until a later proof (the
+  safe direction), and a `turn_end` proof with no `RecordedBefore` is an
+  error (`errTurnEndNoStart`) that proves nothing. The cut is the start,
+  not the read, because a proof releases the row: an idle-prompt
+  Notification that runs late, its read landing after the next turn's
+  PermissionRequest, would otherwise prove that request gone with its
+  dialog up, and a subagent's working hook would then move the row to
+  `working`. The second is the read, taken before the write waits for the
+  lock: a request recorded while a `Stop` or idle prompt waits for the lock
+  (a later turn's) has a higher id and is not proven by it. The rule relies
+  on Claude Code sending a turn's `Stop` before it takes the next prompt,
+  so a `Stop` never arrives after the next turn's permission request;
+  request ids order the requests by their first write. Its residuals are
+  listed under "The row after the last answer" above ("The hook's start
+  second").
 - **The hook side.** `Handle` calls `proveRequestsGone`
   (`internal/hook/handler.go`) on a relay-on agent as the first of an
   ordinary hook's writes, before `closeToolRan` and `applyOrdinaryHook`:
   `ClassifyResult.ToolRan()` gives a `tool_ran` proof with the payload's
   `tool_use_id`, `ClassifyResult.TurnEnded()` (a `Stop`, `EventNameStop`,
   or the idle-prompt Notification, `WaitingIfWorking`, with no `agent_id`)
-  a `turn_end` proof; any other hook proves nothing. It goes through the
+  a `turn_end` proof whose `RecordedBefore` is `Handle`'s `start` (from
+  `HandleConfig.Start`); any other hook proves nothing. It goes through the
   optional `requestProver` extension of `HookStore` and is fail-open: a
-  failed write logs, and the requests stay unproven until a later proof.
+  failed write logs, and the requests stay unproven (holding plain
+  `send-keys`, and the row while they await an answer) until a later proof.
   A request with an `agent_id` is proven only by its `PostToolUse` or by
   the agent's end: a background subagent can outlive the main turn, and
   agent-director registers no hook for a subagent's own stop.
@@ -7284,9 +7407,11 @@ docs/engineering-guide.md).
   (`evaluateRelayGuard`), in any live state, so a row with no request, or
   whose requests are all proven, is never held (`NeverHeldNoRequest`). On
   `ad.send_keys.called` the refusal reads `guard_evaluation` `held` with
-  outcome `ErrDialogMaybeOpen` (`errorName`). `pause`, which also types
-  Enter, runs no relay guard, so it is not held (b.zdz; see
-  [`pause`](#pause)).
+  outcome `ErrDialogMaybeOpen` (`errorName`). `pause`, which types
+  `/exit` and Enter as a plain call without a hash would, runs the same
+  guard (`relayGuard` with `SendKeysParams{}`) and is held too, with no
+  bypass, since it takes no hash (b.zdz; see [`pause`](#pause)); it
+  writes no `ad.send_keys.called`.
 - **The error.** `ErrDialogMaybeOpen` is a `DetailedError` whose
   `DialogMaybeOpenDetails` (`dialogMaybeOpenDetails`) embed the oldest
   unproven request's `PermissionRequestInfo`, with its delivery facts at
@@ -7306,7 +7431,8 @@ docs/engineering-guide.md).
 **Must use:** every `ErrDialogMaybeOpen` is built by
 `dialogMaybeOpenError`; whether a request holds the dialog hold is
 `PermissionRow.ProvenGone()` (through `spawnRequests.unproven`), never a
-test of `delivered_at`, `pane_answer` or `closed_at`; and a proof is
+test of `delivered_at`, `pane_answer` or `closed_at`; whether it holds
+the row is `holdsRowSQL` (see "The row after the last answer" above); and a proof is
 written only through `ProveRequestsGone`, `proveAgentGoneSQL`, the
 PostToolUse close or the v6 → v7 hop's `v7ProveFinishedSQL` (see "Must use: a request's proof" under
 [`internal/store`](#internalstore)).
@@ -7422,8 +7548,9 @@ before the upgrade (rule 5's compatibility clause), through
   "Must use" under [`internal/store`](#internalstore)).
 
 - **`internal/store/request_proof.go`** — `ProveRequestsGone`,
-  `RequestProof` and its `match`: a hook's proof that requests' dialogs
-  are gone (see "The dialog hold" above).
+  `RequestProof` (with `RecordedBefore`, a `turn_end` proof's cut) and its
+  `match`: a hook's proof that requests' dialogs are gone (see "The dialog
+  hold" above).
 
 - **`internal/store/relay_writes.go`** — the relay's writes, each through
   a bounded `inWriteTx` (see "a bounded write for a caller with a
@@ -7454,8 +7581,11 @@ before the upgrade (rule 5's compatibility clause), through
     the store boundary, SR-7.4). Every read selects `permissionColumns`
     and scans with `scanPermissionRow`.
   - `OpenPermissionRequestsForSpawn`: the Spawn's requests that still
-    await an answer (`awaitingAnswerSQL`), decided or not, oldest first;
-    the working hold and `list` read it. `PermissionRequestsForSpawn`:
+    await an answer (`awaitingAnswerSQL`), decided or not, oldest first,
+    a request proven gone included; `list` reads it. The working hold does
+    not: it reads `holdsRowSQL` (through `holdingRequestSQL`,
+    `internal/store/hook_writes.go`), which leaves a proven request out
+    (b.omt). `PermissionRequestsForSpawn`:
     every request of the Spawn (`get`'s one read for both of its lists,
     the send-keys guard, `record-pane-answer`, `decide`'s pre-v7 path and
     its `err_details`, `find-missing`'s repair);
@@ -7501,15 +7631,16 @@ before the upgrade (rule 5's compatibility clause), through
   "The dialog hold" above).
 
 - **`pkg/api/sendkeys_relay.go`** — rule 7, step 2c's dialog hold and the
-  facts `send-keys`, `record-pane-answer` and `decide` share:
+  facts `send-keys`, `pause`, `record-pane-answer` and `decide` share:
   `spawnRequests` (one judged read of every request of a Spawn) with
   `hookMayAnswer`, `fallenBack`, `closed`, `liveHolder`,
   `oldestFallenBack`, `unproven`, `sendKeysRefusal`,
   `notFallenBackRefusal`, `paneInProgress`, `inProgressRefusal`,
   `fallenBackDetails`, `dialogMaybeOpenDetails` and
-  `recordFallenBackGone`, and the error builders `relayFallenBackError`,
-  `dialogMaybeOpenError` and `relayGuardRefusal` (see "Send-keys
-  interaction" below). **Must use:** every `ErrRelayFallenBack` is built
+  `recordFallenBackGone`, the error builders `relayFallenBackError`,
+  `dialogMaybeOpenError` and `relayGuardRefusal`, and
+  `retrySendKeysLater`, send-keys' next step on a recorded verdict (see
+  "Send-keys interaction" below). **Must use:** every `ErrRelayFallenBack` is built
   by `relayFallenBackError`, every `ErrDialogMaybeOpen` by
   `dialogMaybeOpenError`, every `ErrSendKeysWhileRelayed` by
   `relayGuardRefusal`, and every `ErrAlreadyDecided` for a request closed
@@ -7792,15 +7923,23 @@ before the upgrade (rule 5's compatibility clause), through
 
   What the records cannot show, and the trade-offs accepted:
 
-  - **Known gap (b.omt).** While a request awaits an answer, the store's
-    working hold (`holdWorkingTransition` in
-    `internal/store/hook_writes.go`) writes no state for the agent's moves
-    to `working`. So after an answer at the pane made outside
-    agent-director, or a timeout deny returned but not recorded by a hook
-    of an earlier release, the spawn still reads `check_permission` until
-    a later hook moves it out (Stop, AskUserQuestion) or records a later
-    request, `decide` still returns `ErrRelayFallenBack`, and a plain
-    `send-keys` is refused on the request's account. A caller that follows
+  - **A record that outlives its dialog (b.omt).** While a request awaits
+    an answer and is not proven gone, the store's working hold
+    (`holdWorkingTransition` in `internal/store/hook_writes.go`, reading
+    `holdsRowSQL`) writes no state for the agent's moves to `working`. So
+    after an answer at the pane made outside agent-director, or a timeout
+    deny returned but not recorded by a hook of an earlier release, the
+    spawn still reads `check_permission` until a later hook moves it out
+    (Stop, AskUserQuestion) or records a later request, `decide` still
+    returns `ErrRelayFallenBack`, and a plain `send-keys` is refused on the
+    request's account. The main agent's `Stop` or idle-prompt Notification
+    after such a request (one with no `agent_id`, a request recorded before
+    v7 included) proves it gone (`turn_end`), and so does its tool's
+    `PostToolUse` (`tool_ran`); from then on it holds no move to `working`,
+    so it no longer keeps the spawn off `working` in later turns, though it
+    stays open (see "The row after the last answer" above, which lists the
+    residuals: a subagent's request, a turn interrupted by the pane deny,
+    the hook's start second). A caller that follows
     the advice reads the pane first (a pane answer requires its hash) and,
     finding no prompt for the request, closes the record with
     `record-pane-answer` instead of typing. The PostToolUse close closes such a
@@ -7813,9 +7952,11 @@ before the upgrade (rule 5's compatibility clause), through
     A subagent's request recorded while the earlier request's dialog is
     on screen looks the same as the agent's next request, so `decide`
     refuses the earlier one with `ErrNoOpenPermissionRequest`, and keeps
-    refusing it after the later one is decided. And a stale record (the
-    known gap above) makes every later request of the spawn that falls
-    back by its window fail the third check for as long as it stays open.
+    refusing it after the later one is decided. And a stale record (a
+    record that outlives its dialog, above) makes every later request of
+    the spawn that falls back by its window fail the third check for as
+    long as it stays open, proven gone or not: the check reads
+    `AwaitsAnswer`, not the proof.
     Each is a stall instead of a possibly mistyped answer:
     `ErrNoOpenPermissionRequest` advises no pane answer and no recovery,
     and a human at the pane resolves it.
@@ -7933,7 +8074,9 @@ claimed verdict (`as`) is stored, never checked against the key (see the
 "Core Principle: Never Hardcode Claude Code's Terminal Text" in
 docs/engineering-guide.md).
 
-**Rule 7.** `evaluateRelayGuard` (`pkg/api/sendkeys.go`) applies to a row
+**Rule 7.** `evaluateRelayGuard` (`pkg/api/sendkeys.go`: `relayGuard`
+with send-keys' own next step on a recorded verdict, `retrySendKeysLater`)
+applies to a row
 with `relay_mode=on` in every live state the state guard lets through (a
 row can read `waiting` or `working` while a request is still open): it
 reads every request of the row by the check-before-read rule
@@ -7983,6 +8126,21 @@ the send failing with the store's error. On `ad.send_keys.called`,
 `guard_evaluation` is `held` for any refusal above and `released` when
 rule 7 let the call through.
 
+**`pause` (b.zdz).** `pause` types `C-u`, `/exit` and Enter, which a
+plain `send-keys` without `expect_pane_sha256` would type, so on a
+`waiting` row it calls `relayGuard` (`relayGuardStore`: the request read
+and the `hook_gone_at` write, which `SendKeysStore` and `PauseStore` both
+satisfy) with `SendKeysParams{}` and `retryLater`, before any tmux call:
+rules 1 to 3 apply as to that `send-keys`, with the same builders and
+`err_details`, and a refusal types nothing and starts no wait. Only rule
+1's recorded-verdict message differs (`retry later` for
+`retrySendKeysLater`'s `retry send-keys later`). `pause` takes no pane
+hash, so nothing passes its rule 3 (see [`pause`](#pause)). **Must use:**
+a verb that types into the agent's pane what a plain `send-keys` would
+runs `relayGuard` with the params of that `send-keys` and its own next
+step on a recorded verdict, before any tmux call; never a second relay
+check, refusal order or wording.
+
 **`ErrSendKeysWhileRelayed`'s message** (advice; the error name is the
 contract) is built only by `relayGuardRefusal` and states no release time
 (b.ah6): for an undecided request, `spawn <id> is awaiting a relayed
@@ -7990,13 +8148,16 @@ permission decision on request <request_token>; answer it with decide`;
 for one whose verdict is recorded, `spawn <id>: the relayed permission
 verdict on request <request_token> is recorded and its relay hook may
 still be delivering it; retry send-keys later` (b.ceq; `decide` on it
-returns `ErrAlreadyDecided`). A plain retry once that hook has ended can
+returns `ErrAlreadyDecided`). That last step is the caller's (the
+`retry` argument): `retrySendKeysLater` from `send-keys` and
+`record-pane-answer`, `retryLater` (`retry later`) from `pause`, so no
+description advises retrying `send-keys` to a caller of `pause`. A plain retry once that hook has ended can
 meet rule 3 instead (`ErrDialogMaybeOpen`) until the request is proven
 gone: after an allow its tool's `PostToolUse`, after a deny the main
 agent's `Stop` or idle-prompt Notification.
 
 **`ErrRelayFallenBack`** (decision 10 A) is built only by
-`relayFallenBackError`, for `send-keys` and `decide` alike: its description
+`relayFallenBackError`, for `send-keys`, `pause` and `decide` alike: its description
 says the request's relay hook is gone and acked no verdict and that no
 pane answer is recorded on it through agent-director, what the call did
 not do, and to answer it at the pane with `send-keys` and its
@@ -8145,11 +8306,15 @@ A pane answer is audited as `ad.send_keys.called` with
 left awaiting an answer after its dialog closed while the spawn lives is
 closed by `record-pane-answer`, or by the PostToolUse close when its tool
 ran (a request recorded from v7 on), or with the spawn (`find-missing`'s
-mark, the agent's end). Until then the store's working hold keeps the
-spawn in `check_permission` until a later hook moves it out or records a
-later request, `find-missing`'s repair leaves the row alone, and rule 7
-refuses plain `send-keys` on its account (see "Shown sitting on the
-request alone" under `pkg/api/decide.go` above).
+mark, the agent's end). Until then rule 7 refuses plain `send-keys` on its
+account. Until Claude Code proves its dialog gone (the main agent's `Stop`
+or idle-prompt Notification after it, `turn_end`, or its tool's
+`PostToolUse`, `tool_ran`), the store's working hold also keeps the spawn
+in `check_permission` until a later hook moves it out or records a later
+request, and `find-missing`'s repair leaves the row alone; once it is
+proven gone neither holds, though the record stays open (b.omt; see "The
+row after the last answer" and "Shown sitting on the request alone" under
+`pkg/api/decide.go` above).
 
 **What makes the invariant hold, and the window it holds within.** The
 listener half is bounded by the configured relay window, and only because
@@ -8298,7 +8463,7 @@ proof). Eligible rows are ordered `decided_at ASC`; the oldest decided
 rows are removed first. A request agent-director's own records read
 closed (acked, answered at the pane, recorded with `record-pane-answer`)
 but that no hook has proven gone can still have its dialog on the pane
-and holds plain `send-keys` to its Spawn (`ErrDialogMaybeOpen`, see "The
+and holds plain `send-keys` and `pause` to its Spawn (`ErrDialogMaybeOpen`, see "The
 dialog hold"); deleting it would end that hold with no proof (b.kxu), so
 it is kept until it is proven or its Spawn finishes. Exempt: for each spawn with a
 request that still awaits an answer, its newest request
@@ -9729,7 +9894,8 @@ clears the note, as every applied hook clears the liveness columns: a
 SessionStart records the session identity and moves the row to `waiting`,
 and a gated UserPromptSubmit moves it to `working` and records the
 session id when the row has none. A UserPromptSubmit held because a
-permission request of the row still awaits an answer writes nothing but
+permission request of the row holds it (still awaits an answer and is not
+proven gone) writes nothing but
 the clearing of `idle_since`, so the note stays (a rare residual). A later sweep that finds the agent alive keeps the note; a
 sweep that cannot check the agent process may overwrite it with an
 unverified note, and the next sweep that finds the agent alive notes the
@@ -9770,8 +9936,8 @@ Where agent-visible text states it (decision-0930e):
   never `help` or MCP `tools/list`, so they cost no agent tokens.
 - Short form: the `kill`, `resume`, `pause` and `expire`
   descriptions carry the one constant `missingNotProofShort` in
-  `pkg/api/manifest/manifest.go`: "`missing` is not proof the agent exited
-  (see find-missing)." Every verb description reaches `help` and MCP, so
+  `pkg/api/manifest/manifest.go`: "`missing` is not proof of exit (see
+  find-missing)." Every verb description reaches `help` and MCP, so
   the full sentence at each would cost every agent tokens on every session
   and turn (see the [help size guard](#pkgapimanifest--verb-registry)).
 - The README, this document, the Go docs and the error descriptions
@@ -9885,7 +10051,8 @@ step). The evidence model, notes, guard and marking order are in
 8. `Client.FindMissing` then repairs stale `check_permission` rows
    (`RepairCheckPermission`, b.146 rule 9 and problem 3) on a fresh read
    of the live rows: a relay-on row in `check_permission` none of whose
-   requests still awaits an answer and none of whose relay hooks may still
+   requests holds it (still awaits an answer and is not proven gone; b.omt)
+   and none of whose relay hooks may still
    run (a request a close of the row's requests closed is not judged) moves to `waiting` when
    `idle_since` is set, else to `working`, in
    one guarded write with one `ad.find_missing.tick`
@@ -10975,8 +11142,9 @@ the section that describes it in detail.
     from v7 on; a deny at the dialog made outside agent-director needs
     `record-pane-answer`.
 - **The dialog hold (b.146 step 2c).** It holds plain `send-keys` without
-  a pane hash until a hook proves the request gone (see "The dialog hold"
-  under [Permission relay](#permission-relay)), which costs:
+  a pane hash, and `pause` (b.zdz), until a hook proves the request gone
+  (see "The dialog hold" under [Permission relay](#permission-relay)),
+  which costs:
   - after an allow, the hold lasts until the tool has run; after a deny,
     until the main agent's turn ends, even when no dialog is left; an
     `Escape` to stop the agent right after a deny needs a caller that
@@ -10996,17 +11164,43 @@ the section that describes it in detail.
   - the hash path is safe only if the caller judged the pane: a program
     that passes the hash of a pane it read without judging it lets the
     Enter through;
-  - `pause` is not held (b.zdz): it types `C-u`, `/exit` and Enter into a
-    `waiting` row with no relay check, and a `waiting` row can have a
-    request not proven gone (a subagent's request after the main agent's
-    `Stop`, or a request recorded before v7 on an agent idle at the
-    upgrade), so its Enter can answer that request's dialog (see
+  - `pause` has no way past it (b.zdz): it takes no pane hash, so a held
+    `waiting` row (after a subagent's denied request, until the Spawn
+    ends) is stopped only by `kill` or by a caller that looked and sends
+    `/exit` with a hashed `send-keys`, which neither clears a draft first,
+    as `pause`'s `C-u` does, nor waits for `ended` (see
     [`pause`](#pause));
   - unproven closed requests of live Spawns are kept past
     `relay.permission_request_cap` (see "Cap-based GC" under
     [Permission relay](#permission-relay)), so requests no hook proves
     before their Spawn ends (a subagent's denied request, say) can keep
     the table above the cap until then.
+- **The row hold (b.omt).** A request that still awaits an answer and is
+  not proven gone holds the row's moves to `working`, the idle-prompt
+  Notification's move out of `check_permission` and `find-missing`'s
+  repair (see "The row after the last answer" under
+  [Permission relay](#permission-relay)), which costs:
+  - after a deny at the pane made outside agent-director, the row stays in
+    `check_permission` while the agent works on, until the main agent's
+    turn ends; when that deny interrupts the turn (Claude Code sends no
+    `Stop` on a user interrupt), until the idle-prompt Notification, once
+    the agent idles, or the next turn's `Stop`;
+  - a subagent's request (`agent_id` set) answered at the pane outside
+    agent-director is never proven by a turn end, so it holds the row's
+    moves to `working` until `record-pane-answer`, its tool's
+    `PostToolUse` or the row's end;
+  - a request recorded in the second a `Stop` or idle prompt started is
+    not proven by it and holds until a later turn-end proof; a next-turn
+    request recorded between Claude Code sending such a hook and the hook
+    process's start, in an earlier second, could still be proven (very
+    unlikely);
+  - once the row has moved on, a proven request that still awaits an
+    answer is no longer in `get`'s or `list`'s `permission_requests`
+    (listed only while the row's live state is `check_permission`, which
+    `state` can still read for up to `[state] settle_ms`) nor in `get`'s
+    `unproven_requests`; `get-permission` still reads it, and a plain
+    `send-keys` refused on its account (`ErrRelayFallenBack` once it has
+    fallen back) names it.
 - **Accepted risks.**
   - A re-bound or different tmux server gives Can't tell
     (`ErrTmuxNotAvailable`; `find-missing` note `tmux_server_changed`).
@@ -11108,7 +11302,8 @@ the section that describes it in detail.
     noted `unreported` while the agent runs (no hook of theirs clears the
     note; the README states the minimum version);
   - a UserPromptSubmit held because a noted `unreported` row has a
-    permission request that still awaits an answer writes nothing but the
+    permission request that holds it (still awaits an answer and is not
+    proven gone) writes nothing but the
     clearing of `idle_since`, so that rare row keeps its note;
   - subagents' and in-process agent-team teammates' tool and permission
     events move the row's state and use its relay, so a row can read
@@ -11266,10 +11461,25 @@ meaning and links to the section that describes it in detail.
   leaves no time to decide.
 - **A relay row left in `check_permission` moves on (b.146 problem 3).**
   The idle-prompt Notification returns a relayed `check_permission` row
-  with no request awaiting an answer to `waiting`, and `find-missing`
+  with no request holding it (see the next item) to `waiting`, and `find-missing`
   repairs such a row to `waiting` or `working` with an
   `ad.find_missing.tick` `stale_check_permission`; before, nothing moved it
   until the agent's next hook.
+- **A request proven gone no longer holds the row (b.omt).** A relay row's
+  moves to `working`, the idle-prompt Notification's return to `waiting`
+  and `find-missing`'s repair are held only by a request that still awaits
+  an answer and that Claude Code has not proven gone. A request answered at
+  the pane outside agent-director, and not recorded with
+  `record-pane-answer`, stops holding the row once the main agent's next
+  `Stop` or idle-prompt Notification proves it gone, or its tool's
+  `PostToolUse` does; before, it held every later move to `working` until
+  it was closed. So a row can now read `working`, as well as `waiting`,
+  while one of its requests still awaits an answer: follow a tracked
+  request with `get-permission`. Plain `send-keys` is still refused on its
+  account until it is closed, and a subagent's such request holds the row
+  until `record-pane-answer`, its tool's `PostToolUse` or the row's end
+  (see "The row after the last answer" under
+  [Permission relay](#permission-relay)).
 - **`send-keys`' relay guard (b.146 step 2b, rule 7).** On a relay-on row
   the guard now applies in every live state, not only `check_permission`,
   and holds exactly while a relay hook of the row may still answer its
@@ -11328,6 +11538,21 @@ meaning and links to the section that describes it in detail.
   idle prompt; an agent already idle at its prompt sends neither until a
   new turn starts, so its first plain send needs a person or an LLM to
   read the pane and send with its hash.
+- **`pause` is held like a plain `send-keys` (b.zdz).** On a relay-on
+  `waiting` Spawn, `pause` is now refused, typing nothing (no `C-u`) and
+  starting no wait, whenever a plain `send-keys` without
+  `expect_pane_sha256` would be: `ErrSendKeysWhileRelayed`,
+  `ErrRelayFallenBack` or `ErrDialogMaybeOpen`, new on `pause`, with the
+  same `err_details`; before, it typed `/exit` and Enter with no relay
+  check, so the Enter could answer a dialog still on the pane. Its
+  `ErrSendKeysWhileRelayed` on a recorded verdict ends `retry later`.
+  `pause` takes no pane hash, so it has no way past the hold: a caller
+  that looked closes any fallen-back request first (a hash passes only the
+  dialog hold, never `ErrRelayFallenBack`), then sends `/exit` with a
+  hashed `send-keys`, or ends the Spawn with `kill` (see
+  [`pause`](#pause)). A Spawn with the relay off, or with
+  no unproven request, pauses as before. **Upgrade:** a request recorded
+  before this release that holds plain `send-keys` holds `pause` too.
 - **`decision_reason` values (b.146 step 2b).** `ended`, `pane`,
   `pane_outside` and `tool_ran` are new, and the last three can come with
   an allow (or, for `pane_outside`, no `decision`): an unknown reason no
@@ -11412,6 +11637,11 @@ meaning and links to the section that describes it in detail.
   store's row) `ProvenGoneAt`, `ProvenGoneHow` and `ProvenGone()`. The
   sentinel `api.ErrDialogMaybeOpen` and its `api.DialogMaybeOpenDetails`
   are new.
+- **Go seams for `pause`'s relay guard (b.zdz).** `api.Pause` takes a
+  `PauseEnv` (`Relay`, a `RelayView`, and `IntentHold`) in place of its
+  start-time reader, and `PauseStore` requires
+  `PermissionRequestsForSpawn` and `RecordHookGone`, so a Go
+  implementation of it must add them (`*store.Store` has them).
 - **Go seams for the launch owner (b.kdf).** `api.Spawn` and
   `api.LiveSpawnIdentity` carry `LaunchOwner` (`api.LaunchOwner`, zero for
   none); `ResumeStore.MoveToPending` takes the launch owner as its last
@@ -11844,9 +12074,10 @@ path.
 ### `pause`
 
 `pkg/api/pause.go` holds the flow (`Pause`, unexported `pauseRun` and
-`waitEnded`); its tmux phase is the keys verbs' shared `keysRun`
-(`pkg/api/pane_keys.go`), the same one `send-keys` uses (SRD SR-7.1 to
-SR-7.3). `pause` is the only verb with a polling loop:
+`waitEnded`); its relay guard is `send-keys`' `relayGuard`
+(`pkg/api/sendkeys.go`), and its tmux phase the keys verbs' shared
+`keysRun` (`pkg/api/pane_keys.go`), the same one `send-keys` uses (SRD
+SR-7.1 to SR-7.3). `pause` is the only verb with a polling loop:
 
 1. **Row read.** Unknown id → `ErrSpawnNotFound`.
 2. **Finished row** (`ended` / `missing`) → no-op success, no tmux call,
@@ -11855,13 +12086,31 @@ SR-7.3). `pause` is the only verb with a polling loop:
    `ask_user`, `check_permission`) → `ErrSpawnNotPausable`, no tmux call.
    `/exit` is never typed in these states, where the slash would be read
    as input text.
-4. **`waiting` row: unusable recorded name.** A recorded session name that
+4. **`waiting` row: the relay guard (b.zdz).** `C-u`, `/exit` and Enter
+   are what a plain `send-keys` without `expect_pane_sha256` types, so
+   `pause` is held as one: `relayGuard(s, newRelayJudge(env.Relay),
+   env.IntentHold, row, SendKeysParams{}, retryLater)`, with the relay
+   view and intent hold `send-keys` gets (`PauseEnv`; see "`pause`
+   (b.zdz)" under "Send-keys interaction" in
+   [Permission relay](#permission-relay)).
+   A row with `relay_mode` other than `on` is not held. Otherwise it reads
+   every request of the row by the check-before-read rule and refuses, in
+   rule 7's order, with its builders and `err_details`:
+   `ErrSendKeysWhileRelayed` (a relay hook may still answer; on a recorded
+   verdict the message ends `retry later`), `ErrRelayFallenBack` (an open
+   fallen-back request, after `recordFallenBackGone` writes its
+   `hook_gone_at`), then `ErrDialogMaybeOpen` (a request not proven
+   gone). A refusal makes no tmux call (no `C-u` either) and starts no
+   wait; a failed read of the requests is the store's error, nothing
+   sent. A row with no request, or whose every request is proven gone,
+   goes on as before.
+5. **`waiting` row: unusable recorded name.** A recorded session name that
    is empty, holds a control character, or holds a character tmux stores
    differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
    (`unusableNameError`, SR-3.2), no tmux call, `/exit` not sent and no
    wait; removing the row is a human's decision (README "Operator
    actions"). A finished row never reaches this check (step 2).
-5. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
+6. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
    directory → `ErrTmuxNotAvailable`), one lookup by the row's current
    label and, on Ours, one pane listing; then `C-u`, a key send
    (`SendKeyPane`; see "Why `C-u` first" below), and `/exit` and a separate
@@ -11887,7 +12136,7 @@ SR-7.3). `pause` is the only verb with a polling loop:
      `/exit`; it is described as a failed text call is, naming the key
      send ("tmux key send failed"). Every `ErrTmuxUnresponsive` ends
      "retry later".
-6. **The wait**, only once `C-u`, `/exit` and Enter went through:
+7. **The wait**, only once `C-u`, `/exit` and Enter went through:
    poll the row's state column every `pausePollInterval` (200 ms) until
    `state == ended` (success) or the wait elapses on the real clock
    (`ErrPauseTimeout`). `ctx.Done()` short-circuits the loop with
@@ -11900,26 +12149,37 @@ SR-7.3). `pause` is the only verb with a polling loop:
    `config.MaxPauseTimeoutSeconds` (9223372036, the largest whole number of
    seconds a `time.Duration` holds), so the wait never wraps.
 
-**No relay check (b.zdz, open).** `pause` reads no permission request
-(`PauseStore` has no `PermissionRequestsForSpawn`) and runs none of
-`send-keys`' relay refusals (`evaluateRelayGuard`): not
-`ErrSendKeysWhileRelayed`, not `ErrRelayFallenBack` and not the dialog
-hold (`ErrDialogMaybeOpen`). Its only gate is the `waiting` state, and a
-relay-on row can read `waiting` while one of its requests is not proven
-gone (a subagent's request after the main agent's `Stop`, which proves
-only requests with no `agent_id`; a request recorded before v7 on an
-agent already idle at the upgrade), so its Enter can answer a dialog the
-hold would protect. b.zdz tracks the fix (the plain no-hash relay guard
-before any tmux call), to ship in the same release as b.146 steps 2, 2b
-and 2c (docs/release-blockers.md, B146).
+**Why the relay guard (b.zdz).** A relay-on row can read `waiting` while
+one of its requests is not proven gone (a subagent's request after the
+main agent's `Stop`, which proves only requests with no `agent_id`; a
+request recorded before v7 on an agent already idle at the upgrade), so
+an unguarded `pause`'s Enter could answer a dialog the dialog hold
+protects. **No way past the hold.** `pause` takes no pane hash, so the
+hold lasts until Claude Code's own hooks prove each request gone,
+whatever is done at the pane: a subagent's request denied at the pane
+gets no `PostToolUse`, and the main agent's `Stop` does not prove it, so
+it holds `pause` until the agent ends. A
+caller that has read the pane and answered any dialog on it types
+`/exit` itself with a `send-keys` whose `expect_pane_sha256` is the pane
+it judged, which the hold lets through, or ends the Spawn with `kill`
+(the manifest's advice). A hash passes only the dialog hold: a
+fallen-back request still refuses that `send-keys` (`ErrRelayFallenBack`)
+until it is closed, with a pane answer naming its `request_token` or with
+`record-pane-answer`, so the caller closes it first. That `send-keys`
+sends no `C-u`, so the caller checks the prompt is empty first, and it
+does not wait for `ended`, so the caller polls `get` or `status`
+(docs/permissions.md, "Send-keys interaction"; the help text, at its size
+cap, carries only the way past `ErrDialogMaybeOpen`).
 
-`pause` never writes the row's state; the adoption is its only store
-write. **Trail:** no call event of its own. It writes at most one
+`pause` never writes the row's state; the adoption and the relay guard's
+`hook_gone_at` (on an `ErrRelayFallenBack` refusal) are its only store
+writes. **Trail:** no call event of its own. It writes at most one
 `ad.provenance.disagree` per distinct reason per call, with verb `pause`
 and source `ad_send_keys` (the action values as for `send-keys`; a failed
-`C-u` is `nothing_sent`), only for those reasons, none in the normal case,
-and before the wait, so the wait's outcome neither adds nor removes one
-(see [`ad.*` event namespace](#ad-event-namespace)).
+`C-u` is `nothing_sent`), only for those reasons, none in the normal case
+or on a relay guard refusal (no lookup), and before the wait, so the
+wait's outcome neither adds nor removes one (see
+[`ad.*` event namespace](#ad-event-namespace)).
 
 **Why `C-u` first** (b.9o4). A failed `pause` can leave `/exit` typed and
 not submitted, and a waiting agent's input can hold a draft. Typing
@@ -11938,7 +12198,9 @@ none.
 **Worst case** (SRD SR-13.2, the one source for this bound): the tmux
 phase is at most one lookup, one pane listing, the `C-u` call, the `/exit`
 call, the Enter call and one follow-up lookup, 3Q + 3A + 6W, **11.1 s** at
-the defaults. The configured pause wait (`pause.timeout_seconds`, default
+the defaults. The relay guard (step 4) makes no tmux call; its store read,
+and its `hook_gone_at` write on an `ErrRelayFallenBack` refusal (which
+ends the call before the tmux phase), come before it. The configured pause wait (`pause.timeout_seconds`, default
 30 s, from 1 to 9223372036 s, a missing key or 0 giving the default) is
 separate and comes on top.
 
@@ -14957,9 +15219,10 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       directory of a single-row verb ("nothing was done", never "nothing
       was launched").
     - `DescKillInternalTrigger()`: `DescUnusableNameTrigger()` (below) as
-      `kill`'s manifest description and `Client.Kill`'s Go doc prose state
-      it, renamed for `kill`; saying that a tmux failure is swallowed or
-      logged is also a must-not.
+      `Client.Kill`'s Go doc prose states it, renamed for `kill`; saying
+      that a tmux failure is swallowed or logged is also a must-not.
+      `DescKillManifest` applies it to `kill`'s manifest description with
+      the three kinds in `kill`'s own short form (`unusableNameKindsKill`).
     - `DescKillRepeatedAfterLastSession(verb)`: the Q5 limitation
       (decision-0930b Q5): a repeated kill right after the last session on
       its tmux server ends can get `ErrTmuxUnresponsive` or
@@ -14968,12 +15231,22 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       `kill`'s manifest description, "Kill" for `Client.Kill`'s Go doc
       prose (checked with `AssertDescription`).
     - `DescKillManifest()`: `kill`'s manifest description (success only
-      once the agent process is gone, `kill_sent`, a finished row's no-op
-      is not verification, the row's state is unchanged, the per-call
-      contract, each error's class with GONE as success, never delete, the
-      same user and tmux environment). It includes
+      once the agent process and every other process found in the
+      session's panes are gone, `kill_sent`, a finished row's no-op
+      success, the row's state is unchanged, the per-call contract
+      including that a process an earlier `ErrTmuxKillFailed` "named a
+      non-agent process", each error's class with GONE as success, the
+      same user and tmux environment and SR-18.7's two consequences, the
+      first of which states that the no-op success is not verification;
+      "never delete" is a must-not). It includes
       `DescKillRepeatedAfterLastSession("kill")` and
-      `DescKillInternalTrigger`. Check it with `AssertAgentTextCase`.
+      `DescKillInternalTrigger`, with the three kinds in `kill`'s own
+      short form (`unusableNameKindsKill`: "empty, or containing a control
+      character or a character tmux stores differently") in place of the
+      Go doc prose's full form (`unusableNameKindsFull`); it panics if
+      the trigger no longer requires the full form to swap. The sweeps'
+      result fields keep their own form (`unusableNameKinds`). Check it
+      with `AssertAgentTextCase`.
 
     Later single-row verbs reuse these cases (with `AfterKillSent` where
     they already acted) and add their own constructors in a file of their
@@ -15012,8 +15285,9 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       case requires each set character and rejects each unset one.
     - `DescUnusableNameTrigger()`: the full verb-neutral trigger (the
       three kinds, `ErrInternal` with no tmux call, the human's decision,
-      the pointer), for any looking-up verb's `Client` Go doc prose and
-      `kill`'s manifest description.
+      the pointer), for any looking-up verb's `Client` Go doc prose and,
+      with the kinds in `kill`'s own short form (`unusableNameKindsKill`;
+      see `DescKillManifest`), `kill`'s manifest description.
     - `DescUnusableNamePointer()`: the short "(see kill)" pointer the
       `read-pane`, `send-keys`, `pause`, `resume` and `spawn` manifest
       descriptions carry; "unusable" is matched in any case. Check it with
@@ -15210,8 +15484,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     - `DescMissingNotProofShort()`: SR-18.2's short form for the four
       descriptions that carry the constant `missingNotProofShort`
       (`kill`, `resume`, `pause`, `expire`). It requires the
-      short sentence verbatim ("`missing` is not proof the agent exited
-      (see find-missing)."); its must-nots are the full statement's key
+      short sentence verbatim ("`missing` is not proof of exit (see
+      find-missing)."); its must-nots are the full statement's key
       phrases and the same dead-or-safe-to-delete claims. See
       "`missing` is a judgement, not proof" in
       [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user).
@@ -15248,11 +15522,12 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     - `DescCleanupPointer()`: the short pointer (`expireCleanupPointer`)
       the `kill` and `find-missing` Descriptions carry instead. It
       requires "Agents never run expire" and
-      "operator-scheduled", and rejects the full sentence's phrases
-      ("at the default retention", the keeps-and-reports phrase, "zero
-      window"), so the full sentence cannot come back at those sites and
-      push help stdout past the hard cap (`helpHardCap`). Check
-      `find-missing`'s on `FindMissingOwnText`.
+      "operator-scheduled finished-row cleanup", and rejects the full
+      sentence's phrases ("at the default retention", the
+      keeps-and-reports phrase, "zero window"), so the full sentence
+      cannot come back at those sites and push help stdout past its
+      recorded count (`helpStdoutBytes`) or the hard cap (`helpHardCap`).
+      Check `find-missing`'s on `FindMissingOwnText`.
     - Both cleanup cases reject the schedule claims ("cron", "crontab",
       "daily", "hourly", "nightly", "weekly", "runs every"): no text says
       or implies a schedule is installed.
@@ -15873,8 +16148,27 @@ each file's doc comments carry the detail.
     1 ms poll, restored at cleanup through `api.PauseTestKnobs`; the knobs
     are process-wide, so a test that calls it is serial) and
     `pauseTimeoutSeconds` (1 s): a row nothing ends times out after about
-    1 s. `e.store` is the failing `PauseStore` wrapper (`failStateReads`,
-    `failAdopt`, `refuseAdopt`).
+    1 s. `e.pause` judges its relay guard as `e.sendKeys` does
+    (`sendKeysWindow`, the fixture clock). `e.store` is the failing
+    `PauseStore` wrapper (`failStateReads`, `failPermissionRequests`,
+    `failAdopt`, `refuseAdopt`). `pause`'s relay guard tests
+    (`pause_relay_test.go`, b.zdz) run on the pane-answer fixture
+    (`pane_answer_fixture_test.go`: `newSubagentPAEnv`, a background
+    subagent's requests; `mainAgentStop`; and `pauseRun`, pause with its
+    relay guard judged as `p.sendKeys` judges, through `api.Pause` or
+    `Client.Pause`, whose config sets `[relay] timeout_seconds` to the
+    fixture's relay window, so a request recorded before v7 is judged by
+    it as `api.Pause` judges it).
+  - relay proofs (`pane_answer_fixture_test.go`): `toolRan(id)` and
+    `turnEnd`, a `turn_end` proof whose `RecordedBefore` is an hour after
+    the test binary started, so it covers every request a test records
+    (b.omt); `proveOn(t, s, dbPath, id, proof)` writes one as `id`'s own
+    agent's hook does (`ProveRequestsGone` through the row's gate) and
+    returns how many it proved, `proveGone(t, e, id, proof)` is it on a
+    kill fixture's store and `p.prove(t, proof)` on a pane-answer env;
+    `find_missing_repair_test.go` uses `proveOn` too. A test that builds
+    its own `turn_end` proof sets `RecordedBefore`: a zero one is
+    `errTurnEndNoStart` and proves nothing.
 - **Pane-input model** (`pane_input_fixture_test.go`, no tests; b.fji,
   b.9o4): `watchPaneInput(e, pane, timeoutsReach)` models the agent's
   input box from every keys call to `pane`, in call order, through one
@@ -16501,7 +16795,7 @@ test/
     version.test.ts
   internal/
     tempHome.ts              # withTempHome() helper
-    helper.ts                # runHelper() wrapper for ts-helper subprocess; openClient(), homeStore(), FAKE_TMUX_BIN, PKG_VERSION; privateTmuxSocket(); fakeTmuxCalls(), withProcessEnv(), withCwd(), withDeletedCwd(), rejection(), thrownBy(), CLAUDE_JSON, trustEntry(), seedOuterParent()
+    helper.ts                # runHelper() wrapper for ts-helper subprocess; openClient(), homeStore(), FAKE_TMUX_BIN, PKG_VERSION; privateTmuxSocket(); seedFallenBackRelayRow(); fakeTmuxCalls(), paneSends(), withProcessEnv(), withCwd(), withDeletedCwd(), rejection(), thrownBy(), CLAUDE_JSON, trustEntry(), seedOuterParent()
     stagedScript.ts          # stageScript(), runScript(), removeStaged(): a package script run in a staged copy
 ```
 
@@ -16570,8 +16864,11 @@ and Enter, with `pause`'s `C-u` line clear before its text).
 A `read-pane` or `send-keys` test seeds the row's own labelled session
 into the table first (`runHelper("seed-row-session", ...)`, with
 `capture` for the text `read-pane` must return); without it the lookup is
-Gone. The `pause` smoke cases cover only a finished row and a refused
-state, which make no tmux call. Without a socket the fake answers only the
+Gone. The `pause` smoke cases cover a finished row, a refused state and
+the relay hold (b.zdz: `ErrRelayFallenBack`, then `ErrDialogMaybeOpen`
+after `recordPaneAnswer`), none of which makes a tmux call from `pause`;
+the hold case seeds the row's session (`seedFallenBackRelayRow`) for the
+`readPane` and the hashed `sendKeys` of `/exit` that follow. Without a socket the fake answers only the
 bare invocation and `has-session` (exit 1), which no verb sends; it refuses
 any other socket-less call with the catalogue's no-server reply, so a verb
 that named no socket would fail its smoke test.  The binary is built
@@ -16616,7 +16913,19 @@ Its other shared helpers, each with its must-use rule:
   fake-tmux invocation in a `FAKE_TMUX_LOG` file, `[]` when nothing was
   logged. **Must use:** every TS test that reads the fake's log goes
   through it; never split the log format by hand (the Go side's
-  counterpart is `faketmuxfix.ReadLog`).
+  counterpart is `faketmuxfix.ReadLog`). `paneSends(logPath)` narrows it
+  to the `send-keys` invocations, each argv from `send-keys` on (`[]` when
+  none). **Must use:** a test that checks what a verb typed into a pane
+  reads it through `paneSends`, never its own filter of `fakeTmuxCalls`.
+- `seedFallenBackRelayRow(homeDir, id, state)` seeds, in the temp HOME's
+  store (created if missing), relay-on row `id` in `state` on a private
+  socket, with one Bash permission request past its relay window (fallen
+  back) whose relay hook is gone a minute ago, and the row's own labelled
+  session in the fake-tmux table, its pane showing `answered at tmux`; it
+  returns the request's `token` and the pane's `paneId`. **Must use:** a
+  smoke test that needs that row (one store under its temp HOME) seeds it
+  through this, never its own `seed-spawn` / `seed-permission-request` /
+  `seed-row-session` sequence.
 - `withProcessEnv(vars, fn)` runs `fn` with each `process.env` variable set
   (`undefined` unsets it) and restores the prior values afterwards, even
   on a throw; a `Client`'s CLI inherits `process.env` per call. **Must

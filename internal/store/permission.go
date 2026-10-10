@@ -218,7 +218,8 @@ type PermissionRow struct {
 
 // ProvenGone reports whether Claude Code proved r's permission dialog gone
 // (ProvenGoneAt set; b.146 step 2c). Until it does, r holds plain send-keys
-// to its live Spawn, whatever agent-director's own records say of it.
+// and pause (b.zdz) to its live Spawn, whatever agent-director's own records
+// say of it.
 func (r PermissionRow) ProvenGone() bool { return !r.ProvenGoneAt.IsZero() }
 
 // PreV7 reports whether r was recorded before schema v7, by a relay hook that
@@ -268,10 +269,32 @@ func (r PermissionRow) AwaitsAnswer() bool {
 // rule 9): one that no close of its Spawn's requests has closed (closed_at
 // NULL, rule 12), with no completed pane answer (pane_answer none or intent; b.146 step
 // 2b), and that, recorded from schema v7 on, is not acked, or, recorded before
-// v7 (no settled_at), is undecided. It has no placeholders.
+// v7 (no settled_at), is undecided. It has no placeholders. The three writes
+// a request holds off (the working hold, the idle-prompt Notification's move
+// out of check_permission and find-missing's repair) read holdsRowSQL
+// instead, which also leaves out a request proven gone (b.omt).
 const awaitingAnswerSQL = `pr.closed_at IS NULL AND pr.pane_answer IN ('none', 'intent')
     AND CASE WHEN pr.settled_at IS NULL THEN pr.decision IS NULL
              ELSE pr.delivered_at IS NULL END`
+
+// holdsRowSQL is the WHERE fragment, on a permission_requests row named pr,
+// that holds while the request holds its Spawn's row (b.omt): it still awaits
+// an answer (awaitingAnswerSQL) and Claude Code has not proven its dialog gone
+// (proven_gone_at NULL; b.146 step 2c). Exactly three writes read it: the
+// working hold (holdWorkingTransition, through its read holdingRequestSQL),
+// and, in a NOT EXISTS of their own statement, the idle-prompt Notification's
+// move from check_permission to waiting (ApplyHookWaitingIfWorking) and
+// find-missing's repair of a stale check_permission row
+// (repairCheckPermissionSQL). A request proven gone holds none of them,
+// whatever agent-director's own records say of it: a person's answer at the
+// pane, which nothing records, leaves it awaiting an answer, and the main
+// agent's Stop or idle-prompt Notification after it then proves its dialog
+// gone (turn_end), so it no longer keeps the row in check_permission. Every
+// other reader of a request that awaits an answer (get and list, decide,
+// send-keys and its pane answers, the closes, the cap eviction) reads
+// awaitingAnswerSQL alone. It has no placeholders.
+const holdsRowSQL = awaitingAnswerSQL + `
+    AND pr.proven_gone_at IS NULL`
 
 // permissionColumns is the one column list every read returning a
 // PermissionRow selects from a permission_requests row named pr, in
@@ -537,9 +560,10 @@ func (s *Store) GetPermissionRequestByToken(requestToken string) (PermissionRow,
 // undecided. Returns an empty slice (not nil) when none exists; nil error on
 // the empty-result case.
 //
-// Used by ApplyHookTransitionResult's working hold, get's and list's
-// permission_requests, and the ErrAmbiguousRequest guard in
-// DecidePermissionRequest.
+// Used by get's and list's permission_requests and the ErrAmbiguousRequest
+// guard in DecidePermissionRequest. It lists a request proven gone too, as
+// long as it awaits an answer; ApplyHookTransitionResult's working hold does
+// not read it, but holdsRowSQL, which leaves such a request out (b.omt).
 func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error) {
 	const q = `SELECT ` + permissionColumns + `
 		  FROM permission_requests pr

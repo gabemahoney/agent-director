@@ -49,14 +49,16 @@ changes what `decide` returns and when `ErrRelayFallenBack` comes, and schema
 v7 is one migration shared with steps 2b (b.3oc) and 2c (b.8t7), so:
 
 - it must not be released without steps 2b and 2c in the same release;
-- it should not be released without b.zdz in the same release. `pause`
-  types `/exit` and Enter into a `waiting` relay-on row with no relay
-  check (no dialog hold, no `ErrSendKeysWhileRelayed`, no
+- it should not be released without b.zdz in the same release. Without
+  b.zdz, `pause` types `/exit` and Enter into a `waiting` relay-on row with
+  no relay check (no dialog hold, no `ErrSendKeysWhileRelayed`, no
   `ErrRelayFallenBack`), and a `waiting` row can still have a request not
   proven gone (a subagent's after the main agent's `Stop`, or a
-  pre-upgrade one on an agent idle at its prompt). Without b.zdz,
-  `pause` is an unheld path to the Enter step 2c holds. b.zdz adds
-  errors to `pause`, which CSCB consumes, so it adds a b.u7d item; and
+  pre-upgrade one on an agent idle at its prompt), so `pause` is an
+  unheld path to the Enter step 2c holds. b.zdz holds `pause` like a plain
+  `send-keys` without a pane hash, which adds `ErrSendKeysWhileRelayed`,
+  `ErrRelayFallenBack` and `ErrDialogMaybeOpen` to `pause`. CSCB consumes
+  `pause`'s errors, so b.zdz adds a b.u7d item (item 13); and
 - it must not be released before the CSCB coordination bee, b.u7d, is
   finished: CSCB ships its handling of `delivery`, `max_wait_ms`,
   `ErrStoreBusy` and the step 2b and 2c surfaces (step 2c:
@@ -94,6 +96,19 @@ starts, so its first plain `send-keys` needs a person or an LLM to
 no longer frees plain `send-keys` by itself: the request stays held until
 Claude Code proves it gone. See docs/migration-guide.md, "What the upgrade
 changes for an existing request".
+
+b.zdz: on a relay-on agent, `pause` is refused, typing nothing, whenever a
+plain `send-keys` without `--expect-pane-sha256` is (`ErrSendKeysWhileRelayed`,
+`ErrRelayFallenBack` or `ErrDialogMaybeOpen`), so the requests recorded
+before the upgrade that hold plain `send-keys` above hold `pause` too.
+`pause` takes no pane hash, and a pane hash gets a plain `send-keys` past
+`ErrDialogMaybeOpen` only, never past `ErrRelayFallenBack`: to stop a held
+agent, `kill` it, or have a person or an LLM `read-pane`, first close a
+fallen-back request with `record-pane-answer` (or a pane answer with its
+`--request-token` if its prompt still waits), answer any other dialog,
+check the prompt is empty, send `/exit` with
+`send-keys --expect-pane-sha256` and poll `get` or `status` until the row
+is `ended`. See docs/permissions.md, "Send-keys interaction".
 
 ### Resolution steps
 

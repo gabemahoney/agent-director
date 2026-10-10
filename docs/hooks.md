@@ -59,8 +59,8 @@ null.
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
 | `PostToolUse` | — | `working`; with `relay_mode=on`, it first proves the permission requests carrying the same `tool_use_id` gone (see "Hooks that prove a request's dialog gone" below), then closes a fallen-back one (see "A request whose tool ran" below) |
 | `PostToolUseFailure` | — | as `PostToolUse`: the tool ran and failed |
-| `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it gone |
-| `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request still awaiting an answer; any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below). With `relay_mode=on`, it first proves the main agent's permission requests recorded before it gone, as `Stop` does |
+| `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it started gone |
+| `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (see "A relay row left in `check_permission`" below); any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below). With `relay_mode=on`, it first proves the main agent's permission requests recorded before it started gone, as `Stop` does |
 | `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, closes the row's permission requests that still await an answer and proves every request of the row gone; see "The agent's end closes its requests" below) |
@@ -102,17 +102,21 @@ Claude Code sends a `Notification` with `notification_type`
   `ad.spawn.state_transition` from `working` to `waiting` with
   `soft_refresh` false and `triggering_event_name` `Notification`;
 - so does a row with `relay_mode=on` in `check_permission` none of whose
-  permission requests still awaits an answer (a request awaits one until
-  its relay hook confirms a verdict in the store, it is closed at the pane,
-  or it is closed with the row by `find-missing`'s mark or the agent's
-  end): the agent's turn ended after its
+  permission requests holds it. A request holds the row while it still
+  awaits an answer (until its relay hook confirms a verdict in the store,
+  it is closed at the pane, or it is closed with the row by
+  `find-missing`'s mark or the agent's end) and Claude Code has not proven
+  its dialog gone (see "Hooks that prove a request's dialog gone" below).
+  The agent's turn ended after its
   last request was answered, and the hook that would have moved the row
-  (the turn's `Stop`, after a denied request) was lost. The trail records
+  (the turn's `Stop`, after a denied request) was lost. The Notification's
+  own proof comes first, so a main-agent request recorded before it
+  started, answered at the pane outside agent-director, holds nothing by
+  then. The trail records
   the move from `check_permission` to `waiting`;
 - a row in any other state gets the soft refresh: `last_seen_at` is
   bumped and the state does not change. A row with the relay off in
-  `check_permission`, or one with a request that still awaits an answer,
-  is such a row.
+  `check_permission`, or one with a request that holds it, is such a row.
 
 Every applied write of this Notification, the soft refresh included, sets
 the row's `idle_since` to the current time, and the agent's next applied
@@ -308,9 +312,9 @@ The agent's next applied hook clears the note and
 SessionStart that arrives later records the session id and identity and moves the row to
 `waiting`; a UserPromptSubmit (for example from the prompt the caller
 typed) moves it to `working` and records the session id. A
-UserPromptSubmit held because a permission request of the row still
-awaits an answer writes nothing but the clearing of `idle_since`, so the
-note stays.
+UserPromptSubmit held because a permission request of the row holds it
+(see "A relay row left in `check_permission`" below) writes nothing but
+the clearing of `idle_since`, so the note stays.
 
 ### Subagents and in-process teammates
 
@@ -676,18 +680,44 @@ it for a request recorded before this release; see
 
 ### A relay row left in `check_permission`
 
-While any of its requests still awaits an answer, a row stays in
-`check_permission`: the agent's moves to `working` are held (the hook is
-applied, writes no state, and clears `idle_since`). Once none does, the
+While any of its requests holds it, a row stays in `check_permission`:
+the agent's moves to `working` are held (the hook is applied, writes no
+state, and clears `idle_since`). A request holds the row while it still
+awaits an answer and Claude Code has not proven its dialog gone (see
+"Hooks that prove a request's dialog gone" below). Once none does, the
 row stays there until the agent's next hook, which after a denied request
-is normally the turn's `Stop`. If that hook is lost:
+is normally the turn's `Stop`.
+
+A request answered at the pane outside agent-director, by a person at
+tmux for example, still awaits an answer in agent-director's records,
+since nothing recorded that answer. It holds the row only until Claude
+Code proves its dialog gone: the main agent's `Stop` or idle-prompt
+Notification after it, or its tool's `PostToolUse` (an allow). From then
+on the agent's moves to `working` apply again, though the request stays
+open until `record-pane-answer` closes it, so the row can read `working`
+or `waiting` while one of its requests still awaits an answer. Limits:
+
+- A subagent's request (`agent_id` set) is never proven by the main
+  agent's turn end, since a background subagent can outlive it. Answered
+  at the pane outside agent-director, it holds the row's moves to
+  `working` until `record-pane-answer`, its tool's `PostToolUse` or the
+  agent's end; the main agent's `Stop` still moves the row to `waiting`.
+- Claude Code sends no `Stop` when a user interrupts a turn, so after a
+  deny at the pane that interrupts the turn, the row stays held until the
+  idle-prompt Notification (once the agent idles) or the next turn's
+  `Stop`.
+- A request recorded in the same second a `Stop` or idle prompt started
+  is not proven by it, and holds until a later turn end.
+
+If the hook that would move the row is lost:
 
 - the idle-prompt Notification moves the row to `waiting` (see "The
   idle-prompt Notification" above);
 - a scheduled `find-missing` moves the row out of `check_permission` in
-  one guarded statement once none of its requests still awaits an answer
+  one guarded statement once none of its requests holds it
   and none has a relay hook that may still run (one whose `confirm_by` has
-  not passed and that is not provably gone): to `waiting` when `idle_since`
+  not passed and that is not provably gone, a proven request's included):
+  to `waiting` when `idle_since`
   is set, otherwise to `working`. A request closed with the row (when
   `find-missing` marked it `missing` or its agent ended it) is not judged:
   the row is back in `check_permission` only through a later hook (after a
@@ -695,7 +725,7 @@ is normally the turn's `Stop`. If that hook is lost:
   hook that cannot be checked does not hold the row there until its
   `confirm_by`. The statement applies only while the row
   is still in `check_permission` with `relay_mode=on`, holds the snapshot
-  the sweep read and has no request awaiting an answer, so a hook or a new
+  the sweep read and has no request holding it, so a hook or a new
   request that lands first wins. It writes one `ad.find_missing.tick` with
   `reconciliation_reason` `stale_check_permission`; the row is in neither
   of `find-missing`'s result lists.
@@ -730,7 +760,10 @@ prove a request's dialog gone" below) and before its ordinary write:
   (`writer_process` `hook`).
 
 The close runs first so that the hook's own move to `working` is no longer
-held by the request it closed. It closes only allows: Claude Code runs no
+held by the request it closed. The proof before it already ends that hold
+for every request it covers, so the move applies even when the close
+leaves a request open because its relay hook may still answer it: the
+tool ran, so its dialog is gone. It closes only allows: Claude Code runs no
 hook for a deny at its prompt, so a request denied at the pane outside
 agent-director is closed with `record-pane-answer` (see
 [permissions.md](permissions.md#a-request-answered-outside-agent-director)).
@@ -769,8 +802,11 @@ refuses no `send-keys`, and `decide` refuses it, never with
 agent-director's own records of a request (its relay hook's ack, a pane
 answer, `record-pane-answer`) do not show that Claude Code's dialog for it
 is gone. Until a hook of the agent shows it, the request holds a plain
-`send-keys` without a pane hash to the row (`ErrDialogMaybeOpen`; see
-[permissions.md](permissions.md#the-dialog-hold)). On a relay-on agent
+`send-keys` without a pane hash, and `pause`, to the row
+(`ErrDialogMaybeOpen`; see
+[permissions.md](permissions.md#the-dialog-hold)), and, while it still
+awaits an answer, the row's moves to `working` (see "A relay row left in
+`check_permission`" above). On a relay-on agent
 (`AGENT_DIRECTOR_RELAY_MODE=on`), these hooks write that proof on the
 row's requests not yet proven, as `proven_gone_at` (the hook's clock) and
 `proven_gone_how`:
@@ -778,7 +814,7 @@ row's requests not yet proven, as `proven_gone_at` (the hook's clock) and
 | Hook | Requests it proves | `proven_gone_how` |
 | --- | --- | --- |
 | `PostToolUse` or `PostToolUseFailure` with a `tool_use_id` | every request carrying that `tool_use_id`, whatever agent-director's records say of it, a subagent's included | `tool_ran` |
-| `Stop` with no `agent_id` | every request with no `agent_id` recorded before the hook, one recorded before this release included | `turn_end` |
+| `Stop` with no `agent_id` | every request with no `agent_id` recorded before the second the hook started, one recorded before this release included | `turn_end` |
 | idle-prompt `Notification` with no `agent_id` | as `Stop` | `turn_end` |
 
 `turn_end` means the turn of the agent that asked ended after the request
@@ -787,10 +823,15 @@ for a request with no `agent_id`. No other hook proves anything: not `PreToolUse
 Notification, not a `Stop` or idle prompt carrying `agent_id`, and not a
 `PostToolUse` with another `tool_use_id` or none.
 
-- **Written before.** A `Stop` or idle prompt reads the newest request it
-  may cover when it starts, before its write waits for the store's write
-  lock, and its write covers no later request. A request recorded while
-  the hook waits belongs to a later turn and stays unproven.
+- **Written before.** A `Stop` or idle prompt covers only a request whose
+  `created_at` is before the second the hook process started, so one
+  recorded in that second or later stays unproven until a later proof. An
+  idle prompt can run late, and one that read the requests after the next
+  turn's permission request would otherwise prove that request gone while
+  its dialog is up. It also reads the newest request it may cover before
+  its write waits for the store's write lock, and its write covers no
+  later request: a request recorded while the hook waits belongs to a
+  later turn and stays unproven.
 - **Order and gate.** The proof is the hook's first write, before the
   `PostToolUse` close and the ordinary state write, in one statement
   under the same gate as every hook: a hook from another process proves
@@ -802,10 +843,17 @@ Notification, not a `Stop` or idle prompt carrying `agent_id`, and not a
   in the transaction of their close (see "The agent's end closes its
   requests" above). The upgrade to this release proves the requests of a
   row already `ended` or `missing` the same way.
+- **What a proof releases.** A request proven gone holds no move of the
+  row, even while it still awaits an answer (see "A relay row left in
+  `check_permission`" above). Nothing else changes for it:
+  `get-permission` reads it, `decide` judges it as before, and a plain
+  `send-keys` is still refused on its account until it is closed.
 - **Subagents.** A request with an `agent_id` is proven only by its
   tool's `PostToolUse` or the agent's end. A denied subagent request runs
-  no tool, so it holds a plain `send-keys` without a pane hash until the
-  agent ends.
+  no tool, so it holds a plain `send-keys` without a pane hash, and
+  `pause`, until the agent ends; one answered at the pane outside
+  agent-director also holds the row's moves to `working` until
+  `record-pane-answer`, its `PostToolUse` or the agent's end.
 
 ## References
 

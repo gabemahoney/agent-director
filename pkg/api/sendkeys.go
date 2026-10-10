@@ -531,7 +531,7 @@ func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKey
 			if err := sendKeysStateGuard(sp, params); err != nil {
 				return err
 			}
-			if err := lockedRequests(r.j, sp, rows).sendKeysRefusal(params, r.env.IntentHold); err != nil {
+			if err := lockedRequests(r.j, sp, rows).sendKeysRefusal(params, r.env.IntentHold, retrySendKeysLater); err != nil {
 				return err
 			}
 			return r.paneMatches(paneID, launch, plan, token)
@@ -626,7 +626,26 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 	return nil
 }
 
-// evaluateRelayGuard is send-keys' relay guard (b.146 rule 7). It returns
+// relayGuardStore is the store surface the relay guard needs
+// (relayGuard): the read of every permission request of the row and
+// the hook_gone_at write on a request it finds fallen back. SendKeysStore and
+// PauseStore satisfy it.
+type relayGuardStore interface {
+	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
+	hookGoneRecorder
+}
+
+// evaluateRelayGuard is send-keys' relay guard (b.146 rule 7): relayGuard with
+// send-keys' own next step on a recorded verdict (retrySendKeysLater).
+func evaluateRelayGuard(s relayGuardStore, j relayJudge, hold time.Duration, row Spawn, params SendKeysParams) (sendKeysGuard, error) {
+	return relayGuard(s, j, hold, row, params, retrySendKeysLater)
+}
+
+// relayGuard is the relay guard of a call that types into the agent's pane:
+// send-keys' (evaluateRelayGuard), and pause's as a plain call without a pane
+// hash (SendKeysParams{}; b.zdz). retry is the refused call's next step on a
+// request whose verdict is recorded (sendKeysRefusal); nothing else in the
+// refusals or their err_details depends on the verb. It returns
 // guardNotApplicable when relay_mode is not on (no relay hook records a
 // request on such a row). Otherwise it reads every permission request of the
 // row by the check-before-read rule (judgedRequests: each relay hook judged by
@@ -641,7 +660,7 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 //
 // A request of an ended or missing row is closed (b.146 rule 12): the guard
 // runs only on a row the state guard let through, which is live.
-func evaluateRelayGuard(s SendKeysStore, j relayJudge, hold time.Duration, row Spawn, params SendKeysParams) (sendKeysGuard, error) {
+func relayGuard(s relayGuardStore, j relayJudge, hold time.Duration, row Spawn, params SendKeysParams, retry string) (sendKeysGuard, error) {
 	if row.RelayMode != "on" {
 		return sendKeysGuard{eval: guardNotApplicable}, nil
 	}
@@ -651,10 +670,10 @@ func evaluateRelayGuard(s SendKeysStore, j relayJudge, hold time.Duration, row S
 	if err != nil {
 		return sendKeysGuard{eval: guardError}, err
 	}
-	refusal := reqs.sendKeysRefusal(params, hold)
+	refusal := reqs.sendKeysRefusal(params, hold, retry)
 	if errors.Is(refusal, ErrRelayFallenBack) {
 		reqs.recordFallenBackGone(s, store.DefaultLockWait)
-		refusal = reqs.sendKeysRefusal(params, hold)
+		refusal = reqs.sendKeysRefusal(params, hold, retry)
 	}
 	if refusal != nil {
 		return sendKeysGuard{eval: guardHeld, refusal: refusal}, nil

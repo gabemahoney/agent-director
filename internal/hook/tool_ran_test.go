@@ -37,7 +37,9 @@ func toolRanPayload(t *testing.T, fixture, toolUseID string) []byte {
 // (pane_answer tool_ran, decision allow, decision_reason tool_ran, hook_gone_at
 // recorded), so the hook's move to working is no longer held; another
 // tool_use_id, a hook that may still answer, a relay-off hook or another
-// process's hook changes nothing.
+// process's hook closes nothing. A hook that may still answer leaves the
+// request open, but its tool_ran proof releases the hold (b.omt): the tool
+// ran, so its dialog is gone, and the move to working applies.
 func TestToolRanClosesTheFallenBackRequest(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -47,13 +49,15 @@ func TestToolRanClosesTheFallenBackRequest(t *testing.T) {
 		relayOff  bool
 		foreign   bool
 		closed    bool
+		wantState string
 	}{
-		{"PostToolUse, the request's tool_use_id", "post-tool-use.json", toolRanUseID, true, false, false, true},
-		{"PostToolUseFailure, the request's tool_use_id", "post-tool-use-failure.json", toolRanUseID, true, false, false, true},
-		{"PostToolUse, another tool_use_id", "post-tool-use.json", "toolu_01OTHER", true, false, false, false},
-		{"PostToolUse, the relay hook may still answer", "post-tool-use.json", toolRanUseID, false, false, false, false},
-		{"PostToolUse, relay off", "post-tool-use.json", toolRanUseID, true, true, false, false},
-		{"PostToolUse from another process", "post-tool-use.json", toolRanUseID, true, false, true, false},
+		{"PostToolUse, the request's tool_use_id", "post-tool-use.json", toolRanUseID, true, false, false, true, store.StateWorking},
+		{"PostToolUseFailure, the request's tool_use_id", "post-tool-use-failure.json", toolRanUseID, true, false, false, true,
+			store.StateWorking},
+		{"PostToolUse, another tool_use_id", "post-tool-use.json", "toolu_01OTHER", true, false, false, false, store.StateCheckPermission},
+		{"PostToolUse, the relay hook may still answer", "post-tool-use.json", toolRanUseID, false, false, false, false, store.StateWorking},
+		{"PostToolUse, relay off", "post-tool-use.json", toolRanUseID, true, true, false, false, store.StateCheckPermission},
+		{"PostToolUse from another process", "post-tool-use.json", toolRanUseID, true, false, true, false, store.StateCheckPermission},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,12 +87,12 @@ func TestToolRanClosesTheFallenBackRequest(t *testing.T) {
 			pr := onlyRequest(t, st, id)
 			state := mustGetSpawn(t, st, id).State
 			committed := linesAfter(t, before, "ad.row_mutation.committed", id)
+			if state != tc.wantState {
+				t.Errorf("state = %q; want %q (held only while the open request is unproven)", state, tc.wantState)
+			}
 			if !tc.closed {
 				if pr.PaneAnswer != store.PaneAnswerNone || pr.Decision != "" || !pr.HookGoneAt.IsZero() {
 					t.Errorf("request = pane_answer %q, decision %q, hook_gone_at %v; want it untouched", pr.PaneAnswer, pr.Decision, pr.HookGoneAt)
-				}
-				if state != store.StateCheckPermission {
-					t.Errorf("state = %q; want check_permission, held by the open request", state)
 				}
 				if len(committed) != 0 {
 					t.Errorf("ad.row_mutation.committed = %v; want none", committed)
@@ -102,9 +106,6 @@ func TestToolRanClosesTheFallenBackRequest(t *testing.T) {
 			}
 			if len(judged) != 1 || judged[0] != storefix.TestRequestTokenA {
 				t.Errorf("relay hooks judged = %v; want request A's, before the close", judged)
-			}
-			if state != store.StateWorking {
-				t.Errorf("state = %q; want working (the closed request no longer holds the move)", state)
 			}
 			if len(committed) != 1 || committed[0]["writer_process"] != store.WriterProcessHook ||
 				committed[0]["decision"] != "allow" || committed[0]["decision_reason"] != store.DecisionReasonToolRan {

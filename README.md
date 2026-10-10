@@ -394,9 +394,9 @@ the relay hook's process (for example from another pid namespace, or for a
 request recorded before you upgraded to this release); such a request
 falls back by time, at `confirm_by`. A closed request's `delivery` reads
 the same way as any other's: `delivered` only if its relay hook confirmed a
-verdict. A row can read `waiting` while a request it recorded still awaits
-an answer, so follow each request you track with `get-permission`, not only
-rows in `check_permission`.
+verdict. A row can read `waiting` or `working` while a request it recorded
+still awaits an answer, so follow each request you track with
+`get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how Claude Code itself
 showed the request's dialog gone: `tool_ran` (its tool ran), `turn_end`
@@ -478,6 +478,18 @@ the keys and retry later. If it is still held after some seconds, have a
 person or an LLM read the pane and, having looked, send with that read's
 `pane_sha256`: a matching hash passes this hold (every other refusal still
 applies), and a changed pane is `ErrPaneChanged`.
+
+`pause` is held like a plain `send-keys` without `--expect-pane-sha256`
+(`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)
+and types nothing; it takes no pane hash. To stop a held agent, `kill` it,
+or close any fallen-back request (above), then have a person or an LLM
+read the pane, answer any dialog, check the prompt is empty, send `/exit`
+with that read's hash and poll `status` until the row is `ended`:
+
+```sh
+agent-director send-keys --claude-instance-id "$id" --text /exit \
+    --expect-pane-sha256 "$hash"
+```
 
 Never pass `--expect-pane-sha256` from an automatic flow: it says that a
 person or an LLM judged that exact screen, and passed blindly it lets
@@ -805,14 +817,17 @@ sweep that finds the agent alive keeps the note; the agent's next hook
 clears it and moves the row on.
 
 A row with `relay_mode=on` stays in `check_permission` until the agent's
-next hook after its last permission request. When that hook is lost (for
-example the end of a turn after a denied request), the notification Claude
-Code sends while the agent sits idle at its prompt moves the row to
-`waiting` once none of its requests still awaits an answer. Failing that,
-`find-missing` moves the row out once none of its requests still awaits an
-answer and none of its relay hooks can still run: to `waiting` when that
-idle notification was the agent's last hook, otherwise to `working`. Such
-a row is in neither `ids` nor `unverified_ids`.
+next hook after its last permission request. A request answered at the
+pane outside agent-director stops holding the row once Claude Code shows
+its dialog gone: its tool runs, or, for the main agent's request (not a
+subagent's), the turn ends. When the agent's next hook is lost (for
+example the end of a turn after a denied request), the
+notification Claude Code sends while the agent sits idle at its prompt
+moves the row to `waiting` once none of its requests still holds it.
+Failing that, `find-missing` moves the row out once none of its requests
+still holds it and none of its relay hooks can still run: to `waiting`
+when that idle notification was the agent's last hook, otherwise to
+`working`. Such a row is in neither `ids` nor `unverified_ids`.
 
 Finished rows (`ended` or `missing`) are never removed on their own: no
 `agent-director` verb removes a row you name, and only an `expire` you
@@ -941,14 +956,15 @@ the class of every tmux error, is in
   read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
   minus 1 s; its `ErrStoreBusy` and `ErrRelayFallenBack` record nothing (see
   [Intercept permission prompts](#intercept-permission-prompts)).
-- `ErrRelayFallenBack` comes from `decide` and from a plain `send-keys`.
-  Close the request with a pane answer (`send-keys --request-token`) or
-  with `record-pane-answer` (see
+- `ErrRelayFallenBack` comes from `decide`, a plain `send-keys` and
+  `pause`. Close the request with a pane answer
+  (`send-keys --request-token`) or with `record-pane-answer` (see
   [Answer a request at the pane](#answer-a-request-at-the-pane)).
-- `ErrDialogMaybeOpen` comes from a plain `send-keys` while Claude Code
-  has not shown a permission request's dialog gone. Retry later; if it
-  stays held, a person or an LLM looks at the pane and sends with its
-  `pane_sha256`. Never pass `--expect-pane-sha256` from an automatic flow.
+- `ErrDialogMaybeOpen` comes from a plain `send-keys` and from `pause`
+  while Claude Code has not shown a permission request's dialog gone.
+  Retry later; if it stays held, a person or an LLM looks at the pane and
+  sends with its `pane_sha256` (for `pause`, `/exit`; or `kill`). Never
+  pass `--expect-pane-sha256` from an automatic flow.
 - Some errors carry their facts in an `err_details` object beside
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):
@@ -1669,7 +1685,8 @@ hand-edit or migrate `state.db` to stop agents, and never delete a row.
    ```
 
    `pause` stops only a `waiting` row. For every other live row, and for
-   any row `pause` refuses (a row this binary cannot reach, for example) or
+   any row `pause` refuses (a row this binary cannot reach, or a relay-on
+   row held by a permission request, for example) or
    that does not end in time, use `agent-director kill` and steps 1 to 5 of
    the live-row sequence of the [caller contract](#caller-contract), which
    `kill`'s description also gives. With a binary from before this release,

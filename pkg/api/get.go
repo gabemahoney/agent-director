@@ -142,9 +142,9 @@ type SpawnRow struct {
 	// answer and, unlike PermissionRequests, those agent-director's own
 	// records read closed: acked (delivery delivered), answered at the pane or
 	// recorded answered outside it; such a request carries unproven_since.
-	// While it is not empty, plain send-keys without a pane hash is refused
-	// (ErrDialogMaybeOpen or an earlier relay refusal). Always a non-nil slice
-	// (encodes as [] when empty).
+	// While it is not empty, plain send-keys without a pane hash, and pause
+	// (b.zdz), are refused (ErrDialogMaybeOpen or an earlier relay refusal).
+	// Always a non-nil slice (encodes as [] when empty).
 	UnprovenRequests []PermissionRequestInfo `json:"unproven_requests"`
 	// TranscriptStatus is a derived, operator-facing summary of the current
 	// session's transcript state (b.v2c AC8). Session history belongs to a
@@ -431,8 +431,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // proven_gone_how, unproven_since). On a row that is not ended or missing it
 // carries unproven_requests: every permission request Claude Code has not
 // proven gone, closed in agent-director's records or not, each with the same
-// facts; while one is listed, a plain send-keys without a pane hash is
-// refused. On a pending row it also carries launch_started_at, when the
+// facts; while one is listed, a plain send-keys without a pane hash, and
+// pause, are refused. On a pending row it also carries launch_started_at, when the
 // agent's launch began. When the row records
 // one, it carries tmux_socket, the tmux socket the row's latest launch
 // uses, in any state. prior_sessions and transcript_status come from the
