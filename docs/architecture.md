@@ -3116,9 +3116,9 @@ so each stage can be tested in isolation against synthesized input.
         │        (template wins); non-nil replaces wholesale.
         ▼
    ┌──────────┐   SRD §7.2: cwd shape/existence/type;
-   │ Validate │   relay_mode; denied flags; reserved env keys;
-   └────┬─────┘   explicit tmux session name (see below).
-        │         No side effects on failure.
+   │ Validate │   relay_mode; denied flags; reserved env keys
+   └────┬─────┘   (AGENT_DIRECTOR_*, HOME; see below); explicit tmux
+        │         session name (see below). No side effects on failure.
         ▼
    ┌────────────┐   SRD §7.3: UUID4 if no claude_instance_id;
    │ ApplyDefaults│  <basename(cwd)>-<id[:8]> session name;
@@ -3271,6 +3271,92 @@ processed by tmux's escaping (SR-9.2). All other characters are allowed.
 The name is never rewritten: a caller-supplied name is used byte for
 byte or rejected. Defaulted names go through `SanitizeSessionName`
 instead.
+
+### Reserved `HOME` in `extra_env` (b.nas)
+
+`validateExtraEnv` (`internal/spawn/validate.go`) refuses two kinds of
+key with `ErrReservedEnvKey`. Both rules match a key's env-var name, not
+the raw key: the part before the first `=`, or the whole key when it has
+none (`envVarName`), because that is the name tmux sets. tmux is given
+each entry as `key=value` (`sortedEnvFlags` in `internal/tmux`) and
+splits it at its first `=`, so the key `HOME=/tmp/b` sets `HOME` (to
+`/tmp/b=<value>`) just as the key `HOME` does. Such a key can reach
+spawn over MCP, from the TypeScript client and from a template; the
+CLI's `--extra-env KEY=VALUE` splits at the first `=`, so its keys never
+hold one. The two rules:
+
+- a name with the `AGENT_DIRECTOR_` prefix;
+- a name that is exactly `HOME` (`spawn.ReservedHomeEnvKey`), whatever
+  the value, an empty one included.
+
+The match is case-sensitive, as POSIX env vars are: `home`, `HOMEDIR`,
+`MY_HOME`, `=HOME` and `X=HOME` pass. `HOME` is checked first, then the
+prefix. Each rule names the smallest matching key in sorted order
+(`firstEnvKey`), not the first in map order, so a refusal names the same
+key on every run. It checks the merged extra env, so a template's key is
+refused too. `Validate` runs before any side effect, so a refused spawn,
+a reuse included, writes no row or trust entry and launches nothing. A
+malformed key that sets no reserved name (an empty key, or one such as
+`A=B`) is not refused here.
+
+Why `HOME` is reserved: the extra env reaches the agent's pane through
+tmux `new-session -e`, and the agent's hooks run a bare
+`agent-director hook`, which resolves its config
+(`~/.agent-director/config.toml`) and store (`EffectiveDbPath`) from the
+pane's `HOME`. An extra-env `HOME` would send the agent's hook events to
+another agent-director store, and the spawner's row would stay `pending`
+until `find-missing` marks it `missing`, with no error to the caller.
+Every other `HOME`-derived path (pre-trust's `.claude.json`, the
+transcript lookup of `resume` and `find-missing`) would need a second
+home too. Refusing at validation closes that whole class with one check,
+and is loud, typed and launches nothing. agent-director refuses rather
+than drops the key, because dropping it would launch an agent with an
+env the caller did not ask for. An absolute `CLAUDE_CONFIG_DIR` is the
+supported way to give an agent its own Claude Code config; it leaves the
+agent-director store alone.
+
+`resume` refuses a row whose stored extra env has a key that sets `HOME`
+(only a row spawned before this refusal can) with `ErrReservedEnvKey`,
+before any transcript lookup, tmux call or write (step 4 of
+[Resume](#resume)). `ComposeRelaunch` and pre-trust therefore never see
+an extra-env `HOME`.
+
+**The shared rule, `spawn.ReservedHomeKey(env)`.** It returns the
+smallest key of `env` whose name before the first `=` is `HOME`, and
+whether there is one. Spawn validation (`validateExtraEnv`) and resume's
+stored-row guard (`resumeImpl`) both call it, so they refuse the same
+keys and name the same one.
+
+The error name is the existing `ErrReservedEnvKey`, so no catalog,
+manifest or TypeScript client entry is added; the manifest lists it
+among `resume`'s errors. The name is the contract; the description is
+advice. Each description quotes the key as given (Go `%q`, so a key
+holding `=` or a control character stays on one line). Spawn's says the
+key sets `HOME` and why (`spawn.ReservedHomeReason`), to remove that
+key, and what to set instead (`spawn.ReservedHomeAlternative`):
+`ErrReservedEnvKey: extra_env key "HOME=/tmp/b" sets HOME, which is
+reserved: <reason>; remove "HOME=/tmp/b" from extra_env, and
+<alternative>`. Resume's (`homeInExtraEnvError` in `pkg/api/resume.go`)
+also names the instance id, says nothing was written or launched, and
+gives the recourse, a spawn of the id with the reuse opt-in
+(`spawn.ReuseOptIn`) and an extra env without `HOME`:
+`ErrReservedEnvKey: resume of instance <id>: the row's extra_env key
+"HOME" sets HOME, which is reserved: <reason>; nothing was written and
+nothing was launched; to run the agent again, spawn the id with …`. The
+prefix refusal is the quoted key alone: `ErrReservedEnvKey:
+"AGENT_DIRECTOR_X"`.
+
+Pinned by `TestValidateOrder` and `TestReservedHomeKey`
+(`internal/spawn/validate_test.go`), `TestSpawnRefusesHomeInExtraEnv`
+and `TestResumeRefusesHomeInExtraEnv` (`pkg/api/reserved_home_test.go`),
+and the literal-follow tests A14 and B11
+(`pkg/api/advice_follow_reserved_home_test.go`).
+
+**Must use:** code that asks whether an extra env sets `HOME` calls
+`spawn.ReservedHomeKey`; do not compare a key with `"HOME"` or split it
+at `=` by hand. Code that refuses or explains a reserved `HOME` uses
+`spawn.ReservedHomeEnvKey`, `spawn.ReservedHomeReason` and
+`spawn.ReservedHomeAlternative`; do not restate the key or the text.
 
 ### Launch identity
 
@@ -4086,37 +4172,27 @@ write, it never lengthens the window between the launch start and the
 create.
 
 The step resolves the target `.claude.json` (`claudeJSONFor`) from the
-launch's extra env, so that it is the file the launched Claude Code
-reads. Claude Code reads `<CLAUDE_CONFIG_DIR or else its home
-directory>/.claude.json` (2.1.280: `CLAUDE_CONFIG_DIR || os.homedir()`,
-and Bun's `os.homedir()` returns `$HOME` as set), and the extra env
-reaches its pane through tmux `new-session -e`, so an extra-env `HOME`
-moves the file too (b.wb4). In order:
+launch's extra env `CLAUDE_CONFIG_DIR`, so that it is the file the
+launched Claude Code reads (2.1.280:
+`CLAUDE_CONFIG_DIR || os.homedir()`):
 
-1. The extra env's `CLAUDE_CONFIG_DIR` is set (non-empty): an absolute
-   path gives `<CLAUDE_CONFIG_DIR>/.claude.json`; any other value
-   (relative, `~`-prefixed or whitespace-only) is refused (b.nje). `HOME`
-   is not consulted either way.
-2. Else the extra env's `HOME` is set (non-empty): an absolute path
-   gives `<HOME>/.claude.json`; any other value is refused by the same
-   rule (b.wb4).
-3. Else (both absent or empty): the operator's `~/.claude.json`, from
-   agent-director's own `HOME`.
+- Absent or empty: the operator's `~/.claude.json`, from
+  agent-director's own `HOME`.
+- An absolute path: `<CLAUDE_CONFIG_DIR>/.claude.json`.
+- Set but not an absolute path (relative, `~`-prefixed or
+  whitespace-only): refused (b.nje). Pre-trust reads, writes and stats
+  no file, makes no lock dir, and reports `failed` (below). Claude Code
+  resolves a relative value against its pane's cwd, while agent-director
+  would resolve it against its own caller's cwd, which differs for each
+  caller, so the entry could land in a file the agent never reads.
+  Falling back to `~/.claude.json` could also write a file the agent
+  never reads, so pre-trust does not fall back.
 
-A refused value resolves no file: pre-trust reads, writes and stats no
-file, makes no lock dir, and reports `failed` (below). Claude Code
-resolves a relative value against its pane's cwd, while agent-director
-would resolve it against its own caller's cwd, which differs for each
-caller, so the entry could land in a file the agent never reads. A
-refused value is never replaced by the next step: falling back to
-`<HOME>/.claude.json` or `~/.claude.json` could also write a file the
-agent never reads.
-
-Pre-trust following an extra-env `HOME` does not by itself make such a
-launch work: the agent's hooks resolve agent-director's config and store
-from the pane's `HOME` too, so they open that home's store, not the
-launching one, and the launching row can stay `pending` unless that
-home's config points `db_path` at the launching store (b.nas).
+The extra env's `HOME` is never consulted. No launch carries one:
+`spawn` validation refuses a key that sets `HOME` in `extra_env` and
+`resume` refuses a row whose stored extra env has one, both with
+`ErrReservedEnvKey` and before pre-trust (see [Reserved `HOME` in
+`extra_env`](#reserved-home-in-extra_env-bnas)).
 
 For `resume` the extra env is the row's, so it targets the same file the
 row's spawn did. With a file resolved, the step sets
@@ -4143,23 +4219,20 @@ resolve is never replaced: pre-trust writes nothing and reports
 (its target removed, or turned into a loop) fails the write with the
 reason `resolve symlink <path>: …`.
 
-**One rule for `CLAUDE_CONFIG_DIR` and `HOME` (b.1ba, b.nje, b.wb4).**
-Whether a `CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
+**One rule for `CLAUDE_CONFIG_DIR` (b.1ba, b.nje).** Whether a
+`CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
 (`internal/spawn/pretrust.go`): only an absolute path is. Every reader
 of the value shares it: pre-trust's file resolution above, and the
 transcript paths `resume`'s fallback and `find-missing`'s heal compose
 (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
-Only the response to an unusable `CLAUDE_CONFIG_DIR` differs: those
-read paths treat it as absent and look under `~/.claude`, while
-pre-trust, which writes, refuses it. Pre-trust applies the same rule,
-and the same refusal, to the extra env's `HOME`. The transcript paths
-do not read the extra env's `HOME` at all: with no usable `CLAUDE_CONFIG_DIR` they look under
-agent-director's own `~/.claude`, so a transcript
-Claude Code wrote under an extra-env `HOME` is found only through its
-recorded `jsonl_path` (b.s52). **Must use:** code that reads
-`CLAUDE_CONFIG_DIR` or `HOME` from a launch's or row's extra env decides
-whether to use it with `spawn.ConfigDirUsable`; do not write a second
-check.
+Only the response to an unusable value differs: those read paths treat
+it as absent and look under `~/.claude`, while pre-trust, which writes,
+refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
+launch's or row's extra env decides whether to use it with
+`spawn.ConfigDirUsable`; do not write a second check. No reader derives
+a path from an extra-env `HOME`: it is a reserved key (see [Reserved
+`HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), so do not add
+one.
 
 **Config lock (b.zjm).** Claude Code writes the same file, at startup
 and while it runs, and saves it under a lock: it takes the lock,
@@ -4275,10 +4348,9 @@ with the rest of that life.
 
 Pre-trust is best effort on both verbs: a failure never fails the
 launch. When the write cannot be made (the extra env's
-`CLAUDE_CONFIG_DIR`, or with none its `HOME`, is set but not an absolute
-path, or the resolved file does not exist, as on a fresh Claude Code
-install or a fresh `CLAUDE_CONFIG_DIR` or extra-env `HOME`, or it cannot
-be read, parsed or written, or its
+`CLAUDE_CONFIG_DIR` is set but not an absolute path, or the resolved
+file does not exist, as on a fresh Claude Code install or a fresh
+`CLAUDE_CONFIG_DIR`, or it cannot be read, parsed or written, or its
 lock cannot be taken, stays held by another process through the
 `lock_wait_seconds` wait, was held too long to write under, or was taken
 over by another process before the write), `PreTrust` returns `failed` and
@@ -4290,14 +4362,12 @@ gave up after waiting 12s` (the configured wait, as Go formats a
 duration) for a lock that stayed held, and `pre-trust:
 lock <path>.lock was taken over by another process, so wrote nothing`
 for a lock taken over before the write. An unusable `CLAUDE_CONFIG_DIR`
-or `HOME` resolves no file, so its line names none and gives the
-variable's name and its value quoted (Go `%q`) instead:
-`agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR "rel" is
-not an absolute path); the agent may stop at Claude Code's folder-trust
-prompt`, or `… (pre-trust: HOME "rel" is not an absolute path) …`. The
-line names no label, token or environment value other than the extra
-env's `CLAUDE_CONFIG_DIR` and `HOME`. The launch proceeds, and the agent
-may wait at the trust dialog.
+resolves no file, so its line names none and quotes the value (Go `%q`)
+instead: `agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR
+"rel" is not an absolute path); the agent may stop at Claude Code's
+folder-trust prompt`. The line names no label, token or environment
+value other than the extra env's `CLAUDE_CONFIG_DIR`. The launch
+proceeds, and the agent may wait at the trust dialog.
 
 **The `pre_trust` result field.** Every successful `spawn` and `resume`
 result carries `pre_trust`, always exactly one of three values:
@@ -4312,9 +4382,9 @@ result carries `pre_trust`, always exactly one of three values:
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
   written, its lock held by another process included, or the extra
-  env's `CLAUDE_CONFIG_DIR`, or with none its `HOME`, is set but not an
-  absolute path, so no file was touched). The launch still proceeds, and
-  the agent may stop at Claude Code's folder-trust prompt.
+  env's `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
+  was touched). The launch still proceeds, and the agent may stop at
+  Claude Code's folder-trust prompt.
 
 A `failed` pre-trust never fails the launch; a launch that fails returns
 its error, not a result. The value is the `PreTrustOutcome` the shared
@@ -7157,11 +7227,11 @@ Same `claude_instance_id`, fresh tmux session, same JSONL transcript.
 ### Verb (`pkg/api/resume.go`)
 
 Steps run in order (SR-8.1). Every refusal before the move to `pending`
-(step 10) writes nothing: no row, parent-id, trust, history or
+(step 11) writes nothing: no row, parent-id, trust, history or
 permission-request write, no `ad.resume.*` event and no create. The only
-tmux call before the move is the pre-launch lookup (step 7), whose
+tmux call before the move is the pre-launch lookup (step 8), whose
 `ad.provenance.disagree` records are the one thing such a refusal may
-still write. A refusal before pre-trust (step 9) also writes no trust
+still write. A refusal before pre-trust (step 10) also writes no trust
 entry; a move that loses its race after pre-trust leaves the entry
 written, harmlessly:
 
@@ -7196,7 +7266,25 @@ written, harmlessly:
    recourse). Recourse: spawn again
    with the same id, opting in to reuse (`--reuse-finished`); the new
    life starts with no memory of the old one.
-4. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
+4. The row's stored extra env has no key that sets `HOME`, whatever its
+   value, an empty one included: neither the key `HOME` nor one such as
+   `HOME=/x` whose name before the first `=` is `HOME`
+   (`spawn.ReservedHomeKey`, the rule spawn validation shares) →
+   otherwise `ErrReservedEnvKey` (`homeInExtraEnvError`, b.nas). `spawn`
+   refuses such a key in `extra_env` (see [Reserved `HOME` in
+   `extra_env`](#reserved-home-in-extra_env-bnas)), so only a row spawned
+   before that refusal can carry one; relaunched, its agent's hook would
+   report to another agent-director store. The check uses the row as step
+   1 read it, before any transcript lookup or tmux call. The description
+   names the instance id, quotes the smallest such key in sorted order,
+   says it sets `HOME` and why
+   (`spawn.ReservedHomeReason`) and that nothing was written or launched,
+   and gives the recourse: spawn the id again with the reuse opt-in
+   (`spawn.ReuseOptIn`) and an extra env without `HOME`
+   (`spawn.ReservedHomeAlternative`: an absolute `CLAUDE_CONFIG_DIR` gives
+   the agent its own Claude Code config); the new life starts with no
+   memory of the old conversation.
+5. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
    `ErrJsonlNeverWritten` (see below). Pure `os.Stat` pre-flight; no read.
    Candidate resolution follows a strict precedence (decision of record, bug
    b.1ba, extended by b.v2c):
@@ -7266,13 +7354,13 @@ written, harmlessly:
    from the current session's own two candidates or the current life's
    visible history (see
    [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
-   Steps 1 to 4 read the row once (`GetSpawn`). Everything after works
+   Steps 1 to 5 read the row once (`GetSpawn`). Everything after works
    from that read: the row is never altered in memory, and the winning
    candidate's session id is passed on as the session to resume. The row
    is re-read only once, and only when the pre-launch lookup refuses a
    Leftover (`resumeLostRace`), solely to compare snapshots (the "lost
    race" case below).
-5. The first statement of `resumeAfterJsonl` (SR-8.1 step 2), the
+6. The first statement of `resumeAfterJsonl` (SR-8.1 step 2), the
    recorded name before the id. First a recorded session name that is
    empty, holds a control character, or holds a character tmux stores
    differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
@@ -7285,10 +7373,10 @@ written, harmlessly:
    actions" in the README. A recorded name that tmux rewrites (such as
    `mix.$b`, whose `.` tmux stores as `_`) is refused here, before the
    pre-launch lookup, which could not match that name's holder.
-6. The launch's socket: `spawn.ResolveRowLaunchSocket` on the row's
+7. The launch's socket: `spawn.ResolveRowLaunchSocket` on the row's
    recorded `tmux_socket` (see [Launch identity](#launch-identity)). A
    refusal → `ErrTmuxNotAvailable`.
-7. The pre-launch lookup (SR-8.1 step 3, SR-8.2; `resumeAfterJsonl`,
+8. The pre-launch lookup (SR-8.1 step 3, SR-8.2; `resumeAfterJsonl`,
    decided by `decidePreLaunch` in `pkg/api/resume_lookup.go`): exactly
    one [`tmux.Lookup`](#shared-tmux-lookup) on the launch's socket for the
    row's launch identity as read (its instance id, launch token and
@@ -7300,17 +7388,17 @@ written, harmlessly:
    `ad.provenance.disagree` records are written right after the decision,
    before any write. A refusal makes no further tmux call, touches no
    session and writes nothing else.
-8. A new launch token (`spawn.NewLaunchToken`; a failure → `ErrInternal`),
+9. A new launch token (`spawn.NewLaunchToken`; a failure → `ErrInternal`),
    then `spawn.ComposeRelaunch` composes env, synthesized settings and
    the argv `claude --resume <session_id> --settings <json> [user
    claude_args]` into a `CreateRequest`. Both run before the move, so a
    failure writes nothing.
-9. Pre-trust (`spawn.PreTrust`, SR-8.1 step 4, SR-22.6) for the row's
-   cwd and extra env, skipped when the row records the spawn's opt-out
-   (`NoPreTrust`). Best effort: its outcome never changes resume's control
-   flow or error. See
-   [Workspace-trust pre-write](#workspace-trust-pre-write).
-10. The move to `pending` (`MoveToPending`, SR-8.3): one conditional write
+10. Pre-trust (`spawn.PreTrust`, SR-8.1 step 4, SR-22.6) for the row's
+    cwd and extra env, skipped when the row records the spawn's opt-out
+    (`NoPreTrust`). Best effort: its outcome never changes resume's control
+    flow or error. See
+    [Workspace-trust pre-write](#workspace-trust-pre-write).
+11. The move to `pending` (`MoveToPending`, SR-8.3): one conditional write
     guarded on the row's `RowSnapshot` as read. It sets the launch start
     (one read of the Client's clock), the new token, the launch's socket,
     the `parent_id` re-derived from the caller's
@@ -7325,14 +7413,14 @@ written, harmlessly:
     row changed after resume examined it"); the row is gone →
     `ErrSpawnNotFound`; a store error → `ErrInternal`. In each case
     nothing is written to the store and nothing is launched.
-11. The create (`spawn.Relaunch`, the shared create-and-label step) on
+12. The create (`spawn.Relaunch`, the shared create-and-label step) on
     the launch's socket, with the recorded name, labelled `ad1 <token>
     <$N> <instance id> <store id>`. It runs directly after the move, with
     no store, file or network I/O between them. When it returns, resume
     emits `ad.resume.moved_to_pending` (`claude_instance_id`,
     `prior_state`, the row's `claude_session_id` as read, source
     `ad_resume`), fail-open.
-12. The outcome (`finishedLaunch.outcome` in `pkg/api/finished_launch.go`,
+13. The outcome (`finishedLaunch.outcome` in `pkg/api/finished_launch.go`,
     built by `resumeDeps.launchOnto` with `resumeLaunchVerb` and shared
     with reuse; SR-8.5):
     - A labelled session: the identity write, `spawn.RecordLaunchIdentity`
@@ -7391,7 +7479,7 @@ and comes on top.
 
 ### The pre-launch lookup
 
-`decidePreLaunch` maps the one lookup (step 7) to "proceed" or one
+`decidePreLaunch` maps the one lookup (step 8) to "proceed" or one
 refusal. Every refusal wraps exactly one sentinel and says "nothing was
 done" (the Leftover refusal says "nothing was written"). What it names
 depends on the case: most name the instance id and the quoted recorded
@@ -7673,7 +7761,7 @@ originally created it:
 - A Spawn originally parented to A and later resumed by B → `parent_id
   = B`.
 
-Resume writes the parent id only in its move to `pending` (step 10
+Resume writes the parent id only in its move to `pending` (step 11
 above). A refusal before the move writes none, and a restore after a
 failed launch keeps the value the move wrote. The store's `SetParentID`
 is called by no verb.
@@ -7788,14 +7876,14 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
   Reuse it whenever you need a transcript path under an explicit config
   dir — do not re-derive the layout by hand. The fallback decides
   whether to use the value by the rule pre-trust's file resolution
-  shares (see "One rule for `CLAUDE_CONFIG_DIR` and `HOME`" under
+  shares (see "One rule for `CLAUDE_CONFIG_DIR`" under
   [Workspace-trust pre-write](#workspace-trust-pre-write)); a relative
   value would resolve against the resuming process's cwd, which differs
   for each caller.
 - **`spawn.JsonlPath(cwd, sessionID)`** — a thin wrapper over
   `JsonlPathIn` that resolves the config dir to `$HOME/.claude`,
-  agent-director's own `HOME`; a `HOME` in the row's extra env is not
-  read (b.s52). Used
+  agent-director's own `HOME` (an extra-env `HOME` is reserved, see
+  [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)). Used
   for the default-config fallback (the row's `CLAUDE_CONFIG_DIR` absent,
   empty or not an absolute path). It reconstructs the default layout:
 
@@ -8918,10 +9006,13 @@ guarded on `life_number = 0`.
 
 **Recovery is `find-missing` → `resume`, or a reuse.** `find-missing`
 then `resume` brings the conversation back. When `resume` cannot
-(`ErrNoSessionId`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`), the
+(`ErrNoSessionId`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`, or
+`ErrReservedEnvKey` for a row whose stored `extra_env` sets `HOME`; see
+[Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), the
 recovery is to spawn the id again, opting in to reuse
-(`--reuse-finished`): the agent starts a new life with no memory of the
-old conversation. Callers cannot delete a row (`delete` is on the
+(`--reuse-finished`), with an `extra_env` without `HOME` in the
+`ErrReservedEnvKey` case: the agent starts a new life with no memory of
+the old conversation. Callers cannot delete a row (`delete` is on the
 operator tool only), and a human's `delete` is not a recovery step: it
 removes the row along with its `claude_session_id`, labels and
 `extra_env`. (A resume that fails with
@@ -9787,6 +9878,18 @@ meaning and links to the section that describes it in detail.
   row from before this release has pre-trust allowed, the column's
   default, so its `resume` now pre-trusts whatever its spawn chose (see
   [Workspace-trust pre-write](#workspace-trust-pre-write)).
+- **`HOME` in `extra_env` is refused (b.nas).** `spawn`, a reuse and a
+  template's `extra_env` included, returns `ErrReservedEnvKey` for a key
+  that sets `HOME` (the key `HOME`, or one such as `HOME=/x`, which tmux
+  splits at its first `=`), whatever its value, and writes and launches
+  nothing; before, it launched with that `HOME`, the agent's hooks
+  reported to the agent-director store under it, and the row stayed
+  `pending`. `resume` can now return `ErrReservedEnvKey` too, for a row
+  spawned with such a key before this release, and writes and launches
+  nothing; the recourse is a
+  spawn of the id with `reuse_finished` and an `extra_env` without
+  `HOME`. No error name is new (see
+  [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)).
 - **`resume`'s trail.** `resume` records its move
   (`ad.resume.moved_to_pending`) and each restore attempt
   (`ad.resume.restored`), and SessionStart's `ad.spawn.state_transition`
@@ -11641,13 +11744,12 @@ detail.
   parallel. `Temp` enforces that the way `t.Chdir` does: it sets `$PWD`
   with `t.Setenv`, which panics in a parallel test and makes a later
   `t.Parallel` call panic.
-- Users: `TestPreTrustRefusesUnusableConfigLocation`
-  (`internal/spawn/pretrust_home_test.go`), which checks that a relative
-  `CLAUDE_CONFIG_DIR` (alone or over an absolute `HOME`) and a relative
-  extra-env `HOME` touch nothing where they would resolve from the
+- Users: `TestPreTrustRefusesUnusableConfigDir`
+  (`internal/spawn/pretrust_test.go`), which checks that a relative
+  `CLAUDE_CONFIG_DIR` touches nothing where it would resolve from the
   process cwd; `seedRelativeTrustConfig`
   (see [pkg/api pre-trust fixture](#pkgapi-pre-trust-fixture-package-internal-test-fixture)),
-  which does the same for a relative `CLAUDE_CONFIG_DIR`; and
+  which does the same through `spawn` and `resume`; and
   `TestRefusedStorePathCreatesNothing`
   (`internal/store/expand_tilde_test.go`), which checks that a `~/` store
   path refused for an unset or empty `HOME`, and an empty store path,

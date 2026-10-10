@@ -376,7 +376,7 @@ These 50 classes are generated one-to-one from the shared `err_name` catalog ([`
 |---|---|
 | `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
 | `ErrSpawnDeniedFlag` | `claude_args` contains a flag the supervisor must own (`--settings`, `--resume`, `--continue`, `--print`, `--output-format`). |
-| `ErrReservedEnvKey` | `extra_env` contains an `AGENT_DIRECTOR_*` key (reserved prefix). |
+| `ErrReservedEnvKey` | From `spawn`: `extra_env` (a template's included) contains an `AGENT_DIRECTOR_*` key (reserved prefix), or a key that sets `HOME` (`HOME` itself, or one such as `HOME=/x`, whose name before the first `=` is `HOME`) with any value, an empty one included; nothing is written or launched. An extra-env `HOME` would send the agent's hook events to another agent-director store; set an absolute `CLAUDE_CONFIG_DIR` to give the agent its own Claude Code config. From `resume`: the row's stored `extra_env` has `HOME` (a row spawned before spawn refused it); nothing is written or launched — spawn the same `claude_instance_id` again with `reuse_finished: true` and an `extra_env` without `HOME`, which starts with no memory of the old conversation. |
 | `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `claude_instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
 **tmux session naming** (bad `tmux_session_name` — programmer error):
