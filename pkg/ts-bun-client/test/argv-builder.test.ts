@@ -2,11 +2,14 @@
  * argv-builder.test.ts — SR-1.2: buildArgv maps each verb's params to a
  * shell-free argv: [cli, ...global flags (b.32k), verb, ...long flags];
  * snake_case fields become kebab-case flags, booleans appear only when true,
- * and unset optionals are omitted.
+ * and unset optionals are omitted. A spawn or make-template extra_env key the
+ * CLI could not carry unchanged is refused instead (b.vpb, b.66q).
  */
 
 import { test, expect } from "bun:test";
 import { buildArgv } from "../src/internal/argv.js";
+import { ErrReservedEnvKey } from "../src/errors.js";
+import { thrownBy } from "./internal/helper.js";
 
 const CLI = "/usr/local/bin/agent-director";
 const ID = ["--claude-instance-id", "id-1"];
@@ -28,6 +31,9 @@ test.each([
     "--allow", "Read", "--deny", "Bash", "--ask", "Edit", "--", "--model", "x"]],
   ["spawn: false booleans omitted (SR-10.1)", "spawn", { cwd: "/ws", no_pre_trust: false, reuse_finished: false },
     ["spawn", "--cwd", "/ws"]],
+  // b.vpb: only an empty key or one holding "=" or NUL is refused; a value may hold "=".
+  ["spawn: odd but valid extra_env names pass unchanged", "spawn", { cwd: "/ws", extra_env: { "my-var": "a=b", "1ST": "" } },
+    ["spawn", "--cwd", "/ws", "--extra-env", "my-var=a=b", "--extra-env", "1ST="]],
   ["status", "status", { claude_instance_id: "id-1" }, ["status", ...ID]],
   ["get", "get", { claude_instance_id: "id-1" }, ["get", ...ID]],
   ["kill", "kill", { claude_instance_id: "id-1" }, ["kill", ...ID]],
@@ -61,6 +67,28 @@ test.each([
     ["make-template", "--name", "tpl"]],
 ] as const)("%s", (_label, verb, params, want) => {
   expect(buildArgv(CLI, verb, params)).toEqual([CLI, ...want]);
+});
+
+// b.vpb, b.66q: the CLI splits each --extra-env K=V at its first "=", so spawn and
+// make-template refuse a malformed key before any argv exists, with ErrReservedEnvKey;
+// the smallest such key is named. HOME=/x gets the malformed-key description here,
+// where Go gives the same name with the HOME description (docs/architecture.md).
+const REQUIRED = { spawn: { cwd: "/ws" }, "make-template": { name: "tpl" } } as const;
+test.each([
+  ["spawn", "empty", { "": "x", TEAM: "core" }, "", "it is empty"],
+  ["spawn", "CLAUDE_CONFIG_DIR=/tmp/cfg", { "CLAUDE_CONFIG_DIR=/tmp/cfg": "" }, "CLAUDE_CONFIG_DIR=/tmp/cfg", "it contains '='"],
+  ["spawn", "HOME=/x, the malformed-key description", { "HOME=/x": "" }, "HOME=/x", "it contains '='"],
+  ["spawn", "NUL", { "A\0B": "", TEAM: "core" }, "A\0B", "it contains a NUL byte"],
+  ["spawn", "the smallest of several", { "Z=1": "", "B\0": "", "A=B": "" }, "A=B", "it contains '='"],
+  ["make-template", "CLAUDE_CONFIG_DIR=/tmp/cfg", { "CLAUDE_CONFIG_DIR=/tmp/cfg": "" }, "CLAUDE_CONFIG_DIR=/tmp/cfg", "it contains '='"],
+] as const)("%s: extra_env key %s → ErrReservedEnvKey naming it and what is wrong", (verb, _label, extra_env, key, problem) => {
+  const err = thrownBy(() => buildArgv(CLI, verb, { ...REQUIRED[verb], extra_env }));
+  expect(err).toBeInstanceOf(ErrReservedEnvKey);
+  const e = err as ErrReservedEnvKey;
+  expect([e.verb, e.errName]).toEqual([verb, "ErrReservedEnvKey"]);
+  const q = JSON.stringify(key);
+  expect(e.errDescription.startsWith(`extra_env key ${q} is not a valid env-var name: ${problem}`)).toBe(true);
+  expect(e.errDescription).toContain(`; remove ${q} from extra_env, and `);
 });
 
 // b.32k: global flags precede the verb, in a stable order; an empty object adds none.

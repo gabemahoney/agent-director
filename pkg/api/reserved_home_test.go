@@ -9,23 +9,17 @@ package api_test
 // refusal and the advice by advice_follow_reserved_home_test.go.
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
-	"strconv"
-	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// reservedHomeEnv is an extra env setting key to home, where "B" stands for
-// b's directory, and CLAUDE_CONFIG_DIR to c's when withCfg is set.
-func reservedHomeEnv(key, home string, withCfg bool, b, c trustConfig) map[string]string {
+// reservedHomeRefusal is the ErrReservedEnvKey refusal of an extra env setting
+// key to home, where "B" stands for a directory b holding a .claude.json, and
+// CLAUDE_CONFIG_DIR to another such directory c when withCfg is set.
+func reservedHomeRefusal(t *testing.T, key, home string, withCfg bool) envRefusal {
+	t.Helper()
+	b, c := seedTrustConfig(t, t.TempDir(), trustLacksEntry), seedTrustConfig(t, t.TempDir(), trustLacksEntry)
 	if home == "B" {
 		home = b.dir
 	}
@@ -33,7 +27,7 @@ func reservedHomeEnv(key, home string, withCfg bool, b, c trustConfig) map[strin
 	if withCfg {
 		env["CLAUDE_CONFIG_DIR"] = c.dir
 	}
-	return env
+	return envRefusal{extraEnv: env, key: key, name: "ErrReservedEnvKey", reason: "sets HOME, which is reserved", cfgs: []trustConfig{b, c}}
 }
 
 // TestSpawnRefusesHomeInExtraEnv: a key that sets HOME in extra_env, from the
@@ -55,33 +49,7 @@ func TestSpawnRefusesHomeInExtraEnv(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := newSpawnEnv(t)
-			own := seedTrustConfig(t, env.home, trustLacksEntry)
-			b, c := seedTrustConfig(t, t.TempDir(), trustLacksEntry), seedTrustConfig(t, t.TempDir(), trustLacksEntry)
-			p := api.SpawnParams{CWD: t.TempDir(), ExtraEnv: reservedHomeEnv(tc.key, tc.home, tc.withCfg, b, c)}
-			if tc.template {
-				body := fmt.Sprintf("[extra_env]\n%q = %q\n", tc.key, p.ExtraEnv[tc.key])
-				if _, err := apitest.SeedTemplate(filepath.Join(env.home, ".agent-director", "templates"), "home-env", body); err != nil {
-					t.Fatalf("SeedTemplate: %v", err)
-				}
-				p.Template, p.ExtraEnv = "home-env", nil
-			}
-			rows := listIDs(t, env.c)
-
-			_, err := env.c.Spawn(p)
-
-			assertOneSentinel(t, err, spawn.ErrReservedEnvKey)
-			want := "ErrReservedEnvKey: extra_env key " + strconv.Quote(tc.key) + " sets HOME, which is reserved: "
-			if desc := errText(err); !strings.HasPrefix(desc, want) || !strings.Contains(desc, "; remove "+strconv.Quote(tc.key)+" from extra_env, and ") {
-				t.Errorf("description %q\nwant it to start %q and say to remove that key", desc, want)
-			}
-			assertNoTmuxCalls(t, env.rec)
-			if ids := listIDs(t, env.c); !reflect.DeepEqual(ids, rows) {
-				t.Errorf("List ids = %q; want unchanged %q", ids, rows)
-			}
-			for _, cfg := range []trustConfig{own, b, c} {
-				cfg.check(t, "", false, "after the refused spawn")
-			}
+			assertSpawnRefused(t, reservedHomeRefusal(t, tc.key, tc.home, tc.withCfg), tc.template)
 		})
 	}
 }
@@ -107,30 +75,7 @@ func TestResumeRefusesHomeInExtraEnv(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			b, c := seedTrustConfig(t, t.TempDir(), trustLacksEntry), seedTrustConfig(t, t.TempDir(), trustLacksEntry)
-			spec := e.resumableSpec(rlkSettled(e), agentGone, apitest.WithExtraEnv(reservedHomeEnv(tc.key, tc.home, tc.withCfg, b, c)))
-			spec.State = tc.state
-			r := e.seedResumableRow(t, spec)
-			if tc.noTranscript {
-				if err := os.Remove(r.JSONLPath); err != nil {
-					t.Fatalf("remove transcript: %v", err)
-				}
-			}
-			before := e.snapshotResume(t, r)
-
-			_, err := e.resume(r.ID)
-
-			assertOneName(t, err, "ErrReservedEnvKey")
-			want := "ErrReservedEnvKey: resume of instance " + r.ID + ": the row's extra_env key " + strconv.Quote(tc.key) + " sets HOME, which is reserved: "
-			if desc := errText(err); !strings.HasPrefix(desc, want) || !strings.Contains(desc, "nothing was written and nothing was launched") {
-				t.Errorf("description %q\nwant it to start %q and say nothing was written or launched", desc, want)
-			}
-			e.assertKillCalls(t)
-			e.assertResumeWroteNothing(t, before)
-			for _, cfg := range []trustConfig{b, c} {
-				cfg.check(t, "", false, "after the refused resume")
-			}
+			assertResumeRefused(t, reservedHomeRefusal(t, tc.key, tc.home, tc.withCfg), tc.state, tc.noTranscript)
 		})
 	}
 }

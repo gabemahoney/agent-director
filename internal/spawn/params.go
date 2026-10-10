@@ -41,7 +41,9 @@ type SpawnParams struct {
 	// reserved (AGENT_DIRECTOR_*, and HOME with any value) are rejected with
 	// ErrReservedEnvKey; auth env vars (ANTHROPIC_API_KEY,
 	// CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed. To give the agent its
-	// own Claude Code config, set an absolute CLAUDE_CONFIG_DIR.
+	// own Claude Code config, set an absolute CLAUDE_CONFIG_DIR. Keys that are
+	// not valid env-var names (empty, or holding '=' or a NUL byte) are
+	// rejected with ErrReservedEnvKey too, never rewritten.
 	ExtraEnv map[string]string
 
 	// AgentDirectorLabels are caller-owned tags. Each key is normalized to

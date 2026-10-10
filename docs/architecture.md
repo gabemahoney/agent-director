@@ -2416,6 +2416,12 @@ Every verb call from `Client` follows this four-step recipe inside
    rejects with `ErrInvalidFlags` (`<flag> requires a value`) and the
    CLI never falls back to its default (b.pu2). JSON-only
    fields go through `--params-json` for verbs that accept it.
+   For `spawn` and `make-template`, an `extra_env` key that is empty or
+   holds `=` or a NUL is refused here: the CLI splits each
+   `--extra-env K=V` at its first `=`, so it could not carry such a key
+   unchanged. `buildArgv` throws `ErrReservedEnvKey` and no
+   subprocess runs (b.vpb, b.66q; see
+   [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
 2. **Spawn the CLI.** `resolveCliPath()` is called fresh to obtain the
    binary path (production) or the `_cliPath` DI override is used verbatim
    (tests). `src/internal/spawner.ts` then calls `Bun.spawn` with that
@@ -2479,7 +2485,7 @@ subclass in `src/errors.ts` carries a comment cross-referencing this module.
 
 **Factory.** `errorFromEnvelope(verb, err_name, err_description): AgentDirectorError` in `src/errors.ts`. Maintains an internal `ERROR_TABLE` literal that maps every `err_name` string to its constructor. Unknown `err_name` values produce a plain `AgentDirectorError` with a `console.warn` so callers are not silently swallowed.
 
-**Wiring.** When the CLI exits non-zero and stderr parses as an error envelope, `subprocessClient.ts` calls `throwFromEnvelope(verb, envelope)` in `src/internal/errorMap.ts`. It looks `err_name` up in `errorMap`, built at module load from `catalog.json` and the classes `src/errors.ts` exports, and throws that class; a name with no class there throws `ErrUnknownErrorName`, carrying `unknownName` and the `envelope`.
+**Wiring.** When the CLI exits non-zero and stderr parses as an error envelope, `subprocessClient.ts` calls `throwFromEnvelope(verb, envelope)` in `src/internal/errorMap.ts`. It looks `err_name` up in `errorMap`, built at module load from `catalog.json` and the classes `src/errors.ts` exports, and throws that class; a name with no class there throws `ErrUnknownErrorName`, carrying `unknownName` and the `envelope`. One catalog class is also thrown by the client itself, with no envelope: `buildArgv` throws `ErrReservedEnvKey` for a malformed `spawn` or `make-template` `extra_env` key, before any subprocess runs (b.vpb, b.66q; see [Subprocess call recipe](#subprocess-call-recipe)).
 
 **Catalog drift enforcement gate.** `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`
 reads `pkg/api/errnames/catalog.json` at test time (the single source of truth,
@@ -3129,7 +3135,8 @@ so each stage can be tested in isolation against synthesized input.
         ▼
    ┌──────────┐   SRD §7.2: cwd shape/existence/type;
    │ Validate │   relay_mode; denied flags; reserved env keys
-   └────┬─────┘   (AGENT_DIRECTOR_*, HOME; see below); explicit tmux
+   └────┬─────┘   (AGENT_DIRECTOR_*, HOME), then malformed env keys
+        │         (empty, '=', NUL; see below); explicit tmux
         │         session name (see below). No side effects on failure.
         ▼
    ┌────────────┐   SRD §7.3: UUID4 if no claude_instance_id;
@@ -3286,30 +3293,38 @@ instead.
 
 ### Reserved `HOME` in `extra_env` (b.nas)
 
-`validateExtraEnv` (`internal/spawn/validate.go`) refuses two kinds of
-key with `ErrReservedEnvKey`. Both rules match a key's env-var name, not
+`ValidateExtraEnv` (`internal/spawn/validate.go`), the whole `extra_env`
+check that spawn and `make-template` share (see
+[`make-template` runs the same check](#make-template-runs-the-same-check-b66q)),
+refuses two kinds of reserved key with `ErrReservedEnvKey`. Both rules match a key's env-var name, not
 the raw key: the part before the first `=`, or the whole key when it has
 none (`envVarName`), because that is the name tmux sets. tmux is given
 each entry as `key=value` (`sortedEnvFlags` in `internal/tmux`) and
 splits it at its first `=`, so the key `HOME=/tmp/b` sets `HOME` (to
 `/tmp/b=<value>`) just as the key `HOME` does. Such a key can reach
-spawn over MCP, from the TypeScript client and from a template; the
-CLI's `--extra-env KEY=VALUE` splits at the first `=`, so its keys never
-hold one. The two rules:
+spawn over MCP, from Go and from a template. The CLI's
+`--extra-env KEY=VALUE` splits at the first `=`, so its keys never hold
+one, and the TypeScript client, which passes `extra_env` as those flags,
+refuses a key holding `=` itself, as a malformed key (see
+[Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)). The two
+rules:
 
 - a name with the `AGENT_DIRECTOR_` prefix;
 - a name that is exactly `HOME` (`spawn.ReservedHomeEnvKey`), whatever
   the value, an empty one included.
 
-The match is case-sensitive, as POSIX env vars are: `home`, `HOMEDIR`,
-`MY_HOME`, `=HOME` and `X=HOME` pass. `HOME` is checked first, then the
-prefix. Each rule names the smallest matching key in sorted order
+The match is case-sensitive, as POSIX env vars are: `home`, `HOMEDIR`
+and `MY_HOME` pass. `=HOME` and `X=HOME` pass these two rules too (their
+names are empty and `X`), and are then refused as malformed keys.
+`HOME` is checked first, then the prefix. Each rule names the smallest
+matching key in sorted order
 (`firstEnvKey`), not the first in map order, so a refusal names the same
 key on every run. It checks the merged extra env, so a template's key is
 refused too. `Validate` runs before any side effect, so a refused spawn,
 a reuse included, writes no row or trust entry and launches nothing. A
 malformed key that sets no reserved name (an empty key, or one such as
-`A=B`) is not refused here.
+`A=B`) is refused after these two rules, also with `ErrReservedEnvKey`
+(see [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
 
 Why `HOME` is reserved: the extra env reaches the agent's pane through
 tmux `new-session -e`, and the agent's hooks run a bare
@@ -3335,13 +3350,14 @@ an extra-env `HOME`.
 
 **The shared rule, `spawn.ReservedHomeKey(env)`.** It returns the
 smallest key of `env` whose name before the first `=` is `HOME`, and
-whether there is one. Spawn validation (`validateExtraEnv`) and resume's
-stored-row guard (`resumeImpl`) both call it, so they refuse the same
-keys and name the same one.
+whether there is one. The `extra_env` check (`ValidateExtraEnv`: spawn
+validation and `make-template`) and resume's stored-row guard
+(`resumeImpl`) both call it, so they refuse the same keys and name the
+same one.
 
 The error name is the existing `ErrReservedEnvKey`, so no catalog,
 manifest or TypeScript client entry is added; the manifest lists it
-among `resume`'s errors. The name is the contract; the description is
+among `resume`'s and `make-template`'s errors. The name is the contract; the description is
 advice. Each description quotes the key as given (Go `%q`, so a key
 holding `=` or a control character stays on one line). Spawn's says the
 key sets `HOME` and why (`spawn.ReservedHomeReason`), to remove that
@@ -3369,6 +3385,151 @@ and the literal-follow tests A14 and B11
 at `=` by hand. Code that refuses or explains a reserved `HOME` uses
 `spawn.ReservedHomeEnvKey`, `spawn.ReservedHomeReason` and
 `spawn.ReservedHomeAlternative`; do not restate the key or the text.
+
+### Malformed `extra_env` keys (b.vpb)
+
+After the two reserved rules, `ValidateExtraEnv` refuses a key that is
+not a valid env-var name, with the same `ErrReservedEnvKey` (see **The
+error** below for why no new name). A key is malformed when it:
+
+- is empty;
+- contains `=`;
+- contains a NUL byte.
+
+Nothing else is checked: `home`, `my-var` and `1ST` pass. The key is
+refused, never rewritten.
+
+Why: tmux is given each entry as `key=value` (`sortedEnvFlags`) and
+splits it at its first `=`, so a malformed key sets a different
+variable than the one asked for. The key `CLAUDE_CONFIG_DIR=/x` with the
+value `""` gives the pane `CLAUDE_CONFIG_DIR=/x=`, so Claude Code uses
+`/x=`. Pre-trust (`extraEnv["CLAUDE_CONFIG_DIR"]`) and resume's
+transcript fallback (`row.ExtraEnv["CLAUDE_CONFIG_DIR"]`) look the
+variable up by its exact key and find none, so pre-trust writes
+agent-director's own `~/.claude.json` and resume looks under its own
+`~/.claude`. An empty key gives tmux
+`=value`, which names no variable. No env-var name can hold a NUL byte,
+and no tmux argument can carry one. Rewriting the key would launch an
+agent with an env the caller did not ask for, so it is refused, as a
+reserved key is.
+
+**Order.** `HOME`, then the `AGENT_DIRECTOR_` prefix, then malformed
+keys; each refusal is `ErrReservedEnvKey` and only its description
+differs. A key that is both reserved and malformed (`HOME=/x`,
+`AGENT_DIRECTOR_X=y`) gets the reserved description, and a reserved key
+wins over a malformed key that sorts before it. The whole extra-env step
+runs after the denied-flag check and before the session-name checks
+(`TestValidateOrder`). The refusal names the smallest malformed key in
+sorted order (`firstEnvKey`). It checks the merged extra env, so a
+template's key is refused too.
+
+**Where such a key comes from.**
+
+- MCP passes `extra_env` through as sent, and Go callers set
+  `SpawnParams.ExtraEnv` directly; spawn validation refuses the key.
+- A template: `make-template` refuses such a key and saves nothing (see
+  [`make-template` runs the same check](#make-template-runs-the-same-check-b66q)),
+  so only a template saved before that check, or edited by hand, holds
+  one, and each `spawn` that uses it is refused.
+- The CLI's `--extra-env KEY=VALUE` (`kvSliceValue` in
+  `cmd/agent-director/flags.go`) splits at the first `=`, so its keys
+  never hold one. An empty key (`--extra-env =v`) is `ErrInvalidFlags` at
+  flag parse, before validation.
+- The TypeScript client passes `extra_env` as `--extra-env K=V` flags,
+  so the CLI would split a key holding `=` into another key and value
+  and spawn the wrong variable without an error. `buildArgv`
+  (`src/internal/argv.ts`, `extraEnvFlags` calling `invalidExtraEnvKey`)
+  therefore refuses a malformed `spawn` or `make-template` key itself.
+  It throws `ErrReservedEnvKey` (verb `spawn` or `make-template`, the
+  malformed-key description) and runs no subprocess. This check runs
+  before the CLI's reserved rules, so from TypeScript the key `HOME=/x`
+  gets the malformed-key description where MCP and Go give the `HOME`
+  one; the name is `ErrReservedEnvKey` on every surface, and nothing is
+  launched or saved.
+
+`resume` refuses a row whose stored extra env has a malformed key (only
+a row spawned before this refusal can) with `ErrReservedEnvKey`,
+wrapped. It runs after the `HOME` check and before any transcript
+lookup, tmux call or write (step 4 of [Resume](#resume)). A stored key
+that also sets `HOME` gets the `HOME` description. `ComposeRelaunch`,
+pre-trust and the transcript lookup therefore never see a malformed
+key.
+
+**The shared rule.** `spawn.InvalidEnvKey(env)` returns the smallest
+malformed key of `env`, and whether there is one.
+`spawn.EnvKeyProblem(key)` says what is wrong with a key (`""` when it is
+valid). The `extra_env` check (`ValidateExtraEnv`: spawn validation and
+`make-template`) and resume's stored-row guard (`resumeImpl`) both call
+`InvalidEnvKey`, so they refuse the same keys and name the same one. The TypeScript client cannot call Go, so
+`invalidExtraEnvKey` and `INVALID_ENV_KEY_ALTERNATIVE` in
+`src/internal/argv.ts` restate the rule and its texts.
+
+**The error.** The name is the existing `ErrReservedEnvKey`, not a new
+one: b.grg §3 allows no new or renamed error name on `spawn`,
+`make-template` or `resume`, because a caller that classes refusals by
+name treats a name it does not know as unclassified until it learns it.
+So no catalog or TypeScript client entry is added; the manifest lists
+the name among `make-template`'s errors as well (b.66q). The name is the contract:
+an `extra_env` key was refused and nothing was written or launched. The
+description is advice and says which rule refused the key. Each
+description quotes the key as given (Go `%q`; `JSON.stringify` in the
+TypeScript client), so a key with a NUL byte stays on one line and the
+message holds no raw NUL. Spawn's says the key is not a valid env-var
+name, what is wrong with it (`spawn.EnvKeyProblem`), to remove it, and
+what to do instead (`spawn.InvalidEnvKeyAlternative`):
+`ErrReservedEnvKey: extra_env key "CLAUDE_CONFIG_DIR=/x" is not a
+valid env-var name: it contains '=', and tmux splits each KEY=VALUE
+entry at its first '=', so it would set a different variable; remove
+"CLAUDE_CONFIG_DIR=/x" from extra_env, and give each variable its own
+name as the key (not empty, with no '=' and no NUL byte) and its value as
+the value`. Resume's (`invalidEnvKeyError` in `pkg/api/resume.go`) is
+described in step 4 of [Resume](#resume).
+
+Pinned by `TestValidateOrder`, `TestValidateRefusesInvalidEnvKey` and
+`TestInvalidEnvKey` (`internal/spawn/validate_test.go`).
+
+**Must use:** code that asks whether an extra-env key is a valid env-var
+name calls `spawn.InvalidEnvKey` or `spawn.EnvKeyProblem`; do not test
+for an empty key, `=` or NUL by hand. Code that refuses or explains a
+malformed key uses `spawn.EnvKeyProblem` and
+`spawn.InvalidEnvKeyAlternative`; do not restate the text. A change to
+the rule or its texts also changes `invalidExtraEnvKey` and
+`INVALID_ENV_KEY_ALTERNATIVE` in the TypeScript client.
+
+### `make-template` runs the same check (b.66q)
+
+`MakeTemplate` (`pkg/api/make_template.go`) passes the template's own
+`extra_env` to `spawn.ValidateExtraEnv`, so it never saves a template
+that every spawn using it would refuse. Its checks run in this order:
+the name (`config.ValidateTemplateName`), `relay_mode`, then
+`ValidateExtraEnv` (`HOME`, then the `AGENT_DIRECTOR_` prefix, then a
+malformed key, each `ErrReservedEnvKey` with its own description). All
+run before `config.EnsureTemplatesDir`, so a refused call creates no
+templates directory and writes or replaces no file, whatever
+`Overwrite` is. The error and its description are the ones spawn gives
+for that `extra_env`. The CLI and MCP `make-template` go through
+`api.MakeTemplate`. The manifest lists `ErrReservedEnvKey` among
+`make-template`'s errors; no error name is new (b.grg §3).
+
+The TypeScript client's `makeTemplate` refuses a malformed key itself
+before it runs the CLI, as its `spawn` does (`extraEnvFlags`, verb
+`make-template`; see [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
+
+A template saved before this check, or edited by hand, can still hold
+such a key; spawn checks the merged extra env, so it still refuses each
+spawn that uses that template.
+
+Pinned by `TestMakeTemplateRefusesSpawnRefusedEnvKey`
+(`pkg/api/make_template_test.go`), the literal-follow tests A14 and A15
+(`pkg/api/advice_follow_make_template_env_test.go`),
+`TestMakeTemplateHasErrorNames` (`pkg/api/manifest/manifest_test.go`)
+and the `make-template` row of `argv-builder.test.ts`.
+
+**Must use:** code that checks an `extra_env` map before it is launched
+or saved calls `spawn.ValidateExtraEnv`; do not call
+`spawn.ReservedHomeKey`, the prefix rule and `spawn.InvalidEnvKey` in
+sequence by hand. In the TypeScript client, a builder that passes
+`extra_env` as `--extra-env` flags calls `extraEnvFlags`.
 
 ### Launch identity
 
@@ -4205,6 +4366,13 @@ The extra env's `HOME` is never consulted. No launch carries one:
 `resume` refuses a row whose stored extra env has one, both with
 `ErrReservedEnvKey` and before pre-trust (see [Reserved `HOME` in
 `extra_env`](#reserved-home-in-extra_env-bnas)).
+
+The exact-key lookup of `CLAUDE_CONFIG_DIR` sees the variable the launch
+sets. No launch carries a key such as `CLAUDE_CONFIG_DIR=/x`, which tmux
+would read as `CLAUDE_CONFIG_DIR`: `spawn` validation refuses a
+malformed key and `resume` refuses a row whose stored extra env has one,
+both with `ErrReservedEnvKey` and before pre-trust (see [Malformed
+`extra_env` keys](#malformed-extra_env-keys-bvpb)).
 
 For `resume` the extra env is the row's, so it targets the same file the
 row's spawn did. With a file resolved, the step sets
@@ -7545,7 +7713,22 @@ written, harmlessly:
    (`spawn.ReuseOptIn`) and an extra env without `HOME`
    (`spawn.ReservedHomeAlternative`: an absolute `CLAUDE_CONFIG_DIR` gives
    the agent its own Claude Code config); the new life starts with no
-   memory of the old conversation.
+   memory of the old conversation. Then the stored extra env must have
+   no malformed key: one that is empty or holds `=` or a NUL byte
+   (`spawn.InvalidEnvKey`, the rule spawn validation shares) → otherwise
+   `ErrReservedEnvKey` too, wrapped (`invalidEnvKeyError`, b.vpb). Only a
+   row spawned before spawn refused such keys can carry one; relaunched,
+   tmux would set a different variable than the one pre-trust and the
+   transcript lookup below read (the key `CLAUDE_CONFIG_DIR=/x` sets
+   `CLAUDE_CONFIG_DIR`). The description names the instance id, quotes
+   the smallest such key in sorted order, says it is not a valid env-var
+   name and what is wrong with it (`spawn.EnvKeyProblem`) and that
+   nothing was written or launched, and
+   gives the recourse: spawn the id again with the reuse opt-in
+   (`spawn.ReuseOptIn`) and an extra env without that key, each variable
+   named by its own key (`spawn.InvalidEnvKeyAlternative`); the new life
+   starts with no memory of the old conversation. See [Malformed
+   `extra_env` keys](#malformed-extra_env-keys-bvpb).
 5. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
    `ErrJsonlNeverWritten` (see below). Pure `os.Stat` pre-flight; no read.
    Candidate resolution follows a strict precedence (decision of record, bug
@@ -9269,12 +9452,13 @@ guarded on `life_number = 0`.
 **Recovery is `find-missing` → `resume`, or a reuse.** `find-missing`
 then `resume` brings the conversation back. When `resume` cannot
 (`ErrNoSessionId`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`, or
-`ErrReservedEnvKey` for a row whose stored `extra_env` sets `HOME`; see
-[Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), the
-recovery is to spawn the id again, opting in to reuse
-(`--reuse-finished`), with an `extra_env` without `HOME` in the
-`ErrReservedEnvKey` case: the agent starts a new life with no memory of
-the old conversation. Callers cannot delete a row (`delete` is on the
+`ErrReservedEnvKey` for a row whose stored `extra_env` sets `HOME` or
+has a malformed key; see [Reserved `HOME` in
+`extra_env`](#reserved-home-in-extra_env-bnas) and [Malformed
+`extra_env` keys](#malformed-extra_env-keys-bvpb)), the recovery is to
+spawn the id again, opting in to reuse (`--reuse-finished`), with an
+`extra_env` without the key the `ErrReservedEnvKey` description names:
+the agent starts a new life with no memory of the old conversation. Callers cannot delete a row (`delete` is on the
 operator tool only), and a human's `delete` is not a recovery step: it
 removes the row along with its `claude_session_id`, labels and
 `extra_env`. (A resume that fails with
@@ -9878,7 +10062,7 @@ the section that describes it in detail.
     SessionEnd hook budget is raised past half the stopping window by
     `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`, which has no stated cap and
     can come from the host environment, a settings `env` block or a
-    spawn's `extra_env` (agent-director reserves only
+    spawn's `extra_env` (agent-director reserves only `HOME` and
     `AGENT_DIRECTOR_`-prefixed keys there). An operator covers it by
     keeping the window at least twice the budget, as the README's
     [Timing settings](../README.md#timing-settings-tmux) say (see also
@@ -10166,6 +10350,34 @@ meaning and links to the section that describes it in detail.
   spawn of the id with `reuse_finished` and an `extra_env` without
   `HOME`. No error name is new (see
   [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)).
+- **A malformed `extra_env` key is refused (b.vpb).** `spawn`, a reuse
+  and a template's `extra_env` included, returns `ErrReservedEnvKey`
+  for a key that is empty or holds `=` or a NUL byte, and writes and
+  launches nothing. Before, it launched, and tmux read such a key as
+  another variable (the key `CLAUDE_CONFIG_DIR=/x` set
+  `CLAUDE_CONFIG_DIR` to `/x=<value>`, while pre-trust and resume read no
+  `CLAUDE_CONFIG_DIR`). `resume` returns `ErrReservedEnvKey` for a row
+  spawned with such a key before this release, and writes and launches
+  nothing; the recourse is a spawn of the id with `reuse_finished` and an
+  `extra_env` without that key. The TypeScript client throws
+  `ErrReservedEnvKey` for such a key in `spawn`'s `extra_env` before it
+  runs the CLI. Before, the CLI split a key holding `=` into another key
+  and value and spawn went on with them, and an empty key got
+  `ErrInvalidFlags`. Only the description says the key is malformed
+  rather than reserved. No error name is new (b.grg §3; see
+  [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
+- **`make-template` refuses an `extra_env` key spawn refuses (b.66q).**
+  `make-template` returns `ErrReservedEnvKey`, with spawn's description,
+  for a key that sets `HOME`, starts with `AGENT_DIRECTOR_` or is
+  malformed, and creates, writes and replaces nothing, `overwrite` or
+  not. Before, it saved the template and each spawn using it was
+  refused. The TypeScript client's `makeTemplate` throws
+  `ErrReservedEnvKey` for a malformed key before it runs the CLI;
+  before, the CLI split a key holding `=` into another key and value and
+  saved them, and an empty key got `ErrInvalidFlags`. `make-template`'s
+  error list gains `ErrReservedEnvKey`; no error name is new. A template
+  saved before this release is still refused at spawn (see
+  [`make-template` runs the same check](#make-template-runs-the-same-check-b66q)).
 - **`resume`'s trail.** `resume` records its move
   (`ad.resume.moved_to_pending`) and each restore attempt
   (`ad.resume.restored`), and SessionStart's `ad.spawn.state_transition`

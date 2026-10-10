@@ -17,12 +17,17 @@
  *   - Global flags (b.32k: --store-path, --home, --tmux-command) appear
  *     BEFORE the verb token so the CLI's global-flag parser in
  *     internal/clisetup/globalflags.go strips them prior to verb dispatch.
+ *   - spawn's and make-template's extra_env keys that are not valid env-var
+ *     names are refused with ErrReservedEnvKey, the name the CLI gives every
+ *     refused extra_env key, thrown from buildArgv, so no subprocess runs
+ *     (b.vpb, b.66q; see extraEnvFlags).
  *
  * Implements SRD SR-1.2 (argv construction is verb-driven and shell-free).
  *
  * Internal — NOT re-exported from src/index.ts.
  */
 
+import { ErrReservedEnvKey } from "../errors.js";
 import type { VerbName } from "./verbs.js";
 import type {
   SpawnParams,
@@ -177,11 +182,9 @@ function buildSpawn(p: SpawnParams): string[] {
     for (const lv of p.label) f.push("--label", lv);
   }
 
-  // Repeatable --extra-env K=V (Record<string, string> → K=V strings)
-  if (p.extra_env) {
-    for (const [k, v] of Object.entries(p.extra_env))
-      f.push("--extra-env", `${k}=${v}`);
-  }
+  // Repeatable --extra-env K=V; a key that is not a valid env-var name is
+  // refused first (b.vpb).
+  if (p.extra_env) f.push(...extraEnvFlags("spawn", p.extra_env));
 
   // Repeatable permission flags
   if (p.allow) {
@@ -200,6 +203,70 @@ function buildSpawn(p: SpawnParams): string[] {
   }
 
   return f;
+}
+
+/**
+ * extraEnvFlags returns env as repeatable `--extra-env K=V` arguments, in
+ * insertion order, for spawn's and make-template's argv. It first refuses a key
+ * that is not a valid env-var name (invalidExtraEnvKey) by throwing
+ * ErrReservedEnvKey for verb, with the Go side's description, so no subprocess
+ * runs (b.vpb for spawn, b.66q for make-template): the CLI splits each K=V at
+ * its first "=", so it could not carry such a key unchanged.
+ */
+function extraEnvFlags(verb: VerbName, env: Record<string, string>): string[] {
+  const bad = invalidExtraEnvKey(env);
+  if (bad !== undefined) {
+    const key = JSON.stringify(bad.key);
+    throw new ErrReservedEnvKey(
+      verb,
+      "ErrReservedEnvKey",
+      `extra_env key ${key} is not a valid env-var name: ${bad.problem}; remove ${key} from extra_env, and ${INVALID_ENV_KEY_ALTERNATIVE}`,
+    );
+  }
+  const f: string[] = [];
+  for (const [k, v] of Object.entries(env)) f.push("--extra-env", `${k}=${v}`);
+  return f;
+}
+
+/**
+ * What a caller whose extra_env key is not a valid env-var name does instead;
+ * the same text as spawn.InvalidEnvKeyAlternative in the Go source.
+ */
+const INVALID_ENV_KEY_ALTERNATIVE =
+  "give each variable its own name as the key (not empty, with no '=' and no NUL byte) and its value as the value";
+
+/**
+ * invalidExtraEnvKey returns the first key of env, in sorted order, that is
+ * not a valid env-var name, with what is wrong with it; undefined when every
+ * key is valid (b.vpb). A key is invalid when it is empty, contains "=" or
+ * contains a NUL character, the rule and texts of the Go side's
+ * spawn.InvalidEnvKey and spawn.EnvKeyProblem, which spawn and make-template
+ * apply for MCP and Go callers (and spawn for a template's keys).
+ *
+ * This client must check it itself: it passes each entry as one
+ * `--extra-env K=V` argument, and the CLI splits that at its first "=". A key
+ * holding "=" would reach spawn as a different key and value (silently
+ * rewritten), an empty key would be refused as a malformed flag
+ * (ErrInvalidFlags), and a NUL cannot be carried in an argument.
+ */
+function invalidExtraEnvKey(
+  env: Record<string, string>,
+): { key: string; problem: string } | undefined {
+  for (const key of Object.keys(env).sort()) {
+    if (key === "") {
+      return { key, problem: "it is empty, so tmux would be given \"=<value>\", which names no variable" };
+    }
+    if (key.includes("=")) {
+      return {
+        key,
+        problem: "it contains '=', and tmux splits each KEY=VALUE entry at its first '=', so it would set a different variable",
+      };
+    }
+    if (key.includes("\0")) {
+      return { key, problem: "it contains a NUL byte, which no env-var name can hold and no tmux argument can carry" };
+    }
+  }
+  return undefined;
 }
 
 function buildStatus(p: StatusParams): string[] {
@@ -280,11 +347,9 @@ function buildMakeTemplate(p: MakeTemplateParams): string[] {
     for (const lv of p.label) f.push("--label", lv);
   }
 
-  // Repeatable --extra-env K=V
-  if (p.extra_env) {
-    for (const [k, v] of Object.entries(p.extra_env))
-      f.push("--extra-env", `${k}=${v}`);
-  }
+  // Repeatable --extra-env K=V; a key that is not a valid env-var name is
+  // refused first, as for spawn (b.66q).
+  if (p.extra_env) f.push(...extraEnvFlags("make-template", p.extra_env));
 
   // Repeatable permission flags
   if (p.allow) {

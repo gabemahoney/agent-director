@@ -1,7 +1,9 @@
 /**
- * adviceFollow.test.ts — b.fji literal-follow test for the TS client's own
- * advice (inventory K1): trigger the callTimeoutMs refusal, assert its advice,
- * then omit the field as told and assert the client constructs and works.
+ * adviceFollow.test.ts — b.fji literal-follow tests for the TS client's own
+ * advice: K1 triggers the callTimeoutMs refusal, asserts its advice, then omits
+ * the field as told and asserts the client constructs and works; K2 (b.vpb,
+ * b.66q) does the same for a malformed extra_env key given to spawn, and to
+ * makeTemplate, whose saved template's spawn then pre-trusts as advised.
  */
 
 import { test, expect, afterAll } from "bun:test";
@@ -10,6 +12,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Client } from "../src/client.js";
+import { ErrReservedEnvKey } from "../src/errors.js";
+import type { SpawnResult } from "../src/types.js";
+import { CLAUDE_JSON, homeStore, openClient, rejection, seedOuterParent, trustEntry } from "./internal/helper.js";
+import { withTempHome } from "./internal/tempHome.js";
 
 const fixturePath = path.resolve(import.meta.dir, "fixtures/epic-a/success.sh");
 const tmpDirs: string[] = [];
@@ -50,4 +56,45 @@ for (const bad of [0, -1]) {
       client.close();
     }
   });
+}
+
+// K2 (b.vpb, b.66q): "remove \"CLAUDE_CONFIG_DIR=...\" from extra_env, and give each variable its own name as the key (...) and its value as the value"
+const k2Cases: {
+  verb: string;
+  outcome: string;
+  launch: (c: Client, cwd: string, env: Record<string, string>) => Promise<SpawnResult>;
+}[] = [
+  { verb: "spawn", outcome: "launches and", launch: (c, cwd, env) => c.spawn({ cwd, extra_env: env }) },
+  {
+    verb: "make-template",
+    outcome: "saves a template whose spawn",
+    launch: async (c, cwd, env) => {
+      await c.makeTemplate({ name: "k2", cwd, extra_env: env });
+      return c.spawn({ cwd, template: "k2" });
+    },
+  },
+];
+for (const { verb, outcome, launch } of k2Cases) {
+  test(`K2 ${verb} extra_env key CLAUDE_CONFIG_DIR=<dir>: naming the variable as its own key, as advised, ${outcome} pre-trusts <dir>`, async () => {
+    await withTempHome(async (homeDir) => {
+      const cfg = fs.mkdtempSync(path.join(homeDir, "cfg-"));
+      const claudeJson = path.join(cfg, ".claude.json");
+      fs.writeFileSync(claudeJson, CLAUDE_JSON);
+      seedOuterParent(homeStore(homeDir));
+      using client = await openClient(homeStore(homeDir));
+      const bad = `CLAUDE_CONFIG_DIR=${cfg}`;
+
+      const refusal = await rejection(launch(client, homeDir, { [bad]: "" }));
+
+      expect(refusal).toBeInstanceOf(ErrReservedEnvKey);
+      expect([(refusal as ErrReservedEnvKey).verb, (refusal as ErrReservedEnvKey).errName]).toEqual([verb, "ErrReservedEnvKey"]);
+      expect((refusal as Error).message).toContain(`${JSON.stringify(bad)} is not a valid env-var name: it contains '='`);
+      expect((refusal as Error).message).toContain(
+        `remove ${JSON.stringify(bad)} from extra_env, and give each variable its own name as the key (not empty, with no '=' and no NUL byte) and its value as the value`,
+      );
+      const res = await launch(client, homeDir, { CLAUDE_CONFIG_DIR: cfg });
+      expect(res.pre_trust).toBe("ok");
+      expect(trustEntry(claudeJson, fs.realpathSync(homeDir))).toBe(true);
+    });
+  }, 10_000);
 }

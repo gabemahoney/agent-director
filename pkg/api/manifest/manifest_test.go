@@ -617,11 +617,20 @@ func TestReadPaneHasInteractErrorNames(t *testing.T) {
 }
 
 // TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names and
-// b.nas's ErrReservedEnvKey (a row whose stored extra env has HOME).
+// ErrReservedEnvKey (a row whose stored extra env has HOME, b.nas, or a
+// malformed key, b.vpb).
 func TestResumeHasSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "resume", "Resume", true, "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
 		"ErrReservedEnvKey", "ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",
 		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
+}
+
+// TestMakeTemplateHasErrorNames pins make-template's to exactly its three
+// template names and ErrReservedEnvKey, spawn's one name for every refused
+// extra_env key, reserved or malformed (b.66q).
+func TestMakeTemplateHasErrorNames(t *testing.T) {
+	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrTemplateNameUnsafe", "ErrTemplateExists",
+		"ErrTemplateMalformed", "ErrReservedEnvKey")
 }
 
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven names.
