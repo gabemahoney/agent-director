@@ -3666,10 +3666,12 @@ outcome stays machine-readable. `ad.spawn.state_transition` records raw transiti
   every request Claude Code's hooks have not proven gone, by the proof
   rules of "The dialog hold" under [Permission relay](#permission-relay)
   (a `turn_end` proof covers only requests recorded before the second its
-  hook started, b.omt). A row can read `waiting` with an open request, or
-  `check_permission` with `[]`, for up to T, and a row its agent moved out
-  of `ended` or `missing` can read `ended` or `missing` with requests in
-  `unproven_requests`, also for up to T. And since a request proven gone no
+  hook started, b.omt). For up to T a row can read any state, even `ended`
+  or `missing` (see **Hooks out of a terminal state settle** above), with
+  an open request in `permission_requests`, or `check_permission` with
+  `[]`, and a row its agent moved out of `ended` or `missing` can read
+  `ended` or `missing` with requests in `unproven_requests`, also for up
+  to T. And since a request proven gone no
   longer holds the row (b.omt), the raw state can leave `check_permission`
   while such a request still awaits an answer; the row can then read
   `check_permission` for up to T with that request in neither list
@@ -11347,9 +11349,10 @@ the section that describes it in detail.
   - verbs act on the live state, so a verb can refuse, with a named error,
     on a state `status` does not show yet;
   - permission requests, the relay's delivery states and
-    `launch_started_at` follow the live state: a row can read `waiting`
-    with an open request, `check_permission` with `[]`, or `pending`
-    without `launch_started_at`, for up to the settle time;
+    `launch_started_at` follow the live state: a row can read any state
+    (even `ended` or `missing`) with an open request, `check_permission`
+    with `[]`, or `pending` without `launch_started_at`, for up to the
+    settle time;
   - a hook that moves a row out of `missing` or `ended` settles, so the row
     reads `missing` or `ended` for the settle time first;
   - right after a change of the setting, a value can be reported that held

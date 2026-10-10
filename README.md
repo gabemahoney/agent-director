@@ -668,9 +668,9 @@ once it has held:
   `resume`, `kill`, `find-missing`, `expire` and `spawn` judge a row's
   latest state, which can be newer than what `status` shows, so a verb can
   refuse on a state `status` does not show yet; the refusal is a named
-  error. Permission requests are never delayed: a row can read `waiting`
-  while `get` lists an open request, or `check_permission` with none, for
-  up to T.
+  error. Permission requests are never delayed: a row can read any state,
+  even `ended` or `missing`, while `get` lists an open request, or
+  `check_permission` with none, for up to T.
 - **Reads never wait** for a state to settle. A change of the key takes
   effect for the CLI, the TypeScript client and each hook on their next
   call, for the MCP server after a restart, and for a Go `Client` when it

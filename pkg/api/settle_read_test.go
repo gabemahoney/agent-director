@@ -130,10 +130,11 @@ func TestClientSettledReads(t *testing.T) {
 }
 
 // TestClientSettledReadsKeepRawExtras: the settle time changes only state.
-// A raw check_permission row reading waiting still shows its open request; a
-// raw waiting row reading check_permission shows none (requests are never
-// debounced); a raw waiting row reading pending (just after SessionStart)
-// carries no launch_started_at, though its column still holds one.
+// A raw check_permission row reads whatever state it settled in, even ended or
+// missing (b.hjj), and still shows its open request; a raw waiting row reading
+// check_permission shows none (requests are never debounced); a raw waiting
+// row reading pending (just after SessionStart) carries no launch_started_at,
+// though its column still holds one.
 func TestClientSettledReadsKeepRawExtras(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -156,12 +157,18 @@ func TestClientSettledReadsKeepRawExtras(t *testing.T) {
 	stopped := seed(store.StateWaiting, store.StateCheckPermission, true)
 	// Its column keeps a launch start, so only keying on the raw state hides it.
 	started := seed(store.StateWaiting, store.StatePending, false, apitest.WithLaunchStartedAt(fresh))
-	c := settleClientFor(t, dbPath, settleMax, tmuxfix.NewRecorder(), func() time.Time { return now })
-
-	for _, tc := range []struct {
+	type read struct {
 		id, state string
 		requests  int
-	}{{asking, store.StateWaiting, 1}, {stopped, store.StateCheckPermission, 0}} {
+	}
+	reads := []read{{asking, store.StateWaiting, 1}, {stopped, store.StateCheckPermission, 0}}
+	// b.hjj: a hook's move to check_permission from any other state reads that state meanwhile.
+	for _, from := range []string{store.StateWorking, store.StateAskUser, store.StatePending, store.StateEnded, store.StateMissing} {
+		reads = append(reads, read{seed(store.StateCheckPermission, from, true), from, 1})
+	}
+	c := settleClientFor(t, dbPath, settleMax, tmuxfix.NewRecorder(), func() time.Time { return now })
+
+	for _, tc := range reads {
 		_, row, listed := clientReported(t, c, tc.id)
 		if row.State != tc.state || len(row.PermissionRequests) != tc.requests || len(listed.PermissionRequests) != tc.requests {
 			t.Errorf("%s: state %q, get's permission_requests %d, list's %d; want %q and %d (the raw state's)",

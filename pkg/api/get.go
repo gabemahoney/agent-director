@@ -404,8 +404,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	}
 
 	// The raw state decides the request lists: permission requests are not
-	// debounced (b.3ie), so a settled state can read waiting while the raw
-	// check_permission shows its open requests.
+	// debounced (b.3ie), so the settled state can be any state, even ended or
+	// missing, while the raw check_permission shows its open requests.
 	j := newRelayJudge(v)
 	if !finishedState(row.State) {
 		open, unproven, err := spawnRequestInfos(s.PermissionRequestsForSpawn, j, instanceID)
