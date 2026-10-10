@@ -90,6 +90,15 @@
 # leftovers; each new file and copy is owner-only until its chmod, already has
 # its mode when moved into place, and no cp -p is needed (NFS homes).
 #
+# Symlinked merge files (b.nw5): a hooks-on install writes through a symlinked
+# settings.json and config.toml, absolute or a chain of relative links, to the
+# file at the end, and keeps every link; a dangling settings.json link gets the
+# file it names created. A link it cannot write through (its links loop, or the
+# target's directory is missing) stops the install in pre-flight, settings.json
+# with exit 4 and config.toml with exit 5, before anything on disk changes; with
+# --no-hooks neither link is checked. A link into a directory it cannot write
+# in, and following that refusal's advice, is advice_follow.sh's J20.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -660,10 +669,10 @@ report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.agent-director
 # The stand-in's holder may still hold the lock: wait it out.
 report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$((schema - 1))"
 
-# snap: every path under H with its type, mode, size and mtime, and every
-# file's sha256.
+# snap: every path under H with its type, mode, size, mtime and link target,
+# and every file's sha256.
 snap() {
-    (cd "$H" && find . -printf '%p %y %m %s %T@\n' | sort && find . -type f -exec sha256sum {} + | sort)
+    (cd "$H" && find . -printf '%p %y %m %s %T@ %l\n' | sort && find . -type f -exec sha256sum {} + | sort)
 }
 
 # preflight_refused <name> <config> <line> [<first stderr line>]: install.sh
@@ -836,8 +845,9 @@ chmod 0755 "$KEEP/mv" "$KEEP/chmod" "$KEEP/cp" "$KEEP/date"
 # and each .bak its original's owner bits until chmod gives it its mode. Per case
 # <name>|<umask>|<config mode>|<settings mode>|<setup>: after a first install,
 # both files get unmerged contents at those modes, and a re-install under
-# <umask> merges them. <setup> symlink makes settings.json a link to a file
-# elsewhere; leftovers adds 0666 junk at both .new and .bak.BAK_STAMP names.
+# <umask> merges them. <setup> symlink makes both files links to files in
+# ~/dotfiles, which the merge writes through, keeping each link (b.nw5);
+# leftovers adds 0666 junk at both .new and .bak.BAK_STAMP names.
 HOOKS=1
 while IFS='|' read -r -u 3 name mask cmode smode setup; do
     name="keep-mode-$name"
@@ -845,7 +855,10 @@ while IFS='|' read -r -u 3 name mask cmode smode setup; do
     local_install
     rc="$RC" cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
     if [[ "$setup" == symlink ]]; then
-        mkdir "$H/dotfiles" && mv "$sj" "$H/dotfiles/settings.json" && ln -s "$H/dotfiles/settings.json" "$sj"
+        mkdir "$H/dotfiles"
+        for f in "$cfg" "$sj"; do
+            mv "$f" "$H/dotfiles/${f##*/}" && ln -s "$H/dotfiles/${f##*/}" "$f"
+        done
     fi
     printf '[defaults]\nrelay_mode = "off"\n' >"$cfg"
     printf '{"theme":"dark"}\n' >"$sj"
@@ -867,11 +880,14 @@ while IFS='|' read -r -u 3 name mask cmode smode setup; do
     report "$name-written-owner-only" "$(sort "$KEEP/chmod.log" | paste -sd,)" \
         "config.toml.bak.$BAK_STAMP ${cmode:0:1}00,config.toml.new 600,settings.json.bak.$BAK_STAMP ${smode:0:1}00,settings.json.new 600"
     report "$name-new-file-modes" "$(sort "$KEEP/mv.log" | paste -sd,)" "config.toml $cmode,settings.json $smode"
-    report "$name-no-temp-left" "$(compgen -G "$cfg.new"; compgen -G "$sj.new")" ""
+    report "$name-no-temp-left" "$(compgen -G "$cfg.new"; compgen -G "$sj.new"; compgen -G "$H/dotfiles/*.new")" ""
     report "$name-merged" \
         "$(grep -cx 'inject_help_hook = true' "$cfg") $(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionEnd | length)]' "$sj" 2>&1)" \
         '1 ["dark",1,1]'
     report "$name-backups" "$(cat "$cfg.bak.$BAK_STAMP" "$sj.bak.$BAK_STAMP" 2>&1 | paste -sd'|')" '[defaults]|relay_mode = "off"|{"theme":"dark"}'
+    if [[ "$setup" == symlink ]]; then
+        report "$name-links-kept" "$(readlink "$cfg" "$sj" | paste -sd,)" "$H/dotfiles/config.toml,$H/dotfiles/settings.json"
+    fi
 done 3<<'EOF'
 private|022|600|600|
 group|022|640|660|
@@ -879,7 +895,95 @@ read-only|000|400|400|
 symlink|022|600|600|symlink
 leftovers|022|600|600|leftovers
 EOF
+
+# A hooks-on install writes through a settings.json and config.toml at the end
+# of a chain of two relative links, the first through .., keeping every link as
+# it was (b.nw5).
+new_home link-chain
+cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
+mkdir -p "$H/.agent-director" "$H/.claude" "$H/dotfiles/real"
+printf '[defaults]\nrelay_mode = "off"\n' >"$H/dotfiles/real/config.toml"
+printf '{"theme":"dark"}\n' >"$H/dotfiles/real/settings.json"
+for f in "$cfg" "$sj"; do
+    ln -s "real/${f##*/}" "$H/dotfiles/${f##*/}" && ln -s "../dotfiles/${f##*/}" "$f"
+done
+local_install
+report link-chain-exit-code "$RC" "0"
+report link-chain-links-kept "$(readlink "$cfg" "$H/dotfiles/config.toml" "$sj" "$H/dotfiles/settings.json" | paste -sd,)" \
+    "../dotfiles/config.toml,real/config.toml,../dotfiles/settings.json,real/settings.json"
+report link-chain-merged \
+    "$(grep -cx 'inject_help_hook = true' "$H/dotfiles/real/config.toml") $(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionEnd | length)]' "$H/dotfiles/real/settings.json" 2>&1)" \
+    '1 ["dark",1,1]'
+report link-chain-no-temp-left \
+    "$(compgen -G "$cfg.new"; compgen -G "$sj.new"; compgen -G "$H/dotfiles/*.new"; compgen -G "$H/dotfiles/real/*.new")" ""
+
+# A dangling settings.json link gets the file it names created, holding the
+# hooks, and is kept (b.nw5).
+new_home link-dangling
+sj="$H/.claude/settings.json"
+mkdir -p "$H/.claude" "$H/dotfiles"
+ln -s "$H/dotfiles/settings.json" "$sj"
+local_install
+report link-dangling-exit-code "$RC" "0"
+report link-dangling-link-kept "$(readlink "$sj")" "$H/dotfiles/settings.json"
+report link-dangling-merged "$(jq -c '[(.hooks.SessionStart | length), (.hooks.SessionEnd | length)]' "$H/dotfiles/settings.json" 2>&1)" '[1,1]'
+
+# A settings.json (exit 4) or config.toml (exit 5, ErrConfigMalformed) link the
+# merge cannot write through stops the install in pre-flight, naming the link,
+# its target and why, and leaves H as it was: nothing installed, no state.db, no
+# other file created and every link as it was (b.nw5). Per case <file>|<setup>:
+# loop, two relative links naming each other; missing-dir, a link into a
+# ~/dotfiles that does not exist. read-only is J20's: advice_follow.sh refuses
+# a link into a 0555 directory for each file before following its advice.
+while IFS='|' read -r -u 3 file setup; do
+    name="link-$setup-${file%.*}"
+    new_home "$name"
+    link="$H/.claude/$file" rc=4 last="  Nothing was installed or changed. Re-run this install after the change."
+    if [[ "$file" == config.toml ]]; then
+        link="$H/.agent-director/$file" rc=5 last="install.sh: err_name=ErrConfigMalformed"
+    fi
+    target="$H/dotfiles/$file"
+    mkdir -p "${link%/*}"
+    # refusal: the refusal's first lines, joined by |; lines: how many.
+    refusal="install.sh: cannot merge into $link through its symlink; refusing to install.|  link    : $link" lines=4
+    case "$setup" in
+        loop)
+            mkdir "$H/dotfiles"
+            ln -s "../dotfiles/$file" "$link" && ln -s "../${link#"$H/"}" "$target"
+            refusal+="|  The links loop: following them never reaches a file (more than 40 links)." lines=3 ;;
+        missing-dir)
+            ln -s "$target" "$link"
+            refusal+="|  target  : $target|  There is no directory $H/dotfiles to hold the target (a dotfiles repository not cloned yet, say)." ;;
+    esac
+    before="$(snap)"
+    local_install
+    report "$name-exit-code" "$RC" "$rc"
+    report "$name-refusal" "$(head -n "$lines" "$ERR" | paste -sd'|')" "$refusal"
+    report "$name-last-stderr-line" "$(tail -n 1 "$ERR")" "$last"
+    report "$name-no-pre-flight-ok" "$(grep -c "pre-flight OK" "$OUT")" "0"
+    report "$name-home-unchanged" "$(diff <(echo "$before") <(snap) | paste -sd'|')" ""
+done 3<<'EOF'
+settings.json|loop
+settings.json|missing-dir
+config.toml|loop
+config.toml|missing-dir
+EOF
 HOOKS=""
+
+# With --no-hooks neither file is merged, so neither link is checked: a
+# settings.json whose links loop and a config.toml linked into a missing
+# directory install, both left as they were (b.nw5).
+new_home link-no-hooks
+cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
+mkdir -p "$H/.agent-director" "$H/.claude" "$H/dotfiles"
+ln -s ../dotfiles/settings.json "$sj" && ln -s ../.claude/settings.json "$H/dotfiles/settings.json"
+ln -s "$H/nowhere/config.toml" "$cfg"
+local_install
+report link-no-hooks-exit-code "$RC" "0"
+report_installed link-no-hooks
+report link-no-hooks-links-kept "$(readlink "$sj" "$H/dotfiles/settings.json" "$cfg" | paste -sd,)" \
+    "../dotfiles/settings.json,../.claude/settings.json,$H/nowhere/config.toml"
+report link-no-hooks-not-checked "$(grep -c 'through its symlink' "$ERR")" "0"
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 

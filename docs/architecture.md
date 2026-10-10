@@ -4881,6 +4881,11 @@ claude /install-agent-director (or `bash install.sh`)
   → hooks on only: a config.toml that sets defaults as a key before any
     header (defaults = { ... }) → exit 5, nothing on disk changed (see
     "The config.toml merge" below)
+  → hooks on only: a symlinked settings.json or config.toml the merges
+    cannot write through (its links loop, or its target's directory is
+    missing or cannot be written in) → exit 4 for settings.json, exit 5
+    for config.toml, nothing on disk changed (see "A symlinked
+    settings.json or config.toml" below)
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
   → find both source binaries (agent-director-admin last from its
@@ -4909,8 +4914,10 @@ claude /install-agent-director (or `bash install.sh`)
     left as it was)
   → set inject_help_hook = true in config.toml's [defaults] table (see
     "The config.toml merge" below); --no-hooks skips this and the
-    settings.json merge; both merges keep the file's mode (see "Merged
-    files keep their mode" below)
+    settings.json merge; both merges keep the file's mode and write
+    through a symlink to its target, keeping the link (see "Merged files
+    keep their mode" and "A symlinked settings.json or config.toml"
+    below)
   → optional MCP registration (--register-mcp)
   → print the admin path once, for the human
 ```
@@ -4919,8 +4926,9 @@ Pattern B is where the CLI / state / hooks side effects happen.
 
 **Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
 (`--help`) lists its exit codes: 2 pre-flight, 3 the source binaries or
-their version stamps, 4 the `settings.json` hook merge, 5 the config file
-or the store open and schema migration. Exit 5 has causes needing
+their version stamps, 4 the `settings.json` hook merge (with hooks on, a
+symlinked `settings.json` it cannot write through included, refused in
+pre-flight), 5 the config file or the store open and schema migration. Exit 5 has causes needing
 different remedies, so every exit-5 path ends with one line on stderr, its
 last, `install.sh: err_name=<Name>`. That line is the contract: a caller
 branches on `<Name>`, never on the English above it. The status stays 5
@@ -4929,7 +4937,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `<Name>` | Sites | Remedy |
 |---|---|---|
 | `ErrVersionUnreadable` | `ad_fail_unreadable_version`: step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
-| `ErrConfigMalformed` | pre-flight `ad_store_db_path`, `ad_store_busy_timeout_ms` and (hooks on) `ad_config_merge_check`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml`, then re-run |
+| `ErrConfigMalformed` | pre-flight `ad_store_db_path`, `ad_store_busy_timeout_ms` and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run |
 | `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
 | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded, or a readable `user_version` that is not the target | a human |
 | any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
@@ -5113,9 +5121,11 @@ over `<file>`. The file keeps its mode (a 0600 file stays 0600 under umask
 022), and its new contents are never readable, even before the `mv`, by
 anyone who could not read the old. The mode is read with `stat -L` (GNU
 `-c '%a'`, else BSD `-f '%Lp'`), so a symlinked `<file>` gives its target's
-mode; the `mv` replaces the link with a regular file and leaves the target
-as it was. A `<file>` that does not exist yet takes the umask's mode (a new
-`config.toml` is then `chmod 0600`). The timestamped `.bak` copies are made
+mode; for a symlinked `<file>` the `.new` and the `mv` act on the file the
+link resolves to, and the link is kept (see "A symlinked `settings.json`
+or `config.toml`" below). A `<file>` that does not exist yet takes the
+umask's mode (a new `config.toml` is then `chmod 0600`). The timestamped
+`.bak` copies are made
 with `ad_backup_keeping_mode <file> <bak>` the same way: it removes any
 `<bak>` (an earlier run's copy of the same second), copies with a plain
 `cp -f` under `umask 077`, then `chmod`s the copy to `<file>`'s mode. It
@@ -5126,14 +5136,148 @@ uses the same functions for its two rewrites. **Must use:** a rewrite of
 an existing operator file in either script goes through
 `ad_replace_keeping_mode` and its backup through `ad_backup_keeping_mode`,
 never a bare tempfile and `mv`, a `cp -f` alone, or a `cp -p`;
-`ad_mode_of`, `ad_replace_keeping_mode` and `ad_backup_keeping_mode`
-exist in both scripts (install.sh, uninstall.sh) and change together.
+`ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
+`ad_replace_keeping_mode` and `ad_backup_keeping_mode` exist in both
+scripts (install.sh, uninstall.sh) and change together.
 `test/install-sh/retry.sh`'s merge-modes table and
 `TestUninstallKeepsFileModes` pin this with `chmod` and `cp` stand-ins on
 `PATH`: each `.new` is 600 and each `.bak` holds only its original's owner
 bits before its `chmod` (retry.sh's `-written-owner-only` rows), and a
 `cp` that fails on `-p`/`--preserve`, as on NFS, is never hit (its
 `-no-cp-p` rows); a change adds its cases to both.
+
+**A symlinked `settings.json` or `config.toml` (b.nw5).** When
+`~/.claude/settings.json` or `~/.agent-director/config.toml` is a symlink
+(a dotfile-managed link into a dotfiles repo, say), install.sh's merges and
+uninstall.sh's reversals write through it, as pre-trust's write of a
+symlinked `.claude.json` does (see "A symlinked `.claude.json`" above): the
+link stays in place and the file it resolves to gets the edit. A `mv` over
+the link itself would replace it with a regular file and leave its target
+stale, so later edits made in the dotfiles repo would no longer reach
+Claude Code or agent-director. `ad_replace_keeping_mode` first resolves
+`<file>` with `ad_resolve_link <file>`, which follows the chain one link at
+a time with `readlink`, each relative target taken against its own link's
+directory, and prints the path at its end, or `<file>` itself when it is
+not a link. It is a loop over `readlink` because older macOS has no
+`readlink -f`. The `.new` is written beside that resolved file and `mv`'d
+over it, so the rename stays within one directory even when the link
+points to another filesystem, and the resolved file keeps its mode as
+above. The `.bak` is still made beside the link: `cp` reads through the
+link, so it is a regular copy of the target's contents at the target's
+mode. A dangling link whose directory exists is taken for a missing file
+(`settings.json`'s merge starts from `{}`, `config.toml` gets the created
+file): install.sh creates the file the link names, keeping the link, and
+that file takes the umask's mode (`config.toml` is then `chmod 0600`,
+through the link). The `config.toml` create branch writes with `>` and
+`chmod`s, both of which follow a link.
+
+The write fails when the links loop, when the resolved file's directory
+is missing, or when that directory cannot be written in, so both scripts
+check a symlinked file before anything on disk changes, never at the
+write. `ad_link_write_check <file>` returns 0 for a file that is not a
+symlink, or one whose links end (`ad_resolve_link` succeeds) at a file
+whose directory exists and can be written in (`-w` and `-x`; `-w` also
+fails on a read-only mount). Otherwise it sets `link_target` (the resolved
+file, empty for a loop) and `link_why` (one sentence saying why) and
+returns 1. It refuses:
+
+- **a loop:** more than 40 links, as the kernel counts them;
+- **a missing directory:** the resolved file's directory does not exist
+  (a dotfiles repository not cloned yet, say);
+- **a directory that cannot be written in:** home-manager's links into
+  the read-only `/nix/store`, say.
+
+Each script uses it as follows.
+
+- **install.sh, hooks on:** right after `ad_config_merge_check` and before
+  `pre-flight OK`, it checks `settings.json`, then `config.toml`.
+  `ad_link_refuse <file>` reports a refusal on stderr: first line
+  `install.sh: cannot merge into <file> through its symlink; refusing to install.`,
+  then `link    : <file>`, `target  : <target>` (none for a loop), the
+  reason, the advice, and
+  `Nothing was installed or changed. Re-run this install after the change.`
+  `settings.json` exits 4; `config.toml` exits 5 through
+  `ad_exit_5 ErrConfigMalformed`. The advice gives two ways out: fix the
+  link so it reaches a file in a directory one can write in; or re-run
+  with `--no-hooks`, which edits neither file, and add what the merges add
+  where the files come from (the dotfiles or home-manager source): in
+  `settings.json` a SessionStart hook and a SessionEnd hook with matcher
+  `compact`, each a command hook running `<bin dir>/agent-director help`,
+  and in `config.toml` `inject_help_hook = true` under `[defaults]`. The
+  check never reads the file, so a hooks-on install over such a link is
+  refused even when the file already holds those entries.
+- **install.sh, `--no-hooks`:** neither file is written, so neither is
+  checked.
+- **uninstall.sh** works out both edits first (`settings.json`'s jq
+  filter, `config.toml`'s `awk`). Then, in this order, it checks
+  `settings.json`, asks the `--purge` confirmation (see "Uninstall
+  semantics" below) and checks `config.toml`, each check only for a file
+  it will edit, all before any edit and before the binaries are removed.
+  It edits a file
+  only when it resolves to a regular file (`-f`), so a loop or a dangling
+  link (a missing directory included) is left alone and never reaches the
+  check; only a directory that cannot be written in is refused. Its own
+  `ad_link_refuse <file> <what> <remedy>...` exits 2: first line
+  `uninstall.sh: cannot <what> <file> through its symlink; refusing to uninstall.`,
+  then the link, target and reason, the advice (fix the link, or remove
+  agent-director's entries where the file comes from: each SessionStart
+  and SessionEnd entry holding a hook whose command starts with
+  `<bin dir>/agent-director`, or `inject_help_hook` from `[defaults]` and
+  the header too when only blank lines and comments are left under it),
+  and `Nothing was removed or changed. Re-run this uninstall after the change.`
+  A `settings.json` that cannot be written through but holds none of
+  agent-director's hook entries is left alone instead, and the uninstall
+  goes on, with the stdout line
+  `uninstall.sh: left <file> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
+  uninstall.sh rewrites every valid `settings.json`, so a refusal there
+  would stop every uninstall until the link went. A `config.toml` without
+  the key needs no edit, so it is not checked.
+  Under a confirmed `--purge`, a `config.toml` that cannot be written
+  through is left alone instead of refused, with the stdout line
+  `uninstall.sh: left <file> alone: its symlink cannot be written through, and --purge removes the link; its target, <target>, keeps inject_help_hook`.
+  The purge's `rm -rf` removes the link, never the file it resolves to,
+  so a refusal would only stop the purge; that file keeps
+  `inject_help_hook`, and the line names it. A `config.toml` link that can
+  be written through is edited through as without `--purge`, so a target
+  outside `~/.agent-director` (a dotfiles repo, say) loses the key; its
+  `.bak`, made beside the link, goes with the purge. `--purge` never waives
+  `settings.json`'s check, as that file lives outside
+  `~/.agent-director`; the check runs before the prompt, so no refusal
+  follows a `y`.
+
+**Must use:** a script that writes through a symlinked operator file
+checks it with `ad_link_write_check` before anything on disk changes.
+`ad_resolve_link`'s own loop failure in `ad_replace_keeping_mode` stays
+only as a backstop for a link changed after the check: it prints
+`<script>: <file>: too many levels of symbolic links`, the rewrite writes
+nothing, and `set -e` stops the script with exit 1.
+
+`test/install-sh/retry.sh` pins install.sh's side: its
+`keep-mode-symlink` case (both files absolute links into `~/dotfiles`;
+its `-links-kept` row), `link-chain` (two relative links, the first
+through `..`), `link-dangling`, the four `link-<setup>-settings` and
+`link-<setup>-config` refusals (`<setup>` `loop` or `missing-dir`; each
+checks the exit code, the refusal's first lines, the last stderr line, no
+`pre-flight OK`, and HOME unchanged), and `link-no-hooks`.
+`advice_follow.sh`'s J20 has the third refusal, a link into a directory
+that cannot be written in (a 0555 directory standing in for a read-only
+one), for each file: it checks the exit code, the first stderr line, the
+whole advice and HOME unchanged, then follows both ways out.
+`TestUninstallKeepsFileModes`' symlinked case (`config.toml`
+an absolute link, `settings.json` a relative one, each kept, its target
+edited), `TestUninstallRefusesUnwritableLink` (the refusal changes
+nothing; each way out, followed, lets the re-run finish, with the
+left-alone line for `settings.json`) and `TestUninstallPurge` pin
+uninstall.sh's. `TestUninstallPurge`'s rows: `--force` over a `config.toml`
+linked into a 0555 directory (the left-alone line, the target keeping the
+key, `~/.agent-director` gone); that link with `n` answered (the exit-2
+refusal after the prompt, HOME unchanged); a plain `config.toml` with `n`
+answered (a plain uninstall, last line `uninstall.sh: --purge aborted`,
+exit 0); `--force` over a `config.toml` linked into `~/dotfiles` (the
+target edited, `~/.agent-director` gone); a `settings.json` linked into a
+0555 directory with `y` on stdin (the exit-2 refusal, with no prompt, HOME
+unchanged); and end of input (the prompt, exit 1, HOME unchanged). A
+change adds its cases to both scripts' tests.
 
 #### Schema migration at install-time
 
@@ -5527,8 +5671,14 @@ the optional PATH symlink, and the two hook entries it injected
 `[defaults]` (see "The config.toml merge" above). Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
 rewrite of `settings.json` or `config.toml` takes a timestamped `.bak`
-first and keeps the file's mode, as install.sh's merges do (see "Merged
-files keep their mode" above).
+first, keeps the file's mode and writes through a symlink to its target,
+keeping the link, as install.sh's merges do (see "Merged files keep their
+mode" and "A symlinked `settings.json` or `config.toml`" above). Both
+edits are worked out first; a symlinked file to be edited whose target's
+directory cannot be written in is refused (exit 2) before anything is
+removed or changed, except a `settings.json` holding none of
+agent-director's hook entries, and a `config.toml` under a confirmed
+`--purge`, each left alone with a note.
 `~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.
 
@@ -5537,7 +5687,28 @@ frequently want to keep templates and state.db across reinstalls.
 (`--force` skips the prompt). State, templates, and any local
 edits to `config.toml` are lost. `uninstall.sh` does not read `[store]
 db_path`, so a store that `db_path` puts outside `~/.agent-director`
-survives `--purge`.
+survives `--purge`. `rm -rf` removes a symlink under
+`~/.agent-director`, never the file it points to.
+
+The confirmation is asked before anything is removed or changed: after
+`settings.json`'s symlink check, which `--purge` does not waive, so that
+check's refusal (exit 2) comes before any prompt; and before
+`config.toml`'s, whose outcome it decides (see "A symlinked
+`settings.json` or `config.toml`" above). The prompt,
+`uninstall.sh: --purge will rm -rf <dir> — proceed? [y/N] `, reads one
+line from stdin. Each reply, and what a caller sees:
+
+- **`y`, `Y`, `yes` or `YES`:** the purge runs; exit 0.
+- **any other line:** a declined purge is a plain uninstall, so a
+  `config.toml` link it cannot write through is refused with exit 2, as
+  without `--purge`. Otherwise its last stdout line is
+  `uninstall.sh: --purge aborted`, where the purge would have run;
+  exit 0.
+- **end of input:** no line (stdin at its end, as for a tool call with
+  no stdin, or an answer without its newline) makes `read` fail, and
+  `set -e` stops the script at the prompt with exit 1, nothing removed or
+  changed. A non-interactive caller passes `--force`, or a whole line on
+  stdin.
 
 ### ErrSchemaMismatch recovery
 

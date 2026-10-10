@@ -341,7 +341,7 @@ This skill runs `install.sh` from the same directory. The script:
    `--admin-sha256` ("would install <the other binary> unverified;
    refusing to install"). Then it runs the
    following checks in order; any failure aborts with a clear message
-   and exit code `2`, or `3` or `5` where noted:
+   and exit code `2`, or `3`, `4` or `5` where noted:
 
    1. **Whitespace-in-install-path** — `$HOME` must not contain
       whitespace (SRD §4.3; tmux's direct-argv invocation requires
@@ -389,7 +389,11 @@ This skill runs `install.sh` from the same directory. The script:
       before any header (`defaults = { ... }`) stops the install here
       too (exit `5`, `ErrConfigMalformed`), before anything is installed
       or changed, because step 6's config merge cannot extend it; see
-      step 6 below.
+      step 6 below. Also with hooks on, a symlinked
+      `~/.claude/settings.json` or `config.toml` that step 6's merges
+      cannot write through stops the install here, before anything is
+      installed or changed: `settings.json` with exit `4`, `config.toml`
+      with exit `5` (`ErrConfigMalformed`); see step 6 below.
    5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
@@ -692,9 +696,59 @@ This skill runs `install.sh` from the same directory. The script:
    0600 file stays 0600 whatever your umask), and each `.bak` has the
    same mode as the file it copies (b.ojn).
 
+   When either file is a symlink (into a dotfiles repo, say), the merge
+   writes through it, following a chain of links too: the link is kept
+   and the file at its end gets the edit (b.nw5). The `.bak` is a regular
+   copy of that file, beside the link. A link to a file that does not
+   exist yet, in a directory that does, creates that file.
+
+   With hooks on, pre-flight refuses a link the merge cannot write
+   through, before anything is installed or changed: its links loop
+   (more than 40), the directory of the file it points to is missing (a
+   dotfiles repository not cloned yet, say), or that directory cannot be
+   written in (home-manager's links into the read-only `/nix/store`,
+   say). A `settings.json` link exits **4**; a `config.toml` link exits
+   **5** with `install.sh: err_name=ErrConfigMalformed` last. For
+   example:
+
+       install.sh: cannot merge into /home/<you>/.claude/settings.json through its symlink; refusing to install.
+         link    : /home/<you>/.claude/settings.json
+         target  : /nix/store/<hash>-settings.json
+         The target's directory, /nix/store, cannot be written in (a read-only file system, say, such as home-manager's /nix/store).
+         With hooks on, install.sh writes its merges into the file a symlinked
+         settings.json or config.toml resolves to, keeping the link. Fix the link
+         so it reaches a file in a directory you can write in. Or re-run this
+         install with --no-hooks, which edits neither file, and add what the
+         merges add where the files come from (your dotfiles or home-manager
+         configuration, say): in settings.json, a SessionStart hook and a
+         SessionEnd hook with matcher "compact", each a command hook running
+         "/home/<you>/.agent-director/bin/agent-director help"; in config.toml,
+         inject_help_hook = true under [defaults].
+         Nothing was installed or changed. Re-run this install after the change.
+
+   A loop has no `target` line. Show the message to the operator and ask
+   which way out they want:
+   - **Fix the link** so it reaches a file in a directory they can write
+     in, then re-run the install with the same flags.
+   - **Re-run with `--no-hooks` added**, then add the entries in the
+     dotfiles or home-manager source. In `settings.json`, add to each
+     event's list (beside any entries already there):
+
+         {"hooks": {
+           "SessionStart": [{"hooks": [{"type": "command", "command": "/home/<you>/.agent-director/bin/agent-director help"}]}],
+           "SessionEnd": [{"matcher": "compact", "hooks": [{"type": "command", "command": "/home/<you>/.agent-director/bin/agent-director help"}]}]
+         }}
+
+     In `config.toml`, set `inject_help_hook = true` under `[defaults]`.
+     Keep passing `--no-hooks` on later installs while the link points
+     into a directory install.sh cannot write in: the check does not read
+     the file, so a hooks-on install refuses the link even when it
+     already holds these entries.
+
    With `--no-hooks`, this step is skipped entirely: settings.json is
    not read, not backed up, not written — left byte-identical to its
-   pre-install state — and config.toml is not touched. The post-install
+   pre-install state — and config.toml is not touched; neither file's
+   symlink is checked in pre-flight. The post-install
    summary reports `hooks   : skipped (--no-hooks)`.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
@@ -739,7 +793,7 @@ install.sh exits 0 on success. Its own failures exit 2 to 5:
 |---|---|
 | 2 | Pre-flight: a bad flag or flag pair, whitespace in `$HOME`, an unsupported OS/CPU, a missing tool, or a binary built for another architecture. |
 | 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, or two version stamps that differ or carry no commit. |
-| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"). |
+| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"), or, with hooks on, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). |
 | 5 | The config file, or the store open and schema migration. The cause line below names which. |
 | any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
 
@@ -762,7 +816,7 @@ no other exit status has a cause line.
 | `<Name>` | Cause | Remedy |
 |---|---|---|
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
-| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its check that the `[defaults]` merge can extend the file (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml, then re-run the install with the same flags. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
+| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml (or its symlink), then re-run the install with the same flags; a symlink also has a `--no-hooks` way out. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
 | `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
 | `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open" and "No temp file for the sentinel". |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
@@ -825,18 +879,30 @@ destructive *additions*.
 
    - *What this is:* with `--purge`, `uninstall.sh` prints
      `--purge will rm -rf ~/.agent-director/ — proceed? [y/N]`
-     and waits for a reply. `--force` suppresses that prompt.
+     before it removes or changes anything, and reads the reply from
+     its stdin. `--force` suppresses that prompt. Your tool call gives
+     the script no stdin, so the prompt gets no reply: the script then
+     exits 1, with nothing removed or changed.
    - *Options:*
      - **(a) Keep the prompt (default).** One more chance to back
-       out at the shell.
+       out, at the script's own prompt. The reply has to reach the
+       script's stdin: show the operator the prompt line above, ask
+       them `y` or `n`, and run the command with their reply on stdin,
+       `bash uninstall.sh --purge <other flags> <<< y` (or `<<< n`;
+       the reply needs its newline, which `<<<` adds).
+       Or the operator runs the command in their own terminal and
+       answers the prompt there.
      - **(b) Skip it (`--force`).** The `AskUserQuestion` you just
        answered counts as confirmation; the extra prompt is
-       redundant.
+       redundant. You run the command as assembled.
    - *Default:* (a). Belt-and-suspenders by default; the operator
      can opt into (b) explicitly.
    - *Reversibility:* once `--force` plus `--purge` runs, the
-     directory is gone with no further chance to abort. The
-     `--force` flag itself does nothing without `--purge`.
+     directory is gone with no further chance to abort. A reply
+     other than `y`, `Y`, `yes` or `YES` (`n`, say) cancels only the
+     purge: the plain uninstall still runs, and the script ends
+     `uninstall.sh: --purge aborted` with exit 0. The `--force` flag
+     itself does nothing without `--purge`.
 
 3. **Also deregister the MCP server? (`--mcp-also`)**
 
@@ -862,6 +928,11 @@ destructive *additions*.
 4. **Confirm and execute**
    - Display the assembled `bash uninstall.sh <resolved flags>`.
    - Ask "ready to run?". Only on explicit "yes" execute.
+   - With `--purge` but no `--force`, run it as question 2's (a)
+     says (the operator's reply on stdin, or the operator runs it),
+     never as a bare tool call: that stops at the prompt with exit 1,
+     having done nothing. If that happens, ask the operator for the
+     reply, or whether to add `--force`, and run it again.
 
 ### What uninstall.sh does
 
@@ -874,7 +945,38 @@ destructive *additions*.
   when only blank lines and comments are left under it. When that
   changes the file, it is snapshotted to a timestamped `.bak` first.
 - Both rewrites keep the file's mode, and each `.bak` has the same
-  mode as the file it copies (b.ojn).
+  mode as the file it copies (b.ojn). A symlinked file is written
+  through: the link is kept and the file it points to gets the edit
+  (b.nw5). A link that points nowhere, or whose links loop, is left
+  alone.
+- It works out both edits before it changes anything. A symlinked file
+  it must edit but cannot write through, because the directory of the
+  file it points to cannot be written in (home-manager's read-only
+  `/nix/store`, say), stops the uninstall with **exit 2** before
+  anything is removed or changed (except a `config.toml` under a
+  confirmed `--purge`; see `--purge` below). With `--purge` and no
+  `--force`, a `settings.json` refusal comes before the purge prompt,
+  and a `config.toml` refusal after a reply that declines it. Stderr
+  names the link, its target and
+  why, then gives two ways out: fix the link so it reaches a file in a
+  directory you can write in, or remove agent-director's entries where
+  the file comes from (your dotfiles or home-manager configuration):
+  - `settings.json`: each `SessionStart` and `SessionEnd` entry holding
+    a hook whose command starts with
+    `~/.agent-director/bin/agent-director` (the path spelled out);
+  - `config.toml`: `inject_help_hook` from `[defaults]`, and the
+    `[defaults]` header too when only blank lines and comments are left
+    under it.
+
+  It ends
+  `Nothing was removed or changed. Re-run this uninstall after the change.`
+  Show it to the operator, and re-run the uninstall with the same flags
+  after the change.
+- Such a `settings.json` that holds none of agent-director's hook
+  entries is left alone, and the uninstall goes on, printing
+  `uninstall.sh: left <path> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
+  Such a `config.toml` without `inject_help_hook` needs no edit and is
+  not checked.
 - Removes the binary at `~/.agent-director/bin/agent-director` and
   the `.prior` snapshot if one is present.
 - Removes `~/.agent-director/admin/agent-director-admin`, its `.prior`
@@ -882,9 +984,30 @@ destructive *additions*.
   directory (left in place, with a note, if it holds other files).
 - Unlinks the PATH symlink if one was created.
 - With `--purge`: also removes `~/.agent-director/` entirely
-  (including state.db + templates). Requires confirmation unless
-  `--force` is supplied. A store `[store] db_path` puts outside
-  `~/.agent-director/` is not removed.
+  (including state.db + templates). A store `[store] db_path` puts
+  outside `~/.agent-director/` is not removed. Unless `--force` is
+  supplied, it first prints
+  `--purge will rm -rf ~/.agent-director/ — proceed? [y/N]` and reads
+  one reply line from stdin, before anything is removed or changed
+  (but after the `settings.json` symlink check above). Then:
+  - `y`, `Y`, `yes` or `YES` (or `--force`): the purge runs. A
+    symlinked `config.toml` it cannot write through is not refused:
+    the purge removes the link, never the file it points to, so that
+    file is left alone, still holding `inject_help_hook`, and the
+    script prints
+    `uninstall.sh: left <path> alone: its symlink cannot be written through, and --purge removes the link; its target, <target>, keeps inject_help_hook`.
+    Tell the operator, so they can remove the key where the file
+    comes from if they want it gone. A symlinked `config.toml` it can
+    write through is edited through first (the file it points to, in
+    a dotfiles repo say, loses `inject_help_hook`), then the link is
+    removed; that edit's `.bak`, beside the link, goes with the purge.
+  - Any other reply: no purge. The rest runs as a plain uninstall
+    (so a symlinked `config.toml` it cannot write through is refused
+    with exit 2, as above) and ends `uninstall.sh: --purge aborted`,
+    exit 0.
+  - No reply (stdin at its end, as for a bare tool call): exit 1 after
+    the prompt, with nothing removed or changed. See question 2 of
+    the operator dialog for how to pass the reply, or use `--force`.
 - With `--mcp-also`: runs `claude mcp remove agent-director`.
 
 ## Schema migration: the six-step sentinel flow

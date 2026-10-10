@@ -93,7 +93,11 @@
 #      --from-release release before 0.11.0, which has no
 #      agent-director-admin binary), or the two binaries' version
 #      stamps differ or carry no commit stamp
-#   4  hook merge failure (~/.claude/settings.json malformed)
+#   4  hook merge failure (~/.claude/settings.json malformed), or (hooks
+#      on) a symlinked settings.json install.sh cannot resolve or write
+#      through: its links loop, or the file they resolve to sits in a
+#      directory that is missing or cannot be written in (refused in
+#      pre-flight, before anything on disk changes)
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
 #      existing state.db's user_version unreadable before the open (or
@@ -104,8 +108,10 @@
 #      expected), or a config file whose [store] db_path or
 #      busy_timeout_ms install.sh cannot read, or (hooks on) one that
 #      sets defaults as a key before any header (defaults = { ... }),
-#      which the config.toml merge cannot extend (all refused in
-#      pre-flight, before anything on disk changes). state.db here is
+#      which the config.toml merge cannot extend, or (hooks on) a
+#      symlinked config.toml install.sh cannot resolve or write through,
+#      as for settings.json under exit 4 (all refused in pre-flight,
+#      before anything on disk changes). state.db here is
 #      the store database agent-director opens: ~/.agent-director/state.db,
 #      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
 #      Every exit 5 ends with one line on stderr, its last, naming the
@@ -255,8 +261,8 @@ fi
 #   ErrVersionUnreadable  a user_version read gave no version
 #                         (ad_fail_unreadable_version): re-run.
 #   ErrConfigMalformed    config.toml refused, by agent-director or by
-#                         install.sh's pre-flight readers or merge check:
-#                         fix it, then re-run.
+#                         install.sh's pre-flight readers, merge check or
+#                         symlink check: fix it, then re-run.
 #   ErrSchemaMismatch     state.db newer than this binary (step 4's open):
 #                         install a newer agent-director.
 #   ErrSchemaVerifyFailed step 5 found state.db missing, or not at the
@@ -950,6 +956,108 @@ ad_config_merge_check() (
 )
 
 if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
+    ad_exit_5 ErrConfigMalformed
+fi
+
+# --------------------------------------------------------------------
+# Symlinked settings.json and config.toml pre-check (b.nw5)
+#
+# With hooks on, the merges below write through a symlinked
+# ~/.claude/settings.json or ~/.agent-director/config.toml to the file
+# its chain of links resolves to, keeping the link
+# (ad_replace_keeping_mode). The write puts a .new beside that file and
+# moves it over the file, so it fails, late (after the binaries are
+# installed, the store migrated and a .bak written), when the links
+# loop, when the resolved file's directory is missing (a dotfiles
+# repository not cloned yet, say), or when that directory cannot be
+# written in (home-manager links into a read-only /nix/store, say). With
+# hooks on, such a link is refused here instead, before anything on disk
+# changes: settings.json with exit 4 and config.toml with exit 5
+# (ErrConfigMalformed), as each file's other refusals. A plain file, and
+# a link that resolves to a file, existing or not, in a directory that
+# can be written in, pass. With --no-hooks neither file is written, so
+# neither is checked. uninstall.sh runs the same check before its edits.
+# --------------------------------------------------------------------
+
+# ad_resolve_link <file> — print the path <file> resolves to through its
+# chain of symlinks, or <file> itself when it is not a link (b.nw5). Each
+# relative link target is read against its own link's directory. A loop
+# over readlink, as readlink -f is missing from older macOS. A dangling
+# link gives the missing path it names. More than 40 links (a loop) fails,
+# as the kernel does.
+ad_resolve_link() {
+    local path="$1" link hops=0
+    while [[ -L "$path" ]]; do
+        if (( ++hops > 40 )); then
+            echo "install.sh: $1: too many levels of symbolic links" >&2
+            return 1
+        fi
+        link=$(readlink "$path") || return 1
+        case "$link" in
+            /*) path="$link" ;;
+            *) path="$(dirname "$path")/$link" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# ad_link_write_check <file> — return 0 when <file> is not a symlink, or
+# is one ad_replace_keeping_mode can write through: its links end, and
+# the directory of the file they resolve to exists and can be written in
+# (write and search permission, on a file system mounted read-write).
+# Otherwise set link_target to the file the links resolve to (empty when
+# they loop) and link_why to one sentence saying why the link cannot be
+# written through, and return 1.
+ad_link_write_check() {
+    local dir
+    link_target="" link_why=""
+    if [[ ! -L "$1" ]]; then
+        return 0
+    fi
+    if ! link_target=$(ad_resolve_link "$1" 2>/dev/null); then
+        link_target=""
+        link_why="The links loop: following them never reaches a file (more than 40 links)."
+        return 1
+    fi
+    dir=$(dirname "$link_target")
+    if [[ ! -d "$dir" ]]; then
+        link_why="There is no directory $dir to hold the target (a dotfiles repository not cloned yet, say)."
+        return 1
+    fi
+    if [[ ! -w "$dir" || ! -x "$dir" ]]; then
+        link_why="The target's directory, $dir, cannot be written in (a read-only file system, say, such as home-manager's /nix/store)."
+        return 1
+    fi
+}
+
+# ad_link_refuse <file> — report a symlinked <file> that
+# ad_link_write_check refused, from link_target and link_why, with the
+# ways out, on stderr. The caller exits.
+ad_link_refuse() {
+    echo "install.sh: cannot merge into $1 through its symlink; refusing to install." >&2
+    echo "  link    : $1" >&2
+    if [[ -n "$link_target" ]]; then
+        echo "  target  : $link_target" >&2
+    fi
+    echo "  $link_why" >&2
+    echo "  With hooks on, install.sh writes its merges into the file a symlinked" >&2
+    echo "  settings.json or config.toml resolves to, keeping the link. Fix the link" >&2
+    echo "  so it reaches a file in a directory you can write in. Or re-run this" >&2
+    echo "  install with --no-hooks, which edits neither file, and add what the" >&2
+    echo "  merges add where the files come from (your dotfiles or home-manager" >&2
+    echo "  configuration, say): in settings.json, a SessionStart hook and a" >&2
+    echo "  SessionEnd hook with matcher \"compact\", each a command hook running" >&2
+    echo "  \"${DEFAULT_BIN_DIR}/agent-director help\"; in config.toml," >&2
+    echo "  inject_help_hook = true under [defaults]." >&2
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+}
+
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
+    ad_link_refuse "$DEFAULT_SETTINGS_PATH"
+    exit 4
+fi
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
+    ad_link_refuse "${DEFAULT_INSTALL_ROOT}/config.toml"
     ad_exit_5 ErrConfigMalformed
 fi
 
@@ -2057,29 +2165,41 @@ ad_mode_of() {
 }
 
 # ad_replace_keeping_mode <file> <text> — replace <file> with <text> and a
-# newline: write <file>.new beside it, then mv it over <file>. An existing
-# <file> keeps its permission bits (b.ojn): the new file is written
-# owner-only (umask 077) and only then given them, so no one who could not
-# read the old contents can read the new ones, even before the mv. A new
-# <file> takes the umask's mode.
+# newline: write <file>.new beside it, then mv it over <file>. A symlinked
+# <file> is written through (b.nw5): the file its link chain resolves to
+# (ad_resolve_link, in pre-flight above) is the one replaced, from a .new
+# beside that file, so the link survives and the file it points at (a
+# dotfiles copy, say) gets the edit. A mv over the link itself would
+# replace it with a regular file and leave its target stale. A dangling
+# link gets the file it names created, as > through the link would.
+# Pre-flight (ad_link_write_check) refused a link this cannot write
+# through; ad_resolve_link's own loop failure stays as a backstop for a
+# link changed since. An existing <file> keeps its permission bits
+# (b.ojn): the new file is written owner-only (umask 077) and only then
+# given them, so no one who could not read the old contents can read the
+# new ones, even before the mv. A new <file> takes the umask's mode.
 ad_replace_keeping_mode() {
-    local tmp="${1}.new"
+    local target tmp
+    target=$(ad_resolve_link "$1") || return
+    tmp="${target}.new"
     rm -f "$tmp"
-    if [[ -f "$1" ]]; then
+    if [[ -f "$target" ]]; then
         (umask 077; printf '%s\n' "$2" >"$tmp")
-        chmod "$(ad_mode_of "$1")" "$tmp"
+        chmod "$(ad_mode_of "$target")" "$tmp"
     else
         printf '%s\n' "$2" >"$tmp"
     fi
-    mv -f "$tmp" "$1"
+    mv -f "$tmp" "$target"
 }
 
 # ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
 # permission bits, the same way (b.ojn): remove any <bak> first (an earlier
 # run's copy of the same second, at whatever mode it has), copy owner-only
-# (umask 077), then chmod. Not cp -p: GNU cp -p also copies ACLs and
-# xattrs, and fails where the file system cannot take them (NFS homes;
-# Ubuntu LP#2087769), which would stop the install here.
+# (umask 077), then chmod. cp reads through a symlinked <file>, so <bak> is
+# a regular copy of the link's target, beside the link. Not cp -p: GNU cp
+# -p also copies ACLs and xattrs, and fails where the file system cannot
+# take them (NFS homes; Ubuntu LP#2087769), which would stop the install
+# here.
 ad_backup_keeping_mode() {
     rm -f "$2"
     (umask 077; cp -f "$1" "$2")
@@ -2149,7 +2269,8 @@ else
         echo "  backup  : $backup_settings"
     fi
 
-    # Atomic write: tempfile + mv, keeping an existing file's mode.
+    # Atomic write: tempfile + mv, keeping an existing file's mode, and
+    # writing through a symlinked settings.json to its target.
     ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new_settings"
 
     echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
