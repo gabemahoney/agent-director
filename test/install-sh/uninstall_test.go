@@ -1,6 +1,7 @@
 package installsh_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -160,6 +162,43 @@ func writeMode(t *testing.T, path, text string, mode os.FileMode) {
 	}
 }
 
+// symlink makes link, creating its directory, naming target.
+func symlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// linkIntoReadOnlyDir writes text to home/store/<link's name>, links link to it,
+// and makes store 0555 for the rest of the test; it returns the target.
+func linkIntoReadOnlyDir(t *testing.T, home, link, text string) string {
+	t.Helper()
+	store := filepath.Join(home, "store")
+	target := filepath.Join(store, filepath.Base(link))
+	writeMode(t, target, text, 0o600)
+	symlink(t, target, link)
+	if err := os.Chmod(store, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(store, 0o755) })
+	return target
+}
+
+// standIn writes dir/name, a bash script that runs body and then the real name
+// on PATH with its arguments.
+func standIn(t *testing.T, dir, name, body string) {
+	t.Helper()
+	realPath, err := exec.LookPath(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMode(t, filepath.Join(dir, name), "#!/bin/bash\n"+body+"\nexec '"+realPath+"' \"$@\"\n", 0o755)
+}
+
 // TestUninstallKeepsFileModes (b.ojn, b.nw5): uninstall.sh's edits of
 // settings.json and config.toml, and their .bak copies, keep each file's mode
 // under the umask, also over an earlier run's leftovers and through symlinks,
@@ -181,11 +220,7 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 		"chmod": `t="${!#}"; case "$t" in *.new|*.bak.*) echo "${t##*/} $(stat -c %a "$t")" >>'` + chmodLog + `' ;; esac`,
 		"cp":    `for a; do [[ "$a" =~ ^(-[^-]*[ap]|--preserve|--archive) ]] && { echo "cp: b.ojn stand-in cannot preserve attributes here" >&2; exit 1; }; done`,
 	} {
-		realPath, err := exec.LookPath(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeMode(t, filepath.Join(fakes, name), "#!/bin/bash\n"+body+"\nexec '"+realPath+"' \"$@\"\n", 0o755)
+		standIn(t, fakes, name, body)
 	}
 
 	cases := []struct {
@@ -224,12 +259,7 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 				if !tc.linkedWithLeftovers {
 					continue
 				}
-				if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(f.link, f.path); err != nil {
-					t.Fatal(err)
-				}
+				symlink(t, f.link, f.path)
 				// An earlier run's leftovers: its .new beside the link's target, its .bak beside the link.
 				for _, p := range []string{edited(f.path) + ".new", f.path + ".bak." + stamp} {
 					writeMode(t, p, "junk\n", 0o666)
@@ -294,43 +324,166 @@ func TestUninstallLeavesSettingsWithoutOneDocument(t *testing.T) {
 		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
 	}
 	cli2TrackInputs(t)
-	cases := []struct {
-		name, settings string
-		note           string // the one output line naming settings.json ("" none)
-	}{
-		{"empty", "", ""},
-		{"only whitespace", " \n\t\n", ""},
-		{"two documents", "{} {}\n", "uninstall.sh: ~/.claude/settings.json holds 2 JSON documents, not one; leaving it alone"},
-		{"not valid JSON", "{\n", "uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone"},
+	checkSettingsLeftAlone(t, []settingsLeftAlone{
+		{name: "empty"},
+		{name: "only whitespace", settings: " \n\t\n"},
+		{name: "two documents", settings: "{} {}\n", note: "uninstall.sh: ~/.claude/settings.json holds 2 JSON documents, not one; leaving it alone"},
+		{name: "not valid JSON", settings: "{\n", note: "uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone"},
+	})
+}
+
+// TestUninstallLeavesSettingsItCannotEdit (b.ak5): a settings.json of another
+// shape (also behind an unwritable link, not refused), one jq fails on, or an
+// unwritable link holding none of agent-director's entries among odd values is
+// left alone, with a note, and the uninstall goes on.
+func TestUninstallLeavesSettingsItCannotEdit(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	const (
+		help      = `{"hooks":[{"type":"command","command":"{bin} help"}]}`
+		shapeNote = "uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone"
+		jqNote    = "jq: error: b.ak5 stand-in fails here\n" +
+			"uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone"
+	)
+	checkSettingsLeftAlone(t, []settingsLeftAlone{
+		{name: "an array", settings: "[]\n", note: shapeNote},
+		{name: "hooks a list", settings: `{"hooks":[]}`, note: shapeNote},
+		{name: "object-valued SessionStart holding the help hook", settings: `{"hooks":{"SessionStart":{"x":` + help + `}}}`, note: shapeNote},
+		{name: "string SessionEnd beside the help hook", settings: `{"hooks":{"SessionStart":[` + help + `],"SessionEnd":"x"}}`, note: shapeNote},
+		{name: "jq fails on the filter", settings: `{"hooks":{"SessionStart":[` + help + `]}}`, jqFails: `*'--arg prefix'*`, note: jqNote},
+		{name: "unwritable link, object-valued SessionStart holding the help hook", linked: true,
+			settings: `{"hooks":{"SessionStart":{"x":` + help + `}}}`, note: shapeNote},
+		{name: "unwritable link, odd values and no help hook", linked: true, settings: `{"hooks":{"SessionStart":["x",{"hooks":[{"command":5}]}]}}`,
+			note: "uninstall.sh: left {settings} alone: it holds no agent-director hook entries, and its symlink cannot be written through"},
+		{name: "unwritable link, jq fails on the count", linked: true, settings: `{"hooks":{"SessionStart":[` + help + `]}}`,
+			jqFails: `*'--arg prefix'*'| length'*`, note: jqNote},
+	})
+}
+
+// settingsLeftAlone is a settings.json uninstall.sh leaves alone; {bin} in
+// settings is the installed binary.
+type settingsLeftAlone struct {
+	name, settings string
+	linked         bool   // settings.json links into a 0555 directory
+	jqFails        string // a bash pattern over jq's arguments on which a stand-in jq fails ("" no stand-in)
+	note           string // the output lines naming settings.json or starting "jq: ", "\n"-joined; {settings} is its path
+}
+
+// checkSettingsLeftAlone runs uninstall.sh per case, checking it exits 0 with the
+// case's note, changes neither settings.json nor its link's target, and removes the binary.
+func checkSettingsLeftAlone(t *testing.T, cases []settingsLeftAlone) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.linked && os.Geteuid() == 0 {
+				t.Skip("root can write in the 0555 directory that stands in for a read-only one")
+			}
+			home := t.TempDir()
+			bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
+			claude := filepath.Join(home, ".claude")
+			settings := filepath.Join(claude, "settings.json")
+			fill := strings.NewReplacer("{bin}", bin, "{settings}", settings).Replace
+			writeMode(t, bin, "binary", 0o755)
+			dirs := []string{claude}
+			if tc.linked {
+				dirs = append(dirs, filepath.Dir(linkIntoReadOnlyDir(t, home, settings, fill(tc.settings))))
+			} else {
+				writeMode(t, settings, fill(tc.settings), 0o600)
+			}
+			var pathDirs []string
+			if tc.jqFails != "" {
+				fakes := t.TempDir()
+				standIn(t, fakes, "jq", "if [[ \"$*\" == "+tc.jqFails+" ]]; then\n"+
+					"  echo 'jq: error: b.ak5 stand-in fails here' >&2\n  exit 5\nfi")
+				pathDirs = []string{fakes}
+			}
+			snap := func() map[string]string {
+				all := map[string]string{}
+				for _, d := range dirs {
+					maps.Copy(all, treeSnap(t, d))
+				}
+				return all
+			}
+			before := snap()
+
+			out := runUninstall(t, home, "", pathDirs...)
+
+			var named []string
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "settings.json") || strings.HasPrefix(line, "jq: ") {
+					named = append(named, line)
+				}
+			}
+			if got, want := strings.Join(named, "\n"), fill(tc.note); got != want {
+				t.Errorf("output lines naming settings.json or from jq:\n%s\nwant:\n%s\nfull output:\n%s", got, want, out)
+			}
+			if after := snap(); !maps.Equal(after, before) {
+				t.Errorf("uninstall.sh changed %q:\nbefore %v\nafter  %v", dirs, before, after)
+			}
+			if _, err := os.Lstat(bin); !os.IsNotExist(err) {
+				t.Errorf("%s after uninstall.sh: %v; want it removed", bin, err)
+			}
+		})
+	}
+}
+
+// TestUninstallRemovesHookEntriesBesideOddValues (b.ak5): uninstall.sh removes its
+// entries from event lists holding values of any shape, keeping the rest verbatim,
+// fills in a null document's lists as install.sh does, and keeps a .bak of each.
+func TestUninstallRemovesHookEntriesBesideOddValues(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	const (
+		help = `{"hooks":[{"type":"command","command":"{bin} help"}]}`
+		odd  = `"x",{"hooks":["x"]},{"hooks":[{"command":5}]},{"hooks":{"a":{"command":"{bin} help"}}},{"hooks":[{"type":"command","command":"/usr/bin/true"}]}`
+	)
+	cases := []struct{ name, settings, want string }{
+		{"odd values beside the help hooks",
+			`{"theme":"dark","hooks":{"SessionStart":[` + odd + `,` + help + `,{"hooks":["x",{"type":"command","command":"{bin} help"}]}],` +
+				`"SessionEnd":[5,null,{"matcher":"compact","hooks":[{"type":"command","command":"{bin} help"}]},{"hooks":"y"}]}}`,
+			`{"theme":"dark","hooks":{"SessionStart":[` + odd + `],"SessionEnd":[5,null,{"hooks":"y"}]}}`},
+		{"null SessionEnd filled in", `{"theme":"dark","hooks":{"SessionStart":[` + help + `],"SessionEnd":null}}`,
+			`{"theme":"dark","hooks":{"SessionStart":[],"SessionEnd":[]}}`},
+		{"null document filled in", "null\n", `{"hooks":{"SessionStart":[],"SessionEnd":[]}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
-			claude := filepath.Join(home, ".claude")
+			settings := filepath.Join(home, ".claude", "settings.json")
+			fill := strings.NewReplacer("{bin}", bin).Replace
 			writeMode(t, bin, "binary", 0o755)
-			writeMode(t, filepath.Join(claude, "settings.json"), tc.settings, 0o600)
-			before := treeSnap(t, claude)
+			writeMode(t, settings, fill(tc.settings), 0o600)
 
-			out := runUninstall(t, home, "")
+			runUninstall(t, home, "")
 
-			var named, want []string
-			for _, line := range strings.Split(string(out), "\n") {
-				if strings.Contains(line, "settings.json") {
-					named = append(named, line)
-				}
+			raw, err := os.ReadFile(settings)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if tc.note != "" {
-				want = []string{tc.note}
+			var got, want any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("settings.json after uninstall.sh: %v\n%s", err, raw)
 			}
-			if !slices.Equal(named, want) {
-				t.Errorf("output lines naming settings.json = %q; want %q:\n%s", named, want, out)
+			if err := json.Unmarshal([]byte(fill(tc.want)), &want); err != nil {
+				t.Fatal(err)
 			}
-			if after := treeSnap(t, claude); !maps.Equal(after, before) {
-				t.Errorf("uninstall.sh changed %s:\nbefore %v\nafter  %v", claude, before, after)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("settings.json after uninstall.sh = %s; want %s", raw, fill(tc.want))
 			}
-			if _, err := os.Lstat(bin); !os.IsNotExist(err) {
-				t.Errorf("%s after uninstall.sh: %v; want it removed", bin, err)
+			baks, err := filepath.Glob(settings + ".bak.*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(baks) != 1 {
+				t.Fatalf("settings.json backups = %q; want one", baks)
+			}
+			if bak, err := os.ReadFile(baks[0]); err != nil || string(bak) != fill(tc.settings) {
+				t.Errorf("%s = %q, %v; want the original, %q", baks[0], bak, err, fill(tc.settings))
 			}
 		})
 	}
@@ -405,8 +558,7 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 				home := t.TempDir()
 				bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
 				fill := strings.NewReplacer("{bin}", bin).Replace
-				store := filepath.Join(home, "store")
-				link, target := filepath.Join(home, f.dir, f.base), filepath.Join(store, f.base)
+				link := filepath.Join(home, f.dir, f.base)
 				writeMode(t, bin, "binary", 0o755)
 				// Both files hold uninstall.sh's entry: f's linked into store/, the other plain.
 				for _, g := range files {
@@ -414,17 +566,8 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 						writeMode(t, filepath.Join(home, g.dir, g.base), fill(g.with), 0o600)
 					}
 				}
-				writeMode(t, target, fill(f.with), 0o600)
-				if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, link); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(store, 0o555); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() { _ = os.Chmod(store, 0o755) })
+				target := linkIntoReadOnlyDir(t, home, link, fill(f.with))
+				store := filepath.Dir(target)
 				before := treeSnap(t, home)
 
 				out, code := uninstallExit(t, home, "", "", nil)
@@ -445,15 +588,12 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 
 				switch follow {
 				case "fix the link": // to a copy in a directory uninstall.sh can write in
-					fixed := filepath.Join(home, "dotfiles", f.base)
-					writeMode(t, fixed, fill(f.with), 0o600)
+					target = filepath.Join(home, "dotfiles", f.base)
+					writeMode(t, target, fill(f.with), 0o600)
 					if err := os.Remove(link); err != nil {
 						t.Fatal(err)
 					}
-					if err := os.Symlink(fixed, link); err != nil {
-						t.Fatal(err)
-					}
-					target = fixed
+					symlink(t, target, link)
 				case "remove the entry": // as the read-only store is rebuilt from its source
 					if err := os.Chmod(store, 0o755); err != nil {
 						t.Fatal(err)
@@ -539,25 +679,16 @@ func TestUninstallPurge(t *testing.T) {
 				cfg:      config,
 				settings: `{"theme":"dark","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + bin + ` help"}]}]}}` + "\n",
 			} {
-				if filepath.Base(path) != tc.linked {
+				switch {
+				case filepath.Base(path) != tc.linked:
 					writeMode(t, path, text, 0o600)
-					continue
+				case tc.into == "store":
+					target = linkIntoReadOnlyDir(t, home, path, text)
+				default:
+					target = filepath.Join(home, tc.into, tc.linked)
+					writeMode(t, target, text, 0o600)
+					symlink(t, target, path)
 				}
-				target = filepath.Join(home, tc.into, tc.linked)
-				writeMode(t, target, text, 0o600)
-				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, path); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tc.into == "store" {
-				store := filepath.Join(home, "store")
-				if err := os.Chmod(store, 0o555); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() { _ = os.Chmod(store, 0o755) })
 			}
 			fill := strings.NewReplacer("{config}", cfg, "{settings}", settings, "{target}", target).Replace
 			before := treeSnap(t, home)

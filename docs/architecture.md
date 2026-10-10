@@ -5070,14 +5070,22 @@ event value that is not a list (an object, say) fails the append (jq's
 runtime error, exit 4 as above), never passing as already merged. A merge
 that succeeds therefore writes one object holding both entries in lists,
 and `hooks   : injected` is true. **Must use:** a jq rewrite of `settings.json` in either script
-counts the documents first and runs only on exactly one (uninstall.sh's
-side is in [Uninstall semantics](#uninstall-semantics)).
+counts the documents first and runs only on exactly one, of the outer
+shape this merge needs (an object whose `hooks` holds `SessionStart` and
+`SessionEnd` lists, after the merge's fill-ins); install.sh refuses
+another outer shape with exit 4, uninstall.sh leaves it alone. The two
+agree on that outer shape only, not on the values inside the lists: the
+merge also refuses (exit 4) some of those, such as an entry that is a
+string (`{"hooks":{"SessionStart":["x"]}}`) or a `hooks` list holding a
+string, which uninstall.sh edits around, keeping them verbatim (its side
+is in [Uninstall semantics](#uninstall-semantics)).
 `advice_follow.sh`'s J18 (valid JSON of another shape, an object-valued
 `SessionStart` holding the help hook among them) and J21 (several documents, each
 refusal followed by its fix and a re-run), `test/install-sh/retry.sh`'s
 `settings-empty-*`, `settings-whitespace-*` and
-`settings-entry-hooks-object-*` rows, and
-`TestUninstallLeavesSettingsWithoutOneDocument` pin this.
+`settings-entry-hooks-object-*` rows,
+`TestUninstallLeavesSettingsWithoutOneDocument` and
+`TestUninstallLeavesSettingsItCannotEdit` pin this.
 
 **The two binaries (b.vqr).** Every install installs both
 `agent-director` and the operator tool `agent-director-admin` (see
@@ -5349,8 +5357,14 @@ Each script uses it as follows.
   agent-director's hook entries is left alone instead, and the uninstall
   goes on, with the stdout line
   `uninstall.sh: left <file> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
-  uninstall.sh rewrites every `settings.json` holding one JSON document,
-  so a refusal there would stop every uninstall until the link went. A
+  uninstall.sh rewrites every `settings.json` holding one JSON document
+  of the outer shape install.sh's merge needs, so a refusal there would
+  stop every uninstall until the link went. A `settings.json` uninstall.sh
+  leaves alone while working out its edit (not valid JSON, not one
+  document, the wrong outer shape, or the filter failing; see "Uninstall
+  semantics" below) is not edited, so its link is not checked. The count
+  of entries to remove runs only after the check has refused the link;
+  should jq fail on it, the file is left alone too, after that check. A
   `config.toml` without
   the key needs no edit, so it is not checked.
   Under a confirmed `--purge`, a `config.toml` that cannot be written
@@ -5787,7 +5801,8 @@ legacy versioned-binary siblings left over from pre-b.43y installs),
 `agent-director-admin` with its `.prior` and the `admin/` directory (left
 in place, with a note, when it holds other files),
 the optional PATH symlink, and the two hook entries it injected
-(matched by the install root prefix in their command string), and the
+(matched by the install root prefix in their command string; see the
+`ours` test below), and the
 `inject_help_hook` key the config merge set in `config.toml`'s
 `[defaults]` (see "The config.toml merge" above). Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
@@ -5809,8 +5824,44 @@ no `.bak`. One that is not valid JSON, or holds more than one document,
 is left alone with a stderr note
 (`uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
 or `uninstall.sh: ~/.claude/settings.json holds <N> JSON documents, not one; leaving it alone`).
-In each case the uninstall goes on and exits 0, and the file's symlink
-is not checked, as it is not edited.
+A single document must also have the outer shape install.sh's merge
+needs (b.ak5): an object whose `hooks` is an object holding
+`SessionStart` and `SessionEnd` lists. The check runs the merge's own
+fill-ins (`.hooks //= {}`, each event `//= []`, so a missing, `null` or
+`false` one passes, as does a `null` document) and then asks for two
+lists, so the two scripts agree on that outer shape (the document,
+`hooks` and the two event lists): a document install.sh refuses there
+with exit 4 (b.cfq) is left alone, with
+`uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone`.
+They do not agree inside the lists: install.sh's merge also refuses
+(exit 4) some values there, such as an entry that is a string
+(`{"hooks":{"SessionStart":["x"]}}`) or a `hooks` list holding a string,
+which uninstall.sh's filter takes and keeps verbatim (see below).
+Should jq still fail, on the filter or on the symlink branch's count of
+entries to remove (see "A symlinked `settings.json` or `config.toml`"
+above), the file is left alone with jq's error, then
+`uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone`.
+In each case the uninstall goes on and exits 0, with no `.bak`. The
+file's symlink is not checked, as the file is not edited, except on a
+jq failure on the count, which runs only after the check has refused
+the link.
+
+Inside the event lists the filter takes any value. **Must use:**
+uninstall.sh's `hook_ours_jq` defines `ours`, the one test of an
+agent-director entry, shared by the filter and the symlink branch's
+count: an object whose `hooks` is a list holding an object whose
+`command` is a string starting with `<bin dir>/agent-director`. Every
+other value (a string, a number, an entry whose `hooks` is not a list, a
+`command` that is not a string) is kept verbatim, never indexed or read
+as a string, and agent-director's entries beside it are still removed.
+`TestUninstallLeavesSettingsWithoutOneDocument` (empty, whitespace, two
+documents, not valid JSON), `TestUninstallLeavesSettingsItCannotEdit`
+(the wrong outer shapes, one of them behind an unwritable link, a
+stand-in jq failing on the filter and on the count, and an unwritable
+link holding only odd values) and
+`TestUninstallRemovesHookEntriesBesideOddValues` (odd values beside the
+help hooks, a `null` event list, a `null` document) pin this.
+
 `~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.
 

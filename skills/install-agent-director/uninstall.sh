@@ -140,9 +140,9 @@ ad_backup_keeping_mode() {
 
 # --------------------------------------------------------------------
 # Remove hook entries from ~/.claude/settings.json.
-# Match by command suffix " help" + path prefix matching the install
-# root, so the script only removes ITS entries — other user hooks
-# survive verbatim. The new contents are worked out here and written
+# Match by a command starting with the install root's binary path
+# (hook_prefix), so the script only removes ITS entries — other user
+# hooks survive verbatim. The new contents are worked out here and written
 # after the symlink check below (b.nw5), as config.toml's are.
 #
 # The filter writes one result per JSON document it reads, so the file's
@@ -150,9 +150,48 @@ ad_backup_keeping_mode() {
 # holding none (empty, or only whitespace) holds no hooks to remove and is
 # left alone; one holding several is left alone with a note, as one that
 # is not valid JSON is, rather than written back as several documents.
+#
+# The filter also needs the outer shape install.sh's merge needs (b.ak5):
+# an object whose hooks is an object holding SessionStart and SessionEnd
+# lists. A hooks, SessionStart or SessionEnd that is missing, null or
+# false passes, filled in as the merge fills it in, as does a document
+# that is null. A document of another shape (an array or a string, hooks
+# a list, or an event list an object, say), which install.sh refuses
+# (exit 4, b.cfq), is left alone with a note too, and the uninstall goes
+# on: on it the filter would fail, jq's error stopping this script under
+# set -e before any binary was removed, or would write an object event
+# list's values back as a list. The check runs the merge's own fill-ins
+# and then asks for lists, so the two scripts agree on that outer shape
+# (the document, hooks, and the two event lists) and on nothing inside
+# the lists: install.sh's merge also fails, exit 4, on some values there
+# (an entry that is a string, as in {"hooks":{"SessionStart":["x"]}}, or
+# a hooks list holding a string, say), which the filter takes and keeps
+# verbatim, as below.
+#
+# Inside the event lists the filter takes any value, so no shape there
+# fails it (b.ak5). An entry is agent-director's (ours) only when it is
+# an object whose hooks is a list holding an object whose command is a
+# string starting with hook_prefix; any other value (an entry that is a
+# string, a hooks list holding a number, a command that is not a string,
+# say) is kept verbatim, never indexed or read as a string. Such values
+# can sit beside agent-director's entries (install.sh's merge passes a
+# command that is not a string, and a hand edit can add any of them
+# after the install), so leaving such a file alone would leave those
+# entries running a removed binary. Should jq fail on the file anyway,
+# it is left alone with a note under jq's error, and the uninstall goes
+# on.
 # --------------------------------------------------------------------
 
 hook_prefix="${DEFAULT_BIN_DIR}/agent-director"
+# ours, for the filter and the symlink branch's count below.
+hook_ours_jq='
+    def ours:
+      type == "object"
+      and (.hooks | type) == "array"
+      and any(.hooks[]; type == "object"
+        and (.command | type) == "string"
+        and (.command | startswith($prefix)));
+'
 settings_edit=0
 if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
     if ! command -v jq >/dev/null 2>&1; then
@@ -164,26 +203,27 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         echo "uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone" >&2
     elif [[ "$settings_docs" -gt 1 ]]; then
         echo "uninstall.sh: ~/.claude/settings.json holds $settings_docs JSON documents, not one; leaving it alone" >&2
-    elif [[ "$settings_docs" -eq 1 ]]; then
-        new=$(printf '%s' "$existing" | jq \
-            --arg prefix "$hook_prefix" '
+    elif [[ "$settings_docs" -eq 1 ]] && ! printf '%s' "$existing" | jq -e '
             .hooks //= {}
             | .hooks.SessionStart //= []
             | .hooks.SessionEnd //= []
-            | .hooks.SessionStart |= [
-                .[] | select(
-                  (.hooks | type) != "array"
-                  or all(.hooks[]?; (.command // "") | startswith($prefix) | not)
-                )
-              ]
-            | .hooks.SessionEnd |= [
-                .[] | select(
-                  (.hooks | type) != "array"
-                  or all(.hooks[]?; (.command // "") | startswith($prefix) | not)
-                )
-              ]
-        ')
-        settings_edit=1
+            | (.hooks.SessionStart | type) == "array"
+              and (.hooks.SessionEnd | type) == "array"
+        ' >/dev/null 2>&1; then
+        echo "uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone" >&2
+    elif [[ "$settings_docs" -eq 1 ]]; then
+        if new=$(printf '%s' "$existing" | jq \
+            --arg prefix "$hook_prefix" "$hook_ours_jq"'
+            .hooks //= {}
+            | .hooks.SessionStart //= []
+            | .hooks.SessionEnd //= []
+            | .hooks.SessionStart |= [.[] | select(ours | not)]
+            | .hooks.SessionEnd |= [.[] | select(ours | not)]
+        '); then
+            settings_edit=1
+        else
+            echo "uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone" >&2
+        fi
     fi
 fi
 
@@ -275,9 +315,14 @@ fi
 # directory, as each edited file resolved to a regular file (-f) above.
 # A settings.json that cannot be written through and holds none of
 # agent-director's hook entries is left alone instead: it would be
-# rewritten (every settings.json holding one JSON document is) with
-# nothing removed, and a refusal would then stop every uninstall until
-# the link went.
+# rewritten (every settings.json holding one JSON document of the shape
+# checked above is) with nothing removed, and a refusal would then stop
+# every uninstall until the link went. A settings.json left alone while
+# its edit is worked out above (not valid JSON, not one document, the
+# wrong outer shape, or the filter failing) is not edited, so its
+# symlink is not checked. The count of entries to remove below runs
+# only after the check has refused the link; should jq fail on it, the
+# file is left alone too, after that check.
 # --------------------------------------------------------------------
 
 # ad_link_refuse <file> <what> <remedy>... — report a symlinked <file>
@@ -305,17 +350,19 @@ ad_link_refuse() {
 }
 
 if [[ "$settings_edit" -eq 1 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
-    # The entries the filter above removes: those it does not keep.
-    removed=$(printf '%s' "$existing" | jq --arg prefix "$hook_prefix" '
+    # The entries the filter above removes: those it marks ours. Only a
+    # file the filter ran on gets here, so this count does not fail
+    # either; should jq fail anyway, the file is left alone with the
+    # filter's note and the uninstall goes on (b.ak5).
+    if ! removed=$(printf '%s' "$existing" | jq \
+        --arg prefix "$hook_prefix" "$hook_ours_jq"'
         .hooks //= {}
-        | [(.hooks.SessionStart // []), (.hooks.SessionEnd // []) | .[]
-           | select(
-               (.hooks | type) == "array"
-               and any(.hooks[]?; (.command // "") | startswith($prefix))
-             )]
+        | [(.hooks.SessionStart // []), (.hooks.SessionEnd // []) | .[] | select(ours)]
         | length
-    ')
-    if [[ "$removed" -eq 0 ]]; then
+    '); then
+        settings_edit=0
+        echo "uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone" >&2
+    elif [[ "$removed" -eq 0 ]]; then
         settings_edit=0
         echo "uninstall.sh: left $DEFAULT_SETTINGS_PATH alone: it holds no agent-director hook entries, and its symlink cannot be written through"
     else

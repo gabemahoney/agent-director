@@ -957,14 +957,32 @@ destructive *additions*.
   added; other user hooks are preserved), snapshotting
   `settings.json` to a timestamped `.bak` first. A `settings.json`
   that is empty or holds only whitespace has no entries to remove and
-  is left alone, with no `.bak` and no note. One that is not valid
-  JSON, or holds more than one JSON document, is left alone with a
-  note on stderr, and the uninstall goes on (b.zbg):
-  `uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
-  or
-  `uninstall.sh: ~/.claude/settings.json holds N JSON documents, not one; leaving it alone`.
+  is left alone, with no `.bak` and no note. One the uninstall cannot
+  edit is left alone, with no `.bak` and a note on stderr, and the
+  uninstall goes on (the binaries are still removed; exit 0):
+  - not valid JSON (b.zbg):
+    `uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`;
+  - more than one JSON document (b.zbg):
+    `uninstall.sh: ~/.claude/settings.json holds N JSON documents, not one; leaving it alone`;
+  - valid JSON of another outer shape (b.ak5), a shape install also
+    refuses (exit 4): not an object (an array, say), a `hooks` that is
+    not an object, or a `SessionStart` or `SessionEnd` under it that is
+    not a list (an object, say). A `hooks`, `SessionStart` or `SessionEnd`
+    that is missing or `null` is fine:
+    `uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone`;
+  - one jq fails on anyway (a backstop): jq's error, then
+    `uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone`.
+
   Tell the operator: the file may still hold agent-director's hook
   entries, to remove by hand.
+
+  An entry is agent-director's only when it is an object whose `hooks`
+  is a list holding a hook whose `command` starts with
+  `~/.agent-director/bin/agent-director` (the path spelled out). Any
+  other value in the `SessionStart` and `SessionEnd` lists (a string,
+  a number, an entry whose `hooks` is an object or whose `command` is
+  not a string, say) is kept as it is, while agent-director's entries
+  beside it are removed (b.ak5).
 - Removes `inject_help_hook` from `config.toml`'s `[defaults]` table
   (the header and the key found however they are spaced and in any
   letter case, as install finds them), and the `[defaults]` header too
