@@ -2,12 +2,6 @@ dist/
 node_modules/
 *.tsbuildinfo
 
-# CLI binary the Makefile stages under platforms/: verify-installed-pkg-full
-# into platforms/<host>/bin/, verify-prerelease-linux always into
-# platforms/linux-x64/bin/ (b.1ce tracks dropping that step; the platforms/
-# sub-packages are gone) — never committed.
-platforms/*/bin/
-
 # Temp dirs created by install-resolution test
 test/.tmp-*
 

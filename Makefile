@@ -1069,9 +1069,11 @@ release-bats:
 
 # verify-installed-pkg-full performs a self-contained end-to-end install
 # verification of the ts-bun-client package against a real packed tarball.
-# It builds the release binaries, stages the host CLI into the platform
-# sub-packages, packs the umbrella tarball, installs it into an isolated
-# consumer project, and runs the --full makeTemplate gauntlet driver.
+# It builds the release binaries, packs the package, installs the tarball
+# into an isolated consumer project, and runs the --full makeTemplate
+# gauntlet driver against the host's stamped dist/agent-director-<os>-<arch>
+# binary, passed as AD_CLI_PATH (the package ships no CLI). bun --no-install
+# makes an unresolved import fail instead of fetching it from npm.
 # Temp HOME and consumer project dir are cleaned up via EXIT trap.
 verify-installed-pkg-full: SHELL = /bin/bash
 verify-installed-pkg-full: release-binaries
@@ -1081,40 +1083,39 @@ verify-installed-pkg-full: release-binaries
 	_OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
 	_ARCH=$$(uname -m); \
 	case "$${_OS}-$${_ARCH}" in \
-		linux-x86_64)  _HOST_CROSS="linux-amd64"; _HOST_PKG="linux-x64" ;; \
-		darwin-arm64)  _HOST_CROSS="darwin-arm64"; _HOST_PKG="darwin-arm64" ;; \
+		linux-x86_64)  _HOST_CROSS="linux-amd64" ;; \
+		darwin-arm64)  _HOST_CROSS="darwin-arm64" ;; \
 		*) echo "unsupported host: $${_OS}-$${_ARCH}" >&2; exit 1 ;; \
 	esac; \
-	echo "[verify-installed-pkg-full] staging CLI into platform packages"; \
-	_STAGE_SRC="$$REPO_ROOT/dist/agent-director-$${_HOST_CROSS}"; \
-	_STAGE_DEST="$$REPO_ROOT/pkg/ts-bun-client/platforms/$${_HOST_PKG}/bin"; \
-	if [[ ! -f "$$_STAGE_SRC" ]]; then echo "missing $$_STAGE_SRC — was make release-binaries run?" >&2; exit 1; fi; \
-	mkdir -p "$$_STAGE_DEST"; \
-	cp "$$_STAGE_SRC" "$$_STAGE_DEST/agent-director"; \
-	chmod 0755 "$$_STAGE_DEST/agent-director"; \
-	log verify-installed-pkg-full "staged $$_STAGE_SRC → $$_STAGE_DEST/agent-director"; \
+	_CLI_PATH="$$REPO_ROOT/dist/agent-director-$${_HOST_CROSS}"; \
+	if [[ ! -f "$$_CLI_PATH" ]]; then echo "missing $$_CLI_PATH — was make release-binaries run?" >&2; exit 1; fi; \
+	log verify-installed-pkg-full "CLI under test: $$_CLI_PATH"; \
 	TMP_STAGING=$$(mktemp -d); \
 	TMP_HOME=$$(mktemp -d); \
 	TMP_CONSUMER=$$(mktemp -d); \
 	trap 'rm -rf "$$TMP_STAGING" "$$TMP_HOME" "$$TMP_CONSUMER"' EXIT; \
 	echo "[verify-installed-pkg-full] installing devDependencies (bun-types, typescript) for build"; \
 	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun install --no-progress >/dev/null; \
-	echo "[verify-installed-pkg-full] packing umbrella tarball"; \
+	echo "[verify-installed-pkg-full] packing package tarball"; \
 	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING"; \
 	TARBALL=$$(ls "$$TMP_STAGING"/*.tgz); \
 	echo "[verify-installed-pkg-full] installing into consumer project"; \
 	cd "$$TMP_CONSUMER"; \
 	printf '{"name":"verify-consumer","version":"1.0.0","type":"module"}\n' > package.json; \
 	HOME="$$TMP_HOME" bun add "$$TARBALL"; \
-	HOME="$$TMP_HOME" bun add "file:$$REPO_ROOT/pkg/ts-bun-client/platforms/$$_HOST_PKG"; \
 	echo "[verify-installed-pkg-full] running --full gauntlet"; \
 	cp "$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts" "$$TMP_CONSUMER/"; \
-	HOME="$$TMP_HOME" bun "$$TMP_CONSUMER/verify-installed-pkg.ts" --full
+	HOME="$$TMP_HOME" AD_CLI_PATH="$$_CLI_PATH" bun --no-install "$$TMP_CONSUMER/verify-installed-pkg.ts" --full
 
 # verify-prerelease-linux runs the pre-release Linux Docker verify gate.
-# Stages the linux-amd64 CLI binary, packs the umbrella tarball on the host,
-# copies the linux-x64 platform sub-package into the staging tmpdir, then mounts
-# everything into the test container and runs the consumer-install + --full flow.
+# Packs the package tarball on the host, then mounts it, the verify script and
+# the stamped dist/agent-director-linux-amd64 binary (at /agent-director)
+# read-only into the test container, and runs the consumer-install + --full
+# flow there with AD_CLI_PATH=/agent-director (the package ships no CLI).
+# The script runs from a copy inside the consumer dir: run as /verify.ts, Bun
+# finds no node_modules beside it and auto-installs the published package
+# from npm instead of the tarball (b.1ce); --no-install makes any such
+# fallback fail instead.
 # OTQ-1 resolution: test/Dockerfile already pins Bun (BUN_VERSION=1.3.13) and
 # installs it; this recipe reuses $(TEST_IMAGE) from make test-image —
 # no new Dockerfile added.
@@ -1125,33 +1126,24 @@ verify-prerelease-linux: release-binaries
 	log() { local lvl="$$1"; shift; echo "[$$lvl] $$*"; }; \
 	TMP_STAGING=$$(mktemp -d); \
 	trap 'rm -rf "$$TMP_STAGING"' EXIT; \
-	log verify-prerelease-linux "staging linux-x64 CLI binary"; \
-	_STAGE_SRC="$$REPO_ROOT/dist/agent-director-linux-amd64"; \
-	_STAGE_DEST="$$REPO_ROOT/pkg/ts-bun-client/platforms/linux-x64/bin"; \
-	if [[ ! -f "$$_STAGE_SRC" ]]; then printf 'FAIL stage-cli: missing %s\n' "$$_STAGE_SRC" >&2; exit 1; fi; \
-	mkdir -p "$$_STAGE_DEST"; \
-	cp "$$_STAGE_SRC" "$$_STAGE_DEST/agent-director"; \
-	chmod 0755 "$$_STAGE_DEST/agent-director" \
-		|| { printf 'FAIL stage-cli\n' >&2; exit 1; }; \
-	log verify-prerelease-linux "packing umbrella tarball → $$TMP_STAGING"; \
+	CLI_BIN="$$REPO_ROOT/dist/agent-director-linux-amd64"; \
+	if [[ ! -f "$$CLI_BIN" ]]; then printf 'FAIL cli-binary: missing %s — was make release-binaries run?\n' "$$CLI_BIN" >&2; exit 1; fi; \
+	log verify-prerelease-linux "packing package tarball → $$TMP_STAGING"; \
 	( cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING" ) \
 		|| { printf 'FAIL bun-pack\n' >&2; exit 1; }; \
-	log verify-prerelease-linux "copying linux-x64 platform sub-package into staging dir"; \
-	mkdir -p "$$TMP_STAGING/platforms"; \
-	cp -r "$$REPO_ROOT/pkg/ts-bun-client/platforms/linux-x64" "$$TMP_STAGING/platforms/linux-x64" \
-		|| { printf 'FAIL copy-platform\n' >&2; exit 1; }; \
 	log verify-prerelease-linux "building/reusing $(TEST_IMAGE)"; \
 	$(MAKE) test-image \
 		|| { printf 'FAIL test-image\n' >&2; exit 1; }; \
 	VERIFY_SCRIPT="$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts"; \
-	INNER_CMD="set -eu; C=\$$(mktemp -d); cd \$$C && jq -n '{name:\"verify-consumer\",version:\"1.0.0\",type:\"module\"}' > package.json && bun add /staging/*.tgz && bun add file:/staging/platforms/linux-x64 && bun /verify.ts --full"; \
+	INNER_CMD="set -eu; C=\$$(mktemp -d); cd \$$C && jq -n '{name:\"verify-consumer\",version:\"1.0.0\",type:\"module\"}' > package.json && bun add /staging/*.tgz && cp /verify.ts ./verify.ts && AD_CLI_PATH=/agent-director bun --no-install ./verify.ts --full"; \
 	if [[ -n "$${VERIFY_PRERELEASE_DRY_RUN:-}" ]]; then \
-		echo "docker run --rm -v \"$$TMP_STAGING\":/staging:ro -v \"$$VERIFY_SCRIPT\":/verify.ts:ro $(TEST_IMAGE) bash -c \"$$INNER_CMD\""; \
+		echo "docker run --rm -v \"$$TMP_STAGING\":/staging:ro -v \"$$VERIFY_SCRIPT\":/verify.ts:ro -v \"$$CLI_BIN\":/agent-director:ro $(TEST_IMAGE) bash -c \"$$INNER_CMD\""; \
 		exit 0; \
 	fi; \
 	docker run --rm \
 		-v "$$TMP_STAGING":/staging:ro \
 		-v "$$VERIFY_SCRIPT":/verify.ts:ro \
+		-v "$$CLI_BIN":/agent-director:ro \
 		$(TEST_IMAGE) \
 		bash -c "$$INNER_CMD" \
 		|| { printf 'FAIL docker-run\n' >&2; exit 1; }

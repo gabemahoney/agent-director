@@ -15985,7 +15985,7 @@ would also disable the guard on the self-hosted runner (b.175).
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq, b.4a1, b.qgr and b.uc7). Those tests run `make` against the real
+b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce). Those tests run `make` against the real
 repo Makefile with a fake container engine or tool on PATH, never a real
 container, and assert on what the recipe produced. They exec no built binary
 and open no store, so they carry no sandbox guard.
@@ -16039,6 +16039,20 @@ advice, run as printed, exits 0: for `make generate` it runs
 also `test-docker`'s go builds on the host. The fake engine runs a sandbox-image
 command with docker and podman on its PATH that fail, as the real image has
 no container engine.
+
+`requiresandbox` also reads the recipes of `verify-installed-pkg-full` and
+`verify-prerelease-linux` without running them (b.1ce). Neither may name
+`platforms/`, since the per-platform sub-packages are gone. Each must run
+the verify script as `bun --no-install <script> --full` with `AD_CLI_PATH`
+at the stamped `dist/agent-director-<os>-<arch>` binary; the package ships
+no CLI. In `verify-prerelease-linux`, every `docker run`, the dry-run echo
+included, must mount that binary at the `AD_CLI_PATH` path. The script must
+run from the consumer dir the tarball was installed in (the last `cd`
+before the last `bun add`): a path under that dir, or a relative path with
+no `cd` since the `bun add`, never with `..`. From anywhere else Bun finds
+no `node_modules` beside the script and would install the published package
+from npm instead of the tarball; `--no-install` makes that import fail
+instead.
 
 - `RepoRoot(t)` returns the directory holding the root `go.mod`.
 - `MakefileUnderTest(t)` returns the repo Makefile, or the path in
