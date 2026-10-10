@@ -620,6 +620,7 @@ This skill runs `install.sh` from the same directory. The script:
       it equals the target. On a mismatch (or if state.db wasn't
       created) the install **aborts non-zero (exit 5)** with a clear
       message; for a readable mismatch see "A version mismatch after
+      the store open" below, and for no state.db see "No store after
       the store open" below. An unreadable version also exits 5 when a migration was
       expected; with none expected (a fresh install or an
       already-current store) it is a warning and the install carries
@@ -871,7 +872,7 @@ no other exit status has a cause line.
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
 | `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml (or its symlink), then re-run the install with the same flags; a symlink also has a `--no-hooks` way out. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
 | `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
-| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open" and "No temp file for the sentinel". |
+| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
 
 `ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
@@ -1302,8 +1303,10 @@ Make the change it names, then re-run the install with the same flags.
    install creates state.db at the current version. `ErrConfigMalformed`
    here stops the install (exit 5) with the config advice; see "A
    refused config file" below.
-5. When a migration was expected (step 3 authorized one, or its probe
-   ran one), **verify** the post-open
+5. **Check state.db is there.** The open succeeded, so no file at
+   state.db's path fails the install (exit 5); see "No store after the
+   store open" below. Then, when a migration was expected (step 3
+   authorized one, or its probe ran one), **verify** the post-open
    `user_version` equals the target, and **fail the install loudly**
    (exit 5) if it does not; see "A version mismatch after the store
    open" below. An unreadable version also fails (exit 5) when a
@@ -1326,7 +1329,8 @@ your Spawn history. If the install's step 5 fails verification, do NOT
 delete state.db. If it reports `actual user_version: <unreadable>`,
 see "An unreadable schema version" below. If it reports a readable
 version that differs from the expected one, see "A version mismatch
-after the store open" below.
+after the store open" below. If it reports `state.db was not created by
+the store open`, see "No store after the store open" below.
 
 An operator can also author the sentinel by hand (write the JSON
 above, then run any store-opening verb once), but re-running the
@@ -1450,6 +1454,61 @@ or the read is wrong. Do NOT delete state.db.
    install.
 3. If a re-run fails this same way, capture the error and contact the
    maintainers.
+
+### No store after the store open
+
+When step 4's store open (`agent-director list`) succeeds but step 5
+finds no file at state.db's path, the install exits 5 with:
+
+    install.sh: state.db was not created by the store open
+      state.db: /home/<you>/.agent-director/state.db
+      config  : /home/<you>/.agent-director/config.toml
+      The store open (agent-director list) succeeded, yet there is no store
+      at the state.db path above, where install.sh expected it. agent-director
+      opens its store at [store] db_path in the config file above
+      (~/.agent-director/state.db when unset), and install.sh read that file
+      before the open. So either db_path changed since and agent-director
+      opened a store somewhere else, or something removed or moved the store
+      after the open.
+      Check db_path in the config file, and whether anything (a cleanup, say)
+      removed or moved the store. To keep a moved store's sessions, put it
+      back at the state.db path above first: with no store there, a re-run
+      creates a new, empty one. Then re-run this install: it reads db_path
+      again and opens the store there. If a re-run fails this same way, the
+      installed agent-director does not open its store where this install.sh
+      expects it: contact the maintainers.
+    install.sh: err_name=ErrSchemaVerifyFailed
+
+With `[store] db_path` set, the headline and the `state.db:` line name
+that store's path (see "Which database install.sh checks" above).
+agent-director takes its store's path only from `[store] db_path` in
+`~/.agent-director/config.toml`: no `AGENT_DIRECTOR_*` environment
+variable moves it, and install.sh passes it no store-path flag. install.sh
+read `db_path` in pre-flight, so a missing store means one of: `db_path`
+changed after pre-flight, something removed or moved the store after the
+open, or the installed agent-director opens its store somewhere other
+than where install.sh expects. The cause line names
+`ErrSchemaVerifyFailed`, which needs a human: only the operator knows
+whether the config was edited or a cleanup ran. The new binaries are
+already in place (and the PATH symlink, if any), but the hooks were not
+merged and MCP was not registered.
+
+1. Check `db_path` in the config file the report names. If it changed
+   after the install started, agent-director opened its store at the new
+   path (creating one if none was there), and the re-run checks that
+   store.
+2. Check whether anything (a cleanup, say) removed or moved the store.
+   On an upgrade, step 2 read the store at the `state.db:` path before
+   the open, and a changed `db_path` alone would have left it there, so
+   look for a removal or move. To keep a moved store's sessions,
+   put it back at the `state.db:` path before re-running: with no store
+   there, the re-run creates a new, empty one and leaves the moved store
+   as it is.
+3. Re-run the install with the same flags. It reads `db_path` again,
+   opens the store there and finishes the install.
+4. If a re-run fails this same way, the installed agent-director does
+   not open its store where install.sh expects it: capture the error and
+   contact the maintainers.
 
 ### A refused config file
 

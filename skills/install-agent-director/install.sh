@@ -122,8 +122,19 @@
 #      agent-director), ErrSchemaVerifyFailed (needs a human), or, when the
 #      store open fails another way, agent-director's own err_name.
 #
-# Idempotent: re-running the script with no flags after a clean
-# install is a no-op (returns 0, prints "already installed at vX").
+# Idempotent: re-running it after a clean install, with the same
+# binaries (a no-flag re-run outside a checkout picks the
+# agent-director on PATH and the installed agent-director-admin, as
+# above) and the same --no-hooks, symlink and --register-mcp choices,
+# ends in the same state and returns 0 on success. Its steps run
+# again: the binaries are copied again (with --keep-prior, not
+# snapshotted: any earlier .prior files are kept), the store is opened
+# (a state.db already at its target version is not migrated) and, with
+# hooks on, settings.json and config.toml are merged again (no hook is
+# added twice), each after a fresh timestamped .bak. With
+# --register-mcp, `claude mcp add` refuses a name already registered in
+# its scope, so a re-run from the same directory prints
+# "registration failed (continuing anyway)" and still returns 0.
 
 set -euo pipefail
 
@@ -2075,9 +2086,38 @@ fi
 # ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
 # The open succeeded, so a missing state.db means install.sh and
 # agent-director disagree on where the store is, or it was removed since:
-# needs a human (ErrSchemaVerifyFailed).
+# needs a human (ErrSchemaVerifyFailed). agent-director opens its store at
+# [store] db_path in $HOME/.agent-director/config.toml (pkg/api
+# resolveStorePath; its --store-path and --home flags aside, which
+# install.sh never passes), and no AGENT_DIRECTOR_* variable moves it.
+# install.sh read that file in pre-flight (ad_store_db_path), so the two
+# disagree only when db_path changed since or the installed binary resolves
+# it differently. On an upgrade step 2 read $state_db, so there it was
+# removed or moved: a changed db_path would have left it in place.
+#
+# A re-run reads db_path again and opens the store there, so it finishes
+# after a changed db_path. With no store at $state_db its step-4 open
+# creates a new, empty one, so the advice says to put a moved store back
+# first. A re-run that fails the same way means the binary resolves the
+# store differently from ad_store_db_path: the maintainers' turn.
 if [[ ! -f "$state_db" ]]; then
     echo "install.sh: ${state_db_name} was not created by the store open" >&2
+    echo "  state.db: $state_db" >&2
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
+    echo "  The store open (agent-director list) succeeded, yet there is no store" >&2
+    echo "  at the state.db path above, where install.sh expected it. agent-director" >&2
+    echo "  opens its store at [store] db_path in the config file above" >&2
+    echo "  (~/.agent-director/state.db when unset), and install.sh read that file" >&2
+    echo "  before the open. So either db_path changed since and agent-director" >&2
+    echo "  opened a store somewhere else, or something removed or moved the store" >&2
+    echo "  after the open." >&2
+    echo "  Check db_path in the config file, and whether anything (a cleanup, say)" >&2
+    echo "  removed or moved the store. To keep a moved store's sessions, put it" >&2
+    echo "  back at the state.db path above first: with no store there, a re-run" >&2
+    echo "  creates a new, empty one. Then re-run this install: it reads db_path" >&2
+    echo "  again and opens the store there. If a re-run fails this same way, the" >&2
+    echo "  installed agent-director does not open its store where this install.sh" >&2
+    echo "  expects it: contact the maintainers." >&2
     ad_exit_5 ErrSchemaVerifyFailed
 fi
 chmod 0600 "$state_db" 2>/dev/null || true

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J21). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J22). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -136,10 +136,22 @@ printf '{"Replace":{"%s":"%s"}}\n' "$REPO_ROOT/internal/store/store.go" "$ROOT/s
 (cd "$REPO_ROOT" && CGO_ENABLED=0 go build -overlay "$ROOT/overlay.json" -ldflags "$STAMP" -o "$BIN_NEWER" ./cmd/agent-director) \
     || die "go build (newer)"
 
-# FAKE_AD (J17): a binary for this host stamped as ADMIN, so install.sh
+# FAKE_AD (J17, J22): a binary for this host stamped as ADMIN, so install.sh
 # installs it as agent-director; its `list` does what $HOME/fake-list says
 # (j17_fake), for the store-open outcomes the real binary does not give.
 FAKE_AD="$ROOT/bin/agent-director-fake"
+# FAKE_AROUND: its `list` in mode "around" (J22): BIN's own, with
+# $HOME/fake-before sourced before it and $HOME/fake-after after it succeeds,
+# each once, as a config edit or a cleanup between install.sh's pre-flight
+# and its step 5 would.
+FAKE_AROUND="$ROOT/fake-list-around.sh"
+cat >"$FAKE_AROUND" <<EOF
+#!/bin/bash
+if [[ -e "\$HOME/fake-before" ]]; then . "\$HOME/fake-before"; rm "\$HOME/fake-before"; fi
+"$BIN" "\$@" || exit
+if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
+EOF
+chmod 0755 "$FAKE_AROUND" || die "chmod $FAKE_AROUND"
 mkdir -p "$ROOT/fake-ad"
 { echo "module fakead"; grep -m1 '^go ' "$REPO_ROOT/go.mod"; } >"$ROOT/fake-ad/go.mod" || die "fake go.mod"
 cat >"$ROOT/fake-ad/main.go" <<'EOF'
@@ -149,9 +161,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
-var version, commit string
+var version, commit, around string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
@@ -161,6 +174,10 @@ func main() {
 	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
 	switch string(mode) {
 	case "ok": // exit 0, no store created
+	case "around": // FAKE_AROUND does the list
+		err := syscall.Exec(around, append([]string{around}, os.Args[1:]...), os.Environ())
+		fmt.Fprintln(os.Stderr, "fake agent-director:", err)
+		os.Exit(1)
 	case "odd-name":
 		fmt.Fprintln(os.Stderr, `{"err_name":"ErrOdd\ninstall.sh: err_name=ErrVersionUnreadable","err_description":"fake"}`)
 		os.Exit(1)
@@ -173,7 +190,7 @@ func main() {
 	}
 }
 EOF
-(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT" -o "$FAKE_AD" .) \
+(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.around=$FAKE_AROUND" -o "$FAKE_AD" .) \
     || die "go build (fake agent-director)"
 
 # ---- install.sh copies ----------------------------------------------------
@@ -2607,6 +2624,88 @@ test_J21_SettingsDocumentsFixAndRerun() {
 {} {}|2|{}
 {"theme":"dark"}\n{"hooks":{}}\n{}|3|{"theme":"dark","hooks":{}}
 EOF
+}
+
+# ---- J22: no store where install.sh expects one after the open (b.iks) -------------
+
+# J22: "Check db_path in the config file, and whether anything (a cleanup, say)
+# removed or moved the store. To keep a moved store's sessions, put it back at
+# the state.db path above first: with no store there, a re-run creates a new,
+# empty one. Then re-run this install: it reads db_path again and opens the
+# store there. If a re-run fails this same way, ... contact the maintainers."
+# An install of FAKE_AD whose open succeeds and leaves no store at the state.db
+# path, per <cause>:
+#   db-path   db_path changed to ~/custom/s.db between pre-flight and the open
+#             (a fresh install), which made the store there: the config file
+#             names it, and the re-run installs over that store;
+#   moved     after the open migrated an older store, a cleanup moved it away:
+#             put back, the re-run installs over that same store;
+#   custom    as moved, with db_path set to ~/custom/s.db before the first
+#             install: the headline and the state.db line name that path, not
+#             state.db, and the store put back there is the one installed over;
+#   not-back  as moved, not put back: the re-run makes a new store, and the
+#             moved one stays as it was;
+#   none      the open makes no store: db_path is unset, nothing moved one, and
+#             the re-run fails the same way. Contacting the maintainers is a
+#             human step; not followed.
+test_J22_NoStoreAfterOpenCheckAndRerun() {
+    local -a J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    local cause h db cfg moved set_to want_set name put_back moved_sum first
+    for cause in db-path moved custom not-back none; do
+        h="$(new_home)" db="$h/.agent-director/state.db" cfg="$h/.agent-director/config.toml"
+        moved="$h/attic/state.db.bak" want_set="" name="state.db"
+        printf around >"$h/fake-list"
+        case "$cause" in
+            db-path)
+                want_set='"~/custom/s.db"'
+                printf '[store]\ndb_path = %s\n' "$want_set" >"$h/changed.toml"
+                echo 'mv "$HOME/changed.toml" "$HOME/.agent-director/config.toml"' >"$h/fake-before" ;;
+            moved | custom | not-back)
+                if [[ "$cause" == custom ]]; then
+                    want_set='"~/custom/s.db"' db="$h/custom/s.db" name="$h/custom/s.db"
+                    mkdir -p "$h/.agent-director"
+                    printf '[store]\ndb_path = %s\n' "$want_set" >"$cfg"
+                fi
+                run "$h" "${J7ARGV[@]}"
+                expect_rc 0 "$cause: first install" || continue
+                keep_older "$db"
+                printf 'mkdir "$HOME/attic" && mv "%s" "$HOME/attic/state.db.bak"\n' "$db" >"$h/fake-after" ;;
+            none) printf ok >"$h/fake-list" ;;
+        esac
+        run "$h" "${J7ARGV[@]}"
+        expect_exit5 ErrSchemaVerifyFailed "$cause: no store after the open" || continue
+        [[ "$(head -n 1 "$ERR")" == "install.sh: $name was not created by the store open" ]] \
+            || bad "$cause: first stderr line \"$(head -n 1 "$ERR")\"; want \"install.sh: $name was not created by the store open\""
+        expect_advice "state.db: $db config : $cfg The store open (agent-director list) succeeded, yet there is no store at the state.db path above, where install.sh expected it. agent-director opens its store at [store] db_path in the config file above (~/.agent-director/state.db when unset), and install.sh read that file before the open. So either db_path changed since and agent-director opened a store somewhere else, or something removed or moved the store after the open. Check db_path in the config file, and whether anything (a cleanup, say) removed or moved the store. To keep a moved store's sessions, put it back at the state.db path above first: with no store there, a re-run creates a new, empty one. Then re-run this install: it reads db_path again and opens the store there. If a re-run fails this same way, the installed agent-director does not open its store where this install.sh expects it: contact the maintainers."
+        # Check db_path in the config file the advice names.
+        set_to="$(sed -n 's/^db_path = //p' "$(advice_after "  config  : ")" 2>/dev/null)"
+        [[ "$set_to" == "$want_set" ]] || bad "$cause: db_path in the config file is \"$set_to\"; want \"$want_set\""
+        put_back="$(advice_after "  state.db: ")" || { bad "$cause: no state.db line"; continue; }
+        [[ "$put_back" == "$db" ]] || bad "$cause: the state.db line names \"$put_back\"; want \"$db\""
+        # db_path changed after pre-flight: the re-run opens the store there.
+        if [[ "$cause" == db-path ]]; then db="$h/custom/s.db"; fi
+        case "$cause" in
+            moved | custom) mv "$moved" "$put_back" || { bad "$cause: put the store back at $put_back"; continue; } ;;
+            not-back) moved_sum="$(sha256sum "$moved")" ;;
+            none) [[ -z "$(find "$h" -type f -name '*.db*')" ]] || bad "$cause: a store under HOME: $(find "$h" -type f -name '*.db*')" ;;
+        esac
+        first="$ERR"
+        run "$h" "${J7ARGV[@]}"
+        if [[ "$cause" == none ]]; then
+            expect_exit5 ErrSchemaVerifyFailed "$cause: re-run" || continue
+            cmp -s "$first" "$ERR" || bad "$cause: the re-run failed another way: $(diff "$first" "$ERR")"
+            continue
+        fi
+        expect_rc 0 "$cause: re-run" || continue
+        grep -qF " at $db (schema v$SCHEMA)" "$OUT" || bad "$cause: the re-run did not open the store at $db: $(flat "$OUT")"
+        expect_store "$h" "$db" "$cause: re-run"
+        case "$cause" in
+            moved | custom) [[ "$(is_kept "$db")" == 1 ]] || bad "$cause: the store at $db is not the one put back" ;;
+            not-back)
+                [[ "$(is_kept "$db")" == 0 ]] || bad "$cause: the store at $db is the moved one, not a new one"
+                [[ "$(sha256sum "$moved")" == "$moved_sum" ]] || bad "$cause: the moved store changed" ;;
+        esac
+    done
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"
