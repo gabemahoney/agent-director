@@ -1665,7 +1665,10 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
    checks that hand-wired CLI against `Verbs` (see "The structural parity
    guard" under
    [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
-2. MCP tool schema served in `mcp` mode (Epic 11).
+2. The MCP tool list, served by the `serve` verb (`serve --stdio`):
+   `buildToolList` in `internal/mcp/server.go` builds `tools/list` from
+   `Verbs`, skipping the verbs `ExposedVerb` excludes (see
+   [Stdio MCP server](#stdio-mcp-server)).
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
@@ -1794,16 +1797,27 @@ checked.
    call `client.VerbName(params)`, and marshal the result as JSON via
    `writeJSON`. The `cmd/` file must contain no implementation logic —
    only flag parsing, the `client.X(params)` call, and JSON output.
-4. If the verb emits new error sentinels, follow the checklist in
+4. If `ExposedVerb` (`internal/mcp/server.go`) exposes the verb, add its
+   `case` to `LiveDispatcher.Call` in `internal/mcp/dispatch.go`: decode
+   its params, if it has any, with `decodeParams` into a params struct
+   whose json tags are the manifest param names, then call
+   `client.VerbName(params)`. Without the case, `tools/list` lists the
+   tool but a call to it returns `ErrUnknownTool`;
+   `TestToolsCallDispatchMatrix` (`internal/mcp/dispatch_matrix_test.go`)
+   fails for an exposed verb with no case or no `matrixCases()` entry, and
+   `TestMCPParamParity` fails for a param the case does not decode (see
+   "Prohibitions" below and
+   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)).
+5. If the verb emits new error sentinels, follow the checklist in
    [Err-name five-way coherence](#err-name-five-way-coherence) before
    proceeding — the CI drift gate will fail if any of the five sources
    are out of sync.
-5. Run `make sandbox CMD="make generate"` to regenerate
+6. Run `make sandbox CMD="make generate"` to regenerate
    `docs/cli-reference.md` and `docs/mcp-reference.md` from the manifest.
    A bare `make generate` on a development host refuses (exit 2) and
    prints that command; see
    [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
-6. Verify idempotency: re-run `make sandbox CMD="make generate"` and
+7. Verify idempotency: re-run `make sandbox CMD="make generate"` and
    confirm `git status` shows no diff. A second run that produces a diff
    means the generator is non-deterministic — fix it before merging.
 
@@ -6230,11 +6244,14 @@ don't take effect until the next `serve --stdio` invocation.
 
 ### Drift-free schema generation
 
-The tool list is generated from `pkg/api/manifest.Verbs` — the
-same single source of truth that drives the CLI flag definitions
-and the reference docs (`cli-reference.md`, `mcp-reference.md`).
-Adding a verb to the manifest exposes it via MCP on the next server
-start with NO source changes in `internal/mcp`. The
+The tool list is generated from `pkg/api/manifest.Verbs`, the
+source the reference docs (`cli-reference.md`, `mcp-reference.md`) are
+generated from and the CLI's hand-written flags are checked against.
+A verb added to the manifest is listed in `tools/list` on the next
+server start with no source change in `internal/mcp`, but a call to it
+returns `ErrUnknownTool` until it has its `LiveDispatcher.Call` case (see
+"How to add a verb" under
+[`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). The
 drift-by-construction invariant is pinned by
 `TestToolsListMatchesManifest` in `internal/mcp/server_test.go`:
 the test enumerates `manifest.Verbs` at run time and compares the
