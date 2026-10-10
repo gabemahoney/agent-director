@@ -15645,18 +15645,47 @@ prerequisite, and `all` (the default goal) reaches it through `generate`.
 It passes, printing
 nothing, when `AGENT_DIRECTOR_TEST_SANDBOX` or
 `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is set. Otherwise it exits 2
-before anything runs, and its stderr names the goals and the command that
-runs them in the sandbox, built from all the goals whatever their order
-and under `-j`: `make sandbox CMD="make <goals>"`, or, for `test`,
+before the guarded goals' recipes run, and its stderr names the goals and
+a command that runs them and works when run as printed. The command is
+built from all the goals, so it is the same whatever their order and
+under `-j`.
+
+A goal that cannot run in the sandbox never goes in a
+`make sandbox CMD=` (b.4a1); it runs on the host. `test` runs there as
 `make test-sandbox` (`test-install-sh` starts a container, and the
-sandbox has no container engine). With `test` and other goals it joins
-the two with `&&`, `make test-sandbox` first only if `test` is the first
-goal: `make generate test` gives
-`make sandbox CMD="make generate" && make test-sandbox`. When `test`,
+sandbox image has no container engine). Each goal in the Makefile's
+`_REQUIRE_SANDBOX_HOST_GOALS` runs there as itself. Those goals start a
+container, themselves or through `_sandbox-build` or `test-image`
+(`sandbox`, `test-sandbox`, `test-image`, `test-docker`, `measure-exit`,
+`verify-prerelease-linux`, …), run a host tool the image lacks
+(`release-shellcheck`, `tla`), or check or print the host's own setup
+(`tla-print`, `measure-exit-print`, `_measure-exit-credentials`). Every
+other goal runs in one `make sandbox CMD="make <those goals>"`, so the
+sandbox starts once. The host goals before the first sandbox goal run in
+one `make <goals>` ahead of it, the rest in one `make <goals>` after it,
+each in goal order, joined by `&&`:
+
+| Goals | Advice |
+| --- | --- |
+| `generate surface-json` | `make sandbox CMD="make generate surface-json"` |
+| `test` | `make test-sandbox` |
+| `test generate` | `make test-sandbox && make sandbox CMD="make generate"` |
+| `generate test surface-json` | `make sandbox CMD="make generate surface-json" && make test-sandbox` |
+| `generate test-docker` | `make sandbox CMD="make generate" && make test-docker` |
+| `test-image generate test test-docker` | `make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker` |
+
+The advice names the goals only: variables given on the command line
+(`EPIC=…`, `CMD=…`) are not carried into it.
+
+When `test`,
 `all` or `envelope-diff-ts` is a goal, the build prerequisites that do work of
 their own (`build`, `bin/ts-helper`, `test/fake-tmux/tmux` and the
 sandbox image's `_sandbox-preflight`) take the guard as an order-only
-prerequisite, so nothing runs before it, also under `make -j`.
+prerequisite, so none of that work runs before it, also under `make -j`.
+The guard stops only the goals that reach it: a host goal given before
+the guarded goals (`make test-docker generate`), or one whose work does not
+wait for the guard under `-j`, can run before the refusal, which still
+says `Nothing was run.`
 `make build`, `make test-image` and the `make sandbox*` targets still run
 on the host, and `make -n` still exits 0.
 
@@ -15665,6 +15694,15 @@ on the host, and `make -n` still exits 0.
 as its first prerequisite. Never write another environment check in a
 recipe. `test/sandbox/requiresandbox` scans the Makefile's recipes for
 such targets, so a new one is checked without editing the test.
+
+**Must use:** a new make target that cannot run in the sandbox (it starts
+a container, itself or through a prerequisite or sub-make; runs a host
+tool the sandbox image lacks; or checks or prints the host's own setup)
+joins `_REQUIRE_SANDBOX_HOST_GOALS`, so the advice keeps it out of the
+`CMD=`. A target that runs the same in either place (`build`, `lint`,
+`list-test-docker-epics`, …) stays out of the list. `requiresandbox` also
+scans for targets that start a container and fails when one is missing
+from the list; the host-tool and host-setup kinds are not scanned.
 
 The guard defends against b.8dr: a host-side `go test` can rewrite the real
 store no matter how `HOME` is set. Redirecting `HOME` does not hold as a
@@ -15694,7 +15732,7 @@ would also disable the guard on the self-hosted runner (b.175).
 `test/sandbox/internal/sandboxtest` holds the helpers shared by the
 `test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
 `prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
-b.8yq). Those tests run `make` against the real
+b.8yq and b.4a1). Those tests run `make` against the real
 repo Makefile with a fake container engine or tool on PATH, never a real
 container, and assert on what the recipe produced. They exec no built binary
 and open no store, so they carry no sandbox guard.
@@ -15726,10 +15764,19 @@ set. It finds every target whose recipe runs `go generate`, `go run`,
 one, `all`, the default goal, two goals at once and `test` with other
 goals in either order exit 2 with the refusal and its advice and run
 nothing, also under `-j8` for `test`, `all`, the default goal,
-`envelope-diff-ts` and the mixed-goal cells. It checks that the guard
-passes with the sandbox marker or the bypass, that `make -n` and the
-build-only targets still run outside the sandbox, and that the advice, run
-as printed through a fake engine, runs `go generate` in the "container".
+`envelope-diff-ts` and the mixed-goal cells. It also finds every target
+that starts a container (in its recipe, or through a prerequisite or
+sub-make goal that does) and checks `make generate <that target>`, and it
+mixes `test`, `generate` and container goals (`test-docker generate test`,
+`test-image generate test test-docker`, `test test-docker`, also under
+`-j8`): no container goal goes in the advice's `CMD=` (b.4a1). It checks
+that the guard passes with the sandbox marker or the bypass, that
+`make -n` and the build-only targets still run outside the sandbox, and
+that the advice, run as printed, exits 0: for `make generate` it runs
+`go generate` in the "container", and for `make generate test-docker` also
+`test-docker`'s go builds on the host. The fake engine runs a sandbox-image
+command with docker and podman on its PATH that fail, as the real image has
+no container engine.
 
 - `RepoRoot(t)` returns the directory holding the root `go.mod`.
 - `MakefileUnderTest(t)` returns the repo Makefile, or the path in
