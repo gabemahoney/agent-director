@@ -5166,8 +5166,9 @@ claude /install-agent-director (or `bash install.sh`)
   → find both source binaries (agent-director-admin last from its
     installed path, never PATH; see "The two binaries" below); --binary
     and --admin-binary arch probes
-  → source-tree version check (a local agent-director in a git checkout
-    must be built from HEAD)
+  → source-tree version check (a local agent-director must be built from
+    the HEAD of the checkout install.sh takes bin/ from, else exit 3; see
+    "The source-tree version check" below)
   → version-stamp pairing: agent-director and agent-director-admin must
     report the same `version` stamp (version and commit), with a real
     commit, else exit 3
@@ -5339,6 +5340,30 @@ and J9 (an installed admin from another build, refused, then
   without the CDN retry, because such a release has no admin asset
   ("release <tag> has no agent-director-admin binary"; the advice is a
   release of 0.11.0 or later).
+
+**The source-tree version check (b.go9, b.1rs).** When `agent-director`
+comes from `--binary` or the in-repo build (never from PATH, never with
+`--from-release`), install.sh holds its stamp's commit to the `HEAD` of
+`source_root`: the tree two levels above the script, resolved physically
+(`cd -P … && pwd -P`), the same tree it takes `bin/` from. The check runs
+only when `source_root` has a `cmd/agent-director` and a `.git` of its
+own that git can open (a directory in a clone, a `gitdir:` file in a
+linked worktree). `HEAD` is read with `git --git-dir="$source_root/.git"
+rev-parse HEAD`, which never walks up to a repo that encloses the
+script. So a worktree nested inside another checkout is held to its own
+`HEAD`, and a symlinked skill directory to the `HEAD` of the checkout it
+points into. Not checked: an installed skill copy inside a dotfiles `~`
+or `~/.claude`, a copy outside any checkout, and an agent-director tree
+inside an enclosing repo (a monorepo, a dotfiles `~`) whose own `.git`
+is missing or one git cannot open (empty, half-copied). A commit that
+differs, is `unknown`, or cannot be read is exit 3: "install.sh:
+source-tree version check failed.", a `  HEAD    : <sha> (<source_root>)`
+line, and the advice `make build` or `--from-release`.
+`advice_follow.sh`'s J5 pins this: a clone, a linked and a nested
+worktree, a symlinked skill directory, and five unchecked layouts (the
+installed skill in a dotfiles `~`, a dotfiles `~/.claude`, or a
+`~/.claude` that is a linked worktree; an agent-director tree under a
+dotfiles `~` whose `.git` is missing or empty).
 
 **The operator's umask (b.7j2).** install.sh runs `umask u=rwx` right
 after `set -euo pipefail`. That clears the owner's bits from the umask

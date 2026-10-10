@@ -820,22 +820,24 @@ test_J5_StaleBinaryFromRelease() {
     expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
-# j5_worktree <worktree> <what>: J5 from a git worktree of TREE, with the
-# in-repo build (b.go9). A stale pair in its bin/ is refused, naming the
-# worktree's own HEAD and path; after the advised make build there, the same
-# command installs the rebuilt pair.
+# j5_worktree <worktree> <what> [<skill dir>]: J5 from a git worktree of TREE,
+# with the in-repo build (b.go9), running install.sh from skill dir (default
+# the worktree's own). A stale pair in its bin/ is refused, naming the
+# worktree's own HEAD and physical path (b.1rs); after the advised make build
+# there, the same command installs the rebuilt pair.
 j5_worktree() {
-    local wt="$1" what="$2" h head cmd
-    local -a argv=(bash "$wt/skills/install-agent-director/install.sh" --no-hooks --no-symlink)
+    local wt="$1" what="$2" h head cmd root
+    local -a argv=(bash "${3:-$wt/skills/install-agent-director}/install.sh" --no-hooks --no-symlink)
     h="$(new_home)"
     head="$(git -C "$wt" rev-parse HEAD)" || { bad "$what: git rev-parse HEAD"; return; }
+    root="$(cd -P "$wt" && pwd -P)" || { bad "$what: resolve $wt"; return; }
     mkdir -p "$wt/bin" && cp "$BIN" "$wt/bin/agent-director" && cp "$ADMIN" "$wt/bin/agent-director-admin" \
         || { bad "$what: put the stale pair in bin/"; return; }
     run_in "$h" "$wt" "${argv[@]}"
     expect_rc 3 "$what: stale binary" || return
     grep -qxF "install.sh: source-tree version check failed." "$ERR" || bad "$what: no check-failed line: $(flat "$ERR")"
-    grep -qxF "  HEAD    : $head ($wt)" "$ERR" \
-        || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($wt)\""
+    grep -qxF "  HEAD    : $head ($root)" "$ERR" \
+        || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($root)\""
     expect_nothing_installed "$h"
     cmd="$(advice_after "rebuild it first:")" || { bad "$what: no advised command"; return; }
     run_advised "$h" "$wt" "$cmd"
@@ -863,6 +865,57 @@ test_J5_NestedWorktreeMakeBuild() {
         && git -C "$wt" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
             commit -q --allow-empty -m nested || { bad "nested worktree $wt"; return; }
     j5_worktree "$wt" "nested worktree"
+}
+
+# J5: "rebuild it first: make build", through a symlink to a worktree's skill
+# directory (b.1rs): the check uses the checkout install.sh takes bin/ from,
+# though no checkout encloses the link.
+test_J5_SymlinkedSkillMakeBuild() {
+    local wt="$ROOT/tree-symlinked" link="$ROOT/j5-link/skills/install-agent-director"
+    git -C "$TREE" worktree add -q "$wt" && mkdir -p "${link%/*}" \
+        && ln -s "$wt/skills/install-agent-director" "$link" || { bad "worktree $wt linked at $link"; return; }
+    j5_worktree "$wt" "symlinked skill" "$link"
+}
+
+# j5_dotfiles <home> <layout>: a dotfiles repo with one commit and a copy of
+# install.sh in it, whose path it prints. Layouts: home (~ is the repo, the
+# installed skill under ~/.claude), claude (~/.claude is), claude-worktree
+# (~/.claude is a linked worktree of a repo outside ~, its .git a file),
+# source (~ is, and holds an agent-director tree ~/src/ad with no .git),
+# source-empty-git (as source, ~/src/ad/.git an empty directory, not a repo).
+j5_dotfiles() {
+    local h="$1" repo="$1" skill="$1/.claude/skills/install-agent-director"
+    case "$2" in
+        claude) repo="$h/.claude" ;;
+        claude-worktree) repo="$h.dotfiles" ;;
+        source*) skill="$h/src/ad/skills/install-agent-director" ;;
+    esac
+    mkdir -p "$repo" && git -C "$repo" init -q \
+        && git -C "$repo" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
+            commit -q --allow-empty -m dotfiles || return 1
+    case "$2" in
+        claude-worktree) git -C "$repo" worktree add -q --detach "$h/.claude" >/dev/null || return 1 ;;
+        source) mkdir -p "$h/src/ad/cmd/agent-director" || return 1 ;;
+        source-empty-git) mkdir -p "$h/src/ad/cmd/agent-director" "$h/src/ad/.git" || return 1 ;;
+    esac
+    install_copy "$skill/install.sh"
+    printf '%s' "$skill/install.sh"
+}
+
+# J5 does not come from a copy of install.sh in a dotfiles repo (b.1rs): not
+# the installed skill, and not an agent-director tree in it whose own .git is
+# missing or not a repo. Neither is a checkout of agent-director's source, so a
+# pair the repo's HEAD did not build, given as --binary and --admin-binary,
+# installs.
+test_J5_DotfilesSkillNotChecked() {
+    local layout h sh
+    for layout in home claude claude-worktree source source-empty-git; do
+        h="$(new_home)"
+        sh="$(j5_dotfiles "$h" "$layout")" || { bad "$layout: dotfiles repo"; continue; }
+        run "$h" bash "$sh" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+        expect_rc 0 "$layout: --binary from $sh" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+    done
 }
 
 # ---- J6: store open failed after install ------------------------------------------

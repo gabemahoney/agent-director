@@ -462,13 +462,24 @@ This skill runs `install.sh` from the same directory. The script:
       The probe is independent of the OS/CPU gate above: even on a
       supported host, a wrong-arch binary is refused here.
    8. **Source-tree version check** — when the binary came from a
-      local source (`--binary` or the in-repo build) AND install.sh
-      lives inside a git checkout, the binary's embedded commit
-      must match `HEAD`. A linked worktree counts as a checkout, and
-      the checkout is the nearest one above the script, so a
-      worktree nested inside another checkout is held to its own
-      `HEAD`. Catches the "operator forgot to
-      `make build` after pulling new code" footgun.
+      local source (`--binary` or the in-repo build) AND the tree
+      install.sh takes `bin/` from (two levels above the script,
+      symlinks resolved) is a git checkout of agent-director's
+      source, the binary's embedded commit must match that
+      checkout's `HEAD`. Otherwise install.sh exits 3 ("install.sh:
+      source-tree version check failed."), naming `HEAD` and the
+      checkout's real path, and advises `make build` or
+      `--from-release`. That tree counts only with a `.git` of its
+      own that git can open (a directory in a clone, a file in a
+      linked worktree) and a `cmd/agent-director`; an empty or
+      half-copied `.git` skips the check. So a worktree nested
+      inside another checkout is held to its own `HEAD`, and a
+      symlinked skill directory to the `HEAD` of the checkout it
+      points into. A repo that only encloses the script is never
+      used: the installed skill inside a dotfiles `~` or
+      `~/.claude`, or a copy outside any checkout, is not checked.
+      Catches the "operator forgot to `make build` after pulling new
+      code" footgun.
    9. **Version-stamp pairing** — `agent-director version` and
       `agent-director-admin version` must report the same version and
       commit; otherwise (or when one stamp cannot be read) the install
