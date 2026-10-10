@@ -476,4 +476,4 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 ## Architecture
 
-See [`../../docs/architecture.md`](../../docs/architecture.md) for the internal design. Dedicated subsections cover: Client lifecycle, the subprocess call recipe, Per-platform packaging, Error mapping, TS smoke-test harness, and TS envelope-diff regression.
+See [`../../docs/architecture.md`](../../docs/architecture.md) for the internal design. Dedicated subsections cover: Client lifecycle, the subprocess call recipe, npm packaging, Error mapping, TS smoke-test harness, and TS envelope-diff regression.
