@@ -2266,9 +2266,14 @@ else
     # document counted above, is one object holding both entries in
     # lists, and "hooks : injected" below is true; an event list that is
     # an object fails the append instead.
-    # Valid JSON of another shape (an array, or hooks a string, say) fails
-    # the merge with jq's runtime-error status, 5, which set -e would make
-    # the install's exit status: a hook merge failure is exit 4 (b.cfq).
+    # Valid JSON of another shape fails the merge with jq's runtime-error
+    # status, 5, which set -e would make the install's exit status: a hook
+    # merge failure is exit 4 (b.cfq). The shape is wrong either outside
+    # the event lists (an array, or hooks a string, say) or inside them:
+    # "already there" indexes each entry it reads (.hooks, .matcher) and
+    # each hook in an entry's hooks list (.command), so one that is
+    # neither an object nor null (a string, say) fails the merge too. A
+    # null one indexes to null and passes.
     if ! new_settings=$(printf '%s' "$existing" | jq \
         --arg cmd "$help_cmd" '
             .hooks //= {}
@@ -2288,8 +2293,38 @@ else
             )
         '); then
         echo "install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)" >&2
-        echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
-        echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        # Which side of the event lists is wrong (b.dzu): with the merge's
+        # own fill-ins, an outer shape it takes yields the path of each
+        # entry, and each hook in an entry's hooks list, that is neither an
+        # object nor null, whether or not the merge read it. An outer shape
+        # it does not take yields nothing, or a jq error, and keeps the
+        # outer-shape message.
+        if odd_hook_values=$(printf '%s' "$existing" | jq -r '
+                def odd: type != "object" and type != "null";
+                .hooks //= {}
+                | .hooks.SessionStart //= []
+                | .hooks.SessionEnd //= []
+                | .hooks
+                | select((.SessionStart | type) == "array" and (.SessionEnd | type) == "array")
+                | ("SessionStart", "SessionEnd") as $e
+                | .[$e]
+                | range(length) as $i
+                | .[$i]
+                | if odd then ".hooks.\($e)[\($i)]"
+                  else .hooks | arrays | range(length) as $j
+                    | select(.[$j] | odd)
+                    | ".hooks.\($e)[\($i)].hooks[\($j)]"
+                  end
+            ' 2>/dev/null) && [[ -n "$odd_hook_values" ]]; then
+            echo "  It is valid JSON, and its hooks hold event lists, but an entry in an" >&2
+            echo "  event list, or a hook in an entry's hooks list, is not an object, the" >&2
+            echo "  shape Claude Code reads. Not an object:" >&2
+            sed 's/^/    /' <<<"$odd_hook_values" >&2
+            echo "  Fix it, then re-run this install." >&2
+        else
+            echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
+            echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        fi
         exit 4
     fi
 

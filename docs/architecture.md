@@ -5268,13 +5268,45 @@ counts the documents first and runs only on exactly one, of the outer
 shape this merge needs (an object whose `hooks` holds `SessionStart` and
 `SessionEnd` lists, after the merge's fill-ins); install.sh refuses
 another outer shape with exit 4, uninstall.sh leaves it alone. The two
-agree on that outer shape only, not on the values inside the lists: the
-merge also refuses (exit 4) some of those, such as an entry that is a
+agree on that outer shape only, not on the values inside the lists. The
+merge's "already there" test indexes each entry it reads (`.hooks`,
+`.matcher`) and each hook in that entry's `hooks` list (`.command`), so
+one that is neither an object nor `null`, such as an entry that is a
 string (`{"hooks":{"SessionStart":["x"]}}`) or a `hooks` list holding a
-string, which uninstall.sh edits around, keeping them verbatim (its side
-is in [Uninstall semantics](#uninstall-semantics)).
+string, fails the merge too (exit 4); a `null` one indexes to `null` and
+passes. Only a value the merge reads is refused: `any` stops at the
+first match, and the `hooks` list of a `SessionEnd` entry whose `matcher`
+is not `"compact"` is not read, so a file holding such values can still
+merge (exit 0); `advice_follow.sh`'s J18 pins both, each value kept as it
+was. uninstall.sh edits around all of them, keeping them
+verbatim (its side is in [Uninstall semantics](#uninstall-semantics)).
+
+After the merge's jq fails, install.sh says which side of the event
+lists is wrong (b.dzu). A second jq query, with the merge's fill-ins,
+lists the path of every entry in the `SessionStart` and `SessionEnd`
+lists, and every hook in an entry's `hooks` list, that is neither an
+object nor `null`, whether or not the merge read it: `SessionStart`'s
+first, then `SessionEnd`'s, each by index. When the outer shape is right
+and it finds some, the headline is followed by
+
+```
+  It is valid JSON, and its hooks hold event lists, but an entry in an
+  event list, or a hook in an entry's hooks list, is not an object, the
+  shape Claude Code reads. Not an object:
+    .hooks.SessionStart[0]
+  Fix it, then re-run this install.
+```
+
+with one indented path per line. Otherwise, including a file wrong in
+both ways, it is `It is valid JSON, but not an object whose hooks hold
+event lists, the shape Claude Code reads. Fix it, then re-run this
+install.` The contract is exit 4 with the file unchanged; both messages
+are advice for whoever fixes the file.
 `advice_follow.sh`'s J18 (valid JSON of another shape, an object-valued
-`SessionStart` holding the help hook among them) and J21 (several documents, each
+`SessionStart` holding the help hook among them, and event lists holding
+values that are neither objects nor `null`, with `null` values kept on
+the fix: each message, the paths listed, and a file wrong in both ways
+getting the outer-shape one) and J21 (several documents, each
 refusal followed by its fix and a re-run), `test/install-sh/retry.sh`'s
 `settings-empty-*`, `settings-whitespace-*` and
 `settings-entry-hooks-object-*` rows,
@@ -6052,9 +6084,12 @@ lists, so the two scripts agree on that outer shape (the document,
 with exit 4 (b.cfq) is left alone, with
 `uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone`.
 They do not agree inside the lists: install.sh's merge also refuses
-(exit 4) some values there, such as an entry that is a string
+(exit 4) a value there that is neither an object nor `null` when it reads
+it, such as an entry that is a string
 (`{"hooks":{"SessionStart":["x"]}}`) or a `hooks` list holding a string,
-which uninstall.sh's filter takes and keeps verbatim (see below).
+and lists each such value's path (b.dzu; see "The settings.json merge"
+above), while uninstall.sh's filter takes any such value and keeps it
+verbatim (see below).
 Should jq still fail, on the filter or on the symlink branch's count of
 entries to remove (see "A symlinked `settings.json` or `config.toml`"
 above), the file is left alone with jq's error, then

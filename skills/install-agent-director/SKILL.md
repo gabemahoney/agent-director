@@ -674,6 +674,24 @@ This skill runs `install.sh` from the same directory. The script:
            It is valid JSON, but not an object whose hooks hold event lists, the
            shape Claude Code reads. Fix it, then re-run this install.
 
+     A file also wrong in the next way gets this message;
+   - an entry in an event list, or a hook in an entry's `hooks` list,
+     that is neither an object nor `null`
+     (`{"hooks":{"SessionStart":["x"]}}`, say; b.dzu). Only a value the
+     merge reads stops it, so such a file can still install. jq's error
+     comes first, then the path of every such value in either list, one
+     per line:
+
+         install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)
+           It is valid JSON, and its hooks hold event lists, but an entry in an
+           event list, or a hook in an entry's hooks list, is not an object, the
+           shape Claude Code reads. Not an object:
+             .hooks.SessionStart[0]
+           Fix it, then re-run this install.
+
+     To fix it, take the listed values out, or make them objects; `null`
+     ones can stay.
+
    By then the binaries (and the PATH symlink, if any) are in place
    and state.db is at the binary's version; config.toml was not merged
    and MCP was not registered. Fix the file, then re-run the install
