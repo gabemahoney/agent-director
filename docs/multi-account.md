@@ -18,16 +18,22 @@ instead, so it does not find a transcript Claude Code wrote under the
 relative dir unless the row's recorded `jsonl_path` (or a
 `prior_sessions` entry's) still points at it.
 
-If `extra_env` sets `HOME` and not `CLAUDE_CONFIG_DIR`, Claude Code
-reads `<HOME>/.claude.json`, so the pretrust write targets that file.
-The same rule applies: a `HOME` that is not an absolute path gets no
-pretrust write and `pre_trust: failed`. A `CLAUDE_CONFIG_DIR` in
-`extra_env`, usable or not, takes precedence over `HOME`. Nothing else
-in agent-director is built for an extra-env `HOME`: the agent's
-hooks look for agent-director's store under that home, so the spawn's
-row can stay `pending`, and `resume` does not look for transcripts
-there. To give a Spawn its own Claude config, set
-`CLAUDE_CONFIG_DIR`, not `HOME`.
+`extra_env` may not set `HOME`, whatever its value (an empty one
+included): `spawn` refuses it with `ErrReservedEnvKey`, a template's
+`extra_env` included, before anything is written or launched. A key
+such as `HOME=/x` is refused too, since tmux sets the variable named by
+the part of the key before its first `=`. The
+agent's hooks find agent-director's config and store from the pane's
+`HOME`, so an extra-env `HOME` would send the agent's hook events to
+another agent-director store and leave the spawn's row `pending`. To
+give a Spawn its own Claude config, set an absolute
+`CLAUDE_CONFIG_DIR` instead. `resume` refuses a row whose stored
+`extra_env` has `HOME` (a row spawned before this refusal) with
+`ErrReservedEnvKey`, writing and launching nothing; to run that agent
+again, spawn its id with `reuse_finished` (`--reuse-finished` on the
+CLI) and an `extra_env` without
+`HOME` (a reused id starts a new life with no memory of the earlier
+conversation).
 
 For Claude Code's own auth reference, see:
 
@@ -66,7 +72,8 @@ agent-director spawn \
 ```
 
 The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
-keys but *does not reserve* the auth env vars — they pass through to
+keys and `HOME` with `ErrReservedEnvKey` but *does not reserve* the auth
+env vars — they pass through to
 the tmux session and into Claude verbatim. agent-director never logs
 the value. It *does* persist the per-spawn `--extra-env` map to the
 store — with no opt-out — so `resume` can restore a finished (`ended` or

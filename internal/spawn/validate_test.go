@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +11,8 @@ import (
 
 // TestValidateOrder pins SRD §7.2's validation precedence: each case would
 // fail more than one check and must get the first one's sentinel. It also
-// pins step 3's denied set, each flag in split and equals form, and SRD §19
-// Q5's --setting-sources, which passes.
+// pins step 3's denied set, each flag in split and equals form, SRD §19 Q5's
+// --setting-sources, which passes, and step 4's reserved HOME (b.nas).
 func TestValidateOrder(t *testing.T) {
 	cwdGood := t.TempDir()
 	file := filepath.Join(t.TempDir(), "x")
@@ -37,6 +38,12 @@ func TestValidateOrder(t *testing.T) {
 			TmuxSessionName: "bad:name", TmuxSessionNameSupplied: true}, ErrReservedEnvKey},
 		{"auth env vars are not reserved", SpawnParams{CWD: cwdGood,
 			ExtraEnv: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-test", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}}, nil},
+		{"keys near HOME are not reserved (b.nas)", SpawnParams{CWD: cwdGood, ExtraEnv: map[string]string{
+			"HOMEDIR": "/x", "home": "/x", "MY_HOME": "/x", "=HOME": "/x", "X=HOME": "/x", "CLAUDE_CONFIG_DIR": "/x"}}, nil},
+		{"key HOME=/tmp/b sets HOME, so is reserved (b.nas)", SpawnParams{CWD: cwdGood,
+			ExtraEnv: map[string]string{"HOME=/tmp/b": ""}}, ErrReservedEnvKey},
+		{"key AGENT_DIRECTOR_X=y is reserved", SpawnParams{CWD: cwdGood,
+			ExtraEnv: map[string]string{"AGENT_DIRECTOR_X=y": ""}}, ErrReservedEnvKey},
 		{"--setting-sources", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{"--setting-sources", "project,local"}}, nil},
 		{"--setting-sources=", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{"--setting-sources=project,local"}}, nil},
 		{"happy path", SpawnParams{CWD: cwdGood}, nil},
@@ -46,11 +53,40 @@ func TestValidateOrder(t *testing.T) {
 			validateCase{"denied " + flag, SpawnParams{CWD: cwdGood, ClaudeArgs: []string{flag, "value"}}, ErrSpawnDeniedFlag},
 			validateCase{"denied " + flag + "=", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{flag + "=value"}}, ErrSpawnDeniedFlag})
 	}
+	for _, home := range []string{"/abs/home", "rel", ""} { // b.nas: HOME is reserved whatever its value
+		cases = append(cases, validateCase{fmt.Sprintf("HOME=%q is reserved", home), SpawnParams{CWD: cwdGood,
+			ExtraEnv: map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": cwdGood}}, ErrReservedEnvKey})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := Resolved{SpawnParams: tc.in}
 			if err := Validate(&r); !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
 				t.Fatalf("Validate err = %v; want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestReservedHomeKey (b.nas): the key named is the smallest whose name before
+// the first '=' is HOME, the same on every call whatever the map order.
+func TestReservedHomeKey(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"no key", nil, ""},
+		{"HOME", map[string]string{"HOME": "/x", "TEAM": "core"}, "HOME"},
+		{"HOME=/tmp/b", map[string]string{"HOME=/tmp/b": "", "TEAM": "core"}, "HOME=/tmp/b"},
+		{"HOME before HOME=...", map[string]string{"HOME=/x": "", "HOME": "/a", "HOME=/a": "", "HOMEDIR": ""}, "HOME"},
+		{"the smallest HOME=...", map[string]string{"HOME=/x": "", "HOME=/a": "", "HOME=": "", "=HOME": ""}, "HOME="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 100 {
+				if got, ok := ReservedHomeKey(tc.env); got != tc.want || ok != (tc.want != "") {
+					t.Fatalf("ReservedHomeKey(%q) = %q, %t; want %q, %t", tc.env, got, ok, tc.want, tc.want != "")
+				}
 			}
 		})
 	}

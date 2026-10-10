@@ -37,9 +37,18 @@ var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 // forms; --setting-sources is deliberately not on this list (SRD §19 Q5).
 var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 
-// ErrReservedEnvKey is returned when extra_env contains a key matching the
-// AGENT_DIRECTOR_* prefix (case-sensitive). Auth env vars
-// (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
+// ErrReservedEnvKey is returned when extra_env contains a key whose env-var
+// name, the part before the first '=' (the name tmux sets), matches the
+// AGENT_DIRECTOR_* prefix (case-sensitive) or is exactly HOME
+// (ReservedHomeEnvKey, so "HOME" and "HOME=/x" alike; ReservedHomeKey) with
+// any value, an empty one included (bug b.nas): an extra-env HOME would move
+// the agent's hook to another agent-director store, and CLAUDE_CONFIG_DIR is
+// the supported way to give an agent its own Claude Code config. The message
+// quotes the key as given. Spawn returns it at validation, before anything is
+// written or launched; resume returns it, wrapped, for a row whose stored
+// extra env has a key that sets HOME (spawned before the refusal), also
+// before anything is written or launched. Auth env vars (ANTHROPIC_API_KEY,
+// CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
 var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 
 // ErrInstanceIdCollision is returned when the caller supplied an explicit

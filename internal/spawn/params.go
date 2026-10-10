@@ -36,9 +36,12 @@ type SpawnParams struct {
 	// still collides.
 	ClaudeInstanceID string
 
-	// ExtraEnv injects KEY=VAL env vars on the tmux session. Reserved
-	// keys (AGENT_DIRECTOR_*) are rejected; auth env vars
-	// (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
+	// ExtraEnv injects KEY=VAL env vars on the tmux session. Keys whose
+	// env-var name (the part before the first '=', the name tmux sets) is
+	// reserved (AGENT_DIRECTOR_*, and HOME with any value) are rejected with
+	// ErrReservedEnvKey; auth env vars (ANTHROPIC_API_KEY,
+	// CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed. To give the agent its
+	// own Claude Code config, set an absolute CLAUDE_CONFIG_DIR.
 	ExtraEnv map[string]string
 
 	// AgentDirectorLabels are caller-owned tags. Each key is normalized to
@@ -62,10 +65,9 @@ type SpawnParams struct {
 
 	// NoPreTrust opts out of the folder-trust pre-write (PreTrust) into
 	// <CLAUDE_CONFIG_DIR>/.claude.json when the spawn's extra env sets
-	// CLAUDE_CONFIG_DIR, else <HOME>/.claude.json when it sets HOME, and
-	// ~/.claude.json otherwise; the one of those two it uses being set but
-	// not an absolute path (ConfigDirUsable) gets no pre-write at all, and
-	// PreTrust reports it failed. Default false
+	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR
+	// that is set but not an absolute path (ConfigDirUsable) gets no
+	// pre-write at all, and PreTrust reports it failed. Default false
 	// (= pre-trust IS performed) marks the cwd trusted so the agent skips
 	// Claude Code's folder-trust prompt. True attempts no pre-trust, so the
 	// prompt must be answered for an unseen cwd. The choice is recorded on
