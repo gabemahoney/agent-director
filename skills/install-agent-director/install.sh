@@ -1326,10 +1326,12 @@ VERSION_CHECK_REQUIRED=1
 # levels under the repo root; bin/ is at the root). The root is resolved
 # here, physically as the kernel resolves ../.., so every message names
 # <root>/bin/... with no ../.. (b.j6w); a failed cd keeps the raw path.
-candidate_bin="$(cd -P "${SCRIPT_DIR}/../.." 2>/dev/null && pwd -P)/bin" \
-    || candidate_bin="${SCRIPT_DIR}/../../bin"
-candidate="${candidate_bin}/agent-director"
-admin_candidate="${candidate_bin}/agent-director-admin"
+# The source-tree version check below holds a binary to this same root's
+# HEAD (b.1rs).
+source_root="$(cd -P "${SCRIPT_DIR}/../.." 2>/dev/null && pwd -P)" \
+    || source_root="${SCRIPT_DIR}/../.."
+candidate="${source_root}/bin/agent-director"
+admin_candidate="${source_root}/bin/agent-director-admin"
 
 if [[ -z "$BINARY_SRC" ]]; then
     if [[ -x "$candidate" ]]; then
@@ -1456,39 +1458,42 @@ ad_arch_probe "$ADMIN_SRC" "--admin-binary"
 # Source-tree version check
 #
 # When the operator points install.sh at a local binary (either via
-# --binary or via the in-repo ./bin/agent-director fallback) AND
-# install.sh itself lives inside a git checkout, refuse to install a
-# binary whose embedded commit doesn't match the checkout's HEAD.
-# Catches the "operator forgot to `make build` after pulling new
-# code" footgun — installing a stale artifact silently is exactly
-# what b.qag flagged.
+# --binary or via the in-repo bin/agent-director fallback) AND the tree
+# install.sh takes bin/ from (source_root: two levels above the script,
+# resolved physically) is a git checkout of agent-director's source,
+# refuse to install a binary whose embedded commit doesn't match that
+# checkout's HEAD. Catches the "operator forgot to `make build` after
+# pulling new code" footgun — installing a stale artifact silently is
+# exactly what b.qag flagged.
+#
+# source_root is that checkout only when its own `.git` entry is a repo:
+# a directory in a plain clone, a `gitdir:` file in a linked worktree
+# (b.go9), so a worktree nested inside another checkout is held to its
+# own HEAD. A repo merely enclosing the script is never used (b.1rs);
+# nor is CWD's. It is agent-director's source when it has
+# cmd/agent-director, which `make build` builds into its bin/.
 #
 # Skipped when:
 #   - --from-release was used (the asset is by construction not the
 #     operator's source tree)
-#   - install.sh is not inside a git checkout (curled tarball case)
+#   - source_root is not a git checkout of agent-director's source
+#     (b.1rs): a curled tarball, or an installed copy of the skill in
+#     some other repo, such as a dotfiles ~ or ~/.claude, whose HEAD no
+#     agent-director binary is built from
 #   - BINARY_SRC came from `command -v` (option (c)): there's no
 #     promise it was built from this tree, and the user explicitly
 #     asked for "whatever's on PATH"
 # --------------------------------------------------------------------
 
 if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
-    # Find the script's repo root (walking up from SCRIPT_DIR). The
-    # script-path is what tells us "this checkout"; CWD might be
-    # somewhere unrelated. The nearest folder with a `.git` entry is
-    # the root: a directory in a plain clone, a `gitdir:` file in a
-    # linked worktree (b.go9). Stopping at the nearest one keeps a
-    # worktree nested inside another checkout on its own HEAD.
-    repo_root=""
-    probe="$SCRIPT_DIR"
-    while [[ "$probe" != "/" && -n "$probe" ]]; do
-        if [[ -e "$probe/.git" ]]; then
-            repo_root="$probe"; break
-        fi
-        probe="$(dirname "$probe")"
-    done
-
-    if [[ -n "$repo_root" ]] && head_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null); then
+    # Only source_root's own `.git` counts. --git-dir takes it as given
+    # (a directory, or a linked worktree's `gitdir:` file) and never
+    # searches upward, as git -C would: a `.git` that is not a repo
+    # (empty, half-copied) fails rev-parse, which skips the check, rather
+    # than letting git find a repo enclosing source_root (b.1rs).
+    # --git-dir also overrides an exported GIT_DIR.
+    if [[ -e "$source_root/.git" && -d "$source_root/cmd/agent-director" ]] \
+        && head_sha=$(git --git-dir="$source_root/.git" rev-parse HEAD 2>/dev/null); then
         # Run the binary's `version` verb. An older binary without the
         # verb will exit non-zero / emit an err_name envelope; jq -e
         # returns non-zero if .commit is absent or null. Either way we
@@ -1507,7 +1512,7 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
             else
                 echo "  built from: $bin_commit" >&2
             fi
-            echo "  HEAD    : $head_sha ($repo_root)" >&2
+            echo "  HEAD    : $head_sha ($source_root)" >&2
             echo "" >&2
             echo "  The binary at $BINARY_SRC was not built from this checkout's" >&2
             echo "  current HEAD. Installing it would silently substitute stale code" >&2
@@ -2261,9 +2266,14 @@ else
     # document counted above, is one object holding both entries in
     # lists, and "hooks : injected" below is true; an event list that is
     # an object fails the append instead.
-    # Valid JSON of another shape (an array, or hooks a string, say) fails
-    # the merge with jq's runtime-error status, 5, which set -e would make
-    # the install's exit status: a hook merge failure is exit 4 (b.cfq).
+    # Valid JSON of another shape fails the merge with jq's runtime-error
+    # status, 5, which set -e would make the install's exit status: a hook
+    # merge failure is exit 4 (b.cfq). The shape is wrong either outside
+    # the event lists (an array, or hooks a string, say) or inside them:
+    # "already there" indexes each entry it reads (.hooks, .matcher) and
+    # each hook in an entry's hooks list (.command), so one that is
+    # neither an object nor null (a string, say) fails the merge too. A
+    # null one indexes to null and passes.
     if ! new_settings=$(printf '%s' "$existing" | jq \
         --arg cmd "$help_cmd" '
             .hooks //= {}
@@ -2283,8 +2293,38 @@ else
             )
         '); then
         echo "install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)" >&2
-        echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
-        echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        # Which side of the event lists is wrong (b.dzu): with the merge's
+        # own fill-ins, an outer shape it takes yields the path of each
+        # entry, and each hook in an entry's hooks list, that is neither an
+        # object nor null, whether or not the merge read it. An outer shape
+        # it does not take yields nothing, or a jq error, and keeps the
+        # outer-shape message.
+        if odd_hook_values=$(printf '%s' "$existing" | jq -r '
+                def odd: type != "object" and type != "null";
+                .hooks //= {}
+                | .hooks.SessionStart //= []
+                | .hooks.SessionEnd //= []
+                | .hooks
+                | select((.SessionStart | type) == "array" and (.SessionEnd | type) == "array")
+                | ("SessionStart", "SessionEnd") as $e
+                | .[$e]
+                | range(length) as $i
+                | .[$i]
+                | if odd then ".hooks.\($e)[\($i)]"
+                  else .hooks | arrays | range(length) as $j
+                    | select(.[$j] | odd)
+                    | ".hooks.\($e)[\($i)].hooks[\($j)]"
+                  end
+            ' 2>/dev/null) && [[ -n "$odd_hook_values" ]]; then
+            echo "  It is valid JSON, and its hooks hold event lists, but an entry in an" >&2
+            echo "  event list, or a hook in an entry's hooks list, is not an object, the" >&2
+            echo "  shape Claude Code reads. Not an object:" >&2
+            sed 's/^/    /' <<<"$odd_hook_values" >&2
+            echo "  Fix it, then re-run this install." >&2
+        else
+            echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
+            echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        fi
         exit 4
     fi
 

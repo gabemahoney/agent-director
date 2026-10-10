@@ -455,11 +455,12 @@ expect_installed() {
 }
 
 # hooks_injected <home>: home's settings.json is one JSON document holding both
-# `agent-director help` hooks, SessionStart and SessionEnd reason=compact.
+# `agent-director help` hooks, SessionStart and SessionEnd reason=compact, each
+# in an entry's hooks list (an entry that is null, or has no list, is passed over).
 hooks_injected() {
     jq -se --arg c "$1/.agent-director/bin/agent-director help" 'length == 1 and (.[0]
-        | any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
-        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c)))' \
+        | any(.hooks.SessionStart[]; any(.hooks | arrays | .[]; .command == $c))
+        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks | arrays | .[]; .command == $c)))' \
         "$1/.claude/settings.json" >/dev/null 2>&1
 }
 
@@ -820,22 +821,24 @@ test_J5_StaleBinaryFromRelease() {
     expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
-# j5_worktree <worktree> <what>: J5 from a git worktree of TREE, with the
-# in-repo build (b.go9). A stale pair in its bin/ is refused, naming the
-# worktree's own HEAD and path; after the advised make build there, the same
-# command installs the rebuilt pair.
+# j5_worktree <worktree> <what> [<skill dir>]: J5 from a git worktree of TREE,
+# with the in-repo build (b.go9), running install.sh from skill dir (default
+# the worktree's own). A stale pair in its bin/ is refused, naming the
+# worktree's own HEAD and physical path (b.1rs); after the advised make build
+# there, the same command installs the rebuilt pair.
 j5_worktree() {
-    local wt="$1" what="$2" h head cmd
-    local -a argv=(bash "$wt/skills/install-agent-director/install.sh" --no-hooks --no-symlink)
+    local wt="$1" what="$2" h head cmd root
+    local -a argv=(bash "${3:-$wt/skills/install-agent-director}/install.sh" --no-hooks --no-symlink)
     h="$(new_home)"
     head="$(git -C "$wt" rev-parse HEAD)" || { bad "$what: git rev-parse HEAD"; return; }
+    root="$(cd -P "$wt" && pwd -P)" || { bad "$what: resolve $wt"; return; }
     mkdir -p "$wt/bin" && cp "$BIN" "$wt/bin/agent-director" && cp "$ADMIN" "$wt/bin/agent-director-admin" \
         || { bad "$what: put the stale pair in bin/"; return; }
     run_in "$h" "$wt" "${argv[@]}"
     expect_rc 3 "$what: stale binary" || return
     grep -qxF "install.sh: source-tree version check failed." "$ERR" || bad "$what: no check-failed line: $(flat "$ERR")"
-    grep -qxF "  HEAD    : $head ($wt)" "$ERR" \
-        || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($wt)\""
+    grep -qxF "  HEAD    : $head ($root)" "$ERR" \
+        || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($root)\""
     expect_nothing_installed "$h"
     cmd="$(advice_after "rebuild it first:")" || { bad "$what: no advised command"; return; }
     run_advised "$h" "$wt" "$cmd"
@@ -863,6 +866,57 @@ test_J5_NestedWorktreeMakeBuild() {
         && git -C "$wt" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
             commit -q --allow-empty -m nested || { bad "nested worktree $wt"; return; }
     j5_worktree "$wt" "nested worktree"
+}
+
+# J5: "rebuild it first: make build", through a symlink to a worktree's skill
+# directory (b.1rs): the check uses the checkout install.sh takes bin/ from,
+# though no checkout encloses the link.
+test_J5_SymlinkedSkillMakeBuild() {
+    local wt="$ROOT/tree-symlinked" link="$ROOT/j5-link/skills/install-agent-director"
+    git -C "$TREE" worktree add -q "$wt" && mkdir -p "${link%/*}" \
+        && ln -s "$wt/skills/install-agent-director" "$link" || { bad "worktree $wt linked at $link"; return; }
+    j5_worktree "$wt" "symlinked skill" "$link"
+}
+
+# j5_dotfiles <home> <layout>: a dotfiles repo with one commit and a copy of
+# install.sh in it, whose path it prints. Layouts: home (~ is the repo, the
+# installed skill under ~/.claude), claude (~/.claude is), claude-worktree
+# (~/.claude is a linked worktree of a repo outside ~, its .git a file),
+# source (~ is, and holds an agent-director tree ~/src/ad with no .git),
+# source-empty-git (as source, ~/src/ad/.git an empty directory, not a repo).
+j5_dotfiles() {
+    local h="$1" repo="$1" skill="$1/.claude/skills/install-agent-director"
+    case "$2" in
+        claude) repo="$h/.claude" ;;
+        claude-worktree) repo="$h.dotfiles" ;;
+        source*) skill="$h/src/ad/skills/install-agent-director" ;;
+    esac
+    mkdir -p "$repo" && git -C "$repo" init -q \
+        && git -C "$repo" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
+            commit -q --allow-empty -m dotfiles || return 1
+    case "$2" in
+        claude-worktree) git -C "$repo" worktree add -q --detach "$h/.claude" >/dev/null || return 1 ;;
+        source) mkdir -p "$h/src/ad/cmd/agent-director" || return 1 ;;
+        source-empty-git) mkdir -p "$h/src/ad/cmd/agent-director" "$h/src/ad/.git" || return 1 ;;
+    esac
+    install_copy "$skill/install.sh"
+    printf '%s' "$skill/install.sh"
+}
+
+# J5 does not come from a copy of install.sh in a dotfiles repo (b.1rs): not
+# the installed skill, and not an agent-director tree in it whose own .git is
+# missing or not a repo. Neither is a checkout of agent-director's source, so a
+# pair the repo's HEAD did not build, given as --binary and --admin-binary,
+# installs.
+test_J5_DotfilesSkillNotChecked() {
+    local layout h sh
+    for layout in home claude claude-worktree source source-empty-git; do
+        h="$(new_home)"
+        sh="$(j5_dotfiles "$h" "$layout")" || { bad "$layout: dotfiles repo"; continue; }
+        run "$h" bash "$sh" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+        expect_rc 0 "$layout: --binary from $sh" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+    done
 }
 
 # ---- J6: store open failed after install ------------------------------------------
@@ -2296,33 +2350,56 @@ j17_fake other-name|install.sh: store open (agent-director list) failed after in
 EOF
 }
 
-# ---- J18: settings.json of another shape, hooks on (b.cfq) -------------------------
+# ---- J18: settings.json of another shape, hooks on (b.cfq, b.dzu) ------------------
 
 # J18: "It is valid JSON, but not an object whose hooks hold event lists, the
-# shape Claude Code reads. Fix it, then re-run this install." A hooks-on
-# install over such a settings.json exits 4, the hook merge failure, with jq's
-# error on the line above its headline and no exit-5 cause line, and leaves the
-# file as it was; rewritten to that shape, the re-run injects both hooks. Per
-# case <settings.json>|<fixed>, @CMD@ the help hook's command: a SessionStart
-# object holding that hook is not the hook already there (b.zbg).
+# shape Claude Code reads. Fix it, then re-run this install." Or, when the event
+# lists are lists but hold an entry, or an entry's hooks list a hook, that is
+# neither an object nor null (b.dzu): "It is valid JSON, and its hooks hold event
+# lists, but an entry in an event list, or a hook in an entry's hooks list, is
+# not an object, the shape Claude Code reads. Not an object:", each such value's
+# path on a line of its own, then "Fix it, then re-run this install." A file
+# wrong on both sides gets the first. A hooks-on install over such a
+# settings.json exits 4, the hook merge failure, with jq's error on the line
+# above its headline and no exit-5 cause line, and leaves the file byte for
+# byte with nothing beside it; rewritten to that shape (for the second, the
+# listed values taken out, nulls kept), the re-run injects both hooks. Per case
+# <settings.json>|<fixed>|<paths listed, none for the first>, @CMD@ the help
+# hook's command: a SessionStart object holding that hook is not the hook
+# already there (b.zbg).
 test_J18_SettingsShapeFixAndRerun() {
     local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
-    local h sj settings fixed above
+    local -a paths
+    local h sj settings fixed odd above
     local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
-    while IFS='|' read -r settings fixed <&3; do
+    local outer="It is valid JSON, but not an object whose hooks hold event lists, the shape Claude Code reads."
+    local inner="It is valid JSON, and its hooks hold event lists, but an entry in an event list, or a hook in an entry's hooks list, is not an object, the shape Claude Code reads. Not an object:"
+    while IFS='|' read -r settings fixed odd <&3; do
         h="$(new_home)" sj="$h/.claude/settings.json"
         settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
         fixed="${fixed//@CMD@/$h/.agent-director/bin/agent-director help}"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 4 "settings.json $settings" || continue
-        expect_advice "$want It is valid JSON, but not an object whose hooks hold event lists, the shape Claude Code reads. Fix it, then re-run this install."
+        if [[ -z "$odd" ]]; then
+            expect_advice "$want $outer Fix it, then re-run this install."
+            [[ "$(flat "$ERR")" != *"Not an object:"* ]] || bad "$settings: lists values for an outer shape: $(flat "$ERR")"
+        else
+            read -r -a paths <<<"$odd"
+            expect_advice "$want $inner $odd Fix it, then re-run this install."
+            [[ "$(grep -xE '    \.hooks\.\S+' "$ERR")" == "$(printf '    %s\n' "${paths[@]}")" ]] \
+                || bad "$settings: want each of \"$odd\" on a line of its own, indented 4: $(paste -sd'|' "$ERR")"
+            [[ "$(flat "$ERR")" != *"$outer"* ]] || bad "$settings: the outer-shape text for values in the lists: $(flat "$ERR")"
+        fi
         above="$(grep -m1 -xF -B1 "$want" "$ERR" | head -n 1)"
         [[ "$above" == "jq: error"* ]] || bad "$settings: the line above \"$want\" is not jq's error: $(paste -sd'|' "$ERR")"
+        # The merge's error only: the query that lists the paths fails too on
+        # some outer shapes ([] and {"hooks":"x"}), and its error stays hidden.
+        [[ "$(grep -c '^jq: error' "$ERR")" == 1 ]] || bad "$settings: want one jq error, the merge's: $(paste -sd'|' "$ERR")"
         if grep -q '^install\.sh: err_name=' "$ERR"; then
             bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
         fi
-        [[ "$(<"$sj")" == "$settings" ]] || bad "$settings: settings.json changed: $(<"$sj")"
+        cmp -s "$sj" <(printf '%s\n' "$settings") || bad "$settings: settings.json changed: $(<"$sj")"
         if compgen -G "$sj.*" >/dev/null; then
             bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
         fi
@@ -2331,10 +2408,40 @@ test_J18_SettingsShapeFixAndRerun() {
         expect_rc 0 "$settings fixed to $fixed: re-run" || continue
         hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
     done 3<<'EOF'
-[]|{}
-{"hooks":"x"}|{"hooks":{}}
-{"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}
-{"hooks":{"SessionStart":{"x":{"hooks":[{"type":"command","command":"@CMD@"}]}}}}|{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]}]}}
+[]|{}|
+{"hooks":"x"}|{"hooks":{}}|
+{"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}|
+{"hooks":{"SessionStart":{"x":{"hooks":[{"type":"command","command":"@CMD@"}]}}}}|{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]}]}}|
+{"hooks":{"SessionStart":["x"],"SessionEnd":{}}}|{"hooks":{"SessionStart":[],"SessionEnd":[]}}|
+{"hooks":{"SessionStart":["x"]}}|{"hooks":{"SessionStart":[]}}|.hooks.SessionStart[0]
+{"hooks":{"SessionStart":[{"hooks":["x"]}]}}|{"hooks":{"SessionStart":[{"hooks":[]}]}}|.hooks.SessionStart[0].hooks[0]
+{"hooks":{"SessionStart":[null,{"hooks":[null]}],"SessionEnd":[{"matcher":"compact","hooks":[null,{},"y"]},2]}}|{"hooks":{"SessionStart":[null,{"hooks":[null]}],"SessionEnd":[{"matcher":"compact","hooks":[null,{}]}]}}|.hooks.SessionEnd[0].hooks[2] .hooks.SessionEnd[1]
+{"hooks":{"SessionStart":[1,{"hooks":[{},false]}],"SessionEnd":[{"hooks":["y"]}]}}|{"hooks":{"SessionStart":[{"hooks":[{}]}],"SessionEnd":[{"hooks":[]}]}}|.hooks.SessionStart[0] .hooks.SessionStart[1].hooks[1] .hooks.SessionEnd[0].hooks[0]
+EOF
+}
+
+# J18: "Only a value the merge reads stops it, so such a file can still
+# install." (SKILL.md, b.dzu) A hooks-on install over a settings.json holding a
+# value that is neither an object nor null where the merge does not read it
+# exits 0, injects both hooks and keeps that value as it was. Per case
+# <settings.json>|<path>|<its value> (@CMD@ the help hook's command): the hooks
+# list of a SessionEnd entry whose matcher is not "compact", and a SessionStart
+# entry after the one holding the help hook, where `any` has stopped.
+test_J18_UnreadValueStillMerges() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings path value got
+    while IFS='|' read -r settings path value <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json"
+        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
+        mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "settings.json $settings" || continue
+        hooks_injected "$h" || bad "$settings: hooks not injected: $(<"$sj")"
+        got="$(jq -c "$path" "$sj")"
+        [[ "$got" == "$value" ]] || bad "$settings: $path is $got; want $value, as it was: $(<"$sj")"
+    done 3<<'EOF'
+{"hooks":{"SessionEnd":[{"hooks":["y"]}]}}|.hooks.SessionEnd[0]|{"hooks":["y"]}
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]},"x"]}}|.hooks.SessionStart[1]|"x"
 EOF
 }
 
