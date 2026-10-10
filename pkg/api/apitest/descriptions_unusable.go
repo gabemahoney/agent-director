@@ -7,7 +7,8 @@ import "strconv"
 // Epic 19): the three ErrInternal descriptions every verb's refusal gives
 // (DescUnusableNameEmpty, DescUnusableNameControlChar,
 // DescUnusableNameRewritten), the full trigger sentence a Client method's Go
-// doc prose and kill's manifest Description state (DescUnusableNameTrigger),
+// doc prose and kill's manifest Description state (DescUnusableNameTrigger;
+// kill's lists the kinds in a short form of its own, see DescKillManifest),
 // and the short pointer the other verbs' manifest Descriptions carry
 // (DescUnusableNamePointer), and the find-missing and expire result fields
 // that report such a row (DescUnusableNameFindMissingField,
@@ -82,11 +83,23 @@ func DescUnusableNameTrigger() DescCase {
 		Name: "unusable recorded-name ErrInternal trigger",
 		Require: []string{
 			"recorded tmux session name cannot be used",
-			"it is empty, contains a control character, or contains a character tmux stores differently",
+			unusableNameKindsFull,
 			"gets ErrInternal", "with no tmux call", "removing the row is a human's decision",
 		},
 	}.PointsToOperatorActions()
 }
+
+// unusableNameKindsFull is the three kinds as DescUnusableNameTrigger requires
+// them in the Go doc prose. kill's manifest Description lists them in its own
+// short form, unusableNameKindsKill (b.7vf), which DescKillManifest requires
+// in its place.
+const unusableNameKindsFull = "it is empty, contains a control character, or contains a character tmux stores differently"
+
+// unusableNameKindsKill is the three kinds as kill's manifest Description, the
+// one help text that defines them, lists them (b.7vf): "containing" carries
+// both character kinds, so neither reads as the name being a character. The
+// sweeps' result fields keep their own form, unusableNameKinds.
+const unusableNameKindsKill = "empty, or containing a control character or a character tmux stores differently"
 
 // DescUnusableNamePointer is the short form of the trigger that the read-pane,
 // send-keys, pause, resume and spawn manifest Descriptions carry (SR-1.7;

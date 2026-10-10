@@ -26,8 +26,8 @@ const advKillPace = 5 * time.Second
 // advKillSteps are the six steps of the live-row sequence, word for word.
 var advKillSteps = []string{
 	"1. kill and check the result; on an error follow its class.",
-	"2. If the row is pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate.",
-	"3. Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs.",
+	"2. If pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate.",
+	"3. Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs.",
 	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check.",
 	"5. Still live: escalate to a human.",
 	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with reuse_finished (--reuse-finished on the CLI); callers whose ids agent-director mints spawn fresh.",

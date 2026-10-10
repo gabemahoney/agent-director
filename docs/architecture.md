@@ -1975,14 +1975,19 @@ stdout and runs two checks. Both must pass:
 1. **Hard cap.** The test fails when help stdout is larger than
    `helpHardCap`, the user's cap of 15160 B. There is no slack: 15160 B
    passes and 15161 B fails. The failure message says to trim help.
-2. **Baseline.** The test fails when help stdout grows more than 10% past
-   the byte count recorded in `helpStdoutBytes` (SR-20.6). This check
-   catches growth relative to the last recorded size.
+2. **Baseline.** The test fails when help stdout is larger than the byte
+   count recorded in `helpStdoutBytes` (SR-20.6). There is no slack:
+   one byte of growth over the recorded count fails, even while help is
+   still under the cap. A shrink passes, and the test logs that the
+   count should be re-recorded down to the measured size.
 
-The hard cap is the binding limit: while the baseline sits near the cap,
-baseline + 10% is well above it, so a growth that the baseline check
-allows still fails on the cap. The test logs the measured size, the
-baseline, the baseline limit and the cap on every run.
+The baseline check binds first: the recorded count sits at or under the
+cap (`TestHelpSizeOver` fails if it does not), so any growth fails on the
+baseline before it can reach the cap. The hard cap is the absolute
+ceiling: an approved upward re-record can raise the baseline to the cap
+but never past it. The test logs the measured size, the recorded count
+and the cap on every run. The rule itself is `helpSizeOver(got, recorded,
+hardCap)`, which `TestHelpSizeOver` pins.
 
 **Approval rule for the cap.** `helpHardCap` moves only with the user's
 approval. The change is recorded in the constant's doc comment in the
@@ -1991,9 +1996,10 @@ help must trim other description text to fit at or under the cap, with no
 change in meaning. If it cannot fit, the Task stops and reports the
 measured size; it never raises the cap on its own.
 
-**Re-recording the baseline.** `helpStdoutBytes` is re-recorded to the
-newly measured count in the same commit that changes the size (SR-20.6,
-decision-0930e):
+**Re-recording the baseline.** `helpStdoutBytes` must be re-recorded to
+the newly measured count in the same commit that changes the size
+(SR-20.6, decision-0930e), and its doc comment records each new value
+with the date and the reason:
 
 - Downward, after a trim: free, no approval needed.
 - Upward: only with the user's approval given before the commit,
@@ -4193,11 +4199,10 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
   only as `reuse-finished`: it silently ignores `reuse_finished`, and the
   version check cannot tell it from 0.11.0.
 - Same environment (SR-18.7): use it as the same user and in the same
-  tmux environment as the agents. Two consequences: `kill`'s success on a
-  finished row is not verification that the agent exited; and on the
-  wrong tmux server, a row wrongly marked `missing`, `kill`'s no-op
-  success and a reuse together start a second agent for the same id (see
-  [Same environment](#same-environment)).
+  tmux environment as the agents. So `kill`'s success on a finished row
+  is not verification of exit; on the wrong tmux server, a row wrongly
+  marked `missing`, `kill`'s no-op success and a reuse together start a
+  second agent for the same id (see [Same environment](#same-environment)).
 
 **Gating.** The explicit-id control-character check runs first, then
 `Resolve` and `Validate` (the new cwd is checked before anything
@@ -9658,8 +9663,8 @@ Where agent-visible text states it (decision-0930e):
   never `help` or MCP `tools/list`, so they cost no agent tokens.
 - Short form: the `kill`, `resume`, `pause` and `expire`
   descriptions carry the one constant `missingNotProofShort` in
-  `pkg/api/manifest/manifest.go`: "`missing` is not proof the agent exited
-  (see find-missing)." Every verb description reaches `help` and MCP, so
+  `pkg/api/manifest/manifest.go`: "`missing` is not proof of exit (see
+  find-missing)." Every verb description reaches `help` and MCP, so
   the full sentence at each would cost every agent tokens on every session
   and turn (see the [help size guard](#pkgapimanifest--verb-registry)).
 - The README, this document, the Go docs and the error descriptions
@@ -14811,9 +14816,10 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       directory of a single-row verb ("nothing was done", never "nothing
       was launched").
     - `DescKillInternalTrigger()`: `DescUnusableNameTrigger()` (below) as
-      `kill`'s manifest description and `Client.Kill`'s Go doc prose state
-      it, renamed for `kill`; saying that a tmux failure is swallowed or
-      logged is also a must-not.
+      `Client.Kill`'s Go doc prose states it, renamed for `kill`; saying
+      that a tmux failure is swallowed or logged is also a must-not.
+      `DescKillManifest` applies it to `kill`'s manifest description with
+      the three kinds in `kill`'s own short form (`unusableNameKindsKill`).
     - `DescKillRepeatedAfterLastSession(verb)`: the Q5 limitation
       (decision-0930b Q5): a repeated kill right after the last session on
       its tmux server ends can get `ErrTmuxUnresponsive` or
@@ -14822,12 +14828,22 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       `kill`'s manifest description, "Kill" for `Client.Kill`'s Go doc
       prose (checked with `AssertDescription`).
     - `DescKillManifest()`: `kill`'s manifest description (success only
-      once the agent process is gone, `kill_sent`, a finished row's no-op
-      is not verification, the row's state is unchanged, the per-call
-      contract, each error's class with GONE as success, never delete, the
-      same user and tmux environment). It includes
+      once the agent process and every other process found in the
+      session's panes are gone, `kill_sent`, a finished row's no-op
+      success, the row's state is unchanged, the per-call contract
+      including that a process an earlier `ErrTmuxKillFailed` "named a
+      non-agent process", each error's class with GONE as success, the
+      same user and tmux environment and SR-18.7's two consequences, the
+      first of which states that the no-op success is not verification;
+      "never delete" is a must-not). It includes
       `DescKillRepeatedAfterLastSession("kill")` and
-      `DescKillInternalTrigger`. Check it with `AssertAgentTextCase`.
+      `DescKillInternalTrigger`, with the three kinds in `kill`'s own
+      short form (`unusableNameKindsKill`: "empty, or containing a control
+      character or a character tmux stores differently") in place of the
+      Go doc prose's full form (`unusableNameKindsFull`); it panics if
+      the trigger no longer requires the full form to swap. The sweeps'
+      result fields keep their own form (`unusableNameKinds`). Check it
+      with `AssertAgentTextCase`.
 
     Later single-row verbs reuse these cases (with `AfterKillSent` where
     they already acted) and add their own constructors in a file of their
@@ -14866,8 +14882,9 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       case requires each set character and rejects each unset one.
     - `DescUnusableNameTrigger()`: the full verb-neutral trigger (the
       three kinds, `ErrInternal` with no tmux call, the human's decision,
-      the pointer), for any looking-up verb's `Client` Go doc prose and
-      `kill`'s manifest description.
+      the pointer), for any looking-up verb's `Client` Go doc prose and,
+      with the kinds in `kill`'s own short form (`unusableNameKindsKill`;
+      see `DescKillManifest`), `kill`'s manifest description.
     - `DescUnusableNamePointer()`: the short "(see kill)" pointer the
       `read-pane`, `send-keys`, `pause`, `resume` and `spawn` manifest
       descriptions carry; "unusable" is matched in any case. Check it with
@@ -15064,8 +15081,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     - `DescMissingNotProofShort()`: SR-18.2's short form for the four
       descriptions that carry the constant `missingNotProofShort`
       (`kill`, `resume`, `pause`, `expire`). It requires the
-      short sentence verbatim ("`missing` is not proof the agent exited
-      (see find-missing)."); its must-nots are the full statement's key
+      short sentence verbatim ("`missing` is not proof of exit (see
+      find-missing)."); its must-nots are the full statement's key
       phrases and the same dead-or-safe-to-delete claims. See
       "`missing` is a judgement, not proof" in
       [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user).
@@ -15102,11 +15119,12 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     - `DescCleanupPointer()`: the short pointer (`expireCleanupPointer`)
       the `kill` and `find-missing` Descriptions carry instead. It
       requires "Agents never run expire" and
-      "operator-scheduled", and rejects the full sentence's phrases
-      ("at the default retention", the keeps-and-reports phrase, "zero
-      window"), so the full sentence cannot come back at those sites and
-      push help stdout past the hard cap (`helpHardCap`). Check
-      `find-missing`'s on `FindMissingOwnText`.
+      "operator-scheduled finished-row cleanup", and rejects the full
+      sentence's phrases ("at the default retention", the
+      keeps-and-reports phrase, "zero window"), so the full sentence
+      cannot come back at those sites and push help stdout past its
+      recorded count (`helpStdoutBytes`) or the hard cap (`helpHardCap`).
+      Check `find-missing`'s on `FindMissingOwnText`.
     - Both cleanup cases reject the schedule claims ("cron", "crontab",
       "daily", "hourly", "nightly", "weekly", "runs every"): no text says
       or implies a schedule is installed.

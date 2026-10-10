@@ -223,9 +223,9 @@ func TestAdviceFollow_C6_FollowUpUnreadableRetryLater(t *testing.T) {
 // wait while the agent outlives it; the retried kill is a finished-row no-op.
 func TestAdviceFollow_C8_RowFinishesWhileKillWaits(t *testing.T) {
 	t.Parallel()
-	// C8 kill manifest: "If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op."
+	// C8 kill manifest: "If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op."
 	adviceAssertManifest(t, "kill", "", "If the row finishes while kill waits and the agent outlives the wait, "+
-		"kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op.")
+		"kill returns ErrTmuxKillFailed; a retried kill is a finished-row no-op.")
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{SessionID: "sess-" + uuid.NewString()[:8]})
 	e.seedBystander(t, r.Socket)

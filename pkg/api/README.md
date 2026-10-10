@@ -428,9 +428,10 @@ without special-casing.
 End the agent of a live row's current launch (`pending` included). Kill
 finds the tmux session that carries the launch's label on the row's
 recorded socket, ends the agent's pane and that session by their tmux ids,
-and succeeds only once the agent process is gone, waiting up to
-`kill_exit_wait_ms`. When no session of the launch is found, the agent
-process decides: gone, or none recorded, is success with nothing sent.
+and succeeds only once the agent process and every other process found in
+the session's panes are gone, waiting up to `kill_exit_wait_ms`. When no
+session of the launch is found, the agent process decides: gone, or none
+recorded, is success with nothing sent.
 Kill never signals a process itself and never ends a session an earlier
 launch left behind.
 

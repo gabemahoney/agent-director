@@ -29,10 +29,10 @@ func DescFindMissingGrace() DescCase {
 	return DescCase{
 		Name: "find-missing manifest, pending grace statement",
 		Require: []string{
-			"is not judged while inside the pending grace period",
+			"is not judged inside the pending grace period",
 			fmt.Sprintf("pending_grace_seconds, %d s by default", config.DefaultPendingGraceSeconds),
 			"measured from its launch start, not its started_at",
-			"a resume's launch",
+			"resume's launch",
 		},
 		MustNot: []string{"live-state rows (including pending)"},
 	}
@@ -130,12 +130,11 @@ var missingNotProofFull = []string{
 }
 
 // missingNotProofShort is SR-18.2's short form (decision-0930e), verbatim,
-// and missingNotProofShortMark the phrase that marks a text as carrying it,
-// reworded or not.
-const (
-	missingNotProofShort     = "`missing` is not proof the agent exited (see find-missing)."
-	missingNotProofShortMark = "is not proof the agent exited"
-)
+// and missingNotProofShortMarks the phrases that mark a text as carrying it,
+// reworded or not, in its wording since b.7vf or before.
+const missingNotProofShort = "`missing` is not proof of exit (see find-missing)."
+
+var missingNotProofShortMarks = []string{"is not proof of exit", "is not proof the agent exited"}
 
 // missingNotProofClaims are the claims that present ended or missing as dead
 // or safe to delete, which no text describing missing may make.
@@ -158,13 +157,13 @@ func DescMissingNotProof() DescCase {
 	return DescCase{
 		Name:    "SR-18.2, missing is not proof that the agent exited",
 		Require: append([]string(nil), missingNotProofFull...),
-		MustNot: append([]string{missingNotProofShortMark}, missingNotProofClaims...),
+		MustNot: concatStrings(missingNotProofShortMarks, missingNotProofClaims),
 	}
 }
 
 // DescMissingNotProofShort is SR-18.2's short form (decision-0930e) for the
 // verb Descriptions that reach help and MCP but do not produce missing (kill,
-// resume, pause, expire): "`missing` is not proof the agent exited
+// resume, pause, expire): "`missing` is not proof of exit
 // (see find-missing).", verbatim. Such a text must not carry the full
 // statement (DescMissingNotProof) instead or as well, nor the claims that
 // present ended or missing as dead or safe to delete. Check it with

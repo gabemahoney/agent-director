@@ -59,7 +59,7 @@ var pendingSites = []pendingSite{
 	{name: "resume description", verb: "resume", require: []string{
 		"moves the row to pending, keeping its session id and history",
 		"stays pending until the agent reports in",
-		"restores the row to its prior ended or missing state",
+		"restores the row's prior ended or missing state",
 		"the session may have been created and the row stays pending",
 		"do not retry until get shows the row ended or missing",
 		"a pending row (a launch in progress",
