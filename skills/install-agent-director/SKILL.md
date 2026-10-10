@@ -468,7 +468,8 @@ This skill runs `install.sh` from the same directory. The script:
       source, the binary's embedded commit must match that
       checkout's `HEAD`. Otherwise install.sh exits 3 ("install.sh:
       source-tree version check failed."), naming `HEAD` and the
-      checkout's real path, and advises `make build` or
+      checkout's real path, and advises `make -C <checkout> build`
+      (the checkout named, so it works from any directory) or
       `--from-release`. That tree counts only with a `.git` of its
       own that git can open (a directory in a clone, a file in a
       linked worktree) and a `cmd/agent-director`; an empty or
@@ -487,10 +488,13 @@ This skill runs `install.sh` from the same directory. The script:
       whose commit is `unknown` or empty (a plain `go build`), or two
       unreadable stamps, are refused with exit 3 too ("carry no commit
       stamp, so they cannot be shown to come from the same build").
-      Both refusals advise `make build` (in a git checkout it stamps
-      both binaries with the checkout's commit) or `--from-release`.
-      Both binaries open the same store, so they must come from one
-      build.
+      Both refusals advise `make -C <checkout> build` (in a git
+      checkout it stamps both binaries with the checkout's commit) or
+      `--from-release`. The advice names the tree install.sh sits in
+      when that is a git checkout of agent-director's source with a
+      Makefile; otherwise it names no tree, only the placeholder
+      `<path-to-agent-director-checkout>`. Both binaries open the same
+      store, so they must come from one build.
 
 2. **Creates `~/.agent-director/`** (mode 0700) if missing, plus
    `~/.agent-director/bin/` for the binary and

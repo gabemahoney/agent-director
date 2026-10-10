@@ -5346,8 +5346,8 @@ and J9 (an installed admin from another build, refused, then
   a plain `go build` reports `{"version":"dev","commit":"unknown"}`, so two
   such builds from different trees would otherwise pass as a pair. `make
   build` in a git checkout stamps both with the checkout's commit, and
-  release assets are stamped; the advice for both refusals is `make build`
-  or `--from-release`.
+  release assets are stamped; the advice for both refusals is `make -C
+  <checkout> build` or `--from-release` (see "The build advice" below).
 - **Both staged before either is replaced.** After any `--keep-prior`
   snapshots, install.sh creates the admin directory and makes both sibling
   temp copies with their modes, and only then runs the two `mv`s back to
@@ -5366,27 +5366,75 @@ and J9 (an installed admin from another build, refused, then
 
 **The source-tree version check (b.go9, b.1rs).** When `agent-director`
 comes from `--binary` or the in-repo build (never from PATH, never with
-`--from-release`), install.sh holds its stamp's commit to the `HEAD` of
-`source_root`: the tree two levels above the script, resolved physically
-(`cd -P … && pwd -P`), the same tree it takes `bin/` from. The check runs
-only when `source_root` has a `cmd/agent-director` and a `.git` of its
-own that git can open (a directory in a clone, a `gitdir:` file in a
-linked worktree). `HEAD` is read with `git --git-dir="$source_root/.git"
-rev-parse HEAD`, which never walks up to a repo that encloses the
-script. So a worktree nested inside another checkout is held to its own
-`HEAD`, and a symlinked skill directory to the `HEAD` of the checkout it
-points into. Not checked: an installed skill copy inside a dotfiles `~`
-or `~/.claude`, a copy outside any checkout, and an agent-director tree
-inside an enclosing repo (a monorepo, a dotfiles `~`) whose own `.git`
-is missing or one git cannot open (empty, half-copied). A commit that
-differs, is `unknown`, or cannot be read is exit 3: "install.sh:
-source-tree version check failed.", a `  HEAD    : <sha> (<source_root>)`
-line, and the advice `make build` or `--from-release`.
-`advice_follow.sh`'s J5 pins this: a clone, a linked and a nested
-worktree, a symlinked skill directory, and five unchecked layouts (the
-installed skill in a dotfiles `~`, a dotfiles `~/.claude`, or a
-`~/.claude` that is a linked worktree; an agent-director tree under a
-dotfiles `~` whose `.git` is missing or empty).
+`--from-release`), install.sh holds its stamp's commit to `source_head`,
+the `HEAD` of `source_root`: the tree two levels above the script,
+resolved physically (`cd -P … && pwd -P`), the same tree it takes `bin/`
+from. Both are read once, early (before `--from-release`), and shared
+with the build advice below. `source_head` is set only when
+`source_root` has a `cmd/agent-director` and a `.git` of its own that
+git can open (a directory in a clone, a `gitdir:` file in a linked
+worktree), read with `git --git-dir="$source_root/.git" rev-parse HEAD`,
+which never walks up to a repo that encloses the script; no git or an
+unborn `HEAD` leaves it empty. The check runs only when it is set; unlike
+the build advice, it needs no `Makefile`. So a worktree nested inside
+another checkout is held to its own `HEAD`, and a symlinked skill
+directory to the `HEAD` of the checkout it points into. Not checked: an
+installed skill copy inside a dotfiles `~` or `~/.claude`, a copy
+outside any checkout, and an agent-director tree inside an enclosing
+repo (a monorepo, a dotfiles `~`) whose own `.git` is missing or one git
+cannot open (empty, half-copied). A commit that differs, is `unknown`,
+or cannot be read is exit 3: "install.sh: source-tree version check
+failed.", a `  HEAD    : <sha> (<source_root>)` line, and the advice
+`<build_advice>` (below; `make -C <source_root> build` when it has a
+`Makefile`) or `--from-release`.
+`advice_follow.sh`'s J5 pins this: a clone, a linked worktree whose path
+has a space, a nested worktree, a symlinked skill directory, and five
+unchecked layouts (the installed skill in a dotfiles `~`, a dotfiles
+`~/.claude`, or a `~/.claude` that is a linked worktree; an
+agent-director tree under a dotfiles `~` whose `.git` is missing or
+empty). Each refusal is run, and its advice followed, from a directory
+outside the checkout.
+
+**The build advice (b.3qt).** The contract of these refusals is exit 3
+with nothing installed; the advice is supplementary text for whoever
+fixes the build. Every refusal that advises a build names where to run
+it, so the advice works from any directory: the installed
+skill is often a symlink into a clone, run from `~`, where a bare `make
+build` fails. install.sh sets two strings once, from `source_root` and
+`source_head` (above), before `--from-release`:
+
+| `source_root` | `build_advice` | `build_rerun` |
+|---|---|---|
+| a git checkout of agent-director's source (`source_head` set) with a `Makefile` | `make -C <source_root> build` | `bash <$0>` |
+| anything else (a curled script, an installed skill copy in no checkout or in another repo) | `make -C <path-to-agent-director-checkout> build` | `bash <path-to-agent-director-checkout>/skills/install-agent-director/install.sh` |
+
+`source_root` and `$0` are written with `printf '%q'`, as is `$0` in
+the no-release line "point at local binaries:
+`bash <$0> --binary <path> --admin-binary <path>`", so a path with a
+space or other shell metacharacter can be pasted into a shell as is; a
+plain path prints unchanged. In a checkout, `make build` stamps both
+binaries with its commit, as the source-tree check and the stamp pairing
+require. With no checkout known, the placeholder stands for the
+operator's own, and the re-run is that checkout's install.sh, which
+takes the rebuilt binaries from its `bin/`. Where the advice appears:
+
+- the source-tree version check: `rebuild it first:    <build_advice>`
+- both stamp-pairing refusals: `rebuild both first:  <build_advice>`
+- `--from-release` with no release published (exit 3):
+  `build from source: <build_advice> && <build_rerun>`
+
+**Must use:** an install.sh message that advises a build prints
+`$build_advice` (and `$build_rerun` for the re-run after it), never a bare
+`make build`. `advice_follow.sh` pins the advice text and follows it from
+a directory outside any checkout: J1 (the no-release lines: build from
+source from a checkout, a linked worktree whose path has a space, a copy
+in no checkout and a copy in a dotfiles `~/.claude`, the last two in
+placeholder form with the checkout put in its place; point at local
+binaries from a copy in no checkout and one whose path has a space), J5
+(above, the spaced linked worktree's path quoted) and J9 (a stale
+`agent-director-admin` in a checkout's `bin/`, and a plain-`go build`
+pair passed with `--binary` and `--admin-binary` to a copy in no
+checkout, placeholder form).
 
 **The operator's umask (b.7j2).** install.sh runs `umask u=rwx` right
 after `set -euo pipefail`. That clears the owner's bits from the umask

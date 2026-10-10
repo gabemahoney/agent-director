@@ -1081,6 +1081,63 @@ if [[ "$state_db_name" != state.db ]]; then
 fi
 
 # --------------------------------------------------------------------
+# Source tree, and the build advice that names it
+# --------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# skills/install-agent-director sits two levels under the repo root;
+# bin/ is at the root. The root is resolved here, physically as the
+# kernel resolves ../.., so every message names <root>/bin/... with no
+# ../.. (b.j6w); a failed cd keeps the raw path. Without --from-release,
+# install.sh prefers the binaries in its bin/ (below), and the
+# source-tree version check holds a binary to this same root's HEAD
+# (b.1rs).
+source_root="$(cd -P "${SCRIPT_DIR}/../.." 2>/dev/null && pwd -P)" \
+    || source_root="${SCRIPT_DIR}/../.."
+
+# source_head: source_root's HEAD when source_root is a git checkout of
+# agent-director's source; empty otherwise. Read once, here, for the
+# build advice below and the source-tree version check.
+#
+# source_root is that checkout only when its own `.git` entry is a repo:
+# a directory in a plain clone, a `gitdir:` file in a linked worktree
+# (b.go9), so a worktree nested inside another checkout is held to its
+# own HEAD. --git-dir takes that entry as given and never searches
+# upward, as git -C would: a `.git` that is not a repo (empty,
+# half-copied) fails rev-parse, leaving source_head empty, rather than
+# letting git find a repo enclosing source_root (b.1rs); nor is CWD's
+# repo used. --git-dir also overrides an exported GIT_DIR. It is
+# agent-director's source when it has cmd/agent-director, which `make
+# build` builds into its bin/. A failed rev-parse (no git, an unborn
+# HEAD) leaves source_head empty whatever it printed.
+source_head=""
+if [[ -e "$source_root/.git" && -d "$source_root/cmd/agent-director" ]]; then
+    source_head=$(git --git-dir="$source_root/.git" rev-parse HEAD 2>/dev/null) \
+        || source_head=""
+fi
+
+# The refusals that advise a build (b.3qt) name where to run it, so the
+# advice works from any directory: the installed skill is often a
+# symlink into a clone, run from ~, where a bare `make build` fails.
+# They name source_root, with make -C, only when it is a git checkout of
+# agent-director's source (source_head set) with a Makefile, where `make
+# build` stamps both binaries with the checkout's commit, as the checks
+# below require. Otherwise (a curled tarball, an installed copy of the
+# skill in some other repo) install.sh knows no checkout, so the advice
+# names a placeholder for the operator's own, and the re-run after the
+# build is that checkout's install.sh, which takes the binaries from its
+# bin/. Paths are quoted with %q, as the sqlite3 commands below are, so
+# the line can be pasted into a shell as is: a plain path prints
+# unchanged.
+build_advice="make -C <path-to-agent-director-checkout> build"
+build_rerun="bash <path-to-agent-director-checkout>/skills/install-agent-director/install.sh"
+if [[ -n "$source_head" && -f "$source_root/Makefile" ]]; then
+    build_advice="make -C $(printf '%q' "$source_root") build"
+    build_rerun="bash $(printf '%q' "$0")"
+fi
+
+# --------------------------------------------------------------------
 # --from-release: resolve tag, download asset for this OS/arch, hand
 # the temp path to the rest of the install flow as if --binary had
 # been passed.
@@ -1121,8 +1178,8 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         if [[ -z "$FROM_RELEASE_TAG" || "$FROM_RELEASE_TAG" == "null" ]]; then
             echo "install.sh: --from-release: no releases published for $RELEASE_REPO_SLUG yet" >&2
             echo "  options:" >&2
-            echo "    - build from source: make build && bash $0" >&2
-            echo "    - point at local binaries: bash $0 --binary <path> --admin-binary <path>" >&2
+            echo "    - build from source: $build_advice && $build_rerun" >&2
+            echo "    - point at local binaries: bash $(printf '%q' "$0") --binary <path> --admin-binary <path>" >&2
             exit 3
         fi
     fi
@@ -1326,21 +1383,12 @@ fi
 # Locate source binary
 # --------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Defaults to 1; cleared to 0 only when BINARY_SRC came from PATH
 # (option (c)), since "whatever's on PATH" makes no claim about the
 # operator's source tree.
 VERSION_CHECK_REQUIRED=1
 
-# Prefer the in-repo builds (skills/install-agent-director sits two
-# levels under the repo root; bin/ is at the root). The root is resolved
-# here, physically as the kernel resolves ../.., so every message names
-# <root>/bin/... with no ../.. (b.j6w); a failed cd keeps the raw path.
-# The source-tree version check below holds a binary to this same root's
-# HEAD (b.1rs).
-source_root="$(cd -P "${SCRIPT_DIR}/../.." 2>/dev/null && pwd -P)" \
-    || source_root="${SCRIPT_DIR}/../.."
+# Prefer the in-repo builds: bin/ of source_root, resolved above.
 candidate="${source_root}/bin/agent-director"
 admin_candidate="${source_root}/bin/agent-director-admin"
 
@@ -1477,12 +1525,12 @@ ad_arch_probe "$ADMIN_SRC" "--admin-binary"
 # pulling new code" footgun — installing a stale artifact silently is
 # exactly what b.qag flagged.
 #
-# source_root is that checkout only when its own `.git` entry is a repo:
-# a directory in a plain clone, a `gitdir:` file in a linked worktree
-# (b.go9), so a worktree nested inside another checkout is held to its
-# own HEAD. A repo merely enclosing the script is never used (b.1rs);
-# nor is CWD's. It is agent-director's source when it has
-# cmd/agent-director, which `make build` builds into its bin/.
+# That checkout and its HEAD are source_head, read above with the
+# source root: only source_root's own `.git` counts (a directory in a
+# plain clone, a `gitdir:` file in a linked worktree, b.go9), so a
+# worktree nested inside another checkout is held to its own HEAD; a
+# repo merely enclosing the script is never used (b.1rs), nor is CWD's.
+# Unlike the build advice, the check does not need a Makefile.
 #
 # Skipped when:
 #   - --from-release was used (the asset is by construction not the
@@ -1497,14 +1545,9 @@ ad_arch_probe "$ADMIN_SRC" "--admin-binary"
 # --------------------------------------------------------------------
 
 if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
-    # Only source_root's own `.git` counts. --git-dir takes it as given
-    # (a directory, or a linked worktree's `gitdir:` file) and never
-    # searches upward, as git -C would: a `.git` that is not a repo
-    # (empty, half-copied) fails rev-parse, which skips the check, rather
-    # than letting git find a repo enclosing source_root (b.1rs).
-    # --git-dir also overrides an exported GIT_DIR.
-    if [[ -e "$source_root/.git" && -d "$source_root/cmd/agent-director" ]] \
-        && head_sha=$(git --git-dir="$source_root/.git" rev-parse HEAD 2>/dev/null); then
+    # An empty source_head (no `.git` of source_root's own that git can
+    # read, or no cmd/agent-director) skips the check (b.1rs).
+    if [[ -n "$source_head" ]]; then
         # Run the binary's `version` verb. An older binary without the
         # verb will exit non-zero / emit an err_name envelope; jq -e
         # returns non-zero if .commit is absent or null. Either way we
@@ -1513,7 +1556,7 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
             | jq -er '.commit // empty' 2>/dev/null \
             || true)
 
-        if [[ -z "$bin_commit" || "$bin_commit" == "unknown" || "$bin_commit" != "$head_sha" ]]; then
+        if [[ -z "$bin_commit" || "$bin_commit" == "unknown" || "$bin_commit" != "$source_head" ]]; then
             echo "install.sh: source-tree version check failed." >&2
             echo "  binary  : $BINARY_SRC" >&2
             if [[ -z "$bin_commit" ]]; then
@@ -1523,16 +1566,16 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
             else
                 echo "  built from: $bin_commit" >&2
             fi
-            echo "  HEAD    : $head_sha ($source_root)" >&2
+            echo "  HEAD    : $source_head ($source_root)" >&2
             echo "" >&2
             echo "  The binary at $BINARY_SRC was not built from this checkout's" >&2
             echo "  current HEAD. Installing it would silently substitute stale code" >&2
             echo "  for the source you're sitting on. Either:" >&2
-            echo "    - rebuild it first:    make build" >&2
+            echo "    - rebuild it first:    $build_advice" >&2
             echo "    - or download release: rerun with --from-release (omit --binary)" >&2
             exit 3
         fi
-        echo "  version-check: binary commit matches HEAD ($head_sha)"
+        echo "  version-check: binary commit matches HEAD ($source_head)"
     fi
 fi
 
@@ -1567,7 +1610,7 @@ if [[ "$main_stamp" != "$admin_stamp" ]]; then
     echo "" >&2
     echo "  Both binaries open the same store, so they must come from the same" >&2
     echo "  build (the same version and commit). Either:" >&2
-    echo "    - rebuild both first:  make build" >&2
+    echo "    - rebuild both first:  $build_advice" >&2
     echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi
@@ -1583,7 +1626,7 @@ if [[ -z "$main_stamp" || -z "$stamp_commit" || "$stamp_commit" == "unknown" ]];
     echo "  one (a plain 'go build' reports commit \"unknown\") match any other" >&2
     echo "  such build, from any tree. 'make build' in a git checkout stamps" >&2
     echo "  both with the checkout's commit. Either:" >&2
-    echo "    - rebuild both first:  make build" >&2
+    echo "    - rebuild both first:  $build_advice" >&2
     echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi

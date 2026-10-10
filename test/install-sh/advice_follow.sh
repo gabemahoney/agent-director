@@ -217,6 +217,16 @@ install_copy "$TREE_SH"
 git -C "$TREE" init -q && git -C "$TREE" add -A \
     && git -C "$TREE" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
         commit -qm tree || die "git init tree"
+# TREE_PHYS: TREE's physical path, which install.sh's build advice names (b.3qt).
+TREE_PHYS="$(cd -P "$TREE" && pwd -P)" || die "resolve $TREE"
+# CHECKOUT: the placeholder for the operator's checkout in the build advice of
+# an install.sh in none; a test following that advice puts TREE in its place.
+CHECKOUT="<path-to-agent-director-checkout>"
+# TREE_LINKED: a linked worktree of TREE outside it (its .git a file, b.go9),
+# whose path has a space for the build advice to quote (b.3qt); detached, as git
+# refuses a branch name with a space. J1 and J5 build in it.
+TREE_LINKED="$ROOT/tree linked"
+git -C "$TREE" worktree add -q --detach "$TREE_LINKED" || die "git worktree add $TREE_LINKED"
 
 # ---- toolbox: the only PATH install.sh sees --------------------------------
 
@@ -398,15 +408,23 @@ run_in() {
 }
 run() { local home="$1"; shift; run_in "$home" "$ROOT" "$@"; }
 
-# run_advised <home> <cwd> <command text>: run an advised command as written;
-# "a && b" runs b only if a succeeds. make runs in the caller's own env (it
-# needs the Go toolchain and caches); everything else in the install env.
+# run_advised <home> <cwd> <command text>: run an advised command as written,
+# its words split as a shell splits them (quotes and backslashes, as printf %q
+# writes a path with a space); "a && b" runs b only if a succeeds. make runs in
+# the caller's own env (it needs the Go toolchain and caches); everything else
+# in the install env. A part that does not parse (a <placeholder> left in it)
+# fails the test with RC 255.
 run_advised() {
     local home="$1" cwd="$2" part rest="$3" words
     while [[ -n "$rest" ]]; do
         part="${rest%% && *}"
         [[ "$part" == "$rest" ]] && rest="" || rest="${rest#* && }"
-        read -r -a words <<<"$part"
+        words=()
+        if ! eval "words=($part)" 2>/dev/null || [[ ${#words[@]} -eq 0 ]]; then
+            bad "advised command does not parse as shell words: $part"
+            RC=255
+            return 0
+        fi
         if [[ "${words[0]}" == make ]]; then
             RUN_N=$((RUN_N + 1)); OUT="$ROOT/runs/$RUN_N.out" ERR="$ROOT/runs/$RUN_N.err"
             (cd "$cwd" && "${words[@]}") >"$OUT" 2>"$ERR"; RC=$?
@@ -505,27 +523,49 @@ run_test() {
 
 # ---- J1: --from-release, no release published -------------------------------
 
-# J1: "point at local binaries: bash $0 --binary <path> --admin-binary <path>"
+# J1: "point at local binaries: bash <$0 %q> --binary <path> --admin-binary
+# <path>", from LOOSE and from a copy in no checkout whose path has a space,
+# which the advice quotes (b.3qt).
 test_J1_NoReleasePointAtLocalBinaries() {
-    local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --from-release --no-hooks --no-symlink
-    expect_rc 3 "no release published" || return
-    expect_advice "point at local binaries: bash $LOOSE --binary <path> --admin-binary <path>"
-    local cmd; cmd="$(advice_after "point at local binaries: ")" || { bad "no advised command"; return; }
-    cmd="${cmd/--binary <path>/--binary $BIN}"
-    run_advised "$h" "$ROOT" "${cmd/--admin-binary <path>/--admin-binary $ADMIN}"
-    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
+    local h sh cmd spaced="$ROOT/loose spaced/skills/install-agent-director/install.sh"
+    install_copy "$spaced"
+    for sh in "$LOOSE" "$spaced"; do
+        h="$(new_home)"
+        run "$h" bash "$sh" --from-release --no-hooks --no-symlink
+        expect_rc 3 "$sh: no release published" || continue
+        expect_advice "point at local binaries: bash $(printf '%q' "$sh") --binary <path> --admin-binary <path>"
+        cmd="$(advice_after "point at local binaries: ")" || { bad "$sh: no advised command"; continue; }
+        cmd="${cmd/--binary <path>/--binary $BIN}"
+        run_advised "$h" "$ROOT" "${cmd/--admin-binary <path>/--admin-binary $ADMIN}"
+        expect_rc 0 "$sh: advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
+    done
 }
 
-# J1: "build from source: make build && bash $0"
+# J1: "build from source: make -C <checkout %q> build && bash <$0 %q>", run and
+# followed outside any checkout (b.3qt): a checkout's install.sh names it (TREE,
+# and TREE_LINKED, whose path has a space); a copy in no checkout (LOOSE) or in
+# another repo (a dotfiles ~/.claude) names CHECKOUT and its install.sh, here TREE.
 test_J1_NoReleaseBuildFromSource() {
-    local h; h="$(new_home)"
-    run_in "$h" "$TREE" bash "$TREE_SH" --from-release --no-hooks --no-symlink
-    expect_rc 3 "no release published" || return
-    expect_advice "build from source: make build && bash $TREE_SH"
-    local cmd; cmd="$(advice_after "build from source: ")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
-    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+    local c h sh tree want cmd
+    for c in tree linked loose dotfiles; do
+        h="$(new_home)" tree="$TREE"
+        case "$c" in
+            tree) sh="$TREE_SH" ;;
+            linked) tree="$TREE_LINKED" sh="$TREE_LINKED/skills/install-agent-director/install.sh" ;;
+            loose) sh="$LOOSE" ;;
+            dotfiles) sh="$(j5_dotfiles "$h" claude)" || { bad "$c: dotfiles repo"; continue; } ;;
+        esac
+        want="make -C $CHECKOUT build && bash $CHECKOUT/skills/install-agent-director/install.sh"
+        if [[ "$c" == tree || "$c" == linked ]]; then
+            want="make -C $(printf '%q' "$(cd -P "$tree" && pwd -P)") build && bash $(printf '%q' "$sh")"
+        fi
+        run "$h" bash "$sh" --from-release --no-hooks --no-symlink
+        expect_rc 3 "$c: no release published" || continue
+        expect_advice "build from source: $want"
+        cmd="$(advice_after "build from source: ")" || { bad "$c: no advised command"; continue; }
+        run_advised "$h" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
+        expect_rc 0 "$c: advised: $cmd" && expect_installed "$h" "$tree/bin/agent-director" "$tree/bin/agent-director-admin"
+    done
 }
 
 # ---- J2: --from-release download failed after retries ------------------------
@@ -802,28 +842,29 @@ test_J4_ArchMismatchRightAdminBinary() {
 # ---- J5: source-tree version check -------------------------------------------------
 
 # j5_stale: put a binary not built from the tree's HEAD at the tree's bin/ and
-# run install.sh on it; leaves the J5 refusal in RC/ERR.
+# run install.sh on it from outside the tree; leaves the J5 refusal in RC/ERR.
 j5_stale() {
     mkdir -p "$TREE/bin" && cp "$BIN" "$TREE/bin/agent-director" && cp "$ADMIN" "$TREE/bin/agent-director-admin"
-    run_in "$1" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
+    run "$1" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
     expect_rc 3 "stale binary" || return 1
-    expect_advice "rebuild it first: make build"
+    expect_advice "rebuild it first: make -C $TREE_PHYS build"
     expect_advice "or download release: rerun with --from-release (omit --binary)"
 }
 
-# J5: "rebuild it first: make build", over an installed pair of another build:
-# the checkout's agent-director-admin is used, not the installed one (b.azo).
+# J5: "rebuild it first: make -C <checkout> build", followed outside the
+# checkout (b.3qt), over an installed pair of another build: the checkout's
+# agent-director-admin is used, not the installed one (b.azo).
 test_J5_StaleBinaryMakeBuild() {
     local h want; h="$(new_home)"; j11_paths "$h"
     run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "install the old pair" || return
     j5_stale "$h" || return
     local cmd; cmd="$(advice_after "rebuild it first:")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
+    run_advised "$h" "$ROOT" "$cmd"
     expect_rc 0 "advised: $cmd" || return
-    run_in "$h" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
+    run "$h" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
     expect_rc 0 "re-run after make build" || return
-    want="$(cd -P "$TREE" && pwd -P)/bin/agent-director-admin" # no ../.. (b.j6w)
+    want="$TREE_PHYS/bin/agent-director-admin" # no ../.. (b.j6w)
     grep -qxF "  admin source: $want" "$OUT" \
         || bad "no \"admin source: $want\" line, not the installed $J11A: $(flat "$OUT")"
     expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
@@ -834,15 +875,16 @@ test_J5_StaleBinaryFromRelease() {
     local h; h="$(new_home)"
     j5_stale "$h" || return
     FAKE_CURL_API_TAG="$REL_TAG"
-    run_in "$h" "$TREE" bash "$TREE_SH" --no-hooks --no-symlink --from-release
+    run "$h" bash "$TREE_SH" --no-hooks --no-symlink --from-release
     expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
 # j5_worktree <worktree> <what> [<skill dir>]: J5 from a git worktree of TREE,
 # with the in-repo build (b.go9), running install.sh from skill dir (default
-# the worktree's own). A stale pair in its bin/ is refused, naming the
-# worktree's own HEAD and physical path (b.1rs); after the advised make build
-# there, the same command installs the rebuilt pair.
+# the worktree's own) outside any checkout. A stale pair in its bin/ is
+# refused, naming the worktree's own HEAD and physical path (b.1rs), and the
+# advice make -C that path, quoted for a shell (b.3qt); after following it
+# from the same directory, the same command installs the rebuilt pair.
 j5_worktree() {
     local wt="$1" what="$2" h head cmd root
     local -a argv=(bash "${3:-$wt/skills/install-agent-director}/install.sh" --no-hooks --no-symlink)
@@ -851,32 +893,34 @@ j5_worktree() {
     root="$(cd -P "$wt" && pwd -P)" || { bad "$what: resolve $wt"; return; }
     mkdir -p "$wt/bin" && cp "$BIN" "$wt/bin/agent-director" && cp "$ADMIN" "$wt/bin/agent-director-admin" \
         || { bad "$what: put the stale pair in bin/"; return; }
-    run_in "$h" "$wt" "${argv[@]}"
+    run "$h" "${argv[@]}"
     expect_rc 3 "$what: stale binary" || return
     grep -qxF "install.sh: source-tree version check failed." "$ERR" || bad "$what: no check-failed line: $(flat "$ERR")"
     grep -qxF "  HEAD    : $head ($root)" "$ERR" \
         || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($root)\""
+    expect_advice "rebuild it first: make -C $(printf '%q' "$root") build"
     expect_nothing_installed "$h"
     cmd="$(advice_after "rebuild it first:")" || { bad "$what: no advised command"; return; }
-    run_advised "$h" "$wt" "$cmd"
+    run_advised "$h" "$ROOT" "$cmd"
     expect_rc 0 "$what: advised: $cmd" || return
-    run_in "$h" "$wt" "${argv[@]}"
+    run "$h" "${argv[@]}"
     expect_rc 0 "$what: re-run after make build" || return
     grep -qxF "  version-check: binary commit matches HEAD ($head)" "$OUT" \
         || bad "$what: no version-check line for $head: $(grep -F 'version-check' "$OUT")"
     expect_installed "$h" "$wt/bin/agent-director" "$wt/bin/agent-director-admin"
 }
 
-# J5: "rebuild it first: make build", in a linked worktree outside any other
-# checkout, whose .git is a file (b.go9): the stale pair is refused, not skipped.
+# J5: "rebuild it first: make -C <checkout> build", in TREE_LINKED, a linked
+# worktree outside any other checkout, whose .git is a file (b.go9): the stale
+# pair is refused, not skipped; its path has a space, which the advice quotes,
+# so a shell runs it as one word (b.3qt).
 test_J5_LinkedWorktreeMakeBuild() {
-    local wt="$ROOT/tree-linked"
-    git -C "$TREE" worktree add -q "$wt" || { bad "git worktree add $wt"; return; }
-    j5_worktree "$wt" "linked worktree"
+    j5_worktree "$TREE_LINKED" "linked worktree"
 }
 
-# J5: "rebuild it first: make build", in a worktree nested inside TREE and one
-# commit ahead of it (b.go9): the check uses the worktree's HEAD, not TREE's.
+# J5: "rebuild it first: make -C <checkout> build", in a worktree nested
+# inside TREE and one commit ahead of it (b.go9): the check uses the
+# worktree's HEAD, not TREE's, and the advice names the worktree.
 test_J5_NestedWorktreeMakeBuild() {
     local wt="$TREE/.claude/worktrees/nested"
     git -C "$TREE" worktree add -q "$wt" \
@@ -885,9 +929,10 @@ test_J5_NestedWorktreeMakeBuild() {
     j5_worktree "$wt" "nested worktree"
 }
 
-# J5: "rebuild it first: make build", through a symlink to a worktree's skill
-# directory (b.1rs): the check uses the checkout install.sh takes bin/ from,
-# though no checkout encloses the link.
+# J5: "rebuild it first: make -C <checkout> build", through a symlink to a
+# worktree's skill directory (b.1rs), run and followed outside the checkout, as
+# from ~ (b.3qt): the check and the advice use the checkout install.sh takes
+# bin/ from, though no checkout encloses the link.
 test_J5_SymlinkedSkillMakeBuild() {
     local wt="$ROOT/tree-symlinked" link="$ROOT/j5-link/skills/install-agent-director"
     git -C "$TREE" worktree add -q "$wt" && mkdir -p "${link%/*}" \
@@ -1488,24 +1533,25 @@ EOF
 
 # ---- J9: agent-director and agent-director-admin stamps differ or carry no commit (b.vqr)
 
-# J9: "rebuild both first:  make build": a fresh agent-director beside a stale
-# agent-director-admin in the tree's bin/.
+# J9: "rebuild both first:  make -C <checkout> build": a fresh agent-director
+# beside a stale agent-director-admin in the tree's bin/, run and followed
+# outside the tree (b.3qt).
 test_J9_StampMismatchMakeBuild() {
     local h; h="$(new_home)"
     run_advised "$h" "$TREE" "make build"
     expect_rc 0 "make build in the tree" || return
     cp "$ADMIN_OLD" "$TREE/bin/agent-director-admin"
     local argv=(bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink)
-    run_in "$h" "$TREE" "${argv[@]}"
+    run "$h" "${argv[@]}"
     expect_rc 3 "stale agent-director-admin" || return
     expect_advice "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install."
     expect_advice "(0.0.1-advice-old $OLD_COMMIT)"
-    expect_advice "rebuild both first: make build"
+    expect_advice "rebuild both first: make -C $TREE_PHYS build"
     expect_nothing_installed "$h"
     local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
+    run_advised "$h" "$ROOT" "$cmd"
     expect_rc 0 "advised: $cmd" || return
-    run_in "$h" "$TREE" "${argv[@]}"
+    run "$h" "${argv[@]}"
     expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
@@ -1567,28 +1613,30 @@ test_J9_InstalledAdminStampMismatchFromRelease() {
     done
 }
 
-# J9: "rebuild both first:  make build" in j9_installed_mismatch's refusal,
-# run where install.sh ran, outside any checkout; the same command then
-# installs (a pair: install.sh refuses any other). Known broken: there is no
-# checkout to build in, and the re-run would pair the same two binaries (b.oo9).
+# J9: "rebuild both first:  make -C <path-to-agent-director-checkout> build"
+# in j9_installed_mismatch's refusal (the installed skill is in no checkout),
+# with TREE for the placeholder, run where install.sh ran, outside any
+# checkout; the same command then installs (a pair: install.sh refuses any
+# other). Known broken: the re-run pairs the same two binaries (b.oo9).
 test_J9_InstalledAdminStampMismatchMakeBuild() {
     local how cmd
     for how in PATH --binary; do
         j9_installed_mismatch "$how" || continue
-        expect_advice "rebuild both first: make build"
+        expect_advice "rebuild both first: make -C $CHECKOUT build"
         cmd="$(advice_after "rebuild both first:")" || { bad "$how: no advised command"; continue; }
-        known_broken J9 "filed as b.oo9: no checkout to run \"make build\" in, re-run of the installed skill" || return
-        run_advised "$J3H" "$ROOT" "$cmd"
+        known_broken J9 "filed as b.oo9: the re-run of the installed skill, in no checkout, pairs the same two binaries, not the rebuilt ones" || return
+        run_advised "$J3H" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
         expect_rc 0 "$how: advised: $cmd" || continue
         run "$J3H" "${J9ARGV[@]}"
         expect_rc 0 "$how: re-run after make build"
     done
 }
 
-# J9: "rebuild both first:  make build" when both binaries are plain `go
-# build`s (commit "unknown"), which nothing shows come from one build: refused
-# with nothing installed; make build in their checkout stamps both, and the
-# same command then installs them.
+# J9: "rebuild both first:  make -C <path-to-agent-director-checkout> build"
+# when both binaries are plain `go build`s (commit "unknown"), which nothing
+# shows come from one build: refused with nothing installed. LOOSE is in no
+# checkout, so the advice names a placeholder (b.3qt); make -C their checkout,
+# TREE, from outside it stamps both, and the same command then installs them.
 test_J9_NoCommitStampMakeBuild() {
     local h; h="$(new_home)"
     mkdir -p "$TREE/bin" && cp "$BIN_PLAIN" "$TREE/bin/agent-director" && cp "$ADMIN_PLAIN" "$TREE/bin/agent-director-admin" \
@@ -1599,10 +1647,10 @@ test_J9_NoCommitStampMakeBuild() {
     local want="install.sh: agent-director and agent-director-admin carry no commit stamp, so they cannot be shown to come from the same build; refusing to install."
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
     expect_advice "agent-director-admin: $TREE/bin/agent-director-admin (dev unknown)"
-    expect_advice "rebuild both first: make build"
+    expect_advice "rebuild both first: make -C $CHECKOUT build"
     expect_nothing_installed "$h"
     local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
+    run_advised "$h" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
     expect_rc 0 "advised: $cmd" || return
     run "$h" "${argv[@]}"
     expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
