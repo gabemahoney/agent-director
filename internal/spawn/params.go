@@ -20,8 +20,8 @@ type SpawnParams struct {
 	TmuxSessionName string
 
 	// TmuxSessionNameSupplied distinguishes "caller explicitly passed
-	// --tmux-session-name (possibly empty)" from "caller omitted the
-	// flag". The CLI parser sets this via flag.FlagSet.Visit; the MCP
+	// tmux_session_name (possibly empty)" from "caller omitted it". The
+	// CLI parser sets this via flag.FlagSet.Visit; the MCP
 	// dispatcher sets it when tmux_session_name is present and not null
 	// (b.7or). An explicit empty supplied value trips ErrTmuxSessionNameEmpty,
 	// while a bare omission falls through to composeSessionName.
@@ -53,7 +53,8 @@ type SpawnParams struct {
 	AgentDirectorLabels map[string]string
 
 	// ClaudeArgs is the verbatim argv passed through to `claude` after
-	// --settings. The denied-flag check rejects supervisor-owned flags.
+	// the supervisor's own flags. The denied-flag check rejects
+	// supervisor-owned flags.
 	ClaudeArgs []string
 
 	// Permissions is the per-Spawn permission overlay synthesized into

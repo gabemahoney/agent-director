@@ -168,7 +168,7 @@
 //     DescFindMissingField, its ids and unverified_ids result fields;
 //     DescMissingNotProof, SR-18.2's full statement for a text that states
 //     it in full, and DescMissingNotProofShort, its short form for the
-//     kill, resume, pause, expire and delete descriptions (decision-0930e);
+//     kill, resume, pause and expire descriptions (decision-0930e);
 //     and FindMissingOwnText, which cuts find-missing's own text
 //     before the pointer), or of expire's manifest texts
 //     (descriptions_expire.go: DescExpireManifest, its Description;

@@ -45,7 +45,7 @@ Tiers (lowest precedence first):
 | ---- | --- |
 | user | `["Bash(rm -rf /)"]` |
 | project | `["WebFetch(http://example.com/*)"]` |
-| per-Spawn (via `--deny`) | `["Bash(npm publish)"]` |
+| per-Spawn (via `deny`) | `["Bash(npm publish)"]` |
 
 Effective `deny` for the Spawn:
 
@@ -53,8 +53,8 @@ Effective `deny` for the Spawn:
 ["Bash(rm -rf /)", "WebFetch(http://example.com/*)", "Bash(npm publish)"]
 ```
 
-A Spawn launched with `--deny "Bash(npm publish)"` adds that single
-entry. The operator's pre-existing rules continue to apply.
+A Spawn launched with `deny` `["Bash(npm publish)"]`
+(`--deny "Bash(npm publish)"` on the CLI) adds that single entry. The operator's pre-existing rules continue to apply.
 
 ## `disable_askuserquestion` config
 
@@ -74,7 +74,7 @@ of the AUQ tool" *and* removes the tool from the deferred-tool registry
 
 Recommended for orchestrator-driven setups where every Claude should
 make its own decisions rather than prompting a human. The deny is
-additive — caller-supplied `--deny` entries still concatenate, and the
+additive — caller-supplied `deny` entries still concatenate, and the
 user / project tiers still apply.
 
 To re-enable AUQ for a specific Spawn while keeping the global config
@@ -142,7 +142,8 @@ let untrusted parties spawn Claude instances through agent-director.
 
 ## Relay mode
 
-A Spawn launched with `--relay-mode=on` hands every PermissionRequest
+A Spawn launched with `relay_mode` `on` (`--relay-mode=on` on the CLI)
+hands every PermissionRequest
 to the orchestrator instead of Claude Code's native consent dialog.
 Useful when an unattended supervisor needs to decide allow/deny based
 on policy rather than a human at the keyboard.

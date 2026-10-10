@@ -25,7 +25,7 @@ included): `spawn` refuses it with `ErrReservedEnvKey`, a template's
 such as `HOME=/x` is refused too, since tmux sets the variable named by
 the part of the key before its first `=`. The
 agent's hooks find agent-director's config and store from the pane's
-`HOME`, so an extra-env `HOME` would send the agent's hook events to
+`HOME`, so an `extra_env` `HOME` would send the agent's hook events to
 another agent-director store and leave the spawn's row `pending`. To
 give a Spawn its own Claude config, set an absolute
 `CLAUDE_CONFIG_DIR` instead. `resume` refuses a row whose stored
@@ -89,8 +89,8 @@ The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
 keys and `HOME` with `ErrReservedEnvKey` but *does not reserve* the auth
 env vars — they pass through to
 the tmux session and into Claude verbatim. agent-director never logs
-the value. It *does* persist the per-spawn `--extra-env` map to the
-store — with no opt-out — so `resume` can restore a finished (`ended` or
+the value. It *does* persist the per-spawn `extra_env` map
+(`--extra-env` on the CLI) to the store — with no opt-out — so `resume` can restore a finished (`ended` or
 `missing`) row's original env (see `internal/spawn/relaunch.go`: "ExtraEnv is restored
 from the persisted row … including CLAUDE_CONFIG_DIR and any auth vars").
 That means the auth token sits at rest in `~/.agent-director/state.db`;
@@ -100,12 +100,12 @@ in the README's Configuration section.)
 
 **Caveat — templates persist `extra_env` as plaintext TOML.** Both
 paths now put auth vars on disk; the difference is *where*. Per-spawn
-`--extra-env` values land in the owner-only (`0600`) state DB described
+`extra_env` values land in the owner-only (`0600`) state DB described
 above. Auth vars baked into a template's `extra_env`, by contrast, are
 written verbatim to the template's plaintext TOML under
 `~/.agent-director/templates/` (see `pkg/api/make_template.go`), and
 spawn merges them back in at resolve time (`internal/spawn/params.go`).
-Prefer per-spawn `--extra-env` for auth, and do not bake auth tokens
+Prefer per-spawn `extra_env` for auth, and do not bake auth tokens
 into a template unless you accept them sitting on disk in plaintext.
 
 ## Use `claude setup-token` for long-lived OAuth tokens

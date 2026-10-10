@@ -182,10 +182,11 @@ export interface ListRow {
 // Verb Params / Result interfaces
 //
 // One pair per callable verb in src/internal/verbs.ts.
-// Params field names follow the CLI flag names accepted by the
-// agent-director CLI subprocess (kebab-case flags map to snake_case keys
-// here). For verbs where pkg/api exposes a Params struct, the json tags on
-// that struct are authoritative.
+// Each Params field is named by its parameter's one snake_case name, the
+// same name MCP takes (a CLI flag, where there is one, is its dashed form),
+// except FindMissingParams.timeout_ms, which is TS-only and ignored.
+// For verbs where pkg/api exposes a Params struct, the json tags on that
+// struct are authoritative.
 // Result wire names follow the json:"..." tags on pkg/api result structs.
 // ---------------------------------------------------------------------------
 
@@ -210,7 +211,7 @@ export interface SpawnParams {
   /**
    * KEY→VALUE env-var overrides injected on the tmux session. `AGENT_DIRECTOR_*`
    * keys and `HOME` (any value) are refused with `ErrReservedEnvKey`, a template's
-   * included: an extra-env `HOME` would move the agent's hook to another
+   * included: an extra_env `HOME` would move the agent's hook to another
    * agent-director store. Set an absolute `CLAUDE_CONFIG_DIR` to give the agent its
    * own Claude Code config. A key that is not a valid env-var name (empty, or
    * containing `=` or a NUL character, which tmux would read as a different
@@ -219,7 +220,7 @@ export interface SpawnParams {
    * nothing is launched.
    */
   extra_env?: Record<string, string>;
-  /** Pass-through argv to `claude` after --settings. */
+  /** Pass-through argv to `claude` after the supervisor's own flags. */
   claude_args?: string[];
   /**
    * Skip pre-writing the folder-trust entry for `cwd` (into
@@ -259,7 +260,7 @@ export interface SpawnResult {
   pre_trust: "ok" | "skipped" | "failed";
 }
 
-/** Mirrors the `status` CLI verb's --claude-instance-id flag (pkg/api.Client.Status arg). */
+/** Mirrors the `status` verb's `claude_instance_id` param (pkg/api.Client.Status arg). */
 export interface StatusParams {
   /** Id of the Spawn to inspect. */
   claude_instance_id: string;
@@ -279,7 +280,7 @@ export interface StatusResult {
   launch_started_at?: string | null;
 }
 
-/** Mirrors the `get` CLI verb's --claude-instance-id flag (pkg/api.Client.Get arg). */
+/** Mirrors the `get` verb's `claude_instance_id` param (pkg/api.Client.Get arg). */
 export interface GetParams {
   /** Id of the Spawn to fetch. */
   claude_instance_id: string;
@@ -518,7 +519,7 @@ export interface FindMissingResult {
   unverified_ids: string[];
 }
 
-/** Mirrors the `expire` CLI verb's --older-than flag (pkg/api.Client.Expire arg). */
+/** Mirrors the `expire` verb's `older_than` param (pkg/api.Client.Expire arg). */
 export interface ExpireParams {
   /**
    * Duration override (e.g. "7d", "2h", "0d"). When omitted, the config
@@ -569,7 +570,7 @@ export interface MakeTemplateParams {
   cwd?: string;
   /** Default relay mode: "on" | "off" | "" (inherit). */
   relay_mode?: string;
-  /** Default claude argv. Per-call --claude-args replaces wholesale. */
+  /** Default claude argv. Per-call `claude_args` replaces wholesale. */
   claude_args?: string[];
   /**
    * Env-var overrides to bake in. A key spawn would refuse is refused here with

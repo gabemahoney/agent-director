@@ -11,7 +11,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
-// MaxTmuxSessionNameBytes caps caller-supplied --tmux-session-name values
+// MaxTmuxSessionNameBytes caps caller-supplied tmux_session_name values
 // at the UTF-8 byte length the validator accepts. 64 bytes fits any
 // tmux status-bar width and leaves room above the 8-char id suffix the
 // synthesized-name path appends; it is NOT a tmux-imposed limit
@@ -43,7 +43,7 @@ const reservedEnvKeyPrefix = "AGENT_DIRECTOR_"
 // reservedEnvKeyPrefix that extra_env may not set, whatever its value, an
 // empty one included (bug b.nas). The agent's hooks run a bare
 // `agent-director hook`, which resolves its config and store from the pane's
-// HOME, so an extra-env HOME would send the agent's hook events to another
+// HOME, so an extra_env HOME would send the agent's hook events to another
 // agent-director store and leave the spawner's row pending until
 // find-missing marks it missing. It is matched against the name tmux sets
 // (envVarName), not the raw key, so a key such as "HOME=/x" is refused too

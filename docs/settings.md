@@ -25,7 +25,8 @@ The synthesized payload contains:
   the running `agent-director` binary's absolute path. See `hooks.md`
   for the per-event mapping.
 - **`permissions`** (optional) — `allow` / `deny` / `ask` arrays
-  populated from the `--allow` / `--deny` / `--ask` flags plus the
+  populated from the spawn's `allow` / `deny` / `ask` params
+  (`--allow` / `--deny` / `--ask` on the CLI) plus the
   `disable_askuserquestion` config flag. See `permissions.md`.
 
 agent-director never writes hooks or permissions to disk on behalf of a
@@ -92,7 +93,7 @@ for the source read of Claude Code's `B4H` merger function.
 | ---- | --- |
 | user | `["Bash(npm test)"]` |
 | project | `["Bash(go test)"]` |
-| per-Spawn (via `--allow`) | `["WebFetch"]` |
+| per-Spawn (via `allow`) | `["WebFetch"]` |
 
 Effective `allow` for the Spawn: `["Bash(npm test)", "Bash(go test)", "WebFetch"]`.
 
@@ -149,8 +150,8 @@ recording — see `hooks.md` for the caveat and mitigations.
 
 A agent-director **template** is a TOML file at
 `~/.agent-director/templates/<name>.toml` that bakes a default
-spawn-parameter set. Per-call `--template <name>` layers the per-call
-params on top per a fixed merge contract (SRD §7.1).
+spawn-parameter set. A spawn's `template` param (`--template <name>` on
+the CLI) layers the per-call params on top per a fixed merge contract (SRD §7.1).
 
 Templates are not the same as Claude Code's `settings.json` tier
 stack. The tier stack belongs to Claude Code; templates belong to

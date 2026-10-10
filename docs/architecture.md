@@ -1754,12 +1754,14 @@ never-reported-in session, a held name), and `internal/spawn`'s
 list hint) for any further text that names the param; never one surface's
 spelling alone.
 
-**Params named in Descriptions.** A verb or param Description that names a
-param gives its manifest name, either bare (make-template's "Per-call cwd
-overrides.", expire's "older_than overrides") or with the CLI flag as an
-aside, `<param> (--<flag> on the CLI)` (make-template's per-call
-`claude_args`); never the CLI flag alone. `TestManifestTextsNameParamsNotFlags` checks
-every verb and param text on the manifest, and `TestSurfaceJSONMirrorsManifest`
+**Params named in Descriptions.** A verb, param or result-field Description
+that names a param gives its manifest name, either bare (make-template's
+"Per-call cwd overrides.", expire's "older_than overrides") or with the CLI
+flag as an aside, `<param> (--<flag> on the CLI)` (make-template's per-call
+`relay_mode`). Where the CLI takes the value some other way, the aside says
+how (make-template's per-call `claude_args`: "on the CLI, spawn's arguments
+after --"). Never the CLI flag alone. `TestManifestTextsNameParamsNotFlags` checks
+every verb, param and result-field text on the manifest, and `TestSurfaceJSONMirrorsManifest`
 holds `surface.json` to the same texts. Another
 program's flag, such as claude's `--settings`, is not a param and is not
 checked.
@@ -3333,7 +3335,7 @@ Why `HOME` is reserved: the extra env reaches the agent's pane through
 tmux `new-session -e`, and the agent's hooks run a bare
 `agent-director hook`, which resolves its config
 (`~/.agent-director/config.toml`) and store (`EffectiveDbPath`) from the
-pane's `HOME`. An extra-env `HOME` would send the agent's hook events to
+pane's `HOME`. An `extra_env` `HOME` would send the agent's hook events to
 another agent-director store, and the spawner's row would stay `pending`
 until `find-missing` marks it `missing`, with no error to the caller.
 Every other `HOME`-derived path (pre-trust's `.claude.json`, the
@@ -3368,7 +3370,7 @@ store of the server the spawn reaches, and an alternate `HOME` is safe only with
 (only a row spawned before this refusal can) with `ErrReservedEnvKey`,
 before any transcript lookup, tmux call or write (step 4 of
 [Resume](#resume)). `ComposeRelaunch` and pre-trust therefore never see
-an extra-env `HOME`.
+an `extra_env` `HOME`.
 
 **The shared rule, `spawn.ReservedHomeKey(env)`.** It returns the
 smallest key of `env` whose name before the first `=` is `HOME`, and
@@ -3439,7 +3441,7 @@ reserved key is.
 keys; each refusal is `ErrReservedEnvKey` and only its description
 differs. A key that is both reserved and malformed (`HOME=/x`,
 `AGENT_DIRECTOR_X=y`) gets the reserved description, and a reserved key
-wins over a malformed key that sorts before it. The whole extra-env step
+wins over a malformed key that sorts before it. The whole `extra_env` step
 runs after the denied-flag check and before the session-name checks
 (`TestValidateOrder`). The refusal names the smallest malformed key in
 sorted order (`firstEnvKey`). It checks the merged extra env, so a
@@ -3510,7 +3512,7 @@ described in step 4 of [Resume](#resume).
 Pinned by `TestValidateOrder`, `TestValidateRefusesInvalidEnvKey` and
 `TestInvalidEnvKey` (`internal/spawn/validate_test.go`).
 
-**Must use:** code that asks whether an extra-env key is a valid env-var
+**Must use:** code that asks whether an `extra_env` key is a valid env-var
 name calls `spawn.InvalidEnvKey` or `spawn.EnvKeyProblem`; do not test
 for an empty key, `=` or NUL by hand. Code that refuses or explains a
 malformed key uses `spawn.EnvKeyProblem` and
@@ -3851,7 +3853,7 @@ agent (a leftover's included) changes nothing and is logged as
 `ad.hook.ignored` (`no_pane_recorded`). Afterwards a plain spawn of the
 id returns `ErrInstanceIdCollision`, `resume` returns `ErrNoSessionId`
 (the row never had a session id), and a spawn with the reuse opt-in
-(`--reuse-finished`) is decided by its lookup like any finished row's
+`reuse_finished` (`--reuse-finished` on the CLI) is decided by its lookup like any finished row's
 reuse.
 
 **Shared launch-error builders** (`internal/spawn/launch_errors.go`,
@@ -4435,7 +4437,7 @@ it as absent and look under `~/.claude`, while pre-trust, which writes,
 refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
 launch's or row's extra env decides whether to use it with
 `spawn.ConfigDirUsable`; do not write a second check. No reader derives
-a path from an extra-env `HOME`: it is a reserved key (see [Reserved
+a path from an `extra_env` `HOME`: it is a reserved key (see [Reserved
 `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), so do not add
 one.
 
@@ -7782,8 +7784,9 @@ written, harmlessly:
    reuse's launch that never reported in and that `find-missing` marked
    `missing` (the step-2 refusal of its `pending` row named this
    recourse). Recourse: spawn again
-   with the same id, opting in to reuse (`--reuse-finished`); the new
-   life starts with no memory of the old one.
+   with the same id, opting in to reuse with `reuse_finished`
+   (`--reuse-finished` on the CLI); the new life starts with no memory of
+   the old one.
 4. The row's stored extra env has no key that sets `HOME`, whatever its
    value, an empty one included: neither the key `HOME` nor one such as
    `HOME=/x` whose name before the first `=` is `HOME`
@@ -7873,13 +7876,15 @@ written, harmlessly:
      messaged; a fresh Claude session writes no `.jsonl` until its first
      user turn). `resume` returns it only for a finished row, which
      `send-keys` refuses, so the row cannot be messaged. Recourse: spawn
-     again with the same id, opting in to reuse (`--reuse-finished`); the
-     new life starts with no memory of the old conversation.
+     again with the same id, opting in to reuse with `reuse_finished`
+     (`--reuse-finished` on the CLI); the new life starts with no memory of
+     the old conversation.
    - `ErrJsonlMissing` otherwise — the persisted path was set and has
      rotted, or the visible history is non-empty and none of its
      transcripts exists. Recourse: spawn again with the same id, opting in
-     to reuse (`--reuse-finished`); the new life starts with no memory of
-     the old conversation, which cannot be resumed through agent-director
+     to reuse with `reuse_finished` (`--reuse-finished` on the CLI); the new
+     life starts with no memory of the old conversation, which cannot be
+     resumed through agent-director
      afterwards.
 
    Both messages report each path tried with its source (`persisted`,
@@ -8266,14 +8271,15 @@ section; this section names no command for them.
   describes, then retries `resume`.
 - **A different instance id** (`ErrTmuxSessionConflict`): never end that
   session, which is another row's agent. Wait for its row to finish, or
-  respawn with the reuse opt-in (`--reuse-finished`) and a different
-  explicit session name.
+  respawn with the reuse opt-in `reuse_finished` (`--reuse-finished` on
+  the CLI) and a different explicit session name.
 - **Another agent-director store** (`ErrTmuxSessionConflict`; the holder's
   label carries another store's id): never end that session from this
   store. It is another store's agent, found and stopped only through that
   store's own agent-director ("Operator actions"); or respawn this agent
-  with the reuse opt-in (`--reuse-finished`) and a different explicit
-  session name. (SR-18.5 lists no such case; WD 2026-09-29 STORE.)
+  with the reuse opt-in `reuse_finished` (`--reuse-finished` on the CLI)
+  and a different explicit session name. (SR-18.5 lists no such case; WD
+  2026-09-29 STORE.)
 
 A `resume` or reuse right after `pause` returns, or right after an agent's
 natural exit, can get "appears to still be stopping" while the agent's
@@ -8415,7 +8421,7 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
   for each caller.
 - **`spawn.JsonlPath(cwd, sessionID)`** — a thin wrapper over
   `JsonlPathIn` that resolves the config dir to `$HOME/.claude`,
-  agent-director's own `HOME` (an extra-env `HOME` is reserved, see
+  agent-director's own `HOME` (an `extra_env` `HOME` is reserved, see
   [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)). Used
   for the default-config fallback (the row's `CLAUDE_CONFIG_DIR` absent,
   empty or not an absolute path). It reconstructs the default layout:
@@ -9430,7 +9436,7 @@ recorded tmux session name cannot be used, which `resume` and reuse
 refuse and `expire` keeps; the README's "Operator actions" gives the
 procedure), not a cleanup or recovery step: `expire` removes finished
 rows, and a finished id is spawned again with the reuse opt-in
-(`--reuse-finished`).
+`reuse_finished` (`--reuse-finished` on the CLI).
 
 ### Cron user invariant
 
@@ -9509,13 +9515,14 @@ ways, and the errors mean different things:
   not yet messaged: a fresh Claude session writes no `.jsonl` until its first
   user turn. There is genuinely nothing to resume, and the finished row
   cannot be messaged (`send-keys` refuses it). Recovery: spawn again with
-  the same id, opting in to reuse (`--reuse-finished`); the new life starts
-  with no memory of the old one.
+  the same id, opting in to reuse with `reuse_finished` (`--reuse-finished`
+  on the CLI); the new life starts with no memory of the old one.
 - `ErrJsonlMissing` — the persisted path was recorded and has since rotted, or
   the visible history is non-empty and none of its transcripts exists. The
   paths it names all come from the current life. Recovery: spawn again with
-  the same id, opting in to reuse (`--reuse-finished`); the new life starts
-  with no memory of the old conversation, which cannot be resumed through
+  the same id, opting in to reuse with `reuse_finished` (`--reuse-finished`
+  on the CLI); the new life starts with no memory of the old conversation,
+  which cannot be resumed through
   agent-director afterwards.
 
 `get`'s `transcript_status` field surfaces this distinction **before** a resume
@@ -9550,8 +9557,8 @@ then `resume` brings the conversation back. When `resume` cannot
 has a malformed key; see [Reserved `HOME` in
 `extra_env`](#reserved-home-in-extra_env-bnas) and [Malformed
 `extra_env` keys](#malformed-extra_env-keys-bvpb)), the recovery is to
-spawn the id again, opting in to reuse (`--reuse-finished`), with an
-`extra_env` without the key the `ErrReservedEnvKey` description names:
+spawn the id again, opting in to reuse with `reuse_finished`
+(`--reuse-finished` on the CLI), with an `extra_env` without the key the `ErrReservedEnvKey` description names:
 the agent starts a new life with no memory of the old conversation. Callers cannot delete a row (`delete` is on the
 operator tool only), and a human's `delete` is not a recovery step: it
 removes the row along with its `claude_session_id`, labels and
@@ -9621,7 +9628,8 @@ adds it here.
   its label names this instance id. No caller waits for `find-missing`.
   When the holder is a session left over from an earlier life of this id,
   a human ends it (README "Operator actions"), and the id is then spawned
-  again with the reuse opt-in (`--reuse-finished`). Another row's
+  again with the reuse opt-in `reuse_finished` (`--reuse-finished` on the
+  CLI). Another row's
   session, and another agent-director store's, is never ended. The
   description says what became of the new row: ended, left as it is
   because it changed after the spawn inserted it, or still `pending`
@@ -14592,7 +14600,7 @@ carry the detail.
   so a test can check that pre-trust touches nothing there. A test using
   it must not call `t.Parallel`; `cwdfix.Temp` makes that call panic.
 - `c.env()` is the `apitest.SpawnOption` that points a seeded row's
-  `CLAUDE_CONFIG_DIR` at `dir`; `c.extraEnv()` is the same as an extra-env
+  `CLAUDE_CONFIG_DIR` at `dir`; `c.extraEnv()` is the same as an `extra_env`
   map for a launch. Either gives each test its own config directory.
 - `c.reset(t)` writes the seeded bytes back, removing an entry a resume
   wrote.
