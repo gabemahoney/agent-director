@@ -50,9 +50,6 @@ func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]a
 			args[p.Name] = t.TempDir()
 		case "claude_instance_id":
 			args[p.Name] = paramRow
-			if p.Type == "[]string" {
-				args[p.Name] = []string{paramRow}
-			}
 		case "request_token":
 			args[p.Name] = paramToken
 		case "decision":
