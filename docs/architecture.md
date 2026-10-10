@@ -36,8 +36,11 @@ See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 The v1 supported-platform set is **`linux/amd64`**, **`linux/arm64`**,
 and **`darwin/arm64`**. `darwin/amd64` (Intel Mac) was **dropped on
 2026-05-24** (no Intel Mac users to serve). The CLI is released for
-all three; the TS Client's npm sub-packages ship the CLI binary for
-linux-x64 and darwin-arm64.
+all three. The TS Client's npm package ships no CLI binary: it drives
+the CLI installed on the host (see
+[System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)),
+and its `package.json` declares `"os": ["linux", "darwin"]` and
+`"cpu": ["x64", "arm64"]`.
 
 Each target gets two binaries, `agent-director` and `agent-director-admin`
 (six in all). All are pure `CGO_ENABLED=0` cross-compiles (pure-Go
@@ -1665,7 +1668,10 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
    checks that hand-wired CLI against `Verbs` (see "The structural parity
    guard" under
    [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
-2. MCP tool schema served in `mcp` mode (Epic 11).
+2. The MCP tool list, served by the `serve` verb (`serve --stdio`):
+   `buildToolList` in `internal/mcp/server.go` builds `tools/list` from
+   `Verbs`, skipping the verbs `ExposedVerb` excludes (see
+   [Stdio MCP server](#stdio-mcp-server)).
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
@@ -1794,16 +1800,27 @@ checked.
    call `client.VerbName(params)`, and marshal the result as JSON via
    `writeJSON`. The `cmd/` file must contain no implementation logic —
    only flag parsing, the `client.X(params)` call, and JSON output.
-4. If the verb emits new error sentinels, follow the checklist in
+4. If `ExposedVerb` (`internal/mcp/server.go`) exposes the verb, add its
+   `case` to `LiveDispatcher.Call` in `internal/mcp/dispatch.go`: decode
+   its params, if it has any, with `decodeParams` into a params struct
+   whose json tags are the manifest param names, then call
+   `client.VerbName(params)`. Without the case, `tools/list` lists the
+   tool but a call to it returns `ErrUnknownTool`;
+   `TestToolsCallDispatchMatrix` (`internal/mcp/dispatch_matrix_test.go`)
+   fails for an exposed verb with no case or no `matrixCases()` entry, and
+   `TestMCPParamParity` fails for a param the case does not decode (see
+   "Prohibitions" below and
+   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)).
+5. If the verb emits new error sentinels, follow the checklist in
    [Err-name five-way coherence](#err-name-five-way-coherence) before
    proceeding — the CI drift gate will fail if any of the five sources
    are out of sync.
-5. Run `make sandbox CMD="make generate"` to regenerate
+6. Run `make sandbox CMD="make generate"` to regenerate
    `docs/cli-reference.md` and `docs/mcp-reference.md` from the manifest.
    A bare `make generate` on a development host refuses (exit 2) and
    prints that command; see
    [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
-6. Verify idempotency: re-run `make sandbox CMD="make generate"` and
+7. Verify idempotency: re-run `make sandbox CMD="make generate"` and
    confirm `git status` shows no diff. A second run that produces a diff
    means the generator is non-deterministic — fix it before merging.
 
@@ -1916,7 +1933,7 @@ executable"` check in `make release-binaries-smoke`.
 ### TS Client → CLI subprocess
 
 There is no FFI / shared-library path. The TS Client (`pkg/ts-bun-client`)
-spawns the bundled CLI binary as a subprocess per verb call; see
+spawns the installed CLI binary as a subprocess per verb call; see
 [TS/Bun client library — Subprocess Client](#tsbun-client-library-pkgts-bun-client)
 below.
 
@@ -2083,25 +2100,25 @@ hidden or CLI-only flag, and none of them can run either action.
 
 `pkg/ts-bun-client/` is the TypeScript client library for agent-director.
 It ships as a Bun-native ESM package (`type: "module"`, `target: "bun"`)
-and spawns the bundled CLI binary as a subprocess per verb call.
+and spawns the host's installed CLI binary as a subprocess per verb call.
 
 ### Subprocess Client (post-b.eiv architecture)
 
-The public `Client` is `src/internal/subprocessClient.ts` (re-exported
-from `src/client.ts`). For every verb call the Client spawns the
-bundled `agent-director` CLI binary with a JSON params envelope on
+The public `Client` (`src/client.ts`) extends `SubprocessClient`
+(`src/internal/subprocessClient.ts`) with the async factory
+`Client.create()`. For every verb call the Client spawns the
+installed `agent-director` CLI binary with a JSON params envelope on
 argv, reads the stdout JSON envelope back, and returns it (or throws
 the matching `Err*` subclass for stderr error envelopes).
 
 ```
   agent-director (TS/Bun)
        │
-       │  src/client.ts            (public Client = SubprocessClient)
+       │  src/client.ts            (public Client extends SubprocessClient; create())
        │        │
        │  src/internal/
        │     subprocessClient.ts   (per-call spawn + parse)
-       │     spawner.ts            (Bun.spawn wrapper, stderr/stdout pumps)
-       │     platformResolve.ts    (binary path resolver; called per-spawn in production)
+       │     platformResolve.ts    (Bun runtime-version guard, run by create())
        │     argv.ts               (verb name + JSON params → argv)
        │     errorMap.ts           (stderr envelope → typed Err* class)
        │        │
@@ -2135,7 +2152,9 @@ other precedence) and probed with `<bin> version --json` under a bounded
 invocation policy (5000 ms timeout, SIGTERM → 2000 ms grace → SIGKILL,
 allowlist-only env scrub, stdin closed, cwd=/, stdout/stderr capped at
 64 KiB each). The probed version is compared against `MIN_BINARY_VERSION`
-(sourced from `dist/version-floor.json` at build time). Each failure
+(`src/internal/constants.ts` imports the package-root `version-floor.json`,
+which the build inlines into the bundle; `dist/version-floor.json` is a
+copy `build.ts` makes for shell scripts). Each failure
 mode surfaces as one of:
 
 - `ErrSystemInstallNotFound` (no candidate found anywhere)
@@ -2185,142 +2204,62 @@ hook command pointing at AD's CLI binary is an absolute path to a
 binary that remains callable for the lifetime of the configuration
 that referenced it.
 
-### Per-platform optional-dependency packaging
+### npm packaging and version scripts
 
-**Distribution model.** `pkg/ts-bun-client/` follows the [esbuild distribution
-model](https://esbuild.github.io/getting-started/#download-a-build) for native
-binaries: the top-level package ships zero binaries; each supported
-platform gets its own optional sub-package that carries exactly one CLI
-binary at `bin/agent-director`. `npm install` (and `bun install`)
-resolve only the sub-package that matches `os` + `cpu` on the installing
-host, leaving the others absent.
+**One package, no binary.** `pkg/ts-bun-client/` publishes one npm
+package, `agent-director`. Its `package.json` `files` list ships the
+bundle (`dist/**/*.js`, `dist/**/*.d.ts`), `dist/version-floor.json` and
+`README.md`, and no CLI binary. It has no `optionalDependencies` and no
+per-platform sub-packages.
+`Client.create()` and `resolveSystemBinary()` find the CLI the host has
+installed instead (see
+[System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)).
 
-**Sub-packages (v1 — two platforms):**
+**Bun runtime guard — `src/internal/platformResolve.ts`.** All that is
+left in this file (internal, not re-exported from `src/index.ts`) is
+`checkBunVersion()`: it throws `ErrBunVersionTooOld` when `Bun.version` is
+below `MIN_BUN_VERSION` (`"1.0.21"`, also `engines.bun` in
+`package.json`). `Client.create()` and `resolveSystemBinary()` call it
+first, before discovery.
 
-| npm package | Platform | Binary file |
-| --- | --- | --- |
-| `@agent-director/linux-x64` | Linux x86-64 | `bin/agent-director` |
-| `@agent-director/darwin-arm64` | macOS Apple Silicon | `bin/agent-director` |
+**version-bump script.** `scripts/version-bump.ts` (`bun run
+version-bump-publish --version X.Y.Z`) sets `version` in
+`pkg/ts-bun-client/package.json`. Its one `--target` selector,
+`umbrella-version`, is also what a run without `--target` does. It skips
+the write, logging `version-bump [umbrella-version]: already at <version> —
+skipped`, when the file already carries the version, so a second run with
+the same version writes nothing.
 
-> **v1 scope note (2026-05-24).** `@agent-director/darwin-x64` (macOS
-> Intel) was **dropped** from the v1 set — no Intel Mac users to serve
-> and the GH-hosted `macos-13` 10x billing multiplier was not worth the
-> spend. Linux ARM64 (`linux-arm64`) remains deferred to v2; a
-> sub-package `@agent-director/linux-arm64` will be added then.
+**check-version-coherence script.**
+`scripts/check-version-coherence.ts --scope verify|publish
+--expected-version X.Y.Z` runs these checks under both scopes, reports
+every failure, and exits 1 if there is one:
 
-Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
-contains only `package.json`, `README-binary-source.md`, and
-(release-injected) the CLI binary under `bin/agent-director`. The
-binary is gitignored; the `/release` skill stages it after `make
-release-binaries` cross-compiles.
+| Check | Asserts |
+| --- | --- |
+| `site-3a` | `package.json` `version` equals the expected version |
+| `site-dist-no-inline` | `dist/index.js` exists and holds neither `NPM_PACKAGE_VERSION` nor `"0.0.0"` (the package version is read at run time, never inlined) |
+| `site-floor-lockstep` | `version-floor.json` and `dist/version-floor.json` exist and are byte-equal; `min_binary_version` is strict SemVer and not `0.0.0-dev`; the `MIN_BINARY_VERSION` that `dist/index.js` exports equals it |
 
-For local development, `bun run prepare-platforms` copies the matching
-`dist/agent-director-<os>-<arch>` into `platforms/<tuple>/bin/agent-director`.
-The TS test preload (`test/setup.ts`) does the same at test time so
-`resolveCliPath()` succeeds against the in-repo binary.
+`--scope publish` also re-hashes every tarball listed in the manifest that
+`AGENT_DIRECTOR_RELEASE_SHASUMS` names, and fails when that variable is
+unset or a SHA-256 differs from the manifest's.
 
-**Resolver flow — `src/internal/platformResolve.ts`.**
-
-`platformResolve.ts` (internal, not re-exported from `src/index.ts`)
-implements a five-step resolution sequence. In production it is called
-on every verb spawn — not cached — so the client recovers transparently
-from a binary replacement between construction and spawn (b.i5y). It is
-also called once eagerly at construction to surface install errors
-immediately (see Construction step 2 below):
-
-1. **Bun version check.** Compare `Bun.version` against `MIN_BUN_VERSION`
-   (`"1.0.21"`). Fail fast with `ErrBunVersionTooOld` before attempting any
-   module resolution.
-2. **Tuple lookup.** Build `<process.platform>-<process.arch>` and look it up
-   in a static map. An unsupported tuple throws `ErrUnsupportedPlatform`.
-3. **Sub-package resolution.** Call
-   `import.meta.resolve("<subpkg>/package.json")` (Bun-synchronous,
-   returns a `file://` URL). On failure (package not installed), throw
-   `ErrPlatformPackageMissing`. Construct
-   `<pkgDir>/bin/agent-director`.
-4. **Stat the binary.** `statSync` on the resolved path; if absent,
-   throw `ErrPlatformPackageMissing` (the message differentiates the
-   two missing cases).
-5. **Execute-bit check.** Check `S_IXUSR | S_IXGRP | S_IXOTH` against
-   the current uid/gid; if not executable throw `ErrCliNotExecutable`.
-
-**Four platform error subclasses** (all TS-only):
-
-| Class | Thrown when | Key field in message |
-| --- | --- | --- |
-| `ErrBunVersionTooOld` | `Bun.version` < `1.0.21` | actual version + minimum |
-| `ErrUnsupportedPlatform` | tuple not in supported set | tuple string (e.g. `linux-arm64`) |
-| `ErrPlatformPackageMissing` | sub-package not installed or binary absent | sub-package name |
-| `ErrCliNotExecutable` | binary exists but lacks execute permission | binary path |
-
-**version-bump script.** `scripts/version-bump.ts` is the canonical tool for
-all version-stamp mutations at release time. Only `verify_phase` calls it,
-in a two-pass sequence, against the stage directory (never the live working
-tree). A bare invocation with no `--target` stamps all five version-bearing
-sites in one pass:
-
-```sh
-bun run version-bump-publish --version X.Y.Z
-```
-
-The five sites and their four `--target` selectors:
-
-| `--target` selector | File(s) | Field |
-| --- | --- | --- |
-| `platform-version` | `platforms/linux-x64/package.json`, `platforms/darwin-arm64/package.json` | `version` |
-| `umbrella-version` | `package.json` | `version` |
-| `opt-deps` | `package.json` | `optionalDependencies` (`file:` → `^X.Y.Z` pins) |
-| `skill-frontmatter` | `skills/install-agent-director/SKILL.md` | frontmatter `version:` |
-
-Omitting `--target` runs all four selectors in canonical order:
-`platform-version` → `umbrella-version` → `opt-deps` → `skill-frontmatter`.
-The flag is repeatable for targeted single-site runs.
-
-**Idempotence.** Every target skips the write if the file already carries the
-target version, logging `version-bump [<target>]: already at <version> —
-skipped`. Running the script twice with the same version produces zero file
-writes on the second pass.
-
-**OTQ-2 frontmatter robustness.** The `skill-frontmatter` target is strictly
-frontmatter-scoped: the file must open with `---` and the frontmatter block
-extends to the next `---`. Exactly one `version:` line must appear inside that
-block — zero or multiple `version:` lines → non-zero exit with a descriptive
-error. Lines after the closing `---` (the document body) are never scanned or
-modified, even if they contain the word `version:`.
-
-**check-version-coherence script.** `scripts/check-version-coherence.ts`
-is the version-coherence gate run by `verify_phase` and `publish_phase` to
-assert that all version-stamp sites agree with the release version before any
-irreversible step. The gate accepts `--scope verify` or `--scope publish` and
-checks five sites:
-
-| Site ID | File | Field |
-| --- | --- | --- |
-| `site-1` | `platforms/linux-x64/bin/agent-director`, `platforms/darwin-arm64/bin/agent-director` | `version --json` output (`"v${ver}"`) |
-| `site-3a` | `package.json` | `version` |
-| `site-3b` | `platforms/linux-x64/package.json`, `platforms/darwin-arm64/package.json` | `version` |
-| `site-4` | `package.json` | `optionalDependencies` (`^X.Y.Z` pins) |
-| `site-5` | `skills/install-agent-director/SKILL.md` | frontmatter `version:` |
-
-**Site-4 verify-scope skip.** Under `--scope verify`, site-4 is skipped when
-all `optionalDependencies` entries still carry `file:` paths — this is normal
-because `verify_phase` stamps opt-deps only after `bun install`, running the
-first gate before the opt-deps pass. After the opt-deps pass, a second
-`--scope verify` gate runs and site-4 must pass (opt-deps are now `^X.Y.Z`).
-
-**Publish-scope additions.** `--scope publish` additionally performs a
-SHA-256 round-trip check (SR-1.3 / SR-1.5): it reads
-`AGENT_DIRECTOR_RELEASE_SHASUMS` (the manifest written by `verify_phase`) and
-re-hashes every listed tarball. A hash mismatch means bytes were mutated after
-`verify_phase` packed them; the gate aborts before `npm publish` fires.
-`--scope publish` also runs the `dist/index.js` negative-grep
-(SR-2.3), making publish ⊇ verify per SR-2.2.
+**Who runs them.** No `/release` gate runs either script against the
+release tree. The release's `branch-and-bump` phase writes the version into
+`package.json` itself (`gates/branch/create-release-worktree.sh`), and its
+`coherence` gates check the stamped version
+(`gates/coherence/binary-version.sh`, `gates/coherence/tarball-and-bump.sh`;
+see [The release skill](#the-release-skill)). The bun suite runs both
+scripts on a staged copy of the package: `test/version-bump.test.ts`,
+`test/check-version-coherence.test.ts` and
+`test/release-version-coherence.test.ts`.
 
 ### Release blockers
 
-The npm-name blocker (H3) was resolved on 2026-05-24: the umbrella package
-publishes as `agent-director` (unscoped) and the three per-platform sub-packages
-publish under the `@agent-director` scope. The H3 entry in
+The npm-name blocker (H3) was resolved on 2026-05-24: the package publishes
+as `agent-director` (unscoped). It is the only npm package (see
+[npm packaging and version scripts](#npm-packaging-and-version-scripts)). The H3 entry in
 [docs/release-blockers.md](release-blockers.md) records the resolution and is
 kept as the template for any future release blockers.
 
@@ -2328,27 +2267,30 @@ kept as the template for any future release blockers.
 
 ```
 pkg/ts-bun-client/
-├── package.json          name: agent-director, version 0.0.0
+├── package.json          name: agent-director; its version is the repo's one version source (SR-16)
+├── version-floor.json    min_binary_version, the CLI version floor (MIN_BINARY_VERSION)
 ├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
 ├── .eslintrc.cjs         @typescript-eslint strict rules
-├── build.ts              Bun.build (ESM, single entry) → tsc (declarations)
+├── build.ts              Bun.build (ESM, single entry) → tsc (declarations) → copy version-floor.json to dist/
 ├── go.mod                module-boundary stub, no Go code (see below)
+├── scripts/              release and check scripts (version-bump.ts, check-version-coherence.ts, …)
 ├── src/
 │   ├── index.ts          public re-exports (client, errors, types)
-│   ├── client.ts         thin re-export: Client = SubprocessClient
+│   ├── client.ts         Client (extends SubprocessClient; adds create()) + resolveSystemBinary()
 │   ├── errors.ts         typed error subclasses
 │   ├── types.ts          param/result types
 │   └── internal/
 │       ├── subprocessClient.ts  per-call CLI spawn + envelope parse
-│       ├── spawner.ts           Bun.spawn wrapper, stderr/stdout pumps
-│       ├── platformResolve.ts   CLI binary path resolver (called per-spawn in production)
+│       ├── discovery.ts         system-install discovery + candidate validation
+│       ├── probe.ts             bounded `<bin> version --json` probe
+│       ├── semver.ts            strict SemVer parse + compare (floor check)
+│       ├── constants.ts         MIN_BINARY_VERSION, read from version-floor.json
+│       ├── platformResolve.ts   Bun runtime-version guard (checkBunVersion)
+│       ├── spawner.ts           ErrSubprocessCrash, plus a runSubprocess helper the Client does not use
 │       ├── argv.ts              verb name + JSON params → argv
 │       ├── errorMap.ts          stderr envelope → typed Err* class
 │       ├── verbs.ts             callable-verb list (mirrors manifest.CallableVerbs)
 │       └── tsOnlyErrors.ts      TS-only error allow-list (catalog-drift exemption)
-├── platforms/            per-platform npm sub-packages
-│   ├── linux-x64/        @agent-director/linux-x64 → bin/agent-director
-│   └── darwin-arm64/     @agent-director/darwin-arm64 → bin/agent-director
 ├── test/                 bun:test suite
 └── dist/                 build output (gitignored)
 ```
@@ -2368,18 +2310,25 @@ package.
 
 ### Client lifecycle
 
-A `Client` (aliased from `SubprocessClient`) owns no Go-side resources;
+A `Client` (a subclass of `SubprocessClient`) owns no Go-side resources;
 each verb call is a one-shot subprocess.
 
-**Construction.** `new Client(opts)` is synchronous. All `ClientOptions` fields are optional; omitted fields fall through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). The constructor:
+**Construction.** `await Client.create(opts)` is the only entry point. The constructor is not public (`protected` on `SubprocessClient`; `Client` declares none), so `new Client(...)` is a compile-time TS error. `create` is async and runs one subprocess, the version probe, before it resolves, so a resolved Client has a binary that answered. All `ClientOptions` fields are optional; an omitted `storePath`, `home` or `tmuxCommand` falls through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). `create(opts)` runs, in order:
 
-1. Calls `resolveCliPath()` eagerly to surface platform/install errors at construction time (ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable, ErrBunVersionTooOld), but does **not** cache the result. Each verb call re-resolves the binary path fresh so that a binary replacement between construction and spawn (e.g. a background `bun install` upgrading the global package) does not cause ENOENT failures on long-lived clients.
-2. Stores the caller-supplied options, `storePath`, `home` and `tmuxCommand` verbatim (see **Tilde expansion** below), for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
-3. Initializes `#npmPkgVersion` to `undefined`. The npm package version is loaded lazily on the first `version()` call and cached for the lifetime of the instance (see `loadNpmPackageVersion()` below).
+1. **Bun check.** `checkBunVersion()` (`src/internal/platformResolve.ts`) rejects with `ErrBunVersionTooOld` when `Bun.version` is below `MIN_BUN_VERSION` (`1.0.21`).
+2. **Find the binary.** `discoverSystemBinary()` runs the [System-install discovery pipeline](#system-install-discovery-pipeline-bw3q) against `HOME` and `PATH`. It rejects with `ErrSystemInstallNotFound` when no candidate exists, and with `ErrSystemInstallUnreachable` (`reason` `not-a-regular-file` or `not-executable`) when the candidate fails validation. The `_cliPath` option (a DI hatch for tests, not on `ClientOptions`) replaces this step: discovery and its validation are skipped, and `canonicalizePath()` makes the path absolute and resolves its symlinks, rejecting with `ErrSystemInstallUnreachable` (`not-a-regular-file`) when it cannot.
+3. **Probe.** `runProbe()` spawns `<binary> version --json` under the bounded policy of the discovery pipeline. A failed probe, or a reported version that is not strict SemVer, rejects with `ErrSystemInstallUnreachable`, whose `reason` names the failure.
+4. **Floor check.** A probed version below `MIN_BINARY_VERSION` (from `version-floor.json`) rejects with `ErrSystemInstallTooOld`. The dev build's `0.0.0-dev` passes any floor (`src/internal/semver.ts`).
+5. **Caller cwd check.** `assertCallerCwdReachable()` rejects with `ErrCallerCwdUnreachable` when `process.cwd()` throws, is gone or is not a directory (b.cot). Every verb subprocess inherits that cwd, and a gone cwd would fail each spawn with an ENOENT that looks like a missing binary.
+6. **Allocate.** It calls the `SubprocessClient` constructor (`src/internal/subprocessClient.ts`) with `opts`, the binary path and the probed version. The constructor:
+   - Throws a plain `Error` when `callTimeoutMs` is zero or negative (omitted means 30 000 ms); `create` rejects with it, after the probe has run.
+   - Keeps the path as `#binaryPath` and the probed version as `#binaryVersion`, read through the `binaryPath` and `binaryVersion` getters. Every verb call spawns that path; the Client never looks for the binary again (see [Subprocess call recipe](#subprocess-call-recipe)).
+   - Stores the caller-supplied options, `storePath`, `home` and `tmuxCommand` verbatim (see **Tilde expansion** below), for forwarding on each verb call. Only a field the caller set is stored.
+   - Opens the Client. `#npmPkgVersion` stays `undefined`: the npm package version is loaded lazily on the first `version()` call and cached for the lifetime of the instance (see `loadNpmPackageVersion()` below).
 
 **`close()`.**
 
-- Sets `_open = false` so subsequent verb calls throw `ErrClientClosed`.
+- Sets `#open = false` so subsequent verb calls throw `ErrClientClosed`.
 - Has no subprocess to terminate (every verb call is its own short-lived subprocess) — so it cannot fail mid-call.
 - **Idempotent**: a second `close()` call is a no-op.
 
@@ -2387,12 +2336,12 @@ each verb call is a one-shot subprocess.
 
 ```ts
 {
-  using client = new Client({});
+  using client = await Client.create({});
   // use client …
 } // client.close() called automatically here
 ```
 
-**`_assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
+**`#assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
 
 **Tilde expansion** of `storePath`, `home` and `tmuxCommand` is the CLI's,
 never the TS side's (b.38a). The Client forwards the three values verbatim,
@@ -2448,11 +2397,19 @@ Every verb call from `Client` follows this four-step recipe inside
    unchanged. `buildArgv` throws `ErrReservedEnvKey` and no
    subprocess runs (b.vpb, b.66q; see
    [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
-2. **Spawn the CLI.** `resolveCliPath()` is called fresh to obtain the
-   binary path (production) or the `_cliPath` DI override is used verbatim
-   (tests). `src/internal/spawner.ts` then calls `Bun.spawn` with that
-   path, pipes stdin (closed), captures stdout and stderr, and respects
-   `callTimeoutMs` (default 30 s).
+2. **Spawn the CLI.** The binary path is `#binaryPath`, fixed by
+   `Client.create` (the discovered path, or the canonicalized `_cliPath` in
+   tests); no verb call looks for the binary again or re-probes it, so
+   `binaryVersion` stays the version `create` probed. `#doCall` passes the
+   argv, with that path first, to `Bun.spawn` itself: stdin piped and
+   closed at once, stdout and stderr captured, env a copy of `process.env`,
+   cwd the caller's. It respects `callTimeoutMs` (default 30 s). When
+   `Bun.spawn` throws ENOENT, `#doCall` names the cause:
+   `ErrSystemInstallDisappeared` when `#binaryPath` no longer exists or is
+   no longer a regular file, else `ErrCallerCwdUnreachable` when
+   `process.cwd()` is gone or not a directory, else the original error
+   (b.xht). Any other spawn failure is rethrown as is. A Client does not
+   follow a binary that moved; create a new one.
 3. **Parse the envelope.** On exit code 0, parse stdout as a JSON
    object → return it. On non-zero exit, parse stderr as a JSON
    error envelope (`{ "err_name": "...", "err_description": "..." }`)
@@ -2466,13 +2423,13 @@ Every verb call from `Client` follows this four-step recipe inside
 ```
 Client.sendKeys(params)
   │
-  ▼  src/internal/subprocessClient.ts → callVerb("send-keys", params)
+  ▼  src/internal/subprocessClient.ts → #enqueue → #doCall("send-keys", params)
   │
-  ▼  argv.ts → [verb, ...flags]
+  ▼  argv.ts → buildArgv(#binaryPath, verb, params, globals) → [#binaryPath, ...globals, verb, ...flags]
+  │           (#binaryPath fixed at Client.create; never re-resolved)
   │
-  ▼  resolveCliPath() → cliPath (fresh per-call)
-  │
-  ▼  spawner.ts → Bun.spawn(cliPath, argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  ▼  Bun.spawn({ cmd: argv, stdin: "pipe" (closed at once), stdout: "pipe", stderr: "pipe", env: { ...process.env } })
+  │     throws ENOENT → ErrSystemInstallDisappeared | ErrCallerCwdUnreachable | original error
   │
   ▼  read stdout to EOF; await exit
   │
@@ -5124,46 +5081,57 @@ map a tree by recursive listings.
 
 ## Install flows
 
-There are two complementary install surfaces, separated by what they
-touch on disk. **Pattern A** (the npm postinstall) ships
-`/install-agent-director` into Claude Code's skill registry so the
-operator can discover the install skill in one step; **Pattern B**
-(the install skill itself) is the only path that touches the CLI
-binary, state DB, and Claude Code hooks. Pattern A is silent; Pattern
-B is explicit and operator-confirmed.
+agent-director ships one installer, `install.sh`, the script of the
+`install-agent-director` skill
+([Pattern B](#pattern-b--installsh-the-install-skill)). It installs
+`agent-director` and `agent-director-admin`, brings `state.db` to the
+current schema, and merges the Claude Code hooks (unless `--no-hooks`).
+The npm package is not an installer: it installs nothing outside
+`node_modules/`, so it neither installs the CLI nor stages the skill
+(see [Staging the install skill](#staging-the-install-skill)).
 
-### Pattern A — Postinstall skill copy
+### Staging the install skill
 
-When the umbrella package is installed:
+The skill is `SKILL.md`, `install.sh` and `uninstall.sh` in
+`skills/install-agent-director/`. Claude Code finds personal skills in
+`~/.claude/skills/` and project skills in a project's `.claude/skills/`;
+the repo's top-level `skills/` is neither, and nothing in agent-director
+copies the skill into either. The npm package does not carry it:
 
-```
-bun add agent-director
-  → bun resolves umbrella + platform sub-package
-  → bun runs pkg/ts-bun-client/scripts/postinstall.ts
-      → host-pair gate (linux/x64 or darwin/arm64, else exit 1)
-      → ${HOME}/.claude/skills/install-agent-director/ atomic copy
-        of the bundled skill body
-  → claude /install-agent-director is now invokable in any Claude
-    Code session run by that operator
-```
+- `pkg/ts-bun-client/package.json` `files` lists only the `dist/` output
+  (`dist/**/*.js`, `dist/**/*.d.ts`, `dist/version-floor.json`) and
+  `README.md`.
+- Its `scripts` (build, lint, typecheck, the test runners and two release
+  helpers) include no lifecycle script a package manager runs on
+  install, so `bun add agent-director` runs no package code, with or
+  without `--ignore-scripts`. Installing the package writes nothing
+  under `~/.claude/`, `~/.agent-director/` or `~/.local/bin/`. See
+  [npm packaging and version scripts](#npm-packaging-and-version-scripts).
 
-The postinstall **only** writes under `${HOME}/.claude/skills/`
-(plus a sibling tmp dir and an optional timestamped backup). It does
-NOT touch `~/.local/bin/agent-director`, `~/.agent-director/`,
-`~/.claude/settings.json`, or `~/.claude/config.toml`. Those side
-effects are reserved for Pattern B's `install.sh`. Keeping
-postinstall narrow protects operators who install the library purely
-to import it from TypeScript code and never want the CLI / state DB
-/ hooks materialized.
+`install.sh` is reached three ways:
 
-The three-way decision (identical / older-or-absent / newer) is
-governed by the YAML frontmatter `version:` field on
-`SKILL.md`. Authoritative spec lives in SRD `t1.fg3.7i` SR-1.4.
+1. **The skill.** The operator copies or symlinks
+   `skills/install-agent-director/` into `~/.claude/skills/` (or a
+   project's `.claude/skills/`), then invokes `/install-agent-director`
+   in Claude Code. The skill runs the `install.sh` beside its `SKILL.md`.
+2. **A checkout.** `bash skills/install-agent-director/install.sh` with
+   its options.
+3. **The one-liner.** It fetches `install.sh` from `main` and installs
+   the latest release's binaries:
+
+   ```
+   curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+   ```
+
+Without `--binary` or `--from-release`, a symlinked skill directory
+installs the `bin/` build of the checkout it points into, held to that
+checkout's `HEAD`; a copy has no checkout behind it. See "The two
+binaries" and "The source-tree version check" under Pattern B.
 
 ### Pattern B — `install.sh` (the install skill)
 
 Invoked from inside Claude Code via `/install-agent-director` (which
-runs the skill body Pattern A copied), or directly via
+runs the skill body the operator staged; see [Staging the install skill](#staging-the-install-skill)), or directly via
 `bash skills/install-agent-director/install.sh`:
 
 ```
@@ -5976,19 +5944,6 @@ operator to *this install flow* and nowhere else. `architecture.md`,
 `install-agent-director/SKILL.md`, and docs/migration-guide.md are
 internal/admin-facing, which is why they may name it.
 
-### Pattern B fallback (postinstall skipped)
-
-When `bun add --ignore-scripts agent-director` (or any client that
-suppresses lifecycle scripts) is used, the postinstall does not run.
-Pattern B is still reachable two ways:
-
-1. Manual: `cp -r node_modules/agent-director/skills/install-agent-director ~/.claude/skills/` then invoke the skill.
-2. Direct: invoke `claude /install-agent-director` — the skill body
-   knows how to copy itself into `~/.claude/skills/` as a side
-   effect of running install.sh.
-
-Same end state in both cases.
-
 ## Install layout
 
 The `skills/install-agent-director/` skill (Epic 12) lays out the
@@ -6259,11 +6214,14 @@ don't take effect until the next `serve --stdio` invocation.
 
 ### Drift-free schema generation
 
-The tool list is generated from `pkg/api/manifest.Verbs` — the
-same single source of truth that drives the CLI flag definitions
-and the reference docs (`cli-reference.md`, `mcp-reference.md`).
-Adding a verb to the manifest exposes it via MCP on the next server
-start with NO source changes in `internal/mcp`. The
+The tool list is generated from `pkg/api/manifest.Verbs`, the
+source the reference docs (`cli-reference.md`, `mcp-reference.md`) are
+generated from and the CLI's hand-written flags are checked against.
+A verb added to the manifest is listed in `tools/list` on the next
+server start with no source change in `internal/mcp`, but a call to it
+returns `ErrUnknownTool` until it has its `LiveDispatcher.Call` case (see
+"How to add a verb" under
+[`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). The
 drift-by-construction invariant is pinned by
 `TestToolsListMatchesManifest` in `internal/mcp/server_test.go`:
 the test enumerates `manifest.Verbs` at run time and compares the
@@ -11107,7 +11065,7 @@ successful live run).
 
 **Source-of-truth invariant.** `pkg/ts-bun-client/package.json` is the
 sole authoritative version string in the repo (SR-16). Every other site —
-binary ldflags, npm sub-packages, release notes — derives from it. The
+binary ldflags, the npm package, release notes — derives from it. The
 SR-16 gate (`pkg/ts-bun-client/scripts/check-source-of-truth.ts`) enforces
 this invariant and fires on any independent version site detected outside
 the derivation chain.
