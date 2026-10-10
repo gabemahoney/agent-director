@@ -829,13 +829,9 @@ launch), then the session by its id. It then waits for the youngest
 session's agent process, the other processes of those sessions' panes and
 each older session's agent process, even one whose pane was moved into
 another session. When the youngest session's agent process cannot be
-checked, it instead looks the sessions up once more and succeeds once none
-of them is listed, waiting for no process, so an older session's agent
-whose pane was moved into another session may still run after it
-succeeds: before running it, note that agent's pid from the pane listing
-(`list-panes -a`), and afterwards handle it as "An agent process that runs
-with no session or pane of its launch" describes. Its answers mean what they mean above, and the row is never
-changed.
+checked, it first looks the sessions up once more and, once none of them
+is listed, waits for those other processes. Its answers mean what they
+mean above, and the row is never changed.
 
 Every other answer sends no kill and changes nothing:
 

@@ -3,8 +3,10 @@ package api_test
 // kill_check_test.go covers kill's check after a sent kill (SR-6.1 step 4,
 // SR-3.8, SR-6.4): the process wait (zombie, survivors, an unreadable later
 // poll), the one follow-up lookup when the agent cannot be checked, never
-// both, the pane identity chosen over a disagreeing SessionStart pid, and
-// that kill never signals the agent process.
+// both on the current label (this id's own abandoned launch waits after its
+// follow-up, b.myx: kill_optin_abandoned_test.go), the pane identity chosen
+// over a disagreeing SessionStart pid, and that kill never signals the agent
+// process.
 
 import (
 	"os/exec"
@@ -84,6 +86,14 @@ func kcAssertErr(t *testing.T, err error, name string, want *apitest.DescCase) {
 	apitest.AssertDescription(t, err.Error(), *want)
 }
 
+// kcAssertPolls fails unless sleeps is exactly polls pauses of api.KillPollInterval.
+func kcAssertPolls(t *testing.T, sleeps []time.Duration, polls int) {
+	t.Helper()
+	if len(sleeps) != polls || slices.ContainsFunc(sleeps, func(d time.Duration) bool { return d != api.KillPollInterval }) {
+		t.Errorf("sleeps = %v; want %d of %v", sleeps, polls, api.KillPollInterval)
+	}
+}
+
 // TestKillCheckWait covers the checkable path: every reading after the kills
 // polls every KillPollInterval up to the exit wait, zombie = gone, no follow-up.
 func TestKillCheckWait(t *testing.T) {
@@ -157,11 +167,7 @@ func TestKillCheckWait(t *testing.T) {
 				t.Error("KillSent = false; want true")
 			}
 			e.assertKillCalls(t, killOursCalls...)
-			if len(run.sleeps) != polls || slices.ContainsFunc(run.sleeps, func(d time.Duration) bool {
-				return d != api.KillPollInterval
-			}) {
-				t.Errorf("sleeps = %v; want %d of %v", run.sleeps, polls, api.KillPollInterval)
-			}
+			kcAssertPolls(t, run.sleeps, polls)
 			q, a := e.cfg.EffectiveQueryTimeout(), e.cfg.EffectiveActionTimeout()
 			if wantElapsed := 2*q + 2*a + time.Duration(polls)*api.KillPollInterval; run.elapsed != wantElapsed {
 				t.Errorf("virtual time = %v; want %v", run.elapsed, wantElapsed)
@@ -181,7 +187,7 @@ func TestKillCheckWait(t *testing.T) {
 }
 
 // TestKillCheckFollowUp covers the not-checkable path: exactly one follow-up
-// lookup after the kills, no wait, and its verdict decides.
+// lookup after the kills, no wait (a running teammate included), and its verdict decides.
 func TestKillCheckFollowUp(t *testing.T) {
 	t.Parallel()
 	scriptFollowUp := func(f tmux.Failure) func(*testing.T, *killEnv, killRow) {
@@ -193,48 +199,51 @@ func TestKillCheckFollowUp(t *testing.T) {
 	}
 	bystander := func(t *testing.T, e *killEnv, r killRow) { e.seedBystander(t, r.Socket) }
 	cases := []struct {
-		name     string
-		agent    agentState
-		setup    func(t *testing.T, e *killEnv, r killRow)
-		followup string
-		errName  string
-		want     func(e *killEnv, r killRow) apitest.DescCase
+		name      string
+		agent     agentState
+		teammates int // still running through the call
+		setup     func(t *testing.T, e *killEnv, r killRow)
+		followup  string
+		errName   string
+		want      func(e *killEnv, r killRow) apitest.DescCase
 	}{
-		{"unreadable agent, follow-up gone", agentUnreadable, bystander, "gone", "", nil},
-		{"no agent recorded, follow-up gone", agentNotRecorded, func(_ *testing.T, e *killEnv, r killRow) {
+		{"unreadable agent, follow-up gone", agentUnreadable, 0, bystander, "gone", "", nil},
+		// On the current label the follow-up alone decides: no wait for the teammate (b.myx).
+		{"unreadable agent, a teammate outlives the kills, follow-up gone", agentUnreadable, 1, bystander, "gone", "", nil},
+		{"no agent recorded, follow-up gone", agentNotRecorded, 0, func(_ *testing.T, e *killEnv, r killRow) {
 			e.serverExitsWhenEmpty(r.Socket)
 		}, "gone", "", nil},
-		{"follow-up leftover", agentUnreadable, func(_ *testing.T, e *killEnv, r killRow) {
+		{"follow-up leftover", agentUnreadable, 0, func(_ *testing.T, e *killEnv, r killRow) {
 			e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "old-" + uuid.NewString()[:8], Label: r.old()})
 		}, "leftover", "", nil},
 		// SR-20.6: formerly TestKillSwallowsTmuxFailure; a failed kill is left to
 		// the follow-up: Ours is ErrTmuxKillFailed, Gone (the next row) success.
-		{"follow-up ours, label still there", agentUnreadable, func(_ *testing.T, e *killEnv, r killRow) {
+		{"follow-up ours, label still there", agentUnreadable, 0, func(_ *testing.T, e *killEnv, r killRow) {
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallKillPane, tmux.CallKillSession)
 		}, "ours", "ErrTmuxKillFailed", func(_ *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescKillUncheckable(r.ID, r.Name, apitest.KillSent{Pane: true, Session: true})
 		}},
-		{"kills report failure but take effect, follow-up gone", agentUnreadable, func(t *testing.T, e *killEnv, r killRow) {
+		{"kills report failure but take effect, follow-up gone", agentUnreadable, 0, func(t *testing.T, e *killEnv, r killRow) {
 			bystander(t, e, r)
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Applied: true},
 				tmux.CallKillPane, tmux.CallKillSession)
 		}, "gone", "", nil},
-		{"follow-up unreadable", agentUnreadable, func(t *testing.T, e *killEnv, r killRow) {
+		{"follow-up unreadable", agentUnreadable, 0, func(t *testing.T, e *killEnv, r killRow) {
 			bystander(t, e, r)
 			scriptFollowUp(tmux.FailTimeout)(t, e, r)
 		}, "cant_tell", "ErrTmuxUnresponsive", func(e *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescKillFollowUpUnresponsive(apitest.KillFollowUp{Name: r.Name, Timeout: e.cfg.EffectiveQueryTimeout()})
 		}},
-		{"follow-up tmux not run", agentUnreadable, scriptFollowUp(tmux.FailUnavailable), "tmux_unavailable",
+		{"follow-up tmux not run", agentUnreadable, 0, scriptFollowUp(tmux.FailUnavailable), "tmux_unavailable",
 			"ErrTmuxNotAvailable", func(*killEnv, killRow) apitest.DescCase { return apitest.DescTmuxNotRun().AfterKillSent() }},
-		{"follow-up socket permission", agentUnreadable, scriptFollowUp(tmux.FailSocketDenied), "tmux_unavailable",
+		{"follow-up socket permission", agentUnreadable, 0, scriptFollowUp(tmux.FailSocketDenied), "tmux_unavailable",
 			"ErrTmuxNotAvailable", func(_ *killEnv, r killRow) apitest.DescCase {
 				return apitest.DescSocketPermission(r.Socket).AfterKillSent()
 			}},
 		// b.47f: the recorded server stays up with no session (tmux's exit-empty off).
-		{"follow-up gone, the recorded server left with no session", agentUnreadable,
+		{"follow-up gone, the recorded server left with no session", agentUnreadable, 0,
 			func(*testing.T, *killEnv, killRow) {}, "gone", "", nil},
-		{"follow-up different server, the socket rebound to an empty server", agentUnreadable,
+		{"follow-up different server, the socket rebound to an empty server", agentUnreadable, 0,
 			func(_ *testing.T, e *killEnv, r killRow) {
 				e.rec.AfterCall(tmux.CallKillSession, func(tmuxfix.SocketCall, error) {
 					e.rec.RebindServer(r.Socket, tmuxfix.Server{})
@@ -247,7 +256,7 @@ func TestKillCheckFollowUp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{Agent: tc.agent})
+			r := e.seedRow(t, killRowSpec{Agent: tc.agent, Teammates: tc.teammates})
 			tc.setup(t, e, r)
 			run := kcKill(t, e, r, e.pc)
 
@@ -271,8 +280,9 @@ func TestKillCheckFollowUp(t *testing.T) {
 				t.Errorf("sleeps = %v, virtual time = %v; want no sleep and %v", run.sleeps, run.elapsed, wantElapsed)
 			}
 			if rec := kcTrail(t, r.ID); rec["process_check"] != check || rec["followup_outcome"] != tc.followup ||
-				rec["kill_sent"] != true {
-				t.Errorf("trail = %v; want process_check %s, followup_outcome %s, kill_sent true", rec, check, tc.followup)
+				rec["kill_sent"] != true || len(kcInts(rec["survivor_pids"])) != 0 {
+				t.Errorf("trail = %v; want process_check %s, followup_outcome %s, kill_sent true, no survivor_pids",
+					rec, check, tc.followup)
 			}
 		})
 	}
