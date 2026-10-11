@@ -291,7 +291,7 @@ its test. The test:
    refusal comes back unchanged while the condition holds and the operation
    succeeds once it clears.
 
-A human-only pointer (the README's "Operator actions") is not itself followed,
+A human-only pointer (to docs/operator-actions.md) is not itself followed,
 but an `ErrTmuxSessionConflict` refusal that carries one gets a
 condition-clears test (`TestAdviceFollow_HO<n>_…` in
 `pkg/api/advice_follow_conflict_test.go`): re-issued while the condition
@@ -426,16 +426,18 @@ Cross-reference: SRD §15 (testing strategy), §17 (audit standard), §18
 
 ### Structure
 
-Testplans live in the `testplans` bees hive at `tickets/testplans/`. Each
-Epic produces a t1 collector with a clear `harness-smoke`-style title slug;
-under it are t2 cases. The on-disk layout is what bees produces:
+Testplans live in `tickets/testplans/`. The files are shaped like bees
+tickets, but the folder is not a working bees hive: it is not registered,
+so `bees` commands cannot read or write it. Write and edit the files by
+hand. Each Epic produces a t1 collector with a clear `harness-smoke`-style
+title slug; under it are t2 cases. The on-disk layout is:
 
 ```
 tickets/testplans/<bee>/<t1>/<t2>/<t2>.md
 ```
 
-The driver does *not* read tier labels (the hive happens to use
-`Collector` / `Test case` for cosmetic reasons). It finds the t1 by title
+The driver does *not* read tier labels or statuses (the folder's `.hive` names
+`Collector` / `Test case`). It finds the t1 by title
 match (`title:.*<EPIC>`), then iterates t2 cases in the order from the
 t1's frontmatter `children:` list.
 
@@ -563,12 +565,17 @@ exactly what was checked, not just that something exited 0.
 
 ### Adding a testplan for a new Epic
 
-1. Create a t1 in the `testplans` hive titled to include a short slug:
-   `bees create-ticket --ticket-type t1 --hive testplans --parent b.75s \
-   --title "Epic N — <slug> testplan" --body-file <t1-body>`.
-2. Add t2 cases under it (`--parent <t1-id>`), one per case. Order
-   matters: the `children:` list controls execution order.
-3. Commit `tickets/testplans/...` along with the rest of the Epic's
+1. Create the t1 collector by hand at
+   `tickets/testplans/b.75s/<t1-id>/<t1-id>.md`. Pick an unused id of the
+   form `t1.75s.<2 chars>`. Copy the frontmatter of an existing t1 there:
+   `id`, `type: t1`, a `title` that includes the slug
+   (`Epic N — <slug> testplan`), `parent: b.75s`, and a `children:` list.
+2. Add each t2 case at `<t1-id>/<t2-id>/<t2-id>.md`, with id
+   `t2.75s.<t1 chars>.<2 chars>`, `type: t2` and `parent: <t1-id>`, and
+   list its id under the t1's `children:`. Order matters: the `children:`
+   list controls execution order.
+3. Add the slug as a line of `test/docker-epics.txt`, and commit
+   `tickets/testplans/...` along with the rest of the Epic's
    implementation.
 4. Verify locally: `make test-docker EPIC=<slug>` exits 0 with one
    `{"status":"pass"}` line per case.
