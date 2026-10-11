@@ -40,6 +40,7 @@ func SeedListFixture(t *testing.T) (*store.Store, string) {
 		t.Helper()
 		row := store.Spawn{
 			ClaudeInstanceID: id,
+			Agent:            store.AgentClaude,
 			ParentID:         parent,
 			CWD:              cwd,
 			TmuxSessionName:  "cd-" + id,
@@ -86,6 +87,7 @@ func SeedDeleteFixture(t *testing.T) (*store.Store, string) {
 	} {
 		row := store.Spawn{
 			ClaudeInstanceID: sp.id,
+			Agent:            store.AgentClaude,
 			CWD:              "/tmp",
 			TmuxSessionName:  "cd-" + sp.id,
 			RelayMode:        "off",
@@ -113,6 +115,7 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: "id-d-1",
+		Agent:            store.AgentClaude,
 		CWD:              "/tmp",
 		TmuxSessionName:  "cd-d-1",
 		RelayMode:        relayMode,
@@ -154,6 +157,7 @@ func SeedExpireFixture(t *testing.T) (*store.Store, string) {
 		t.Helper()
 		row := store.Spawn{
 			ClaudeInstanceID: id,
+			Agent:            store.AgentClaude,
 			CWD:              cwd,
 			TmuxSessionName:  "cd-" + id,
 			RelayMode:        "off",
@@ -182,17 +186,17 @@ func SeedExpireFixture(t *testing.T) (*store.Store, string) {
 
 	backdate := time.Now().UTC().Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
 	if _, err := raw.Exec(
-		`UPDATE spawns SET ended_at = ? WHERE claude_instance_id = ?`,
+		`UPDATE spawns SET ended_at = ? WHERE instance_id = ?`,
 		backdate, "row-ended-old"); err != nil {
 		t.Fatalf("SeedExpireFixture: backdate old: %v", err)
 	}
 	if _, err := raw.Exec(
-		`UPDATE spawns SET ended_at = ? WHERE claude_instance_id = ?`,
+		`UPDATE spawns SET ended_at = ? WHERE instance_id = ?`,
 		backdate, "row-missing-old"); err != nil {
 		t.Fatalf("SeedExpireFixture: backdate missing: %v", err)
 	}
 	if _, err := raw.Exec(
-		`UPDATE spawns SET ended_at = NULL WHERE claude_instance_id = ?`,
+		`UPDATE spawns SET ended_at = NULL WHERE instance_id = ?`,
 		"row-ended-null-at"); err != nil {
 		t.Fatalf("SeedExpireFixture: null-at: %v", err)
 	}
@@ -267,6 +271,7 @@ func OpenStoreWithRow(t *testing.T, id, sessionName, state, relayMode string) (*
 
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: id,
+		Agent:            store.AgentClaude,
 		CWD:              "/tmp",
 		TmuxSessionName:  sessionName,
 		RelayMode:        relayMode,

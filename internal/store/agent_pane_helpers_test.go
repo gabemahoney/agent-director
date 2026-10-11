@@ -25,8 +25,12 @@ func testPane() LaunchIdentity {
 }
 
 // insertAgentRow inserts sp pending, as spawn does, then records the test
-// pane on it (recordAgentPane), so hooks through agentGate apply to it.
+// pane on it (recordAgentPane), so hooks through agentGate apply to it. A
+// row naming no agent is a Claude row.
 func insertAgentRow(s *Store, sp Spawn) error {
+	if sp.Agent == "" {
+		sp.Agent = AgentClaude
+	}
 	if sp.Identity.Token == "" {
 		sp.Identity.Token = testLaunchToken
 	}

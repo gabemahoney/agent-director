@@ -80,7 +80,7 @@ func WithSeedPane(dbPath, id string, writes func(gate store.HookGate) error) err
 		ptrs[i] = &prior[i]
 	}
 	if err := raw.QueryRow(`SELECT pane_id, pane_pid, pane_starttime, pid, proc_starttime
-	                          FROM spawns WHERE claude_instance_id = ?`, id).Scan(ptrs...); err != nil {
+	                          FROM spawns WHERE instance_id = ?`, id).Scan(ptrs...); err != nil {
 		return fmt.Errorf("WithSeedPane: read identity of %q: %w", id, err)
 	}
 
@@ -90,7 +90,7 @@ func WithSeedPane(dbPath, id string, writes func(gate store.HookGate) error) err
 		if start, ok := asText(prior[2]); ok && start != "" {
 			gate.ParentStart = start
 		}
-	} else if _, err := raw.Exec(`UPDATE spawns SET pane_pid = ?, pane_starttime = ? WHERE claude_instance_id = ?`,
+	} else if _, err := raw.Exec(`UPDATE spawns SET pane_pid = ?, pane_starttime = ? WHERE instance_id = ?`,
 		launchfix.TestPanePID, SeedPaneStarttime, id); err != nil {
 		return fmt.Errorf("WithSeedPane: record seed pane on %q: %w", id, err)
 	}
@@ -99,7 +99,7 @@ func WithSeedPane(dbPath, id string, writes func(gate store.HookGate) error) err
 
 	args := append(append([]any{}, prior...), id)
 	if _, err := raw.Exec(`UPDATE spawns SET pane_id = ?, pane_pid = ?, pane_starttime = ?, pid = ?, proc_starttime = ?
-	                        WHERE claude_instance_id = ?`, args...); err != nil {
+	                        WHERE instance_id = ?`, args...); err != nil {
 		return errors.Join(werr, fmt.Errorf("WithSeedPane: write back identity of %q: %w", id, err))
 	}
 	return werr

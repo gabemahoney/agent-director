@@ -13,7 +13,7 @@ import (
 // ReuseRow is reuse's pre-check read of one row (SR-10.2, SR-10.3, Appendix
 // F.4): what spawn with reuse_finished examines before it resets the row, and
 // the pre-reuse life it keeps for the restore (SR-10.4). It is read without
-// decoding labels, claude_args or extra_env and without failing on any stored
+// decoding labels, agent_args or extra_env and without failing on any stored
 // value of the SR-5.5 columns or the timestamp columns, so a row a hand edit
 // made malformed can still be reused and restored byte for byte (SR-5.5).
 type ReuseRow struct {
@@ -41,7 +41,7 @@ type ReuseRow struct {
 }
 
 // RawLife is a row's pre-reuse life exactly as stored (SR-5.3, SR-5.5,
-// SR-10.3, SR-10.4): every spawns column except claude_instance_id,
+// SR-10.3, SR-10.4): every spawns column except instance_id,
 // row_version, launch_started_at and the settle columns settled_state and
 // state_changed_ms (the restore writes those as an immediate write of the
 // prior state, b.3ie), each with its stored value and SQLite
@@ -52,7 +52,7 @@ type RawLife struct {
 	state                   rawValue
 	lifeNumber              rawValue
 	noPreTrust              rawValue
-	claudeSessionID         rawValue
+	sessionID               rawValue
 	jsonlPath               rawValue
 	pid                     rawValue
 	procStarttime           rawValue
@@ -63,7 +63,7 @@ type RawLife struct {
 	endedAt                 rawValue
 	cwd                     rawValue
 	tmuxSessionName         rawValue
-	claudeArgs              rawValue
+	agentArgs               rawValue
 	relayMode               rawValue
 	labels                  rawValue
 	extraEnv                rawValue
@@ -79,6 +79,8 @@ type RawLife struct {
 	launchOwnerPID          rawValue
 	launchOwnerStarttime    rawValue
 	launchOwnerPIDNS        rawValue
+	agent                   rawValue
+	endReportedAt           rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -120,7 +122,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"state", func(l *RawLife) *rawValue { return &l.state }},
 	{"life_number", func(l *RawLife) *rawValue { return &l.lifeNumber }},
 	{"no_pre_trust", func(l *RawLife) *rawValue { return &l.noPreTrust }},
-	{"claude_session_id", func(l *RawLife) *rawValue { return &l.claudeSessionID }},
+	{"session_id", func(l *RawLife) *rawValue { return &l.sessionID }},
 	{"jsonl_path", func(l *RawLife) *rawValue { return &l.jsonlPath }},
 	{"pid", func(l *RawLife) *rawValue { return &l.pid }},
 	{"proc_starttime", func(l *RawLife) *rawValue { return &l.procStarttime }},
@@ -131,7 +133,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"ended_at", func(l *RawLife) *rawValue { return &l.endedAt }},
 	{"cwd", func(l *RawLife) *rawValue { return &l.cwd }},
 	{"tmux_session_name", func(l *RawLife) *rawValue { return &l.tmuxSessionName }},
-	{"claude_args", func(l *RawLife) *rawValue { return &l.claudeArgs }},
+	{"agent_args", func(l *RawLife) *rawValue { return &l.agentArgs }},
 	{"relay_mode", func(l *RawLife) *rawValue { return &l.relayMode }},
 	{"labels", func(l *RawLife) *rawValue { return &l.labels }},
 	{"extra_env", func(l *RawLife) *rawValue { return &l.extraEnv }},
@@ -147,6 +149,8 @@ var rawLifeColumns = []rawLifeColumn{
 	{"launch_owner_pid", func(l *RawLife) *rawValue { return &l.launchOwnerPID }},
 	{"launch_owner_starttime", func(l *RawLife) *rawValue { return &l.launchOwnerStarttime }},
 	{"launch_owner_pidns", func(l *RawLife) *rawValue { return &l.launchOwnerPIDNS }},
+	{"agent", func(l *RawLife) *rawValue { return &l.agent }},
+	{"end_reported_at", func(l *RawLife) *rawValue { return &l.endReportedAt }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -175,14 +179,14 @@ func rawLifeDest(l *RawLife) []any {
 var readForReuseSQL = `SELECT state, ended_at, CAST(ended_at AS TEXT),` + lifeColumns + `,
         ` + rawLifeSelect + `
    FROM spawns
-  WHERE claude_instance_id = ?`
+  WHERE instance_id = ?`
 
 // ReadForReuse is reuse's pre-check read (SR-10.2, SR-10.3, SR-5.5; Appendix
 // F.4): one SELECT of the row with the given id by primary key. found is
 // false, with no error, when no row has the id. The snapshot and launch
 // identity are read through lifeColumns, the fragment GetSpawn selects, so
 // they equal GetSpawn's for the same row. Life captures every column the
-// restore writes back exactly as stored (RawLife). labels, claude_args and
+// restore writes back exactly as stored (RawLife). labels, agent_args and
 // extra_env are never decoded, and no stored started_at, ended_at,
 // launch_started_at, launch_token or no_pre_trust value fails the read
 // (SR-5.5). A driver error is returned wrapped. It writes nothing and emits no
@@ -215,10 +219,10 @@ func (s *Store) ReadForReuse(instanceID string) (row ReuseRow, found bool, err e
 // with the examined snapshot, judged by the shared finished guard and
 // snapshot-match condition. Its placeholders take finishedStateGuardArgs,
 // snapshotMatchArgs and the id, in that order.
-const resetForReuseReadSQL = `SELECT COALESCE(claude_session_id, ''), COALESCE(jsonl_path, ''), life_number,
+const resetForReuseReadSQL = `SELECT COALESCE(session_id, ''), COALESCE(jsonl_path, ''), life_number,
         CASE WHEN ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL + ` THEN 1 ELSE 0 END
    FROM spawns
-  WHERE claude_instance_id = ?`
+  WHERE instance_id = ?`
 
 // resetForReuseSQL is ResetForReuse's reset: the finished row set to pending
 // in a new life, guarded by the finished state and the examined snapshot
@@ -226,7 +230,7 @@ const resetForReuseReadSQL = `SELECT COALESCE(claude_session_id, ''), COALESCE(j
 // b.3ie): it reports at once.
 const resetForReuseSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
-        claude_session_id         = NULL,
+        session_id                = NULL,
         jsonl_path                = NULL,
         pid                       = NULL,
         proc_starttime            = NULL,
@@ -238,7 +242,7 @@ const resetForReuseSQL = `UPDATE spawns
         launch_started_at         = ?,
         cwd                       = ?,
         tmux_session_name         = ?,
-        claude_args               = ?,
+        agent_args                = ?,
         relay_mode                = ?,
         labels                    = ?,
         extra_env                 = ?,
@@ -255,13 +259,15 @@ const resetForReuseSQL = `UPDATE spawns
         launch_owner_pid          = ?,
         launch_owner_starttime    = ?,
         launch_owner_pidns        = ?,
+        agent                     = ?,
+        end_reported_at           = NULL,
         life_number               = life_number + 1,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // resetForReuseDeleteRequestsSQL is ResetForReuse's deletion of every
 // permission request of the id, decided or not (SR-10.3).
-const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE claude_instance_id = ?`
+const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE instance_id = ?`
 
 // ResetForReuse is reuse's change of a finished row to a new life, the write
 // that begins its launch (SR-10.3, SR-5.3, SR-5.6, SR-5.8, SR-5.9; Appendix
@@ -273,7 +279,7 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE cl
 // other store transaction's locking changes.
 //
 // Inside it, it reads the row's session id, transcript path and life_number
-// (never labels, claude_args or extra_env, so a malformed row can be reset).
+// (never labels, agent_args or extra_env, so a malformed row can be reset).
 // No row: CondAbsent. A row that is not ended or missing, or whose snapshot
 // differs from examined (the shared finished guard and snapshot-match
 // condition, compared on the values exactly as stored): CondChanged. Both
@@ -290,18 +296,20 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE cl
 //   - Reset, one UPDATE still guarded on the finished state and examined, and
 //     required to change exactly one row: state pending, an immediate write
 //     (settled_state pending, state_changed_ms the statement's clock; b.3ie);
-//     claude_session_id,
+//     session_id,
 //     jsonl_path, pid, proc_starttime, liveness_unverified_since,
 //     liveness_note, ended_at and the six server and pane identity columns
 //     NULL, whatever fresh.Identity carries; started_at and last_seen_at
 //     fresh.StartedAt in the store's CURRENT_TIMESTAMP layout;
 //     launch_started_at fresh.LaunchStartedAtMillis; cwd, tmux_session_name,
-//     claude_args, relay_mode, labels and extra_env from fresh, encoded before
+//     agent_args, relay_mode, labels and extra_env from fresh, encoded before
 //     the transaction begins; parent_id fresh.ParentID ("" = NULL);
 //     no_pre_trust this call's fresh.NoPreTrust; launch_token and tmux_socket
 //     from fresh.Identity (zero = NULL); the three launch-owner columns from
 //     fresh.LaunchOwner (zero = NULL; the reuse records itself as the owner
-//     of the launch it begins, b.kdf); life_number and row_version each
+//     of the launch it begins, b.kdf); agent fresh.Agent, which must be claude
+//     or codex (checked before anything is written: ErrRowAgentInvalid) and
+//     end_reported_at NULL; life_number and row_version each
 //     advanced by one. The store reads no clock: the caller supplies
 //     fresh.StartedAt and fresh.LaunchStartedAtMillis.
 //   - Permission requests: every request of the id, decided or not, is
@@ -320,9 +328,12 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE cl
 // It emits no trail event.
 func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spawn) (res CondResult, archivedSessionID string, resetVersion int64, err error) {
 	const errPrefix = "store: reset for reuse"
+	if err := validateRowAgent(fresh.Agent); err != nil {
+		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	argsJSON, err := encodeArgs(fresh.ClaudeArgs)
 	if err != nil {
-		return 0, "", 0, fmt.Errorf("%s: encode claude_args: %w", errPrefix, err)
+		return 0, "", 0, fmt.Errorf("%s: encode agent_args: %w", errPrefix, err)
 	}
 	labelsJSON, err := encodeLabels(fresh.Labels)
 	if err != nil {
@@ -390,6 +401,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
 	)
 	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
+	resetArgs = append(resetArgs, fresh.Agent)
 	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
 	resetArgs = append(resetArgs, snapshotMatchArgs(examined)...)
@@ -441,11 +453,11 @@ var restoreAfterFailedReuseSQL = func() string {
 	return `UPDATE spawns
     SET ` + strings.Join(set, ",\n        ") + `,
         ended_at  = ?,
-        parent_id = (SELECT claude_instance_id FROM spawns WHERE claude_instance_id = ?),
+        parent_id = (SELECT instance_id FROM spawns WHERE instance_id = ?),
         ` + immediateSettleSet + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND row_version = ?`
+  WHERE instance_id = ? AND state = ? AND row_version = ?`
 }()
 
 // RestoreAfterFailedReuse undoes reuse's change after a launch that failed
@@ -455,11 +467,11 @@ var restoreAfterFailedReuseSQL = func() string {
 // produced. In that statement it writes back every column of prior, the
 // pre-reuse life ReadForReuse captured, with its stored value and storage
 // class, never parsed or re-formatted (state, life_number, no_pre_trust,
-// claude_session_id, jsonl_path, pid, proc_starttime, started_at,
+// session_id, jsonl_path, pid, proc_starttime, started_at,
 // last_seen_at, liveness_unverified_since, liveness_note, cwd,
-// tmux_session_name, claude_args, relay_mode, labels, extra_env,
-// launch_token, tmux_socket, the six server and pane identity columns and the
-// three launch-owner columns), so the row returns to its pre-reuse life and
+// tmux_session_name, agent_args, relay_mode, labels, extra_env,
+// launch_token, tmux_socket, the six server and pane identity columns, the
+// three launch-owner columns, agent and end_reported_at), so the row returns to its pre-reuse life and
 // that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
 // row with that id still exists, otherwise NULL, decided in the same

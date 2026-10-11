@@ -58,7 +58,7 @@ func rrNoPreTrustClass(t *testing.T, f *v5Store, id string) string {
 	}
 	defer func() { _ = db.Close() }()
 	var class string
-	if err := db.QueryRow(`SELECT typeof(no_pre_trust) FROM spawns WHERE claude_instance_id = ?`, id).Scan(&class); err != nil {
+	if err := db.QueryRow(`SELECT typeof(no_pre_trust) FROM spawns WHERE instance_id = ?`, id).Scan(&class); err != nil {
 		t.Fatalf("typeof(no_pre_trust) for %q: %v", id, err)
 	}
 	return class
@@ -67,8 +67,8 @@ func rrNoPreTrustClass(t *testing.T, f *v5Store, id string) string {
 // TestReuseRestoreApplied checks an applied restore writes the pre-reuse row
 // back byte for byte, malformed values and their storage class included, with
 // no launch start, the reset version + 1, the failure time for a NULL ended_at
-// and a NULL parent once the pre-reuse parent is deleted; the reset's archive
-// and request deletion stay.
+// and a NULL parent once the pre-reuse parent is deleted, the agent and end
+// report included; the reset's archive and request deletion stay.
 func TestReuseRestoreApplied(t *testing.T) {
 	badToken := reuseIdentity()
 	badToken.Token = "NOT-a-token!"
@@ -103,7 +103,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 				t.Fatalf("seeded typeof(no_pre_trust) = %q; want %q", seededClass, tc.seedClass)
 			}
 			r := rrDoReset(t, f, id, reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust))
-			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "ClaudeSessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID"} {
+			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "ClaudeSessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt"} {
 				b, a := reflect.ValueOf(r.before).FieldByName(col).Interface(), reflect.ValueOf(r.reset).FieldByName(col).Interface()
 				if reflect.DeepEqual(a, b) {
 					t.Fatalf("the reset left %s = %s; the restore check would be vacuous", col, rsShow(b))
@@ -139,7 +139,8 @@ func TestReuseRestoreApplied(t *testing.T) {
 }
 
 // TestReuseRestoreErrors checks an injected restore failure or a prior read
-// from a live row returns an error and no CondResult, leaving the reset row.
+// from a live row returns an error and no CondResult, leaving the reset row
+// (the reset's agent and no end report).
 func TestReuseRestoreErrors(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -159,6 +160,10 @@ func TestReuseRestoreErrors(t *testing.T) {
 			r := rrDoReset(t, f, seedReuseRow(t, f, reuseSpec{}).id, reuseFresh("", false))
 			if res, err := f.s.RestoreAfterFailedReuse(r.id, r.version, tc.prior(t, f, r), rrFailedAt); err == nil || res != 0 {
 				t.Fatalf("RestoreAfterFailedReuse = %v, %v; want an error with no CondResult", res, err)
+			}
+			if r.reset.Agent == r.before.Agent || r.reset.EndReportedAt != nil {
+				t.Fatalf("the reset wrote agent %v (was %v), end_reported_at %v; want a new agent and none, or the check is vacuous",
+					r.reset.Agent, r.before.Agent, r.reset.EndReportedAt)
 			}
 			rsAssertRow(t, f.rawColumns(r.id), r.reset)
 			if got := f.historyAllLives(r.id); !reflect.DeepEqual(got, r.history) {

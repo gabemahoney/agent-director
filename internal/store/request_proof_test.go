@@ -168,7 +168,7 @@ func TestTurnEndCoversOnlyRequestsWrittenBeforeIt(t *testing.T) {
 		}
 		landed = true
 		withRaw(t, path, func(db *sql.DB) {
-			mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input)
+			mustExec(t, db, `INSERT INTO permission_requests (instance_id, request_token, tool_name, tool_input)
 				VALUES (?, ?, 'Bash', '{}')`, relayID, tokenB)
 		})
 	})
@@ -188,7 +188,7 @@ func TestTurnEndCoversOnlyRequestsWrittenBeforeIt(t *testing.T) {
 func setCreatedAt(t *testing.T, path, token, createdAt string) {
 	t.Helper()
 	withRaw(t, path, func(db *sql.DB) {
-		mustExec(t, db, `UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
+		mustExec(t, db, `UPDATE permission_requests SET created_at = ? WHERE instance_id = ? AND request_token = ?`,
 			createdAt, relayID, token)
 	})
 }

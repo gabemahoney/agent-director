@@ -23,7 +23,7 @@ const (
 // rvReuseFresh is the reset's new life with parentID: pre-trust allowed, unlike
 // the seed's opt-out, so the no_pre_trust write is observable.
 func rvReuseFresh(parentID string) store.Spawn {
-	return store.Spawn{CWD: "/tmp/rv/reuse", TmuxSessionName: "ts-rv-reuse", RelayMode: "off",
+	return store.Spawn{Agent: store.AgentClaude, CWD: "/tmp/rv/reuse", TmuxSessionName: "ts-rv-reuse", RelayMode: "off",
 		StartedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: rvReuseStart,
 		ParentID: parentID, Identity: store.LaunchIdentity{Token: rvReuseToken, Socket: rvReuseSocket}}
 }

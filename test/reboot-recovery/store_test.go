@@ -16,7 +16,7 @@ import (
 // instance. Shared by rowReady (the poll CONDITION) and observeRow (the timeout
 // DIAGNOSTIC) so the dump can never silently diverge from the condition it
 // explains (b.129).
-const readinessQuery = `SELECT state, pid, proc_starttime, jsonl_path, claude_session_id FROM spawns WHERE claude_instance_id = ?`
+const readinessQuery = `SELECT state, pid, proc_starttime, jsonl_path, session_id FROM spawns WHERE instance_id = ?`
 
 // rowReady reports whether the SessionStart hook has applied for instanceID:
 // state has left `pending` (→ waiting) AND pid, proc_starttime, jsonl_path and
@@ -94,7 +94,7 @@ func getState(t *testing.T, dbPath, instanceID string) string {
 	defer db.Close()
 	var state string
 	if err := db.QueryRow(
-		`SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&state); err != nil {
+		`SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&state); err != nil {
 		t.Fatalf("getState query: %v", err)
 	}
 	return state
@@ -168,7 +168,7 @@ func nullOutJsonlPath(t *testing.T, dbPath, instanceID string) {
 		t.Fatalf("open db rw: %v", err)
 	}
 	defer db.Close()
-	res, err := db.Exec(`UPDATE spawns SET jsonl_path = NULL WHERE claude_instance_id = ?`, instanceID)
+	res, err := db.Exec(`UPDATE spawns SET jsonl_path = NULL WHERE instance_id = ?`, instanceID)
 	if err != nil {
 		t.Fatalf("null out jsonl_path: %v", err)
 	}
@@ -185,7 +185,7 @@ func jsonlPathColumn(t *testing.T, dbPath, instanceID string) string {
 	defer db.Close()
 	var jp sql.NullString
 	if err := db.QueryRow(
-		`SELECT jsonl_path FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&jp); err != nil {
+		`SELECT jsonl_path FROM spawns WHERE instance_id = ?`, instanceID).Scan(&jp); err != nil {
 		t.Fatalf("jsonlPathColumn query: %v", err)
 	}
 	if !jp.Valid {
@@ -201,7 +201,7 @@ func recordedPID(t *testing.T, dbPath, instanceID string) int64 {
 	db := openDB(t, dbPath)
 	defer db.Close()
 	var pid sql.NullInt64
-	if err := db.QueryRow(`SELECT pid FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&pid); err != nil {
+	if err := db.QueryRow(`SELECT pid FROM spawns WHERE instance_id = ?`, instanceID).Scan(&pid); err != nil {
 		t.Fatalf("recordedPID query: %v", err)
 	}
 	if !pid.Valid || pid.Int64 == 0 {

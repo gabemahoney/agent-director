@@ -37,7 +37,7 @@ func seedSpawnForPerm(t *testing.T, s *Store, id, relayMode string) {
 func readPermRow(t *testing.T, s *Store, instanceID, requestToken string) (requestID int64, toolName, toolInput string, decision, reason sql.NullString) {
 	t.Helper()
 	if err := s.db.QueryRow(`SELECT request_id, tool_name, tool_input, decision, decision_reason FROM permission_requests
-		WHERE claude_instance_id = ? AND request_token = ?`, instanceID, requestToken).
+		WHERE instance_id = ? AND request_token = ?`, instanceID, requestToken).
 		Scan(&requestID, &toolName, &toolInput, &decision, &reason); err != nil {
 		t.Fatalf("read request (%s, %s): %v", instanceID, requestToken, err)
 	}
@@ -106,10 +106,10 @@ func TestUpsertOpenPermissionRequest(t *testing.T) {
 	if _, name, input, decision, _ := readPermRow(t, s, id, tokenA); name != "tool_A" || input != `{"a":1}` || decision.Valid {
 		t.Errorf("row after the collision = %q, %q, %v; want the original, undecided", name, input, decision)
 	}
-	if _, err := s.db.Exec(`DELETE FROM spawns WHERE claude_instance_id = ?`, id); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM spawns WHERE instance_id = ?`, id); err != nil {
 		t.Fatalf("delete spawn: %v", err)
 	}
-	if n := countPermRows(t, s, "claude_instance_id = ?", id); n != 0 {
+	if n := countPermRows(t, s, "instance_id = ?", id); n != 0 {
 		t.Errorf("rows after the spawn's delete = %d; want 0 (ON DELETE CASCADE)", n)
 	}
 }
@@ -337,7 +337,7 @@ func seedClosedPermRequests(t *testing.T, s *Store, dbPath, instanceID string, n
 		for i, tok := range tokens {
 			at := base.Add(time.Duration(i) * step)
 			mustExec(t, db, `UPDATE permission_requests SET decided_at = ?, proven_gone_at = ?, proven_gone_how = ?
-				WHERE claude_instance_id = ? AND request_token = ?`,
+				WHERE instance_id = ? AND request_token = ?`,
 				at.UTC().Format("2006-01-02 15:04:05"), at.UnixMilli(), ProvenGoneTurnEnd, instanceID, tok)
 		}
 	})
@@ -403,10 +403,10 @@ func TestPermissionRequestCapEvictionKeepsNewestWhileOpen(t *testing.T) {
 			t.Fatalf("decide %s = %v, %v", tok, updated, err)
 		}
 		withRaw(t, path, func(db *sql.DB) {
-			mustExec(t, db, `UPDATE permission_requests SET proven_gone_at = ?, proven_gone_how = ? WHERE claude_instance_id = ? AND request_token = ?`,
+			mustExec(t, db, `UPDATE permission_requests SET proven_gone_at = ?, proven_gone_how = ? WHERE instance_id = ? AND request_token = ?`,
 				proofAt.UnixMilli(), ProvenGoneTurnEnd, sid, tok)
 			if !decidedAt.IsZero() {
-				mustExec(t, db, `UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
+				mustExec(t, db, `UPDATE permission_requests SET decided_at = ? WHERE instance_id = ? AND request_token = ?`,
 					decidedAt.Format("2006-01-02 15:04:05"), sid, tok)
 			}
 		})
@@ -553,7 +553,7 @@ func TestDecideIfDeliverableRefusesFinishedSpawn(t *testing.T) {
 				t.Fatalf("insert: %v", err)
 			}
 			withRaw(t, path, func(db *sql.DB) {
-				mustExec(t, db, `UPDATE spawns SET state = 'ended', ended_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`, id)
+				mustExec(t, db, `UPDATE spawns SET state = 'ended', ended_at = CURRENT_TIMESTAMP WHERE instance_id = ?`, id)
 			})
 		}},
 		{"missing, the request recorded after the mark", func(t *testing.T, s *Store, _, id string) {

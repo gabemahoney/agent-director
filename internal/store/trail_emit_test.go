@@ -188,7 +188,7 @@ const (
 // find-missing's mark. It returns the row as resume or reuse examines it.
 func trailSeedFinished(t *testing.T, s *Store, id, state string) Spawn {
 	t.Helper()
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-trail-" + id, RelayMode: "off"}); err != nil {
+	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-trail-" + id, RelayMode: "off"}); err != nil {
 		t.Fatalf("insertAgentRow(%s): %v", id, err)
 	}
 	if state == StateEnded {
@@ -232,7 +232,7 @@ func trailReset(t *testing.T, s *Store, id string) (RawLife, int64) {
 	if err != nil || !found {
 		t.Fatalf("ReadForReuse(%s) = found %v, %v", id, found, err)
 	}
-	fresh := Spawn{CWD: "/tmp", TmuxSessionName: "cd-trail-reused-" + id, RelayMode: "off",
+	fresh := Spawn{Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-trail-reused-" + id, RelayMode: "off",
 		StartedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: trailMoveStart,
 		Identity: LaunchIdentity{Token: trailReuseToken, Socket: "/tmp/trail-reuse-sock"}}
 	res, _, v, err := s.ResetForReuse(id, row.Snapshot, fresh)
@@ -262,7 +262,7 @@ func TestTrailResumeAndReuseWritesEmitNoStateTransition(t *testing.T) {
 					mark = TrailMark(t)
 					prior := ResumePrior{State: examined.State, EndedAtText: examined.EndedAtText, PID: examined.PID,
 						ProcStarttime: examined.ProcStarttime, LivenessUnverifiedSince: examined.LivenessUnverifiedSince,
-						LivenessNote: examined.LivenessNote, Identity: examined.Identity}
+						LivenessNote: examined.LivenessNote, EndReportedAtMillis: examined.EndReportedAtMillis, Identity: examined.Identity}
 					if res, err := s.RestoreAfterFailedResume(id, moved, prior); err != nil || res != CondApplied {
 						t.Fatalf("RestoreAfterFailedResume = %v, %v; want CondApplied", res, err)
 					}

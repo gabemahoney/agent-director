@@ -37,7 +37,7 @@ var markMissingIfSameLifeSQL = `UPDATE spawns
         liveness_note             = NULL,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // setLivenessNoteIfSameLifeSQL is SetLivenessNoteIfSameLife's one statement:
 // the note overwritten, the unverified time kept or set, and the version
@@ -47,7 +47,7 @@ var setLivenessNoteIfSameLifeSQL = `UPDATE spawns
     SET liveness_note             = ?,
         liveness_unverified_since = COALESCE(liveness_unverified_since, CURRENT_TIMESTAMP),
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // clearLivenessIfSameLifeSQL is ClearLivenessIfSameLife's one statement: both
 // liveness columns NULLed and the version advance, guarded by a live state and
@@ -56,7 +56,7 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
     SET liveness_unverified_since = NULL,
         liveness_note             = NULL,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // MarkMissingIfSameLife is find-missing's mark (SR-11.3, SR-11.6; Appendix
 // F.4), with the close of the row's open permission requests (SR-5.4) in the
@@ -140,7 +140,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 	}()
 
 	var prior string
-	err = conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&prior)
+	err = conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", CondAbsent, nil
@@ -209,7 +209,7 @@ var noteUnreportedIfSameLifeSQL = `UPDATE spawns
     SET liveness_note             = ?,
         liveness_unverified_since = COALESCE(liveness_unverified_since, CURRENT_TIMESTAMP),
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND COALESCE(liveness_note, '') <> ? AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND state = ? AND COALESCE(liveness_note, '') <> ? AND ` + snapshotMatchSQL
 
 // NoteUnreportedIfSameLife is find-missing's report of a live pending row
 // that no hook has reported (b.kdf, b.146 rule 10): a report, not a state
@@ -332,7 +332,7 @@ func (s *Store) ClearLivenessIfSameLife(instanceID string, examined RowSnapshot)
 // state and the examined row snapshot (SR-3.6, SR-5.3, SR-11.6).
 var adoptIdentityIfSameLifeSQL = `UPDATE spawns
     SET ` + adoptIdentitySet + `
-  WHERE claude_instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // AdoptIdentityIfSameLife is find-missing's adoption write (SR-3.6, SR-11.6;
 // LFR H2; Appendix F.4): when the sweep's lookup found Ours for a row that
@@ -398,9 +398,9 @@ var repairCheckPermissionSQL = `UPDATE spawns
         state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND relay_mode = 'on' AND ` + snapshotMatchSQL + `
+  WHERE instance_id = ? AND state = ? AND relay_mode = 'on' AND ` + snapshotMatchSQL + `
     AND NOT EXISTS (SELECT 1 FROM permission_requests pr
-                     WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + holdsRowSQL + `)
+                     WHERE pr.instance_id = spawns.instance_id AND ` + holdsRowSQL + `)
   RETURNING state`
 
 // RepairCheckPermissionIfSameLife is find-missing's repair of a stale

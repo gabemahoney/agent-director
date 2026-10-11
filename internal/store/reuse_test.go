@@ -19,6 +19,9 @@ const (
 	reuseSessionID       = "sess-reuse-cur"
 	reuseJsonl           = "/tmp/ad-reuse-test/cur.jsonl"
 	reuseLife      int64 = 3
+	// reuseEndReported is the seeded row's end report (end_reported_at, Unix
+	// ms); the seeded row's agent is codex, the reset's claude.
+	reuseEndReported int64 = 1767225622000
 )
 
 // reuseIdentity is the seeded row's launch identity, every field set.
@@ -31,7 +34,7 @@ func reuseIdentity() store.LaunchIdentity {
 // reuseSpec overrides seedReuseRow's ended row that opted out of pre-trust.
 type reuseSpec struct {
 	state     string                // "" = ended
-	noSession bool                  // NULL claude_session_id
+	noSession bool                  // NULL session_id
 	preTrust  bool                  // no_pre_trust 0 instead of the opt-out
 	opts      []apitest.SpawnOption // after the defaults; a later option wins
 }
@@ -46,9 +49,10 @@ type reuseRow struct {
 	childBefore       apitest.SpawnColumns
 }
 
-// seedReuseRow seeds a finished row with a non-default value in every column
-// the reset clears, sets or keeps, an older history entry, a parent, a child
-// and two permission requests (one decided), read as reuse would.
+// seedReuseRow seeds a finished codex row with a non-default value in every
+// column the reset clears, sets or keeps (an end report included), an older
+// history entry, a parent, a child and two permission requests (one decided),
+// read as reuse would.
 func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 	t.Helper()
 	state, session := spec.state, reuseSessionID
@@ -65,6 +69,7 @@ func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 		apitest.WithLaunchStartedAt(1767225600999), apitest.WithLifeNumber(reuseLife), apitest.WithTmuxSessionName("reuse-ts"),
 		apitest.WithRawLabels(`{"team":  "a", "b":"2"}`), apitest.WithRawClaudeArgs(`["--model",   "opus"]`),
 		apitest.WithRawExtraEnv(`{"K":  "v"}`), apitest.WithEndedAt("2026-09-29T01:02:03.5Z"), apitest.WithJsonlPath(reuseJsonl),
+		apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(reuseEndReported),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-reuse-old", JSONLPath: "/tmp/ad-reuse-test/old.jsonl",
 			Life: 1, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
@@ -108,13 +113,13 @@ func (f *v5Store) reuseRequests(t *testing.T, id string) []store.PermissionRow {
 	return rows
 }
 
-// reuseFresh is the fresh launch a reset writes: a start off UTC and
+// reuseFresh is the fresh Claude launch a reset writes: a start off UTC and
 // sub-second (stored as "2026-10-01 12:34:56"), new request fields, token and
 // socket, parentID ("" = NULL) and the pre-trust choice. Its server and pane
 // identity are ignored by the reset.
 func reuseFresh(parentID string, noPreTrust bool) store.Spawn {
 	return store.Spawn{
-		ParentID: parentID, CWD: "/tmp/ad-reuse-test/new", TmuxSessionName: "reuse-ts-new",
+		Agent: store.AgentClaude, ParentID: parentID, CWD: "/tmp/ad-reuse-test/new", TmuxSessionName: "reuse-ts-new",
 		ClaudeArgs: []string{"--model", "sonnet"}, RelayMode: "on",
 		Labels: map[string]string{"team": "z"}, ExtraEnv: map[string]string{"NEW": "1"},
 		StartedAt:             time.Date(2026, 10, 1, 14, 34, 56, 700_000_000, time.FixedZone("UTC+2", 2*3600)),
@@ -175,22 +180,27 @@ func TestReuseReadForReuse(t *testing.T) {
 }
 
 // TestReuseResetApplied checks the applied reset on ended and missing rows:
-// the archived session, cleared and fresh columns, life and version each +1,
-// the pre-trust choice either way, an empty parent stored NULL; every request
+// the archived session, cleared and fresh columns (the agent the fresh spawn
+// names, either way between claude and codex, and no end report), life and
+// version each +1, the pre-trust choice either way, an empty parent stored NULL; every request
 // of the id deleted (another id's kept), the child and older history kept; a
 // row with no session archives nothing.
 func TestReuseResetApplied(t *testing.T) {
 	cases := []struct {
 		name       string
 		spec       reuseSpec
-		parent     bool  // pass a live row as the fresh parent; false passes ""
-		noPreTrust bool  // the reset's own choice
-		want       int64 // stored no_pre_trust
+		parent     bool   // pass a live row as the fresh parent; false passes ""
+		noPreTrust bool   // the reset's own choice
+		want       int64  // stored no_pre_trust
+		freshAgent string // the reset's agent; "" = claude, reuseFresh's
 	}{
-		{"ended, opted-out row reset allowing pre-trust", reuseSpec{}, true, false, 0},
-		{"missing, opted-out row reset allowing pre-trust", reuseSpec{state: store.StateMissing}, true, false, 0},
-		{"ended, allowing row reset opting out, empty parent", reuseSpec{preTrust: true}, false, true, 1},
-		{"ended, no session id", reuseSpec{noSession: true}, true, false, 0},
+		{"ended, opted-out row reset allowing pre-trust", reuseSpec{}, true, false, 0, ""},
+		{"missing, opted-out row reset allowing pre-trust", reuseSpec{state: store.StateMissing}, true, false, 0, ""},
+		{"ended, allowing row reset opting out, empty parent", reuseSpec{preTrust: true}, false, true, 1, ""},
+		{"ended, no session id", reuseSpec{noSession: true}, true, false, 0, ""},
+		{"ended codex row reset as claude (the seed's agent changes)", reuseSpec{}, true, false, 0, store.AgentClaude},
+		{"ended claude row reset as codex", reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}, true, false, 0, store.AgentCodex},
+		{"ended claude row reset as claude", reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}, true, false, 0, store.AgentClaude},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,7 +219,16 @@ func TestReuseResetApplied(t *testing.T) {
 				wantArchived = ""
 			}
 
-			res, archived, v, err := f.reuseReset(r, reuseFresh(parentID, tc.noPreTrust))
+			fresh := reuseFresh(parentID, tc.noPreTrust)
+			wantAgent := store.AgentClaude
+			if tc.freshAgent != "" {
+				fresh.Agent, wantAgent = tc.freshAgent, tc.freshAgent
+			}
+			if r.before.EndReportedAt != reuseEndReported {
+				t.Fatalf("seeded end_reported_at = %v; want %d, or the cleared check is vacuous", r.before.EndReportedAt, reuseEndReported)
+			}
+
+			res, archived, v, err := f.reuseReset(r, fresh)
 			if err != nil || res != store.CondApplied || archived != wantArchived {
 				t.Fatalf("ResetForReuse = %v, %q, %d, %v; want CondApplied, %q", res, archived, v, err, wantArchived)
 			}
@@ -217,20 +236,22 @@ func TestReuseResetApplied(t *testing.T) {
 			got := map[string]any{"row_version": a.RowVersion, "state": a.State, "life_number": a.LifeNumber,
 				"no_pre_trust": a.NoPreTrust, "started_at": a.StartedAt, "last_seen_at": a.LastSeenAt,
 				"launch_started_at": a.LaunchStartedAt, "cwd": a.CWD, "tmux_session_name": a.TmuxSessionName,
-				"claude_args": a.ClaudeArgs, "relay_mode": a.RelayMode, "labels": a.Labels, "extra_env": a.ExtraEnv,
+				"agent_args": a.ClaudeArgs, "relay_mode": a.RelayMode, "labels": a.Labels, "extra_env": a.ExtraEnv,
 				"parent_id": a.ParentID, "launch_token": a.LaunchToken, "tmux_socket": a.TmuxSocket,
-				"claude_session_id": a.ClaudeSessionID, "jsonl_path": a.JSONLPath, "pid": a.PID, "proc_starttime": a.ProcStarttime,
-				"ended_at": a.EndedAt, "liveness_unverified_since": a.LivenessUnverifiedSince, "liveness_note": a.LivenessNote}
+				"session_id": a.ClaudeSessionID, "jsonl_path": a.JSONLPath, "pid": a.PID, "proc_starttime": a.ProcStarttime,
+				"ended_at": a.EndedAt, "liveness_unverified_since": a.LivenessUnverifiedSince, "liveness_note": a.LivenessNote,
+				"agent": a.Agent, "end_reported_at": a.EndReportedAt}
 			for col, g := range identityColumns(a) {
 				got[col] = g
 			}
 			want := map[string]any{"row_version": r.read.Snapshot.RowVersion + 1, "state": store.StatePending,
 				"life_number": reuseLife + 1, "no_pre_trust": tc.want, "started_at": "2026-10-01 12:34:56",
 				"last_seen_at": "2026-10-01 12:34:56", "launch_started_at": int64(1790000000456), "cwd": "/tmp/ad-reuse-test/new",
-				"tmux_session_name": "reuse-ts-new", "claude_args": `["--model","sonnet"]`, "relay_mode": "on",
+				"tmux_session_name": "reuse-ts-new", "agent_args": `["--model","sonnet"]`, "relay_mode": "on",
 				"labels": `{"team":"z"}`, "extra_env": `{"NEW":"1"}`, "parent_id": parent, "launch_token": "a1b2c3d4e5f60718",
-				"tmux_socket": "/tmp/ad-reuse-test/new-sock", "claude_session_id": nil, "jsonl_path": nil, "pid": nil,
-				"proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil}
+				"tmux_socket": "/tmp/ad-reuse-test/new-sock", "session_id": nil, "jsonl_path": nil, "pid": nil,
+				"proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
+				"agent": wantAgent, "end_reported_at": nil}
 			for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
 				want[col] = w
 			}

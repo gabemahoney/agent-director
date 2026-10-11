@@ -119,7 +119,7 @@ func (s *Store) ProveRequestsGone(instanceID string, gate HookGate, proof Reques
 	}
 	var newest sql.NullInt64
 	read := `SELECT MAX(pr.request_id) FROM permission_requests pr
-	  WHERE pr.claude_instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag
+	  WHERE pr.instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag
 	if err := s.db.QueryRow(read, append([]any{instanceID}, matchArgs...)...).Scan(&newest); err != nil {
 		return 0, fmt.Errorf("%s: read: %w", errPrefix, err)
 	}
@@ -132,8 +132,8 @@ func (s *Store) ProveRequestsGone(instanceID string, gate HookGate, proof Reques
 	}
 	write := `UPDATE permission_requests AS pr
 	    SET proven_gone_at = ?, proven_gone_how = ?
-	  WHERE pr.claude_instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag + ` AND pr.request_id <= ?
-	    AND EXISTS (SELECT 1 FROM spawns WHERE claude_instance_id = ? AND ` + hookGateSQL + `)`
+	  WHERE pr.instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag + ` AND pr.request_id <= ?
+	    AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + hookGateSQL + `)`
 	args := append([]any{millisArg(at), proof.How, instanceID}, matchArgs...)
 	args = append(args, newest.Int64, instanceID)
 	args = append(args, hookGateArgs(gate)...)

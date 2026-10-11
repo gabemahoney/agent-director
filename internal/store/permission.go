@@ -96,7 +96,7 @@ var ErrNoOpenPermissionRequest = errors.New("ErrNoOpenPermissionRequest")
 var ErrAlreadyDecided = errors.New("ErrAlreadyDecided")
 
 // ErrRequestTokenCollision is returned by UpsertOpenPermissionRequest when a
-// row with the same (claude_instance_id, request_token) pair already exists.
+// row with the same (instance_id, request_token) pair already exists.
 // Callers detect it with errors.Is; the underlying UNIQUE constraint row is
 // unmodified.
 var ErrRequestTokenCollision = errors.New("ErrRequestTokenCollision")
@@ -302,7 +302,7 @@ const holdsRowSQL = awaitingAnswerSQL + `
 // permissionColumns is the one column list every read returning a
 // PermissionRow selects from a permission_requests row named pr, in
 // scanPermissionRow's order.
-const permissionColumns = `pr.request_id, pr.claude_instance_id, pr.tool_name, pr.tool_input,
+const permissionColumns = `pr.request_id, pr.instance_id, pr.tool_name, pr.tool_input,
        COALESCE(pr.decision, ''), COALESCE(pr.decision_reason, ''),
        pr.created_at, pr.request_token, pr.decided_at,
        COALESCE(pr.hook_pid, 0), COALESCE(pr.hook_starttime, ''), COALESCE(pr.hook_pidns, ''),
@@ -376,7 +376,7 @@ func queryPermissionRows(query func(string, ...any) (*sql.Rows, error), q, errPr
 // pair, gated like every hook write (SR-22.9): the INSERT applies only when
 // gate's parent process is the row's recorded pane process, a condition of the
 // INSERT's own statement. The v2 schema's composite
-// UNIQUE(claude_instance_id, request_token) allows parallel rows for the same
+// UNIQUE(instance_id, request_token) allows parallel rows for the same
 // Spawn to coexist (SR-3.1). A second call with the same pair returns
 // ErrRequestTokenCollision; the first row is unmodified.
 //
@@ -424,10 +424,10 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGa
 	insArgs := append([]any{instanceID, requestToken, toolName, toolInputJSON, instanceID}, hookGateArgs(gate)...)
 	insRes, err := tx.Exec(`
 		INSERT INTO permission_requests
-		  (claude_instance_id, request_token, tool_name, tool_input)
+		  (instance_id, request_token, tool_name, tool_input)
 		SELECT ?, ?, ?, ?
 		 WHERE EXISTS (SELECT 1 FROM spawns
-		                WHERE claude_instance_id = ? AND `+hookGateSQL+`)
+		                WHERE instance_id = ? AND `+hookGateSQL+`)
 	`, insArgs...)
 	if err != nil {
 		_ = tx.Rollback()
@@ -503,7 +503,7 @@ func (s *Store) GetPermissionRequest(instanceID, requestToken string) (Permissio
 // getPermissionRequestSQL is the read of one request by (instance, token).
 const getPermissionRequestSQL = `SELECT ` + permissionColumns + `
 	  FROM permission_requests pr
-	 WHERE pr.claude_instance_id = ? AND pr.request_token = ?`
+	 WHERE pr.instance_id = ? AND pr.request_token = ?`
 
 // GetPermissionRequestWithin is GetPermissionRequest with its waits bounded
 // by maxWait (readWithin: for the store's connection, when another call of
@@ -527,7 +527,7 @@ func (s *Store) GetPermissionRequestWithin(instanceID, requestToken string, maxW
 }
 
 // GetPermissionRequestByToken reads the current state of a permission request
-// identified by request_token alone (no claude_instance_id filter). Per SR-3.5
+// identified by request_token alone (no instance_id filter). Per SR-3.5
 // the request_token UUIDv4 is globally selective, so callers — notably the
 // `get-permission` verb wrapper added in Task B — can resolve a row without
 // prior knowledge of the owning Spawn. Returns:
@@ -570,7 +570,7 @@ func (s *Store) GetPermissionRequestByToken(requestToken string) (PermissionRow,
 func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error) {
 	const q = `SELECT ` + permissionColumns + `
 		  FROM permission_requests pr
-		 WHERE pr.claude_instance_id = ? AND ` + awaitingAnswerSQL + `
+		 WHERE pr.instance_id = ? AND ` + awaitingAnswerSQL + `
 		 ORDER BY pr.created_at ASC, pr.request_id ASC`
 	return queryPermissionRows(s.db.Query, q, "store: open permission requests", instanceID)
 }
@@ -597,7 +597,7 @@ func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, 
 // permissionRequestsForSpawnSQL is the read of every request of one Spawn.
 const permissionRequestsForSpawnSQL = `SELECT ` + permissionColumns + `
 	  FROM permission_requests pr
-	 WHERE pr.claude_instance_id = ?
+	 WHERE pr.instance_id = ?
 	 ORDER BY pr.created_at ASC`
 
 // PermissionRequestsForSpawnWithin is PermissionRequestsForSpawn with its
@@ -625,11 +625,11 @@ func (s *Store) PermissionRequestsForSpawnWithin(instanceID string, maxWait time
 // its created_at, and its Spawn being live.
 const decideRelayRequestSQL = `UPDATE permission_requests
 	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
-	 WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+	 WHERE instance_id = ? AND request_token = ? AND decision IS NULL
 	   AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
 	   AND (settled_at IS NOT NULL OR created_at > ?)
 	   AND NOT EXISTS (SELECT 1 FROM spawns
-	                    WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + `)
+	                    WHERE instance_id = ? AND ` + finishedStateGuardSQL + `)
 	 RETURNING request_id, tool_name`
 
 // DecideRelayRequest is decide's verdict write (SRD §6.2; b.146 rules 6, 16
@@ -756,7 +756,7 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 	const q = `
 		UPDATE permission_requests
 		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
-		 WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+		 WHERE instance_id = ? AND request_token = ? AND decision IS NULL
 		 RETURNING request_id, tool_name
 	`
 	var reasonArg any

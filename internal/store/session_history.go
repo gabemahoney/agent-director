@@ -8,7 +8,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
-// SessionHistoryEntry is one archived (claude_session_id, jsonl_path) pair a
+// SessionHistoryEntry is one archived (session_id, jsonl_path) pair a
 // spawn previously pointed at before a session rotation (b.v2c). Session
 // history belongs to a life: every entry belongs to the life (SR-5.9) of the
 // id that was current when its session ran, and the life-taking read returns
@@ -41,9 +41,9 @@ type SessionHistoryEntry struct {
 // it to surface the "history exists under a different session id" case
 // (AC6/AC8).
 func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error) {
-	const q = `SELECT claude_session_id, COALESCE(jsonl_path, ''), recorded_at
+	const q = `SELECT session_id, COALESCE(jsonl_path, ''), recorded_at
 	             FROM session_history
-	            WHERE claude_instance_id = ?
+	            WHERE instance_id = ?
 	              AND life_number = ?
 	         ORDER BY recorded_at DESC, history_id DESC`
 	rows, err := s.db.Query(q, instanceID, life)
@@ -112,9 +112,9 @@ func upsertSessionHistoryEntry(q querier, instanceID, sessionID, jsonlPath strin
 	// though the same statement assigns it.
 	_, err := q.Exec(
 		`INSERT INTO session_history
-		     (claude_instance_id, claude_session_id, jsonl_path, life_number)
+		     (instance_id, session_id, jsonl_path, life_number)
 		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(claude_instance_id, claude_session_id) DO UPDATE SET
+		 ON CONFLICT(instance_id, session_id) DO UPDATE SET
 		     jsonl_path  = CASE WHEN session_history.life_number = excluded.life_number
 		                        THEN COALESCE(excluded.jsonl_path, session_history.jsonl_path)
 		                        ELSE excluded.jsonl_path
@@ -129,7 +129,7 @@ func upsertSessionHistoryEntry(q querier, instanceID, sessionID, jsonlPath strin
 // HealJsonlPath records a now-present transcript path onto a row whose
 // jsonl_path is currently NULL (b.v2c AC3, lazy healing). It writes only when
 // jsonl_path IS NULL so it never clobbers an already-verified path, and only for
-// the given claude_session_id (guarding against a race where the session rotated
+// the given session_id (guarding against a race where the session rotated
 // between the find-missing read and this write). Returns true when a row was
 // updated. Emits an ad.session.jsonl_healed trail event on a successful write.
 //
@@ -139,8 +139,8 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 	const q = `UPDATE spawns
 	              SET jsonl_path = ?,
 	                  ` + rowVersionAdvance + `
-	            WHERE claude_instance_id = ?
-	              AND claude_session_id = ?
+	            WHERE instance_id = ?
+	              AND session_id = ?
 	              AND jsonl_path IS NULL`
 	res, err := s.db.Exec(q, jsonlPath, instanceID, sessionID)
 	if err != nil {
@@ -163,7 +163,7 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 }
 
 // ListProvisionalTranscripts returns the (instance, session id, cwd,
-// config-dir) tuples for every live-state row that has a claude_session_id but
+// config-dir) tuples for every live-state row that has a session_id but
 // a NULL jsonl_path — i.e. a session that started but whose transcript had not
 // been written when SessionStart fired (b.v2c AC3). find-missing recomposes the
 // path for each and stats it, healing rows whose transcript has since appeared.
@@ -174,11 +174,11 @@ func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 		placeholders[i] = "?"
 		args[i] = st
 	}
-	q := `SELECT claude_instance_id, claude_session_id, cwd, extra_env
+	q := `SELECT instance_id, session_id, cwd, extra_env
 	        FROM spawns
 	       WHERE jsonl_path IS NULL
-	         AND claude_session_id IS NOT NULL
-	         AND claude_session_id != ''
+	         AND session_id IS NOT NULL
+	         AND session_id != ''
 	         AND state IN (` + joinPlaceholders(placeholders) + `)`
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

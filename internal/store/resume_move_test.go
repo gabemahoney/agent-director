@@ -21,6 +21,10 @@ const (
 	moveToken              = "fedcba9876543210"
 	moveSocket             = "/tmp/ad-move-test/new-sock"
 	moveSessionID          = "sess-move-cur"
+	// moveEndReported is the seeded row's end report (end_reported_at, Unix
+	// ms), which the move clears; moveAgent is its agent, which it keeps.
+	moveEndReported int64 = 1767225611000
+	moveAgent             = store.AgentCodex
 )
 
 // moveIdentity is the seeded row's previous launch identity, every field set.
@@ -44,8 +48,9 @@ type moveRow struct {
 	history  []apitest.HistoryEntry // session_history after seeding
 }
 
-// seedMoveRow seeds a row with a value in every column the move clears or
-// keeps (non-default layouts, raw text), a parent and a history entry.
+// seedMoveRow seeds a codex row with a value in every column the move clears
+// or keeps (non-default layouts, raw text, an end report), a parent and a
+// history entry.
 func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 	t.Helper()
 	state := spec.state
@@ -60,6 +65,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 		apitest.WithTmuxSessionName("move-ts"), apitest.WithRawLabels(`{"team":  "a", "b":"2"}`),
 		apitest.WithRawClaudeArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
 		apitest.WithJsonlPath("/tmp/ad-move-test/cur.jsonl"), apitest.WithPID(4242),
+		apitest.WithAgent(moveAgent), apitest.WithEndReportedAt(moveEndReported),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
 			Life: 2, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
@@ -78,10 +84,10 @@ func (f *v5Store) move(r moveRow, parentID string) (store.CondResult, int64, err
 // moveKept are the columns the move leaves exactly as stored.
 func moveKept(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
-		"claude_session_id": c.ClaudeSessionID, "jsonl_path": c.JSONLPath, "life_number": c.LifeNumber,
+		"session_id": c.ClaudeSessionID, "jsonl_path": c.JSONLPath, "life_number": c.LifeNumber,
 		"no_pre_trust": c.NoPreTrust, "started_at": c.StartedAt, "last_seen_at": c.LastSeenAt, "cwd": c.CWD,
-		"tmux_session_name": c.TmuxSessionName, "claude_args": c.ClaudeArgs, "relay_mode": c.RelayMode,
-		"labels": c.Labels, "extra_env": c.ExtraEnv,
+		"tmux_session_name": c.TmuxSessionName, "agent_args": c.ClaudeArgs, "relay_mode": c.RelayMode,
+		"labels": c.Labels, "extra_env": c.ExtraEnv, "agent": c.Agent,
 	}
 }
 
@@ -96,10 +102,10 @@ func requireSet(t *testing.T, cols map[string]any) {
 }
 
 // TestMoveToPendingApplied checks the applied move on an ended and a missing
-// row: the returned version is stored; pid, process start, ended_at, liveness
-// and the server and pane identity are NULL; the launch start, token, socket
+// row: the returned version is stored; pid, process start, ended_at, the end
+// report, liveness and the server and pane identity are NULL; the launch start, token, socket
 // and parent (NULL for "") are the move's, also over a row with no token; every
-// kept column and the history are byte for byte unchanged.
+// kept column (the agent included) and the history are byte for byte unchanged.
 func TestMoveToPendingApplied(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -116,6 +122,7 @@ func TestMoveToPendingApplied(t *testing.T) {
 			f := newV5Store(t)
 			r := seedMoveRow(t, f, tc.spec)
 			requireSet(t, moveKept(r.before))
+			requireSet(t, map[string]any{"end_reported_at": r.before.EndReportedAt})
 			var parent any
 			parentID := ""
 			if tc.parent {
@@ -129,7 +136,8 @@ func TestMoveToPendingApplied(t *testing.T) {
 			after := f.rawColumns(r.id)
 			want := map[string]any{"state": store.StatePending, "row_version": r.examined.Snapshot.RowVersion + 1,
 				"launch_started_at": moveLaunchMillis, "launch_token": moveToken, "tmux_socket": moveSocket, "parent_id": parent,
-				"pid": nil, "proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil}
+				"pid": nil, "proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
+				"end_reported_at": nil}
 			for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
 				want[col] = w
 			}
@@ -137,7 +145,7 @@ func TestMoveToPendingApplied(t *testing.T) {
 			for col, g := range map[string]any{"state": after.State, "row_version": after.RowVersion, "launch_started_at": after.LaunchStartedAt,
 				"launch_token": after.LaunchToken, "tmux_socket": after.TmuxSocket, "parent_id": after.ParentID, "pid": after.PID,
 				"proc_starttime": after.ProcStarttime, "ended_at": after.EndedAt, "liveness_unverified_since": after.LivenessUnverifiedSince,
-				"liveness_note": after.LivenessNote} {
+				"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt} {
 				got[col] = g
 			}
 			if !reflect.DeepEqual(got, want) || v != r.examined.Snapshot.RowVersion+1 {

@@ -531,7 +531,7 @@ and exit status are sqlite3's own:
 ```bash
 token="$(/opt/driver/sql.sh -readonly "$HOME/.agent-director/state.db" \
     "SELECT request_token FROM permission_requests
-     WHERE claude_instance_id = '$id' AND decision IS NULL;")"
+     WHERE instance_id = '$id' AND decision IS NULL;")"
 ```
 
 Why: a bare `sqlite3` waits 0 ms for a lock. In WAL mode a reader is

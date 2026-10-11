@@ -275,7 +275,7 @@ func TestLaunchParentID(t *testing.T) {
 // seedParent inserts a parent row so a child's parent_id FK is satisfied.
 func seedParent(t *testing.T, s *store.Store, id string) {
 	t.Helper()
-	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
+	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
 		t.Fatalf("seed parent: %v", err)
 	}
 }

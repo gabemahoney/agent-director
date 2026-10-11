@@ -37,7 +37,8 @@ func rsShow(v any) string {
 
 // TestRestoreAfterFailedResumeApplied checks an applied restore leaves the
 // pre-move row byte for byte (ended_at text of any layout or NULL, no identity
-// or pid included) except the move's parent, no launch start and version + 1.
+// or pid included, and the end report the move cleared) except the move's
+// parent, no launch start and version + 1.
 func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -60,6 +61,9 @@ func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 			if err != nil || res != store.CondApplied {
 				t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
 			}
+			if after := f.rawColumns(r.id); r.before.EndReportedAt != moveEndReported || after.EndReportedAt != nil {
+				t.Fatalf("end_reported_at %v -> %v after the move; want %d -> NULL, or the restore check is vacuous", r.before.EndReportedAt, after.EndReportedAt, moveEndReported)
+			}
 			want := r.before
 			want.ParentID, want.LaunchStartedAt, want.RowVersion = parent, nil, v+1
 			if tc.deleteParent {
@@ -70,7 +74,8 @@ func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 			}
 			e := r.examined
 			prior := store.ResumePrior{State: e.State, EndedAtText: e.EndedAtText, PID: e.PID, ProcStarttime: e.ProcStarttime,
-				LivenessUnverifiedSince: e.LivenessUnverifiedSince, LivenessNote: e.LivenessNote, Identity: e.Identity}
+				LivenessUnverifiedSince: e.LivenessUnverifiedSince, LivenessNote: e.LivenessNote, EndReportedAtMillis: e.EndReportedAtMillis,
+				Identity: e.Identity}
 			if res, err := f.s.RestoreAfterFailedResume(r.id, v, prior); err != nil || res != store.CondApplied {
 				t.Fatalf("RestoreAfterFailedResume = %v, %v; want CondApplied", res, err)
 			}

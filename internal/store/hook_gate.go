@@ -102,7 +102,7 @@ func (s *Store) readHookGateRow(instanceID string, g HookGate, errPrefix string)
 	var r hookGateRow
 	err := s.db.QueryRow(`SELECT state, pane_pid IS NULL,
 	                             CASE WHEN `+hookGateSQL+` THEN 1 ELSE 0 END
-	                        FROM spawns WHERE claude_instance_id = ?`, args...,
+	                        FROM spawns WHERE instance_id = ?`, args...,
 	).Scan(&r.state, &r.paneNull, &r.gateMatches)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hookGateRow{}, nil
@@ -157,8 +157,8 @@ func hookSessionRecordSet(g HookGate, jsonlPath string, jsonlPresent bool) (stri
 	if g.SessionID == "" {
 		return "", nil
 	}
-	const noSession = `COALESCE(claude_session_id, '') = ''`
-	frag := `claude_session_id = CASE WHEN ` + noSession + ` THEN ? ELSE claude_session_id END, `
+	const noSession = `COALESCE(session_id, '') = ''`
+	frag := `session_id = CASE WHEN ` + noSession + ` THEN ? ELSE session_id END, `
 	args := []any{g.SessionID}
 	switch {
 	case jsonlPath != "" && jsonlPresent:

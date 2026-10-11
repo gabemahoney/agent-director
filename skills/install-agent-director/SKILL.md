@@ -927,7 +927,7 @@ destructive *additions*.
      `state.db` is not backed up. Templates are not backed up. The
      JSONL transcripts of each Spawn live under
      `~/.claude/projects/` and survive — but their mapping to
-     claude_instance_ids is in `state.db`, so a purge means you'd
+     instance ids is in `state.db`, so a purge means you'd
      have to grep transcripts by hand to find a specific session.
      `uninstall.sh` does not read `[store] db_path`: a store that
      `db_path` puts outside `~/.agent-director/` survives `--purge`,

@@ -181,7 +181,7 @@ func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any
 	             liveness_unverified_since = NULL, liveness_note = NULL,
 	             ` + recordSet + hookPaneStartSet + `,
 	             ` + rowVersionAdvance + `
-	       WHERE claude_instance_id = ? AND ` + hookGateSQL
+	       WHERE instance_id = ? AND ` + hookGateSQL
 	args := append(append([]any{}, setArgs...), recordArgs...)
 	args = append(args, gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)
@@ -261,7 +261,7 @@ func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, 
 // check_permission to waiting (ApplyHookWaitingIfWorking). It has no
 // placeholders.
 const noRequestHoldsRowSQL = `NOT EXISTS (SELECT 1 FROM permission_requests pr
-     WHERE pr.claude_instance_id = spawns.claude_instance_id AND ` + holdsRowSQL + `)`
+     WHERE pr.instance_id = spawns.instance_id AND ` + holdsRowSQL + `)`
 
 // endedTransitionSet is the ended transition's SET fragment (SRD §5.2): the
 // state as an immediate write (immediateStateSet, its placeholders
@@ -315,7 +315,7 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 		closed []closedRequest
 	)
 	err := s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&prior)
+		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errEndedNotApplied
 		}
@@ -517,14 +517,14 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 // the same condition (noRequestHoldsRowSQL), so a request recorded after the
 // read still holds the row (b.36h).
 const holdingRequestSQL = `SELECT EXISTS (SELECT 1 FROM permission_requests pr
-     WHERE pr.claude_instance_id = ? AND ` + holdsRowSQL + `)`
+     WHERE pr.instance_id = ? AND ` + holdsRowSQL + `)`
 
 // clearIdleSinceSQL is a held working transition's one write: idle_since
 // NULLed, with the version advance, only on a row that has it set and for
 // which the hook's gate holds.
 const clearIdleSinceSQL = `UPDATE spawns
     SET ` + idleClear + `, ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND idle_since IS NOT NULL AND ` + hookGateSQL
+  WHERE instance_id = ? AND idle_since IS NOT NULL AND ` + hookGateSQL
 
 // sessionStartPrior is what a SessionStart write replaces, read at the
 // snapshot the caller examined: the prior state (for the trail) and the
@@ -606,7 +606,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	         SET ` + stateSet + `,
 	             last_seen_at              = CURRENT_TIMESTAMP,
 	             ended_at                  = NULL,
-	             claude_session_id         = COALESCE(?, claude_session_id),
+	             session_id                = COALESCE(?, session_id),
 	             ` + jsonlSet + `,
 	             pid                       = ?,
 	             proc_starttime            = ?,
@@ -616,7 +616,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	             ` + hookPaneStartSet + `,
 	             ` + launchStartClear + `,
 	             ` + rowVersionAdvance + `
-	       WHERE claude_instance_id = ? AND ` + hookGateSQL + ` AND ` + snapshotMatchSQL
+	       WHERE instance_id = ? AND ` + hookGateSQL + ` AND ` + snapshotMatchSQL
 	args := append(append(stateArgs, nullableStringArg(gate.SessionID)), jsonlArgs...)
 	args = append(args, positiveIntArg(gate.ParentPID), nullableStringArg(gate.ParentStart),
 		gate.ParentStart, instanceID)
@@ -690,7 +690,7 @@ func (s *Store) readSessionStartPrior(instanceID string, examined RowSnapshot, e
 	args := append([]any{instanceID}, snapshotMatchArgs(examined)...)
 	err = s.db.QueryRow(`SELECT state, COALESCE(jsonl_path, ''), COALESCE(life_number, 0)
 	                       FROM spawns
-	                      WHERE claude_instance_id = ? AND `+snapshotMatchSQL, args...,
+	                      WHERE instance_id = ? AND `+snapshotMatchSQL, args...,
 	).Scan(&prior.state, &prior.jsonlPath, &prior.life)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sessionStartPrior{}, false, nil

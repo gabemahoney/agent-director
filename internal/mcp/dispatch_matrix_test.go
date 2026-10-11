@@ -267,6 +267,7 @@ func seedMatrixSpawn(t *testing.T, s *store.Store, id, state, relayMode string) 
 	t.Helper()
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: id,
+		Agent:            store.AgentClaude,
 		CWD:              "/tmp",
 		TmuxSessionName:  "cd-test-" + id,
 		RelayMode:        relayMode,

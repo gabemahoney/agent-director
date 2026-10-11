@@ -46,7 +46,7 @@ func TestStateWriteRacingARequestRecordedAfterItsRead(t *testing.T) {
 			wantState: StateCheckPermission, wantOutcome: UpsertNoChange, wantApplied: HookApplied{Reason: HookReasonPIDMismatch}, wantBumps: 1},
 		{name: "a move to working whose row is deleted", gate: agentGate("PreToolUse", ""), target: StateWorking,
 			race: func(t *testing.T, _ *Store, path string) {
-				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `DELETE FROM spawns WHERE claude_instance_id = ?`, relayID) })
+				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `DELETE FROM spawns WHERE instance_id = ?`, relayID) })
 			},
 			wantOutcome: UpsertNoChange, wantApplied: HookApplied{}},
 		{name: "a move to working after the request is proven gone", gate: agentGate("PreToolUse", ""), target: StateWorking,

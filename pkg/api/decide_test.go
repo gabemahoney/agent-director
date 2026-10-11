@@ -278,7 +278,7 @@ func TestDecideFallenBackShownAlone(t *testing.T) {
 				}
 			}
 			if tc.capped {
-				if err := s.InsertPending(store.Spawn{ClaudeInstanceID: "id-d-2", CWD: "/tmp", TmuxSessionName: "cd-d-2",
+				if err := s.InsertPending(store.Spawn{ClaudeInstanceID: "id-d-2", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-d-2",
 					RelayMode: "on"}); err != nil {
 					t.Fatalf("InsertPending(id-d-2): %v", err)
 				}

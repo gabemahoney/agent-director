@@ -387,7 +387,7 @@ func (r *rvResume) move(t *testing.T, f *v5Store, id string) {
 	sp := rvExamine(t, f, id)
 	r.prior = store.ResumePrior{State: sp.State, EndedAtText: sp.EndedAtText, PID: sp.PID,
 		ProcStarttime: sp.ProcStarttime, LivenessUnverifiedSince: sp.LivenessUnverifiedSince,
-		LivenessNote: sp.LivenessNote, Identity: sp.Identity}
+		LivenessNote: sp.LivenessNote, EndReportedAtMillis: sp.EndReportedAtMillis, Identity: sp.Identity}
 	r.moved = rvMove(t, f, id, sp, store.CondApplied)
 }
 
@@ -607,7 +607,7 @@ func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
-			sp := store.Spawn{ClaudeInstanceID: "rv-insert", CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
+			sp := store.Spawn{ClaudeInstanceID: "rv-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
 				RelayMode: "off", LaunchStartedAtMillis: tc.ms, NoPreTrust: tc.noPreTrust, Identity: tc.lid}
 			if err := f.s.InsertPending(sp); err != nil {
 				t.Fatalf("InsertPending: %v", err)

@@ -65,7 +65,7 @@ const paneIntentSQL = `UPDATE permission_requests AS pr
 	   SET pane_answer = 'intent', pane_as = ?,
 	       pane_sender_pid = ?, pane_sender_starttime = ?, pane_sender_pidns = ?,
 	       pane_intent_at = ?, hook_gone_at = COALESCE(pr.hook_gone_at, ?)
-	 WHERE pr.claude_instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL
+	 WHERE pr.instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL
 
 // RecordPaneIntent is a pane answer's first write (b.146 rule 8, step 1): in
 // ONE transaction, begun with BEGIN IMMEDIATE and waiting at most maxWait for
@@ -141,7 +141,7 @@ func paneIntentOwnerArgs(intent PaneIntent) []any {
 // paneSentSQL is RecordPaneSent's statement.
 const paneSentSQL = `UPDATE permission_requests
 	   SET pane_answer = 'sent', decision = pane_as, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
-	 WHERE claude_instance_id = ? AND request_token = ? AND closed_at IS NULL AND ` + paneIntentOwnerSQL + `
+	 WHERE instance_id = ? AND request_token = ? AND closed_at IS NULL AND ` + paneIntentOwnerSQL + `
 	 RETURNING request_id, tool_name, decision`
 
 // RecordPaneSent is a pane answer's last write (b.146 rule 8, step 3), once
@@ -188,7 +188,7 @@ func (s *Store) RecordPaneSent(instanceID, requestToken string, intent PaneInten
 // paneReleaseSQL is ReleasePaneIntent's statement.
 const paneReleaseSQL = `UPDATE permission_requests
 	   SET pane_sender_pid = NULL, pane_sender_starttime = NULL, pane_sender_pidns = NULL, pane_intent_at = NULL
-	 WHERE claude_instance_id = ? AND request_token = ? AND ` + paneIntentOwnerSQL
+	 WHERE instance_id = ? AND request_token = ? AND ` + paneIntentOwnerSQL
 
 // ReleasePaneIntent ends a pane answer's claim on its request when its call
 // ends without recording sent (b.146 rule 8; problem 2): the key send failed,
@@ -224,7 +224,7 @@ func (s *Store) ReleasePaneIntent(instanceID, requestToken string, intent PaneIn
 // paneOutsideSQL is RecordPaneOutside's statement.
 const paneOutsideSQL = `UPDATE permission_requests AS pr
 	   SET pane_answer = 'outside', pane_as = ?, decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
-	 WHERE pr.claude_instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL + `
+	 WHERE pr.instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL + `
 	 RETURNING request_id, tool_name`
 
 // RecordPaneOutside is record-pane-answer's write (b.146 rule 13): in ONE
@@ -279,7 +279,7 @@ func (s *Store) RecordPaneOutside(instanceID, requestToken, claim string, maxWai
 // v7 on, whose tool_use_id is the given one and which still await an answer.
 const toolRanCandidatesSQL = `SELECT ` + permissionColumns + `
 	  FROM permission_requests pr
-	 WHERE pr.claude_instance_id = ? AND pr.tool_use_id = ? AND pr.settled_at IS NOT NULL AND ` + awaitingAnswerSQL + `
+	 WHERE pr.instance_id = ? AND pr.tool_use_id = ? AND pr.settled_at IS NOT NULL AND ` + awaitingAnswerSQL + `
 	 ORDER BY pr.request_id ASC`
 
 // closeToolRanSQL is CloseToolRanRequests' statement, run once per request.
@@ -288,8 +288,8 @@ const closeToolRanSQL = `UPDATE permission_requests AS pr
 	       hook_gone_at = COALESCE(pr.hook_gone_at, ?),
 	       proven_gone_how = CASE WHEN pr.proven_gone_at IS NULL THEN '` + ProvenGoneToolRan + `' ELSE pr.proven_gone_how END,
 	       proven_gone_at = COALESCE(pr.proven_gone_at, ?)
-	 WHERE pr.request_id = ? AND pr.claude_instance_id = ? AND pr.tool_use_id = ? AND ` + awaitingAnswerSQL + `
-	   AND EXISTS (SELECT 1 FROM spawns WHERE claude_instance_id = ? AND ` + hookGateSQL + `)
+	 WHERE pr.request_id = ? AND pr.instance_id = ? AND pr.tool_use_id = ? AND ` + awaitingAnswerSQL + `
+	   AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + hookGateSQL + `)
 	 RETURNING request_token, tool_name`
 
 // CloseToolRanRequests is the PostToolUse close (b.146 rule 13): Claude

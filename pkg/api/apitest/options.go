@@ -189,7 +189,7 @@ func WithRowVersion(v int64) SpawnOption {
 // SessionHistorySeed is one archived session_history entry WithSessionHistory
 // seeds on the row (SR-5.9, SR-8.7).
 type SessionHistorySeed struct {
-	// SessionID is the entry's claude_session_id. It may equal the row's
+	// SessionID is the entry's session_id. It may equal the row's
 	// current session id (the current-session-rule fixtures, SR-8.7).
 	SessionID string
 	// JSONLPath is the entry's transcript path; empty stores NULL.
@@ -276,6 +276,20 @@ func WithSettle(settled string, stampMs int64) SpawnOption {
 	}
 }
 
+// WithAgent stores agent as the row's schema-v9 agent column in place of
+// SeedSpawn's claude, exactly as given (any text, so an unreadable agent is
+// expressible).
+func WithAgent(agent string) SpawnOption {
+	return func(o *spawnOpts) { o.set("agent", agent) }
+}
+
+// WithEndReportedAt stores ms (Unix milliseconds) as the row's schema-v9
+// end_reported_at, the time its agent's SessionEnd was reported. Without it the
+// row has no end report (NULL).
+func WithEndReportedAt(ms int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("end_reported_at", ms) }
+}
+
 // WithRelayMode stores mode as the row's relay_mode in place of SeedSpawn's
 // relayMode argument, for seeders that take no relay mode of their own.
 func WithRelayMode(mode string) SpawnOption {
@@ -318,10 +332,10 @@ func WithRawLabels(text string) SpawnOption {
 	return func(o *spawnOpts) { o.set("labels", text) }
 }
 
-// WithRawClaudeArgs stores text in the claude_args column byte for byte (no
+// WithRawClaudeArgs stores text in the agent_args column byte for byte (no
 // JSON encoding), for malformed-value cases.
 func WithRawClaudeArgs(text string) SpawnOption {
-	return func(o *spawnOpts) { o.set("claude_args", text) }
+	return func(o *spawnOpts) { o.set("agent_args", text) }
 }
 
 // WithRawExtraEnv stores text in the extra_env column byte for byte (no JSON

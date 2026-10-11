@@ -46,7 +46,7 @@ func newUnreportedEnv(t *testing.T, lostReply bool) *unreportedEnv {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	e.s = s
-	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: e.id, CWD: "/tmp", TmuxSessionName: "cd-" + e.id, RelayMode: "off",
+	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: e.id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + e.id, RelayMode: "off",
 		LaunchStartedAtMillis: fmNow.Add(-fmGrace - time.Second).UnixMilli(),
 		Identity:              store.LaunchIdentity{Token: trailToken, Socket: apitest.TestSocket}}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
@@ -243,7 +243,7 @@ func (e *unreportedEnv) setFirstNoted(t *testing.T, at string) {
 		t.Fatalf("open raw db: %v", err)
 	}
 	defer func() { _ = raw.Close() }()
-	if _, err := raw.Exec(`UPDATE spawns SET liveness_unverified_since = ? WHERE claude_instance_id = ?`, at, e.id); err != nil {
+	if _, err := raw.Exec(`UPDATE spawns SET liveness_unverified_since = ? WHERE instance_id = ?`, at, e.id); err != nil {
 		t.Fatalf("set liveness_unverified_since of %s: %v", e.id, err)
 	}
 }

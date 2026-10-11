@@ -1,7 +1,8 @@
 package store
 
 // Schema v8 (b.3ie, the settle time): the v7 fixture's rows after the hop
-// (every value kept, each row settled at once whatever the settle time), the
+// (every value kept, read under its v9 name: the chain runs on to the current
+// schema; each row settled at once whatever the settle time), the
 // hop's backfill run twice, and the v8 → v7 downgrade. The guide match of its
 // recipe is schema_v5_test.go's; the column specs, re-entry and rollback rows
 // are schema_test.go's; fixtures: migration_fixtures_test.go.
@@ -72,12 +73,12 @@ func TestV8MigrationKeepsV7Rows(t *testing.T) {
 		id := v7ID(st)
 		ids = append(ids, id)
 		assertV8Defaults(t, f.path, id)
-		if got := readRawSpawn(t, f.path, id, f.spawnCols); !reflect.DeepEqual(got, f.rows[id]) {
-			t.Errorf("%s's v7 values changed:\n got  %v\n want %v", id, got, f.rows[id])
+		if got, want := readRawSpawn(t, f.path, id, v9Cols(f.spawnCols)), v9Row(f.rows[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s's v7 values changed:\n got  %v\n want %v", id, got, want)
 		}
 	}
-	if got := readQuotedRows(t, f.path, "permission_requests", v7ID(StateCheckPermission), "request_id", f.requestCols); !reflect.DeepEqual(got, f.requests) {
-		t.Errorf("request's v7 values changed:\n got  %v\n want %v", got, f.requests)
+	if got, want := readQuotedRows(t, f.path, "permission_requests", v7ID(StateCheckPermission), "request_id", v9Cols(f.requestCols)), v9Rows(f.requests); !reflect.DeepEqual(got, want) {
+		t.Errorf("request's v7 values changed:\n got  %v\n want %v", got, want)
 	}
 
 	s, err := Open(f.path)
@@ -111,32 +112,20 @@ func TestV8BackfillRunsOnce(t *testing.T) {
 }
 
 // TestDowngradeV8ToV7_KeepsRowsThenRemigrates: the v8 → v7 statements
-// (v8ToV7RecipeStatements) leave a v7 store with no v8 column, every other
-// value of a row with an unsettled change kept, and the store id kept; this
-// binary refuses it until an authorised re-migration, after which the row
-// reads settled (its unsettled change is lost with the columns).
+// (v8ToV7RecipeStatements), run on the v8 fixture, leave a v7 store with no v8
+// column, every other value of a row with an unsettled change kept, and the
+// store id kept; this binary refuses it until an authorised re-migration, after
+// which the row reads settled (its unsettled change is lost with the columns)
+// and its other values read under their v9 names.
 func TestDowngradeV8ToV7_KeepsRowsThenRemigrates(t *testing.T) {
-	path, storeID := newClosedStore(t)
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	const id = "v8-unsettled" // the writer has no settle time: each old raw value is the base
-	seedSpawnForPerm(t, s, id, "off")
-	for _, to := range []string{StateWaiting, StateWorking} {
-		if err := agentHook(s, id, to, false, "settle_downgrade_test"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	f := makeV8Fixture(t, t.TempDir())
+	path, storeID := f.path, assertOneStoreID(t, f.path)
+	const id = v8UnsettledID
 	got := readRawSpawn(t, path, id, []string{"state", "settled_state"})
 	if got["state"] != "'working'" || got["settled_state"] != "'waiting'" {
-		t.Fatalf("seeded row = %v; want raw working with waiting settled (an unsettled change)", got)
+		t.Fatalf("fixture row = %v; want raw working with waiting settled (an unsettled change)", got)
 	}
-	var cols []string
-	withRaw(t, path, func(db *sql.DB) { cols = withoutV8Columns(tableColumnNames(t, db, "spawns")) })
+	cols := withoutV8Columns(f.spawnCols)
 	before := readRawSpawn(t, path, id, cols)
 
 	applyRecipe(t, path, v8ToV7RecipeStatements)
@@ -167,7 +156,8 @@ func TestDowngradeV8ToV7_KeepsRowsThenRemigrates(t *testing.T) {
 		t.Errorf("StoreID() after re-migration = %q; want %q", got, storeID)
 	}
 	assertV8Defaults(t, path, id)
-	if got := readRawSpawn(t, path, id, cols); !reflect.DeepEqual(got, before) {
-		t.Errorf("values after re-migration = %v; want %v", got, before)
+	assertV9Defaults(t, path, id)
+	if got, want := readRawSpawn(t, path, id, v9Cols(cols)), v9Row(before); !reflect.DeepEqual(got, want) {
+		t.Errorf("values after re-migration = %v; want %v", got, want)
 	}
 }

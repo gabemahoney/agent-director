@@ -50,7 +50,7 @@ func endRelayRow(t *testing.T, s *Store) {
 func endRelayRowUnclosed(t *testing.T, path string) {
 	t.Helper()
 	withRaw(t, path, func(db *sql.DB) {
-		mustExec(t, db, `UPDATE spawns SET state = 'ended', ended_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`, relayID)
+		mustExec(t, db, `UPDATE spawns SET state = 'ended', ended_at = CURRENT_TIMESTAMP WHERE instance_id = ?`, relayID)
 	})
 }
 

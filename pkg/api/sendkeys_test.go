@@ -208,7 +208,7 @@ func setRequestsCreatedAt(t *testing.T, e *killEnv, id string, at time.Time) {
 		t.Fatalf("open raw db: %v", err)
 	}
 	defer func() { _ = raw.Close() }()
-	if _, err := raw.Exec(`UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ?`,
+	if _, err := raw.Exec(`UPDATE permission_requests SET created_at = ? WHERE instance_id = ?`,
 		at.UTC().Format("2006-01-02 15:04:05"), id); err != nil {
 		t.Fatalf("set created_at of %s's requests: %v", id, err)
 	}

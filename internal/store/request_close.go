@@ -26,7 +26,7 @@ import (
 // for the trail.
 var denyOrphanedRequestsSQL = `UPDATE permission_requests AS pr
     SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, closed_at = ?
-  WHERE pr.claude_instance_id = ? AND pr.decision IS NULL AND ` + awaitingAnswerSQL + `
+  WHERE pr.instance_id = ? AND pr.decision IS NULL AND ` + awaitingAnswerSQL + `
   RETURNING request_id, request_token, tool_name`
 
 // closeDecidedRequestsSQL is the close's second statement: every request of
@@ -36,7 +36,7 @@ var denyOrphanedRequestsSQL = `UPDATE permission_requests AS pr
 // trail.
 var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
     SET closed_at = ?
-  WHERE pr.claude_instance_id = ? AND ` + awaitingAnswerSQL + `
+  WHERE pr.instance_id = ? AND ` + awaitingAnswerSQL + `
   RETURNING request_id, request_token, tool_name`
 
 // proveAgentGoneSQL is the close's third statement (b.146 step 2c): every
@@ -44,7 +44,7 @@ var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
 // acked, answered at the pane or closed before, is proven gone, agent_gone.
 const proveAgentGoneSQL = `UPDATE permission_requests
     SET proven_gone_at = ?, proven_gone_how = ?
-  WHERE claude_instance_id = ? AND proven_gone_at IS NULL`
+  WHERE instance_id = ? AND proven_gone_at IS NULL`
 
 // closedRequest is one permission request closeOrphanedRequests closed;
 // denied when the close also denied it (it was undecided).

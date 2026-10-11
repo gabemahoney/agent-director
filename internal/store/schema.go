@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v8 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v9 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -69,17 +69,29 @@ import (
 // write of state sets both in its own statement (settle.go), and status, get
 // and list derive the state they report from the three (SettleRead). The
 // column text matches v8Columns exactly (the two-places rule).
+//
+// v9 changes vs v8 (b.ssz, agent-generic columns): the six Claude-named
+// columns are renamed, each keeping its type, position, constraints, keys,
+// indexes and foreign keys (v9Renames: spawns.claude_instance_id to
+// instance_id, claude_args to agent_args, claude_session_id to session_id;
+// permission_requests.claude_instance_id and session_history.claude_instance_id
+// to instance_id; session_history.claude_session_id to session_id), and spawns
+// gains agent (TEXT NOT NULL, default the empty string, which is no agent: every
+// write of a row names claude or codex) and then end_reported_at (nullable
+// INTEGER, milliseconds since the epoch), appended in that order after
+// state_changed_ms. The column text matches v9Columns exactly (the two-places
+// rule).
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
-    claude_instance_id         TEXT PRIMARY KEY,
-    parent_id                  TEXT REFERENCES spawns(claude_instance_id) ON DELETE SET NULL,
+    instance_id                TEXT PRIMARY KEY,
+    parent_id                  TEXT REFERENCES spawns(instance_id) ON DELETE SET NULL,
     state                      TEXT NOT NULL,
     cwd                        TEXT NOT NULL,
     tmux_session_name          TEXT NOT NULL,
-    claude_args                TEXT NOT NULL DEFAULT '[]',
+    agent_args                 TEXT NOT NULL DEFAULT '[]',
     relay_mode                 TEXT NOT NULL,
     jsonl_path                 TEXT,
-    claude_session_id          TEXT,
+    session_id                 TEXT,
     labels                     TEXT NOT NULL DEFAULT '{}',
     started_at                 TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at               TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -106,7 +118,9 @@ CREATE TABLE IF NOT EXISTS spawns (
     launch_owner_pidns         TEXT,
     idle_since                 TEXT,
     settled_state              TEXT NOT NULL DEFAULT '',
-    state_changed_ms           INTEGER NOT NULL DEFAULT 0
+    state_changed_ms           INTEGER NOT NULL DEFAULT 0,
+    agent                      TEXT NOT NULL DEFAULT '',
+    end_reported_at            INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -114,8 +128,8 @@ CREATE INDEX IF NOT EXISTS idx_spawns_parent    ON spawns(parent_id);
 
 CREATE TABLE IF NOT EXISTS permission_requests (
     request_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    claude_instance_id  TEXT NOT NULL
-                        REFERENCES spawns(claude_instance_id) ON DELETE CASCADE,
+    instance_id         TEXT NOT NULL
+                        REFERENCES spawns(instance_id) ON DELETE CASCADE,
     request_token       TEXT NOT NULL,
     tool_name           TEXT NOT NULL,
     tool_input          TEXT NOT NULL,
@@ -142,22 +156,22 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     closed_at           INTEGER,
     proven_gone_at      INTEGER,
     proven_gone_how     TEXT,
-    UNIQUE(claude_instance_id, request_token)
+    UNIQUE(instance_id, request_token)
 );
-CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(claude_instance_id, decision);
+CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(instance_id, decision);
 CREATE INDEX IF NOT EXISTS idx_permission_requests_decision_decided_at ON permission_requests(decision, decided_at);
 
 CREATE TABLE IF NOT EXISTS session_history (
     history_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    claude_instance_id  TEXT NOT NULL
-                        REFERENCES spawns(claude_instance_id) ON DELETE CASCADE,
-    claude_session_id   TEXT NOT NULL,
+    instance_id         TEXT NOT NULL
+                        REFERENCES spawns(instance_id) ON DELETE CASCADE,
+    session_id          TEXT NOT NULL,
     jsonl_path          TEXT,
     recorded_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     life_number         INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(claude_instance_id, claude_session_id)
+    UNIQUE(instance_id, session_id)
 );
-CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claude_instance_id);
+CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(instance_id);
 
 CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
@@ -188,6 +202,7 @@ var migrationSteps = []migrationStep{
 	{from: 5, apply: migrateV5toV6},
 	{from: 6, apply: migrateV6toV7},
 	{from: 7, apply: migrateV7toV8},
+	{from: 8, apply: migrateV8toV9},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -824,6 +839,157 @@ func migrateV7toV8(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v7→v8 migration tx: %w", err)
+	}
+	return nil
+}
+
+// v9Renames is every column migrateV8toV9 renames (b.ssz, SR-3.1), in order:
+// the table and the old and new column names. A rename keeps the column's
+// type, position, constraints, primary key, unique constraints, indexes and the
+// foreign keys that refer to it: SQLite's ALTER TABLE ... RENAME COLUMN rewrites
+// them all, including the REFERENCES clauses of the other tables. spawns comes
+// first because the other two tables refer to its instance id.
+var v9Renames = []struct{ table, oldName, newName string }{
+	{"spawns", "claude_instance_id", "instance_id"},
+	{"spawns", "claude_args", "agent_args"},
+	{"spawns", "claude_session_id", "session_id"},
+	{"permission_requests", "claude_instance_id", "instance_id"},
+	{"session_history", "claude_instance_id", "instance_id"},
+	{"session_history", "claude_session_id", "session_id"},
+}
+
+// v9Columns is every column migrateV8toV9 adds (b.ssz), in order, with the
+// exact column text schemaDDL uses (the two-places rule), both on spawns after
+// state_changed_ms:
+//   - agent: the row's agent, claude or codex. NOT NULL with the empty string
+//     as the column default, which an added not-null column needs and which is
+//     no agent: the hop backfills every existing row to claude
+//     (v9BackfillSQL), and every write that inserts or resets a row names its
+//     agent, so nothing relies on the default;
+//   - end_reported_at: when a Codex row's verified agent process sent a
+//     SessionEnd, in milliseconds since the epoch (NULL on every row until a
+//     the Codex end report sets it; nothing writes it yet. Always NULL on a
+//     Claude row).
+var v9Columns = []struct{ table, name, ddl string }{
+	{"spawns", "agent", "ALTER TABLE spawns ADD COLUMN agent TEXT NOT NULL DEFAULT ''"},
+	{"spawns", "end_reported_at", "ALTER TABLE spawns ADD COLUMN end_reported_at INTEGER"},
+}
+
+// v9BackfillSQL is migrateV8toV9's one backfill (phase 3): every row that
+// existed before the hop is a Claude row. It writes only where agent is still
+// the empty string, so a second run rewrites nothing and a row that already
+// holds an agent keeps it.
+const v9BackfillSQL = `UPDATE spawns SET agent = 'claude' WHERE agent = ''`
+
+// v9HasColumn reports whether table has a column called name, by a
+// pragma_table_info probe inside tx. The table name is bound as an argument and
+// comes from the trusted literal lists above, never from input.
+func v9HasColumn(tx *sql.Tx, table, name string) (bool, error) {
+	var exists int
+	err := tx.QueryRow(
+		"SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+		table, name,
+	).Scan(&exists)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// migrateV8toV9 upgrades a v8 database to v9 inside a single transaction
+// (b.ssz, SR-3.3), in the migration guide's four phases:
+//
+//  1. Validate, read-only: for each of v9Renames, a table that holds both the
+//     old and the new name of the column, or neither, fails the hop naming the
+//     table and the columns; nothing has been changed yet.
+//  2. Rename and add: ALTER TABLE ... RENAME COLUMN for each rename whose old
+//     name is still there (one whose new name is present and old name absent
+//     was done by an earlier run and is skipped), then ADD COLUMN for each of
+//     v9Columns not already there, in order.
+//  3. Backfill: every row whose agent is still the empty string gets claude
+//     (v9BackfillSQL); a row that already holds an agent is not touched.
+//  4. Stamp user_version = 9, the last statement.
+//
+// No existing value is rewritten but agent, and store_meta and its store id are
+// kept. Every other table, index and constraint keeps its shape. Any probe,
+// rename, ADD COLUMN or backfill failure rolls the whole hop back, leaving
+// user_version=8, every column under its old name and no new column.
+func migrateV8toV9(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v8→v9 migration tx: %w", err)
+	}
+	// Phase 1: validate.
+	type renameState struct{ hasOld, hasNew bool }
+	states := make([]renameState, len(v9Renames))
+	for i, r := range v9Renames {
+		hasOld, err := v9HasColumn(tx, r.table, r.oldName)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 probe %s.%s: %w", r.table, r.oldName, err)
+		}
+		hasNew, err := v9HasColumn(tx, r.table, r.newName)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 probe %s.%s: %w", r.table, r.newName, err)
+		}
+		switch {
+		case hasOld && hasNew:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 table %s holds both %s and %s: refusing to rename",
+				r.table, r.oldName, r.newName)
+		case !hasOld && !hasNew:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 table %s holds neither %s nor %s",
+				r.table, r.oldName, r.newName)
+		}
+		states[i] = renameState{hasOld: hasOld, hasNew: hasNew}
+	}
+	// Phase 2: rename, then add.
+	for i, r := range v9Renames {
+		if !states[i].hasOld {
+			// Already renamed by an earlier run: skip to stay idempotent.
+			continue
+		}
+		// The table and column names come from the trusted literal list above,
+		// never from input.
+		ddl := fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", r.table, r.oldName, r.newName)
+		if _, err := tx.Exec(ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 rename %s.%s: %w", r.table, r.oldName, err)
+		}
+	}
+	for _, col := range v9Columns {
+		exists, err := v9HasColumn(tx, col.table, col.name)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 probe %s.%s: %w", col.table, col.name, err)
+		}
+		if exists {
+			// Column already present: skip to stay idempotent.
+			continue
+		}
+		if _, err := tx.Exec(col.ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v8→v9 add %s.%s: %w", col.table, col.name, err)
+		}
+	}
+	// Phase 3: backfill.
+	if _, err := tx.Exec(v9BackfillSQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v8→v9 backfill agent: %w", err)
+	}
+	// Phase 4: stamp.
+	if _, err := tx.Exec("PRAGMA user_version = 9"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v8→v9 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v8→v9 migration tx: %w", err)
 	}
 	return nil
 }

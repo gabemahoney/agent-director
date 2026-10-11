@@ -40,7 +40,7 @@ func newStore(t *testing.T) string {
 	db := filepath.Join(t.TempDir(), "state.db")
 	r := run(t, nil, "", "sqlite3", db, `PRAGMA journal_mode=WAL;
 CREATE TABLE t(v TEXT); INSERT INTO t VALUES ('tok-abc');
-CREATE TABLE spawns(claude_instance_id TEXT, pane_id TEXT, tmux_socket TEXT);
+CREATE TABLE spawns(instance_id TEXT, pane_id TEXT, tmux_socket TEXT);
 INSERT INTO spawns VALUES ('id-x', NULL, NULL);`)
 	if r.code != 0 {
 		t.Fatalf("create store: %s", r)

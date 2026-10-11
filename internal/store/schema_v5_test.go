@@ -58,20 +58,21 @@ func newClosedStore(t *testing.T) (string, string) {
 }
 
 // TestV5MigrationKeepsV4Rows: after the authorised hop every v4 value and
-// history entry of the fixture reads back exactly as seeded, each row and
-// entry at life 0 with the ordinary v5 defaults (the pending row's launch start
-// NULL), GetSpawn and ListSpawns agree, and history reads at the row's life.
+// history entry of the fixture reads back as seeded (under its v9 column name:
+// the open chain runs on to the current schema), each row and entry at life 0
+// with the ordinary v5 defaults (the pending row's launch start NULL), GetSpawn
+// and ListSpawns agree, and history reads at the row's life.
 func TestV5MigrationKeepsV4Rows(t *testing.T) {
 	f := makeV4HistoryFixture(t, t.TempDir())
 	migrateV4Fixture(t, f)
 	assertOneStoreID(t, f.path)
 	for _, id := range f.ids {
 		assertV5Defaults(t, f.path, id, len(f.history[id]))
-		if got := readRawSpawn(t, f.path, id, f.spawnsCols); !reflect.DeepEqual(got, f.rows[id]) {
-			t.Errorf("%s v4 values changed:\n got  %v\n want %v", id, got, f.rows[id])
+		if got, want := readRawSpawn(t, f.path, id, v9Cols(f.spawnsCols)), v9Row(f.rows[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s v4 values changed:\n got  %v\n want %v", id, got, want)
 		}
-		if got := readRawHistory(t, f.path, id, f.historyCols); !reflect.DeepEqual(got, f.history[id]) {
-			t.Errorf("%s history changed:\n got  %v\n want %v", id, got, f.history[id])
+		if got, want := readRawHistory(t, f.path, id, v9Cols(f.historyCols)), v9Rows(f.history[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s history changed:\n got  %v\n want %v", id, got, want)
 		}
 	}
 
@@ -282,15 +283,17 @@ func TestDowngradeRecipe_MatchesGuide(t *testing.T) {
 	}
 }
 
-// TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults: on a store taken
-// back to v5 first (the v8 → v7, v7 → v6 and v6 → v5 recipes), the recipe leaves v4 with no
-// store_meta or v5 column and every v4 value of a reused row and an opted-out
-// row; an authorised re-migration gives the ordinary defaults (earlier lives
-// read as current until the next reuse; the opt-out is lost; no launch owner)
-// and one new store id (SR-5.4).
+// TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults: on the v8 fixture
+// taken back to v5 first (the v8 → v7, v7 → v6 and v6 → v5 recipes), the
+// recipe leaves v4 with no store_meta or v5 column and every v4 value of a
+// reused row and an opted-out row; an authorised re-migration through to the
+// current schema gives the ordinary defaults (earlier lives read as current
+// until the next reuse; the opt-out is lost; no launch owner; agent claude) and
+// one new store id (SR-5.4). The values read back under their v9 names.
 func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
-	path, oldID := newClosedStore(t)
-	reused, optedOut := seedV5DowngradeRows(t, path)
+	f := makeV8Fixture(t, t.TempDir())
+	path, oldID := f.path, assertOneStoreID(t, f.path)
+	reused, optedOut := v8ReusedID, v8OptedOutID
 	applyRecipe(t, path, v8ToV7RecipeStatements)
 	applyRecipe(t, path, v7ToV6RecipeStatements)
 	applyRecipe(t, path, v6ToV5RecipeStatements)
@@ -304,10 +307,19 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 			}
 		}
 	})
-	read := func(id string) any {
-		return []any{readRawSpawn(t, path, id, cols["spawns"]), readRawHistory(t, path, id, cols["session_history"])}
+	type v4Values struct {
+		spawn   map[string]string
+		history []map[string]string
 	}
-	before := map[string]any{reused: read(reused), optedOut: read(optedOut)}
+	// read reads id's v4 columns, under their v9 names once the store is migrated
+	read := func(id string, migrated bool) v4Values {
+		spawnCols, historyCols := cols["spawns"], cols["session_history"]
+		if migrated {
+			spawnCols, historyCols = v9Cols(spawnCols), v9Cols(historyCols)
+		}
+		return v4Values{readRawSpawn(t, path, id, spawnCols), readRawHistory(t, path, id, historyCols)}
+	}
+	before := map[string]v4Values{reused: read(reused, false), optedOut: read(optedOut, false)}
 
 	applyV5ToV4Recipe(t, path)
 	if _, present := readStoreMeta(t, path); present || readUserVersion(t, path) != 4 {
@@ -315,7 +327,7 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	}
 	assertNoV5Columns(t, path)
 	for id, want := range before {
-		if got := read(id); !reflect.DeepEqual(got, want) {
+		if got := read(id, false); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s after the recipe = %+v; want the v4 values kept %+v", id, got, want)
 		}
 	}
@@ -329,8 +341,9 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	if newID := assertOneStoreID(t, path); newID == oldID || newID != s.StoreID() {
 		t.Errorf("re-migrated store_id = %q, StoreID() %q; want one new id, not %q", newID, s.StoreID(), oldID)
 	}
-	for id, want := range before {
-		if got := read(id); !reflect.DeepEqual(got, want) {
+	for id, was := range before {
+		want := v4Values{v9Row(was.spawn), v9Rows(was.history)}
+		if got := read(id, true); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s after re-migration = %+v; want the v4 values kept %+v", id, got, want)
 		}
 	}
@@ -338,6 +351,8 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	assertV5Defaults(t, path, optedOut, 1) // no_pre_trust 0: the opt-out is lost
 	assertV6Defaults(t, path, reused)
 	assertV6Defaults(t, path, optedOut)
+	assertV9Defaults(t, path, reused)
+	assertV9Defaults(t, path, optedOut)
 
 	visible := func(life int64) (out []string) {
 		t.Helper()
@@ -357,7 +372,7 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ReadForReuse = found %v, %v", found, err)
 	}
-	fresh := Spawn{CWD: "/work/reused", TmuxSessionName: "ad-reused", RelayMode: "off",
+	fresh := Spawn{CWD: "/work/reused", TmuxSessionName: "ad-reused", RelayMode: "off", Agent: AgentClaude,
 		StartedAt: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: 1772323200000,
 		Identity: LaunchIdentity{Token: "00112233aabbccdd", Socket: "/tmp/ad-sock"}}
 	if res, _, _, err := s.ResetForReuse(reused, rr.Snapshot, fresh); err != nil || res != CondApplied {

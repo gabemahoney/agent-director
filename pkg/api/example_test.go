@@ -49,6 +49,7 @@ func exampleClient() (*api.Client, *store.Store, string, *tmuxfix.Recorder, func
 func seedRow(s *store.Store, path, id, state string, labels map[string]string) {
 	sp := store.Spawn{
 		ClaudeInstanceID: id,
+		Agent:            store.AgentClaude,
 		CWD:              "/tmp",
 		TmuxSessionName:  "sess-" + id,
 		RelayMode:        "off",

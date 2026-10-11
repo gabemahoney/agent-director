@@ -983,20 +983,18 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: make the newest migration step, v7→v8
-# (migrateV7toV8, b.3ie), fail part-way on a store stamped v7 that keeps its
-# v8 columns: state_changed_ms, the step's last column, is re-added as
-# STATE_CHANGED_MS, a name SQLite's columns treat as the same but the step's
-# probe does not, so the step's ADD COLUMN state_changed_ms fails as a
-# duplicate and rolls the step back. j6_repair_hop removes that cause. Both
-# name the v7→v8 step: give them the next step's failure when the schema
-# moves on.
+# j6_break_hop <state.db>: make the newest migration step, v8→v9
+# (migrateV8toV9, b.ssz), fail on a store stamped v8 that already holds its v9
+# column names: session_history also gets claude_session_id, the old name of
+# session_id, so the step's validation finds both names in one table and fails
+# the open naming it, before it changes anything. j6_repair_hop removes that
+# cause. Both name the v8→v9 step: give them the next step's failure when the
+# schema moves on.
 j6_break_hop() {
-    [[ "$SCHEMA" == 8 ]] || { bad "j6_break_hop breaks the v7→v8 step; update it for v$SCHEMA"; return 1; }
-    "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN state_changed_ms;
-        ALTER TABLE spawns ADD COLUMN STATE_CHANGED_MS INTEGER NOT NULL DEFAULT 0;"
+    [[ "$SCHEMA" == 9 ]] || { bad "j6_break_hop breaks the v8→v9 step; update it for v$SCHEMA"; return 1; }
+    "$SQLITE" "$1" "ALTER TABLE session_history ADD COLUMN claude_session_id TEXT;"
 }
-j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN STATE_CHANGED_MS;"; }
+j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE session_history DROP COLUMN claude_session_id;"; }
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),

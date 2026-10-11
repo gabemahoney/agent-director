@@ -1,7 +1,8 @@
 package store
 
 // Schema v6 (b.kdf, b.146 rule 11): the v5 fixture's rows after the hop (no
-// launch owner, every v5 value kept) and the v6 → v5 downgrade. The guide
+// launch owner, every v5 value kept, read under their v9 names: the chain runs
+// on to the current schema) and the v6 → v5 downgrade. The guide
 // match of its recipe is schema_v5_test.go's. The column specs, re-entry and
 // rollback rows are schema_test.go's; fixtures: migration_fixtures_test.go.
 // How find-missing judges a migrated row is v5_migrated_find_missing_test.go's.
@@ -30,8 +31,8 @@ func TestV6MigrationKeepsV5Rows(t *testing.T) {
 	assertSentinel(t, f.dir, false)
 	for _, rowID := range f.ids {
 		assertV6Defaults(t, f.path, rowID)
-		if got := readRawSpawn(t, f.path, rowID, f.spawnsCols); !reflect.DeepEqual(got, f.rows[rowID]) {
-			t.Errorf("%s v5 values changed:\n got  %v\n want %v", rowID, got, f.rows[rowID])
+		if got, want := readRawSpawn(t, f.path, rowID, v9Cols(f.spawnsCols)), v9Row(f.rows[rowID]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s v5 values changed:\n got  %v\n want %v", rowID, got, want)
 		}
 	}
 	if got := readRawSpawn(t, f.path, f.pending, []string{"launch_started_at"})["launch_started_at"]; got != "1772359200123" {
@@ -61,28 +62,20 @@ func TestV6MigrationKeepsV5Rows(t *testing.T) {
 	}
 }
 
-// TestDowngradeV6ToV5_KeepsRowsThenRemigrates: on a store taken back to v6
-// first (the v8 → v7 and v7 → v6 recipes), the v6 → v5 statements
+// TestDowngradeV6ToV5_KeepsRowsThenRemigrates: on the v8 fixture taken back to
+// v6 first (the v8 → v7 and v7 → v6 recipes), the v6 → v5 statements
 // (v6ToV5RecipeStatements) leave a v5 store with no v6 column, every other
 // value of a pending row that recorded an owner kept and the store id kept;
 // this binary refuses it until an authorised re-migration, which gives the
-// row no owner.
+// row no owner (its other values read under their v9 names).
 func TestDowngradeV6ToV5_KeepsRowsThenRemigrates(t *testing.T) {
-	path, storeID := newClosedStore(t)
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+	f := makeV8Fixture(t, t.TempDir())
+	path, storeID := f.path, assertOneStoreID(t, f.path)
+	const id = v8PendingID // pending with its launch owner recorded
+	if f.rows[id]["launch_owner_pid"] != "4300" {
+		t.Fatalf("fixture row's launch_owner_pid = %s; want 4300 recorded", f.rows[id]["launch_owner_pid"])
 	}
-	const id = "v6-owned"
-	if err := s.InsertPending(Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "ts-" + id, RelayMode: "off",
-		LaunchStartedAtMillis: 1790000000123, Identity: LaunchIdentity{Token: "0123456789abcdef", Socket: "/tmp/ad-v6/sock"},
-		LaunchOwner: LaunchOwner{PID: 4300, Starttime: "12345", PIDNamespace: "pid:[4026531836]"}}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	applyRecipe(t, path, v8ToV7RecipeStatements) // a current store is past v6: back to v6 first
+	applyRecipe(t, path, v8ToV7RecipeStatements) // the v8 fixture is past v6: back to v6 first
 	applyRecipe(t, path, v7ToV6RecipeStatements)
 	var v5Cols []string
 	withRaw(t, path, func(db *sql.DB) {
@@ -115,7 +108,8 @@ func TestDowngradeV6ToV5_KeepsRowsThenRemigrates(t *testing.T) {
 		t.Errorf("StoreID() after re-migration = %q; want %q", got, storeID)
 	}
 	assertV6Defaults(t, path, id)
-	if got := readRawSpawn(t, path, id, v5Cols); !reflect.DeepEqual(got, before) {
-		t.Errorf("row after re-migration = %v; want %v", got, before)
+	assertV9Defaults(t, path, id)
+	if got, want := readRawSpawn(t, path, id, v9Cols(v5Cols)), v9Row(before); !reflect.DeepEqual(got, want) {
+		t.Errorf("row after re-migration = %v; want %v", got, want)
 	}
 }

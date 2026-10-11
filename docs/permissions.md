@@ -165,7 +165,7 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
    - Mints a per-request UUIDv4 `request_token` and, in one store
      transaction, moves the Spawn to `check_permission` and records the
      open request in `permission_requests`, keyed by the composite
-     `(claude_instance_id, request_token)`: both are written or neither
+     `(instance_id, request_token)`: both are written or neither
      is. The request carries the hook's own process identity (pid, start
      time and pid namespace) and the payload's `tool_use_id`. Concurrent
      requests for the same Spawn each get their own row and are decided
@@ -384,11 +384,11 @@ applies only to a request recorded before this release (one with no
 ```sql
 UPDATE permission_requests
    SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
- WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+ WHERE instance_id = ? AND request_token = ? AND decision IS NULL
    AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
    AND (settled_at IS NOT NULL OR created_at > ?)
    AND NOT EXISTS (SELECT 1 FROM spawns
-                    WHERE claude_instance_id = ? AND state IN (?, ?))  -- 'ended', 'missing'
+                    WHERE instance_id = ? AND state IN (?, ?))  -- 'ended', 'missing'
 ```
 
 First call wins; concurrent second calls see RowsAffected==0. The

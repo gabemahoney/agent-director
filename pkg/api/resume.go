@@ -671,6 +671,7 @@ func resumePriorOf(row Spawn) ResumePrior {
 		ProcStarttime:           row.ProcStarttime,
 		LivenessUnverifiedSince: row.LivenessUnverifiedSince,
 		LivenessNote:            row.LivenessNote,
+		EndReportedAtMillis:     row.EndReportedAtMillis,
 		Identity:                row.Identity,
 	}
 }

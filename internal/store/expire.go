@@ -23,7 +23,7 @@ func finishedStateGuardArgs() []any {
 // (SR-12.1, SR-12.2, Appendix F.4): what expire needs to judge whether the
 // row's agent, own session or a leftover may still run, and to guard its
 // delete on the life it examined. It is read without decoding labels,
-// claude_args or extra_env, and without parsing started_at or ended_at, so a
+// agent_args or extra_env, and without parsing started_at or ended_at, so a
 // row a hand edit made malformed is judged like any other (SR-5.5). Zero
 // values mean NULL.
 type ExpireCandidate struct {
@@ -47,12 +47,12 @@ type ExpireCandidate struct {
 // listExpireCandidatesSQL is ListExpireCandidates' one statement: the
 // finished rows with an ended_at older than the cutoff, compared as stored
 // text, in instance-id order.
-const listExpireCandidatesSQL = `SELECT claude_instance_id, ` + lifeColumns + `
+const listExpireCandidatesSQL = `SELECT instance_id, ` + lifeColumns + `
    FROM spawns
   WHERE ` + finishedStateGuardSQL + `
     AND ended_at IS NOT NULL
     AND ended_at < ?
-  ORDER BY claude_instance_id`
+  ORDER BY instance_id`
 
 // ListExpireCandidates returns an ExpireCandidate for every finished row
 // (state ended or missing) whose ended_at is set and older than cutoff:
@@ -68,7 +68,7 @@ const listExpireCandidatesSQL = `SELECT claude_instance_id, ` + lifeColumns + `
 // snapshot-match condition compares, and PID, ProcStarttime and
 // TmuxSessionName are copied from the snapshot. launch_token is decoded by
 // decodeLaunchToken and the nullable columns read NULL as their zero value,
-// so no stored value of those columns fails the read; labels, claude_args and
+// so no stored value of those columns fails the read; labels, agent_args and
 // extra_env are never read (SR-5.5).
 //
 // Candidates are returned in instance-id order, so a run's per-socket stop
@@ -107,7 +107,7 @@ func (s *Store) ListExpireCandidates(cutoff time.Time) ([]ExpireCandidate, error
 // the row removed, guarded by a finished state and the examined row snapshot
 // (SR-5.3, SR-12.3).
 const deleteFinishedIfSameLifeSQL = `DELETE FROM spawns
-  WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // DeleteFinishedIfSameLife is expire's delete of a row whose lookup was Gone
 // (SR-12.3, SR-5.3, SR-5.6, SR-5.8; Appendix F.4). It is one conditional

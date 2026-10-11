@@ -1,8 +1,9 @@
 package store
 
 // Schema v7 (b.146 steps 2, 2b and 2c): the v6 fixture's requests after the
-// hop (no relay hook identity, no settle instant: judged by time, as before),
-// the hop's backfill proving finished rows' requests gone, and the v7 → v6
+// hop (no relay hook identity, no settle instant: judged by time, as before;
+// read under their v9 names, the chain runs on to the current schema), the
+// hop's backfill proving finished rows' requests gone, and the v7 → v6
 // downgrade. The guide match of its recipe is
 // schema_v5_test.go's; the column specs, re-entry and rollback rows are
 // schema_test.go's; fixtures: migration_fixtures_test.go.
@@ -62,11 +63,11 @@ func TestV7MigrationKeepsV6Rows(t *testing.T) {
 	}
 	assertSentinel(t, f.dir, false)
 	assertV7Defaults(t, f.path, f.id)
-	if got := readRawSpawn(t, f.path, f.id, f.spawnCols); !reflect.DeepEqual(got, f.spawn) {
-		t.Errorf("row's v6 values changed:\n got  %v\n want %v", got, f.spawn)
+	if got, want := readRawSpawn(t, f.path, f.id, v9Cols(f.spawnCols)), v9Row(f.spawn); !reflect.DeepEqual(got, want) {
+		t.Errorf("row's v6 values changed:\n got  %v\n want %v", got, want)
 	}
-	for _, r := range readQuotedRows(t, f.path, "permission_requests", f.id, "request_id", f.requestCols) {
-		if want := f.requests[unquote(r["request_token"])]; !reflect.DeepEqual(r, want) {
+	for _, r := range readQuotedRows(t, f.path, "permission_requests", f.id, "request_id", v9Cols(f.requestCols)) {
+		if want := v9Row(f.requests[unquote(r["request_token"])]); !reflect.DeepEqual(r, want) {
 			t.Errorf("request's v6 values changed:\n got  %v\n want %v", r, want)
 		}
 	}
@@ -103,8 +104,7 @@ func TestV7MigrationKeepsV6Rows(t *testing.T) {
 // TestV7MigrationProvesFinishedRowsRequests (b.146 step 2c; b.kxu): the hop
 // proves every request of a row already ended or missing gone, agent_gone at
 // one instant within the hop, its v6 values kept (an undecided one stays
-// undecided and awaits an answer); the live row's requests stay unproven. A
-// second run of the hop rewrites nothing.
+// undecided and awaits an answer); the live row's requests stay unproven.
 func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
 	f := makeV6Fixture(t, t.TempDir())
 	v6Values := map[string][]map[string]string{}
@@ -138,8 +138,8 @@ func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
 				t.Errorf("%s/%s = decision %q, awaits an answer %v; want it undecided, still awaiting one", id, tok, pr.Decision, pr.AwaitsAnswer())
 			}
 		}
-		if got := readQuotedRows(t, f.path, "permission_requests", id, "request_id", f.requestCols); !reflect.DeepEqual(got, v6Values[id]) {
-			t.Errorf("%s's requests' v6 values changed:\n got  %v\n want %v", id, got, v6Values[id])
+		if got, want := readQuotedRows(t, f.path, "permission_requests", id, "request_id", v9Cols(f.requestCols)), v9Rows(v6Values[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s's requests' v6 values changed:\n got  %v\n want %v", id, got, want)
 		}
 	}
 	for _, tok := range []string{f.open, f.decided} {
@@ -150,12 +150,22 @@ func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+}
 
+// TestV7BackfillRunsOnce: the hop run again over a v6 store it has migrated
+// rewrites no proven request (the second run's own instant would show), and
+// changes nothing else. It runs the step itself, on a v6 fixture: the backfill
+// names the v6 columns, so it cannot run over a store the chain took to v9.
+func TestV7BackfillRunsOnce(t *testing.T) {
+	f := makeV6Fixture(t, t.TempDir())
+	step, _ := migrationStepFrom(6)
+	if err := step.apply(openRaw(t, f.path)); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
 	withRaw(t, f.path, func(db *sql.DB) { // a rewrite would stamp the second run's own instant
 		mustExec(t, db, `UPDATE permission_requests SET proven_gone_at = 1 WHERE proven_gone_at IS NOT NULL`)
 	})
 	before := dbDump(t, f.path)
-	step, _ := migrationStepFrom(6)
 	if err := step.apply(openRaw(t, f.path)); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -164,39 +174,35 @@ func TestV7MigrationProvesFinishedRowsRequests(t *testing.T) {
 	}
 }
 
-// TestDowngradeV7ToV6_KeepsRowsThenRemigrates: on a store taken back to v7
-// first (the v8 → v7 recipe), the v7 → v6 statements
+// TestDowngradeV7ToV6_KeepsRowsThenRemigrates: on the v8 fixture taken back to
+// v7 first (the v8 → v7 recipe), the v7 → v6 statements
 // (v7ToV6RecipeStatements) leave a v6 store with no v7 column, every other
 // value of a row and of a relay request recorded with its hook's identity
 // kept, and the store id kept; this binary refuses it until an authorised
-// re-migration, after which the request reads as recorded before v7.
+// re-migration, after which the request reads as recorded before v7 (its other
+// values read under their v9 names).
 func TestDowngradeV7ToV6_KeepsRowsThenRemigrates(t *testing.T) {
-	path, storeID := newClosedStore(t)
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+	f := makeV8Fixture(t, t.TempDir())
+	path, storeID := f.path, assertOneStoreID(t, f.path)
+	const id = v8RelayID // an open request holding its hook's identity
+	if f.requests[id][0]["hook_pid"] != "4321" {
+		t.Fatalf("fixture request's hook_pid = %s; want 4321 recorded", f.requests[id][0]["hook_pid"])
 	}
-	const id = "v7-relay"
-	seedSpawnForPerm(t, s, id, "on")
-	if _, applied, err := s.InsertRelayRequest(id, agentGate("PermissionRequest", ""), RelayRequest{
-		RequestToken: tokenA, ToolName: "Bash", ToolInput: `{}`, ToolUseID: "toolu_01", AgentID: "agent-1",
-		Hook: ProcessIdentity{PID: 4321, Starttime: "777", PIDNamespace: "pid:[4026531836]"}, SettledAt: time.UnixMilli(1790000000000),
-	}, 0, DefaultLockWait); err != nil || !applied.Applied {
-		t.Fatalf("InsertRelayRequest = %+v, %v", applied, err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	applyRecipe(t, path, v8ToV7RecipeStatements) // a current store is past v7: back to v7 first
+	applyRecipe(t, path, v8ToV7RecipeStatements) // the fixture is past v7: back to v7 first
 	var spawnCols, requestCols []string
 	withRaw(t, path, func(db *sql.DB) {
 		spawnCols = v6Columns("spawns", tableColumnNames(t, db, "spawns"))
 		requestCols = v6Columns("permission_requests", tableColumnNames(t, db, "permission_requests"))
 	})
-	read := func() any {
-		return []any{readRawSpawn(t, path, id, spawnCols), readQuotedRows(t, path, "permission_requests", id, "request_id", requestCols)}
+	// read reads id's v6 columns, under their v9 names once the store is migrated
+	read := func(migrated bool) (spawn map[string]string, requests []map[string]string) {
+		sc, rc := spawnCols, requestCols
+		if migrated {
+			sc, rc = v9Cols(sc), v9Cols(rc)
+		}
+		return readRawSpawn(t, path, id, sc), readQuotedRows(t, path, "permission_requests", id, "request_id", rc)
 	}
-	before := read()
+	beforeSpawn, beforeRequests := read(false)
 
 	applyRecipe(t, path, v7ToV6RecipeStatements)
 
@@ -211,8 +217,8 @@ func TestDowngradeV7ToV6_KeepsRowsThenRemigrates(t *testing.T) {
 			t.Errorf("schema after the downgrade:\n got  %v\n want a v6 store's %v", got, v6)
 		}
 	})
-	if got := read(); !reflect.DeepEqual(got, before) {
-		t.Errorf("values after the downgrade = %v; want %v", got, before)
+	if spawn, requests := read(false); !reflect.DeepEqual(spawn, beforeSpawn) || !reflect.DeepEqual(requests, beforeRequests) {
+		t.Errorf("values after the downgrade = %v, %v; want %v, %v", spawn, requests, beforeSpawn, beforeRequests)
 	}
 	if got := assertOneStoreID(t, path); got != storeID {
 		t.Errorf("store_id after the downgrade = %q; want %q kept", got, storeID)
@@ -226,7 +232,8 @@ func TestDowngradeV7ToV6_KeepsRowsThenRemigrates(t *testing.T) {
 		t.Errorf("StoreID() after re-migration = %q; want %q", got, storeID)
 	}
 	assertV7Defaults(t, path, id)
-	if got := read(); !reflect.DeepEqual(got, before) {
-		t.Errorf("values after re-migration = %v; want %v", got, before)
+	assertV9Defaults(t, path, id)
+	if spawn, requests := read(true); !reflect.DeepEqual(spawn, v9Row(beforeSpawn)) || !reflect.DeepEqual(requests, v9Rows(beforeRequests)) {
+		t.Errorf("values after re-migration = %v, %v; want %v, %v", spawn, requests, v9Row(beforeSpawn), v9Rows(beforeRequests))
 	}
 }

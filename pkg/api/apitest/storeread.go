@@ -55,6 +55,11 @@ type SpawnColumns struct {
 	// The schema-v7 spawns column (b.146 problem 3): when the main agent's
 	// idle-prompt Notification last landed, as stored text.
 	IdleSince any
+
+	// The two schema-v9 spawns columns: the row's agent (claude or codex) and
+	// when its agent's SessionEnd was reported (Unix ms; nil = no end report).
+	Agent         any
+	EndReportedAt any
 }
 
 // ReadSpawnColumns reads every column of instanceID's spawns row from the
@@ -70,17 +75,18 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 
 	// The unary + makes each TIMESTAMP column an expression with no declared
 	// type, so the driver returns its stored value instead of a parsed time.
-	const q = `SELECT parent_id, state, cwd, tmux_session_name, claude_args,
-	                  relay_mode, jsonl_path, claude_session_id, labels,
+	const q = `SELECT parent_id, state, cwd, tmux_session_name, agent_args,
+	                  relay_mode, jsonl_path, session_id, labels,
 	                  +started_at, +last_seen_at, +ended_at, pid, proc_starttime,
 	                  liveness_unverified_since, liveness_note, extra_env,
 	                  row_version, launch_started_at, life_number, no_pre_trust,
 	                  launch_token, tmux_socket, tmux_server_pid,
 	                  tmux_server_started, tmux_server_starttime, pane_id,
 	                  pane_pid, pane_starttime, launch_owner_pid,
-	                  launch_owner_starttime, launch_owner_pidns, idle_since
+	                  launch_owner_starttime, launch_owner_pidns, idle_since,
+		                  agent, end_reported_at
 	             FROM spawns
-	            WHERE claude_instance_id = ?`
+	            WHERE instance_id = ?`
 	var c SpawnColumns
 	err = raw.QueryRow(q, instanceID).Scan(
 		&c.ParentID, &c.State, &c.CWD, &c.TmuxSessionName, &c.ClaudeArgs,
@@ -92,6 +98,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 		&c.TmuxServerStarted, &c.TmuxServerStarttime, &c.PaneID,
 		&c.PanePID, &c.PaneStarttime, &c.LaunchOwnerPID,
 		&c.LaunchOwnerStarttime, &c.LaunchOwnerPIDNS, &c.IdleSince,
+		&c.Agent, &c.EndReportedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SpawnColumns{}, fmt.Errorf("ReadSpawnColumns: %w: %s", store.ErrSpawnNotFound, instanceID)
@@ -123,10 +130,10 @@ func ReadSessionHistoryAllLives(dbPath, instanceID string) ([]HistoryEntry, erro
 	}
 	defer raw.Close() //nolint:errcheck
 
-	const q = `SELECT claude_session_id, jsonl_path, life_number,
+	const q = `SELECT session_id, jsonl_path, life_number,
 	                  CAST(recorded_at AS TEXT)
 	             FROM session_history
-	            WHERE claude_instance_id = ?
+	            WHERE instance_id = ?
 	         ORDER BY recorded_at DESC, history_id DESC`
 	rows, err := raw.Query(q, instanceID)
 	if err != nil {

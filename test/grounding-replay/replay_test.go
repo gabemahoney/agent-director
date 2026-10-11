@@ -257,6 +257,7 @@ func TestGroundingReplayScenario(t *testing.T) {
 
 	sp := store.Spawn{
 		ClaudeInstanceID: testInstanceID,
+		Agent:            store.AgentClaude,
 		CWD:              "/tmp/grounding-replay",
 		TmuxSessionName:  "gr-replay-session",
 		RelayMode:        "on",

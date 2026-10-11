@@ -27,7 +27,7 @@ type RowSnapshot struct {
 // zero value, so a NULL column matches that zero value and no other value.
 const snapshotMatchSQL = `COALESCE(row_version, 0) = ?
     AND CAST(started_at AS TEXT) = ?
-    AND COALESCE(claude_session_id, '') = ?
+    AND COALESCE(session_id, '') = ?
     AND COALESCE(pid, 0) = ?
     AND COALESCE(proc_starttime, '') = ?
     AND tmux_session_name = ?`
@@ -141,7 +141,7 @@ const launchOwnerClear = `launch_owner_pid       = NULL,
 // stored text the snapshot-match condition compares (SR-5.3, SR-5.5).
 const lifeColumns = `
         COALESCE(row_version, 0), CAST(started_at AS TEXT),
-        COALESCE(claude_session_id, ''), COALESCE(pid, 0),
+        COALESCE(session_id, ''), COALESCE(pid, 0),
         COALESCE(proc_starttime, ''), tmux_session_name,
         launch_token, COALESCE(tmux_socket, ''), COALESCE(tmux_server_pid, 0),
         COALESCE(tmux_server_started, 0), COALESCE(tmux_server_starttime, ''),
@@ -236,6 +236,17 @@ func InsidePendingGrace(state string, launchStartedAtMillis int64, grace time.Du
 		return false
 	}
 	return launchStartedAtMillis > now.UnixMilli()-grace.Milliseconds()
+}
+
+// decodeEndReportedAt maps end_reported_at to milliseconds since the epoch.
+// Only a positive integer is an end report; NULL and any other stored value
+// (zero, a negative, text, real, blob) yield 0, meaning absent, so a
+// hand-edited value never fails a read.
+func decodeEndReportedAt(v any) int64 {
+	if ms, ok := v.(int64); ok && ms > 0 {
+		return ms
+	}
+	return 0
 }
 
 // decodeLaunchToken maps launch_token to the token. Only text of exactly 16

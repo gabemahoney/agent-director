@@ -127,7 +127,7 @@ db="${PANE_HOOK_DB:-$HOME/.agent-director/state.db}"
 # for the SQL literal.
 esc="${id//\'/\'\'}"
 row="$("$driver_dir/sql.sh" -readonly -separator '|' "$db" \
-    "SELECT COALESCE(pane_id, ''), COALESCE(tmux_socket, '') FROM spawns WHERE claude_instance_id = '${esc}';")"
+    "SELECT COALESCE(pane_id, ''), COALESCE(tmux_socket, '') FROM spawns WHERE instance_id = '${esc}';")"
 row_pane="${row%%|*}"
 socket="${row#*|}"
 [[ -n "$row" ]] || socket=""

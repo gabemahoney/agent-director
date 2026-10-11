@@ -47,7 +47,7 @@ func TestLaunchOwnerRecordedByEachLaunch(t *testing.T) {
 		begin func(t *testing.T, f *v5Store, owner store.LaunchOwner) string // the id it left pending
 	}{
 		{"spawn's insert", func(t *testing.T, f *v5Store, owner store.LaunchOwner) string {
-			sp := store.Spawn{ClaudeInstanceID: "lo-insert", CWD: "/tmp", TmuxSessionName: "ts-lo-insert", RelayMode: "off",
+			sp := store.Spawn{ClaudeInstanceID: "lo-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-lo-insert", RelayMode: "off",
 				LaunchStartedAtMillis: launchStart, Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/ad-lo/sock"},
 				LaunchOwner: owner}
 			if err := f.s.InsertPending(sp); err != nil {
@@ -94,7 +94,7 @@ func TestLaunchOwnerRecordedByEachLaunch(t *testing.T) {
 func TestLaunchOwnerHoldEnds(t *testing.T) {
 	inserted := func(t *testing.T, f *v5Store) string {
 		t.Helper()
-		if err := f.s.InsertPending(store.Spawn{ClaudeInstanceID: "lo-row", CWD: "/tmp", TmuxSessionName: "ts-lo-row",
+		if err := f.s.InsertPending(store.Spawn{ClaudeInstanceID: "lo-row", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-lo-row",
 			RelayMode: "off", LaunchStartedAtMillis: launchStart, Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/ad-lo/sock"},
 			LaunchOwner: rvOwner}); err != nil {
 			t.Fatalf("InsertPending: %v", err)
@@ -162,7 +162,7 @@ func TestLaunchOwnerHoldEnds(t *testing.T) {
 		}
 		e := r.examined
 		if res, err := f.s.RestoreAfterFailedResume(r.id, v, store.ResumePrior{State: e.State, EndedAtText: e.EndedAtText,
-			PID: e.PID, ProcStarttime: e.ProcStarttime, Identity: e.Identity}); err != nil || res != store.CondApplied {
+			PID: e.PID, ProcStarttime: e.ProcStarttime, EndReportedAtMillis: e.EndReportedAtMillis, Identity: e.Identity}); err != nil || res != store.CondApplied {
 			t.Fatalf("RestoreAfterFailedResume = %v, %v; want CondApplied", res, err)
 		}
 		after := f.rawColumns(r.id)

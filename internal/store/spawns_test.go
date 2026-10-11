@@ -20,10 +20,10 @@ import (
 // id is ErrSpawnNotFound.
 func TestInsertPendingRoundTrip(t *testing.T) {
 	s, _ := openTempStore(t)
-	full := Spawn{ClaudeInstanceID: "11111111-aaaa-4bbb-8ccc-000000000001", CWD: "/tmp/x", TmuxSessionName: "cd-x",
+	full := Spawn{ClaudeInstanceID: "11111111-aaaa-4bbb-8ccc-000000000001", Agent: AgentClaude, CWD: "/tmp/x", TmuxSessionName: "cd-x",
 		ClaudeArgs: []string{"--model", "opus"}, RelayMode: "off", Labels: map[string]string{"role": "researcher"},
 		ExtraEnv: map[string]string{"CLAUDE_CONFIG_DIR": "/home/u/.claude-alt", "EMPTY": ""}}
-	bare := Spawn{ClaudeInstanceID: "bare", CWD: "/tmp", TmuxSessionName: "cd-bare", RelayMode: "on"}
+	bare := Spawn{ClaudeInstanceID: "bare", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-bare", RelayMode: "on"}
 	for _, sp := range []Spawn{full, bare} {
 		if err := s.InsertPending(sp); err != nil {
 			t.Fatalf("InsertPending(%s): %v", sp.ClaudeInstanceID, err)
@@ -41,14 +41,14 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 	}
 
 	var raw sql.NullString
-	if err := s.db.QueryRow(`SELECT extra_env FROM spawns WHERE claude_instance_id = 'bare'`).Scan(&raw); err != nil || raw.String != "{}" {
+	if err := s.db.QueryRow(`SELECT extra_env FROM spawns WHERE instance_id = 'bare'`).Scan(&raw); err != nil || raw.String != "{}" {
 		t.Errorf("nil extra_env stored as %+v, %v; want '{}'", raw, err)
 	}
 	if b := mustGetSpawn(t, s, "bare"); b.ExtraEnv == nil || len(b.ExtraEnv) != 0 {
 		t.Errorf("nil extra_env read as %#v; want an empty non-nil map", b.ExtraEnv)
 	}
 	if _, err := s.db.Exec(`UPDATE spawns SET pid = 4242, proc_starttime = '123', liveness_unverified_since = '2026-09-20T00:00:00Z',
-		liveness_note = 'note', extra_env = '{"A":"1"}' WHERE claude_instance_id = 'bare'`); err != nil {
+		liveness_note = 'note', extra_env = '{"A":"1"}' WHERE instance_id = 'bare'`); err != nil {
 		t.Fatalf("populate v3 columns: %v", err)
 	}
 	if b := mustGetSpawn(t, s, "bare"); b.PID != 4242 || b.ProcStarttime != "123" || b.LivenessUnverifiedSince != "2026-09-20T00:00:00Z" ||
@@ -68,7 +68,7 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 	if err := s.InsertPending(bare); err == nil {
 		t.Error("a second insert of the same id succeeded; want a collision")
 	}
-	if err := s.InsertPending(Spawn{ClaudeInstanceID: "orphan", ParentID: "no-such-parent", CWD: "/tmp",
+	if err := s.InsertPending(Spawn{ClaudeInstanceID: "orphan", Agent: AgentClaude, ParentID: "no-such-parent", CWD: "/tmp",
 		TmuxSessionName: "cd-o", RelayMode: "off"}); err == nil {
 		t.Error("an insert naming no parent row succeeded; want the foreign key refused")
 	}
@@ -88,7 +88,7 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 func TestHookTransitionTrailLine(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "trail-transitions"
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tt", RelayMode: "off"}); err != nil {
+	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-tt", RelayMode: "off"}); err != nil {
 		t.Fatalf("insertAgentRow: %v", err)
 	}
 	steps := []struct {
@@ -190,7 +190,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 func TestRecordSessionStartIdentity(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "ss-identity"
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-ss", RelayMode: "off"}); err != nil {
+	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-ss", RelayMode: "off"}); err != nil {
 		t.Fatalf("insertAgentRow: %v", err)
 	}
 	pane := testPane()
@@ -210,7 +210,7 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 func TestSetParentID(t *testing.T) {
 	s, _ := openTempStore(t)
 	for _, id := range []string{"parent-1", "child-1"} {
-		if err := s.InsertPending(Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
+		if err := s.InsertPending(Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
 		}
 	}
@@ -219,7 +219,7 @@ func TestSetParentID(t *testing.T) {
 			t.Fatalf("SetParentID(%q): %v", parent, err)
 		}
 		var raw sql.NullString
-		if err := s.db.QueryRow(`SELECT parent_id FROM spawns WHERE claude_instance_id = 'child-1'`).Scan(&raw); err != nil ||
+		if err := s.db.QueryRow(`SELECT parent_id FROM spawns WHERE instance_id = 'child-1'`).Scan(&raw); err != nil ||
 			raw != (sql.NullString{String: parent, Valid: parent != ""}) || mustGetSpawn(t, s, "child-1").ParentID != parent {
 			t.Errorf("parent_id after SetParentID(%q) = %+v, %v", parent, raw, err)
 		}

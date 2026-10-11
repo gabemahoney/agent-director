@@ -55,7 +55,7 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 		t.Fatalf("OpenOrInit(%q): %v", dbPath, err)
 	}
 	defer s.Close() //nolint:errcheck
-	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: sessionName, RelayMode: "off"}); err != nil {
+	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: sessionName, RelayMode: "off"}); err != nil {
 		t.Fatalf("InsertPending(%s): %v", id, err)
 	}
 	if err := seedAgentState(s, dbPath, id, state); err != nil {

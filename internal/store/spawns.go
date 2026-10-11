@@ -13,7 +13,7 @@ import (
 )
 
 // ErrSpawnNotFound is returned by lookup-by-id methods when no row matches
-// the supplied claude_instance_id. Callers use errors.Is to detect.
+// the supplied instance_id. Callers use errors.Is to detect.
 var ErrSpawnNotFound = errors.New("ErrSpawnNotFound")
 
 // ErrPrimaryKeyCollision is returned by InsertPending when SQLite reports a
@@ -28,6 +28,30 @@ var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 // reuse change with errors.Is. It is the store's own marker, not a catalogued
 // sentinel, and is never aliased in pkg/api (SR-1.5).
 var ErrReuseArchive = errors.New("store: reuse archive failed")
+
+// The two agents a row can record (spawns.agent, schema v9, SR-3.1).
+const (
+	AgentClaude = "claude"
+	AgentCodex  = "codex"
+)
+
+// ErrRowAgentInvalid is returned, wrapped, by InsertPending and ResetForReuse
+// when the row's agent is not exactly claude or codex (SR-3.1, SR-3.6). The
+// check runs before anything is written, so the database is unchanged. It is
+// the store's own marker, not a catalogued sentinel, and is never aliased in
+// pkg/api (the public agent errors come with the agent input). Callers use
+// errors.Is to detect it.
+var ErrRowAgentInvalid = errors.New("store: row agent must be claude or codex")
+
+// validateRowAgent returns an error wrapping ErrRowAgentInvalid unless agent
+// is exactly AgentClaude or AgentCodex. The empty string, which is the column
+// default and no agent, and any other spelling are refused.
+func validateRowAgent(agent string) error {
+	if agent != AgentClaude && agent != AgentCodex {
+		return fmt.Errorf("%w: %q", ErrRowAgentInvalid, agent)
+	}
+	return nil
+}
 
 // State constants mirror the SRD §5.1 enum. They live here (the package
 // that owns the column's text values) so the rest of the codebase has
@@ -53,7 +77,7 @@ const (
 
 // liveStates is the set of live state values (anything except the terminal
 // ones): the rows find-missing reads and judges (ListLiveSpawnIdentities).
-// The collision pre-check on a caller-supplied claude_instance_id tests the
+// The collision pre-check on a caller-supplied instance_id tests the
 // row's state against this set (IsLiveState): a live row collides, while a
 // finished row's id is reused only by a spawn with the reuse opt-in (SR-10.2)
 // and otherwise collides at the pre-check (resume relaunches a finished row
@@ -106,7 +130,7 @@ type Spawn struct {
 
 	// PID, ProcStarttime, LivenessUnverifiedSince, and LivenessNote are the
 	// schema-v3 identity/liveness columns, scanned via COALESCE per the
-	// jsonl_path/claude_session_id precedent.
+	// jsonl_path/session_id precedent.
 	//
 	// NULL semantics: a zero value ("" for the string fields, 0 for PID)
 	// means the underlying SQL column is NULL. Writers MUST store NULL for
@@ -164,6 +188,21 @@ type Spawn struct {
 	// repair of a stale check_permission row picks waiting when it is set.
 	IdleSince string
 
+	// Agent is the schema-v9 agent column (SR-3.1): claude or codex. Every read
+	// that returns a Spawn fills it; InsertPending and ResetForReuse write it
+	// from a Spawn, refusing any other value (ErrRowAgentInvalid). Rows that
+	// existed at the v9 migration read claude.
+	Agent string
+
+	// EndReportedAtMillis is the schema-v9 end_reported_at column (SR-3.1):
+	// when a Codex row's verified agent process sent a SessionEnd, in
+	// milliseconds since the epoch; 0 = absent (NULL, or a stored value that is
+	// not a positive integer). Every read that returns a Spawn fills it. No
+	// write takes it from a Spawn: it is NULL on insert and after reuse's
+	// reset, cleared by resume's move to pending, and saved and restored with
+	// the row's raw life.
+	EndReportedAtMillis int64
+
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives
 	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
@@ -176,9 +215,12 @@ type Spawn struct {
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
 // (SRD §7.4 step 2). The caller is expected to have already validated the
 // row and minted any defaults — InsertPending does no semantic checks
-// beyond what SQLite's constraints enforce.
+// beyond what SQLite's constraints enforce, and the row's agent: sp.Agent must
+// be exactly claude or codex, or it returns an error wrapping
+// ErrRowAgentInvalid before writing anything (SR-3.1, SR-3.6). The insert
+// writes the agent explicitly and leaves end_reported_at NULL.
 //
-// On PRIMARY KEY collision (claude_instance_id already exists, in any
+// On PRIMARY KEY collision (instance_id already exists, in any
 // state) it returns ErrPrimaryKeyCollision; spawn.Launch maps that to
 // ErrInstanceIdCollision. The collision pre-check has already refused every
 // existing row a plain spawn may not use, a finished one included, so this
@@ -204,9 +246,12 @@ type Spawn struct {
 // the statement's own clock, so the new row reports pending at once whatever
 // the settle time.
 func (s *Store) InsertPending(sp Spawn) error {
+	if err := validateRowAgent(sp.Agent); err != nil {
+		return fmt.Errorf("store: insert pending: %w", err)
+	}
 	argsJSON, err := encodeArgs(sp.ClaudeArgs)
 	if err != nil {
-		return fmt.Errorf("store: encode claude_args: %w", err)
+		return fmt.Errorf("store: encode agent_args: %w", err)
 	}
 	labelsJSON, err := encodeLabels(sp.Labels)
 	if err != nil {
@@ -221,12 +266,12 @@ func (s *Store) InsertPending(sp Spawn) error {
 	// row's settled state at once, stamped with the statement's own clock.
 	const stmt = `
         INSERT INTO spawns (
-            claude_instance_id, parent_id, state, cwd, tmux_session_name,
-            claude_args, relay_mode, labels, extra_env,
+            instance_id, parent_id, state, cwd, tmux_session_name,
+            agent_args, relay_mode, labels, extra_env,
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
-            settled_state, state_changed_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `)
+            settled_state, state_changed_ms, agent
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -247,7 +292,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending)
+	args = append(args, StatePending, sp.Agent)
 	_, err = s.db.Exec(stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
@@ -262,7 +307,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 	return nil
 }
 
-// GetSpawn returns the full row for the given claude_instance_id. Missing
+// GetSpawn returns the full row for the given instance_id. Missing
 // rows yield ErrSpawnNotFound; other failures wrap the driver error.
 func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 	sp, err := scanSpawn(s.db.QueryRow(getSpawnSQL, instanceID), getSpawnErrs)
@@ -276,7 +321,7 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 }
 
 // getSpawnSQL is the read of one row by id.
-const getSpawnSQL = `SELECT ` + spawnColumns + ` FROM spawns WHERE claude_instance_id = ?`
+const getSpawnSQL = `SELECT ` + spawnColumns + ` FROM spawns WHERE instance_id = ?`
 
 // GetSpawnWithin is GetSpawn with its waits bounded by maxWait: for the
 // store's one connection, when another call of this process holds it, and
@@ -310,7 +355,7 @@ func (s *Store) GetSpawnSettled(instanceID string, r SettleRead) (Spawn, error) 
 		return s.GetSpawn(instanceID)
 	}
 	expr, args := r.stateExpr()
-	q := `SELECT ` + spawnColumns + `, ` + expr + ` FROM spawns WHERE claude_instance_id = ?`
+	q := `SELECT ` + spawnColumns + `, ` + expr + ` FROM spawns WHERE instance_id = ?`
 	sp, err := scanSpawnRow(s.db.QueryRow(q, append(args, instanceID)...), getSpawnErrs, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
@@ -327,16 +372,16 @@ func (s *Store) GetSpawnSettled(instanceID string, r SettleRead) (Spawn, error) 
 // second time through CAST so the driver hands back the stored text instead of
 // parsing the TIMESTAMP column (SR-5.3). The v5 part ends with lifeColumns, the
 // snapshot and launch-identity fragment the live-row read shares; its
-// started_at, claude_session_id, pid, proc_starttime and tmux_session_name
+// started_at, session_id, pid, proc_starttime and tmux_session_name
 // are the same row's values the Spawn's own fields read. The SR-5.5 columns are selected bare and decoded in
 // Go; the other v5 columns follow the v3 identity columns' rule (NULL is the
 // zero value; any other stored value scans normally). The v6 launch-owner
 // columns (launchOwnerColumns) come after lifeColumns, by the same rule, and
-// the v7 idle_since last.
+// the v7 idle_since, then the v9 agent and end_reported_at, last.
 const spawnColumns = `
-        claude_instance_id, COALESCE(parent_id, ''), state, cwd,
-        tmux_session_name, claude_args, relay_mode,
-        COALESCE(jsonl_path, ''), COALESCE(claude_session_id, ''),
+        instance_id, COALESCE(parent_id, ''), state, cwd,
+        tmux_session_name, agent_args, relay_mode,
+        COALESCE(jsonl_path, ''), COALESCE(session_id, ''),
         labels, started_at, last_seen_at, ended_at,
         COALESCE(pid, 0), COALESCE(proc_starttime, ''),
         COALESCE(liveness_unverified_since, ''),
@@ -344,7 +389,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, '')`
+        COALESCE(idle_since, ''), agent, end_reported_at`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -365,7 +410,7 @@ var (
 
 // scanSpawn scans one row selected with spawnColumns into a Spawn. The
 // pre-v5 fields and failures are exactly as before (an unparseable
-// started_at/ended_at or malformed labels, claude_args or extra_env fails the
+// started_at/ended_at or malformed labels, agent_args or extra_env fails the
 // read); the SR-5.5 columns never fail it. The Scan error is wrapped with %w,
 // so callers can still detect sql.ErrNoRows. ReportedState is State.
 func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
@@ -386,6 +431,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		endedAtText     sql.NullString
 		launchStartedAt any
 		noPreTrust      any
+		endReportedAt   any
 		life            lifeScan
 	)
 	dest := append([]any{
@@ -399,7 +445,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt)
 	if reported {
 		dest = append(dest, &sp.ReportedState)
 	}
@@ -415,7 +461,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		sp.EndedAt = &t
 	}
 	if sp.ClaudeArgs, err = decodeArgs(argsJSON); err != nil {
-		return Spawn{}, fmt.Errorf("%s claude_args: %w", errs.decode, err)
+		return Spawn{}, fmt.Errorf("%s agent_args: %w", errs.decode, err)
 	}
 	if sp.Labels, err = decodeLabels(labelsJSON); err != nil {
 		return Spawn{}, fmt.Errorf("%s labels: %w", errs.decode, err)
@@ -425,6 +471,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	}
 	sp.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
 	sp.NoPreTrust = decodeNoPreTrust(noPreTrust)
+	sp.EndReportedAtMillis = decodeEndReportedAt(endReportedAt)
 	sp.EndedAtText = endedAtText.String
 	sp.Snapshot, sp.Identity = life.result()
 	sp.RowVersion = sp.Snapshot.RowVersion
@@ -435,7 +482,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 // serves pause's wait loop and api.Status's fallback for a store without
 // SpawnStatus; production Status reads through SpawnStatus instead.
 func (s *Store) GetSpawnState(instanceID string) (string, error) {
-	const q = `SELECT state FROM spawns WHERE claude_instance_id = ?`
+	const q = `SELECT state FROM spawns WHERE instance_id = ?`
 	var state string
 	err := s.db.QueryRow(q, instanceID).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -466,13 +513,13 @@ func (s *Store) SpawnStatus(instanceID string) (state string, launchStartedAtMil
 func (s *Store) SpawnStatusSettled(instanceID string, r SettleRead) (reported, raw string, launchStartedAtMillis int64, err error) {
 	var (
 		launchStartedAt any
-		q               = `SELECT state, launch_started_at FROM spawns WHERE claude_instance_id = ?`
+		q               = `SELECT state, launch_started_at FROM spawns WHERE instance_id = ?`
 		args            = []any{instanceID}
 		dest            = []any{&raw, &launchStartedAt}
 	)
 	if r.on() {
 		expr, exprArgs := r.stateExpr()
-		q = `SELECT state, launch_started_at, ` + expr + ` FROM spawns WHERE claude_instance_id = ?`
+		q = `SELECT state, launch_started_at, ` + expr + ` FROM spawns WHERE instance_id = ?`
 		args = append(exprArgs, instanceID)
 		dest = append(dest, &reported)
 	}
@@ -489,13 +536,13 @@ func (s *Store) SpawnStatusSettled(instanceID string, r SettleRead) (reported, r
 	return reported, raw, decodeLaunchStartedAt(launchStartedAt), nil
 }
 
-// SpawnState returns the state of the row with the given claude_instance_id
+// SpawnState returns the state of the row with the given instance_id
 // in one read, with exists false and no error when there is no such row. It
 // is the collision pre-check's read (spawn.CollisionChecker; SR-9.3): it
 // tells no row, a live row (IsLiveState) and a finished row apart. err is
 // set only when the store cannot be read.
 func (s *Store) SpawnState(instanceID string) (state string, exists bool, err error) {
-	const q = `SELECT state FROM spawns WHERE claude_instance_id = ?`
+	const q = `SELECT state FROM spawns WHERE instance_id = ?`
 	err = s.db.QueryRow(q, instanceID).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
@@ -521,7 +568,7 @@ const launchStartClear = `launch_started_at = NULL`
 // Returns (state, true, nil) when a row was found.
 func (s *Store) selectPriorState(instanceID string) (string, bool, error) {
 	var state string
-	err := s.db.QueryRow(`SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&state)
+	err := s.db.QueryRow(`SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -572,7 +619,7 @@ const recordLaunchIdentitySQL = `UPDATE spawns
         pane_starttime        = ?,
         ` + launchOwnerClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND row_version = ? AND launch_token = ?`
+  WHERE instance_id = ? AND state = ? AND row_version = ? AND launch_token = ?`
 
 // RecordLaunchIdentity is the identity write after a create reply (SR-3.6,
 // SR-5.3). It applies only while the row is pending with row_version equal to
@@ -624,7 +671,7 @@ func (s *Store) RecordLaunchIdentity(instanceID string, launchVersion int64, tok
 const releaseLaunchOwnerSQL = `UPDATE spawns
     SET ` + launchOwnerClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND launch_token = ? AND launch_owner_pid IS NOT NULL`
+  WHERE instance_id = ? AND state = ? AND launch_token = ? AND launch_owner_pid IS NOT NULL`
 
 // ReleaseLaunchOwner ends a launch's hold on its pending row (b.kdf, b.146
 // rule 11) when the launch ends without its identity write
@@ -680,7 +727,7 @@ const endHeldLaunchSQL = `UPDATE spawns
         ended_at = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND row_version = 0 AND launch_started_at = ?`
+  WHERE instance_id = ? AND state = ? AND row_version = 0 AND launch_started_at = ?`
 
 // EndHeldLaunch is a plain spawn's end write after its create answered
 // "duplicate session" (SR-9.4; PO 2026-09-27 HELD): that answer proves the
@@ -765,7 +812,7 @@ func adoptIdentityArgs(id LaunchIdentity) []any {
 // (SR-3.6, SR-5.3).
 const adoptIdentitySQL = `UPDATE spawns
     SET ` + adoptIdentitySet + `
-  WHERE claude_instance_id = ? AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + snapshotMatchSQL
 
 // AdoptIdentityIfUnchanged is the adoption write (SR-3.6; LFR H2; Appendix
 // F.3): when a lookup found Ours for a row that records no server identity or
@@ -812,7 +859,7 @@ func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot
 // only reads. errPrefix names the write in a driver error.
 func (s *Store) condNotApplied(instanceID, errPrefix string) (CondResult, error) {
 	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&one)
+	err := s.db.QueryRow(`SELECT 1 FROM spawns WHERE instance_id = ?`, instanceID).Scan(&one)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return CondAbsent, nil
@@ -839,7 +886,7 @@ func (s *Store) condNotApplied(instanceID, errPrefix string) (CondResult, error)
 // The write advances row_version by one and leaves launch_started_at
 // unchanged (SR-5.2).
 func (s *Store) SetParentID(instanceID, parentID string) error {
-	const q = `UPDATE spawns SET parent_id = ?, ` + rowVersionAdvance + ` WHERE claude_instance_id = ?`
+	const q = `UPDATE spawns SET parent_id = ?, ` + rowVersionAdvance + ` WHERE instance_id = ?`
 	var parent any
 	if parentID != "" {
 		parent = parentID

@@ -59,7 +59,7 @@ var errRelayNotApplied = errors.New("store: relay request not applied")
 
 // relayInsertSQL is the request insert of InsertRelayRequest.
 const relayInsertSQL = `INSERT INTO permission_requests
-	  (claude_instance_id, request_token, tool_name, tool_input,
+	  (instance_id, request_token, tool_name, tool_input,
 	   hook_pid, hook_starttime, hook_pidns, tool_use_id, agent_id, settled_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
@@ -102,7 +102,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 		stateSet+`, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, `+launchStartClear+`, `+idleClear,
 		stateArgs, req.TranscriptPath, req.TranscriptPresent)
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
-		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&prior)
+		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errRelayNotApplied
 		}
@@ -171,7 +171,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 // ackRelayDecisionSQL is AckRelayDecision's one statement.
 const ackRelayDecisionSQL = `UPDATE permission_requests
 	   SET delivered_at = ?
-	 WHERE claude_instance_id = ? AND request_token = ?
+	 WHERE instance_id = ? AND request_token = ?
 	   AND decision IS NOT NULL AND delivered_at IS NULL AND pane_answer = 'none'
 	 RETURNING decision, COALESCE(decision_reason, '')`
 
@@ -224,7 +224,7 @@ func (s *Store) AckRelayDecision(instanceID, requestToken string, at time.Time, 
 // denyRelayTimeoutSQL is DenyRelayTimeout's one statement.
 const denyRelayTimeoutSQL = `UPDATE permission_requests
 	   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP, delivered_at = ?
-	 WHERE claude_instance_id = ? AND request_token = ?
+	 WHERE instance_id = ? AND request_token = ?
 	   AND decision IS NULL AND pane_answer = 'none'
 	 RETURNING request_id, tool_name`
 
@@ -278,7 +278,7 @@ func (s *Store) DenyRelayTimeout(instanceID, requestToken string, at time.Time, 
 // by the request still awaiting an answer.
 const recordRefusedDecisionSQL = `UPDATE permission_requests AS pr
 	   SET attempted_decision = ?, attempted_at = ?, hook_gone_at = COALESCE(pr.hook_gone_at, ?)
-	 WHERE pr.claude_instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL
+	 WHERE pr.instance_id = ? AND pr.request_token = ? AND ` + awaitingAnswerSQL
 
 // RecordRefusedDecision stores the verdict a decide refused as fallen back
 // tried to record (b.146 rule 15): attempted_decision and attempted_at,
@@ -362,10 +362,10 @@ const evictClosedRequestsSQL = `DELETE FROM permission_requests
 	     SELECT pr.rowid FROM permission_requests pr
 	      WHERE NOT (` + awaitingAnswerSQL + `)
 	        AND (pr.proven_gone_at IS NOT NULL
-	             OR pr.claude_instance_id IN (SELECT claude_instance_id FROM spawns WHERE ` + finishedStateGuardSQL + `))
+	             OR pr.instance_id IN (SELECT instance_id FROM spawns WHERE ` + finishedStateGuardSQL + `))
 	        AND pr.request_id NOT IN (
 	            SELECT MAX(pr.request_id) FROM permission_requests pr
-	             GROUP BY pr.claude_instance_id
+	             GROUP BY pr.instance_id
 	            HAVING SUM(` + awaitingAnswerSQL + `) > 0
 	        )
 	      ORDER BY pr.decided_at ASC

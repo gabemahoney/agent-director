@@ -21,7 +21,7 @@ func SetSettle(dbPath, id, settled string, stampMs int64) error {
 		return fmt.Errorf("SetSettle: %w", err)
 	}
 	defer raw.Close() //nolint:errcheck
-	res, err := raw.Exec(`UPDATE spawns SET settled_state = ?, state_changed_ms = ? WHERE claude_instance_id = ?`,
+	res, err := raw.Exec(`UPDATE spawns SET settled_state = ?, state_changed_ms = ? WHERE instance_id = ?`,
 		settled, stampMs, id)
 	if err != nil {
 		return fmt.Errorf("SetSettle: %w", err)
@@ -39,7 +39,7 @@ func ReadSettle(dbPath, id string) (settled string, stampMs int64, err error) {
 		return "", 0, fmt.Errorf("ReadSettle: %w", err)
 	}
 	defer raw.Close() //nolint:errcheck
-	if err := raw.QueryRow(`SELECT settled_state, state_changed_ms FROM spawns WHERE claude_instance_id = ?`, id).
+	if err := raw.QueryRow(`SELECT settled_state, state_changed_ms FROM spawns WHERE instance_id = ?`, id).
 		Scan(&settled, &stampMs); err != nil {
 		return "", 0, fmt.Errorf("ReadSettle %s: %w", id, err)
 	}

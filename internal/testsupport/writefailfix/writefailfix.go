@@ -107,7 +107,7 @@ func Kinds() []Kind {
 const createTargetsTable = `CREATE TABLE IF NOT EXISTS ad_test_write_failure (
     id                  INTEGER PRIMARY KEY,
     kind                INTEGER NOT NULL,
-    claude_instance_id  TEXT NOT NULL
+    instance_id         TEXT NOT NULL
 )`
 
 // trigger is one CREATE TRIGGER statement and the trigger's name.
@@ -125,7 +125,7 @@ var triggersByKind = map[Kind][]trigger{
 			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_reuse_archive_insert
     BEFORE INSERT ON session_history
     WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 1 AND claude_instance_id = NEW.claude_instance_id)
+                  WHERE kind = 1 AND instance_id = NEW.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: reuse archive');
 END`,
@@ -135,7 +135,7 @@ END`,
 			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_reuse_archive_update
     BEFORE UPDATE ON session_history
     WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 1 AND claude_instance_id = OLD.claude_instance_id)
+                  WHERE kind = 1 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: reuse archive');
 END`,
@@ -148,7 +148,7 @@ END`,
     BEFORE UPDATE ON spawns
     WHEN OLD.state IN ('ended', 'missing') AND NEW.state = 'pending'
      AND EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 2 AND claude_instance_id = OLD.claude_instance_id)
+                  WHERE kind = 2 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: reuse reset');
 END`,
@@ -160,7 +160,7 @@ END`,
 			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_reuse_permission_delete
     BEFORE DELETE ON permission_requests
     WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 3 AND claude_instance_id = OLD.claude_instance_id)
+                  WHERE kind = 3 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: reuse permission-request deletion');
 END`,
@@ -173,7 +173,7 @@ END`,
     BEFORE UPDATE ON spawns
     WHEN OLD.state = 'pending' AND NEW.state IN ('ended', 'missing')
      AND EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 4 AND claude_instance_id = OLD.claude_instance_id)
+                  WHERE kind = 4 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: reuse restore');
 END`,
@@ -193,7 +193,7 @@ END`,
                      pane_id, pane_pid ON spawns
     WHEN NEW.state IS OLD.state
      AND EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 5 AND claude_instance_id = OLD.claude_instance_id)
+                  WHERE kind = 5 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: launch identity write');
 END`,
@@ -208,7 +208,7 @@ END`,
     BEFORE UPDATE OF decision ON permission_requests
     WHEN OLD.decision IS NULL
      AND EXISTS (SELECT 1 FROM ad_test_write_failure
-                  WHERE kind = 6 AND claude_instance_id = OLD.claude_instance_id)
+                  WHERE kind = 6 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: permission decision');
 END`,
@@ -244,7 +244,7 @@ func Install(db *sql.DB, kind Kind, instanceID string) (Handle, error) {
 		}
 	}
 	res, err := tx.Exec(
-		`INSERT INTO ad_test_write_failure (kind, claude_instance_id) VALUES (?, ?)`,
+		`INSERT INTO ad_test_write_failure (kind, instance_id) VALUES (?, ?)`,
 		int(kind), instanceID,
 	)
 	if err != nil {

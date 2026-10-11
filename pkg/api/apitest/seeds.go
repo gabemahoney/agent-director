@@ -23,7 +23,7 @@ import (
 //
 //   - dbPath: path to the SQLite store file.
 //
-//   - id: claude_instance_id; auto-generated UUID if empty.
+//   - id: instance_id; auto-generated UUID if empty.
 //
 //   - state: target state (e.g. "waiting", "working", "ended"). Defaults to
 //     "waiting" if empty.
@@ -33,7 +33,7 @@ import (
 //   - relayMode: relay_mode value ("on"|"off"|""). Defaults to "off" if empty.
 //
 //   - sessionID: if non-empty, recorded after InsertPending through a gated
-//     soft-refresh hook (SR-22.9) so the row has a claude_session_id (required
+//     soft-refresh hook (SR-22.9) so the row has a session_id (required
 //     by the resume verb's pre-flight) and keeps its state: a pending row
 //     seeded with a session id stays pending. Only the session id is seeded
 //     here; the identity columns (pid/proc_starttime/jsonl_path) are seeded
@@ -86,7 +86,10 @@ import (
 // version deltas (after minus before, both read through ReadSpawnColumns),
 // never absolute values, except for a row the test inserted itself.
 //
-// Returns the claude_instance_id that was written.
+// Every seeded row is a Claude row (agent claude, no end report) unless
+// WithAgent or WithEndReportedAt says otherwise.
+//
+// Returns the instance_id that was written.
 func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error) {
 	var (
 		s   *store.Store
@@ -120,6 +123,7 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 		CWD:              cwd,
 		TmuxSessionName:  "ts-" + id,
 		RelayMode:        relayMode,
+		Agent:            store.AgentClaude,
 	}); err != nil {
 		return "", fmt.Errorf("SeedSpawn: InsertPending: %w", err)
 	}
@@ -219,14 +223,14 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		return fmt.Errorf("SeedSpawn: begin options tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
-	q := "UPDATE spawns SET " + strings.Join(setClauses, ", ") + " WHERE claude_instance_id = ?"
+	q := "UPDATE spawns SET " + strings.Join(setClauses, ", ") + " WHERE instance_id = ?"
 	if _, err := tx.Exec(q, args...); err != nil {
 		return fmt.Errorf("SeedSpawn: apply options UPDATE: %w", err)
 	}
 	if pendingDefaultStart {
 		if _, err := tx.Exec(`UPDATE spawns
 		    SET launch_started_at = CAST(strftime('%s', started_at) AS INTEGER) * 1000
-		  WHERE claude_instance_id = ?`, id); err != nil {
+		  WHERE instance_id = ?`, id); err != nil {
 			return fmt.Errorf("SeedSpawn: default launch start UPDATE: %w", err)
 		}
 	}
@@ -251,11 +255,11 @@ func insertSessionHistory(tx *sql.Tx, id string, entries []SessionHistorySeed) e
 		var err error
 		if h.RecordedAt.IsZero() {
 			_, err = tx.Exec(`INSERT INTO session_history
-			    (claude_instance_id, claude_session_id, jsonl_path, life_number)
+			    (instance_id, session_id, jsonl_path, life_number)
 			  VALUES (?, ?, ?, ?)`, id, h.SessionID, pathArg, h.Life)
 		} else {
 			_, err = tx.Exec(`INSERT INTO session_history
-			    (claude_instance_id, claude_session_id, jsonl_path, life_number, recorded_at)
+			    (instance_id, session_id, jsonl_path, life_number, recorded_at)
 			  VALUES (?, ?, ?, ?, ?)`, id, h.SessionID, pathArg, h.Life,
 				h.RecordedAt.UTC().Format(storeTimestampLayout))
 		}

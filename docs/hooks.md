@@ -53,7 +53,7 @@ null.
 
 | Event | Tool matcher | Resulting state (SRD §5.2) |
 | --- | --- | --- |
-| `SessionStart` | — | `waiting` (also writes `claude_session_id`) |
+| `SessionStart` | — | `waiting` (also writes `session_id`) |
 | `UserPromptSubmit` | — | `working` |
 | `PreToolUse` | `*` (all tools) | `working` |
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
@@ -662,7 +662,7 @@ modes.
 ### Per-request rows in `permission_requests`
 
 The v2 schema keys `permission_requests` by a composite
-`UNIQUE(claude_instance_id, request_token)`. Each relay invocation
+`UNIQUE(instance_id, request_token)`. Each relay invocation
 mints its own UUIDv4 `request_token` and INSERTs its own row, so
 concurrent PermissionRequest events for the same Spawn coexist and
 are decided independently — a decision targets exactly one row, and

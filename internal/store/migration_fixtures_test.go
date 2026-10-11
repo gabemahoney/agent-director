@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -227,13 +229,16 @@ func queryStrings(t *testing.T, db *sql.DB, q string, args ...any) []string {
 	return out
 }
 
-// schemaShape is db's every table (its table_info) and index (its columns),
-// keyed "table <name>" and "index <name>".
+// schemaShape is db's every table (its table_info), index (its columns) and
+// foreign keys (each one's column, target table and column and delete action),
+// keyed "table <name>", "index <name>" and "fk <table>".
 func schemaShape(t *testing.T, db *sql.DB) map[string]any {
 	t.Helper()
 	shape := map[string]any{}
 	for _, name := range queryStrings(t, db, `SELECT name FROM sqlite_master WHERE type = 'table'`) {
 		shape["table "+name] = readTableShape(t, db, name)
+		shape["fk "+name] = queryStrings(t, db, `SELECT "from" || ' -> ' || "table" || '(' || COALESCE("to", '') || ') on delete '
+			|| on_delete FROM pragma_foreign_key_list(?) ORDER BY id, seq`, name)
 	}
 	for _, name := range queryStrings(t, db, `SELECT name FROM sqlite_master WHERE type = 'index'`) {
 		shape["index "+name] = queryStrings(t, db, `SELECT name FROM pragma_index_info(?)`, name)
@@ -924,20 +929,38 @@ func unquote(lit string) string {
 	return strings.ReplaceAll(strings.TrimSuffix(strings.TrimPrefix(lit, "'"), "'"), "''", "'")
 }
 
+// idColumn is the instance id column of table in the store db holds:
+// claude_instance_id before the v9 hop, instance_id after (found from the
+// table's columns, so a part-migrated store answers too).
+func idColumn(t *testing.T, db *sql.DB, table string) string {
+	t.Helper()
+	var found []string
+	for _, c := range tableColumnNames(t, db, table) {
+		if c == "claude_instance_id" || c == "instance_id" {
+			found = append(found, c)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s has instance id columns %v; want exactly one", table, found)
+	}
+	return found[0]
+}
+
 // readQuotedRows returns quote() literals of cols (from table_info, never
-// input) for table's rows of instance id, in orderBy order.
+// input; named as the store's version names them) for table's rows of
+// instance id, in orderBy order. The row is picked by the table's id column.
 func readQuotedRows(t *testing.T, path, table, id, orderBy string, cols []string) []map[string]string {
 	t.Helper()
 	sel := make([]string, len(cols))
 	for i, c := range cols {
 		sel[i] = "quote(" + c + ")"
 	}
-	q := "SELECT " + strings.Join(sel, ", ") + " FROM " + table + " WHERE claude_instance_id = ?"
-	if orderBy != "" {
-		q += " ORDER BY " + orderBy
-	}
 	var out []map[string]string
 	withRaw(t, path, func(db *sql.DB) {
+		q := "SELECT " + strings.Join(sel, ", ") + " FROM " + table + " WHERE " + idColumn(t, db, table) + " = ?"
+		if orderBy != "" {
+			q += " ORDER BY " + orderBy
+		}
 		rows, err := db.Query(q, id)
 		if err != nil {
 			t.Fatalf("query %s for %q: %v", table, id, err)
@@ -1112,38 +1135,369 @@ func applyV5ToV4Recipe(t *testing.T, path string) {
 	applyRecipe(t, path, v5ToV4RecipeStatements)
 }
 
-// seedV5DowngradeRows seeds a closed v5 store with a row reused twice (life 2,
-// history in lives 0 to 2, a launch identity) and a row that opted out of
-// pre-trust, returning their ids (SR-5.4).
-func seedV5DowngradeRows(t *testing.T, path string) (reused, optedOut string) {
-	t.Helper()
-	reused, optedOut = "v5-reused", "v5-opted-out"
-	withRaw(t, path, func(db *sql.DB) {
-		// id, state, cwd, tmux name, relay, jsonl, session, started, ended, row
-		// version, launch start, life, no_pre_trust, token, socket, server pid /
-		// started / starttime, pane id / pid / starttime.
-		for _, s := range [][]any{
-			{reused, "ended", "/work/reused", "ad-reused", "off", "/t/r-2.jsonl", "sess-r-2", "2026-02-01 10:00:00",
-				"2026-02-03 10:00:00", 7, nil, 2, 0, "0123456789abcdef", "/tmp/ad-sock", 4100, 1767225600, "123", "%3", 4200, "456"},
-			{optedOut, "waiting", "/work/opted-out", "ad-opted-out", "on", "/t/o.jsonl", "sess-o", "2026-02-04 10:00:00",
-				nil, 3, nil, 0, 1, "fedcba9876543210", "/tmp/ad-sock", 4100, 1767225600, "123", "%4", 4300, "789"},
-		} {
-			mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode,
-				jsonl_path, claude_session_id, started_at, ended_at, row_version, launch_started_at, life_number,
-				no_pre_trust, launch_token, tmux_socket, tmux_server_pid, tmux_server_started, tmux_server_starttime,
-				pane_id, pane_pid, pane_starttime) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, s...)
+// v9RenameSpecs are the six column renames of the v8→v9 hop (SR-3.1), written
+// out here and not read from the hop: its table and the old and new names.
+var v9RenameSpecs = []struct{ table, oldName, newName string }{
+	{"spawns", "claude_instance_id", "instance_id"},
+	{"spawns", "claude_args", "agent_args"},
+	{"spawns", "claude_session_id", "session_id"},
+	{"permission_requests", "claude_instance_id", "instance_id"},
+	{"session_history", "claude_instance_id", "instance_id"},
+	{"session_history", "claude_session_id", "session_id"},
+}
+
+// v9Name is the name col has after the v8→v9 hop: its new name when it was
+// renamed, col itself otherwise.
+func v9Name(col string) string {
+	for _, r := range v9RenameSpecs {
+		if r.oldName == col {
+			return r.newName
 		}
-		// instance id, session id, jsonl path, recorded_at, life.
-		for _, h := range [][]any{
-			{reused, "sess-r-0a", "/t/r-0a.jsonl", "2026-02-01 11:00:00", 0},
-			{reused, "sess-r-0b", nil, "2026-02-01 12:00:00", 0},
-			{reused, "sess-r-1", "/t/r-1.jsonl", "2026-02-02 11:00:00", 1},
-			{reused, "sess-r-2-prior", "/t/r-2p.jsonl", "2026-02-03 09:00:00", 2},
-			{optedOut, "sess-o-prior", "/t/o-prior.jsonl", "2026-02-04 11:00:00", 0},
-		} {
-			mustExec(t, db, `INSERT INTO session_history (claude_instance_id, claude_session_id, jsonl_path,
-				recorded_at, life_number) VALUES (?,?,?,?,?)`, h...)
+	}
+	return col
+}
+
+// v9Cols is cols under their v9 names, to read a migrated store with a column
+// list taken before the hop.
+func v9Cols(cols []string) []string {
+	out := make([]string, len(cols))
+	for i, c := range cols {
+		out[i] = v9Name(c)
+	}
+	return out
+}
+
+// v9Row is row, read before the hop, with its keys under their v9 names, to
+// compare with the same row read after it.
+func v9Row(row map[string]string) map[string]string {
+	if row == nil {
+		return nil
+	}
+	out := make(map[string]string, len(row))
+	for c, v := range row {
+		out[v9Name(c)] = v
+	}
+	return out
+}
+
+// v9Rows is v9Row of each row (nil stays nil).
+func v9Rows(rows []map[string]string) []map[string]string {
+	if rows == nil {
+		return nil
+	}
+	out := make([]map[string]string, len(rows))
+	for i, r := range rows {
+		out[i] = v9Row(r)
+	}
+	return out
+}
+
+// v9ColumnSpecs are the two spawns columns the v8→v9 step adds (SR-3.1), in
+// schema order, after state_changed_ms. agent's default is no agent: the hop
+// backfills claude (assertV9Defaults).
+var v9ColumnSpecs = []columnSpec{
+	{"spawns", "agent", "TEXT", true, "''"},
+	{"spawns", "end_reported_at", "INTEGER", false, ""},
+}
+
+// v9ColumnNames are v9ColumnSpecs' column names, in order.
+func v9ColumnNames() []string {
+	var names []string
+	for _, c := range v9ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// assertV9Defaults checks id's v9 columns hold what the hop gives an existing
+// row: agent claude and no end report (NULL).
+func assertV9Defaults(t *testing.T, path, id string) {
+	t.Helper()
+	got := readRawSpawn(t, path, id, v9ColumnNames())
+	if got["agent"] != "'claude'" || got["end_reported_at"] != "NULL" {
+		t.Errorf("%s: agent %s, end_reported_at %s; want 'claude' and NULL", id, got["agent"], got["end_reported_at"])
+	}
+}
+
+// preRenameV9 renames the named columns ("table.oldname") to their v9 names: a
+// v8→v9 hop that stopped part-way through its renames.
+func preRenameV9(t *testing.T, path string, keys ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, k := range keys {
+			found := false
+			for _, r := range v9RenameSpecs {
+				if r.table+"."+r.oldName == k {
+					mustExec(t, db, fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", r.table, r.oldName, r.newName))
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("unknown v9 rename %q", k)
+			}
 		}
 	})
-	return reused, optedOut
+}
+
+// allV9RenameKeys is every rename as "table.oldname", in the hop's order.
+func allV9RenameKeys() []string {
+	var keys []string
+	for _, r := range v9RenameSpecs {
+		keys = append(keys, r.table+"."+r.oldName)
+	}
+	return keys
+}
+
+// preAddV9Columns adds the named v9 spawns columns with their definitions: a
+// v8→v9 hop that stopped part-way (before its backfill).
+func preAddV9Columns(t *testing.T, path string, names ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, n := range names {
+			for _, spec := range v9ColumnSpecs {
+				if spec.name == n {
+					mustExec(t, db, spec.addColumnDDL())
+				}
+			}
+		}
+	})
+}
+
+// setRowAgent writes agent on id's spawns row, whichever id column the store
+// has: a row that already holds an agent when the hop runs.
+func setRowAgent(t *testing.T, path, id, agent string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, "UPDATE spawns SET agent = ? WHERE "+idColumn(t, db, "spawns")+" = ?", agent, id)
+	})
+}
+
+// agentsHeld returns, by id, the agent of each of ids' rows that holds one
+// (not ""); nil when spawns has no agent column yet.
+func agentsHeld(t *testing.T, path string, ids []string) map[string]string {
+	t.Helper()
+	var has bool
+	withRaw(t, path, func(db *sql.DB) { has = slices.Contains(tableColumnNames(t, db, "spawns"), "agent") })
+	if !has {
+		return nil
+	}
+	held := map[string]string{}
+	for _, id := range ids {
+		if a := unquote(readRawSpawn(t, path, id, []string{"agent"})["agent"]); a != "" {
+			held[id] = a
+		}
+	}
+	return held
+}
+
+// breakV9BothNames adds session_history.session_id beside claude_session_id: a
+// table holding an old and its new name. The hop validates before it changes
+// anything, so it renames nothing, not even spawns' columns that come first.
+func breakV9BothNames(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE session_history ADD COLUMN session_id TEXT") })
+}
+
+// breakV9NeitherName renames spawns.claude_args to a name the hop does not
+// know: a table holding neither the old nor the new name.
+func breakV9NeitherName(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE spawns RENAME COLUMN claude_args TO args_backup") })
+}
+
+// breakV9Backfill makes every update of a spawns row fail: the hop renames
+// every column and adds both new ones, then fails at its agent backfill.
+func breakV9Backfill(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `CREATE TRIGGER ad_test_fail_agent_backfill BEFORE UPDATE ON spawns
+			BEGIN SELECT RAISE(ABORT, 'test: the agent backfill fails'); END`)
+	})
+}
+
+// seedPreMigrationRow inserts the row 'pre' (working, relay on, settled when
+// the store has the settle columns) into the closed older-version store at
+// path, and, at v1, a request of it (v1 has no request token).
+func seedPreMigrationRow(t *testing.T, path string, from int) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		id := idColumn(t, db, "spawns")
+		mustExec(t, db, "INSERT INTO spawns ("+id+`, state, cwd, tmux_session_name, relay_mode)
+			VALUES ('pre', 'working', '/tmp', 'pre-sess', 'on')`)
+		if slices.Contains(tableColumnNames(t, db, "spawns"), "settled_state") { // a store with the settle time has the row settled
+			mustExec(t, db, `UPDATE spawns SET settled_state = state WHERE `+id+` = 'pre'`)
+		}
+		if from == 1 {
+			mustExec(t, db, "INSERT INTO permission_requests ("+idColumn(t, db, "permission_requests")+
+				", tool_name, tool_input) VALUES ('pre', 'Bash', '{}')")
+		}
+	})
+}
+
+// insertRow inserts row (column to value) into table; the columns are the
+// test's own literals.
+func insertRow(t *testing.T, db *sql.DB, table string, row map[string]any) {
+	t.Helper()
+	cols := make([]string, 0, len(row))
+	for c := range row {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+	vals := make([]any, len(cols))
+	for i, c := range cols {
+		vals[i] = row[c]
+	}
+	mustExec(t, db, "INSERT INTO "+table+" ("+strings.Join(cols, ", ")+") VALUES (?"+strings.Repeat(", ?", len(cols)-1)+")", vals...)
+}
+
+// The ids of makeV8Fixture's rows.
+const (
+	v8PendingID   = "v8-pending"
+	v8LiveID      = "v8-live"
+	v8RelayID     = "v8-relay"
+	v8UnsettledID = "v8-unsettled"
+	v8ReusedID    = "v8-reused"
+	v8OptedOutID  = "v8-opted-out"
+	v8MissingID   = "v8-missing"
+)
+
+// v8Fixture describes what makeV8Fixture seeded: the baseline of the v8→v9
+// hop, also the start of every downgrade test. Every map holds quote()
+// literals of every v8 column, under v8's names, read before the hop.
+type v8Fixture struct {
+	dir, path string
+	ids       []string // spawns ids, parents first
+
+	spawnCols, requestCols, historyCols []string
+	rows                                map[string]map[string]string   // id → column → literal
+	requests                            map[string][]map[string]string // id → requests, request_id order
+	history                             map[string][]map[string]string // id → entries, newest first
+}
+
+// makeV8Fixture builds a genuine v8 store under dir, closed, holding the rows
+// the v8→v9 hop and the downgrade tests need, seeded by raw SQL under v8's names:
+//   - v8PendingID: pending, mid-launch, with its launch owner and identity;
+//   - v8LiveID: waiting with args, session, labels, extra env, every identity,
+//     a launch owner, an idle mark and one archived session;
+//   - v8RelayID: check_permission with an open relay request holding its hook's
+//     identity and a decided one;
+//   - v8UnsettledID: working over a waiting settled state, child of v8LiveID;
+//   - v8ReusedID: ended at life 2 with history in lives 0 to 2;
+//   - v8OptedOutID: waiting, no_pre_trust, one archived session;
+//   - v8MissingID: missing with a closed request proven gone.
+func makeV8Fixture(t *testing.T, dir string) v8Fixture {
+	t.Helper()
+	f := v8Fixture{dir: dir, path: makeVersionedDB(t, dir, 8), rows: map[string]map[string]string{},
+		requests: map[string][]map[string]string{}, history: map[string][]map[string]string{}}
+	f.ids = []string{v8LiveID, v8PendingID, v8RelayID, v8UnsettledID, v8ReusedID, v8OptedOutID, v8MissingID}
+	const (
+		token  = "0123456789abcdef"
+		socket = "/tmp/ad-v8/sock"
+		pidns  = "pid:[4026531836]"
+	)
+	spawn := func(id string, over map[string]any) map[string]any {
+		row := map[string]any{"claude_instance_id": id, "state": "waiting", "cwd": "/work/" + id, "tmux_session_name": "ad-" + id,
+			"relay_mode": "off", "started_at": "2026-05-01 10:00:00", "last_seen_at": "2026-05-01 10:05:00",
+			"row_version": 3, "settled_state": "waiting"}
+		for c, v := range over {
+			row[c] = v
+		}
+		return row
+	}
+	identity := func(pane string, pid int) map[string]any {
+		return map[string]any{"launch_token": token, "tmux_socket": socket, "tmux_server_pid": 4100,
+			"tmux_server_started": 1767225600, "tmux_server_starttime": "123", "pane_id": pane, "pane_pid": pid, "pane_starttime": "456"}
+	}
+	merge := func(base, more map[string]any) map[string]any {
+		for c, v := range more {
+			base[c] = v
+		}
+		return base
+	}
+	spawns := []map[string]any{
+		spawn(v8LiveID, merge(map[string]any{"relay_mode": "on", "claude_args": `["--model","opus"]`, "jsonl_path": "/t/live.jsonl",
+			"claude_session_id": "sess-live", "labels": `{"team":"red"}`, "extra_env": `{"K":"V"}`, "pid": 4242, "proc_starttime": "98765",
+			"liveness_unverified_since": "2026-05-01 10:04:00", "liveness_note": "probe_eacces", "row_version": 5,
+			"launch_owner_pid": 4300, "launch_owner_starttime": "12345", "launch_owner_pidns": pidns,
+			"idle_since": "2026-05-01 10:03:00", "state_changed_ms": 1790000000000}, identity("%2", 4242))),
+		spawn(v8PendingID, map[string]any{"state": "pending", "settled_state": "pending", "row_version": 1,
+			"launch_started_at": int64(1790000000123), "launch_token": token, "tmux_socket": socket,
+			"launch_owner_pid": 4300, "launch_owner_starttime": "12345", "launch_owner_pidns": pidns}),
+		spawn(v8RelayID, map[string]any{"state": "check_permission", "settled_state": "check_permission", "relay_mode": "on", "row_version": 4}),
+		spawn(v8UnsettledID, map[string]any{"state": "working", "settled_state": "waiting", "parent_id": v8LiveID,
+			"state_changed_ms": 1790000000500, "row_version": 4}),
+		spawn(v8ReusedID, merge(map[string]any{"state": "ended", "settled_state": "ended", "jsonl_path": "/t/r-2.jsonl",
+			"claude_session_id": "sess-r-2", "started_at": "2026-02-01 10:00:00", "ended_at": "2026-02-03 10:00:00",
+			"row_version": 7, "life_number": 2, "claude_args": `["--resume"]`}, identity("%3", 4200))),
+		spawn(v8OptedOutID, map[string]any{"relay_mode": "on", "no_pre_trust": 1, "jsonl_path": "/t/o.jsonl",
+			"claude_session_id": "sess-o", "launch_token": "fedcba9876543210", "tmux_socket": socket}),
+		spawn(v8MissingID, map[string]any{"state": "missing", "settled_state": "missing", "ended_at": "2026-05-01 12:00:00"}),
+	}
+	const (
+		openTok    = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+		decidedTok = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+		goneTok    = "cccccccc-cccc-4ccc-cccc-cccccccccccc"
+	)
+	requests := []map[string]any{
+		{"claude_instance_id": v8RelayID, "request_token": openTok, "tool_name": "Bash", "tool_input": `{"command":"ls"}`,
+			"created_at": "2026-05-03 10:00:00", "hook_pid": 4321, "hook_starttime": "777", "hook_pidns": pidns,
+			"tool_use_id": "toolu_01", "agent_id": "agent-1", "settled_at": 1790000000000},
+		{"claude_instance_id": v8RelayID, "request_token": decidedTok, "tool_name": "Read", "tool_input": "{}", "decision": "allow",
+			"decided_at": "2026-05-03 09:00:05", "created_at": "2026-05-03 09:00:00", "delivered_at": 1790000000100},
+		{"claude_instance_id": v8MissingID, "request_token": goneTok, "tool_name": "Bash", "tool_input": "{}", "decision": "deny",
+			"decision_reason": "ended", "decided_at": "2026-05-01 11:00:00", "created_at": "2026-05-01 10:30:00",
+			"closed_at": 1790000000200, "proven_gone_at": 1790000000300, "proven_gone_how": "agent_gone"},
+	}
+	histories := []map[string]any{
+		{"claude_instance_id": v8LiveID, "claude_session_id": "sess-live-prior", "jsonl_path": "/t/live-prior.jsonl", "recorded_at": "2026-05-01 10:01:00"},
+		{"claude_instance_id": v8ReusedID, "claude_session_id": "sess-r-0a", "jsonl_path": "/t/r-0a.jsonl", "recorded_at": "2026-02-01 11:00:00", "life_number": 0},
+		{"claude_instance_id": v8ReusedID, "claude_session_id": "sess-r-0b", "recorded_at": "2026-02-01 12:00:00", "life_number": 0},
+		{"claude_instance_id": v8ReusedID, "claude_session_id": "sess-r-1", "jsonl_path": "/t/r-1.jsonl", "recorded_at": "2026-02-02 11:00:00", "life_number": 1},
+		{"claude_instance_id": v8ReusedID, "claude_session_id": "sess-r-2-prior", "jsonl_path": "/t/r-2p.jsonl", "recorded_at": "2026-02-03 09:00:00", "life_number": 2},
+		{"claude_instance_id": v8OptedOutID, "claude_session_id": "sess-o-prior", "jsonl_path": "/t/o-prior.jsonl", "recorded_at": "2026-05-01 10:02:00"},
+	}
+	withRaw(t, f.path, func(db *sql.DB) {
+		for _, tbl := range []struct {
+			name string
+			rows []map[string]any
+		}{{"spawns", spawns}, {"permission_requests", requests}, {"session_history", histories}} {
+			for _, r := range tbl.rows {
+				insertRow(t, db, tbl.name, r)
+			}
+		}
+		f.spawnCols, f.requestCols, f.historyCols = tableColumnNames(t, db, "spawns"),
+			tableColumnNames(t, db, "permission_requests"), tableColumnNames(t, db, "session_history")
+	})
+	for _, id := range f.ids {
+		f.rows[id] = readRawSpawn(t, f.path, id, f.spawnCols)
+		f.requests[id] = readQuotedRows(t, f.path, "permission_requests", id, "request_id", f.requestCols)
+		f.history[id] = readRawHistory(t, f.path, id, f.historyCols)
+	}
+	return f
+}
+
+// assertV8ValuesKept fails unless every value makeV8Fixture seeded in the
+// store at path (migrated through the v8→v9 hop) reads back under its v9 name:
+// every spawns row, request and history entry, each row's agent claude (or
+// held's) and no end report.
+func assertV8ValuesKept(t *testing.T, path string, f v8Fixture, held map[string]string) {
+	t.Helper()
+	for _, id := range f.ids {
+		if got, want := readRawSpawn(t, path, id, v9Cols(f.spawnCols)), v9Row(f.rows[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: v8 values changed:\n got  %v\n want %v", id, got, want)
+		}
+		if got, want := readQuotedRows(t, path, "permission_requests", id, "request_id", v9Cols(f.requestCols)), v9Rows(f.requests[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: requests changed:\n got  %v\n want %v", id, got, want)
+		}
+		if got, want := readRawHistory(t, path, id, v9Cols(f.historyCols)), v9Rows(f.history[id]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: history changed:\n got  %v\n want %v", id, got, want)
+		}
+		wantAgent := "'claude'"
+		if a, ok := held[id]; ok {
+			wantAgent = "'" + a + "'"
+		}
+		if got := readRawSpawn(t, path, id, v9ColumnNames()); got["agent"] != wantAgent || got["end_reported_at"] != "NULL" {
+			t.Errorf("%s: agent %s, end_reported_at %s; want %s and NULL", id, got["agent"], got["end_reported_at"], wantAgent)
+		}
+	}
 }

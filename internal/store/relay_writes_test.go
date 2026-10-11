@@ -131,7 +131,7 @@ func requestDump(t *testing.T, path string) []map[string]string {
 func setPaneAnswer(t *testing.T, path, token, value string) {
 	t.Helper()
 	withRaw(t, path, func(db *sql.DB) {
-		mustExec(t, db, `UPDATE permission_requests SET pane_answer = ? WHERE claude_instance_id = ? AND request_token = ?`, value, relayID, token)
+		mustExec(t, db, `UPDATE permission_requests SET pane_answer = ? WHERE instance_id = ? AND request_token = ?`, value, relayID, token)
 	})
 }
 

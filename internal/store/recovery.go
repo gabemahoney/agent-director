@@ -65,7 +65,7 @@ type LiveSpawnIdentity struct {
 // decodeLaunchStartedAt and launch_token by decodeLaunchToken, and the
 // nullable columns read NULL as their zero value through COALESCE, so no
 // stored launch start, token, identity or owner value fails the read; the
-// structured columns (labels, claude_args, extra_env) are never read
+// structured columns (labels, agent_args, extra_env) are never read
 // (SR-5.5).
 //
 // Order is unspecified. Callers that need stable ordering sort the
@@ -77,7 +77,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 		placeholders[i] = "?"
 		args[i] = st
 	}
-	q := "SELECT claude_instance_id, state, launch_started_at, COALESCE(liveness_note, ''), " + lifeColumns +
+	q := "SELECT instance_id, state, launch_started_at, COALESCE(liveness_note, ''), " + lifeColumns +
 		", " + launchOwnerColumns +
 		" FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := s.db.Query(q, args...)
@@ -131,7 +131,7 @@ func emitOrphanCloseoutTick(instanceID, requestToken string) {
 // JSONL transcripts; the caller is expected to have already torn
 // those down or accept the orphan.
 func (s *Store) DeleteSpawn(instanceID string) error {
-	const q = `DELETE FROM spawns WHERE claude_instance_id = ?`
+	const q = `DELETE FROM spawns WHERE instance_id = ?`
 	res, err := s.db.Exec(q, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: delete spawn: %w", err)

@@ -233,7 +233,7 @@ func pinReadSurfaceTimes(dbPath string, rows []readSurfaceRow) error {
 	defer func() { _ = tx.Rollback() }() // no-op after Commit
 	for i, r := range rows {
 		seen := readSurfaceBase.Add(time.Duration(i)*time.Minute + 30*time.Second)
-		if _, err := tx.Exec(`UPDATE spawns SET last_seen_at = ? WHERE claude_instance_id = ?`,
+		if _, err := tx.Exec(`UPDATE spawns SET last_seen_at = ? WHERE instance_id = ?`,
 			seen.Format(storeTimestampLayout), r.id); err != nil {
 			return fmt.Errorf("SeedReadSurfaceStore: pin last_seen_at of %s: %w", r.id, err)
 		}
@@ -244,7 +244,7 @@ func pinReadSurfaceTimes(dbPath string, rows []readSurfaceRow) error {
 			gone = req.hookGone.UnixMilli()
 		}
 		if _, err := tx.Exec(`UPDATE permission_requests SET created_at = ?, hook_gone_at = ?
-		                       WHERE claude_instance_id = ? AND request_token = ?`,
+		                       WHERE instance_id = ? AND request_token = ?`,
 			req.created.Format(storeTimestampLayout), gone, req.spawnID, req.token); err != nil {
 			return fmt.Errorf("SeedReadSurfaceStore: pin request %s: %w", req.token, err)
 		}

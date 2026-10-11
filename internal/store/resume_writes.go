@@ -17,6 +17,10 @@ type ResumePrior struct {
 	ProcStarttime           string // "" = NULL
 	LivenessUnverifiedSince string // "" = NULL
 	LivenessNote            string // "" = NULL
+	// EndReportedAtMillis is end_reported_at as stored, milliseconds since the
+	// epoch; 0 = NULL (no end report). The move clears it and a failed
+	// resume's restore writes it back.
+	EndReportedAtMillis int64
 	// Identity is the pre-move launch_token, tmux_socket and server and pane
 	// identity, as stored, so the restore writes the previous token back and
 	// the label of the row's earlier launch stays current (amendment 1; LFR H3).
@@ -40,6 +44,7 @@ const moveToPendingSQL = `UPDATE spawns
         pane_id                   = NULL,
         pane_pid                  = NULL,
         pane_starttime            = NULL,
+        end_reported_at           = NULL,
         launch_started_at         = ?,
         launch_token              = ?,
         tmux_socket               = ?,
@@ -48,7 +53,7 @@ const moveToPendingSQL = `UPDATE spawns
         launch_owner_starttime    = ?,
         launch_owner_pidns        = ?,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // MoveToPending is resume's move of a finished row to pending, the write that
 // begins its launch (SR-8.3), with a backstop close of the row's open
@@ -62,15 +67,15 @@ const moveToPendingSQL = `UPDATE spawns
 // pending as an immediate write (settled_state pending, state_changed_ms the
 // statement's clock; b.3ie: a caller that has just resumed never reads the
 // row ended for the settle time); clears pid, proc_starttime, ended_at, liveness_unverified_since,
-// liveness_note and the six server and pane identity columns; sets
-// launch_started_at to launchStartedAtMillis (the caller's clock; the store
+// liveness_note, end_reported_at and the six server and pane identity columns;
+// sets launch_started_at to launchStartedAtMillis (the caller's clock; the store
 // reads none), launch_token to token, tmux_socket to socket, parent_id to
 // parentID and the three launch-owner columns to owner (the resume records
 // itself as the owner of the launch it begins, b.kdf), each zero value
 // written as NULL; and advances row_version by one. Every other column
-// (claude_session_id, jsonl_path, life_number, no_pre_trust, started_at,
-// last_seen_at and the request fields) is unchanged, and session_history is
-// not touched.
+// (session_id, jsonl_path, life_number, no_pre_trust, started_at,
+// last_seen_at, agent and the request fields) is unchanged, and session_history
+// is not touched.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request
 // of the row that still awaits an answer gets closed_at, an undecided one
@@ -162,9 +167,10 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
         pane_id                   = ?,
         pane_pid                  = ?,
         pane_starttime            = ?,
+        end_reported_at           = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state = ? AND row_version = ?`
+  WHERE instance_id = ? AND state = ? AND row_version = ?`
 
 // RestoreAfterFailedResume undoes resume's move after a launch that failed
 // other than by a timeout (SR-8.5). It is one conditional statement (SR-5.6)
@@ -172,14 +178,14 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
 // movedVersion, the version MoveToPending produced. In that statement it sets
 // state to prior.State as an immediate write (settled_state prior.State,
 // state_changed_ms the statement's clock; b.3ie); writes ended_at, pid, proc_starttime,
-// liveness_unverified_since and liveness_note from prior, and launch_token,
-// tmux_socket and the six server and pane identity columns from
+// liveness_unverified_since, liveness_note and end_reported_at from prior, and
+// launch_token, tmux_socket and the six server and pane identity columns from
 // prior.Identity, each zero value as NULL; sets launch_started_at to NULL; and
 // advances row_version by one. The texts are bound as the stored text they
 // were read as, never parsed or re-formatted (SR-5.3), so ended_at and
 // liveness_unverified_since read back byte for byte. Every other column is
 // unchanged: parent_id keeps the move's value (RR5b T-h), and
-// claude_session_id, jsonl_path, life_number, no_pre_trust, started_at,
+// session_id, jsonl_path, life_number, no_pre_trust, started_at,
 // last_seen_at and the request fields are untouched. It never touches
 // session_history or permission_requests and emits no trail event.
 //
@@ -210,6 +216,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
 		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
 		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
+		positiveInt64Arg(prior.EndReportedAtMillis),
 		instanceID, StatePending, movedVersion,
 	)
 	r, err := s.db.Exec(restoreAfterFailedResumeSQL, args...)

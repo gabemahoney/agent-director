@@ -44,6 +44,7 @@ func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 	t.Helper()
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: id,
+		Agent:            store.AgentClaude,
 		CWD:              "/tmp",
 		TmuxSessionName:  "cd-" + id,
 		RelayMode:        relayMode,
@@ -54,7 +55,7 @@ func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 }
 
 // SeedErrSpawnNotFound returns an empty store. Callers invoke verbs with a
-// non-existent claude_instance_id to trigger ErrSpawnNotFound.
+// non-existent instance_id to trigger ErrSpawnNotFound.
 func SeedErrSpawnNotFound(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	return openErrStore(t)

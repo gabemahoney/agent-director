@@ -79,6 +79,11 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			Labels:           r.AgentDirectorLabels,
 			ExtraEnv:         r.ExtraEnv,
 			NoPreTrust:       r.NoPreTrust,
+			// Interim (schema v9): every launch is a Claude launch until the
+			// agent input resolves the row's agent. The one place the row's
+			// agent is set, for spawn's insert (insertPending) and reuse's
+			// reset (ResetForReuse) alike.
+			Agent: store.AgentClaude,
 		},
 	}, nil
 }

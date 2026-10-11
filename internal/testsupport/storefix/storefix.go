@@ -55,6 +55,7 @@ func OpenTempStore(t *testing.T) (*store.Store, string) {
 func defaultSpawn(id string) store.Spawn {
 	return store.Spawn{
 		ClaudeInstanceID: id,
+		Agent:            store.AgentClaude,
 		State:            store.StatePending,
 		CWD:              "/tmp",
 		TmuxSessionName:  "sess-" + id,
@@ -92,7 +93,7 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	return row
 }
 
-// SeedResumable inserts a Spawn in StateEnded with a claude_session_id
+// SeedResumable inserts a Spawn in StateEnded with a session_id
 // (recorded by the agent's gated writes through a seed pane, removed
 // afterwards, as for SeedCheckPermission; row_version 2) and a placeholder transcript at spawn.JsonlPath under HOME,
 // which must be a temp directory, so resume's pre-flight passes. s must come
@@ -179,7 +180,7 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 		at := baseTime.Add(time.Duration(i) * step)
 		if _, err := raw.Exec(
 			`UPDATE permission_requests SET decided_at = ?, proven_gone_at = ?, proven_gone_how = ?
-			  WHERE claude_instance_id = ? AND request_token = ?`,
+			  WHERE instance_id = ? AND request_token = ?`,
 			at.UTC().Format("2006-01-02 15:04:05"), at.UnixMilli(), store.ProvenGoneTurnEnd, instanceID, tok,
 		); err != nil {
 			t.Fatalf("storefix.SeedClosedPermissionRequests: backdate decided_at and prove (%q, %q): %v", instanceID, tok, err)
@@ -218,7 +219,7 @@ func SeedUndeliverablePermissionRequest(t *testing.T, s *store.Store, dbPath, in
 
 	backdate := time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05")
 	res, err := raw.Exec(
-		`UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL`,
+		`UPDATE permission_requests SET created_at = ? WHERE instance_id = ? AND request_token = ? AND decision IS NULL`,
 		backdate, instanceID, requestToken,
 	)
 	if err != nil {

@@ -5,7 +5,8 @@ package store
 // refusals, step re-entry (b.93m), rollback and the consume. Fixtures:
 // migration_fixtures_test.go; v5 data, store id and downgrade cases:
 // schema_v5_test.go; v6 data and downgrade cases: schema_v6_test.go; v7's:
-// schema_v7_test.go; v8's (b.3ie): schema_v8_test.go.
+// schema_v7_test.go; v8's (b.3ie): schema_v8_test.go; v9's (b.ssz):
+// schema_v9_test.go.
 
 import (
 	"bytes"
@@ -52,9 +53,10 @@ func columnsByName(shape map[string]any) map[string]any {
 }
 
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
-// schemaVersion, every table and index, the v3, v5, v6, v7 and v8 columns (in
-// order, last on their tables), store_meta, WAL and foreign keys on, no
-// sentinel, and a 0700 parent and 0600 file that a second open does not widen.
+// schemaVersion, every table, index and foreign key, the v9 renames at their
+// old positions, the v3, v5, v6, v7, v8 and v9 columns (in order, last on their
+// tables), store_meta, WAL and foreign keys on, no sentinel, and a 0700 parent
+// and 0600 file that a second open does not widen.
 func TestFreshStoreSchema(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent-director") // OpenOrInit creates the parent
 	path := filepath.Join(dir, "state.db")
@@ -97,24 +99,50 @@ func TestFreshStoreSchema(t *testing.T) {
 			t.Errorf("%s missing", name)
 		}
 	}
-	// v2's composite UNIQUE(claude_instance_id, request_token).
-	if got := shape["index sqlite_autoindex_permission_requests_1"]; !reflect.DeepEqual(got, []string{"claude_instance_id", "request_token"}) {
-		t.Errorf("permission_requests unique index = %v; want (claude_instance_id, request_token)", got)
+	// v2's composite UNIQUE(instance_id, request_token), the history's unique
+	// pair and the two indexes on the instance id, under the v9 names.
+	for index, want := range map[string][]string{
+		"sqlite_autoindex_permission_requests_1":    {"instance_id", "request_token"},
+		"sqlite_autoindex_session_history_1":        {"instance_id", "session_id"},
+		"idx_permission_requests_instance_decision": {"instance_id", "decision"},
+		"idx_session_history_instance":              {"instance_id"},
+	} {
+		if got := shape["index "+index]; !reflect.DeepEqual(got, want) {
+			t.Errorf("index %s = %v; want %v", index, got, want)
+		}
+	}
+	for table, want := range map[string][]string{
+		"spawns":              {"parent_id -> spawns(instance_id) on delete SET NULL"},
+		"permission_requests": {"instance_id -> spawns(instance_id) on delete CASCADE"},
+		"session_history":     {"instance_id -> spawns(instance_id) on delete CASCADE"},
+	} {
+		if got := shape["fk "+table]; !reflect.DeepEqual(got, want) {
+			t.Errorf("foreign keys of %s = %v; want %v", table, got, want)
+		}
 	}
 	if got := shape["table store_meta"]; !reflect.DeepEqual(got, storeMetaShape) {
 		t.Errorf("store_meta = %+v; want %+v", got, storeMetaShape)
 	}
-	if got, want := tableColumnNames(t, db, "session_history"), []string{"history_id", "claude_instance_id",
-		"claude_session_id", "jsonl_path", "recorded_at", "life_number"}; !slices.Equal(got, want) {
+	if got, want := tableColumnNames(t, db, "session_history"), []string{"history_id", "instance_id",
+		"session_id", "jsonl_path", "recorded_at", "life_number"}; !slices.Equal(got, want) {
 		t.Errorf("session_history columns = %v; want %v", got, want)
 	}
-	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs, v8ColumnSpecs))
-	// spawns ends with the v6 columns, v7's idle_since, then the v8 columns;
-	// permission_requests with the v7 columns after created_at (the
-	// two-places rule's order).
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames())
+	// The renamed columns keep their positions: spawns' first nine columns,
+	// permission_requests' first two.
+	if got, want := tableColumnNames(t, db, "spawns")[:9], []string{"instance_id", "parent_id", "state", "cwd",
+		"tmux_session_name", "agent_args", "relay_mode", "jsonl_path", "session_id"}; !slices.Equal(got, want) {
+		t.Errorf("spawns' first columns = %v; want %v", got, want)
+	}
+	if got, want := tableColumnNames(t, db, "permission_requests")[:2], []string{"request_id", "instance_id"}; !slices.Equal(got, want) {
+		t.Errorf("permission_requests' first columns = %v; want %v", got, want)
+	}
+	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs, v8ColumnSpecs, v9ColumnSpecs))
+	// spawns ends with the v6 columns, v7's idle_since, the v8 columns, then
+	// agent and end_reported_at; permission_requests with the v7 columns after
+	// created_at (the two-places rule's order).
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames())
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
-		t.Errorf("spawns columns = %v; want the v6, v7 then v8 columns last, in order %v", cols, wantSpawnsTail)
+		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}
 	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
 	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
@@ -127,7 +155,7 @@ func TestFreshStoreSchema(t *testing.T) {
 // TestNoAgentSuppliedIdentifierIsAKey: the hook input's tool_use_id and
 // agent_id are recorded on a request (b.146 rule 2) but never identify one
 // (b.c26): no index, UNIQUE or primary key covers either; a request stays
-// keyed by its row id and (claude_instance_id, request_token), the token the
+// keyed by its row id and (instance_id, request_token), the token the
 // relay hook mints.
 func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 	s, _ := openTempStore(t)
@@ -147,11 +175,11 @@ func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 
 // TestAuthorizedMigrationFromEveryVersion: each released version beside an
 // exact-match sentinel climbs the real chain in one open to the fresh store's
-// schema (the two-places rule), consumes the sentinel with one
-// ad.schema.migrated line, keeps a pre-existing row with the new columns'
-// defaults and one store id, and does not backfill v1's permission rows. A
-// reopen is a clean no-op, and a stale sentinel beside the current store is
-// left alone (SR-1, SR-2, SR-5.4).
+// schema (the two-places rule, foreign keys included), consumes the sentinel
+// with one ad.schema.migrated line, keeps a pre-existing row with the new
+// columns' defaults (agent claude, no end report) and one store id, and does
+// not backfill v1's permission rows. A reopen is a clean no-op, and a stale
+// sentinel beside the current store is left alone (SR-1, SR-2, SR-5.4).
 func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 	fresh, _ := openTempStore(t)
 	want := schemaShape(t, fresh.db)
@@ -159,13 +187,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", from), func(t *testing.T) {
 			dir := t.TempDir()
 			path := makeVersionedDB(t, dir, from)
-			withRaw(t, path, func(db *sql.DB) {
-				mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode)
-					VALUES ('pre', 'working', '/tmp', 'pre-sess', 'on')`)
-				if from == 1 { // v1's permission_requests has no request_token
-					mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, tool_name, tool_input) VALUES ('pre', 'Bash', '{}')`)
-				}
-			})
+			seedPreMigrationRow(t, path, from)
 			writeSentinel(t, dir, from, schemaVersion)
 			mark := TrailMark(t)
 
@@ -186,8 +208,8 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			sp, err := s.GetSpawn("pre")
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
 				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
-				sp.LaunchOwner != (LaunchOwner{}) {
-				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults", sp, err)
+				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 {
+				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude and no end report", sp, err)
 			}
 			id := s.StoreID()
 			if err := s.Close(); err != nil {
@@ -206,6 +228,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertV6Defaults(t, path, "pre")
 			assertV7Defaults(t, path, "pre")
 			assertV8Defaults(t, path, "pre")
+			assertV9Defaults(t, path, "pre")
 			if raw := assertOneStoreID(t, path); raw != id {
 				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
 			}
@@ -328,7 +351,8 @@ func TestNewerThanBinaryIsSchemaMismatch(t *testing.T) {
 
 // TestMigrationStepReentry: a step re-run over a DB it migrated wholly or in
 // part succeeds and gives the schema one run gives (b.93m); v4→v5 and every
-// later hop never add a second store id or replace one (SR-5.4).
+// later hop never add a second store id or replace one (SR-5.4). The v8→v9 rows
+// run over a v8 fixture and also keep every value, a row's held agent included.
 func TestMigrationStepReentry(t *testing.T) {
 	const preID = "0123456789abcdef"
 	var allV5 []string
@@ -353,6 +377,15 @@ func TestMigrationStepReentry(t *testing.T) {
 	}
 	preV8 := func(names ...string) func(*testing.T, string) {
 		return func(t *testing.T, path string) { preAddV8Columns(t, path, names...) }
+	}
+	preV9Renames := func(keys ...string) func(*testing.T, string) {
+		return func(t *testing.T, path string) { preRenameV9(t, path, keys...) }
+	}
+	// every rename and column done, one row already holding an agent the backfill must keep
+	preV9Held := func(t *testing.T, path string) {
+		preRenameV9(t, path, allV9RenameKeys()...)
+		preAddV9Columns(t, path, v9ColumnNames()...)
+		setRowAgent(t, path, v8LiveID, AgentCodex)
 	}
 	cases := []struct {
 		name   string
@@ -384,15 +417,37 @@ func TestMigrationStepReentry(t *testing.T) {
 		{"v7→v8 run twice", 7, nil, 2, ""},
 		{"v7→v8 after settled_state", 7, preV8("settled_state"), 1, ""},
 		{"v7→v8 after both columns, before the backfill", 7, preV8(v8ColumnNames()...), 1, ""},
+		{"v8→v9 run twice", 8, nil, 2, ""},
+		{"v8→v9 after spawns' first rename", 8, preV9Renames("spawns.claude_instance_id"), 1, ""},
+		{"v8→v9 after spawns' three renames", 8, preV9Renames("spawns.claude_instance_id", "spawns.claude_args", "spawns.claude_session_id"), 1, ""},
+		{"v8→v9 after a mix across the three tables", 8, preV9Renames("spawns.claude_args", "permission_requests.claude_instance_id",
+			"session_history.claude_session_id"), 1, ""},
+		{"v8→v9 after all six renames", 8, preV9Renames(allV9RenameKeys()...), 1, ""},
+		{"v8→v9 after the renames and agent", 8, func(t *testing.T, path string) {
+			preRenameV9(t, path, allV9RenameKeys()...)
+			preAddV9Columns(t, path, "agent")
+		}, 1, ""},
+		{"v8→v9 after the renames and both columns, before the backfill", 8, func(t *testing.T, path string) {
+			preRenameV9(t, path, allV9RenameKeys()...)
+			preAddV9Columns(t, path, v9ColumnNames()...)
+		}, 1, ""},
+		{"v8→v9 after the backfill, a row holding codex kept", 8, preV9Held, 1, ""},
+		{"v8→v9 run twice after a row holds codex", 8, preV9Held, 2, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var want map[string]any
 			withRaw(t, makeVersionedDB(t, t.TempDir(), tc.from+1), func(db *sql.DB) { want = schemaShape(t, db) })
 			path := makeVersionedDB(t, t.TempDir(), tc.from)
+			var v8 v8Fixture
+			if tc.from == 8 { // the hop's values are checked, so it runs over seeded rows
+				v8 = makeV8Fixture(t, t.TempDir())
+				path = v8.path
+			}
 			if tc.pre != nil {
 				tc.pre(t, path)
 			}
+			held := agentsHeld(t, path, v8.ids)
 			step, _ := migrationStepFrom(tc.from)
 			db := openRaw(t, path)
 			id := tc.keepID
@@ -414,6 +469,9 @@ func TestMigrationStepReentry(t *testing.T) {
 			if got := schemaShape(t, db); !reflect.DeepEqual(columnsByName(got), columnsByName(want)) {
 				t.Errorf("schema after re-entry:\n got  %v\n want %v", got, want)
 			}
+			if tc.from == 8 {
+				assertV8ValuesKept(t, path, v8, held)
+			}
 		})
 	}
 }
@@ -421,7 +479,9 @@ func TestMigrationStepReentry(t *testing.T) {
 // TestMigrationRollback: a step failing part-way rolls back its whole hop: the
 // open fails as a migration failure (not a refusal), and the store keeps its
 // version, schema, rows and sentinel (SR-2.4, SR-5.4, SR-20.6); a v6→v7 hop
-// failing at its backfill leaves no column added and no request proven.
+// failing at its backfill leaves no column added and no request proven; a
+// v8→v9 hop failing in its validation leaves every column under its old name,
+// and failing at its agent backfill leaves no rename and no column.
 func TestMigrationRollback(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -441,6 +501,9 @@ func TestMigrationRollback(t *testing.T) {
 		{"v6→v7 at the backfill, after every column", 6, breakV7Backfill, "prove finished rows' requests gone"},
 		{"v7→v8 at state_changed_ms, after settled_state", 7, breakV8StateChangedColumn, "spawns.state_changed_ms"},
 		{"v7→v8 at the backfill, after both columns", 7, breakV8Backfill, "backfill settled state"},
+		{"v8→v9 at a table holding both names", 8, breakV9BothNames, "holds both claude_session_id and session_id"},
+		{"v8→v9 at a table holding neither name", 8, breakV9NeitherName, "holds neither claude_args nor agent_args"},
+		{"v8→v9 at the agent backfill, after every rename and column", 8, breakV9Backfill, "backfill agent"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -454,6 +517,8 @@ func TestMigrationRollback(t *testing.T) {
 				path = makeV6Fixture(t, t.TempDir()).path
 			case 7:
 				path = makeV7Fixture(t, t.TempDir()).path
+			case 8:
+				path = makeV8Fixture(t, t.TempDir()).path
 			default:
 				path = makeVersionedDB(t, t.TempDir(), tc.from)
 			}
