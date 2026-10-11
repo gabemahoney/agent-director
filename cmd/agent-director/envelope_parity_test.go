@@ -40,7 +40,7 @@ func TestEnvelopeParityListEmpty(t *testing.T) {
 // nonexistent cwd: exit code 1, empty stdout, and an ErrCwdNotFound envelope
 // with a description.
 func TestEnvelopeParitySpawnCwdNotFound(t *testing.T) {
-	stdout, stderr, code := runCLI(t, "spawn", "--cwd", "/no/such/path")
+	stdout, stderr, code := runCLI(t, withAgent("claude", "spawn", "--cwd", "/no/such/path")...)
 	if env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrCwdNotFound"); env.ErrDescription == "" {
 		t.Errorf("err_description empty; want a human-readable message")
 	}

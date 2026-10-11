@@ -38,7 +38,7 @@ func kohSpawn(t *testing.T, e *killEnv) string {
 	id := "koh-" + uuid.NewString()[:8]
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	c, _ := e.client(t)
-	if _, err := c.Spawn(api.SpawnParams{InstanceID: id, CWD: t.TempDir(),
+	if _, err := c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: id, CWD: t.TempDir(),
 		ExtraEnv: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()}); err != nil {
 		t.Fatalf("Spawn(%s): %v", id, err)
 	}

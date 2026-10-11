@@ -34,7 +34,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (55 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (60 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -42,6 +42,10 @@ export {
   ErrRelayModeInvalid,
   ErrSpawnDeniedFlag,
   ErrReservedEnvKey,
+  ErrAgentMissing,
+  ErrAgentInvalid,
+  ErrAgentArgsMismatch,
+  ErrPermissionsUnsupported,
   ErrInstanceIdCollision,
   ErrTmuxSessionNameEmpty,
   ErrTmuxSessionNameInvalid,
@@ -63,6 +67,7 @@ export {
   ErrTemplateNotFound,
   ErrTemplateMalformed,
   ErrTemplateExists,
+  ErrTemplateAgentMissing,
   ErrProbeUnsupported,
   ErrSpawnNotResumable,
   ErrNoSessionId,

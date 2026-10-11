@@ -42,7 +42,7 @@ func TestPreTrustResultCLISpawn(t *testing.T) {
 					t.Fatalf("seed %s: %v", path, err)
 				}
 			}
-			args := []string{"spawn", "--cwd", cwd}
+			args := withAgent("claude", "spawn", "--cwd", cwd)
 			if tc.optOut {
 				args = append(args, "--no-pre-trust")
 			}

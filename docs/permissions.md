@@ -25,6 +25,16 @@ invocation of that tool (`AskUserQuestion` denies every AUQ — see the
 empirical confirmation in
 `reference/permissions-deny-tool-name-research.md`).
 
+## Codex spawns
+
+The lists on this page apply to spawns whose agent is `claude`. A `codex`
+spawn or template that carries any `allow`, `deny` or `ask` entry is refused
+with `ErrPermissionsUnsupported` before anything is written (see the
+[caller contract](caller-contract.md#spawn-and-template-input-refusals)). Set
+a Codex agent's permission rules in the `rules/` folder of the group's Codex
+folder, and use Codex's own permission controls. The `disable_ask_user`
+setting below is not such an entry and never makes a spawn refused.
+
 ## Per-tier concatenation
 
 Each tier's `permissions.allow` / `deny` / `ask` arrays are concatenated
@@ -109,7 +119,7 @@ no `TMUX` and no `--store-path`:
 
 ```sh
 mkdir -p /path/to/alt-tmux
-env -u TMUX HOME=/path/to/alt-home TMUX_TMPDIR=/path/to/alt-tmux agent-director spawn --cwd <dir>
+env -u TMUX HOME=/path/to/alt-home TMUX_TMPDIR=/path/to/alt-tmux agent-director spawn --cwd <dir> --agent claude
 ```
 
 The spawn starts a new server whose `HOME` is the alternate one, so the

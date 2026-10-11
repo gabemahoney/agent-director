@@ -99,7 +99,7 @@ func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 	env["MCP_SHAPE_ENV"] = "set"
 	args := []string{"--model", "opus"}
 
-	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "instance_id": id, "relay_mode": "on",
+	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "agent": "claude", "instance_id": id, "relay_mode": "on",
 		"label": []string{"role=worker", "team=core"}, "agent_args": args, "extra_env": env}))
 
 	assertPreTrust(t, obj, "ok")
@@ -133,6 +133,9 @@ func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 	}
 	if want := (stored{map[string]string{"role": "worker", "team": "core"}, args, env}); !reflect.DeepEqual(row, want) {
 		t.Errorf("row labels, agent_args, extra_env = %+v; want %+v", row, want)
+	}
+	if cols.Agent != "claude" {
+		t.Errorf("row agent = %v; want claude", cols.Agent)
 	}
 	if cols.RelayMode != "on" {
 		t.Errorf("row relay_mode = %v; want on (the default is off)", cols.RelayMode)

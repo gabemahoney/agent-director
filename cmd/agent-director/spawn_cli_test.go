@@ -1,10 +1,13 @@
 package main_test
 
 // spawn's flags through the built CLI and test/fake-tmux. Validation, the
-// label scan, pre-trust and reuse themselves are pkg/api's spawn_*_test.go.
+// label scan, pre-trust and reuse themselves are pkg/api's spawn_*_test.go,
+// as is the order of the agent checks; here only how the CLI maps --agent.
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -28,7 +31,7 @@ type spawnResult struct {
 // new row's id.
 func spawnOK(t *testing.T, home, fakeDir string, args ...string) string {
 	t.Helper()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"spawn"}, args...)...)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", args...)...)
 	var res spawnResult
 	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil || res.InstanceID == "" {
 		t.Fatalf("spawn %q: exit = %d, stdout = %q; want 0 and an id (stderr=%s)", args, code, stdout, stderr)
@@ -60,9 +63,9 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 
 	row := getRow(t, home, fakeDir, id)
 	labels, _ := row["labels"].(map[string]any)
-	if row["state"] != "pending" || row["relay_mode"] != "off" || row["tmux_session_name"] != name ||
+	if row["state"] != "pending" || row["agent"] != "claude" || row["relay_mode"] != "off" || row["tmux_session_name"] != name ||
 		labels["role"] != "worker" || jsonOf(t, row["agent_args"]) != `["--model","opus"]` {
-		t.Errorf("get = %v; want pending, relay off, %s, label role=worker, agent_args [--model opus]", row, name)
+		t.Errorf("get = %v; want pending, agent claude, relay off, %s, label role=worker, agent_args [--model opus]", row, name)
 	}
 
 	socket := spawnSocket(t, home)
@@ -107,7 +110,7 @@ func TestSpawnCLITmuxSessionNameSupplied(t *testing.T) {
 	}
 
 	home = t.TempDir()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--tmux-session-name=")
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", "--cwd", t.TempDir(), "--tmux-session-name=")...)
 	env := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrTmuxSessionNameEmpty")
 	const desc = "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"
 	if !strings.Contains(env.ErrDescription, desc) {
@@ -134,9 +137,7 @@ func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			if _, err := apitest.SeedTemplate(filepath.Join(directorDir(home), "templates"), "tpl", apitest.TemplateBody(apitest.TemplateFields{AgentArgs: []string{"--foo"}})); err != nil {
-				t.Fatalf("SeedTemplate: %v", err)
-			}
+			seedTemplate(t, home, "tpl", apitest.TemplateFields{Agent: "claude", AgentArgs: []string{"--foo"}})
 			id := spawnOK(t, home, fakeDir, append([]string{"--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
 
 			argv := assertInvocationKinds(t, home, "new-session")[0]
@@ -147,6 +148,122 @@ func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 				t.Errorf("get.agent_args = %s; want [%s]", got, tc.want)
 			}
 		})
+	}
+}
+
+// seedTemplate writes a template under home from fields.
+func seedTemplate(t *testing.T, home, name string, fields apitest.TemplateFields) {
+	t.Helper()
+	if _, err := apitest.SeedTemplate(filepath.Join(directorDir(home), "templates"), name, apitest.TemplateBody(fields)); err != nil {
+		t.Fatalf("SeedTemplate: %v", err)
+	}
+}
+
+// TestSpawnCLIAgentArgsMismatch: a template for another agent gives
+// ErrAgentArgsMismatch when the spawn passes nothing after -- (a bare -- counts
+// as none on the CLI), with no row and no tmux call; args after -- replace the
+// template's and the row records the spawn's agent.
+func TestSpawnCLIAgentArgsMismatch(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, tc := range []struct {
+		name  string
+		extra []string
+		want  string // the err_name, "" for a launch
+	}{
+		{"nothing after --", nil, "ErrAgentArgsMismatch"},
+		{"a bare --", []string{"--"}, "ErrAgentArgsMismatch"},
+		{"args after --", []string{"--", "--bar"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			seedTemplate(t, home, "tpl", apitest.TemplateFields{Agent: "codex", AgentArgs: []string{"--foo"}})
+			args := append(withAgent("claude", "spawn", "--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"), tc.extra...)
+
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, args...)
+
+			if tc.want != "" {
+				env := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, tc.want)
+				if !strings.Contains(env.ErrDescription, `template "tpl"'s agent_args are for agent codex and this spawn's agent is claude`) {
+					t.Errorf("err_description = %q; want it to name the template and both agents", env.ErrDescription)
+				}
+				assertInvocationKinds(t, home)
+				if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
+					t.Errorf("rows = %v; want none", ids)
+				}
+				return
+			}
+			var res spawnResult
+			if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {
+				t.Fatalf("exit = %d, stdout = %q; want 0 and an id (stderr=%s)", code, stdout, stderr)
+			}
+			row := getRow(t, home, fakeDir, res.InstanceID)
+			if row["agent"] != "claude" || jsonOf(t, row["agent_args"]) != `["--bar"]` {
+				t.Errorf("get = %v; want agent claude and agent_args [--bar]", row)
+			}
+		})
+	}
+}
+
+// TestSpawnCLIAgentRefusals: --agent's invalid, empty and codex-with-permissions
+// refusals reach the CLI as their envelopes, with no row and no tmux call.
+func TestSpawnCLIAgentRefusals(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	const noPerms = "a codex agent takes no allow, deny or ask entries"
+	for _, tc := range []struct {
+		name, errName, desc string
+		flags               []string
+	}{
+		{"wrong case", "ErrAgentInvalid", `agent "Claude" (want claude or codex)`, []string{"--agent", "Claude"}},
+		{"empty counts as not given", "ErrAgentMissing", "--agent on the CLI", []string{"--agent="}},
+		{"codex allow", "ErrPermissionsUnsupported", noPerms, []string{"--agent", "codex", "--allow", "Bash"}},
+		{"codex deny", "ErrPermissionsUnsupported", noPerms, []string{"--agent", "codex", "--deny", "Bash"}},
+		{"codex ask", "ErrPermissionsUnsupported", noPerms, []string{"--agent", "codex", "--ask", "Bash"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"spawn", "--cwd", t.TempDir(), "--no-pre-trust"}, tc.flags...)...)
+
+			env := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, tc.errName)
+			if !strings.Contains(env.ErrDescription, tc.desc) {
+				t.Errorf("err_description = %q; want it to carry %q", env.ErrDescription, tc.desc)
+			}
+			assertInvocationKinds(t, home)
+			if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
+				t.Errorf("rows = %v; want none", ids)
+			}
+		})
+	}
+}
+
+// TestMakeTemplateCLIAgent: make-template --agent writes the template's agent
+// beside --agent-args, and a spawn from it with no --agent takes that agent
+// and its args; --agent-args with no --agent writes no template.
+func TestMakeTemplateCLIAgent(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	path := filepath.Join(directorDir(home), "templates", "tpl.toml")
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "make-template", "--name", "tpl", "--agent-args", "--foo")
+	assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrTemplateAgentMissing")
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("template after the refusal: %v; want none written", err)
+	}
+
+	if _, stderr, code = runSpawnCLI(t, home, fakeDir, withAgent("claude", "make-template", "--name", "tpl", "--agent-args", "--foo")...); code != 0 {
+		t.Fatalf("make-template --agent claude: exit = %d; stderr=%s", code, stderr)
+	}
+	if body, err := os.ReadFile(path); err != nil || !strings.Contains(string(body), `agent = "claude"`) || !strings.Contains(string(body), "--foo") {
+		t.Fatalf("template = %q (err %v); want agent = \"claude\" and agent_args with --foo", body, err)
+	}
+
+	stdout, stderr, code = runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust")
+	var res spawnResult
+	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {
+		t.Fatalf("spawn --template: exit = %d, stdout = %q; want 0 and an id (stderr=%s)", code, stdout, stderr)
+	}
+	if row := getRow(t, home, fakeDir, res.InstanceID); row["agent"] != "claude" || jsonOf(t, row["agent_args"]) != `["--foo"]` {
+		t.Errorf("get = %v; want agent claude and agent_args [--foo]", row)
 	}
 }
 
@@ -165,7 +282,7 @@ func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: uuid.NewString(), Life: 1}))
 			before := rowColumns(t, home, id)
 
-			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--instance-id", id, tc.flag)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", "--cwd", t.TempDir(), "--instance-id", id, tc.flag)...)
 
 			if !tc.reuse {
 				assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInstanceIdCollision")

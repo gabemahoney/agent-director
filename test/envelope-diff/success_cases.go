@@ -117,10 +117,10 @@ var successCases = append([]successCase{
 			return dir, map[string]any{"cwd": "/tmp"}
 		},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"cwd": ctx["cwd"]}
+			return map[string]any{"cwd": ctx["cwd"], "agent": "claude"}
 		},
 		cliArgv: func(ctx map[string]any) []string {
-			return []string{"spawn", "--cwd", ctx["cwd"].(string)}
+			return []string{"spawn", "--agent", "claude", "--cwd", ctx["cwd"].(string)}
 		},
 		extraSetup:   plantClaudeJSON,
 		wantPreTrust: "ok",

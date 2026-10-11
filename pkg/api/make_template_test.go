@@ -12,6 +12,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // withTempHome points $HOME at a per-test temp dir (t.Setenv), so the
@@ -24,7 +25,8 @@ func withTempHome(t *testing.T) string {
 }
 
 // seedTemplateBody is a valid template no test call writes, so a no-op write shows.
-const seedTemplateBody = "cwd = \"/seed/dir\"\nrelay_mode = \"on\"\n\n[labels]\n  origin = \"seed\"\n"
+var seedTemplateBody = apitest.TemplateBody(apitest.TemplateFields{Agent: "claude", CWD: "/seed/dir", RelayMode: "on",
+	Labels: map[string]string{"origin": "seed"}})
 
 // seedTemplateFile writes seedTemplateBody as name's template and returns its path.
 func seedTemplateFile(t *testing.T, name string) string {
@@ -62,7 +64,7 @@ func assertNoOrphanTempfile(t *testing.T, name string) {
 func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	home := withTempHome(t)
-	p := api.MakeTemplateParams{Name: "dev", CWD: "/var/data", RelayMode: "on", AgentArgs: []string{"--model", "opus"},
+	p := api.MakeTemplateParams{Name: "dev", Agent: "claude", CWD: "/var/data", RelayMode: "on", AgentArgs: []string{"--model", "opus"},
 		ExtraEnv: map[string]string{"ANTHROPIC_API_KEY": "sk-test"}, AgentDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
 		Permissions: &api.MakeTemplatePermissions{Allow: []string{"Bash(jq)", "Read(/etc)"}, Deny: []string{"Bash(rm)"}}}
 	res, err := api.MakeTemplate(p)
@@ -84,7 +86,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 			t.Errorf("TOML body missing %q:\n%s", want, body)
 		}
 	}
-	want := config.TemplateFile{CWD: p.CWD, RelayMode: p.RelayMode, AgentArgs: p.AgentArgs, ExtraEnv: p.ExtraEnv,
+	want := config.TemplateFile{Agent: p.Agent, CWD: p.CWD, RelayMode: p.RelayMode, AgentArgs: p.AgentArgs, ExtraEnv: p.ExtraEnv,
 		AgentDirectorLabels: p.AgentDirectorLabels, Permissions: &config.TemplatePermissions{Allow: p.Permissions.Allow, Deny: p.Permissions.Deny}}
 	if got, err := config.LoadTemplate("dev"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("LoadTemplate = %+v, %v; want %+v", got, err, want)
@@ -98,12 +100,12 @@ func TestMakeTemplateRefusals(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	withTempHome(t)
 	for _, name := range []string{"", ".", "..", ".hidden", "foo/bar", `foo\bar`, "foo..bar", "../escape"} {
-		if _, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/tmp"}); !errors.Is(err, config.ErrTemplateNameUnsafe) {
+		if _, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, Agent: "claude", CWD: "/tmp"}); !errors.Is(err, config.ErrTemplateNameUnsafe) {
 			t.Errorf("name %q: err = %v; want ErrTemplateNameUnsafe", name, err)
 		}
 	}
 	target := seedTemplateFile(t, "taken")
-	_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "taken", CWD: "/var/call", RelayMode: "off"})
+	_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "taken", Agent: "claude", CWD: "/var/call", RelayMode: "off"})
 	if !errors.Is(err, config.ErrTemplateExists) || !strings.Contains(err.Error(), target) {
 		t.Errorf("err = %v; want ErrTemplateExists naming %s", err, target)
 	}
@@ -139,7 +141,7 @@ func TestMakeTemplateRefusesSpawnRefusedEnvKey(t *testing.T) {
 				target = seedTemplateFile(t, "refused")
 			}
 
-			_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "refused", ExtraEnv: extra, Overwrite: tc.overwrite})
+			_, err := api.MakeTemplate(api.MakeTemplateParams{Name: "refused", Agent: "claude", ExtraEnv: extra, Overwrite: tc.overwrite})
 
 			assertOneName(t, err, "ErrReservedEnvKey")
 			if !strings.HasPrefix(errText(err), tc.text) {
@@ -153,7 +155,7 @@ func TestMakeTemplateRefusesSpawnRefusedEnvKey(t *testing.T) {
 			} else if _, err := os.Stat(filepath.Join(env.home, ".agent-director", "templates")); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("templates dir: %v; want none created", err)
 			}
-			if _, spawnErr := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ExtraEnv: extra}); errText(err) != errText(spawnErr) {
+			if _, spawnErr := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), ExtraEnv: extra}); errText(err) != errText(spawnErr) {
 				t.Errorf("description %q\nwant spawn's for that extra_env, %q", errText(err), errText(spawnErr))
 			}
 		})
@@ -167,7 +169,7 @@ func TestMakeTemplateOverwrite(t *testing.T) {
 	withTempHome(t)
 	seedTemplateFile(t, "existing")
 	for _, name := range []string{"existing", "absent"} {
-		res, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/var/replaced", RelayMode: "off",
+		res, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, Agent: "claude", CWD: "/var/replaced", RelayMode: "off",
 			AgentDirectorLabels: map[string]string{"origin": "call"}, Overwrite: true})
 		if err != nil {
 			t.Fatalf("MakeTemplate(%s, Overwrite): %v", name, err)
@@ -199,7 +201,7 @@ func TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-release
-				if _, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, CWD: "/tmp", RelayMode: "off",
+				if _, err := api.MakeTemplate(api.MakeTemplateParams{Name: name, Agent: "claude", CWD: "/tmp", RelayMode: "off",
 					AgentDirectorLabels: map[string]string{"writer": w}, Overwrite: true}); err != nil {
 					t.Errorf("iter %d %s: %v", iter, w, err)
 				}

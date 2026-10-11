@@ -43,7 +43,7 @@ func TestSpawnReuseInsertRace(t *testing.T) {
 		seeded = e.columns(t, id)
 	})
 
-	_, _, err := e.reuseWith(t, w, api.SpawnParams{InstanceID: id, ReuseFinished: true, CWD: t.TempDir(),
+	_, _, err := e.reuseWith(t, w, api.SpawnParams{Agent: "claude", InstanceID: id, ReuseFinished: true, CWD: t.TempDir(),
 		ExtraEnv: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()})
 
 	assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)

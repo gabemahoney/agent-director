@@ -1,6 +1,8 @@
 package api
 
 import (
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -251,3 +253,45 @@ var ErrTmuxSendKeys = tmux.ErrTmuxSendKeys
 // launch (nothing read), or the capture failed and the follow-up lookup
 // finds the launch's session gone (SR-1.1, SR-1.2).
 var ErrTmuxCaptureFailed = tmux.ErrTmuxCaptureFailed
+
+// Agent sentinels (SR-1.6): the refusals of the agent input of spawn and
+// make-template. Match them with errors.Is.
+
+// ErrAgentMissing is returned by spawn when it resolves no agent: the call
+// gives none (SpawnParams.Agent; agent over MCP and in the TypeScript client;
+// --agent on the CLI) and its template names none. The caller names claude or
+// codex in the call or in the template; no config key, environment variable
+// or default supplies one. Nothing was written or launched.
+var ErrAgentMissing = spawn.ErrAgentMissing
+
+// ErrAgentInvalid is returned by spawn when the call's agent is neither
+// claude nor codex (compared case-sensitively; the empty string is not a
+// value, it is no agent given). The description quotes the value. Nothing was
+// written or launched. A bad agent in a template is ErrTemplateMalformed.
+var ErrAgentInvalid = spawn.ErrAgentInvalid
+
+// ErrAgentArgsMismatch is returned by spawn when it would inherit a non-empty
+// agent_args from a template whose agent differs from the spawn's agent: the
+// arguments belong to the template's agent and are neither passed to the other
+// agent nor dropped silently. The description names both agents. Spawn the
+// template's agent, or pass the call's own non-empty agent_args, which replace
+// the template's and leave nothing to inherit. The advice says non-empty
+// because the CLI and the TS client count an empty list as none supplied; a Go
+// or MCP caller that supplies an explicit empty list also inherits nothing.
+// Nothing was written or launched.
+var ErrAgentArgsMismatch = spawn.ErrAgentArgsMismatch
+
+// ErrPermissionsUnsupported is returned by spawn for a codex agent given an
+// allow, deny or ask entry (in the call or from its template), and by
+// make-template for a codex template that holds one: Codex has no counterpart
+// of Claude Code's permission lists for agent-director to pass on. The
+// description points to the rules/ folder of the group's Codex folder and to
+// Codex's own permission controls. Nothing was written, replaced or launched.
+var ErrPermissionsUnsupported = spawn.ErrPermissionsUnsupported
+
+// ErrTemplateAgentMissing is returned by make-template for a non-empty
+// agent_args with no agent, and by spawn for a template that holds a non-empty
+// agent_args and names no agent (whatever agent the call gives): the arguments
+// need an owner. Give the template its agent, or remove its agent_args.
+// Nothing was written or launched.
+var ErrTemplateAgentMissing = config.ErrTemplateAgentMissing

@@ -80,15 +80,55 @@ const (
 	reuseOptIn         = "the reuse opt-in " + reuseOptInSpelling
 )
 
+// The agent in spawn-again advice (SR-4.4, P-66): every text that tells a
+// caller to spawn an id again says that the spawn names its agent. Advice
+// built for a known row (a launch error, a refusal of a row) names that row's
+// recorded agent, as agentSpelling gives it: "agent <name> (--agent <name> on
+// the CLI)". Text written for no particular row (a manifest description, the
+// live-row sequence) says rowAgentPointer instead. An Agent field of a case
+// parameter left empty means claude, as SeedSpawn's rows do; set it to codex
+// for a codex row's advice.
+const (
+	agentClaude     = "claude"
+	agentCodex      = "codex"
+	rowAgentPointer = "the row's agent, which get shows"
+)
+
+// agentSpelling is how advice built for a row of agent names the agent a
+// spawn again passes ("" is claude). Any other agent panics: a row's agent is
+// claude or codex.
+func agentSpelling(agent string) string {
+	switch agent {
+	case "":
+		agent = agentClaude
+	case agentClaude, agentCodex:
+	default:
+		panic("apitest: agent " + strconv.Quote(agent) + " is neither claude nor codex")
+	}
+	return "agent " + agent + " (--agent " + agent + " on the CLI)"
+}
+
+// reuseSpawn is the spawn-again advice's argument list for a row of agent: the
+// reuse opt-in in its one spelling (reuseOptIn), then the agent
+// (agentSpelling).
+func reuseSpawn(agent string) string {
+	return reuseOptIn + " and " + agentSpelling(agent)
+}
+
+// heldNameFree ends the retry guidance's opted-in retry.
+const heldNameFree = "once the name is free"
+
 // heldRetryFree is the retry guidance of SR-1.4's "after duplicate session"
 // row for an ErrTmuxUnresponsive (the re-lookup could not answer), in place
 // of "retry later", which no held-name description says, and for the
 // ErrTmuxSessionCreate of a holder that vanished first (b.1qq): once the end
-// write applied, a retry uses the reuse opt-in once the name is free;
-// otherwise the launch-timeout rule (launchRetryRule) followed by the same
-// opted-in retry, since a plain spawn of the id collides with its row once it
-// is finished.
-var heldRetryFree = []string{reuseOptIn, "once the name is free"}
+// write applied, a retry uses the reuse opt-in and the row's agent (agent,
+// SR-4.4) once the name is free; otherwise the launch-timeout rule
+// (launchRetryRule) followed by the same opted-in retry, since a plain spawn
+// of the id collides with its row once it is finished.
+func heldRetryFree(agent string) []string {
+	return []string{reuseSpawn(agent), heldNameFree}
+}
 
 // retryLater is the default retry sentence a held-name description replaces.
 const retryLater = "retry later"
@@ -110,8 +150,9 @@ var heldNotPendingStatements = []string{"stays pending", "will heal"}
 // Restore the restore's result, and Row stays zero. InstanceID is plain
 // spawn's new row's id, which its vanished holder's description
 // (DescSessionCreateFailed with Duplicate) names as "instance <id>" (b.1qq);
-// left empty, that case requires the "instance " lead alone. The other cases
-// ignore it.
+// left empty, that case requires the "instance " lead alone. Agent is the new
+// row's agent, which that retry sentence names (claude when empty). The other
+// cases ignore InstanceID and Agent.
 type HeldName struct {
 	Name         string
 	SessionID    string
@@ -119,6 +160,7 @@ type HeldName struct {
 	BeforeLaunch bool
 	Restore      ResumeRestore
 	InstanceID   string
+	Agent        string
 }
 
 // AfterHeldName returns c as an error a plain spawn returns after "duplicate
@@ -130,9 +172,9 @@ type HeldName struct {
 // An unanswered case (DescCallTimeout, DescUnrecognisedReply,
 // DescHeldAmbiguous) and the vanished holder (DescSessionCreateFailed with
 // Duplicate) also require the retry guidance by p.Row: for HeldRowEnded the
-// reuse opt-in (reuseOptIn) "once the name is free" and not the
-// launch-timeout rule; otherwise the launch-timeout rule followed by the same
-// opted-in retry (b.1qq, b.c4u). Any other case states neither. The vanished
+// reuse opt-in and the new row's agent (reuseSpawn(p.Agent)) "once the name
+// is free" and not the launch-timeout rule; otherwise the launch-timeout rule
+// followed by the same opted-in retry (b.1qq, b.c4u, SR-4.4). Any other case states neither. The vanished
 // holder also requires "instance " and p.InstanceID, the id that retry
 // sentence's "this id" means (b.1qq). Use it on
 // DescSessionCreateFailed (Duplicate), DescConflictingLabels
@@ -178,12 +220,12 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 	}
 	switch {
 	case (c.unanswered || c.heldRetry) && p.Row == HeldRowEnded:
-		req = append(req, heldRetryFree...)
+		req = append(req, heldRetryFree(p.Agent)...)
 		mustNot = appendMissing(mustNot, launchRetryRule)
 	case c.unanswered || c.heldRetry:
-		req = append(append(req, launchRetryRule), heldRetryFree...)
+		req = append(append(req, launchRetryRule), heldRetryFree(p.Agent)...)
 	default:
-		mustNot = appendMissing(mustNot, launchRetryRule, heldRetryFree[1])
+		mustNot = appendMissing(mustNot, launchRetryRule, heldNameFree)
 	}
 	if c.heldRetry {
 		req = append(req, "instance "+p.InstanceID)
@@ -357,7 +399,8 @@ func DescHeldAmbiguous(p HeldName) DescCase {
 // ends the new row at once, ErrTmuxSessionConflict names the holder, the
 // class statement, another row's or store's session must not be ended, the
 // "Operator actions" pointer and spawning the id again with the reuse opt-in
-// in its one spelling (reuseOptInSpelling, b.c4u). It never quotes a
+// in its one spelling (reuseOptInSpelling, b.c4u) and the row's agent
+// (SR-4.4; the description is for no particular row). It never quotes a
 // held-name error's row sentence. Check it with AssertAgentTextCase.
 func DescSpawnHeldName() DescCase {
 	return DescCase{
@@ -366,7 +409,7 @@ func DescSpawnHeldName() DescCase {
 			"already held", "ends its new row at once", "ErrTmuxSessionConflict naming the holder",
 			"holder vanished", "ErrTmuxSessionConflict is CONFLICT (permanent until a human looks)",
 			"another row's", "another agent-director store", "must not be ended", "no valid instance id",
-			OperatorActionsDoc, "spawn the id again with " + reuseOptInSpelling,
+			OperatorActionsDoc, "spawn the id again with " + reuseOptInSpelling + " and the row's agent",
 		},
 		MustNot: []string{
 			heldRowSentences[HeldRowEnded], heldRowSentences[HeldRowLeftAsIs], heldRowSentences[HeldRowStoreError],

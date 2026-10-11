@@ -42,7 +42,7 @@ func main() {
 	// Spawn — compile check only; will fail at runtime without tmux, which
 	// is expected. The important property is that api.SpawnParams is a pkg/api
 	// type and the call compiles without importing internal/*.
-	_, _ = c.Spawn(api.SpawnParams{CWD: "/tmp"})
+	_, _ = c.Spawn(api.SpawnParams{CWD: "/tmp", Agent: "claude"})
 
 	// Status — will return ErrSpawnNotFound for unknown id; that's fine.
 	_, _ = c.Status("absent-id")
@@ -78,7 +78,7 @@ func main() {
 	_, _ = c.FindMissing(context.Background())
 
 	// MakeTemplate — standalone (no Client needed).
-	_, _ = api.MakeTemplate(api.MakeTemplateParams{Name: "dryrun-test"})
+	_, _ = api.MakeTemplate(api.MakeTemplateParams{Name: "dryrun-test", Agent: "claude"})
 
 	// Help — standalone.
 	_, _ = api.Help()

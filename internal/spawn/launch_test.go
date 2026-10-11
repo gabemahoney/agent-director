@@ -36,7 +36,8 @@ type launchEnv struct {
 }
 
 // newLaunchEnv builds a launchEnv whose Resolved has passed validation and
-// defaults; tests override only the fields they pin.
+// defaults and names claude; tests override only the fields they pin (a launch
+// path through e.cfg.Launch.ClaudePath).
 func newLaunchEnv(t *testing.T) *launchEnv {
 	t.Helper()
 	withStubExe(t, "/bin/agent-director")
@@ -51,6 +52,7 @@ func newLaunchEnv(t *testing.T) *launchEnv {
 	t.Cleanup(func() { _ = s.Close() })
 	e.s = s
 	e.r = Resolved{SpawnParams: SpawnParams{
+		Agent:               config.AgentClaude,
 		CWD:                 t.TempDir(),
 		InstanceID:          "id-launch-1",
 		TmuxSessionName:     "cd-launch-1",
@@ -133,9 +135,9 @@ func TestLaunchInsertsPendingAndCreatesSession(t *testing.T) {
 	}
 
 	row := e.row(id)
-	if row.State != store.StatePending || row.CWD != e.r.CWD || row.TmuxSessionName != "bot-claude-status" {
-		t.Errorf("row = {state %q, cwd %q, name %q}; want pending, %q, bot-claude-status",
-			row.State, row.CWD, row.TmuxSessionName, e.r.CWD)
+	if row.State != store.StatePending || row.CWD != e.r.CWD || row.TmuxSessionName != "bot-claude-status" || row.Agent != "claude" {
+		t.Errorf("row = {state %q, cwd %q, name %q, agent %q}; want pending, %q, bot-claude-status, claude",
+			row.State, row.CWD, row.TmuxSessionName, row.Agent, e.r.CWD)
 	}
 	if !reflect.DeepEqual(row.AgentArgs, []string{"--model", "opus"}) || !reflect.DeepEqual(row.Labels, e.r.AgentDirectorLabels) ||
 		!reflect.DeepEqual(row.ExtraEnv, e.r.ExtraEnv) {
@@ -238,7 +240,7 @@ func TestLaunchDuplicateSessionReturnsHeldName(t *testing.T) {
 	e.onlyCreate() // no tmux call after the "duplicate session" answer
 	row := e.row("id-launch-1")
 	want := HeldNameError{InstanceID: "id-launch-1", Name: "bot-claude-status", Socket: e.socket,
-		Token: row.Identity.Token, LaunchStartedAtMillis: e.clock.Now().UnixMilli()}
+		Token: row.Identity.Token, LaunchStartedAtMillis: e.clock.Now().UnixMilli(), Agent: "claude"}
 	if *held != want || want.Token == "" {
 		t.Errorf("held = %+v; want %+v (with the row's token)", *held, want)
 	}

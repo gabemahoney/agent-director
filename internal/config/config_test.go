@@ -106,6 +106,21 @@ func TestLoadKeepsDefaults(t *testing.T) {
 			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
 		{"unrelated unknown [defaults] key ignored", makeConfigFile(t, "[defaults]\ndisable_something_else = true\nrelay_mode = \"on\"\n"),
 			func(c *config.Config) { c.Defaults.RelayMode = "on" }},
+		{"claude_path absolute", makeConfigFile(t, "[launch]\nclaude_path = \"/opt/bin/claude\"\n"),
+			func(c *config.Config) { c.Launch.ClaudePath = "/opt/bin/claude" }},
+		{"codex_path absolute", makeConfigFile(t, "[launch]\ncodex_path = \"/opt/bin/codex\"\n"),
+			func(c *config.Config) { c.Launch.CodexPath = "/opt/bin/codex" }},
+		{"both paths absolute", makeConfigFile(t, "[launch]\nclaude_path = \"/a/claude\"\ncodex_path = \"/b/codex\"\n"),
+			func(c *config.Config) { c.Launch.ClaudePath, c.Launch.CodexPath = "/a/claude", "/b/codex" }},
+		{"launch paths joined onto HOME", makeConfigFile(t, "[launch]\nclaude_path = \"~/bin/claude\"\ncodex_path = \"~/.local/bin/codex\"\n"),
+			func(c *config.Config) {
+				c.Launch.ClaudePath, c.Launch.CodexPath = filepath.Join(home, "bin/claude"), filepath.Join(home, ".local/bin/codex")
+			}},
+		{"empty launch paths load as unset", makeConfigFile(t, "[launch]\nclaude_path = \"\"\ncodex_path = \"\"\n"), func(*config.Config) {}},
+		{"launch table and keys in another letter case", makeConfigFile(t, "[LAUNCH]\nCLAUDE_PATH = \"/a/claude\"\nCodex_Path = \"/b/codex\"\n"),
+			func(c *config.Config) { c.Launch.ClaudePath, c.Launch.CodexPath = "/a/claude", "/b/codex" }},
+		{"unknown [launch] key ignored", makeConfigFile(t, "[launch]\nclaude_paths = \"relative\"\ngemini_path = \"x\"\nclaude_path = \"/a/claude\"\n"),
+			func(c *config.Config) { c.Launch.ClaudePath = "/a/claude" }},
 		{"old key name outside [defaults] ignored as any unknown key", makeConfigFile(t, "[relay]\ndisable_askuserquestion = true\n"),
 			func(*config.Config) {}},
 	}

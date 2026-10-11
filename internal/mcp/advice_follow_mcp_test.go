@@ -118,7 +118,7 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 		{
 			tool: "spawn", verb: "spawn",
 			args: func(t *testing.T) map[string]any {
-				return map[string]any{"cwd": t.TempDir(), "instance_id": "advcli-labelled"}
+				return map[string]any{"cwd": t.TempDir(), "agent": "claude", "instance_id": "advcli-labelled"}
 			},
 			check: func(t *testing.T, client *api.Client, resp *mcp.Response) {
 				var res api.SpawnResult
@@ -134,7 +134,7 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 		},
 		{
 			tool: "make_template", verb: "make-template",
-			args: func(*testing.T) map[string]any { return map[string]any{"name": "advcli-labelled"} },
+			args: func(*testing.T) map[string]any { return map[string]any{"name": "advcli-labelled", "agent": "claude"} },
 			check: func(t *testing.T, _ *api.Client, resp *mcp.Response) {
 				var res api.MakeTemplateResult
 				advCLIResult(t, resp, &res)
@@ -248,7 +248,7 @@ func TestAdviceFollow_I7_OldInstanceIDKeyUseInstanceID(t *testing.T) {
 			d, client := advCLIServer(t, "i7-row")
 			id, args := "i7-row", map[string]any{}
 			if tool == "spawn" {
-				id, args["cwd"] = "i7-new", t.TempDir()
+				id, args["cwd"], args["agent"] = "i7-new", t.TempDir(), "claude"
 			}
 			args["claude_instance_id"] = id
 
@@ -277,7 +277,7 @@ func TestAdviceFollow_I8_OldArgsKeyUseAgentArgs(t *testing.T) {
 	agentArgs := []string{"--model", "opus"}
 	t.Run("spawn", func(t *testing.T) {
 		d, client := advCLIServer(t)
-		args := map[string]any{"cwd": t.TempDir(), "instance_id": "i8-new", "claude_args": agentArgs}
+		args := map[string]any{"cwd": t.TempDir(), "agent": "claude", "instance_id": "i8-new", "claude_args": agentArgs}
 
 		advCLIResult(t, advOldKeyFollow(t, d, "spawn", "claude_args", args), &api.SpawnResult{})
 
@@ -291,7 +291,7 @@ func TestAdviceFollow_I8_OldArgsKeyUseAgentArgs(t *testing.T) {
 	})
 	t.Run("make_template", func(t *testing.T) {
 		d, _ := advCLIServer(t)
-		args := map[string]any{"name": "i8-tpl", "claude_args": agentArgs}
+		args := map[string]any{"name": "i8-tpl", "agent": "claude", "claude_args": agentArgs}
 
 		var res api.MakeTemplateResult
 		advCLIResult(t, advOldKeyFollow(t, d, "make_template", "claude_args", args), &res)

@@ -24,7 +24,7 @@ func TestMCPSpawnRefusesInvalidEnvKey(t *testing.T) {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
 
-	data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "extra_env": map[string]string{key: ""}})))
+	data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "agent": "claude", "extra_env": map[string]string{key: ""}})))
 
 	want := "ErrReservedEnvKey: extra_env key " + strconv.Quote(key) + " is not a valid env-var name: it contains '='"
 	if data.ErrName != "ErrReservedEnvKey" || !strings.HasPrefix(data.ErrDescription, want) {

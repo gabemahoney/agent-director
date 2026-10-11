@@ -14,11 +14,16 @@ package config_test
 // that name's value, and a spawn template's likewise (b.2u1). G4 (SR-4.3): a
 // refused old [defaults] key's description says "use <new key>"; renaming the
 // key as it says must make the file load with the same value, and G5: a spawn
-// template's old claude_args likewise.
+// template's old claude_args likewise. G6 (SR-5.0): a refused [launch] value
+// says "must be an absolute path or start with "~/"" (and, without HOME, "use
+// an absolute path"); rewriting the value as it says must load. G7 (SR-1.3): a
+// template whose agent_args name no agent says "add agent = "claude" or "codex",
+// or remove agent_args"; either step must make it load.
 
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -504,10 +509,10 @@ func TestAdviceFollow_G5_OldTemplateKeyRenamedLoadsSameValue(t *testing.T) {
 		key    string // the old key as the file writes it
 		fields apitest.TemplateFields
 	}{
-		{"lower", "claude_args", apitest.TemplateFields{}},
-		{"upper", "CLAUDE_ARGS", apitest.TemplateFields{}},
-		{"mixed", "Claude_Args", apitest.TemplateFields{}},
-		{"beside_other_fields", "claude_args", apitest.TemplateFields{CWD: "/tmp", RelayMode: "on"}},
+		{"lower", "claude_args", apitest.TemplateFields{Agent: "claude"}},
+		{"upper", "CLAUDE_ARGS", apitest.TemplateFields{Agent: "claude"}},
+		{"mixed", "Claude_Args", apitest.TemplateFields{Agent: "claude"}},
+		{"beside_other_fields", "claude_args", apitest.TemplateFields{Agent: "claude", CWD: "/tmp", RelayMode: "on"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -529,9 +534,109 @@ func TestAdviceFollow_G5_OldTemplateKeyRenamedLoadsSameValue(t *testing.T) {
 			if loadErr != nil {
 				t.Fatalf("after renaming %s to %s as %q says, LoadTemplate: %v", oldKey, newKey, err, loadErr)
 			}
-			if !slices.Equal(tf.AgentArgs, want) || tf.CWD != tc.fields.CWD || tf.RelayMode != tc.fields.RelayMode {
+			if !slices.Equal(tf.AgentArgs, want) || tf.Agent != "claude" || tf.CWD != tc.fields.CWD || tf.RelayMode != tc.fields.RelayMode {
 				t.Errorf("LoadTemplate = %+v after the rename; want agent_args %v and the other fields kept", tf, want)
 			}
 		})
+	}
+}
+
+// advLaunchRefusal matches a refused [launch] value's clause: the key and the
+// value it was given.
+var advLaunchRefusal = regexp.MustCompile(`(claude_path|codex_path) = "[^"]*", which (must be an absolute path or start with "~/")`)
+
+// TestAdviceFollow_G6_LaunchValueAbsoluteOrTilde: G6 (SR-5.0) "[launch] values:
+// <key> = <value>, which must be an absolute path or start with "~/"" and, with
+// HOME unset or empty, "use an absolute path". Each refused value is rewritten
+// as the advice says, to an absolute path or to one starting "~/", and the
+// file must then load that path ("~/" joined onto HOME).
+func TestAdviceFollow_G6_LaunchValueAbsoluteOrTilde(t *testing.T) {
+	cases := []struct {
+		name, key, bad, fixed string
+		noHome                bool
+	}{
+		{"relative_made_absolute", "claude_path", "bin/claude", "/opt/bin/claude", false},
+		{"relative_made_tilde", "claude_path", "bin/claude", "~/bin/claude", false},
+		{"bare_name_made_absolute", "codex_path", "codex", "/usr/local/bin/codex", false},
+		{"tilde_alone_made_tilde", "codex_path", "~", "~/bin/codex", false},
+		{"other_user_made_tilde", "claude_path", "~user/x", "~/x", false},
+		{"other_user_made_absolute", "codex_path", "~user/x", "/home/user/x", false},
+		{"tilde_without_home_made_absolute", "claude_path", "~/bin/claude", "/home/me/bin/claude", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := homeDir(t)
+			refused := "[launch]\n" + tc.key + " = " + quoted(tc.bad) + "\n"
+			if tc.noHome {
+				t.Setenv("HOME", "")
+			}
+			_, loadErr := config.Load(makeConfigFile(t, refused))
+			var ce *config.ConfigError
+			if !errors.As(loadErr, &ce) {
+				t.Fatalf("Load(%s = %q) = %v; want a ConfigError", tc.key, tc.bad, loadErr)
+			}
+			desc := ce.Err.Error()
+			m := advLaunchRefusal.FindStringSubmatch(desc)
+			if m == nil || m[1] != tc.key {
+				t.Fatalf("description %q does not name %s with the advice", desc, tc.key)
+			}
+			if tc.noHome && !strings.Contains(desc, `use an absolute path`) {
+				t.Errorf("description %q does not say to use an absolute path", desc)
+			}
+
+			cfg, err := config.Load(makeConfigFile(t, "[launch]\n"+m[1]+" = "+quoted(tc.fixed)+"\n"))
+
+			want := tc.fixed
+			if strings.HasPrefix(want, "~/") {
+				want = filepath.Join(home, want[2:])
+			}
+			got := cfg.Launch.ClaudePath
+			if tc.key == "codex_path" {
+				got = cfg.Launch.CodexPath
+			}
+			if err != nil || got != want {
+				t.Errorf("after rewriting %s to %q as %q says, Load = %q, %v; want %q", tc.key, tc.fixed, desc, got, err, want)
+			}
+		})
+	}
+}
+
+// advTemplateAgentAdvice matches the agent a template without one is told to
+// add: "add agent = "claude" or "codex", or remove agent_args".
+var advTemplateAgentAdvice = regexp.MustCompile(`add agent = "(\w+)" or "(\w+)", or remove agent_args$`)
+
+// TestAdviceFollow_G7_TemplateAgentArgsWithoutAgent: G7 (SR-1.3) "<name>:
+// agent_args are set but the template names no agent; add agent = "claude" or
+// "codex", or remove agent_args". Each way out of the advice must make the
+// template load: add either agent and keep the arguments, or drop agent_args.
+func TestAdviceFollow_G7_TemplateAgentArgsWithoutAgent(t *testing.T) {
+	args := []string{"--model", "opus"}
+	refused := apitest.TemplateFields{AgentArgs: args, CWD: "/tmp", RelayMode: "on"}
+	dir := templatesDir(t)
+	writeTemplate(t, dir, "bare", apitest.TemplateBody(refused))
+	_, err := config.LoadTemplate("bare")
+	if !errors.Is(err, config.ErrTemplateAgentMissing) {
+		t.Fatalf("LoadTemplate = %v; want ErrTemplateAgentMissing", err)
+	}
+	m := advTemplateAgentAdvice.FindStringSubmatch(err.Error())
+	if m == nil {
+		t.Fatalf("error %q gives no agent to add", err)
+	}
+
+	for _, agent := range m[1:] {
+		added := refused
+		added.Agent = agent
+		writeTemplate(t, dir, "bare", apitest.TemplateBody(added))
+		tf, loadErr := config.LoadTemplate("bare")
+		if loadErr != nil || tf.Agent != agent || !slices.Equal(tf.AgentArgs, args) || tf.CWD != "/tmp" {
+			t.Errorf("after adding agent %q as %q says, LoadTemplate = %+v, %v; want it loaded with its agent_args", agent, err, tf, loadErr)
+		}
+	}
+	removed := refused
+	removed.AgentArgs = nil
+	writeTemplate(t, dir, "bare", apitest.TemplateBody(removed))
+	tf, loadErr := config.LoadTemplate("bare")
+	if loadErr != nil || tf.Agent != "" || len(tf.AgentArgs) != 0 || tf.CWD != "/tmp" || tf.RelayMode != "on" {
+		t.Errorf("after removing agent_args as %q says, LoadTemplate = %+v, %v; want the other fields loaded", err, tf, loadErr)
 	}
 }

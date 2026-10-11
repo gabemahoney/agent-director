@@ -37,7 +37,7 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 // emptyGetJSON is the row every Get failure encodes: agent_args, labels,
 // permission_requests, unproven_requests and prior_sessions empty, never null,
 // every other field zero (b.4nt).
-const emptyGetJSON = `{"instance_id":"","parent_id":"","state":"","cwd":"","tmux_session_name":"",` +
+const emptyGetJSON = `{"instance_id":"","parent_id":"","state":"","cwd":"","agent":"","tmux_session_name":"",` +
 	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +
 	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z",` +
 	`"permission_requests":[],"unproven_requests":[],"transcript_status":"","prior_sessions":[]}`
@@ -73,6 +73,34 @@ func assertOptionalString(t *testing.T, out any, key string, got *string, want s
 		t.Errorf("%s = %v, JSON %s (present %t); want nil and the key omitted", key, got, raw, ok)
 	case want != "" && (got == nil || *got != want || string(raw) != strconv.Quote(want)):
 		t.Errorf("%s = %v, JSON %s; want %q", key, got, raw, want)
+	}
+}
+
+// TestGetShowsRowAgent (SR-1.5): get's agent is the agent the row runs, claude
+// or codex, whether the seed names it or takes the default.
+func TestGetShowsRowAgent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		opts []apitest.SpawnOption
+		want string
+	}{
+		{"seeded claude row", []apitest.SpawnOption{apitest.WithAgent("claude")}, "claude"},
+		{"seeded codex row", []apitest.SpawnOption{apitest.WithAgent("codex")}, "codex"},
+		{"default seed", nil, "claude"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "state.db")
+			seedWaiting(t, dbPath, "row-agent", tc.opts...)
+			got, err := api.Get(openDB(t, dbPath), api.RelayView{}, "row-agent")
+			if err != nil || got.Agent != tc.want {
+				t.Fatalf("Get agent = %q, %v; want %q", got.Agent, err, tc.want)
+			}
+			if raw, _ := jsonField(t, got, "agent"); string(raw) != strconv.Quote(tc.want) {
+				t.Errorf("JSON agent = %s; want %q", raw, tc.want)
+			}
+		})
 	}
 }
 

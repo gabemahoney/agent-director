@@ -174,7 +174,7 @@ func hasControlChar(id string) bool {
 	return false
 }
 
-// Spawn launches a tracked Claude Code instance inside a new tmux session.
+// Spawn launches a tracked agent inside a new tmux session.
 // The call returns the instance_id and pre_trust (what the launch's
 // folder-trust pre-trust did: ok, skipped or failed; a failure never fails
 // the spawn) without waiting for the agent; the row is pending from its
@@ -186,8 +186,20 @@ func hasControlChar(id string) bool {
 // have been created and the new row stays pending; do not retry until get
 // shows the row ended or missing, since a retried spawn without an explicit
 // id would start a second agent. Then retry an explicit InstanceID with
-// ReuseFinished: without it, the spawn collides with the id's finished row
-// (ErrInstanceIdCollision).
+// ReuseFinished and the row's agent (SpawnParams.Agent; the error's
+// description names it, and get shows it): without ReuseFinished, the spawn
+// collides with the id's finished row (ErrInstanceIdCollision).
+//
+// The spawn names its agent, claude or codex (case-sensitive): SpawnParams.Agent,
+// else the template's agent, else the call is refused with ErrAgentMissing; no
+// config key or environment variable supplies one. Agent_args inherited from
+// a template belong to the template's agent: a spawn of another agent that
+// supplies no AgentArgs of its own is refused with ErrAgentArgsMismatch, and a
+// supplied list, an empty one included, replaces the template's and is never
+// refused for its owner. A codex agent is accepted and every refusal below is
+// built for it, but a codex spawn that passes them all stops at launch
+// composition with ErrInternal (a Codex launch is not available in this
+// build), before any write, pre-trust or tmux call.
 //
 // With an explicit InstanceID that has no row, Spawn first makes one
 // tmux lookup for a session of this agent-director store still labelled with
@@ -208,7 +220,8 @@ func hasControlChar(id string) bool {
 // session left over from an earlier life of this id, or one with no valid
 // instance id, is for a human to end (docs/operator-actions.md), after
 // which the id is spawned again with ReuseFinished (reuse_finished over MCP,
-// --reuse-finished on the CLI).
+// --reuse-finished on the CLI) and the row's agent (agent over MCP, --agent
+// on the CLI; the description names it).
 //
 // With ReuseFinished, a finished row whose recorded tmux session name cannot
 // be used (it is empty, contains a control character, or contains a
@@ -225,14 +238,23 @@ func hasControlChar(id string) bool {
 //   - ErrCwdNotFound: CWD does not exist on disk.
 //   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
 //   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
-//   - ErrSpawnDeniedFlag: a denied claude flag was passed in AgentArgs.
+//   - ErrAgentMissing: the call gives no Agent and its template names none.
+//   - ErrAgentInvalid: Agent is neither claude nor codex (case-sensitive).
+//   - ErrAgentArgsMismatch: the template's agent_args are for another agent
+//     than this spawn's and the call supplies no AgentArgs of its own.
+//   - ErrSpawnDeniedFlag: a denied claude flag was passed in AgentArgs of a
+//     claude spawn (a codex spawn has no refused-argument set).
+//   - ErrPermissionsUnsupported: a codex spawn carries Permissions allow,
+//     deny or ask entries (merged with the template's).
 //   - ErrReservedEnvKey: ExtraEnv (merged with the template's) contains a
 //     key whose name before the first '=' (the name tmux sets) is reserved:
 //     it starts with AGENT_DIRECTOR_, or it is HOME (the key HOME, or one
 //     such as "HOME=/x") with any value, an empty one included. The message
 //     quotes the key. An extra_env HOME would move the agent's hook to
 //     another agent-director store, so set an absolute CLAUDE_CONFIG_DIR
-//     instead to give the agent its own Claude Code config. Also returned,
+//     (a claude agent) or CODEX_HOME (a codex agent) instead to give the
+//     agent its own config; the message names the spawn's agent's variable,
+//     both when no agent is known yet. Also returned,
 //     after those checks, for a key that is not a valid env-var name: it is
 //     empty, or it contains '=' or a NUL byte. tmux splits each KEY=VALUE
 //     entry at its first '=', so such a key would set a different variable
@@ -271,9 +293,9 @@ func hasControlChar(id string) bool {
 //     "duplicate session", the session holding the requested name was gone
 //     by the re-lookup; the new row is ended (the description says if it
 //     could not be), and a retry of the id (the description names it) uses
-//     ReuseFinished once get shows the row ended or missing and the name is
-//     free. With the reuse opt-in: after the row was reset, session
-//     creation failed, a created session could not be labelled, or after
+//     ReuseFinished and the row's agent once get shows the row ended or
+//     missing and the name is free. With the reuse opt-in: after the row was
+//     reset, session creation failed, a created session could not be labelled, or after
 //     "duplicate session" no session held the requested name when it was
 //     looked up again; then the row is restored (the description says what
 //     the restore did). A name found held is never this error.
@@ -281,13 +303,13 @@ func hasControlChar(id string) bool {
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
 //     the row ended or missing, then retry an explicit InstanceID with
-//     ReuseFinished. Also, with an explicit InstanceID that has no
+//     ReuseFinished and the row's agent. Also, with an explicit InstanceID that has no
 //     row, the label scan's lookup could not be read; nothing was written.
 //     Also, after "duplicate session", the re-lookup of the requested name
 //     could not be read; the new row is ended (the description says if it
 //     could not be), and a retry of the id (the description names it) uses
-//     ReuseFinished once get shows the row ended or missing and the name is
-//     free. With the reuse opt-in: at the lookup, before anything is
+//     ReuseFinished and the row's agent once get shows the row ended or
+//     missing and the name is free. With the reuse opt-in: at the lookup, before anything is
 //     changed, the row's own session or agent appears to still be stopping
 //     (the row ended less than the stopping window ago) or still starting
 //     (younger than the starting-session bound), this id's own abandoned
@@ -328,7 +350,10 @@ func hasControlChar(id string) bool {
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed, or it
 //     sets an unknown key, one key under names differing only in letter
-//     case, or a relay_mode other than on/off.
+//     case, a relay_mode other than on/off, or an agent other than claude
+//     or codex.
+//   - ErrTemplateAgentMissing: the template sets agent_args but names no
+//     agent.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.
 //
 // Nondeterminism: .instance_id — a UUID4 is minted when

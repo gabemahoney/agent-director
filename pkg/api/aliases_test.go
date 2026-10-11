@@ -21,7 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -112,6 +114,36 @@ func TestTmuxSentinelAliases(t *testing.T) {
 				c = apitest.DescKillSentinelText(tc.name)
 			}
 			apitest.AssertDescription(t, tc.orig.Error(), c)
+		})
+	}
+}
+
+// TestAgentSentinelAliases checks each agent sentinel (SR-1.6) is the internal
+// one itself, so a wrapped one matches it under errors.Is and classifies to its name.
+func TestAgentSentinelAliases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		api, orig error
+	}{
+		{"ErrAgentMissing", api.ErrAgentMissing, spawn.ErrAgentMissing},
+		{"ErrAgentInvalid", api.ErrAgentInvalid, spawn.ErrAgentInvalid},
+		{"ErrAgentArgsMismatch", api.ErrAgentArgsMismatch, spawn.ErrAgentArgsMismatch},
+		{"ErrPermissionsUnsupported", api.ErrPermissionsUnsupported, spawn.ErrPermissionsUnsupported},
+		{"ErrTemplateAgentMissing", api.ErrTemplateAgentMissing, config.ErrTemplateAgentMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.api == nil || tc.api != tc.orig {
+				t.Fatalf("api.%s (%v) is not the internal sentinel value", tc.name, tc.api)
+			}
+			wrapped := fmt.Errorf("%w: verb failed", tc.orig)
+			if !errors.Is(wrapped, tc.api) {
+				t.Errorf("errors.Is(wrapped internal %s, api.%s) = false; want true", tc.name, tc.name)
+			}
+			if got, _ := errnames.Classify(wrapped); got != tc.name {
+				t.Errorf("errnames.Classify(wrapped %s) = %q; want %q", tc.name, got, tc.name)
+			}
 		})
 	}
 }

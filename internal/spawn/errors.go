@@ -31,8 +31,8 @@ var ErrCwdNotADirectory = errors.New("ErrCwdNotADirectory")
 // other than "on" / "off" / "" (empty falls back to the config default).
 var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 
-// ErrSpawnDeniedFlag is returned when agent_args contains a flag the
-// supervisor must own (--settings, --resume, --continue, --print,
+// ErrSpawnDeniedFlag is returned when the agent_args of a claude spawn contain
+// a flag the supervisor must own (--settings, --resume, --continue, --print,
 // --output-format). The match handles both --flag VALUE and --flag=VALUE
 // forms; --setting-sources is deliberately not on this list (SRD §19 Q5).
 var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
@@ -69,6 +69,46 @@ var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 // is written or launched. One error name covers every refused extra_env key,
 // so callers match one name.
 var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
+
+// ErrAgentMissing is returned by spawn when it resolves no agent: the call
+// gives no agent and its template, if any, names none. No config key,
+// environment variable or default supplies one (SR-1.1), so the caller names
+// the agent, claude or codex, in the call (agent; --agent on the CLI) or in
+// its template. It comes after the cwd and relay_mode checks and before
+// every check that depends on the agent, extra_env included; nothing was
+// written or launched.
+var ErrAgentMissing = errors.New("ErrAgentMissing")
+
+// ErrAgentInvalid is returned by spawn when the call's agent is neither
+// claude nor codex. The match is case-sensitive ("Claude" is refused) and the
+// empty string counts as no agent given (ErrAgentMissing, when the template
+// names none either). The message quotes the value and names both accepted
+// values; nothing was written or launched. A bad agent in a template is
+// ErrTemplateMalformed, whatever agent the call gives.
+var ErrAgentInvalid = errors.New("ErrAgentInvalid")
+
+// ErrAgentArgsMismatch is returned by spawn when it would inherit a non-empty
+// agent_args from a template whose agent differs from the spawn's resolved
+// agent (SR-2.1): the arguments are one agent's, so they are not passed to
+// the other, and are not dropped silently either. The message names the
+// template's agent, the spawn's agent and the ways out: spawn the template's
+// agent, or pass this call's own non-empty agent_args, which replace the
+// template's wholesale and leave nothing to inherit. The advice says non-empty
+// because the CLI and the TS client count an empty list as none supplied; Go
+// and MCP callers that supply an explicit empty list also inherit nothing and
+// are not refused. Nothing was written or launched.
+var ErrAgentArgsMismatch = errors.New("ErrAgentArgsMismatch")
+
+// ErrPermissionsUnsupported is returned when a codex agent is given
+// allow, deny or ask entries: spawn refuses one from the call or from its
+// template, and make-template refuses a codex template that holds one (SR-5.5).
+// Codex has no counterpart of Claude Code's permission lists for AD to pass,
+// so the entries are refused instead of dropped. The message points to the
+// agent's own permission controls: the rules/ folder of the group's Codex
+// folder and Codex's own permission settings. Nothing was written, replaced
+// or launched. The question-tool setting's own deny entry is not one of these
+// entries.
+var ErrPermissionsUnsupported = errors.New("ErrPermissionsUnsupported")
 
 // ErrInstanceIdCollision is returned when the caller supplied an explicit
 // instance_id that already has a row. Without the reuse opt-in

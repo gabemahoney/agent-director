@@ -326,6 +326,7 @@ func dispatchSpawn(c *api.Client, params map[string]any) ([]byte, bool) {
 	p := api.SpawnParams{
 		CWD:                 strParam(params, "cwd"),
 		Template:            strParam(params, "template"),
+		Agent:               strParam(params, "agent"),
 		InstanceID:          strParam(params, "instance_id"),
 		RelayMode:           strParam(params, "relay_mode"),
 		AgentArgs:           strSliceParam(params, "agent_args"),
@@ -336,6 +337,10 @@ func dispatchSpawn(c *api.Client, params map[string]any) ([]byte, bool) {
 	if tmuxName, ok := params["tmux_session_name"].(string); ok {
 		p.TmuxSessionName = tmuxName
 		p.TmuxSessionNameSupplied = true
+	}
+	allow, deny, ask := strSliceParam(params, "allow"), strSliceParam(params, "deny"), strSliceParam(params, "ask")
+	if allow != nil || deny != nil || ask != nil {
+		p.Permissions = &api.Permissions{Allow: allow, Deny: deny, Ask: ask}
 	}
 	res, err := c.Spawn(p)
 	if err != nil {
@@ -479,6 +484,7 @@ func dispatchMakeTemplate(c *api.Client, params map[string]any) ([]byte, bool) {
 	p := api.MakeTemplateParams{
 		Name:                strParam(params, "name"),
 		CWD:                 strParam(params, "cwd"),
+		Agent:               strParam(params, "agent"),
 		RelayMode:           strParam(params, "relay_mode"),
 		AgentArgs:           strSliceParam(params, "agent_args"),
 		ExtraEnv:            strMapParam(params, "extra_env"),

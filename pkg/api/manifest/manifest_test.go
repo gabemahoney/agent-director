@@ -574,11 +574,13 @@ func assertErrorNames(t *testing.T, verb, method string, exact bool, want ...str
 // (bounded create) and ErrTmuxSessionConflict (label scan, SR-9.3; held name,
 // SR-9.4), as Client.Spawn's "Errors:" list does; that bullet names the
 // held-name case, and each tmux name reuse returns states its reuse opt-in
-// cases (SR-1.4, SR-10).
+// cases (SR-1.4, SR-10); and the five agent names, ErrTemplateAgentMissing
+// among them as spawn raises it from template load (SR-1.6).
 func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "spawn", "Spawn", false, "ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey", "ErrInvalidFlags", "ErrInstanceIdCollision",
-		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict")
+		"ErrTmuxSessionNameInvalid", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate", "ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
+		"ErrAgentMissing", "ErrAgentInvalid", "ErrAgentArgsMismatch", "ErrPermissionsUnsupported", "ErrTemplateAgentMissing")
 	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
 	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
 		if !strings.Contains(conflict, phrase) {
@@ -631,11 +633,12 @@ func TestResumeHasSRDErrorNames(t *testing.T) {
 }
 
 // TestMakeTemplateHasErrorNames pins make-template's to exactly its three
-// template names and ErrReservedEnvKey, spawn's one name for every refused
-// extra_env key, reserved or malformed (b.66q).
+// template names, ErrReservedEnvKey, spawn's one name for every refused
+// extra_env key, reserved or malformed (b.66q), and the two agent refusals
+// ErrTemplateAgentMissing and ErrPermissionsUnsupported (SR-1.6).
 func TestMakeTemplateHasErrorNames(t *testing.T) {
 	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrTemplateNameUnsafe", "ErrTemplateExists",
-		"ErrTemplateMalformed", "ErrReservedEnvKey")
+		"ErrTemplateMalformed", "ErrReservedEnvKey", "ErrTemplateAgentMissing", "ErrPermissionsUnsupported")
 }
 
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven

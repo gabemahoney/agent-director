@@ -12,9 +12,10 @@ import (
 
 // TemplateFields are the fields of a spawn template body (SRD §10.2), the
 // same ones make-template writes. A zero field is left out of the body, as
-// make-template leaves it out. To add a template field (E2-T3's `agent`), add
-// it here and copy it in TemplateBody's config.TemplateFile literal.
+// make-template leaves it out. To add a template field, add it here and copy it
+// in TemplateBody's config.TemplateFile literal.
 type TemplateFields struct {
+	Agent       string                      // agent ("claude" or "codex"; any other text builds a body the loader refuses)
 	AgentArgs   []string                    // agent_args
 	CWD         string                      // cwd
 	RelayMode   string                      // relay_mode ("on" or "off"; any other text builds a body the loader refuses)
@@ -49,6 +50,7 @@ func TemplateBody(f TemplateFields) string {
 	file := config.TemplateFile{
 		CWD:                 f.CWD,
 		RelayMode:           f.RelayMode,
+		Agent:               f.Agent,
 		AgentArgs:           f.AgentArgs,
 		ExtraEnv:            f.ExtraEnv,
 		AgentDirectorLabels: f.Labels,

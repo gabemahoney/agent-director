@@ -281,6 +281,9 @@ func TestResumeLaunch(t *testing.T) {
 				}
 			}
 			after := e.columns(t, r.ID)
+			if after.Agent != "claude" {
+				t.Errorf("agent after the resume = %v; want the row's claude kept", after.Agent)
+			}
 			srv, _ := e.rec.Server(socket)
 			identity := []any{int64(srv.PID), srv.Start, apitest.LinuxProcStarttime, s.Panes[0].ID, int64(s.Panes[0].PID), apitest.DarwinProcStarttime}
 			if tc.noIdentity {

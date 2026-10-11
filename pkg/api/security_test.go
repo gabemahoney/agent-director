@@ -118,7 +118,7 @@ var securityVerbs = slices.Concat([]securityVerb{{
 	record: securityNameHeldRecord, cases: securitySpawnCases,
 	call: func(t *testing.T, c *api.Client, s *securityScene) (any, error) {
 		secMoveHome(t)
-		return c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: s.subject,
+		return c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: s.subject,
 			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
 	},
 }, {

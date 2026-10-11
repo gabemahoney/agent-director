@@ -41,7 +41,7 @@ func TestLaunchPathsUseConfiguredLockWait(t *testing.T) {
 			advKillServer(t, e)
 			trust, cwd := seedTrustConfig(t, t.TempDir(), trustLacksEntry), t.TempDir()
 			ptwHoldLock(t, trust)
-			res, err := c.Spawn(api.SpawnParams{InstanceID: "ptw-" + uuid.NewString()[:8], CWD: cwd,
+			res, err := c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: "ptw-" + uuid.NewString()[:8], CWD: cwd,
 				ExtraEnv: trust.extraEnv()})
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)

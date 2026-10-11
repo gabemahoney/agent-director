@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -25,15 +26,26 @@ import (
 
 // The advice B1-B6 pin, exactly as the description or the Go doc words it.
 const (
-	advResumeLaunchInProgress          = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written"
-	advResumeLaunchInProgressNoSession = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI); nothing was written"
-	advResumeLaunchInProgressDoc       = "find-missing marks it missing once the pending grace period has passed since its launch start; then a row with a session id (typically a resume's launch) can be resumed, and a row with none (typically a spawn's or reuse's launch), whose resume would return ErrNoSessionId, is spawned again with the same id, opting in to reuse (SpawnParams.ReuseFinished), if get still shows no session id"
-	advResumeLaunchNoSessionErrDoc     = "the step after that: if get still shows no session id, spawn the id again, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished), since there is no conversation to resume"
-	advResumeLostRaceChanged           = "the row changed after resume examined it and nothing was written; nothing was launched"
-	advResumeLostRaceRemoved           = "was removed after resume examined it; nothing was written and nothing was launched"
-	advResumeLiveDoc                   = "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
-	advResumeReuseRecourse             = "recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
+	advResumeLaunchInProgress      = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written"
+	advResumeLaunchInProgressDoc   = "find-missing marks it missing once the pending grace period has passed since its launch start; then a row with a session id (typically a resume's launch) can be resumed, and a row with none (typically a spawn's or reuse's launch), whose resume would return ErrNoSessionId, is spawned again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent, the row's recorded one), if get still shows no session id"
+	advResumeLaunchNoSessionErrDoc = "the step after that: if get still shows no session id, spawn the id again, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; the description names the row's recorded one), since there is no conversation to resume"
+	advResumeLostRaceChanged       = "the row changed after resume examined it and nothing was written; nothing was launched"
+	advResumeLostRaceRemoved       = "was removed after resume examined it; nothing was written and nothing was launched"
+	advResumeLiveDoc               = "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
+	advResumeReuseRecourse         = "recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 )
+
+// advResumeNoSessionAdvice is the launch-in-progress refusal's end for a row with no session id and agent
+// ("claude" or "codex"): the spawn-again step names the reuse opt-in and that agent.
+func advResumeNoSessionAdvice(agent string) string {
+	return "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing " +
+		"once the pending grace period has passed since its launch start; the row has no session id, so there is no conversation to resume: " +
+		"once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished " +
+		"(--reuse-finished on the CLI) and agent " + agent + " (--agent " + agent + " on the CLI); nothing was written"
+}
+
+// advResumeRowAgents are the agents a row the recourse tests seed records.
+var advResumeRowAgents = []string{"claude", "codex"}
 
 // advResumeState is id's state as get shows it; "" when get finds no row.
 func advResumeState(t *testing.T, c *api.Client, id string) string {
@@ -150,7 +162,7 @@ func advResumePendings() []advResumePending {
 
 // TestAdviceFollow_B1_LaunchInProgressFindMissing: refused alike inside the grace period; then find-missing, get,
 // and resume a row with a session id, or (none, b.uey) spawn the id with the reuse opt-in.
-// B1: "... since its launch start; nothing was written" / "... since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI); nothing was written"
+// B1: "... since its launch start; nothing was written" / "... since its launch start; the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI); nothing was written"
 func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeLaunchInProgressDoc)
@@ -163,7 +175,7 @@ func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 			before := e.columns(t, id)
 			advice := advResumeLaunchInProgress
 			if o.noSession {
-				advice = advResumeLaunchInProgressNoSession
+				advice = advResumeNoSessionAdvice("claude")
 			}
 
 			_, refused := e.resume(id)
@@ -327,57 +339,81 @@ func advResumeRow(t *testing.T, e *killEnv, id string) (cols apitest.SpawnColumn
 	return cols, true
 }
 
-// advResumeRecourse resumes r, refused with want and writing nothing, then follows the Go doc's
-// recourse: spawn r's id again with the reuse opt-in, which starts a new life.
-func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error) {
+// advResumeRecourse resumes r, a row of agent, refused with want and writing nothing, then follows the Go
+// doc's recourse: spawn r's id again with the reuse opt-in and the row's agent. A claude row starts a new
+// life; a codex row's spawn passes every check and stops at composition, writing nothing.
+func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error, agent string) {
 	t.Helper()
 	before := e.snapshotResume(t, r.resumeRow)
 	_, err := e.resume(r.ID)
 	assertOneSentinel(t, err, want)
 	e.assertResumeWroteNothing(t, before)
 
-	res, logs, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+	p := reuseParams(t, r, reuseRequest{})
+	p.Agent = agent
+	if agent == "codex" {
+		snap := e.snapshotReuse(t, r)
+		_, logs, err := e.reuse(t, p)
+		if err == nil || !strings.Contains(err.Error(), codexStopText) {
+			t.Fatalf("spawn of %s with the reuse opt-in and agent codex = %v (log %q); want the Codex composition stop", r.ID, err, logs)
+		}
+		e.assertWroteNothing(t, snap)
+		return
+	}
+	res, logs, err := e.reuse(t, p)
 	if err != nil || res.InstanceID != r.ID {
 		t.Fatalf("spawn of %s with the reuse opt-in = %+v, %v (log %q); want it launched", r.ID, res, err, logs)
 	}
-	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != any(reuseLife+1) {
-		t.Errorf("row after the reuse {state %v, life %#v}; want pending in life %d", cols.State, cols.LifeNumber, reuseLife+1)
+	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != any(reuseLife+1) || cols.Agent != agent {
+		t.Errorf("row after the reuse {state %v, life %#v, agent %v}; want pending in life %d, agent %s", cols.State, cols.LifeNumber, cols.Agent, reuseLife+1, agent)
 	}
 }
 
-// TestAdviceFollow_B4_NoSessionIdSpawnWithReuse: resume refuses a row with no session id; spawn the id with reuse.
-// B4 (Go doc of ErrNoSessionId): "the caller's recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
+// TestAdviceFollow_B4_NoSessionIdSpawnWithReuse: resume refuses a row with no session id; spawn the id with reuse, as a claude row and a codex row.
+// B4 (Go doc of ErrNoSessionId): "the caller's recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 func TestAdviceFollow_B4_NoSessionIdSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "errors.go", "ErrNoSessionId", "the caller's "+advResumeReuseRecourse)
-	e := newKillEnv(t)
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), NoSessionID: true})
-	advResumeRecourse(t, e, r, api.ErrNoSessionId)
+	for _, agent := range advResumeRowAgents {
+		t.Run(agent+" row", func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), NoSessionID: true, Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+			advResumeRecourse(t, e, r, api.ErrNoSessionId, agent)
+		})
+	}
 }
 
 // TestAdviceFollow_B5_JsonlMissingSpawnWithReuse: resume refuses a row whose transcript is gone; spawn the id with reuse.
-// B5 (Go doc of ErrJsonlMissing): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
+// B5 (Go doc of ErrJsonlMissing): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 func TestAdviceFollow_B5_JsonlMissingSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "errors.go", "ErrJsonlMissing", "the "+advResumeReuseRecourse)
-	e := newKillEnv(t)
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
-	if err := os.Remove(r.JSONLPath); err != nil {
-		t.Fatalf("remove transcript: %v", err)
+	for _, agent := range advResumeRowAgents {
+		t.Run(agent+" row", func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+			if err := os.Remove(r.JSONLPath); err != nil {
+				t.Fatalf("remove transcript: %v", err)
+			}
+			advResumeRecourse(t, e, r, api.ErrJsonlMissing, agent)
+		})
 	}
-	advResumeRecourse(t, e, r, api.ErrJsonlMissing)
 }
 
 // TestAdviceFollow_B6_JsonlNeverWrittenSpawnWithReuse: resume refuses a row that never wrote a transcript; spawn with reuse.
-// B6 (Go doc of ErrJsonlNeverWritten): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
+// B6 (Go doc of ErrJsonlNeverWritten): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 func TestAdviceFollow_B6_JsonlNeverWrittenSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "errors.go", "ErrJsonlNeverWritten", "the "+advResumeReuseRecourse)
-	e := newKillEnv(t)
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Bare: true,
-		Opts: []apitest.SpawnOption{apitest.WithJsonlPath("")}})
-	if err := os.Remove(r.JSONLPath); err != nil {
-		t.Fatalf("remove transcript: %v", err)
+	for _, agent := range advResumeRowAgents {
+		t.Run(agent+" row", func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Bare: true,
+				Opts: []apitest.SpawnOption{apitest.WithJsonlPath(""), apitest.WithAgent(agent)}})
+			if err := os.Remove(r.JSONLPath); err != nil {
+				t.Fatalf("remove transcript: %v", err)
+			}
+			advResumeRecourse(t, e, r, api.ErrJsonlNeverWritten, agent)
+		})
 	}
-	advResumeRecourse(t, e, r, api.ErrJsonlNeverWritten)
 }

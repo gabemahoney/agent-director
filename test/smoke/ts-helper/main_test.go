@@ -204,6 +204,32 @@ func TestDispatch(t *testing.T) {
 		})
 	}
 
+	// --agent seeds the row's agent; without it the row runs claude.
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{"a_success_seed_spawn_default_agent", nil, "claude"},
+		{"a_success_seed_spawn_agent_codex", []string{"--agent", "codex"}, "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "spawn.db")
+			args := append([]string{"seed-spawn", "--store", dbPath, "--id", "ts-helper-agent", "--state", "ended", "--create-store"}, tc.flags...)
+			var stdout, stderr bytes.Buffer
+			if code := dispatch(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
+			}
+			cols, err := apitest.ReadSpawnColumns(dbPath, "ts-helper-agent")
+			if err != nil {
+				t.Fatalf("ReadSpawnColumns: %v", err)
+			}
+			if cols.Agent != tc.want {
+				t.Fatalf("agent = %#v, want %q", cols.Agent, tc.want)
+			}
+		})
+	}
+
 	t.Run("a_success_seed_parent_child", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "pc.db")
 

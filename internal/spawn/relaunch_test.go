@@ -32,14 +32,16 @@ type relaunchEnv struct {
 	row    store.Spawn
 }
 
-// newRelaunchEnv builds a relaunchEnv with a persisted-shaped row fed directly
-// (GetSpawn's round-trip is the store's tests' concern).
+// newRelaunchEnv builds a relaunchEnv with a persisted-shaped claude row fed
+// directly (GetSpawn's round-trip is the store's tests' concern); a launch path
+// goes through e.cfg.Launch.ClaudePath.
 func newRelaunchEnv(t *testing.T) *relaunchEnv {
 	t.Helper()
 	withStubExe(t, "/bin/agent-director")
 	return &relaunchEnv{t: t, socket: isolateTmux(t), rec: tmuxfix.NewRecorder(), cfg: config.Default(),
 		row: store.Spawn{
 			InstanceID:      "id-relaunch-1",
+			Agent:           store.AgentClaude,
 			CWD:             "/tmp/relaunch-cwd",
 			TmuxSessionName: "cd-relaunch-1",
 			RelayMode:       "off",

@@ -104,7 +104,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 		{"plain spawn whose launch failed", func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
 			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
 			id := uuid.NewString()
-			if _, err := e.c.Spawn(api.SpawnParams{InstanceID: id, CWD: t.TempDir()}); !errors.Is(err, api.ErrTmuxSessionCreate) {
+			if _, err := e.c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: id, CWD: t.TempDir()}); !errors.Is(err, api.ErrTmuxSessionCreate) {
 				t.Fatalf("Spawn = %v; want ErrTmuxSessionCreate", err)
 			}
 			start, _ := e.columns(t, id).LaunchStartedAt.(int64)

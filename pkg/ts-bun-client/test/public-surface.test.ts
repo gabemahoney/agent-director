@@ -232,6 +232,15 @@ test.each(["StatusResult", "ListRow"])(
   }
 );
 
+test.each([
+  ["GetResult", /\bagent\s*:\s*string\s*;/, "required"],
+  ["ListRow", /\bagent\s*:\s*string\s*;/, "required"],
+  ["SpawnParams", /\bagent\?\s*:\s*string\s*;/, "optional"],
+  ["MakeTemplateParams", /\bagent\?\s*:\s*string\s*;/, "optional"],
+] as const)("public-surface: %s declares agent as a %s string (SR-1.1, SR-2.1)", (iface, shape) => {
+  expect(interfaceBody(typesGolden(), iface), `${iface} must declare agent as a plain string`).toMatch(shape);
+});
+
 test("public-surface: GetResult carries jsonl_path; ListRow does not (SR-9.3/SR-10.3)", () => {
   const golden = typesGolden();
   // get surfaces the persisted transcript path as a required string field.

@@ -80,6 +80,7 @@ func TestLoadTemplateValidFileDecodes(t *testing.T) {
 	writeTemplate(t, dir, "valid", apitest.TemplateBody(apitest.TemplateFields{
 		CWD:         "/tmp",
 		RelayMode:   "off",
+		Agent:       "claude",
 		AgentArgs:   []string{"--model", "opus"},
 		Labels:      map[string]string{"project": "foo"},
 		Permissions: &config.TemplatePermissions{Allow: []string{"Bash(jq)"}},
@@ -90,7 +91,7 @@ func TestLoadTemplateValidFileDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTemplate: %v", err)
 	}
-	if tf.CWD != "/tmp" || tf.RelayMode != "off" {
+	if tf.CWD != "/tmp" || tf.RelayMode != "off" || tf.Agent != "claude" {
 		t.Errorf("scalars: %+v", tf)
 	}
 	if !slices.Equal(tf.AgentArgs, []string{"--model", "opus"}) {
@@ -149,21 +150,33 @@ func TestLoadTemplateRefusesOldKeys(t *testing.T) {
 	}
 }
 
-// TestLoadTemplateLoadsAgentArgs: agent_args loads as the template's agent
-// arguments, in any letter case, alone or beside the other fields.
-func TestLoadTemplateLoadsAgentArgs(t *testing.T) {
+// TestLoadTemplateLoadsAgent: agent loads as claude or codex, in any letter
+// case of the key, with or without agent_args (SR-1.1, SR-1.3 step 2); a
+// template naming no agent supplies none, an empty agent_args needing no
+// agent. agent_args load as the template's agent arguments, alone or beside
+// the other fields.
+func TestLoadTemplateLoadsAgent(t *testing.T) {
 	args := []string{"--model", "opus", "--verbose"}
 	cases := []struct {
 		name   string
 		fields apitest.TemplateFields
 		want   config.TemplateFile
 	}{
-		{"alone", apitest.TemplateFields{AgentArgs: args}, config.TemplateFile{AgentArgs: args}},
-		{"single_arg", apitest.TemplateFields{AgentArgs: []string{"--x"}}, config.TemplateFile{AgentArgs: []string{"--x"}}},
-		{"upper_case_key", apitest.TemplateFields{RawKeys: []string{`AGENT_ARGS = ["--model", "opus", "--verbose"]`}},
-			config.TemplateFile{AgentArgs: args}},
-		{"beside_other_fields", apitest.TemplateFields{AgentArgs: args, CWD: "/tmp", RelayMode: "on"},
-			config.TemplateFile{AgentArgs: args, CWD: "/tmp", RelayMode: "on"}},
+		{"claude", apitest.TemplateFields{Agent: "claude"}, config.TemplateFile{Agent: "claude"}},
+		{"codex", apitest.TemplateFields{Agent: "codex"}, config.TemplateFile{Agent: "codex"}},
+		{"upper_case_key", apitest.TemplateFields{RawKeys: []string{`AGENT = "codex"`}}, config.TemplateFile{Agent: "codex"}},
+		{"no_agent_supplies_none", apitest.TemplateFields{CWD: "/tmp"}, config.TemplateFile{CWD: "/tmp"}},
+		{"empty_agent_is_none", apitest.TemplateFields{RawKeys: []string{`agent = ""`}}, config.TemplateFile{}},
+		{"empty_agent_args_without_agent", apitest.TemplateFields{RawKeys: []string{`agent_args = []`}},
+			config.TemplateFile{AgentArgs: []string{}}},
+		{"agent_args_with_claude", apitest.TemplateFields{Agent: "claude", AgentArgs: args},
+			config.TemplateFile{Agent: "claude", AgentArgs: args}},
+		{"agent_args_with_codex", apitest.TemplateFields{Agent: "codex", AgentArgs: []string{"--x"}},
+			config.TemplateFile{Agent: "codex", AgentArgs: []string{"--x"}}},
+		{"agent_args_upper_case_key", apitest.TemplateFields{Agent: "claude", RawKeys: []string{`AGENT_ARGS = ["--model", "opus", "--verbose"]`}},
+			config.TemplateFile{Agent: "claude", AgentArgs: args}},
+		{"beside_other_fields", apitest.TemplateFields{Agent: "claude", AgentArgs: args, CWD: "/tmp", RelayMode: "on"},
+			config.TemplateFile{Agent: "claude", AgentArgs: args, CWD: "/tmp", RelayMode: "on"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,6 +186,56 @@ func TestLoadTemplateLoadsAgentArgs(t *testing.T) {
 
 			if err != nil || !reflect.DeepEqual(tf, tc.want) {
 				t.Fatalf("LoadTemplate = %+v, %v; want %+v", tf, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoadTemplateRefusesAgent: an agent other than exactly claude or codex is
+// ErrTemplateMalformed, and agent_args with no agent is ErrTemplateAgentMissing
+// (never ErrTemplateMalformed), each with its exact text (SR-1.3 step 2). The
+// checks run in load order, relay_mode then agent then agent_args without an
+// agent, so each row beside an earlier failure reports the earlier one.
+func TestLoadTemplateRefusesAgent(t *testing.T) {
+	const missingText = "agent_args are set but the template names no agent; " +
+		`add agent = "claude" or "codex", or remove agent_args`
+	args := []string{"--model", "opus"}
+	cases := []struct {
+		name   string
+		fields apitest.TemplateFields
+		want   error
+		text   string // what follows "<name>: "
+	}{
+		{"wrong_case", apitest.TemplateFields{Agent: "Claude"}, config.ErrTemplateMalformed, `agent="Claude" (want claude or codex)`},
+		{"upper_case_value", apitest.TemplateFields{Agent: "CODEX"}, config.ErrTemplateMalformed, `agent="CODEX" (want claude or codex)`},
+		{"padded_before", apitest.TemplateFields{Agent: " claude"}, config.ErrTemplateMalformed, `agent=" claude" (want claude or codex)`},
+		{"padded_after", apitest.TemplateFields{Agent: "codex "}, config.ErrTemplateMalformed, `agent="codex " (want claude or codex)`},
+		{"unknown", apitest.TemplateFields{Agent: "gpt"}, config.ErrTemplateMalformed, `agent="gpt" (want claude or codex)`},
+		{"unknown_with_agent_args", apitest.TemplateFields{Agent: "gpt", AgentArgs: args}, config.ErrTemplateMalformed,
+			`agent="gpt" (want claude or codex)`},
+		{"agent_args_without_agent", apitest.TemplateFields{AgentArgs: args}, config.ErrTemplateAgentMissing, missingText},
+		{"agent_args_beside_empty_agent", apitest.TemplateFields{AgentArgs: args, RawKeys: []string{`agent = ""`}},
+			config.ErrTemplateAgentMissing, missingText},
+		{"agent_args_without_agent_beside_other_fields", apitest.TemplateFields{AgentArgs: args, CWD: "/tmp", RelayMode: "on"},
+			config.ErrTemplateAgentMissing, missingText},
+		// Adjacent pairs of the load order: relay_mode, agent, agent_args without agent.
+		{"bad_relay_mode_and_bad_agent", apitest.TemplateFields{RelayMode: "bogus", Agent: "gpt"}, config.ErrTemplateMalformed,
+			`relay_mode="bogus" (want on/off)`},
+		{"bad_relay_mode_and_agent_args_without_agent", apitest.TemplateFields{RelayMode: "bogus", AgentArgs: args}, config.ErrTemplateMalformed,
+			`relay_mode="bogus" (want on/off)`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeTemplate(t, templatesDir(t), tc.name, apitest.TemplateBody(tc.fields))
+
+			_, err := config.LoadTemplate(tc.name)
+
+			want := tc.want.Error() + ": " + tc.name + ": " + tc.text
+			if !errors.Is(err, tc.want) || err.Error() != want {
+				t.Fatalf("err = %v\nwant  %s", err, want)
+			}
+			if tc.want == config.ErrTemplateAgentMissing && errors.Is(err, config.ErrTemplateMalformed) {
+				t.Errorf("err = %v is also ErrTemplateMalformed", err)
 			}
 		})
 	}
@@ -196,6 +259,11 @@ func TestLoadTemplateRefusesCaseVariantKeys(t *testing.T) {
 		// The relay_mode check would have checked whichever value the decoder kept.
 		{"refused_value_under_one_name", "RELAY_MODE = \"on\"\nrelay_mode = \"bogus\"\n",
 			templateCaseVariantText("refused_value_under_one_name", "RELAY_MODE and relay_mode")},
+		{"agent_two_spellings", "AGENT = \"claude\"\nagent = \"codex\"\n",
+			templateCaseVariantText("agent_two_spellings", "AGENT and agent")},
+		// The agent check would have checked whichever value the decoder kept.
+		{"agent_refused_value_under_one_name", "AGENT = \"gpt\"\nagent = \"claude\"\n",
+			templateCaseVariantText("agent_refused_value_under_one_name", "AGENT and agent")},
 		{"three_key_spellings", "cwd = \"/a\"\nCWD = \"/b\"\nCwd = \"/c\"\n",
 			templateCaseVariantText("three_key_spellings", "cwd, CWD and Cwd")},
 		{"two_table_spellings", "[permissions]\nallow = [\"a\"]\n\n[Permissions]\nallow = [\"b\"]\n",

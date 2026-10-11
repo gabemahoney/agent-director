@@ -62,6 +62,10 @@ type SpawnRow struct {
 	State string `json:"state"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
+	// Agent is the agent the row runs, "claude" or "codex": set by the spawn
+	// that began the row's life (replaced by a reuse's spawn), followed by
+	// resume, never changed by anything else (SR-1.5).
+	Agent string `json:"agent"`
 	// TmuxSessionName is the tmux session under which the Spawn is running.
 	TmuxSessionName string `json:"tmux_session_name"`
 	// TmuxSocket is the absolute path of the tmux socket the row's latest
@@ -381,6 +385,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		ParentID:                row.ParentID,
 		State:                   reported,
 		CWD:                     row.CWD,
+		Agent:                   row.Agent,
 		TmuxSessionName:         row.TmuxSessionName,
 		TmuxSocket:              row.Identity.Socket,
 		AgentArgs:               row.AgentArgs,

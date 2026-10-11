@@ -221,6 +221,18 @@ export declare class ErrSpawnDeniedFlag extends AgentDirectorError {
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export declare class ErrReservedEnvKey extends AgentDirectorError {
 }
+/** Mirrors ErrAgentMissing (package: spawn) */
+export declare class ErrAgentMissing extends AgentDirectorError {
+}
+/** Mirrors ErrAgentInvalid (package: spawn) */
+export declare class ErrAgentInvalid extends AgentDirectorError {
+}
+/** Mirrors ErrAgentArgsMismatch (package: spawn) */
+export declare class ErrAgentArgsMismatch extends AgentDirectorError {
+}
+/** Mirrors ErrPermissionsUnsupported (package: spawn) */
+export declare class ErrPermissionsUnsupported extends AgentDirectorError {
+}
 /** Mirrors ErrInstanceIdCollision (package: spawn) */
 export declare class ErrInstanceIdCollision extends AgentDirectorError {
 }
@@ -286,6 +298,9 @@ export declare class ErrTemplateMalformed extends AgentDirectorError {
 }
 /** Mirrors ErrTemplateExists (package: config) */
 export declare class ErrTemplateExists extends AgentDirectorError {
+}
+/** Mirrors ErrTemplateAgentMissing (package: config) */
+export declare class ErrTemplateAgentMissing extends AgentDirectorError {
 }
 /** Mirrors ErrProbeUnsupported (package: probe) */
 export declare class ErrProbeUnsupported extends AgentDirectorError {

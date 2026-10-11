@@ -4,7 +4,8 @@
  * Happy path: cwd = the temp HOME, whose .claude.json lacks its trust entry;
  * pre_trust ok writes the entry, no_pre_trust reports skipped and leaves the
  * file byte-identical (SR-22.6).
- * Errors: empty cwd → ErrCwdMissing; an id with a control character →
+ * Errors: empty cwd → ErrCwdMissing; no agent (absent or empty) → ErrAgentMissing and a
+ * wrong-case agent → ErrAgentInvalid, each with no row (SR-1.1); an id with a control character →
  * ErrInvalidFlags with no row and no session, with or without reuse_finished.
  * reuse_finished (SR-10.1, SR-10.2): without an id it mints one; with an id an
  * ended row is reused (pending, one session); without the opt-in an ended row
@@ -17,9 +18,11 @@ import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import {
   runHelper, privateTmuxSocket, fakeTmuxCalls, withProcessEnv, CLAUDE_JSON, trustEntry, seedOuterParent,
-  homeStore, openClient, rejection,
+  homeStore, openClient, rejection, spawnClaude,
 } from "../internal/helper.js";
-import { ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, AgentDirectorError } from "../../src/index.js";
+import {
+  ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, ErrAgentMissing, ErrAgentInvalid, AgentDirectorError,
+} from "../../src/index.js";
 
 /** fake-tmux invocations in logPath whose argv includes new-session. */
 const newSessionCount = (logPath: string) => fakeTmuxCalls(logPath).filter((argv) => argv.includes("new-session")).length;
@@ -33,9 +36,10 @@ test.each([
     fs.writeFileSync(claudeJson, CLAUDE_JSON);
     seedOuterParent(homeStore(homeDir));
     using client = await openClient(homeStore(homeDir));
-    const result = await client.spawn({ cwd: homeDir, ...(noPreTrust ? { no_pre_trust: true } : {}) });
+    const result = await spawnClaude(client, { cwd: homeDir, ...(noPreTrust ? { no_pre_trust: true } : {}) });
     expect(result.instance_id.length).toBeGreaterThan(0);
     expect(result.pre_trust).toBe(want);
+    expect((await client.get({ instance_id: result.instance_id })).agent).toBe("claude");
     if (noPreTrust) expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
     // The entry is keyed by the canonical cwd (the spawn resolves symlinks).
     else expect(trustEntry(claudeJson, fs.realpathSync(homeDir))).toBe(true);
@@ -45,7 +49,22 @@ test.each([
 test("spawn: error — empty cwd → ErrCwdMissing", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.spawn({ cwd: "" })).rejects.toBeInstanceOf(ErrCwdMissing);
+    await expect(spawnClaude(client, { cwd: "" })).rejects.toBeInstanceOf(ErrCwdMissing);
+  });
+}, 10_000);
+
+// SR-1.1: a spawn names its agent (case-sensitive); the refusal leaves no row.
+test.each([
+  ["absent", {}, ErrAgentMissing],
+  ["empty, which counts as absent", { agent: "" }, ErrAgentMissing],
+  ["Claude, wrong case", { agent: "Claude" }, ErrAgentInvalid],
+] as const)("spawn: error — agent %s → %p, no row", async (_label, params, want) => {
+  await withTempHome(async (homeDir) => {
+    seedOuterParent(homeStore(homeDir));
+    using client = await openClient(homeStore(homeDir));
+    const before = (await client.list({})).spawns.length;
+    await expect(client.spawn({ cwd: homeDir, ...params })).rejects.toBeInstanceOf(want);
+    expect((await client.list({})).spawns.length).toBe(before);
   });
 }, 10_000);
 
@@ -66,7 +85,7 @@ test.each([
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       const before = (await client.list({})).spawns.length;
       const err = await rejection(
-        client.spawn({ cwd: homeDir, instance_id: `${prefix}${ctl}x`, ...(reuse ? { reuse_finished: true } : {}) })
+        spawnClaude(client, { cwd: homeDir, instance_id: `${prefix}${ctl}x`, ...(reuse ? { reuse_finished: true } : {}) })
       );
       expect(err).toBeInstanceOf(ErrInvalidFlags);
       expect((err as AgentDirectorError).message).toContain("the instance id contains a control character");
@@ -77,7 +96,7 @@ test.each([
       expect(newSessionCount(logPath)).toBe(0);
 
       // Control: a clean id in the same wiring records new-session (the log is routed).
-      expect((await client.spawn({ cwd: homeDir, instance_id: `${prefix}-ok` })).instance_id).toBe(`${prefix}-ok`);
+      expect((await spawnClaude(client, { cwd: homeDir, instance_id: `${prefix}-ok` })).instance_id).toBe(`${prefix}-ok`);
       expect(newSessionCount(logPath)).toBe(1);
     });
   });
@@ -88,7 +107,7 @@ test("spawn: reuse_finished without instance_id → fresh spawn with a minted id
   await withTempHome(async (homeDir) => {
     seedOuterParent(homeStore(homeDir));
     using client = await openClient(homeStore(homeDir));
-    const result = await client.spawn({ cwd: homeDir, reuse_finished: true });
+    const result = await spawnClaude(client, { cwd: homeDir, reuse_finished: true });
     expect((await client.get({ instance_id: result.instance_id })).state).toBe("pending");
   });
 }, 10_000);
@@ -103,10 +122,24 @@ test("spawn: reuse_finished over an ended row → reused, get shows pending", as
     runHelper("seed-spawn", { store: storePath, id, state: "ended", "create-store": true, socket: privateTmuxSocket(homeDir) });
     using client = await openClient(storePath);
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
-      expect((await client.spawn({ cwd: homeDir, instance_id: id, reuse_finished: true })).instance_id).toBe(id);
+      expect((await spawnClaude(client, { cwd: homeDir, instance_id: id, reuse_finished: true })).instance_id).toBe(id);
       expect((await client.get({ instance_id: id })).state).toBe("pending");
       expect(newSessionCount(logPath)).toBe(1);
     });
+  });
+}, 10_000);
+
+// The reused row takes the new spawn's agent, not the ended row's (get shows it).
+test("spawn: reuse_finished over an ended codex row, spawned as claude → the row now runs claude", async () => {
+  await withTempHome(async (homeDir) => {
+    const storePath = homeStore(homeDir);
+    const id = `reuse-agent-${crypto.randomUUID().slice(0, 8)}`;
+    seedOuterParent(storePath);
+    runHelper("seed-spawn", { store: storePath, id, state: "ended", agent: "codex", "create-store": true, socket: privateTmuxSocket(homeDir) });
+    using client = await openClient(storePath);
+    expect((await client.get({ instance_id: id })).agent).toBe("codex");
+    await spawnClaude(client, { cwd: homeDir, instance_id: id, reuse_finished: true });
+    expect(await client.get({ instance_id: id })).toMatchObject({ state: "pending", agent: "claude" });
   });
 }, 10_000);
 
@@ -125,12 +158,12 @@ test.each([
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       const before = await client.get({ instance_id: id });
       expect(before.state).toBe("ended");
-      await expect(client.spawn({ cwd: homeDir, instance_id: id, ...extra })).rejects.toBeInstanceOf(ErrInstanceIdCollision);
+      await expect(spawnClaude(client, { cwd: homeDir, instance_id: id, ...extra })).rejects.toBeInstanceOf(ErrInstanceIdCollision);
       expect(await client.get({ instance_id: id })).toEqual(before);
       expect(newSessionCount(logPath)).toBe(0);
 
       // Control: a fresh id in the same wiring records new-session.
-      await client.spawn({ cwd: homeDir, instance_id: `${id}-ok` });
+      await spawnClaude(client, { cwd: homeDir, instance_id: `${id}-ok` });
       expect(newSessionCount(logPath)).toBe(1);
     });
   });

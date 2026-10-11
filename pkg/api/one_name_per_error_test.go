@@ -68,7 +68,11 @@ func assertOneName(t testing.TB, err error, want string) {
 // TestOneNameCatalogue: each catalogued sentinel, wrapped, and each typed
 // ErrTmuxNotAvailable carrier matches its own entry and no other, so no class
 // sentinel (ErrTmuxUnresponsive, ErrTmuxSessionConflict, ErrTmuxKillFailed)
-// wraps the send, capture, create or unavailable one.
+// wraps the send, capture, create or unavailable one. The agent sentinels
+// (ErrAgentMissing, ErrAgentInvalid, ErrAgentArgsMismatch,
+// ErrPermissionsUnsupported, ErrTemplateAgentMissing) are in that loop, and the
+// verbs' returns of them go through assertOneName in spawn_agent_test.go and
+// make_template_agent_test.go.
 func TestOneNameCatalogue(t *testing.T) {
 	t.Parallel()
 	for _, e := range errnames.Catalog {
@@ -119,7 +123,7 @@ func oneNameSpawnRows() []oneNameRow {
 			}
 		}
 		t.Setenv("TMUX_TMPDIR", f)
-		_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: "one-" + uuid.NewString()[:8]})
+		_, err := e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: "one-" + uuid.NewString()[:8]})
 		return err
 	}}}
 }

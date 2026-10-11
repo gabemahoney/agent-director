@@ -68,6 +68,10 @@ type ListRow struct {
 	State string `json:"state"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
+	// Agent is the agent the row runs, "claude" or "codex": set by the spawn
+	// that began the row's life (replaced by a reuse's spawn), followed by
+	// resume, never changed by anything else (SR-1.5).
+	Agent string `json:"agent"`
 	// TmuxSessionName is the tmux session name for the Spawn.
 	TmuxSessionName string `json:"tmux_session_name"`
 	// RelayMode is "on" or "off".
@@ -203,6 +207,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 			ParentID:                r.ParentID,
 			State:                   reported,
 			CWD:                     r.CWD,
+			Agent:                   r.Agent,
 			TmuxSessionName:         r.TmuxSessionName,
 			RelayMode:               r.RelayMode,
 			Labels:                  r.Labels,

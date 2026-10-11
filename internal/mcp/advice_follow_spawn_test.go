@@ -28,6 +28,29 @@ import (
 // name its create asks for is known: <advSpawnDir>-<id[:8]>.
 const advSpawnDir = "advwork"
 
+// advAgentArg is the agent the advice that follows advReuseCLIParen asks for,
+// as the MCP spawn param it names: a description says "and the row's agent",
+// so the caller reads the row's agent from get; a runtime error for a known
+// spawn says "and agent <name> (--agent <name> on the CLI)", the name given.
+func advAgentArg(t *testing.T, e *mcpEnv, advice, id string) string {
+	t.Helper()
+	if _, rest, ok := strings.Cut(advice, advReuseCLIParen+" and agent "); ok {
+		name := strings.Fields(rest)[0]
+		if !strings.HasPrefix(rest, name+" (--agent "+name+" on the CLI)") {
+			t.Fatalf("advice %q: agent %s is not followed by its CLI spelling", advice, name)
+		}
+		return name
+	}
+	if !strings.Contains(advice, advReuseCLIParen+" and the row's agent") {
+		t.Fatalf("advice %q names no agent after %q", advice, advReuseCLIParen)
+	}
+	var agent string
+	if err := json.Unmarshal(callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))["agent"], &agent); err != nil || agent == "" {
+		t.Fatalf("get %s agent = %q (%v); want the row's agent", id, agent, err)
+	}
+	return agent
+}
+
 // advToolDescription is tool's description as tools/list shows it.
 func advToolDescription(t *testing.T, d mcp.Dispatcher, tool string) string {
 	t.Helper()
@@ -69,10 +92,11 @@ func advOptInName(t *testing.T, advice string) string {
 	return words[len(words)-1]
 }
 
-// TestAdviceFollow_I4_MCPLiteralReuseSpelling: I4 spawn's "spawn the id again with reuse_finished (--reuse-finished on the CLI)",
-// kill's (C11 step 6) "otherwise spawn with reuse_finished (--reuse-finished on the CLI)" and A4's "the reuse opt-in
-// reuse_finished (--reuse-finished on the CLI)", the name before the parenthesis copied literally into an MCP spawn's
-// arguments once the held name is free and the row ended (no session id). delete's F1 text left with delete (b.vqr).
+// TestAdviceFollow_I4_MCPLiteralReuseSpelling: I4 spawn's "spawn the id again with reuse_finished (--reuse-finished on the CLI)
+// and the row's agent", kill's (C11 step 6) "otherwise spawn with reuse_finished (--reuse-finished on the CLI) and the row's
+// agent, which get shows" and A4's "the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI)",
+// the names before the parentheses copied literally into an MCP spawn's arguments (the row's agent read with get where the
+// text says so) once the held name is free and the row ended (no session id). delete's F1 text left with delete (b.vqr).
 func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 	cases := []struct {
 		name, phrase    string
@@ -81,14 +105,14 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 		tool            string // the tool whose tools/list description carries phrase; "" for the error's description
 	}{
 		{"spawn description",
-			"then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)",
+			"then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI) and the row's agent",
 			false, "ErrTmuxSessionConflict", "spawn"},
 		{"kill description's live-row step 6",
 			"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " +
-				"reuse_finished (--reuse-finished on the CLI); callers whose ids agent-director mints spawn fresh.",
+				"reuse_finished (--reuse-finished on the CLI) and the row's agent, which get shows; callers whose ids agent-director mints spawn fresh.",
 			false, "ErrTmuxSessionConflict", "kill"},
 		{"held-name error",
-			"a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) once the name is free",
+			"a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI) once the name is free",
 			true, "ErrTmuxUnresponsive", ""},
 	}
 	for _, tc := range cases {
@@ -123,6 +147,7 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				t.Fatalf("advice %q\nwant it to carry %q", advice, tc.phrase)
 			}
 			key := advOptInName(t, advice)
+			agent := advAgentArg(t, e, advice, id)
 			if cols := readColumns(t, e.storePath, id); cols.State != store.StateEnded {
 				t.Fatalf("row state = %v; want ended", cols.State)
 			}
@@ -130,7 +155,7 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				t.Fatalf("KillSessionID(%s): %v", holder, err)
 			}
 
-			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"instance_id": id, key: true}))
+			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"instance_id": id, key: true, "agent": agent}))
 
 			if resp == nil || resp.Error != nil {
 				got := "no response"
@@ -139,8 +164,8 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				}
 				t.Fatalf("spawn with %q: true = %s; want the reuse to launch", key, got)
 			}
-			if cols := readColumns(t, e.storePath, id); cols.State != store.StatePending {
-				t.Errorf("row state = %v; want pending", cols.State)
+			if cols := readColumns(t, e.storePath, id); cols.State != store.StatePending || cols.Agent != agent {
+				t.Errorf("row state, agent = %v, %v; want pending, %s", cols.State, cols.Agent, agent)
 			}
 		})
 	}

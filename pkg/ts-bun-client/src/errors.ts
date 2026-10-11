@@ -405,7 +405,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (55 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (60 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -425,6 +425,14 @@ export class ErrRelayModeInvalid extends AgentDirectorError {}
 export class ErrSpawnDeniedFlag extends AgentDirectorError {}
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export class ErrReservedEnvKey extends AgentDirectorError {}
+/** Mirrors ErrAgentMissing (package: spawn) */
+export class ErrAgentMissing extends AgentDirectorError {}
+/** Mirrors ErrAgentInvalid (package: spawn) */
+export class ErrAgentInvalid extends AgentDirectorError {}
+/** Mirrors ErrAgentArgsMismatch (package: spawn) */
+export class ErrAgentArgsMismatch extends AgentDirectorError {}
+/** Mirrors ErrPermissionsUnsupported (package: spawn) */
+export class ErrPermissionsUnsupported extends AgentDirectorError {}
 /** Mirrors ErrInstanceIdCollision (package: spawn) */
 export class ErrInstanceIdCollision extends AgentDirectorError {}
 /** Mirrors ErrTmuxSessionNameEmpty (package: spawn) */
@@ -470,6 +478,8 @@ export class ErrTemplateNotFound extends AgentDirectorError {}
 export class ErrTemplateMalformed extends AgentDirectorError {}
 /** Mirrors ErrTemplateExists (package: config) */
 export class ErrTemplateExists extends AgentDirectorError {}
+/** Mirrors ErrTemplateAgentMissing (package: config) */
+export class ErrTemplateAgentMissing extends AgentDirectorError {}
 /** Mirrors ErrProbeUnsupported (package: probe) */
 export class ErrProbeUnsupported extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotResumable (package: api) */
@@ -568,7 +578,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 55
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 60
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -583,6 +593,10 @@ const ERROR_TABLE = {
   ErrRelayModeInvalid,
   ErrSpawnDeniedFlag,
   ErrReservedEnvKey,
+  ErrAgentMissing,
+  ErrAgentInvalid,
+  ErrAgentArgsMismatch,
+  ErrPermissionsUnsupported,
   ErrInstanceIdCollision,
   ErrTmuxSessionNameEmpty,
   ErrTmuxSessionNameInvalid,
@@ -626,6 +640,7 @@ const ERROR_TABLE = {
   ErrTemplateNotFound,
   ErrTemplateMalformed,
   ErrTemplateExists,
+  ErrTemplateAgentMissing,
   // probe package
   ErrProbeUnsupported,
   // clisetup package

@@ -211,6 +211,7 @@ function buildSpawn(p: SpawnParams): string[] {
   f.push("--cwd", p.cwd);
 
   if (p.template !== undefined) f.push("--template", p.template);
+  if (p.agent !== undefined && p.agent !== "") f.push("--agent", p.agent);
   if (p.instance_id !== undefined) f.push("--instance-id", p.instance_id);
   if (p.tmux_session_name !== undefined)
     f.push("--tmux-session-name", p.tmux_session_name);
@@ -399,6 +400,7 @@ function buildMakeTemplate(p: MakeTemplateParams): string[] {
   const f: string[] = ["make-template", "--name", p.name];
 
   if (p.cwd !== undefined) f.push("--cwd", p.cwd);
+  if (p.agent !== undefined && p.agent !== "") f.push("--agent", p.agent);
   if (p.relay_mode !== undefined && p.relay_mode !== "")
     f.push("--relay-mode", p.relay_mode);
   if (p.overwrite === true) f.push("--overwrite");

@@ -215,13 +215,14 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     session id (typically a spawn's or reuse's launch), whose resume once
 //     missing guard 3 refuses, that once find-missing marks it missing, if
 //     get still shows no session id, the step is a spawn of the id with the
-//     reuse opt-in.
+//     reuse opt-in and the row's agent.
 //  3. `session_id` must be populated → otherwise
 //     ErrNoSessionId. A Spawn killed before its first SessionStart
 //     hook fired has no rotated session id to point --resume at, nor does
 //     a spawn's or reuse's launch that never reported in and that
 //     find-missing marked missing (guard 2's refusal of its pending row
-//     named the recourse: a spawn of the id with the reuse opt-in).
+//     named the recourse: a spawn of the id with the reuse opt-in and the
+//     row's agent).
 //  4. The row's stored extra env must not have a key that sets HOME (any
 //     value): the exact key HOME, or a key such as "HOME=/x" whose name
 //     before the first '=' is HOME (spawn.ReservedHomeKey, the rule spawn
@@ -313,10 +314,10 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 
 	if key, ok := spawn.ReservedHomeKey(row.ExtraEnv); ok {
-		return ResumeResult{}, homeInExtraEnvError(row.InstanceID, key)
+		return ResumeResult{}, homeInExtraEnvError(row.InstanceID, key, row.Agent)
 	}
 	if key, ok := spawn.InvalidEnvKey(row.ExtraEnv); ok {
-		return ResumeResult{}, invalidEnvKeyError(row.InstanceID, key)
+		return ResumeResult{}, invalidEnvKeyError(row.InstanceID, key, row.Agent)
 	}
 
 	// Resolve the transcript path against a strict precedence (bug b.1ba):
@@ -469,11 +470,12 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 // character stays on one line) and saying it sets HOME and why
 // (spawn.ReservedHomeReason), that nothing was written or launched, and the
 // way on: the row cannot be resumed with its extra env, so the agent runs
-// again only through a spawn of the id with the reuse opt-in and an extra env
-// without HOME, which starts a new life.
-func homeInExtraEnvError(id, key string) error {
+// again only through a spawn of the id with the reuse opt-in, the row's agent
+// (agent, the row's recorded one; SR-4.4) and an extra env without HOME, which
+// starts a new life; the alternative names that agent's folder variable.
+func homeInExtraEnvError(id, key, agent string) error {
 	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %s (a reused id starts a new life with no memory of this conversation), and %s",
-		spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, spawn.ReuseOptIn, spawn.ReservedHomeEnvKey, spawn.ReservedHomeAlternative)
+		spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, spawn.ReuseSpawn(agent), spawn.ReservedHomeEnvKey, spawn.ReservedHomeAlternative(agent))
 }
 
 // invalidEnvKeyError is resume's refusal of a row whose stored extra env has
@@ -484,11 +486,12 @@ func homeInExtraEnvError(id, key string) error {
 // saying it is not a valid env-var name and what is wrong with it
 // (spawn.EnvKeyProblem), that nothing was written or launched, and the way
 // on: the row cannot be resumed with its extra env, so the agent runs again
-// only through a spawn of the id with the reuse opt-in and an extra env
-// without that key, which starts a new life.
-func invalidEnvKeyError(id, key string) error {
+// only through a spawn of the id with the reuse opt-in, the row's agent (agent,
+// the row's recorded one; SR-4.4) and an extra env without that key, which
+// starts a new life.
+func invalidEnvKeyError(id, key, agent string) error {
 	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (a reused id starts a new life with no memory of this conversation), and %s",
-		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseOptIn, key, spawn.InvalidEnvKeyAlternative)
+		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseSpawn(agent), key, spawn.InvalidEnvKeyAlternative)
 }
 
 // jsonlAttempt records one candidate transcript path resume tried to
@@ -721,10 +724,13 @@ func resumeLostRace(s ResumeStore, row Spawn) error {
 // reuse's launch whose agent has not reported in. Once find-missing marks
 // that row missing, resume of it returns ErrNoSessionId, so the step is a
 // spawn of the id with the reuse opt-in in its one spelling
-// (spawn.ReuseOptIn; b.c4u). The step is conditional on get still showing no
+// (spawn.ReuseOptIn; b.c4u) with the row's recorded agent (spawn.ReuseSpawn,
+// SR-4.4). The step is conditional on get still showing no
 // session id: an agent that reports in late records one, and once that row is
 // missing it is resumable, so a reuse would discard its conversation.
-const launchInProgressNoSessionStep = "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + spawn.ReuseOptIn
+func launchInProgressNoSessionStep(agent string) string {
+	return "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + spawn.ReuseSpawn(agent)
+}
 
 // launchInProgressError is resume's refusal of a pending row (SR-8.4,
 // SR-1.4): a launch in progress whose agent has not reported in. The launch
@@ -743,7 +749,7 @@ func launchInProgressError(row Spawn) error {
 	}
 	next := ""
 	if row.SessionID == "" {
-		next = "; " + launchInProgressNoSessionStep
+		next = "; " + launchInProgressNoSessionStep(row.Agent)
 	}
 	return fmt.Errorf("%w: spawn %s is pending: %s and its agent has not reported in; resume applies only to an ended or missing row; if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start%s; nothing was written",
 		ErrSpawnNotResumable, row.InstanceID, began, next)
@@ -851,24 +857,28 @@ func launchInProgressError(row Spawn) error {
 //     a row with a session id (typically a resume's launch) can be resumed,
 //     and a row with none (typically a spawn's or reuse's launch), whose
 //     resume would return ErrNoSessionId, is spawned again with the same id,
-//     opting in to reuse (SpawnParams.ReuseFinished), if get still shows no
-//     session id, as its description says. Nothing was written. Also a lost race: the row changed after resume examined it
+//     opting in to reuse (SpawnParams.ReuseFinished) and passing the row's
+//     agent (SpawnParams.Agent, the row's recorded one), if get still shows
+//     no session id, as its description says. Nothing was written. Also a lost race: the row changed after resume examined it
 //     (found by the move, or by the one re-read after the pre-launch check
 //     found a left-over session), and nothing was written.
 //   - [ErrNoSessionId]: session_id is empty — the Spawn was killed
 //     before its first SessionStart hook, or a spawn's or reuse's launch
 //     never reported in and find-missing marked its pending row missing (the
 //     launch-in-progress refusal above names this recourse). Recourse: spawn
-//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished);
-//     the reused id starts a new life with no memory of the earlier one.
+//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished)
+//     and passing the row's agent (SpawnParams.Agent; get shows it); the
+//     reused id starts a new life with no memory of the earlier one.
 //   - ErrReservedEnvKey: the row's stored extra env sets HOME (any value),
 //     by the key HOME or a key such as "HOME=/x" (the message quotes the
 //     first such key in sorted order), which spawn now refuses: relaunched,
 //     the agent's hook would report to another agent-director store.
 //     Nothing was written and nothing was launched. Recourse: spawn again
-//     with the same id, opting in to reuse (SpawnParams.ReuseFinished), with
-//     an ExtraEnv without HOME (an absolute CLAUDE_CONFIG_DIR gives the agent
-//     its own Claude Code config); the reused id starts a new life with no
+//     with the same id, opting in to reuse (SpawnParams.ReuseFinished) and
+//     passing the row's agent (SpawnParams.Agent), with an ExtraEnv without
+//     HOME (an absolute CLAUDE_CONFIG_DIR gives a Claude Code agent its own
+//     config, an absolute CODEX_HOME a Codex agent; the message names the
+//     row's agent's variable, both when the row's agent is unknown); the reused id starts a new life with no
 //     memory of the earlier one. Also returned, when no key sets HOME, for a
 //     row whose stored extra env has a key that is not a valid env-var name:
 //     empty, or holding '=' or a NUL byte (the message quotes the first such
@@ -876,8 +886,9 @@ func launchInProgressError(row Spawn) error {
 //     is wrong with it), which spawn now refuses too: relaunched, tmux would
 //     set a different variable than the one pre-trust and the transcript
 //     lookup read. Nothing was written and nothing was launched. Recourse: spawn
-//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished),
-//     with an ExtraEnv without that key; the reused id starts a new life with
+//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished)
+//     and passing the row's agent (SpawnParams.Agent), with an ExtraEnv
+//     without that key; the reused id starts a new life with
 //     no memory of the earlier one.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
 //     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
@@ -887,15 +898,17 @@ func launchInProgressError(row Spawn) error {
 //     belongs to a life; the visible history is the current life's
 //     history minus the entry for the row's current session id. Recourse:
 //     spawn again with the same id, opting in to reuse
-//     (SpawnParams.ReuseFinished); the reused id starts a new life with no
-//     memory of the earlier one, so the earlier conversation cannot be
+//     (SpawnParams.ReuseFinished) and passing the row's agent
+//     (SpawnParams.Agent; get shows it); the reused id starts a new life with
+//     no memory of the earlier one, so the earlier conversation cannot be
 //     resumed through agent-director afterwards.
 //   - [ErrJsonlNeverWritten]: the row has a session id but no transcript was
 //     ever written (persisted jsonl_path NULL and the visible history,
 //     the current life's, empty) — the b.v2c case of a freshly restarted
 //     agent that has not been messaged. Recourse: spawn again with the same
-//     id, opting in to reuse (SpawnParams.ReuseFinished); the reused id
-//     starts a new life with no memory of the earlier one.
+//     id, opting in to reuse (SpawnParams.ReuseFinished) and passing the
+//     row's agent (SpawnParams.Agent; get shows it); the reused id starts a
+//     new life with no memory of the earlier one.
 //   - ErrTmuxNotAvailable: ENVIRONMENT. At the pre-launch lookup, before
 //     anything is written, this is not the tmux server the agent was launched
 //     on, or the tmux binary cannot be run or the socket is not accessible to

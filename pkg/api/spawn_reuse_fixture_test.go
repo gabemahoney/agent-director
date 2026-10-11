@@ -185,7 +185,7 @@ type reuseRequest struct {
 // (setenvIfChanged: with no parent, as TestMain leaves it, nothing is set).
 func reuseParams(t *testing.T, r reuseRow, q reuseRequest) api.SpawnParams {
 	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", q.Parent)
-	p := api.SpawnParams{InstanceID: r.ID, ReuseFinished: true, TmuxSessionName: q.Name, CWD: q.CWD,
+	p := api.SpawnParams{Agent: "claude", InstanceID: r.ID, ReuseFinished: true, TmuxSessionName: q.Name, CWD: q.CWD,
 		AgentArgs: q.Args, AgentDirectorLabels: q.Labels, NoPreTrust: q.NoPreTrust, ExtraEnv: r.Trust.extraEnv()}
 	if p.TmuxSessionName == "" {
 		p.TmuxSessionName = r.Name
@@ -421,7 +421,7 @@ func (e *killEnv) plainSpawnHeld(t *testing.T, k holderKind, late bool) (reuseRo
 	})
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	c, _ := e.client(t)
-	_, err := c.Spawn(api.SpawnParams{InstanceID: r.ID, TmuxSessionName: r.Name, TmuxSessionNameSupplied: true,
+	_, err := c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: r.ID, TmuxSessionName: r.Name, TmuxSessionNameSupplied: true,
 		CWD: r.CWD, ExtraEnv: r.Trust.extraEnv()})
 	if len(placed) == 0 {
 		t.Fatalf("no holder of %q was placed on %s", r.Name, r.Socket)

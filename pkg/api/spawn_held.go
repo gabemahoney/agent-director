@@ -64,9 +64,9 @@ func spawnHeldName(s *store.Store, t tmux.LookupClient, pc ProcChecker, now func
 		StoreID:    s.StoreID(),
 		Socket:     held.Socket,
 	}, held.Name)
-	retry := heldRetrySentences{Unanswered: heldRetryWait, Vanished: heldRetryWait}
+	retry := heldRetrySentences{Unanswered: heldRetryWait(held.Agent), Vanished: heldRetryWait(held.Agent)}
 	if rowResult == nameHeldRowEnded {
-		retry = heldRetrySentences{Unanswered: heldRetryFree, Vanished: heldRetryFree}
+		retry = heldRetrySentences{Unanswered: heldRetryFree(held.Agent), Vanished: heldRetryFree(held.Agent)}
 	}
 	holder, err := heldNameOutcome(res, held.InstanceID, held.Name, held.Socket, sentence, retry, nil)
 

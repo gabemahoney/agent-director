@@ -53,8 +53,9 @@ func matrixCases() map[string]matrixCase {
 		// before tmux is touched, so the test has no real-tmux side
 		// effect. The round-trip signal here is the cwd field — a
 		// dropped json tag would leave CWD empty and surface
-		// ErrCwdMissing instead.
-		"spawn": {args: `{"cwd":"/this/path/does/not/exist","instance_id":"` + matrixID + `"}`},
+		// ErrCwdMissing instead. (The agent field's round trip is
+		// TestMCPSpawnAgentReachesRow's.)
+		"spawn": {args: `{"cwd":"/this/path/does/not/exist","agent":"claude","instance_id":"` + matrixID + `"}`},
 
 		"status":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 		"get":       {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
@@ -88,8 +89,9 @@ func matrixCases() map[string]matrixCase {
 
 		// make-template needs an isolated HOME so we don't litter the
 		// developer's ~/.agent-director/templates/ on test runs. The
-		// per-subtest t.Setenv handles that.
-		"make-template": {args: `{"name":"dispatch-matrix-test"}`},
+		// per-subtest t.Setenv handles that. Its agent_args need an agent,
+		// so a dropped json tag on agent surfaces as ErrTemplateAgentMissing.
+		"make-template": {args: `{"name":"dispatch-matrix-test","agent":"claude","agent_args":["--model","opus"]}`},
 
 		// No entry for trail-emit (nor hook/serve): ExposedVerb excludes
 		// those verbs from the MCP surface (server.go:318), so the matrix
@@ -190,6 +192,12 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 			// ErrCwdMissing first.
 			if v.Name == "spawn" && errors.Is(err, spawn.ErrCwdMissing) {
 				t.Fatalf("dispatcher returned ErrCwdMissing — the cwd field did not round-trip from JSON to the dispatcher's spawn params struct (check the json:\"cwd\" tag on the dispatcher's local struct): %v", err)
+			}
+
+			// make-template's agent_args need its agent: a dropped json tag
+			// on agent leaves it empty and surfaces ErrTemplateAgentMissing.
+			if v.Name == "make-template" && errors.Is(err, api.ErrTemplateAgentMissing) {
+				t.Fatalf("dispatcher returned ErrTemplateAgentMissing — the agent field did not round-trip from JSON to the dispatcher's make-template params struct (check the json:\"agent\" tag): %v", err)
 			}
 
 			// Catch decode failures too — if a future refactor types a

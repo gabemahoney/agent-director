@@ -241,6 +241,8 @@ export interface ListRow {
     state: string;
     /** Canonicalized working directory. */
     cwd: string;
+    /** The agent the row runs: `"claude"` (Claude Code) or `"codex"` (Codex). Set at spawn; resume follows it. */
+    agent: string;
     /** tmux session name. */
     tmux_session_name: string;
     /** "on" or "off". */
@@ -303,6 +305,16 @@ export interface SpawnParams {
     cwd: string;
     /** Named template under ~/.agent-director/templates/. */
     template?: string;
+    /**
+     * The agent to launch: `"claude"` (Claude Code) or `"codex"` (Codex); case-sensitive,
+     * empty or absent means not given. Spawn resolves it per call, else from `template`'s
+     * `agent`; with neither, the spawn is refused with `ErrAgentMissing`. Any other value is
+     * refused with `ErrAgentInvalid`. A template's `agent_args` belong to the template's agent
+     * and are refused with `ErrAgentArgsMismatch` when the spawn's agent differs, unless this call
+     * passes its own non-empty `agent_args`. The
+     * row records it for life; `get` and `list` show it.
+     */
+    agent?: string;
     /** Explicit instance id (UUID4 minted when absent). */
     instance_id?: string;
     /** KEY=VALUE label pairs. */
@@ -319,8 +331,8 @@ export interface SpawnParams {
      * KEY→VALUE env-var overrides injected on the tmux session. `AGENT_DIRECTOR_*`
      * keys and `HOME` (any value) are refused with `ErrReservedEnvKey`, a template's
      * included: an extra_env `HOME` would move the agent's hook to another
-     * agent-director store. Set an absolute `CLAUDE_CONFIG_DIR` to give the agent its
-     * own Claude Code config. A key that is not a valid env-var name (empty, or
+     * agent-director store. Set an absolute `CLAUDE_CONFIG_DIR` (Claude Code) or
+     * `CODEX_HOME` (Codex) to give the agent its own config folder. A key that is not a valid env-var name (empty, or
      * containing `=` or a NUL character, which tmux would read as a different
      * variable) is refused with `ErrReservedEnvKey` too, a template's included,
      * and never rewritten; the description says what is wrong with it, and
@@ -342,8 +354,11 @@ export interface SpawnParams {
     /**
      * Reuse an explicit `instance_id` whose row is `ended` or `missing`;
      * a live row, `pending` included, still collides. No effect without an
-     * explicit `instance_id`; applies to this call only. Default false:
-     * any existing row with the id collides with `ErrInstanceIdCollision`.
+     * explicit `instance_id`; applies to this call only. The spawn names its
+     * agent (`agent`, or the template's) and the reused row takes it; to reuse
+     * a row for the agent it ran, pass the row's agent, which `get` shows.
+     * Default false: any existing row with the id collides with
+     * `ErrInstanceIdCollision`.
      */
     reuse_finished?: boolean;
 }
@@ -419,6 +434,8 @@ export interface GetResult {
      */
     state: string;
     cwd: string;
+    /** The agent the row runs: `"claude"` (Claude Code) or `"codex"` (Codex). Set at spawn; resume follows it. */
+    agent: string;
     tmux_session_name: string;
     /** The tmux socket the row's launch uses; omitted for a row from before this release. */
     tmux_socket?: string | null;
@@ -858,6 +875,15 @@ export interface MakeTemplateParams {
     name: string;
     /** Default working directory to bake in. */
     cwd?: string;
+    /**
+     * The agent the template belongs to: `"claude"` (Claude Code) or `"codex"` (Codex);
+     * case-sensitive, empty or absent means not given. Required when the template bakes in
+     * `agent_args` (otherwise `ErrTemplateAgentMissing`); a Codex template cannot bake in
+     * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). Any other value is refused
+     * with `ErrTemplateMalformed` (`ErrAgentInvalid` is spawn's per-call refusal). A spawn
+     * that names no agent takes it from the template.
+     */
+    agent?: string;
     /** Default relay mode: "on" | "off" | "" (inherit). */
     relay_mode?: string;
     /** Default agent argv. Per-call `agent_args` replaces wholesale. */
@@ -866,7 +892,9 @@ export interface MakeTemplateParams {
      * Env-var overrides to bake in. A key spawn would refuse is refused here with
      * `ErrReservedEnvKey` and nothing is written: `AGENT_DIRECTOR_*` keys, `HOME`
      * (any value), and a key that is not a valid env-var name (empty, or
-     * containing `=` or a NUL character); the description says which.
+     * containing `=` or a NUL character); the description says which. Set an absolute
+     * `CLAUDE_CONFIG_DIR` (Claude Code) or `CODEX_HOME` (Codex) to give the agent its
+     * own config folder.
      */
     extra_env?: Record<string, string>;
     /** Label k=v entries to bake in. */

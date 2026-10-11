@@ -38,7 +38,7 @@ func DescOlderServeParam(verb, param string) DescCase {
 	cases := map[string]DescCase{
 		"spawn relay_mode": renamed(") " + knownOnlyAs + "relay-mode and silently ignores relay_mode."),
 		"spawn extra_env": renamed(") " + knownOnlyAs + "extra-env and silently ignores extra_env, " +
-			"so its variables (CLAUDE_CONFIG_DIR included) are not set."),
+			"so its variables (CLAUDE_CONFIG_DIR and CODEX_HOME included) are not set."),
 		"spawn reuse_finished": renamed(" and " + knownOnlyAs + "reuse-finished) silently ignores reuse_finished, " +
 			"so a finished row gives ErrInstanceIdCollision."),
 		"spawn no_pre_trust":      undecoded("."),

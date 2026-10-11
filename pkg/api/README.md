@@ -90,12 +90,14 @@ progress.
 # CLI: spawn in current directory, tagged for later filtering
 agent-director spawn \
   --cwd "$PWD" \
+  --agent claude \
   --label project=widget \
   --relay-mode on
 ```
 
 ```go
 result, err := c.Spawn(api.SpawnParams{
+    Agent:      "claude",
     CWD:        "/tmp",
     RelayMode:  "on",
     InstanceID: "claude_example",
@@ -109,6 +111,22 @@ if err != nil {
 fmt.Println(result.InstanceID)
 ```
 
+A spawn names its agent: `SpawnParams.Agent`, `"claude"` or `"codex"`
+(case-sensitive), or the `Agent` its template names. `MakeTemplateParams.Agent`
+bakes one into a template; a template with `AgentArgs` needs it. How a call's
+`AgentArgs` combine with a template's is in
+[docs/settings.md](../../docs/settings.md#templates-and-per-call-merge).
+
+Five sentinels refuse the agent input, each before anything is written;
+`pkg/api` re-exports them and callers match them with `errors.Is`:
+`ErrAgentMissing` (no `Agent`, and the template names none), `ErrAgentInvalid`
+(not `"claude"` or `"codex"`), `ErrAgentArgsMismatch` (the template's
+`AgentArgs` are for another agent: spawn that agent, or pass this call's own
+non-empty `AgentArgs`), `ErrTemplateAgentMissing` (the template has `AgentArgs`
+and no agent: give it one; `MakeTemplate` returns it too) and
+`ErrPermissionsUnsupported` (a `"codex"` spawn or template carrying an allow,
+deny or ask entry; `MakeTemplate` returns it too).
+
 Returns `SpawnResult` (`.InstanceID`, `.PreTrust`). `.PreTrust` is
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did (a
 failed pre-trust never fails the spawn; see the `SpawnResult.PreTrust`
@@ -117,8 +135,9 @@ godoc). Most-likely sentinel errors:
 `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
 session-creating call timed out, here or in `Resume`: the row stays
 `pending`; do not retry until `Get` shows it `ended` or `missing`; then
-`Spawn` an explicit `InstanceID` again with `ReuseFinished`, since
-without it the spawn collides with the id's finished row. When the launch
+`Spawn` an explicit `InstanceID` again with `ReuseFinished` and the row's
+`Agent` (`Get` shows it), since without `ReuseFinished` the spawn collides with
+the id's finished row. When the launch
 did start, the row may instead stay `pending` with `LivenessNote`
 `unreported`, because its agent runs: use that agent (`ReadPane`, then
 `SendKeys` with `AllowPending`; only a caller that looked should type) or
@@ -140,7 +159,7 @@ re-lookup found a different tmux server (`ErrTmuxNotAvailable`); in every
 case the error says if the new row was not ended. The
 `ErrTmuxSessionCreate` and `ErrTmuxUnresponsive` errors also name the
 instance id (a minted one included) and the retry: that id with
-`ReuseFinished` once the name is free (and, if the row was not ended,
+`ReuseFinished` and the row's `Agent` once the name is free (and, if the row was not ended,
 once `Get` shows it `ended` or `missing`).
 The holding session is never ended, read or typed into.
 See `(*Client).Spawn` godoc for the full enumeration.
@@ -212,7 +231,8 @@ for _, row := range res.Spawns {
 }
 ```
 
-Returns `ListResult` (`.Spawns []ListRow`). `Spawns` is never nil —
+Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`
+or `"codex"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
 encodes as `[]` when empty. With `[state] settle_ms` set, `State` filters
 on the settled state each row reports (see Status). `Limit` caps the rows
 returned; 0 means no cap. Sentinel errors, each returned before the store is

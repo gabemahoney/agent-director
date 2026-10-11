@@ -45,8 +45,44 @@ func TestManifestSpawnTemplateParamsOneType(t *testing.T) {
 			}
 		}
 	}
-	if shared == 0 {
-		t.Fatal("spawn and make-template share no param")
+	if _, ok := spawnTypes["agent"]; !ok || shared == 0 {
+		t.Fatal("spawn has no agent param, or spawn and make-template share no param")
+	}
+	for _, p := range verbOf(t, "make-template").Params {
+		if p.Name == "agent" {
+			return
+		}
+	}
+	t.Error("make-template has no agent param")
+}
+
+// TestManifestSpawnAgainNamesRowAgent: every manifest text that names the reuse
+// opt-in in its one spelling also says to pass the row's agent (SR-4.4, P-66);
+// make-template's list of reserved param names aside.
+func TestManifestSpawnAgainNamesRowAgent(t *testing.T) {
+	const pointer = "the row's agent"
+	n := 0
+	check := func(where, text string) {
+		if strings.Contains(text, manifest.ReuseOptInSpelling) && !strings.Contains(text, pointer) {
+			t.Errorf("%s names the reuse opt-in without %q:\n%s", where, pointer, text)
+		}
+		if strings.Contains(text, pointer) {
+			n++
+		}
+	}
+	for _, v := range manifest.Verbs {
+		if v.Name != "make-template" {
+			check(v.Name+" description", v.Description)
+		}
+		for _, p := range v.Params {
+			check(v.Name+" param "+p.Name, p.Description)
+		}
+		for _, f := range v.ResultFields {
+			check(v.Name+" result field "+f.Name, f.Description)
+		}
+	}
+	if n < 3 {
+		t.Errorf("only %d manifest texts name %q; want spawn, kill and reuse_finished at least", n, pointer)
 	}
 }
 

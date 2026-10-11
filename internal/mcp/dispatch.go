@@ -78,6 +78,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		var raw struct {
 			CWD             string            `json:"cwd"`
 			Template        string            `json:"template"`
+			Agent           string            `json:"agent"`
 			InstanceID      string            `json:"instance_id"`
 			Label           []string          `json:"label"`
 			Allow           []string          `json:"allow"`
@@ -100,6 +101,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		p := api.SpawnParams{
 			CWD:                 raw.CWD,
 			Template:            raw.Template,
+			Agent:               raw.Agent,
 			InstanceID:          raw.InstanceID,
 			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
@@ -200,6 +202,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		var raw struct {
 			Name      string            `json:"name"`
 			CWD       string            `json:"cwd"`
+			Agent     string            `json:"agent"`
 			RelayMode string            `json:"relay_mode"`
 			AgentArgs []string          `json:"agent_args"`
 			ExtraEnv  map[string]string `json:"extra_env"`
@@ -219,6 +222,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		p := api.MakeTemplateParams{
 			Name:                raw.Name,
 			CWD:                 raw.CWD,
+			Agent:               raw.Agent,
 			RelayMode:           raw.RelayMode,
 			AgentArgs:           raw.AgentArgs,
 			ExtraEnv:            raw.ExtraEnv,

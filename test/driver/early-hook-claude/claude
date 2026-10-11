@@ -15,7 +15,7 @@
 # prefix and not --extra-env):
 #
 #   PATH=/opt/driver/delay-create-tmux:/opt/driver/early-hook-claude:$PATH \
-#       agent-director spawn --cwd /tmp
+#       agent-director spawn --agent claude --cwd /tmp
 #
 # Every argument is ignored. The hook's files go in
 # ${EARLY_HOOK_DIR:-/tmp/early-hook-claude}/<AGENT_DIRECTOR_INSTANCE_ID>/:

@@ -29,7 +29,8 @@ const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"
 // the [tmux] settings that fix the file (the keys outside [tmux] dropped).
 // A raw file is written as given instead, and refused for setting one key
 // under the caseVariant names (b.p8n) or for naming an old key, the
-// description then holding the oldKey phrase (SR-4.3).
+// description then holding the oldKey phrase (SR-4.3). A launch case's
+// description holds each launch phrase ([launch] values, SR-5.0).
 type configRefusal struct {
 	name        string
 	keys        apitest.ConfigKeys
@@ -38,11 +39,12 @@ type configRefusal struct {
 	raw         string
 	caseVariant []string
 	oldKey      string
+	launch      []string
 	fix         []apitest.TmuxSetting
 }
 
 // configRefusals is the one table of refused [tmux], [defaults], [relay],
-// [pause], [pre_trust], [store] and [state] values driving every surface check: a minimum, the
+// [pause], [pre_trust], [store], [state] and [launch] values driving every surface check: a minimum, the
 // derived grace rule, every table at once, a malformed type, db_path set
 // under two letter cases of [store] (b.p8n) and the old [defaults] key
 // disable_askuserquestion (SR-4.3). The per-key refusals are
@@ -56,6 +58,13 @@ func configRefusals() []configRefusal {
 	raisedGraceMin := config.PendingGraceMinimumSeconds(raisedCreate, 0)
 
 	return []configRefusal{
+		{
+			// A relative and a "~user" path: no [launch] path loads unless absolute or "~/".
+			name: "launch_paths_not_absolute",
+			keys: apitest.ConfigKeys{ClaudePath: "bin/claude", CodexPath: "~someone/codex"},
+			launch: []string{"refused [launch] values", `claude_path = "bin/claude", which must be an absolute path or start with "~/"`,
+				`codex_path = "~someone/codex", which must be an absolute path or start with "~/"`},
+		},
 		{
 			name:    "stopping_window_below_minimum",
 			bad:     []apitest.TmuxSetting{apitest.TmuxInt(window, 10)},
@@ -137,6 +146,9 @@ func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, 
 	}
 	if rc.oldKey != "" {
 		want = apitest.DescCase{Name: "config old key", Require: []string{h.cfgPath, rc.oldKey}}
+	}
+	if rc.launch != nil {
+		want = apitest.DescCase{Name: "config launch", Require: append([]string{h.cfgPath}, rc.launch...)}
 	}
 	apitest.AssertDescription(t, env.ErrDescription, want)
 }

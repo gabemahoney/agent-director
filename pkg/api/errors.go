@@ -58,8 +58,9 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 // id (typically a spawn's or reuse's launch), whose resume once missing
 // returns ErrNoSessionId, the description names the step after that: if get
 // still shows no session id, spawn the id again, opting in to reuse
-// (SpawnParams.ReuseFinished, --reuse-finished), since there is no
-// conversation to resume. It is also returned when resume
+// (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent
+// (SpawnParams.Agent, --agent; the description names the row's recorded one),
+// since there is no conversation to resume. It is also returned when resume
 // loses a race: the row changed between resume's read and its move to
 // `pending`, and nothing was written.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
@@ -72,8 +73,9 @@ var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 // ErrSpawnNotResumable, names this recourse). With no
 // session id there is no JSONL to point `claude --resume` at; the
 // caller's recourse is to spawn again with the same id, opting in to reuse
-// (SpawnParams.ReuseFinished, --reuse-finished). The reused id starts a new
-// life with no memory of the earlier one.
+// (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent
+// (SpawnParams.Agent, --agent; get shows it), since a spawn names its agent.
+// The reused id starts a new life with no memory of the earlier one.
 var ErrNoSessionId = errors.New("ErrNoSessionId")
 
 // ErrJsonlMissing is returned by the resume verb when NO candidate
@@ -91,7 +93,8 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 // each, so callers can log which candidates failed —
 // the error NAME is stable, so name-based mapping is unaffected.
 // Resume cannot proceed; the recourse is to spawn again with the same id,
-// opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished). The
+// opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and
+// passing the row's agent (SpawnParams.Agent, --agent; get shows it). The
 // reused id starts a new life with no memory of the earlier one, so the
 // earlier conversation cannot be resumed through agent-director afterwards.
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
@@ -115,7 +118,8 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 // existed but the file is gone. Callers map by error NAME; both remain
 // stable. resume returns it only for a finished row, which send-keys
 // refuses, so the recourse is to spawn again with the same id, opting in to
-// reuse (SpawnParams.ReuseFinished, --reuse-finished); the reused id starts a
+// reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's
+// agent (SpawnParams.Agent, --agent; get shows it); the reused id starts a
 // new life with no memory of the earlier one.
 var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 

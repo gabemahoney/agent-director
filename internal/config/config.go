@@ -63,6 +63,7 @@ type Config struct {
 	State    State    `toml:"state"`
 	Log      Log      `toml:"log"`
 	Tmux     Tmux     `toml:"tmux"`
+	Launch   Launch   `toml:"launch"`
 }
 
 // Defaults holds per-invocation default behavior toggles.
@@ -427,6 +428,64 @@ func (s Store) EffectiveDbPath() (string, error) {
 	return expandTilde(DefaultDbPath, home), nil
 }
 
+// Launch holds the optional launch path of each agent (SR-5.0): the program
+// the first element of the pane's command is, for every launch of that agent
+// (spawn, reuse_finished, resume). A key that is unset or empty means the
+// program is launched by its name, claude or codex, found on the PATH of the
+// pane's environment.
+//
+// A value is an absolute path, or "~/" followed by a path, which Load joins
+// onto HOME (as [store] db_path's "~/" is). Load refuses anything else with
+// ErrConfigMalformed's description naming the key (launchRefusals): a blank
+// value, a relative path, "~" alone, "~user/...", and a "~/" value while HOME
+// is unset or empty. Nothing else is checked: Load and the launch make no file
+// or network I/O for these keys, so a path that names nothing gives what a
+// missing claude gives (the row stays pending and find-missing marks it
+// missing). Nothing is stored on the row; each launch reads the config in
+// force. Unknown keys under [launch] are ignored, as under any table.
+type Launch struct {
+	// ClaudePath is the program Claude launches run, as Load resolved it
+	// ("" when unset).
+	ClaudePath string `toml:"claude_path"`
+	// CodexPath is the program Codex launches run, as Load resolved it ("" when
+	// unset). It is loaded and validated only; no Codex launch exists yet.
+	CodexPath string `toml:"codex_path"`
+}
+
+// launchRefusals returns the description of each refused [launch] value, in
+// key order (claude_path, codex_path), or nil when every value loads. home is
+// the user's home directory as Load read it ("" when unset), which a "~/"
+// value needs.
+func (l Launch) launchRefusals(home string) []string {
+	var out []string
+	for _, k := range []struct{ name, value string }{
+		{"claude_path", l.ClaudePath},
+		{"codex_path", l.CodexPath},
+	} {
+		switch {
+		case k.value == "", filepath.IsAbs(k.value):
+		case strings.HasPrefix(k.value, "~/"):
+			if home == "" {
+				out = append(out, fmt.Sprintf("%s = %q, which must be an absolute path or start with \"~/\", but HOME is unset or empty so \"~/\" cannot be resolved; use an absolute path",
+					k.name, k.value))
+			}
+		default:
+			out = append(out, fmt.Sprintf("%s = %q, which must be an absolute path or start with \"~/\"", k.name, k.value))
+		}
+	}
+	return out
+}
+
+// launchRefusal is Load's [launch] check: nil when every value loads, else an
+// error whose description names each refused key (launchRefusals).
+func launchRefusal(cfg Config, home string) error {
+	refused := cfg.Launch.launchRefusals(home)
+	if len(refused) == 0 {
+		return nil
+	}
+	return errors.New("refused [launch] values: " + strings.Join(refused, "; ") + ". An empty value counts as unset.")
+}
+
 // Log holds logging paths.
 type Log struct {
 	ErrorLogPath string `toml:"error_log_path"`
@@ -514,6 +573,10 @@ func (e *ConfigError) Unwrap() error {
 // of a table setting different keys, load as before. This refusal comes
 // first, alone, so its text never depends on which value the decoder kept.
 //
+// Load also refuses a [launch] claude_path or codex_path that is neither
+// empty, an absolute path nor "~/..." with HOME set (launchRefusal, SR-5.0),
+// and joins a "~/" value onto HOME (resolvePaths).
+//
 // Load then validates the [tmux] table (SR-4.1): a negative value of any key,
 // and a positive value below its key's safe minimum, are refused, never
 // raised to the minimum or replaced by the default. A missing key, or 0, is
@@ -566,6 +629,9 @@ func Load(path string) (Config, error) {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
 		if err := validate(cfg, meta); err != nil {
+			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
+		}
+		if err := launchRefusal(cfg, home); err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
 		cfg.Tmux = resolveUnsetTmux(cfg.Tmux, meta)
@@ -799,6 +865,11 @@ func resolvePaths(cfg Config, home string) Config {
 	base := filepath.Join(home, ".agent-director")
 	cfg.Store.DbPath = resolvePathField(cfg.Store.DbPath, home, base)
 	cfg.Log.ErrorLogPath = resolvePathField(cfg.Log.ErrorLogPath, home, base)
+	// A [launch] value is already checked (launchRefusal): an absolute path
+	// stays as written and a "~/" value is joined onto HOME. Unlike a path
+	// field, a launch path is never joined onto the agent-director directory.
+	cfg.Launch.ClaudePath = expandTilde(cfg.Launch.ClaudePath, home)
+	cfg.Launch.CodexPath = expandTilde(cfg.Launch.CodexPath, home)
 	return cfg
 }
 

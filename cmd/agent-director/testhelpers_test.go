@@ -201,6 +201,12 @@ func fakeTmuxEnv(t *testing.T, home, fakeTmuxDir string) []string {
 	}
 }
 
+// withAgent is a spawn or make-template argv for agent after its verb; the
+// tests that need no particular agent pass claude.
+func withAgent(agent, verb string, rest ...string) []string {
+	return append([]string{verb, "--agent", agent}, rest...)
+}
+
 // errorEnvelope mirrors the JSON shape main.go emits on stderr for an error.
 type errorEnvelope struct {
 	ErrName        string `json:"err_name"`

@@ -5,7 +5,8 @@
  * b.66q) does the same for a malformed extra_env key given to spawn, and to
  * makeTemplate, whose saved template's spawn then pre-trusts as advised; K3 and K4
  * (SR-4.3) do the same for the old keys `claude_instance_id` and `claude_args`:
- * the call renamed as the refusal says succeeds.
+ * the call renamed as the refusal says succeeds; K5-K7 (SR-1.1, SR-1.6) do the same
+ * for the agent refusals: the agent passed, or the template's agent_args fixed, as told.
  */
 
 import { test, expect, afterAll } from "bun:test";
@@ -14,9 +15,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Client } from "../src/client.js";
-import { ErrInvalidFlags, ErrReservedEnvKey } from "../src/errors.js";
+import { ErrAgentArgsMismatch, ErrAgentMissing, ErrInvalidFlags, ErrReservedEnvKey, ErrTemplateAgentMissing } from "../src/errors.js";
 import type { SpawnResult } from "../src/types.js";
-import { CLAUDE_JSON, homeStore, openClient, rejection, seedOuterParent, trustEntry } from "./internal/helper.js";
+import {
+  CLAUDE_JSON, homeStore, makeTemplateClaude, openClient, rejection, seedOuterParent, spawnClaude, trustEntry,
+} from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 const fixturePath = path.resolve(import.meta.dir, "fixtures/epic-a/success.sh");
@@ -66,12 +69,12 @@ const k2Cases: {
   outcome: string;
   launch: (c: Client, cwd: string, env: Record<string, string>) => Promise<SpawnResult>;
 }[] = [
-  { verb: "spawn", outcome: "launches and", launch: (c, cwd, env) => c.spawn({ cwd, extra_env: env }) },
+  { verb: "spawn", outcome: "launches and", launch: (c, cwd, env) => spawnClaude(c, { cwd, extra_env: env }) },
   {
     verb: "make-template",
     outcome: "saves a template whose spawn",
     launch: async (c, cwd, env) => {
-      await c.makeTemplate({ name: "k2", cwd, extra_env: env });
+      await makeTemplateClaude(c, { name: "k2", cwd, extra_env: env });
       return c.spawn({ cwd, template: "k2" });
     },
   },
@@ -117,10 +120,10 @@ test("K3 claude_instance_id: passing instance_id as advised, spawn launches unde
     seedOuterParent(homeStore(homeDir));
     using client = await openClient(homeStore(homeDir));
 
-    const refusedSpawn = await rejection(client.spawn({ cwd: homeDir, claude_instance_id: "k3-id" } as never));
+    const refusedSpawn = await rejection(spawnClaude(client, { cwd: homeDir, claude_instance_id: "k3-id" } as never));
     expect(refusedSpawn).toBeInstanceOf(ErrInvalidFlags);
     expect((refusedSpawn as ErrInvalidFlags).errDescription).toContain('"claude_instance_id" is no longer accepted; use "instance_id"');
-    const spawned = await client.spawn(renamedAsAdvised({ cwd: homeDir, claude_instance_id: "k3-id" }, refusedSpawn as ErrInvalidFlags) as never);
+    const spawned = await spawnClaude(client, renamedAsAdvised({ cwd: homeDir, claude_instance_id: "k3-id" }, refusedSpawn as ErrInvalidFlags) as never);
     expect(spawned.instance_id).toBe("k3-id");
 
     const refusedStatus = await rejection(client.status({ claude_instance_id: "k3-id" } as never));
@@ -135,12 +138,12 @@ for (const { verb, outcome, call } of [
   {
     verb: "spawn",
     outcome: "launches",
-    call: (c: Client, cwd: string, p: Record<string, unknown>) => c.spawn({ cwd, ...p } as never),
+    call: (c: Client, cwd: string, p: Record<string, unknown>) => spawnClaude(c, { cwd, ...p } as never),
   },
   {
     verb: "make-template",
     outcome: "saves the template",
-    call: (c: Client, cwd: string, p: Record<string, unknown>) => c.makeTemplate({ name: "k4", cwd, ...p } as never),
+    call: (c: Client, cwd: string, p: Record<string, unknown>) => makeTemplateClaude(c, { name: "k4", cwd, ...p } as never),
   },
 ]) {
   test(`K4 ${verb} claude_args: passing agent_args as advised ${outcome}`, async () => {
@@ -158,3 +161,80 @@ for (const { verb, outcome, call } of [
     });
   }, 10_000);
 }
+
+// K5 (SR-1.1): "pass agent claude or codex (--agent on the CLI), or put agent in the template"
+test("K5 spawn with no agent: passing agent as advised launches a row that runs it", async () => {
+  await withTempHome(async (homeDir) => {
+    seedOuterParent(homeStore(homeDir));
+    using client = await openClient(homeStore(homeDir));
+    const phrase = "pass agent claude or codex (--agent on the CLI), or put agent in the template";
+
+    const refusal = await rejection(client.spawn({ cwd: homeDir, instance_id: "k5-id" }));
+
+    expect(refusal).toBeInstanceOf(ErrAgentMissing);
+    expect((refusal as ErrAgentMissing).errDescription).toContain(phrase);
+    // The advice names the param ("agent") and its values; the first is passed as told.
+    const [, param, value] = /pass (\w+) (\w+) or \w+ \(--agent/.exec((refusal as ErrAgentMissing).errDescription)!;
+    const spawned = await client.spawn({ cwd: homeDir, instance_id: "k5-id", [param!]: value } as never);
+    expect(spawned.instance_id).toBe("k5-id");
+    expect((await client.get({ instance_id: "k5-id" })).agent).toBe(value);
+  });
+}, 10_000);
+
+// K6 (SR-1.6): make-template's "agent_args are set but no agent is given; pass agent claude or codex, or remove agent_args"
+const k6Fixes: [string, { agent?: string; agent_args?: string[] }][] = [
+  ["pass agent", { agent: "claude", agent_args: ["--model", "opus"] }],
+  ["remove agent_args", {}],
+];
+test.each(k6Fixes)("K6 make-template agent_args with no agent: to %s, as advised, saves the template", async (_label, fix) => {
+  await withTempHome(async (homeDir) => {
+    using client = await openClient(homeStore(homeDir));
+    const params = { name: "k6", cwd: homeDir, agent_args: ["--model", "opus"] };
+
+    const refusal = await rejection(client.makeTemplate(params));
+
+    expect(refusal).toBeInstanceOf(ErrTemplateAgentMissing);
+    expect((refusal as ErrTemplateAgentMissing).errDescription).toContain(
+      "agent_args are set but no agent is given; pass agent claude or codex, or remove agent_args",
+    );
+    const saved = await client.makeTemplate({ name: "k6", cwd: homeDir, ...fix });
+    expect(fs.existsSync(saved.path)).toBe(true);
+  });
+}, 10_000);
+
+// K7 (SR-1.6): ErrAgentArgsMismatch's "spawn agent <the template's agent>, or pass this call's own non-empty
+// agent_args, which replace the template's"
+const k7Mismatch = async (client: Client, cwd: string, templateAgent: string, callAgent: string, id: string) => {
+  await client.makeTemplate({ name: "k7", cwd, agent: templateAgent, agent_args: ["--model", "opus"] });
+  const refusal = await rejection(client.spawn({ cwd, template: "k7", agent: callAgent, instance_id: id }));
+  expect(refusal).toBeInstanceOf(ErrAgentArgsMismatch);
+  expect((refusal as ErrAgentArgsMismatch).errDescription).toContain(
+    ", or pass this call's own non-empty agent_args, which replace the template's",
+  );
+  return (refusal as ErrAgentArgsMismatch).errDescription;
+};
+
+test("K7 ErrAgentArgsMismatch: spawning the agent the advice names inherits the template's agent_args", async () => {
+  await withTempHome(async (homeDir) => {
+    seedOuterParent(homeStore(homeDir));
+    using client = await openClient(homeStore(homeDir));
+
+    const advice = await k7Mismatch(client, homeDir, "claude", "codex", "k7-named");
+
+    const named = /spawn agent (\w+),/.exec(advice)![1]!;
+    await client.spawn({ cwd: homeDir, template: "k7", agent: named, instance_id: "k7-named" });
+    expect(await client.get({ instance_id: "k7-named" })).toMatchObject({ agent: "claude", agent_args: ["--model", "opus"] });
+  });
+}, 10_000);
+
+test("K7 ErrAgentArgsMismatch: passing this call's own agent_args replaces the template's", async () => {
+  await withTempHome(async (homeDir) => {
+    seedOuterParent(homeStore(homeDir));
+    using client = await openClient(homeStore(homeDir));
+
+    await k7Mismatch(client, homeDir, "codex", "claude", "k7-own");
+
+    await client.spawn({ cwd: homeDir, template: "k7", agent: "claude", instance_id: "k7-own", agent_args: ["--model", "sonnet"] });
+    expect(await client.get({ instance_id: "k7-own" })).toMatchObject({ agent: "claude", agent_args: ["--model", "sonnet"] });
+  });
+}, 10_000);

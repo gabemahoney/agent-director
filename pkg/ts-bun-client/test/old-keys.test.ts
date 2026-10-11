@@ -46,7 +46,9 @@ const idVerbs: [verb: string, call: Call][] = [
 ];
 
 const refusedCalls: [verb: string, call: Call, params: Record<string, unknown>, oldKey: string, newKey: string][] = [
-  ...idVerbs.map(([verb, call]) => [verb, call, { claude_instance_id: "id-1" }, "claude_instance_id", "instance_id"] as const),
+  ...idVerbs.map(
+    ([verb, call]): (typeof refusedCalls)[number] => [verb, call, { claude_instance_id: "id-1" }, "claude_instance_id", "instance_id"],
+  ),
   ["spawn", (c, p) => c.spawn(p as never), { cwd: "/ws", claude_args: ["--model", "x"] }, "claude_args", "agent_args"],
   ["spawn", (c, p) => c.spawn(p as never), { cwd: "/ws", claude_instance_id: "id-1" }, "claude_instance_id", "instance_id"],
   ["make-template", (c, p) => c.makeTemplate(p as never), { name: "t", claude_args: ["--x"] }, "claude_args", "agent_args"],

@@ -142,7 +142,7 @@ func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
 				}
 			})
 			wantStart := env.clock.Now().UnixMilli()
-			id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id})
+			id := mustSpawn(t, env, api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: tc.id})
 			row, tok, storeID := spawnRow(t, env, id)
 
 			calls := env.rec.SocketCalls()
@@ -187,7 +187,7 @@ func TestSpawnRecordsResolvedSocket(t *testing.T) {
 	env := newSpawnEnv(t)
 	sock := filepath.Join(t.TempDir(), "other.sock")
 	t.Setenv("TMUX", sock+",123,0")
-	row, _, _ := spawnRow(t, env, mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir()}))
+	row, _, _ := spawnRow(t, env, mustSpawn(t, env, api.SpawnParams{Agent: "claude", CWD: t.TempDir()}))
 	if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Socket != sock || row.TmuxSocket != sock {
 		t.Errorf("create calls %+v, row socket %v; want one create and the row on %q", creates, row.TmuxSocket, sock)
 	}
@@ -230,7 +230,7 @@ func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
 			env := newSpawnEnv(t)
 			want := tc.setup(t, os.Getenv("TMUX_TMPDIR"))
 			want.Socket = filepath.Join(want.Dir, "default")
-			_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir()})
+			_, err := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir()})
 			assertLaunchSentinel(t, err, tmux.ErrTmuxNotAvailable)
 			apitest.AssertDescription(t, err.Error(), apitest.DescSocketDir(want.Socket, want.Dir, want.Error()))
 			assertNoTmuxCalls(t, env.rec)
@@ -248,7 +248,7 @@ func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
 	env := newSpawnEnv(t)
 	id := "identfail-" + uuid.NewString()[:8]
 	storefix.InjectWriteFailure(t, env.dbPath, storefix.WriteFailLaunchIdentity, id)
-	res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: id})
+	res, err := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id})
 	if err != nil || res.InstanceID != id {
 		t.Fatalf("Spawn = %+v, %v; want %s, nil", res, err, id)
 	}
@@ -291,7 +291,7 @@ func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 			name := "fail-" + uuid.NewString()[:8]
 			env.rec.Script(env.socket, tmuxfix.Script{Failure: tc.fail, ExitStatus: 1}, tmux.CallCreate)
 			wantStart, mark := env.clock.Now().UnixMilli(), trailLen(t)
-			_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), TmuxSessionName: name, TmuxSessionNameSupplied: true})
+			_, err := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), TmuxSessionName: name, TmuxSessionNameSupplied: true})
 			assertLaunchSentinel(t, err, tc.want)
 			ids := listIDs(t, env.c)
 			if len(ids) != 1 {
@@ -364,7 +364,7 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 			}
 			mark := trailLen(t)
 
-			res, err, returned := spawnReturned(e.c, api.SpawnParams{CWD: t.TempDir(), InstanceID: id})
+			res, err, returned := spawnReturned(e.c, api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id})
 
 			if got := callKinds(e.rec); !reflect.DeepEqual(got, calls) {
 				t.Fatalf("tmux calls = %q; want %q (no label by id, no kill)", got, calls)
@@ -439,7 +439,7 @@ func TestSpawnLaunchBoundCeiling(t *testing.T) {
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailLabel}, tmux.CallCreate).
 				Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallSetLabel, tmux.CallKillSession)
 
-			_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id,
+			_, err := e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: tc.id,
 				TmuxSessionName: name, TmuxSessionNameSupplied: true})
 			if !errors.Is(err, api.ErrTmuxSessionCreate) {
 				t.Fatalf("Spawn err = %v; want ErrTmuxSessionCreate", err)

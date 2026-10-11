@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
-import type { SpawnParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
+import type { SpawnParams, MakeTemplateParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { DialogMaybeOpenDetails, ProvenGoneHow } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
@@ -84,3 +84,18 @@ function _assertUnprovenTypes(get: GetResult, row: ListRow, info: PermissionRequ
   void _state;
 }
 void _assertUnprovenTypes;
+
+// Typecheck (SR-1.1, SR-2.1): agent is an optional string input on spawn and make-template and a required
+// string on get's and list's rows; tsc reports an unused directive if any of these changes.
+function _assertAgentTypes(get: GetResult, row: ListRow): void {
+  const _spawn: SpawnParams = { cwd: "/ws", agent: "claude" };
+  const _template: MakeTemplateParams = { name: "t", agent: "codex" };
+  const _rows: string[] = [get.agent, row.agent];
+  // @ts-expect-error — agent is a string, not a number
+  const _bad: SpawnParams = { cwd: "/ws", agent: 1 };
+  void _spawn;
+  void _template;
+  void _rows;
+  void _bad;
+}
+void _assertAgentTypes;

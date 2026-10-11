@@ -41,9 +41,9 @@ type SpawnParams struct {
 	// reserved (AGENT_DIRECTOR_*, and HOME with any value) are rejected with
 	// ErrReservedEnvKey; auth env vars (ANTHROPIC_API_KEY,
 	// CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed. To give the agent its
-	// own Claude Code config, set an absolute CLAUDE_CONFIG_DIR. Keys that are
-	// not valid env-var names (empty, or holding '=' or a NUL byte) are
-	// rejected with ErrReservedEnvKey too, never rewritten.
+	// own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME
+	// (Codex). Keys that are not valid env-var names (empty, or holding '=' or
+	// a NUL byte) are rejected with ErrReservedEnvKey too, never rewritten.
 	ExtraEnv map[string]string
 
 	// AgentDirectorLabels are caller-owned tags. Each key is normalized to
@@ -52,9 +52,18 @@ type SpawnParams struct {
 	// labels also persist into the spawns.labels JSON column.
 	AgentDirectorLabels map[string]string
 
-	// AgentArgs is the verbatim argv passed through to `claude` after
-	// the supervisor's own flags. The denied-flag check rejects
-	// supervisor-owned flags.
+	// Agent is the agent the spawn is for: "claude" or "codex", compared
+	// case-sensitively; empty means not given. As the caller sets it, it is
+	// the per-call agent; Resolve fills an empty one from the template's
+	// agent, so after Resolve it is the resolved agent (SR-1.2) and empty
+	// only when neither names one (Validate then gives ErrAgentMissing). No
+	// config key or environment variable supplies it (SR-1.1).
+	Agent string
+
+	// AgentArgs is the verbatim argv passed through to the agent program
+	// after the supervisor's own flags. For claude the denied-flag check
+	// rejects supervisor-owned flags. Nil means not supplied (a template's
+	// are inherited); a supplied empty list inherits nothing.
 	AgentArgs []string
 
 	// Permissions is the per-Spawn permission overlay synthesized into
@@ -113,6 +122,13 @@ type Permissions struct {
 // exercise them against synthesized inputs without touching disk.
 type Resolved struct {
 	SpawnParams
+
+	// InheritedArgsAgent is the agent of the template whose non-empty
+	// agent_args this spawn inherited, and "" when it inherited none (no
+	// template, a template with no agent_args, or a call that supplied its
+	// own list, an empty one included). Validate refuses a value that differs
+	// from the resolved agent (ErrAgentArgsMismatch, SR-2.1).
+	InheritedArgsAgent string
 }
 
 // Resolve folds template values into per-call params per SRD §7.1.
@@ -128,9 +144,14 @@ type Resolved struct {
 //     come first, per-call entries appended. A nil per-call
 //     Permissions field falls back to the template's value wholesale
 //     (no concat happens because there's nothing to append).
+//   - Agent: per-call non-empty REPLACES the template's; per-call empty
+//     takes the template's (which may be empty). Resolve does not check the
+//     value; Validate does (SR-1.3).
 //   - AgentArgs: per-call non-nil REPLACES the template's slice
 //     wholesale. A nil per-call slice falls back to the template.
 //     Explicit empty (len=0, non-nil) replaces (with an empty slice).
+//     Inherited non-empty template arguments are recorded in
+//     Resolved.InheritedArgsAgent for the ownership check (SR-2.1).
 //
 // When p.Template is empty (the common path for ad-hoc spawns) Resolve
 // is a near no-op: it returns the params verbatim wrapped in Resolved.
@@ -146,6 +167,7 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 	}
 
 	merged := p
+	var inheritedArgsAgent string
 
 	// Scalars: per-call empty falls back to template.
 	if merged.CWD == "" {
@@ -153,6 +175,9 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 	}
 	if merged.RelayMode == "" {
 		merged.RelayMode = tmpl.RelayMode
+	}
+	if merged.Agent == "" {
+		merged.Agent = tmpl.Agent
 	}
 
 	// Maps: merge with per-call winning on collision.
@@ -166,6 +191,9 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 		// mutate the cached template state via the resolved struct.
 		if tmpl.AgentArgs != nil {
 			merged.AgentArgs = append([]string(nil), tmpl.AgentArgs...)
+		}
+		if len(tmpl.AgentArgs) > 0 {
+			inheritedArgsAgent = tmpl.Agent
 		}
 	}
 
@@ -189,7 +217,7 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 		}
 	}
 
-	return Resolved{SpawnParams: merged}, nil
+	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent}, nil
 }
 
 // mergeStringMap layers `over` on top of `base`. Per-call wins on

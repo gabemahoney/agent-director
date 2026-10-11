@@ -35,6 +35,26 @@
     "description": ""
   },
   {
+    "name": "ErrAgentMissing",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrAgentInvalid",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrAgentArgsMismatch",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrPermissionsUnsupported",
+    "package": "spawn",
+    "description": ""
+  },
+  {
     "name": "ErrInstanceIdCollision",
     "package": "spawn",
     "description": ""
@@ -136,6 +156,11 @@
   },
   {
     "name": "ErrTemplateExists",
+    "package": "config",
+    "description": ""
+  },
+  {
+    "name": "ErrTemplateAgentMissing",
     "package": "config",
     "description": ""
   },

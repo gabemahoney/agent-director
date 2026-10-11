@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -57,8 +58,19 @@ const ReservedHomeEnvKey = "HOME"
 const ReservedHomeReason = "the agent's hook resolves agent-director's config and store from HOME, so its events would reach another agent-director store and the row would stay pending until find-missing marks it missing"
 
 // ReservedHomeAlternative is what a caller who set HOME in extra_env sets
-// instead, shared like ReservedHomeReason.
-const ReservedHomeAlternative = "to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead"
+// instead, shared like ReservedHomeReason. It names the folder variable of the
+// agent the call is for (SR-4.4): CLAUDE_CONFIG_DIR for claude, CODEX_HOME for
+// codex, and both when agent is neither (no agent is known: make-template
+// with no agent).
+func ReservedHomeAlternative(agent string) string {
+	switch agent {
+	case config.AgentClaude:
+		return "to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead"
+	case config.AgentCodex:
+		return "to give the agent its own Codex config, set an absolute CODEX_HOME in extra_env instead"
+	}
+	return "to give the agent its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) in extra_env instead"
+}
 
 // InvalidEnvKeyAlternative is what a caller whose extra_env key is not a valid
 // env-var name (EnvKeyProblem) does instead, the one text spawn's,
@@ -77,13 +89,19 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //     callers spawning into /foo/bar and /foo/./bar end up with the same
 //     row.
 //  2. relay_mode is "on" / "off" / "" if set.
-//  3. agent_args contains no denied flag (both --flag VALUE and
-//     --flag=VALUE forms).
-//  4. extra_env contains no key whose env-var name (the part before the
+//  3. The agent (SR-1.3 step 5): the resolved agent is claude or codex,
+//     else ErrAgentInvalid for a given value and ErrAgentMissing for none.
+//  4. Argument ownership (SR-2.1): inherited template agent_args belong to
+//     the resolved agent, else ErrAgentArgsMismatch.
+//  5. agent_args contains no denied flag (both --flag VALUE and
+//     --flag=VALUE forms); Claude's set only, Codex has none yet.
+//  6. A codex spawn carries no allow, deny or ask entry
+//     (ErrPermissionsUnsupported).
+//  7. extra_env contains no key whose env-var name (the part before the
 //     first '=', the name tmux sets) is HOME or starts with AGENT_DIRECTOR_,
 //     then no key that is not a valid env-var name (empty, or holding '='
 //     or a NUL byte).
-//  5. labels normalization is a no-op here; the prefix guard in §7.2
+//  8. labels normalization is a no-op here; the prefix guard in §7.2
 //     step 5 lands at env-composition time.
 func Validate(r *Resolved) error {
 	if err := validateCwd(r); err != nil {
@@ -92,10 +110,23 @@ func Validate(r *Resolved) error {
 	if err := validateRelayMode(r.RelayMode); err != nil {
 		return err
 	}
-	if err := validateClaudeArgs(r.AgentArgs); err != nil {
+	if err := validateAgent(r); err != nil {
 		return err
 	}
-	if err := ValidateExtraEnv(r.ExtraEnv); err != nil {
+	if err := validateArgsOwnership(r); err != nil {
+		return err
+	}
+	if r.Agent == config.AgentClaude {
+		if err := validateClaudeArgs(r.AgentArgs); err != nil {
+			return err
+		}
+	}
+	if r.Agent == config.AgentCodex && r.Permissions != nil {
+		if err := RefuseCodexPermissions(r.Permissions.Allow, r.Permissions.Deny, r.Permissions.Ask); err != nil {
+			return err
+		}
+	}
+	if err := ValidateExtraEnv(r.ExtraEnv, r.Agent); err != nil {
 		return err
 	}
 	if r.TmuxSessionNameSupplied {
@@ -104,6 +135,52 @@ func Validate(r *Resolved) error {
 		}
 	}
 	return nil
+}
+
+// validateAgent applies SR-1.3 step 5 to r.Agent, the resolved agent (the
+// call's own, else its template's; Resolve). A value other than claude or
+// codex, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
+// template's own bad agent never gets here: loading it is
+// ErrTemplateMalformed (config.LoadTemplate).
+func validateAgent(r *Resolved) error {
+	switch {
+	case r.Agent == "":
+		return fmt.Errorf("%w: the call gives no agent and its template names none; pass agent %s or %s (--agent on the CLI), or put agent in the template",
+			ErrAgentMissing, config.AgentClaude, config.AgentCodex)
+	case !config.ValidAgent(r.Agent):
+		return fmt.Errorf("%w: agent %q (want %s or %s)", ErrAgentInvalid, r.Agent, config.AgentClaude, config.AgentCodex)
+	}
+	return nil
+}
+
+// validateArgsOwnership applies SR-2.1 (SR-1.3 step 6). Resolve records, in
+// InheritedArgsAgent, the agent of a template whose non-empty agent_args the
+// spawn would inherit; a different resolved agent is ErrAgentArgsMismatch
+// rather than a silent drop or a pass-through to the wrong agent. A call that
+// supplies its own agent_args, an explicit empty list included, inherits
+// nothing and is never refused here.
+func validateArgsOwnership(r *Resolved) error {
+	if r.InheritedArgsAgent == "" || r.InheritedArgsAgent == r.Agent {
+		return nil
+	}
+	return fmt.Errorf("%w: template %q's agent_args are for agent %s and this spawn's agent is %s, so they are not inherited; spawn agent %s, or pass this call's own non-empty agent_args, which replace the template's",
+		ErrAgentArgsMismatch, r.Template, r.InheritedArgsAgent, r.Agent, r.InheritedArgsAgent)
+}
+
+// RefuseCodexPermissions is the one refusal of allow, deny and ask entries for
+// a codex agent (SR-5.5): ErrPermissionsUnsupported when any of the three
+// lists holds an entry, nil otherwise (empty lists are not entries). Spawn
+// (Validate, for the call's and the template's merged entries) and
+// make-template (for a codex template) both call it, so a template is never
+// saved that every spawn using it would refuse. The description points to the
+// agent's own permission controls. The question-tool setting's own deny entry
+// is never one of these entries.
+func RefuseCodexPermissions(allow, deny, ask []string) error {
+	if len(allow)+len(deny)+len(ask) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: a codex agent takes no allow, deny or ask entries; set permission rules in the rules/ folder of the group's Codex folder and use Codex's own permission controls",
+		ErrPermissionsUnsupported)
 }
 
 // validateTmuxSessionName applies SR-2.1, SR-2.2, SR-2.3. The function
@@ -231,7 +308,9 @@ func validateClaudeArgs(args []string) error {
 // HOME is checked first (ReservedHomeKey, bug b.nas): a key whose name is
 // HOME, whatever its value, an empty one included, is refused, the message
 // quoting the key as given and saying it sets HOME, why that is refused
-// (ReservedHomeReason) and what to set instead (ReservedHomeAlternative).
+// (ReservedHomeReason) and what to set instead (ReservedHomeAlternative,
+// which names the folder variable of agent, or both when agent is neither
+// claude nor codex: make-template with no agent).
 // Then a key whose name has the AGENT_DIRECTOR_ prefix is refused, quoted.
 // Last, a key that is not a valid env-var name (InvalidEnvKey, bug b.vpb:
 // empty, or holding '=' or a NUL byte) is refused, also with
@@ -247,10 +326,10 @@ func validateClaudeArgs(args []string) error {
 // make-template checked its keys), is refused too. make-template passes the
 // template's own extra_env, before it creates the templates directory or
 // writes anything, so a refused template leaves no file, new or replaced.
-func ValidateExtraEnv(env map[string]string) error {
+func ValidateExtraEnv(env map[string]string, agent string) error {
 	if k, ok := ReservedHomeKey(env); ok {
 		return fmt.Errorf("%w: extra_env key %q sets %s, which is reserved: %s; remove %q from extra_env, and %s",
-			ErrReservedEnvKey, k, ReservedHomeEnvKey, ReservedHomeReason, k, ReservedHomeAlternative)
+			ErrReservedEnvKey, k, ReservedHomeEnvKey, ReservedHomeReason, k, ReservedHomeAlternative(agent))
 	}
 	if k, ok := firstEnvKey(env, func(key string) bool { return strings.HasPrefix(envVarName(key), reservedEnvKeyPrefix) }); ok {
 		return fmt.Errorf("%w: %q", ErrReservedEnvKey, k)

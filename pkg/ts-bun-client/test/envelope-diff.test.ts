@@ -34,6 +34,8 @@ import {
   CLAUDE_JSON,
   trustEntry,
   seedOuterParent,
+  spawnClaude,
+  makeTemplateClaude,
 } from "./internal/helper.js";
 import { runCli } from "./internal/cliRunner.js";
 import { assertEnvelopesEqual } from "./internal/structuralDiff.js";
@@ -205,7 +207,7 @@ describe("spawn", () => {
       });
       plantClaudeJson(homeA, homeB);
       try {
-        const cli = runCli(["spawn", "--cwd", "/tmp"], cliEnv(homeA));
+        const cli = runCli(["spawn", "--agent", "claude", "--cwd", "/tmp"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
         // home: homeB keeps the Client's pre-trust on homeB's .claude.json.
@@ -214,7 +216,7 @@ describe("spawn", () => {
           home: homeB,
           tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
         } as any);
-        const ts = await client.spawn({ cwd: "/tmp" });
+        const ts = await spawnClaude(client, { cwd: "/tmp" });
 
         const cliEnvelope = JSON.parse(cli.stdout) as unknown;
         assertEnvelopesEqual(
@@ -249,6 +251,38 @@ describe("spawn", () => {
         }
 
         assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  // The agent refusals (SR-1.1, SR-5.5): the CLI args and the TS params make the same call.
+  test.each([
+    ["ErrAgentMissing", [], {}],
+    ["ErrAgentInvalid", ["--agent", "Claude"], { agent: "Claude" }],
+    ["ErrPermissionsUnsupported", ["--agent", "codex", "--allow", "Bash(ls)"], { agent: "codex", allow: ["Bash(ls)"] as string[] }],
+  ] as const)(
+    "error path: %s",
+    async (errName, cliArgs, params) => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["spawn", "--cwd", "/tmp", ...cliArgs], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        let tsErr: unknown;
+        try {
+          await client.spawn({ cwd: "/tmp", ...params });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+        expect((tsErr as AgentDirectorError).errName).toBe(errName);
       } finally {
         cleanup();
       }
@@ -1266,7 +1300,7 @@ describe("make-template", () => {
 
       try {
         const cli = runCli(
-          ["make-template", "--name", templateName],
+          ["make-template", "--name", templateName, "--agent", "claude", "--agent-args", "--model"],
           cliEnv(homeA)
         );
         expect(cli.exitCode).toBe(0);
@@ -1278,7 +1312,7 @@ describe("make-template", () => {
           home: homeB,
           _cliPath: process.env.CLI_PATH
         } as any);
-        const ts = await client.makeTemplate({ name: templateName });
+        const ts = await makeTemplateClaude(client, { name: templateName, agent_args: ["--model"] });
 
         // .path is in ignorePaths (embeds each side's temp HOME).
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -1315,6 +1349,34 @@ describe("make-template", () => {
         }
 
         assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  // agent_args with no agent is refused alike by both surfaces (SR-1.6).
+  test(
+    "error path: ErrTemplateAgentMissing",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["make-template", "--name", "envdiff-noagent", "--agent-args", "--model"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        let tsErr: unknown;
+        try {
+          await client.makeTemplate({ name: "envdiff-noagent", agent_args: ["--model"] });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+        expect((tsErr as AgentDirectorError).errName).toBe("ErrTemplateAgentMissing");
       } finally {
         cleanup();
       }

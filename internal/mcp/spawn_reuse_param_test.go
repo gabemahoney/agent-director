@@ -42,7 +42,7 @@ func TestSpawnReuseMCPCollisionMatchesGoClient(t *testing.T) {
 			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, extra))
 			data := toolErrorData(t, resp)
 
-			goErr := goClientSpawn(t, e.storePath, api.SpawnParams{CWD: cwd, ExtraEnv: c.env(), InstanceID: id})
+			goErr := goClientSpawn(t, e.storePath, api.SpawnParams{CWD: cwd, Agent: "claude", ExtraEnv: c.env(), InstanceID: id})
 			if !errors.Is(goErr, spawn.ErrInstanceIdCollision) {
 				t.Fatalf("Go client Spawn err = %v; want ErrInstanceIdCollision", goErr)
 			}

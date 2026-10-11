@@ -102,7 +102,7 @@ type rowView struct {
 // failed. A socket outside the private directory is a *refusal: the run must
 // abort.
 func (h *harness) spawnAgent(caseID string, spec spawnSpec) (agentRef, error) {
-	argv := []string{"spawn", "--cwd", spec.CWD,
+	argv := []string{"spawn", "--agent", "claude", "--cwd", spec.CWD,
 		"--label", labelRun + "=" + h.iso.RunID, "--label", labelCase + "=" + caseID}
 	if spec.RelayMode != "" {
 		argv = append(argv, "--relay-mode", spec.RelayMode)

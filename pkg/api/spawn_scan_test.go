@@ -138,7 +138,7 @@ func TestScanRefusesLeftover(t *testing.T) {
 			e.rec.SeedSessions(e.socket, seeded...)
 			before := e.rec.Sessions(e.socket)
 			mark := trailLen(t)
-			p := api.SpawnParams{CWD: t.TempDir(), InstanceID: id, ReuseFinished: tc.reuse}
+			p := api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id, ReuseFinished: tc.reuse}
 			if tc.requested != "" {
 				p.TmuxSessionName, p.TmuxSessionNameSupplied = tc.requested, true
 			}
@@ -216,7 +216,7 @@ func TestScanProceeds(t *testing.T) {
 			})
 			mark := trailLen(t)
 
-			if _, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: id, ReuseFinished: tc.reuse}); err != nil {
+			if _, err := e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id, ReuseFinished: tc.reuse}); err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
 
@@ -271,7 +271,7 @@ func TestScanCantTellRefuses(t *testing.T) {
 			tc.setup(e, id)
 			mark := trailLen(t)
 
-			_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: id})
+			_, err := e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id})
 
 			assertOneSentinel(t, err, tc.want)
 			if err != nil {

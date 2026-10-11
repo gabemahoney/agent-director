@@ -120,7 +120,7 @@ func (e heldEnv) spawnHeld(t *testing.T, id, name string, onScan func()) heldRun
 		run.createdAt = e.clock.Now()
 		run.sessionsAtCreate = e.rec.Sessions(e.socket)
 	})
-	_, run.err = e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: id,
+	_, run.err = e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id,
 		TmuxSessionName: name, TmuxSessionNameSupplied: true})
 	return run
 }

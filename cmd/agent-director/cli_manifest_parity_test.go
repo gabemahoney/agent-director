@@ -143,6 +143,29 @@ func TestCLIFlagsAreManifestParams(t *testing.T) {
 	}
 }
 
+// TestCLIFlagUsageNamesFolderVariables: spawn's and make-template's --extra-env
+// usage names both agents' folder variables, while spawn's --no-pre-trust,
+// which only Claude Code's trust file has, names Claude's alone (SR-14.4).
+func TestCLIFlagUsageNamesFolderVariables(t *testing.T) {
+	s := scanCLISources(t)
+	for _, tc := range []struct{ verb, flag, want, banned string }{
+		{"spawn", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
+		{"make-template", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
+		{"spawn", "no-pre-trust", "CLAUDE_CONFIG_DIR", "CODEX_HOME"},
+	} {
+		t.Run(tc.verb+" --"+tc.flag, func(t *testing.T) {
+			i := slices.IndexFunc(s.flags[tc.verb], func(f cliFlag) bool { return f.name == tc.flag })
+			if i < 0 {
+				t.Fatalf("the scan found no %s --%s (found %v)", tc.verb, tc.flag, s.flags[tc.verb])
+			}
+			usage := s.flags[tc.verb][i].usage
+			if !strings.Contains(usage, tc.want) || (tc.banned != "" && strings.Contains(usage, tc.banned)) {
+				t.Errorf("usage = %q; want it to name %q and not %q", usage, tc.want, tc.banned)
+			}
+		})
+	}
+}
+
 // TestMCPExposedVerbExceptions: the only manifest verbs MCP does not expose
 // are the machine plumbing hook, serve and trail-emit (b.vqr).
 func TestMCPExposedVerbExceptions(t *testing.T) {

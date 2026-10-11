@@ -32,6 +32,24 @@ func TestClassifyKnown(t *testing.T) {
 	}
 }
 
+// TestClassifyAgentErrors: the five agent errors pkg/api re-exports classify
+// under their own names, wrapped as callers meet them (SR-1.6).
+func TestClassifyAgentErrors(t *testing.T) {
+	for name, sentinel := range map[string]error{
+		"ErrAgentMissing":           api.ErrAgentMissing,
+		"ErrAgentInvalid":           api.ErrAgentInvalid,
+		"ErrAgentArgsMismatch":      api.ErrAgentArgsMismatch,
+		"ErrPermissionsUnsupported": api.ErrPermissionsUnsupported,
+		"ErrTemplateAgentMissing":   api.ErrTemplateAgentMissing,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, _ := errnames.Classify(fmt.Errorf("%w: context", sentinel)); got != name {
+				t.Errorf("Classify(%s) = %q, want %q", name, got, name)
+			}
+		})
+	}
+}
+
 // TestClassifyUnknown verifies that an unrecognized error collapses to
 // "ErrInternal" with the original error message as description.
 func TestClassifyUnknown(t *testing.T) {

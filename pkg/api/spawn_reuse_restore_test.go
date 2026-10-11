@@ -105,44 +105,47 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 	}
 	for _, tr := range triggers {
 		for _, prior := range []string{store.StateEnded, store.StateMissing} {
-			t.Run(tr.name+"/"+prior, func(t *testing.T) {
-				t.Parallel()
-				e := newKillEnv(t)
-				// The old life opted out of pre-trust and the call does not: the restore brings 1 back. A missing
-				// row's NULL ended_at is restored as the failure time, read from the Client clock.
-				spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true}
-				if prior == store.StateMissing {
-					spec.EndedAt = endedNull
-				}
-				r := e.seedReusable(t, agentGone, spec)
-				tr.arrange(e, r)
-				before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
-
-				_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
-				assertLaunchSentinel(t, err, tr.want)
-				c := rlOneCreate(t, e, r.Socket, tr.calls...)
-				restore := apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior, Launch: apitest.LaunchReuse}
-				apitest.AssertDescription(t, err.Error(), tr.desc(e, r).AfterResumeRestore(restore), c.Token, e.storeID, r.Token)
-				want := before // every column restored but the launch start, cleared, two versions on (reset, restore)
-				want.LaunchStartedAt, want.RowVersion = nil, before.RowVersion.(int64)+2
-				if spec.EndedAt == endedNull {
-					want.EndedAt = e.clock.Now().UTC().Format(time.DateTime) // the clock when the restore ran
-				}
-				rrAssertRestored(t, e, r, want, hist, tr.wantName)
-				for _, s := range e.rec.Sessions(r.Socket) {
-					if s.Name == storedFormOf(c.Target) {
-						t.Errorf("session %+v left under the requested name; want none", s)
+			for _, rowAgent := range []string{"claude", "codex"} {
+				t.Run(tr.name+"/"+prior+"/"+rowAgent+" row", func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					// The old life opted out of pre-trust and the call does not: the restore brings 1 back. A missing
+					// row's NULL ended_at is restored as the failure time, read from the Client clock. The call launches
+					// Claude, so a codex row's agent column is the one the reset moved and the restore brings back.
+					spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true, Opts: []apitest.SpawnOption{apitest.WithAgent(rowAgent)}}
+					if prior == store.StateMissing {
+						spec.EndedAt = endedNull
 					}
-				}
+					r := e.seedReusable(t, agentGone, spec)
+					tr.arrange(e, r)
+					before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
 
-				// AC-REUSE-07: with the cause gone, an immediate second reuse launches.
-				if _, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{})); err != nil {
-					t.Fatalf("second reuse: %v", err)
-				}
-				if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != reuseLife+1 {
-					t.Errorf("after the second reuse: state %v, life %v; want pending, %d", cols.State, cols.LifeNumber, reuseLife+1)
-				}
-			})
+					_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+					assertLaunchSentinel(t, err, tr.want)
+					c := rlOneCreate(t, e, r.Socket, tr.calls...)
+					restore := apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior, Launch: apitest.LaunchReuse}
+					apitest.AssertDescription(t, err.Error(), tr.desc(e, r).AfterResumeRestore(restore), c.Token, e.storeID, r.Token)
+					want := before // every column restored but the launch start, cleared, two versions on (reset, restore)
+					want.LaunchStartedAt, want.RowVersion = nil, before.RowVersion.(int64)+2
+					if spec.EndedAt == endedNull {
+						want.EndedAt = e.clock.Now().UTC().Format(time.DateTime) // the clock when the restore ran
+					}
+					rrAssertRestored(t, e, r, want, hist, tr.wantName)
+					for _, s := range e.rec.Sessions(r.Socket) {
+						if s.Name == storedFormOf(c.Target) {
+							t.Errorf("session %+v left under the requested name; want none", s)
+						}
+					}
+
+					// AC-REUSE-07: with the cause gone, an immediate second reuse launches.
+					if _, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{})); err != nil {
+						t.Fatalf("second reuse: %v", err)
+					}
+					if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != reuseLife+1 {
+						t.Errorf("after the second reuse: state %v, life %v; want pending, %d", cols.State, cols.LifeNumber, reuseLife+1)
+					}
+				})
+			}
 		}
 	}
 }

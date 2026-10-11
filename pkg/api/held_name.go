@@ -46,16 +46,20 @@ const (
 // simply be retried: its row is already ended, or may still be pending, and
 // once finished it collides with a plain spawn of the id
 // (ErrInstanceIdCollision), so each names the opted-in retry.
-const (
-	// heldRetryFree: the end write applied, and either the re-lookup could
-	// not answer or the holder vanished, so a plain spawn of the id now
-	// collides with its ended row: the opted-in retry once the name is free,
-	// the opt-in in its one spelling (spawn.ReuseRetry; b.c4u).
-	heldRetryFree = spawn.ReuseRetry + " once the name is free, " + spawn.PlainSpawnCollides
-	// heldRetryWait: the end write did not apply, or failed: the
-	// launch-timeout rule (SR-1.4), then heldRetryFree's opted-in retry.
-	heldRetryWait = spawn.LaunchRetryRule + "; then " + heldRetryFree
-)
+
+// heldRetryFree: the end write applied, and either the re-lookup could not
+// answer or the holder vanished, so a plain spawn of the id now collides with
+// its ended row: the opted-in retry once the name is free, the opt-in in its
+// one spelling and the row's agent (spawn.ReuseRetry; b.c4u, SR-4.4).
+func heldRetryFree(agent string) string {
+	return spawn.ReuseRetry(agent) + " once the name is free, " + spawn.PlainSpawnCollides
+}
+
+// heldRetryWait: the end write did not apply, or failed: the launch-timeout
+// rule (SR-1.4), then heldRetryFree's opted-in retry.
+func heldRetryWait(agent string) string {
+	return spawn.LaunchRetryRule + "; then " + heldRetryFree(agent)
+}
 
 // heldRetrySentences is a verb's retry sentences for heldNameOutcome's
 // errors, each following the row sentence: Unanswered for the

@@ -30,7 +30,7 @@ var advKillSteps = []string{
 	"3. Run find-missing, then check status; repeat about 5 s apart until ended or missing, at most three runs.",
 	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check.",
 	"5. Still live: escalate to a human.",
-	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with reuse_finished (--reuse-finished on the CLI); callers whose ids agent-director mints spawn fresh.",
+	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with reuse_finished (--reuse-finished on the CLI) and the row's agent, which get shows; callers whose ids agent-director mints spawn fresh.",
 }
 
 // advKillScene is a row to end and relaunch: its id and what happens in the
@@ -79,7 +79,7 @@ func advKillPendingSpawn(t *testing.T, e *killEnv, c *api.Client) advKillScene {
 	advKillServer(t, e)
 	id := "advkill-" + uuid.NewString()[:8]
 	e.agentOnCreate(id, agentAlive)
-	if _, err := c.Spawn(api.SpawnParams{InstanceID: id, CWD: t.TempDir(), ExtraEnv: advKillTrust(t)}); err != nil {
+	if _, err := c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: id, CWD: t.TempDir(), ExtraEnv: advKillTrust(t)}); err != nil {
 		t.Fatalf("Spawn(%s): %v", id, err)
 	}
 	advKillAgentExitsAtKill(t, e, id)
@@ -108,7 +108,7 @@ func advKillCreateTimedOut(late bool) func(*testing.T, *killEnv, *api.Client) ad
 		id := "advkill-" + uuid.NewString()[:8]
 		e.agentOnCreate(id, agentAlive)
 		e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallCreate)
-		if _, err := c.Spawn(api.SpawnParams{InstanceID: id, CWD: t.TempDir(),
+		if _, err := c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: id, CWD: t.TempDir(),
 			ExtraEnv: advKillTrust(t)}); !errors.Is(err, api.ErrTmuxUnresponsive) {
 			t.Fatalf("Spawn(%s) = %v; want the create's ErrTmuxUnresponsive", id, err)
 		}
@@ -232,7 +232,7 @@ func (s *advKillSeq) run(t *testing.T, wantConversation bool, afterFirstKill fun
 		_, err = s.c.Resume(api.ResumeParams{InstanceID: s.id})
 	} else {
 		s.branch = "reuse"
-		_, err = s.c.Spawn(api.SpawnParams{InstanceID: s.id, ReuseFinished: true, CWD: row.CWD, ExtraEnv: advKillTrust(t)})
+		_, err = s.c.Spawn(api.SpawnParams{Agent: row.Agent, InstanceID: s.id, ReuseFinished: true, CWD: row.CWD, ExtraEnv: advKillTrust(t)})
 	}
 	if err != nil {
 		t.Fatalf("step 6: %s of the %s row: %v", s.branch, row.State, err)

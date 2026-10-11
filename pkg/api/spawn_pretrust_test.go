@@ -61,6 +61,7 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 			}
 
 			res, err := env.c.Spawn(api.SpawnParams{
+				Agent:      "claude",
 				CWD:        cwd,
 				InstanceID: "pretrust-" + uuid.NewString()[:8],
 				ExtraEnv:   c.extraEnv(),

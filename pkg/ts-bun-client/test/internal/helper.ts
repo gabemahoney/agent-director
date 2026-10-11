@@ -2,8 +2,9 @@
  * helper — shared test helpers: ts-helper seeding (runHelper; a relay-on row
  * with a fallen-back request, seedFallenBackRelayRow), Clients over the in-repo
  * CLI, process env and cwd scoping, the fake-tmux log (its send-keys calls,
- * paneSends), and .claude.json pre-trust fixtures. setup.ts (the preload)
- * sets TS_HELPER_PATH, FAKE_TMUX_DIR and CLI_PATH.
+ * paneSends), spawnClaude and makeTemplateClaude (the agent every spawn names),
+ * and .claude.json pre-trust fixtures. setup.ts (the preload) sets
+ * TS_HELPER_PATH, FAKE_TMUX_DIR and CLI_PATH.
  */
 
 import * as fs from "fs";
@@ -39,6 +40,16 @@ export function openClient(storePath: string, extra: Record<string, unknown> = {
     _cliPath: process.env.CLI_PATH,
     ...extra,
   } as unknown as ClientOptions);
+}
+
+/** client.spawn naming the claude agent, which a spawn must name (SR-14.4); params may override it. */
+export function spawnClaude(client: Client, params: Parameters<Client["spawn"]>[0]): ReturnType<Client["spawn"]> {
+  return client.spawn({ agent: "claude", ...params });
+}
+
+/** client.makeTemplate naming the claude agent, which a template with agent_args must name; params may override it. */
+export function makeTemplateClaude(client: Client, params: Parameters<Client["makeTemplate"]>[0]): ReturnType<Client["makeTemplate"]> {
+  return client.makeTemplate({ agent: "claude", ...params });
 }
 
 /** Runs fn with process.cwd() at dir, restoring the prior cwd afterwards. */

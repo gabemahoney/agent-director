@@ -22,7 +22,8 @@
 //     WriteRetentionConfig adds [defaults] expire_retention_days, and
 //     WriteKeysConfig the keys outside [tmux] with a range (ConfigKeys:
 //     that one, [relay] and [pause] timeout_seconds, [pre_trust]
-//     lock_wait_seconds, [store] busy_timeout_ms and [state] settle_ms).
+//     lock_wait_seconds, [store] busy_timeout_ms, [state] settle_ms and the
+//     [launch] claude_path and codex_path, written as given).
 //     SettleOnConfig is a whole config.toml with the largest settle_ms.
 //
 // # Schema-v5 seeding and store reads (SR-20.2, SR-20.3)

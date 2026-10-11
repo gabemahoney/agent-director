@@ -89,6 +89,7 @@ func ExampleClient_Spawn() {
 	defer cleanup()
 	// README:start ExampleClient_Spawn
 	result, err := c.Spawn(api.SpawnParams{
+		Agent:      "claude",
 		CWD:        "/tmp",
 		RelayMode:  "on",
 		InstanceID: "claude_example",

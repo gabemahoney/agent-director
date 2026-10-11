@@ -28,6 +28,10 @@ busy_timeout_ms = 10000
 [state]
 settle_ms = 0   # 0 = off
 
+[launch]   # optional; absolute or "~/" paths; empty or omitted = unset
+# claude_path = "/opt/claude/bin/claude"
+# codex_path = "/opt/codex/bin/codex"
+
 [log]
 error_log_path = "~/.agent-director/errors.log"
 
@@ -62,6 +66,8 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[store] db_path` | path | `~/.agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores). Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
 | `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new state must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
+| `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). |
+| `[launch] codex_path` | absolute path or `~/` path | unset | The path of the Codex program, in the same form and under the same refusals as `claude_path`. Checked at load only; no launch runs it. |
 | `[log] error_log_path` | path | `~/.agent-director/errors.log` | Where hooks and the CLI append errors (stderr if it cannot be opened). |
 
 ## Refused values
@@ -70,8 +76,11 @@ A negative, out-of-range, below-minimum or non-integer value is refused, never
 defaulted (the `[relay] poll_*` keys and `permission_request_cap` aside); a
 misspelt key is ignored. The old name of `[defaults] disable_ask_user` is
 refused with `ErrConfigMalformed`, which names `disable_ask_user`, not ignored.
-After editing, check the file with `agent-director list`. What a refusal stops:
-[`ErrConfigMalformed`](caller-contract.md).
+A `[launch]` value that is not an absolute path or a `~/` path (a blank, a
+relative path, `~` alone or `~user/...`), or a `~/` path while `HOME` is unset
+or empty, is refused with `ErrConfigMalformed`, which names the key; an empty
+value is unset. After editing, check the file with `agent-director list`.
+What a refusal stops: [`ErrConfigMalformed`](caller-contract.md).
 
 ## When a change takes effect
 

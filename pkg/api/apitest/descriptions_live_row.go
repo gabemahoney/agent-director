@@ -68,7 +68,7 @@ func liveRowSteps() []liveRowStep {
 		{
 			phrases: []string{
 				"Then resume the row if it has a session id and the caller wants the conversation back",
-				"otherwise spawn with " + reuseOptInSpelling,
+				"otherwise spawn with " + reuseOptInSpelling + " and the row's agent, which get shows",
 				liveRowShortClosing,
 			},
 			keys: []string{"if it has a session id", "wants the conversation back", "otherwise spawn with " + reuseOptInName, "spawn fresh"},
@@ -84,8 +84,9 @@ func liveRowSteps() []liveRowStep {
 // inside it wait and check again, never escalate; (3) up to three find-missing
 // runs about 5 s apart, each checked with status; (4) one more kill, "wait
 // about 5 s" and a last find-missing; (5) a human; (6) resume or spawn with
-// the reuse opt-in in its one spelling (reuseOptInSpelling, b.c4u), and a
-// caller whose ids agent-director mints spawns fresh.
+// the reuse opt-in in its one spelling (reuseOptInSpelling, b.c4u) and the
+// row's agent, which get shows (SR-4.4), and a caller whose ids agent-director mints spawns
+// fresh.
 // It must not carry the rationale docs/caller-contract.md keeps ("history belongs to a
 // life", "unreachable for good", SR/OFR citations), the long form's or the
 // pointer's opening, or the pointer. Check it with AssertAgentTextCase.

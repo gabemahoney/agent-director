@@ -234,7 +234,7 @@ func TestSpawnRejectsControlCharacterInstanceID(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
-			p := api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id}
+			p := api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: tc.id}
 			if tc.setup != nil {
 				tc.setup(t, env, &p)
 			}
@@ -278,7 +278,7 @@ func TestSpawnAcceptsEmptyAndPrintableInstanceID(t *testing.T) {
 			if tc.reuse {
 				other, before = seedFinishedRow(t, env.dbPath, store.StateEnded)
 			}
-			res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id, ReuseFinished: tc.reuse})
+			res, err := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: tc.id, ReuseFinished: tc.reuse})
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
@@ -329,7 +329,7 @@ func TestSpawnPreCheckReadFailureIsErrInternal(t *testing.T) {
 				t.Fatalf("write .claude.json: %v", err)
 			}
 			_, err := api.SpawnWithCollisionReader(env.c, failingCollisionReader{err: readErr},
-				api.SpawnParams{CWD: t.TempDir(), InstanceID: "precheck-" + uuid.NewString()[:8]})
+				api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: "precheck-" + uuid.NewString()[:8]})
 			assertOneName(t, err, "ErrInternal")
 			_, desc := errnames.Classify(err)
 			apitest.AssertDescription(t, desc, apitest.DescPreCheckRead())
@@ -366,7 +366,7 @@ func TestSpawnExistingRowCollides(t *testing.T) {
 			e.rec.SeedSessions(e.socket, e.leftover("old-life", "", id, 0))
 			trust, cwd, mark := seedTrustConfig(t, t.TempDir(), trustLacksEntry), t.TempDir(), trailLen(t)
 
-			_, err := e.c.Spawn(api.SpawnParams{CWD: cwd, InstanceID: id, ReuseFinished: tc.reuse,
+			_, err := e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: cwd, InstanceID: id, ReuseFinished: tc.reuse,
 				ExtraEnv: trust.extraEnv()})
 
 			assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
@@ -404,7 +404,7 @@ func TestSpawnRefusesTemplateWithOldClaudeArgsKey(t *testing.T) {
 	}
 	rows := listIDs(t, env.c)
 
-	_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), Template: "old-key"})
+	_, err := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), Template: "old-key"})
 
 	assertOneName(t, err, "ErrTemplateMalformed")
 	if want := "ErrTemplateMalformed: old-key: claude_args is no longer accepted; use agent_args"; errText(err) != want {

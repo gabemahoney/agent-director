@@ -31,6 +31,12 @@ type RelaunchInput struct {
 //
 //	claude --resume <session id> --settings <inline-json> [row agent_args]
 //
+// (claude is [launch] claude_path when set, from cfg), composed for the row's
+// recorded agent. A row whose agent is codex is the composition stop: an
+// uncatalogued error (a Codex launch is not available in this build) comes
+// back before anything else, so resume writes and launches nothing; a row
+// whose agent is neither claude nor codex gets store.ErrRowAgentInvalid.
+//
 // on in.Socket, labelled with in.Token, the row's instance id and in.StoreID.
 //
 // The environment and the synthesized settings (the same hooks as a fresh
@@ -45,11 +51,15 @@ type RelaunchInput struct {
 // ExtraEnv. AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
 func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error) {
+	if err := launchAgentError(in.Row.Agent); err != nil {
+		return CreateRequest{}, err
+	}
 	// Synthesize a Resolved for the env/settings helpers. Permissions is
 	// intentionally nil: it isn't stored on the row, so a resume can't carry
 	// it over (matches SRD §8.1's contract).
 	r := Resolved{SpawnParams: SpawnParams{
 		InstanceID:          in.Row.InstanceID,
+		Agent:               in.Row.Agent,
 		CWD:                 in.Row.CWD,
 		TmuxSessionName:     in.Row.TmuxSessionName,
 		RelayMode:           in.Row.RelayMode,
@@ -64,7 +74,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error)
 		return CreateRequest{}, err
 	}
 
-	command := []string{claudeBinary, "--resume", in.SessionID, "--settings", settings}
+	command := []string{claudeProgram(cfg), "--resume", in.SessionID, "--settings", settings}
 	command = append(command, r.AgentArgs...)
 
 	return CreateRequest{

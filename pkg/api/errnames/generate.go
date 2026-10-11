@@ -57,6 +57,10 @@ var packageOf = map[string]string{
 	"ErrRelayModeInvalid":       "spawn",
 	"ErrSpawnDeniedFlag":        "spawn",
 	"ErrReservedEnvKey":         "spawn",
+	"ErrAgentMissing":           "spawn",
+	"ErrAgentInvalid":           "spawn",
+	"ErrAgentArgsMismatch":      "spawn",
+	"ErrPermissionsUnsupported": "spawn",
 	"ErrInstanceIdCollision":    "spawn",
 	"ErrTmuxSessionNameEmpty":   "spawn",
 	"ErrTmuxSessionNameInvalid": "spawn",
@@ -83,10 +87,11 @@ var packageOf = map[string]string{
 	"ErrTmuxKillFailed":      "tmux",
 
 	// internal/config
-	"ErrTemplateNameUnsafe": "config",
-	"ErrTemplateNotFound":   "config",
-	"ErrTemplateMalformed":  "config",
-	"ErrTemplateExists":     "config",
+	"ErrTemplateNameUnsafe":   "config",
+	"ErrTemplateNotFound":     "config",
+	"ErrTemplateMalformed":    "config",
+	"ErrTemplateExists":       "config",
+	"ErrTemplateAgentMissing": "config",
 
 	// internal/probe
 	"ErrProbeUnsupported": "probe",

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -229,6 +230,15 @@ func seedFinished(t *testing.T, e *mcpEnv, id, state string, opts ...apitest.Spa
 	return readColumns(t, e.storePath, id)
 }
 
+// seedTemplate writes the template name with f under the test's HOME, where
+// a spawn naming it finds it.
+func seedTemplate(t *testing.T, name string, f apitest.TemplateFields) {
+	t.Helper()
+	if _, err := apitest.SeedTemplate(config.TemplatesDir(), name, apitest.TemplateBody(f)); err != nil {
+		t.Fatalf("SeedTemplate(%s): %v", name, err)
+	}
+}
+
 // readColumns reads id's row straight from the store at dbPath.
 func readColumns(t *testing.T, dbPath, id string) apitest.SpawnColumns {
 	t.Helper()
@@ -274,11 +284,11 @@ func assertCreates(t *testing.T, rec *tmuxfix.Recorder) {
 	}
 }
 
-// spawnArgs marshals spawn's arguments: cwd, the config dir's extra_env, then
-// extra (an explicit id, reuse_finished) on top.
+// spawnArgs marshals spawn's arguments: cwd, agent claude, the config dir's
+// extra_env, then extra (an explicit id, reuse_finished, another agent) on top.
 func spawnArgs(t *testing.T, cwd string, c ptConfig, extra map[string]any) string {
 	t.Helper()
-	args := map[string]any{"cwd": cwd, "extra_env": c.env()}
+	args := map[string]any{"cwd": cwd, "agent": "claude", "extra_env": c.env()}
 	for k, v := range extra {
 		args[k] = v
 	}

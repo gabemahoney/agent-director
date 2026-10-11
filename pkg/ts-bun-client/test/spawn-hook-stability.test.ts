@@ -36,7 +36,7 @@ function spawnHookCommands(binary: string, home: string): string[] {
   }
   const log = join(home, "fake-tmux.log");
   Object.assign(env, { HOME: home, PATH: `${process.env.FAKE_TMUX_DIR}:${process.env.PATH ?? ""}`, FAKE_TMUX_LOG: log });
-  const proc = Bun.spawnSync([binary, "spawn", "--cwd", tmp("ad-hook-stab-cwd-")], { env });
+  const proc = Bun.spawnSync([binary, "spawn", "--agent", "claude", "--cwd", tmp("ad-hook-stab-cwd-")], { env });
   expect(proc.exitCode, new TextDecoder().decode(proc.stderr)).toBe(0);
 
   const argv = fakeTmuxCalls(log).find((a) => a.includes("--settings"))!;

@@ -187,7 +187,8 @@ state MUST use these factories rather than re-implementing seeding inline.
 Exported factories (in pkg/api/apitest/seeds.go):
 - `SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error)`
   — the `With…` options in pkg/api/apitest/options.go (e.g. `WithLaunchIdentity`,
-  `WithLaunchStartedAt`, `WithNoLaunchToken`) set further spawn columns.
+  `WithLaunchStartedAt`, `WithNoLaunchToken`, `WithAgent`) set further spawn columns;
+  a seeded row is a Claude row unless `WithAgent` says otherwise.
 - `SeedParentChild(dbPath, parentID, childID string) error`
 - `SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error)`
 - `AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error`
@@ -195,7 +196,7 @@ Exported factories (in pkg/api/apitest/seeds.go):
   fallen back) and records its `hook_gone_at` in the past (old enough for
   `record-pane-answer`); each only when positive.
 - `SeedTemplate(templatesDir, name, body string) (string, error)`
-- `TemplateBody(TemplateFields{AgentArgs, CWD, RelayMode, ExtraEnv, Labels, Permissions, RawKeys}) string`
+- `TemplateBody(TemplateFields{Agent, AgentArgs, CWD, RelayMode, ExtraEnv, Labels, Permissions, RawKeys}) string`
   (pkg/api/apitest/template_body.go) — builds the `body` for `SeedTemplate`,
   encoded as `make-template` encodes it. A new template body MUST be built
   with it, not held as template TOML text of the test's own; `RawKeys` carries
@@ -283,7 +284,7 @@ the test.
 
 An error description, manifest text or `install.sh` message that tells the
 caller what to do next ("retry later", "do not retry until get shows the row
-ended or missing", "retry kill later", "spawn again with the reuse opt-in")
+ended or missing", "retry kill later", "spawn again with the reuse opt-in and the row's agent")
 needs a test that follows that advice (b.fji). Checking that the description
 contains the advice is not enough: Epic 13 found a "retry later" whose plain
 retry was certain to collide. When you add or change such a text, add or update

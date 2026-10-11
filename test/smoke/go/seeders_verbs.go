@@ -21,6 +21,7 @@ func init() {
 			return c.Spawn(api.SpawnParams{
 				InstanceID: id,
 				CWD:        "/tmp",
+				Agent:      "claude",
 				RelayMode:  "off",
 			})
 		},
@@ -176,8 +177,9 @@ func init() {
 		SeedID:   "",
 		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
 			return c.MakeTemplate(api.MakeTemplateParams{
-				Name: "smoke-template",
-				CWD:  "/tmp",
+				Name:  "smoke-template",
+				CWD:   "/tmp",
+				Agent: "claude",
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {

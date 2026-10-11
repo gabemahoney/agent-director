@@ -26,6 +26,11 @@ type MakeTemplateParams struct {
 	// CWD is an optional default working directory to bake into the template.
 	// Per-call cwd overrides at spawn time.
 	CWD string
+	// Agent is the template's agent, claude or codex (case-sensitive), or ""
+	// for none: no agent key is stored then. It is the agent the template's
+	// agent_args belong to and the agent a spawn that names none takes (SR-1.2,
+	// SR-2.1). Any other value is refused with ErrTemplateMalformed.
+	Agent string
 	// RelayMode is an optional default relay mode: "on", "off", or "" (inherit
 	// config default). Per-call relay_mode overrides at spawn time.
 	RelayMode string
@@ -38,7 +43,8 @@ type MakeTemplateParams struct {
 	// (spawn.ValidateExtraEnv), with ErrReservedEnvKey, and nothing is
 	// written: a reserved key (AGENT_DIRECTOR_*, or HOME with any value), or
 	// a key that is not a valid env-var name (empty, or holding '=' or a NUL
-	// byte; the description says which).
+	// byte; the description says which). To give the agent its own config,
+	// set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex).
 	ExtraEnv map[string]string
 	// AgentDirectorLabels is an optional map of label k=v pairs to bake in.
 	// Per-call label entries merge by key; per-call wins on collision.
@@ -87,6 +93,11 @@ type MakeTemplateResult struct {
 //
 //   - Name safety: validated via config.ValidateTemplateName.
 //   - RelayMode (when non-empty) must be "on" or "off".
+//   - Agent (when non-empty) must be "claude" or "codex", else
+//     ErrTemplateMalformed; a non-empty AgentArgs with no Agent is
+//     ErrTemplateAgentMissing; a codex template with any allow, deny or ask
+//     entry is ErrPermissionsUnsupported (SR-1.4), in that order, after
+//     RelayMode and before ExtraEnv.
 //   - ExtraEnv: spawn's whole extra_env check (spawn.ValidateExtraEnv, bug
 //     b.66q), in spawn's order: a key that sets HOME, then one with the
 //     AGENT_DIRECTOR_ prefix, then one that is not a valid env-var name, all
@@ -114,7 +125,10 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	if err := validateTemplateRelayMode(params.RelayMode); err != nil {
 		return MakeTemplateResult{}, err
 	}
-	if err := spawn.ValidateExtraEnv(params.ExtraEnv); err != nil {
+	if err := validateTemplateAgent(params); err != nil {
+		return MakeTemplateResult{}, err
+	}
+	if err := spawn.ValidateExtraEnv(params.ExtraEnv, params.Agent); err != nil {
 		return MakeTemplateResult{}, err
 	}
 
@@ -130,6 +144,7 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	file := config.TemplateFile{
 		CWD:                 params.CWD,
 		RelayMode:           params.RelayMode,
+		Agent:               params.Agent,
 		AgentArgs:           params.AgentArgs,
 		ExtraEnv:            params.ExtraEnv,
 		AgentDirectorLabels: params.AgentDirectorLabels,
@@ -196,6 +211,28 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	return MakeTemplateResult{Path: filepath.Clean(target)}, nil
 }
 
+// validateTemplateAgent is make-template's agent checks, in SR-1.4's order
+// (steps 3 to 5): a value other than claude or codex is ErrTemplateMalformed,
+// as a bad relay_mode is; a non-empty AgentArgs with no Agent is
+// ErrTemplateAgentMissing; a codex template with an allow, deny or ask entry
+// is ErrPermissionsUnsupported (spawn's own refusal, spawn.RefuseCodexPermissions).
+// All run before the templates directory is created, so a refused call
+// writes nothing.
+func validateTemplateAgent(params MakeTemplateParams) error {
+	if params.Agent != "" && !config.ValidAgent(params.Agent) {
+		return fmt.Errorf("%w: agent %q (want %s or %s)", config.ErrTemplateMalformed,
+			params.Agent, config.AgentClaude, config.AgentCodex)
+	}
+	if params.Agent == "" && len(params.AgentArgs) > 0 {
+		return fmt.Errorf("%w: agent_args are set but no agent is given; pass agent %s or %s, or remove agent_args",
+			config.ErrTemplateAgentMissing, config.AgentClaude, config.AgentCodex)
+	}
+	if params.Agent == config.AgentCodex && params.Permissions != nil {
+		return spawn.RefuseCodexPermissions(params.Permissions.Allow, params.Permissions.Deny, params.Permissions.Ask)
+	}
+	return nil
+}
+
 // validateTemplateRelayMode rejects an unrecognized relay_mode at write
 // time so the file never lands with a value LoadTemplate would later
 // reject as ErrTemplateMalformed.
@@ -218,13 +255,22 @@ func validateTemplateRelayMode(m string) error {
 //   - ErrTemplateNameUnsafe: Name contains path-unsafe characters (path
 //     separators, leading dot, or "..").
 //   - ErrTemplateExists: a template with that name already exists.
-//   - ErrTemplateMalformed: RelayMode is not "on", "off", or "".
+//   - ErrTemplateMalformed: RelayMode is not "on", "off", or "", or Agent
+//     is not "claude", "codex" or "" (the message quotes the value).
+//   - ErrTemplateAgentMissing: AgentArgs is non-empty and Agent is empty;
+//     nothing is written. Give the template's agent or drop AgentArgs.
+//   - ErrPermissionsUnsupported: Agent is "codex" and Permissions holds an
+//     allow, deny or ask entry. Codex has no counterpart of Claude Code's
+//     permission lists; the message points to the rules/ folder of the
+//     group's Codex folder and Codex's own permission controls. Nothing is
+//     written. The question-tool setting's deny entry is not one of these.
 //   - ErrReservedEnvKey: ExtraEnv contains a key whose name before the
 //     first '=' (the name tmux sets) is reserved: it starts with
 //     AGENT_DIRECTOR_, or it is HOME (the key HOME, or one such as
-//     "HOME=/x") with any value. The message quotes the key. Set an absolute
-//     CLAUDE_CONFIG_DIR instead to give the agent its own Claude Code
-//     config. Also returned, after those checks, for a key that is not a
+//     "HOME=/x") with any value. The message quotes the key. Set the
+//     agent's absolute folder variable instead to give it its own config:
+//     CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex, and the message
+//     names both when Agent is empty. Also returned, after those checks, for a key that is not a
 //     valid env-var name: it is empty, or it contains '=' or a NUL byte. The
 //     key is refused, never rewritten; the message quotes it, says it is not
 //     a valid env-var name and says what is wrong with it. A key that is both

@@ -102,6 +102,102 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 	},
 
+	// ── spawn / ErrAgentMissing ───────────────────────────────────────────
+	// A valid cwd and no agent, from the call or a template: pure parameter
+	// validation (SR-1.3 step 5), no tmux interaction.
+	{
+		verb:    "spawn",
+		errName: "ErrAgentMissing",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			return filepath.Dir(apitest.SeedEmptyStore(t)), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp"}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--cwd", "/tmp"}
+		},
+	},
+
+	// ── spawn / ErrAgentInvalid ───────────────────────────────────────────
+	// The agent is compared case-sensitively: "Claude" is not "claude".
+	{
+		verb:    "spawn",
+		errName: "ErrAgentInvalid",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			return filepath.Dir(apitest.SeedEmptyStore(t)), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp", "agent": "Claude"}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--cwd", "/tmp", "--agent", "Claude"}
+		},
+	},
+
+	// ── spawn / ErrAgentArgsMismatch ──────────────────────────────────────
+	// A claude template's agent_args are not inherited by a codex spawn
+	// that supplies none of its own (SR-2.1).
+	{
+		verb:    "spawn",
+		errName: "ErrAgentArgsMismatch",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			srcDir := filepath.Dir(apitest.SeedEmptyStore(t))
+			body := apitest.TemplateBody(apitest.TemplateFields{
+				Agent:     "claude",
+				AgentArgs: []string{"--model", "x"},
+			})
+			if _, err := apitest.SeedTemplate(filepath.Join(srcDir, "templates"), "claude-args", body); err != nil {
+				t.Fatalf("seed template: %v", err)
+			}
+			return srcDir, nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp", "template": "claude-args", "agent": "codex"}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--cwd", "/tmp", "--template", "claude-args", "--agent", "codex"}
+		},
+	},
+
+	// ── spawn / ErrPermissionsUnsupported ─────────────────────────────────
+	// A codex spawn takes no allow, deny or ask entries (SR-5.5).
+	{
+		verb:    "spawn",
+		errName: "ErrPermissionsUnsupported",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			return filepath.Dir(apitest.SeedEmptyStore(t)), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp", "agent": "codex", "allow": []string{"Bash(ls)"}}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--cwd", "/tmp", "--agent", "codex", "--allow", "Bash(ls)"}
+		},
+	},
+
+	// ── make-template / ErrTemplateAgentMissing ───────────────────────────
+	// agent_args belong to an agent: a template that sets them names none
+	// (SR-1.4). The check runs before any file is written.
+	{
+		verb:    "make-template",
+		errName: "ErrTemplateAgentMissing",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			return filepath.Dir(apitest.SeedEmptyStore(t)), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"name": "no-agent", "agent_args": []string{"--model", "x"}}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"make-template", "--name", "no-agent", "--agent-args", "--model", "--agent-args", "x"}
+		},
+	},
+
 	// ── status / ErrSpawnNotFound ─────────────────────────────────────────
 	// Canonical missing-row error: empty store + non-existent id.
 	{

@@ -84,7 +84,7 @@ func TestSpawnAgent(t *testing.T) {
 		if err != nil || a.InstanceID != "id-1" || a.Socket != privateSocket(r.h.iso.TmuxTmpdir) {
 			t.Fatalf("agent %+v, %v", a, err)
 		}
-		want := []string{"agent-director", "spawn", "--cwd", "/w/0", "--label", "mx_run=mx-test-run", "--label", "mx_case=rn6.idle",
+		want := []string{"agent-director", "spawn", "--agent", "claude", "--cwd", "/w/0", "--label", "mx_run=mx-test-run", "--label", "mx_case=rn6.idle",
 			"--extra-env", sessionEndBudgetEnv + "=3000", "--", "prompt", "--mcp-config", "/m.json"}
 		if !reflect.DeepEqual(r.ex.calls[0], want) {
 			t.Errorf("spawn argv %q", r.ex.calls[0])

@@ -106,6 +106,7 @@ type LaunchInProgress struct {
 	InstanceID  string
 	LaunchStart time.Time
 	NoSessionID bool
+	Agent       string // the row's agent, named by the step with NoSessionID (claude when empty)
 }
 
 // launchBegan and noLaunchStart are the launch-in-progress refusal's two
@@ -114,13 +115,17 @@ type LaunchInProgress struct {
 // a spawn's or reuse's launch), whose resume once missing is ErrNoSessionId:
 // once find-missing marks the row missing, if get still shows no session id, a
 // spawn of the id with the reuse opt-in in its one spelling (b.uey, b.c4u);
-// "nothing was written" closes either.
+// "nothing was written" closes either. The spawn names the row's recorded
+// agent (SR-4.4, P-66): reuseSpawn.
 const (
 	launchBegan   = "a launch of this row began at "
 	noLaunchStart = "no launch start is recorded"
 	afterGrace    = "since its launch start; "
-	noSessionStep = "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + reuseOptIn
 )
+
+func noSessionStep(agent string) string {
+	return "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + reuseSpawn(agent)
+}
 
 // DescResumeLaunchInProgress is ErrSpawnNotResumable for a resume of a
 // pending row (SR-8.4): the instance id; when the launch began, as RFC3339
@@ -129,7 +134,8 @@ const (
 // an ended or missing row; that the row becomes live if the agent reports in;
 // that find-missing marks it missing after the pending grace period; with
 // NoSessionID, that the step after that, if get still shows no session id, is
-// a spawn of the id with the reuse opt-in (b.uey); that nothing was written.
+// a spawn of the id with the reuse opt-in and the row's agent (b.uey, SR-4.4;
+// p.Agent, claude when empty); that nothing was written.
 // Without NoSessionID it must not name a session id, the reuse opt-in or a
 // spawn. It must not say the refusal ends when the agent reports in, nor
 // "dead" or "gone" (naming find-missing is allowed).
@@ -156,7 +162,7 @@ func DescResumeLaunchInProgress(p LaunchInProgress) DescCase {
 		"nothing was written",
 	)
 	if p.NoSessionID {
-		req = append(req, afterGrace+noSessionStep+"; nothing was written")
+		req = append(req, afterGrace+noSessionStep(p.Agent)+"; nothing was written")
 	} else {
 		req = append(req, afterGrace+"nothing was written")
 		mustNot = append(mustNot, "session id", "reuse opt-in", reuseOptInName, "spawn the id")

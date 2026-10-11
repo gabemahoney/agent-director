@@ -25,7 +25,9 @@ func ParentIDFromEnv() string {
 //
 // Create carries the session name, cwd, composed environment, argv
 //
-//	claude --settings <inline-json> [claude args]
+//	claude --settings <inline-json> [agent args]
+//
+// (claude is [launch] claude_path when set)
 //
 // and instance id; its Socket, Token and StoreID are zero, for the caller
 // to fill with the launch's socket, token and this store's id.
@@ -53,12 +55,20 @@ type ComposedLaunch struct {
 // The environment carries AGENT_DIRECTOR_INSTANCE_ID; the create's own -e
 // entry carries it too and the client drops the environment's copy, so it
 // reaches the create argv exactly once (tmux.NewSession).
+//
+// The argv starts with the Claude launch path (claudeProgram). A codex agent
+// is the composition stop: ComposeLaunch returns an uncatalogued error (a
+// Codex launch is not available in this build) before anything else, so no
+// row is written, nothing is pre-trusted and no session is created.
 func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
+	if err := launchAgentError(r.Agent); err != nil {
+		return ComposedLaunch{}, err
+	}
 	settings, err := synthesizeSettings(r, cfg)
 	if err != nil {
 		return ComposedLaunch{}, err
 	}
-	command := []string{claudeBinary, "--settings", settings}
+	command := []string{claudeProgram(cfg), "--settings", settings}
 	command = append(command, r.AgentArgs...)
 
 	return ComposedLaunch{
@@ -79,11 +89,9 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			Labels:          r.AgentDirectorLabels,
 			ExtraEnv:        r.ExtraEnv,
 			NoPreTrust:      r.NoPreTrust,
-			// Interim (schema v9): every launch is a Claude launch until the
-			// agent input resolves the row's agent. The one place the row's
-			// agent is set, for spawn's insert (insertPending) and reuse's
-			// reset (ResetForReuse) alike.
-			Agent: store.AgentClaude,
+			// The one place the row's agent is set, for spawn's insert
+			// (insertPending) and reuse's reset (ResetForReuse) alike.
+			Agent: r.Agent,
 		},
 	}, nil
 }

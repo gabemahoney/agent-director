@@ -1,7 +1,8 @@
 # Multi-Account
 
 Launching a Spawn against a different Claude account than the
-operator's default. agent-director's `extra_env` parameter is the
+operator's default. This page covers spawns whose agent is `claude`.
+agent-director's `extra_env` parameter is the
 single mechanism for this — no file mounts, no profile directories.
 If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, it must be an
 absolute path. The pretrust write then targets
@@ -32,7 +33,7 @@ give a Spawn its own Claude config, set an absolute
 `extra_env` has `HOME` (a row spawned before this refusal) with
 `ErrReservedEnvKey`, writing and launching nothing; to run that agent
 again, spawn its id with `reuse_finished` (`--reuse-finished` on the
-CLI) and an `extra_env` without
+CLI), the row's agent (`--agent`; `get` shows it) and an `extra_env` without
 `HOME` (a reused id starts a new life with no memory of the earlier
 conversation).
 
@@ -46,8 +47,8 @@ agent a `CLAUDE_CONFIG_DIR` that pretrust and `resume` never see; pass
 `{"CLAUDE_CONFIG_DIR": "/x"}` instead. `resume` refuses a row whose
 stored `extra_env` has such a key (a row spawned before this refusal)
 with `ErrReservedEnvKey`, writing and launching nothing; to run that
-agent again, spawn its id with `reuse_finished` and an `extra_env`
-without that key.
+agent again, spawn its id with `reuse_finished`, the row's agent and an
+`extra_env` without that key.
 
 For Claude Code's own auth reference, see:
 
@@ -74,6 +75,7 @@ proves the env var is *the* auth path, not a fallback to a cached file.
 ```
 agent-director spawn \
   --cwd /work/project-foo \
+  --agent claude \
   --extra-env ANTHROPIC_API_KEY=sk-ant-api-test-...
 ```
 
@@ -82,6 +84,7 @@ Or for a Max account:
 ```
 agent-director spawn \
   --cwd /work/project-foo \
+  --agent claude \
   --extra-env CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
@@ -124,6 +127,7 @@ claude setup-token
 # Store the token securely (e.g. a CI secret), then pass at spawn time:
 agent-director spawn \
   --cwd /work/project-bar \
+  --agent claude \
   --extra-env CLAUDE_CODE_OAUTH_TOKEN="$LONG_LIVED_TOKEN"
 ```
 

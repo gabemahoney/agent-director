@@ -17,18 +17,27 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// advTemplateHomeDoc is A14 as (*Client).MakeTemplate's Go doc words it.
-const advTemplateHomeDoc = "Set an absolute CLAUDE_CONFIG_DIR instead to give the agent its own Claude Code config"
+// advTemplateHomeDoc is A14 as MakeTemplate's Go doc words it.
+const advTemplateHomeDoc = "Set the agent's absolute folder variable instead to give it its own config: CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex, and the message names both when Agent is empty"
 
-// TestAdviceFollow_A14_MakeTemplateReservedHomeSetConfigDir: the same template
-// with HOME removed and an absolute CLAUDE_CONFIG_DIR set saves and launches.
-// A14 (b.66q): "remove \"HOME\" from extra_env, and to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead"
+// advTemplateHomeBoth is the alternative a make-template with no agent gets: both folder variables.
+const advTemplateHomeBoth = "to give the agent its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) in extra_env instead"
+
+// TestAdviceFollow_A14_MakeTemplateReservedHomeSetConfigDir: the same template with HOME removed and the
+// advised folder variable set saves and, for a claude template, launches; a codex template's spawn reaches the
+// Codex composition stop; with no agent the advice names both variables and the template saves with either.
+// A14 (b.66q): "remove \"HOME\" from extra_env, and to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead" (Codex: "its own Codex config, set an absolute CODEX_HOME"; no agent: "its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)")
 func TestAdviceFollow_A14_MakeTemplateReservedHomeSetConfigDir(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	adviceAssertManifest(t, "make-template", "extra_env", advSpawnHomeParam)
 	adviceAssertGoDoc(t, "make_template.go", "MakeTemplate", advTemplateHomeDoc)
-	env, cfg := newSpawnEnv(t), seedTrustConfig(t, t.TempDir(), trustLacksEntry)
-	adviceFollowTemplateEnvKey(t, env, cfg, "HOME", cfg.dir, `"HOME" sets HOME, which is reserved`, advSpawnHome)
+	agents := append(append([]advHomeAgent{}, advHomeAgents...), advHomeAgent{"", "CLAUDE_CONFIG_DIR", advTemplateHomeBoth})
+	for _, a := range agents {
+		t.Run("agent "+a.agent, func(t *testing.T) {
+			env, cfg := newSpawnEnv(t), seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			adviceFollowTemplateEnvKey(t, env, cfg, a, "HOME", cfg.dir, `"HOME" sets HOME, which is reserved`, advSpawnHome(a))
+		})
+	}
 }
 
 // TestAdviceFollow_A15_MakeTemplateInvalidEnvKeyNameTheVariable: the same
@@ -38,32 +47,42 @@ func TestAdviceFollow_A15_MakeTemplateInvalidEnvKeyNameTheVariable(t *testing.T)
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env, cfg := newSpawnEnv(t), seedTrustConfig(t, t.TempDir(), trustLacksEntry)
 	bad := "CLAUDE_CONFIG_DIR=" + cfg.dir
-	adviceFollowTemplateEnvKey(t, env, cfg, bad, "", strconv.Quote(bad)+" is not a valid env-var name: it contains '='",
+	adviceFollowTemplateEnvKey(t, env, cfg, advHomeAgents[0], bad, "", strconv.Quote(bad)+" is not a valid env-var name: it contains '='",
 		"remove "+strconv.Quote(bad)+" from extra_env, and "+advEnvKeyOwnName)
 }
 
-// adviceFollowTemplateEnvKey: make-template with key=value is ErrReservedEnvKey, its description carrying
-// phrase (which refusal it is) and advice; without key and with CLAUDE_CONFIG_DIR=cfg.dir it saves, and a
-// spawn with it launches with that variable, pre-trusting cfg.
-func adviceFollowTemplateEnvKey(t *testing.T, env spawnEnv, cfg trustConfig, key, value, phrase, advice string) {
+// adviceFollowTemplateEnvKey: make-template of a's template (a.agent "": no agent) with key=value is
+// ErrReservedEnvKey, its description carrying phrase (which refusal it is) and advice; without key and with
+// a.variable=cfg.dir it saves, and a spawn with it launches a claude agent with that variable, pre-trusting
+// cfg, reaches the Codex composition stop for a codex agent, and for no agent (a spawn naming claude) launches.
+func adviceFollowTemplateEnvKey(t *testing.T, env spawnEnv, cfg trustConfig, a advHomeAgent, key, value, phrase, advice string) {
 	t.Helper()
 	cwd, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	p := api.MakeTemplateParams{Name: "adv-env", ExtraEnv: map[string]string{key: value}}
+	p := api.MakeTemplateParams{Name: "adv-env", Agent: a.agent, ExtraEnv: map[string]string{key: value}}
 
 	_, err = env.c.MakeTemplate(p)
 
 	adviceAssertAdvice(t, err, spawn.ErrReservedEnvKey, advice)
 	adviceAssertPhrase(t, err, phrase)
 	delete(p.ExtraEnv, key)
-	p.ExtraEnv["CLAUDE_CONFIG_DIR"] = cfg.dir
+	p.ExtraEnv[a.variable] = cfg.dir
 	if _, err := env.c.MakeTemplate(p); err != nil {
-		t.Fatalf("make-template with CLAUDE_CONFIG_DIR as its own key = %v; want it saved", err)
+		t.Fatalf("make-template with %s as its own key = %v; want it saved", a.variable, err)
 	}
 	id := "adv-tplenv-" + uuid.NewString()[:8]
-	res, err := env.c.Spawn(api.SpawnParams{CWD: cwd, InstanceID: id, Template: p.Name})
+	sp := api.SpawnParams{CWD: cwd, InstanceID: id, Template: p.Name}
+	if a.agent == "" {
+		sp.Agent = "claude" // a template naming no agent: the spawn names it
+	}
+	res, err := env.c.Spawn(sp)
+	if a.agent == "codex" {
+		advAssertCodexStop(t, err, "a spawn with the saved template")
+		advAssertOnlyLookups(t, env.rec)
+		return
+	}
 	advSpawnLaunched(t, env.dbPath, id, nil, res, err)
 	if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Envs["CLAUDE_CONFIG_DIR"] != cfg.dir {
 		t.Errorf("creates = %+v; want one, its session env CLAUDE_CONFIG_DIR %q", creates, cfg.dir)

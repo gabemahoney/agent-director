@@ -179,7 +179,7 @@ func oldIDVerbs() []oldIDVerb {
 			}},
 		{verb: "spawn", state: store.StateWaiting, value: func(oldFlagWorld) string { return uuid.NewString() },
 			flags: func(w oldFlagWorld) []string {
-				return []string{"spawn", "--cwd", w.home, "--no-pre-trust"}
+				return withAgent("claude", "spawn", "--cwd", w.home, "--no-pre-trust")
 			}},
 		{verb: "trail-emit", state: store.StateWaiting, value: func(oldFlagWorld) string { return "inst-old-flag" },
 			flags: only("trail-emit", "relay-attempt", "--token", "tok-old-flag", "--endpoint", "http://127.0.0.1:9/r", "--outcome", "200")},
@@ -236,7 +236,7 @@ func TestCLIRefusesOldAgentArgsFlag(t *testing.T) {
 	for _, form := range oldFlagForms {
 		t.Run(form.name, func(t *testing.T) {
 			w := newOldFlagWorld(t, store.StateWaiting, false, false)
-			argv := append([]string{"make-template", "--name", "old-args"}, form.render(oldArgsFlag, "--model")...)
+			argv := withAgent("claude", "make-template", append([]string{"--name", "old-args"}, form.render(oldArgsFlag, "--model")...)...)
 
 			stdout, stderr, code := w.run(t, argv...)
 
@@ -254,7 +254,7 @@ func TestCLIRefusesOldAgentArgsFlag(t *testing.T) {
 // writes the template, which holds the args as agent_args.
 func TestAdviceFollow_H9_OldAgentArgsFlag(t *testing.T) {
 	w := newOldFlagWorld(t, store.StateWaiting, false, false)
-	argv := []string{"make-template", "--name", "old-args", "--claude-args", "--model"}
+	argv := withAgent("claude", "make-template", "--name", "old-args", "--claude-args", "--model")
 	stdout, stderr, code := w.run(t, argv...)
 	desc := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInvalidFlags").ErrDescription
 	if desc != oldArgsRefusal {
@@ -282,7 +282,7 @@ func TestCLIOldFlagUnknownWhereNewIsAbsent(t *testing.T) {
 		want string
 	}{
 		{"spawn --claude-args", func(w oldFlagWorld) []string {
-			return []string{"spawn", "--cwd", w.home, "--claude-args", "--model"}
+			return withAgent("claude", "spawn", "--cwd", w.home, "--claude-args", "--model")
 		}, "flag provided but not defined: -claude-args"},
 		{"list --claude-instance-id", func(w oldFlagWorld) []string {
 			return []string{"list", "--claude-instance-id", w.id}

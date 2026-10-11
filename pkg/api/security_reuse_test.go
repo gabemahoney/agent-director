@@ -43,7 +43,7 @@ func securityReuseCall(t *testing.T, c *api.Client, s *securityScene) (any, erro
 			s.forbid = append(s.forbid, sc.Token)
 		}
 	})
-	return c.Spawn(api.SpawnParams{InstanceID: s.target.ID, ReuseFinished: true,
+	return c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: s.target.ID, ReuseFinished: true,
 		TmuxSessionName: s.target.Name, CWD: t.TempDir()})
 }
 

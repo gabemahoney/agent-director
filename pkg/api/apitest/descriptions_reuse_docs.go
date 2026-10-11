@@ -93,8 +93,11 @@ var deleteThenSpawn = []string{
 // share.
 const (
 	sameIDOptIn = "spawn again with the same id, opting in to reuse"
-	noMemory    = "no memory of the"
-	lostRace    = "changed or was removed after this spawn examined it"
+	// goDocAgent is the recourse's agent in a Go doc (SR-4.4, P-66): the
+	// spawn passes the row's agent, SpawnParams.Agent.
+	goDocAgent = "and passing the row's agent (SpawnParams.Agent"
+	noMemory   = "no memory of the"
+	lostRace   = "changed or was removed after this spawn examined it"
 )
 
 // DescReuseHistoryByLife is SR-18.16's forbidden-only case: no claim that
@@ -108,7 +111,8 @@ func DescReuseHistoryByLife() DescCase {
 // DescReuseFinishedParam is spawn's reuse_finished parameter text (SR-18.10,
 // SR-10.7, SR-18.7), by key phrase: finished rows only, explicit id, this
 // call only, default unchanged, silent success, no memory of earlier lives,
-// the failed-plain-spawn retry with the pending grace default, feature
+// the agent the reuse names (SR-4.4), the failed-plain-spawn retry with the
+// pending grace default, feature
 // detection per surface, development builds and older binaries, serve
 // processes from before the rename (DescOlderServeParam, b.c4u), and the same
 // environment with SR-18.7's two consequences; plus DescReuseHistoryByLife.
@@ -123,6 +127,7 @@ func DescReuseFinishedParam() DescCase {
 			"no template or config setting carries it",
 			"The default (off) is unchanged: any existing row with the id collides",
 			"does not say whether it created a fresh row or reset a finished one",
+			"The spawn names its agent (agent, or the template's) and the reused row takes it: to reuse a row for the agent it ran, pass the row's agent, which get shows",
 			"starts with no memory of its earlier lives",
 			"resume and get never use or show an earlier life's history",
 			"after a held-name refusal (duplicate session)", "decides it at once",
@@ -174,12 +179,14 @@ const (
 
 // DescReuseRecourse is SR-18.4's recovery recourse at site: spawn again with
 // the same id, opting in to reuse by the site's spelling, the reused id
-// having no memory of the earlier conversation; never delete-then-spawn.
+// having no memory of the earlier conversation; never delete-then-spawn. A Go
+// doc also says the spawn passes the row's agent (SR-4.4, P-66); the
+// TypeScript README's rows say it too, as "and the row's `agent`" after the opt-in.
 // Check it with AssertAgentTextCase.
 func DescReuseRecourse(site RecourseSite) DescCase {
 	req := map[RecourseSite][]string{
-		RecourseGoDoc:    {sameIDOptIn, "(SpawnParams.ReuseFinished"},
-		RecourseTSREADME: {"spawn the same `instance_id` again", "`reuse_finished: true`"},
+		RecourseGoDoc:    {sameIDOptIn, "(SpawnParams.ReuseFinished", goDocAgent},
+		RecourseTSREADME: {"spawn the same `instance_id` again", "`reuse_finished: true` and the row's `agent`"},
 	}[site]
 	if req == nil {
 		panic("apitest: unknown RecourseSite")

@@ -1,7 +1,7 @@
 /**
  * Smoke test — list verb
  *
- * Happy path: the seeded row is listed with its state and cwd, and a
+ * Happy path: the seeded row is listed with its state, cwd and agent (SR-2.1), and a
  * check_permission row with its open requests and their delivery facts.
  * Error path: a label without "=" → ErrListInvalidLabel.
  */
@@ -19,6 +19,15 @@ test("list: happy path — returns seeded spawns array", async () => {
     expect(row?.state).toBe("working");
     expect(typeof row?.cwd).toBe("string");
     expect(row?.permission_requests).toEqual([]);
+    expect(row?.agent).toBe("claude");
+  });
+}, 10_000);
+
+test("list: a codex row shows agent codex", async () => {
+  await withTempHome(async (homeDir) => {
+    runHelper("seed-spawn", { store: homeStore(homeDir), state: "ended", id: "smoke-list-codex-id", agent: "codex", "create-store": true });
+    using client = await openClient(homeStore(homeDir));
+    expect((await client.list({})).spawns.find((r) => r.instance_id === "smoke-list-codex-id")?.agent).toBe("codex");
   });
 }, 10_000);
 

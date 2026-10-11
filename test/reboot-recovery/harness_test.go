@@ -261,11 +261,11 @@ type findMissingResult struct {
 	UnverifiedIDs []string `json:"unverified_ids"`
 }
 
-// mustSpawn runs `spawn` with the given extra args and returns the new
-// instance id, failing the test on a non-zero exit.
+// mustSpawn runs `spawn --agent claude` with the given extra args and returns
+// the new instance id, failing the test on a non-zero exit.
 func mustSpawn(t *testing.T, binaryAbs string, env []string, args ...string) string {
 	t.Helper()
-	full := append([]string{"spawn"}, args...)
+	full := append([]string{"spawn", "--agent", "claude"}, args...)
 	stdout, stderr, code := runCLI(t, binaryAbs, env, full...)
 	if code != 0 {
 		t.Fatalf("spawn exit=%d stderr=%s", code, stderr)

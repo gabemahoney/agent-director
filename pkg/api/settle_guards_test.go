@@ -267,7 +267,7 @@ func TestSettleGuardSpawnCollision(t *testing.T) {
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StateMissing, e.clock.Now())
 	for _, reuse := range []bool{false, true} {
-		_, err := c.Spawn(api.SpawnParams{InstanceID: r.ID, ReuseFinished: reuse, CWD: t.TempDir(),
+		_, err := c.Spawn(api.SpawnParams{Agent: "claude", InstanceID: r.ID, ReuseFinished: reuse, CWD: t.TempDir(),
 			ExtraEnv: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()})
 		assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
 		adviceAssertPhrase(t, err, r.ID+" already live")

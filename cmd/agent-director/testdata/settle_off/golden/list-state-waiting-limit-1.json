@@ -1,1 +1,1 @@
-{"spawns":[{"instance_id":"rs-waiting","parent_id":"rs-working","state":"waiting","cwd":"/srv/rs/rs-waiting","tmux_session_name":"ts-rs-waiting","relay_mode":"off","labels":{},"started_at":"2026-01-02T03:05:05Z","last_seen_at":"2026-01-02T03:05:35Z","permission_requests":[]}]}
+{"spawns":[{"instance_id":"rs-waiting","parent_id":"rs-working","state":"waiting","cwd":"/srv/rs/rs-waiting","agent":"claude","tmux_session_name":"ts-rs-waiting","relay_mode":"off","labels":{},"started_at":"2026-01-02T03:05:05Z","last_seen_at":"2026-01-02T03:05:35Z","permission_requests":[]}]}

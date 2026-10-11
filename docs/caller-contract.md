@@ -31,7 +31,7 @@ error:
   session to a human; never end it yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not retry
   until `get` shows `ended` or `missing`, then `spawn --instance-id`
-  with `--reuse-finished`. A row noted `unreported` has a running agent: use it
+  with `--reuse-finished` and the row's agent (`get` shows it). A row noted `unreported` has a running agent: use it
   or end it first (see [Maintenance](maintenance.md)).
 - `ErrConfigMalformed` (a config value is refused): store-backed verbs fail,
   `serve` does not start, hooks record nothing and relayed permission requests
@@ -59,10 +59,33 @@ To end a live row (`pending` included) and relaunch its id:
 6. Once `ended` or `missing`:
    - with a session id, to get the conversation back:
      `agent-director resume --instance-id <id>`
-   - otherwise, a reuse (the old conversation is unreachable for good):
-     `agent-director spawn --instance-id <id> --reuse-finished --cwd <dir>`
+   - otherwise, a reuse (the old conversation is unreachable for good), with
+     the row's agent, which `get` shows:
+     `agent-director spawn --instance-id <id> --reuse-finished --agent <agent> --cwd <dir>`
 
    A caller whose ids agent-director mints spawns fresh instead.
+
+## Spawn and template input refusals
+
+Each of these is refused before anything is written: no row, session, trust
+entry or template. Fix the input and re-issue the call. How `agent` and a
+template's `agent_args` combine is in
+[Settings](settings.md#templates-and-per-call-merge).
+
+- `ErrAgentMissing`: the call gives no `agent` and its template names none.
+  Name `claude` or `codex` per call (`--agent` on the CLI), or put `agent` in
+  the template.
+- `ErrAgentInvalid`: the agent is not exactly `claude` or `codex`; the value is
+  case-sensitive. Pass one of the two.
+- `ErrAgentArgsMismatch`: the template's `agent_args` are for another agent
+  than the one this spawn resolves to, so they are not inherited. Pass this
+  call's own non-empty `agent_args`, or spawn through a template for that agent.
+- `ErrTemplateAgentMissing`: a template holds `agent_args` but names no agent,
+  at `make-template` or when a `spawn` loads it. Give the template an `agent`,
+  or remove its `agent_args`.
+- `ErrPermissionsUnsupported`: a `codex` spawn or template carries an `allow`,
+  `deny` or `ask` entry. Drop the lists; see
+  [Permissions](permissions.md#codex-spawns).
 
 ## Permission relay
 

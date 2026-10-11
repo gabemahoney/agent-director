@@ -391,9 +391,11 @@ func TestAdviceFollow_H7_TrailEmitNegativeBytes(t *testing.T) {
 }
 
 // TestAdviceFollow_I4_CLILiteralReuseSpelling: I4 (CLI half) A4's "a retry with this id uses the reuse opt-in
-// reuse_finished (--reuse-finished on the CLI) once the name is free", the flag in the parenthesis copied literally.
+// reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI) once the name is free",
+// both flags in their parentheses copied literally, the agent the ended row's.
 func TestAdviceFollow_I4_CLILiteralReuseSpelling(t *testing.T) {
-	const advice = "a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) once the name is free"
+	const advice = "a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) " +
+		"and agent claude (--agent claude on the CLI) once the name is free"
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	socket, _ := heldHome(t, home)
@@ -409,15 +411,50 @@ func TestAdviceFollow_I4_CLILiteralReuseSpelling(t *testing.T) {
 	}
 	id := heldRowID(t, home, fakeDir)
 	assertHeldRowEnded(t, home, fakeDir, id)
+	if agent := getRow(t, home, fakeDir, id)["agent"]; agent != "claude" {
+		t.Fatalf("ended row's agent = %v; want claude, which the advice names", agent)
+	}
 	writeHolders(t, socket) // the holder exits: the name is free
-	flag := advCLIQuoted(t, env.ErrDescription, "the reuse opt-in reuse_finished (", " on the CLI)")
+	reuse := advCLIQuoted(t, env.ErrDescription, "the reuse opt-in reuse_finished (", " on the CLI)")
+	agent := strings.Fields(advCLIQuoted(t, env.ErrDescription, "and agent claude (", " on the CLI)"))
 
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--instance-id", id, "--cwd", t.TempDir(),
-		"--tmux-session-name", heldName, "--no-pre-trust", flag)
+	argv := append([]string{"spawn", "--instance-id", id, "--cwd", t.TempDir(), "--tmux-session-name", heldName, "--no-pre-trust", reuse}, agent...)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, argv...)
 	if code != 0 {
-		t.Fatalf("spawn %s: exit=%d stdout=%q stderr=%q; want the reuse to launch", flag, code, stdout, stderr)
+		t.Fatalf("spawn %s %s: exit=%d stdout=%q stderr=%q; want the reuse to launch", reuse, agent, code, stdout, stderr)
 	}
 	if st := statusOf(t, home, fakeDir, id); st != string(store.StatePending) {
 		t.Errorf("status = %q; want pending", st)
+	}
+}
+
+// TestAdviceFollow_H10_AgentMissingFlag: H10 ErrAgentMissing "pass agent claude or codex (--agent on the CLI)".
+// A spawn naming no agent is refused with nothing written; re-run with the flag
+// copied from the parenthesis and the first agent listed, it launches that agent.
+func TestAdviceFollow_H10_AgentMissingFlag(t *testing.T) {
+	const advice = "pass agent claude or codex (--agent on the CLI)"
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	argv := []string{"spawn", "--cwd", t.TempDir(), "--no-pre-trust"}
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, argv...)
+	env := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrAgentMissing")
+	if !strings.Contains(env.ErrDescription, advice) {
+		t.Fatalf("description %q lacks %q", env.ErrDescription, advice)
+	}
+	assertInvocationKinds(t, home)
+	if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
+		t.Fatalf("rows after the refusal = %v; want none", ids)
+	}
+
+	flag := advCLIQuoted(t, env.ErrDescription, "pass agent claude or codex (", " on the CLI)")
+	agent := strings.Fields(advCLIQuoted(t, env.ErrDescription, "pass agent ", " or codex"))[0]
+	stdout, stderr, code = runSpawnCLI(t, home, fakeDir, append(argv, flag, agent)...)
+	var res spawnResult
+	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {
+		t.Fatalf("spawn %s %s: exit=%d stdout=%q stderr=%q; want a launch", flag, agent, code, stdout, stderr)
+	}
+	if row := getRow(t, home, fakeDir, res.InstanceID); row["agent"] != agent || row["state"] != string(store.StatePending) {
+		t.Errorf("get = %v; want pending with agent %s", row, agent)
 	}
 }

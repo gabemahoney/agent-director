@@ -1,7 +1,7 @@
 /**
  * Smoke test — get verb
  *
- * Happy path: a working row's fields, with no launch_started_at; a pending
+ * Happy path: a working row's fields (agent included, SR-2.1), with no launch_started_at; a pending
  * row's launch_started_at, RFC3339 UTC at its started_at instant (SR-22.2).
  * tmux_socket (AC-LKP-22): a row seeded with --socket shows that exact path; a
  * row from before the release (--no-launch-identity) has no key. A
@@ -34,6 +34,13 @@ test("get: happy path — returns full spawn row fields", async () => {
       expect(typeof result[field]).toBe("string");
     }
     expect(result.launch_started_at).toBeUndefined();
+    expect(result.agent).toBe("claude");
+  });
+}, 10_000);
+
+test("get: a codex row shows agent codex", async () => {
+  await withTempHome(async (homeDir) => {
+    expect((await seedAndGet(homeDir, "smoke-get-codex-id", { state: "ended", agent: "codex" })).agent).toBe("codex");
   });
 }, 10_000);
 

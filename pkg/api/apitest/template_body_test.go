@@ -15,13 +15,14 @@ func TestTemplateBody_LoadsWithGivenFields(t *testing.T) {
 	want := config.TemplateFile{
 		CWD:                 "/work/here",
 		RelayMode:           "on",
+		Agent:               "claude",
 		AgentArgs:           []string{"--model", "opus"},
 		ExtraEnv:            map[string]string{"FOO": "1"},
 		AgentDirectorLabels: map[string]string{"team": "a"},
 		Permissions:         perms,
 	}
 	body := TemplateBody(TemplateFields{
-		AgentArgs: want.AgentArgs, CWD: want.CWD, RelayMode: want.RelayMode,
+		Agent: want.Agent, AgentArgs: want.AgentArgs, CWD: want.CWD, RelayMode: want.RelayMode,
 		ExtraEnv: want.ExtraEnv, Labels: want.AgentDirectorLabels, Permissions: perms,
 	})
 	if _, err := SeedTemplate(config.TemplatesDir(), "full", body); err != nil {

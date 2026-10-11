@@ -21,7 +21,7 @@
 //	}
 //	defer client.Close()
 //
-//	result, err := client.Spawn(api.SpawnParams{CWD: "/path/to/project"})
+//	result, err := client.Spawn(api.SpawnParams{CWD: "/path/to/project", Agent: "claude"})
 //
 // [Client.Close] is idempotent — calling it more than once is safe and returns
 // nil each time. After Close returns, any verb method call on the same Client

@@ -34,6 +34,15 @@ var ErrTemplateNotFound = errors.New("ErrTemplateNotFound")
 // fails schema validation (unknown keys, wrong types, bad enums).
 var ErrTemplateMalformed = errors.New("ErrTemplateMalformed")
 
+// ErrTemplateAgentMissing is returned when a template holds a non-empty
+// agent_args and names no agent: make-template refuses to write one, and a
+// spawn that loads a hand-made or copied one refuses it, whatever agent the
+// call gives. The arguments belong to the template's agent (SR-2.1), so a
+// template without one cannot say whose they are. The caller adds the template's
+// agent (make-template's agent, a template's agent key) or removes its
+// agent_args; nothing was written, and the spawn made no row.
+var ErrTemplateAgentMissing = errors.New("ErrTemplateAgentMissing")
+
 // ErrTemplateExists is returned by MakeTemplate when the target file
 // already exists. The verb does not overwrite — the caller deletes
 // and re-runs if they really mean to.

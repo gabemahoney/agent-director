@@ -21,6 +21,13 @@ import {
   errorFromEnvelope,
   type CheckedLocation,
 } from "../src/errors.js";
+import {
+  ErrAgentArgsMismatch,
+  ErrAgentInvalid,
+  ErrAgentMissing,
+  ErrPermissionsUnsupported,
+  ErrTemplateAgentMissing,
+} from "../src/index.js";
 import { errorMap, throwFromEnvelope } from "../src/internal/errorMap.js";
 import { thrownBy } from "./internal/helper.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
@@ -44,6 +51,21 @@ test("every catalog err_name maps to its own subclass in errorFromEnvelope and t
       expect(err).toBeInstanceOf(AgentDirectorError);
       expect([err.name, err.errName, err.verb, err.message]).toEqual([name, name, "list", `${name}: d`]);
     }
+  }
+});
+
+// SR-1.6: each agent error is a public class, built by both factories from its err_name.
+test.each([
+  ["ErrAgentMissing", ErrAgentMissing, "spawn"],
+  ["ErrAgentInvalid", ErrAgentInvalid, "spawn"],
+  ["ErrAgentArgsMismatch", ErrAgentArgsMismatch, "spawn"],
+  ["ErrPermissionsUnsupported", ErrPermissionsUnsupported, "spawn"],
+  ["ErrTemplateAgentMissing", ErrTemplateAgentMissing, "make-template"],
+] as const)("%s: the exported class is what both factories build from its err_name", (name, Class, verb) => {
+  const thrown = thrownBy(() => throwFromEnvelope(verb, { err_name: name, err_description: "d" }));
+  for (const err of [errorFromEnvelope(verb, name, "d"), thrown]) {
+    expect(err).toBeInstanceOf(Class);
+    expect((err as AgentDirectorError).verb).toBe(verb);
   }
 });
 

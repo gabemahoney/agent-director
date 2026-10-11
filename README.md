@@ -38,7 +38,7 @@ with Claude Code.
 ## First spawn
 
 ```sh
-id=$(agent-director spawn --cwd "$PWD" | jq -r '.instance_id')
+id=$(agent-director spawn --cwd "$PWD" --agent claude | jq -r '.instance_id')
 
 agent-director list --state waiting
 

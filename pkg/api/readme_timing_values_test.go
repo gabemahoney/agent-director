@@ -302,7 +302,8 @@ func TestReadmeTimingValuesClaudeCodeMinimum(t *testing.T) {
 // the default it states, from the internal/config constants and Default(), and
 // the "1 to N" range cell it states where the key has a maximum (rng empty
 // otherwise). noExample marks a key the doc's example block leaves out:
-// inject_help_hook, whose default (false) is not what install.sh writes (true).
+// inject_help_hook, whose default (false) is not what install.sh writes (true),
+// and the two [launch] paths, which the example block shows commented out.
 func docConfigKeys() []struct {
 	key, def, rng string
 	noExample     bool
@@ -327,6 +328,8 @@ func docConfigKeys() []struct {
 		{"store.db_path", c.Store.DbPath, "", false},
 		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},
 		{"state.settle_ms", itoa(int64(c.State.SettleMs)), "", false},
+		{"launch.claude_path", "unset", "", true},
+		{"launch.codex_path", "unset", "", true},
 		{"log.error_log_path", c.Log.ErrorLogPath, "", false},
 	}
 }

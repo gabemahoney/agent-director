@@ -32,16 +32,20 @@ const advSpawnHeldName = "adv-held"
 // requesting name unless it is "".
 func advSpawnParams(t *testing.T, id, name string) api.SpawnParams {
 	t.Helper()
-	p := api.SpawnParams{CWD: t.TempDir(), InstanceID: id}
+	p := api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id}
 	if name != "" {
 		p.TmuxSessionName, p.TmuxSessionNameSupplied = name, true
 	}
 	return p
 }
 
-// advSpawnReuse is p with the reuse opt-in, the retry the advice names.
+// advSpawnAdviceAgent is the agent the held-name and launch-timeout advice names: the new row's, which is
+// the call's.
+const advSpawnAdviceAgent = "claude"
+
+// advSpawnReuse is p with the reuse opt-in and the agent the advice names, the retry it tells the caller to make.
 func advSpawnReuse(p api.SpawnParams) api.SpawnParams {
-	p.ReuseFinished = true
+	p.ReuseFinished, p.Agent = true, advSpawnAdviceAgent
 	return p
 }
 
@@ -64,8 +68,8 @@ func advSpawnLaunched(t *testing.T, dbPath, id string, wantLife any, res api.Spa
 	if err != nil {
 		t.Fatalf("ReadSpawnColumns(%s): %v", id, err)
 	}
-	if cols.State != store.StatePending || (wantLife != nil && cols.LifeNumber != wantLife) {
-		t.Errorf("row %s: state %v, life %v; want pending, life %v", id, cols.State, cols.LifeNumber, wantLife)
+	if cols.State != store.StatePending || (wantLife != nil && cols.LifeNumber != wantLife) || cols.Agent != advSpawnAdviceAgent {
+		t.Errorf("row %s: state %v, life %v, agent %v; want pending, life %v, agent %s", id, cols.State, cols.LifeNumber, cols.Agent, wantLife, advSpawnAdviceAgent)
 	}
 }
 
@@ -79,7 +83,7 @@ func advSpawnNextLife(cols apitest.SpawnColumns) any {
 // finished (b.1qq), the opt-in in its one spelling (b.c4u); after "duplicate
 // session" it waits for the name too, and an unended row waits first.
 const (
-	advSpawnReuseRetry    = "a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI)"
+	advSpawnReuseRetry    = "a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI)"
 	advSpawnReuseOnceFree = advSpawnReuseRetry + " once the name is free, since a plain spawn of the id now collides"
 	advSpawnWaitThenReuse = "do not retry until get shows the row ended or missing; then " + advSpawnReuseOnceFree
 )
@@ -131,9 +135,9 @@ func TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished(t *testing.T) {
 				t.Errorf("description %q\nwant it to end with %q", err.Error(), tc.advice)
 			}
 			adviceAssertManifest(t, "spawn", "", "do not retry until get shows the row ended or missing, since a retry without an explicit id "+
-				"would start a second agent; then retry an explicit id with the reuse opt-in")
+				"would start a second agent; then retry an explicit id with the reuse opt-in and the row's agent, which get shows")
 			adviceAssertGoDoc(t, "spawn.go", "Spawn", "do not retry until get shows the row ended or missing, since a retried spawn without an "+
-				"explicit id would start a second agent. Then retry an explicit InstanceID with ReuseFinished")
+				"explicit id would start a second agent. Then retry an explicit InstanceID with ReuseFinished and the row's agent (SpawnParams.Agent; the error's description names it, and get shows it)")
 			id := e.rec.SocketCallsOf(tmux.CallCreate)[0].InstanceID
 			adviceAwaitFinished(t, e.c, e.clock, id, nil)
 			if tc.id != "" {
@@ -300,7 +304,7 @@ func advSpawnHeldTrigger(t *testing.T, e heldEnv, id string, p api.SpawnParams, 
 // "duplicate session" whose re-lookup could not answer (A5) or whose holder
 // vanished (A6), following the clause that names the case.
 const advSpawnGoDocRetry = "; the new row is ended (the description says if it could not be), and a retry of the id (the description names it) " +
-	"uses ReuseFinished once get shows the row ended or missing and the name is free."
+	"uses ReuseFinished and the row's agent once get shows the row ended or missing and the name is free."
 
 // TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished: A5 "the new row changed after this spawn inserted it and was left as it is" / "the new row
 // could not be ended and stays pending"; "do not retry until get shows the row ended or missing; then a retry with this id uses the reuse opt-in
@@ -419,7 +423,7 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 			}
 			advSpawnHeldTrigger(t, e, id, p, arrange, api.ErrTmuxSessionConflict, tc.phrase)
 			adviceAssertManifest(t, "spawn", "", "a leftover of an earlier life or a session with no valid instance id is a human's to end "+
-				`(see docs/operator-actions.md); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)`)
+				`(see docs/operator-actions.md); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI) and the row's agent`)
 			advSpawnFreeName(t, e)
 			before := e.readRow(t, id)
 			if tc.failEnd {

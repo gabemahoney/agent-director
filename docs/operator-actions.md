@@ -138,14 +138,15 @@ jq -c 'select(.event == "ad.launch.name_held" and .instance_id == "<id>") | {tmu
 
 Inspect each session (steps 1 to 3), then:
 
-- No row: end each (steps 4 and 5), spawn the id again.
+- No row: end each (steps 4 and 5), spawn the id again with the same
+  `--agent`.
 - Row `ended`: end the leftover with `kill-finished` or by hand once it is older
   than `starting_session_seconds`, then run the same `spawn` again with
-  `--reuse-finished`.
+  `--reuse-finished` and the row's agent (`get` shows it) as `--agent`.
 - "Stays pending", "was left as it is" or "No valid instance id": as the
   leftover item. "A different instance id": another row's agent, and this spawn
-  ended its own row: spawn again with `--reuse-finished` and another
-  `--tmux-session-name`.
+  ended its own row: spawn again with `--reuse-finished`, the row's agent
+  (`get` shows it) as `--agent`, and another `--tmux-session-name`.
 
 ## A session of another agent-director store
 

@@ -3,6 +3,12 @@
 Every verb prints JSON on stdout and a typed error on stderr. The full verb and
 flag list is in `cli-reference.md`.
 
+## Naming the agent
+
+A `spawn` names its agent, `claude` or `codex`, with `--agent` on the call or
+through its [template](#templates); with neither it is refused. The rules
+for combining the two are in [Settings](settings.md#templates-and-per-call-merge).
+
 ## Spawn states
 
 A row is `pending` while its launch is in progress and its agent has not
@@ -21,7 +27,7 @@ prompt.
 `<basename(cwd)>-<id[:8]>`:
 
 ```sh
-agent-director spawn --cwd "$PWD" --tmux-session-name status-agent
+agent-director spawn --cwd "$PWD" --agent claude --tmux-session-name status-agent
 ```
 
 The name must be non-empty, at most 64 bytes, valid UTF-8, with none of `#`,
@@ -71,7 +77,7 @@ With `--relay-mode=on`, an agent permission prompt moves the row to
 `check_permission` and waits for your `decide`:
 
 ```sh
-id=$(agent-director spawn --cwd "$PWD" --relay-mode=on \
+id=$(agent-director spawn --cwd "$PWD" --agent claude --relay-mode=on \
        | jq -r '.instance_id')
 
 token=$(agent-director get --instance-id "$id" \
@@ -223,12 +229,14 @@ through the Enter the hold exists to stop.
 ## Templates
 
 ```sh
-agent-director make-template --name dev --cwd /repos/widget \
+agent-director make-template --name dev --cwd /repos/widget --agent claude \
+    --agent-args --model --agent-args opus \
     --label project=widget --allow 'Bash(npm test)'
 
 agent-director spawn --template dev --label run=$(date +%s)
 ```
 
+The template names its agent, so that `spawn` needs no `--agent`.
 `--overwrite` replaces an existing template atomically.
 
 ## Pause and resume

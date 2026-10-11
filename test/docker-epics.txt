@@ -16,6 +16,7 @@ epic-09-resume
 epic-10-relay
 epic-11-mcp
 epic-12-install
+epic-13-agents
 # DROPPED 2026-06-06 — see b.z2w: release.sh deleted by b.wvr; release-postconditions Go tests cover invariants
 # epic-13-release
 harness-smoke

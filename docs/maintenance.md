@@ -67,9 +67,10 @@ agent-director resume --instance-id <id>   # relaunch with history
 
 `resume` acts on any finished row (`ended` or `missing`); `find-missing` first
 makes a dead live row `missing`. Without a session id or transcript (see
-`transcript_status` in `get`), spawn the id again with reuse; the new agent
-has no memory of the old conversation:
+`transcript_status` in `get`), spawn the id again with reuse and the row's
+agent, which `get` shows; the new agent has no memory of the old
+conversation:
 
 ```sh
-agent-director spawn --cwd <dir> --instance-id <id> --reuse-finished
+agent-director spawn --cwd <dir> --instance-id <id> --reuse-finished --agent <agent>
 ```

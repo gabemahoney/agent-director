@@ -21,10 +21,16 @@ import (
 // The advice A15 and B12 pin, exactly as the description or Go doc words it.
 const (
 	advEnvKeyOwnName       = "give each variable its own name as the key (not empty, with no '=' and no NUL byte) and its value as the value"
-	advResumeEnvKeyReuse   = "nothing was written and nothing was launched; to run the agent again, spawn the id with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and an extra_env without "
-	advResumeEnvKeyGoDoc   = "Recourse: spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished), with an ExtraEnv without that key"
+	advResumeEnvKeyGoDoc   = "Recourse: spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent), with an ExtraEnv without that key"
 	advResumeEnvKeyNewLife = " (a reused id starts a new life with no memory of this conversation), and " + advEnvKeyOwnName
 )
+
+// advResumeEnvKeyReuse is B12's advice up to the key, for a row of agent: the spawn-again step with the reuse
+// opt-in and that agent word, then an extra_env without it.
+func advResumeEnvKeyReuse(agent string) string {
+	return "nothing was written and nothing was launched; to run the agent again, spawn the id with the reuse opt-in reuse_finished " +
+		"(--reuse-finished on the CLI) and agent " + agent + " (--agent " + agent + " on the CLI) and an extra_env without "
+}
 
 // TestAdviceFollow_A15_InvalidEnvKeyNameTheVariable: the same spawn with the key
 // removed and CLAUDE_CONFIG_DIR as its own key launches with that variable set,
@@ -41,7 +47,7 @@ func TestAdviceFollow_A15_InvalidEnvKeyNameTheVariable(t *testing.T) {
 	}
 	id := "adv-envkey-" + uuid.NewString()[:8]
 	bad := "CLAUDE_CONFIG_DIR=" + cfg.dir
-	p := api.SpawnParams{CWD: cwd, InstanceID: id, ExtraEnv: map[string]string{bad: "", "TEAM": "core"}}
+	p := api.SpawnParams{Agent: "claude", CWD: cwd, InstanceID: id, ExtraEnv: map[string]string{bad: "", "TEAM": "core"}}
 
 	_, err = env.c.Spawn(p)
 
@@ -62,37 +68,50 @@ func TestAdviceFollow_A15_InvalidEnvKeyNameTheVariable(t *testing.T) {
 	own.check(t, "", false, "after the followed spawn")
 }
 
-// TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse: the reuse that keeps the key
-// is refused alike and writes nothing; the one naming CLAUDE_CONFIG_DIR as its
-// own key launches the next life, pre-trusting that directory.
-// B12 (b.vpb): "to run the agent again, spawn the id with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and an extra_env without \"CLAUDE_CONFIG_DIR=...\" (...)"
+// TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse: the reuse that keeps the key is refused alike and
+// writes nothing; the one naming the agent's folder variable as its own key launches a claude row's next
+// life, pre-trusting that directory, and a codex row's reaches the Codex composition stop, writing nothing.
+// B12 (b.vpb): "to run the agent again, spawn the id with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI) and an extra_env without \"CLAUDE_CONFIG_DIR=...\" (...)"
 func TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeEnvKeyGoDoc)
-	e := newKillEnv(t)
-	cfg := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
-	bad := "CLAUDE_CONFIG_DIR=" + cfg.dir
-	r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e),
-		Opts: []apitest.SpawnOption{apitest.WithExtraEnv(map[string]string{bad: ""})}})
-	before := e.snapshotResume(t, r.resumeRow)
+	for _, a := range advHomeAgents {
+		t.Run(a.agent+" row", func(t *testing.T) {
+			e := newKillEnv(t)
+			cfg := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			bad := a.variable + "=" + cfg.dir
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e),
+				Opts: []apitest.SpawnOption{apitest.WithAgent(a.agent), apitest.WithExtraEnv(map[string]string{bad: ""})}})
+			before := e.snapshotResume(t, r.resumeRow)
 
-	_, err := e.resume(r.ID)
+			_, err := e.resume(r.ID)
 
-	malformed := strconv.Quote(bad) + " is not a valid env-var name: it contains '='"
-	adviceAssertAdvice(t, err, spawn.ErrReservedEnvKey, advResumeEnvKeyReuse+strconv.Quote(bad)+advResumeEnvKeyNewLife)
-	adviceAssertPhrase(t, err, malformed)
-	e.assertResumeWroteNothing(t, before)
+			malformed := strconv.Quote(bad) + " is not a valid env-var name: it contains '='"
+			adviceAssertAdvice(t, err, spawn.ErrReservedEnvKey, advResumeEnvKeyReuse(a.agent)+strconv.Quote(bad)+advResumeEnvKeyNewLife)
+			adviceAssertPhrase(t, err, malformed)
+			e.assertResumeWroteNothing(t, before)
 
-	kept := e.snapshotReuse(t, r)
-	_, _, err = e.reuse(t, reuseParams(t, r, reuseRequest{Env: map[string]string{bad: ""}}))
-	assertOneSentinel(t, err, spawn.ErrReservedEnvKey)
-	adviceAssertPhrase(t, err, malformed)
-	e.assertWroteNothing(t, kept)
+			kept := e.snapshotReuse(t, r)
+			p := reuseParams(t, r, reuseRequest{Env: map[string]string{bad: ""}})
+			p.Agent = a.agent
+			_, _, err = e.reuse(t, p)
+			assertOneSentinel(t, err, spawn.ErrReservedEnvKey)
+			adviceAssertPhrase(t, err, malformed)
+			e.assertWroteNothing(t, kept)
 
-	res, logs, err := e.reuse(t, reuseParams(t, r, reuseRequest{Env: map[string]string{"CLAUDE_CONFIG_DIR": cfg.dir}}))
-	if err != nil {
-		t.Fatalf("spawn of %s with the reuse opt-in and CLAUDE_CONFIG_DIR as its own key = %v (log %q); want it launched", r.ID, err, logs)
+			p = reuseParams(t, r, reuseRequest{Env: map[string]string{a.variable: cfg.dir}})
+			p.Agent = a.agent
+			res, logs, err := e.reuse(t, p)
+			if a.agent == "codex" {
+				advAssertCodexStop(t, err, "the followed spawn")
+				e.assertWroteNothing(t, kept)
+				return
+			}
+			if err != nil {
+				t.Fatalf("spawn of %s with the reuse opt-in and %s as its own key = %v (log %q); want it launched", r.ID, a.variable, err, logs)
+			}
+			advSpawnLaunched(t, e.dbPath, r.ID, advSpawnNextLife(before.cols), res, err)
+			cfg.check(t, r.CWD, true, "after the followed reuse")
+		})
 	}
-	advSpawnLaunched(t, e.dbPath, r.ID, advSpawnNextLife(before.cols), res, err)
-	cfg.check(t, r.CWD, true, "after the followed reuse")
 }

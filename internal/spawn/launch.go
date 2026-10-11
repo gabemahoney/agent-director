@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -14,6 +15,39 @@ import (
 // as a var so tests can swap it for a fake-claude helper without
 // monkey-patching the spawn flow.
 var claudeBinary = "claude"
+
+// errCodexLaunchUnavailable is what ComposeLaunch and ComposeRelaunch return
+// for a codex agent: this build composes no Codex launch. It is deliberately
+// neither exported nor catalogued, so it reaches callers as ErrInternal, and
+// it is returned before any store write, pre-trust, tmux call or reset, so a
+// codex spawn, reuse or resume that passed every check changes nothing.
+var errCodexLaunchUnavailable = errors.New("a Codex launch is not available in this build")
+
+// claudeProgram is the program a Claude launch (spawn, reuse, resume) puts
+// first in the pane command: [launch] claude_path from the config in force at
+// this launch when set, as one unchanged argument, else the program named
+// claude, found on the pane's PATH (SR-5.0). Nothing about it is stored on
+// the row.
+func claudeProgram(cfg config.Config) string {
+	if cfg.Launch.ClaudePath != "" {
+		return cfg.Launch.ClaudePath
+	}
+	return claudeBinary
+}
+
+// launchAgentError is the composition stop for an agent this build cannot
+// launch: errCodexLaunchUnavailable for codex, and the row-agent error
+// (store.ErrRowAgentInvalid) for anything that is not claude or codex. nil
+// for claude.
+func launchAgentError(agent string) error {
+	switch agent {
+	case store.AgentClaude:
+		return nil
+	case store.AgentCodex:
+		return errCodexLaunchUnavailable
+	}
+	return fmt.Errorf("%w: %q", store.ErrRowAgentInvalid, agent)
+}
 
 // Launch is plain spawn's launch (SRD SR-3.3, SR-3.5, SR-3.6, SR-9.4,
 // SR-22.2). The caller has already run the collision pre-check (and, for a
@@ -129,7 +163,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	if !recorded && out.Kind != CreateDuplicate && row.LaunchOwner.PID > 0 {
 		ReleaseLaunchOwner(s, lg, r.InstanceID, token)
 	}
-	if err := plainSpawnCreateError(out, req, launchStart, minted); err != nil {
+	if err := plainSpawnCreateError(out, req, launchStart, minted, r.Agent); err != nil {
 		return "", "", err
 	}
 	return r.InstanceID, preTrust, nil

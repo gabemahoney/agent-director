@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -38,7 +39,8 @@ func loadConfigError(t *testing.T, path string) *config.ConfigError {
 	}
 	def := config.Default()
 	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause || cfg.PreTrust != def.PreTrust ||
-		cfg.Store.BusyTimeoutMs != def.Store.BusyTimeoutMs || cfg.State != def.State || cfg.Tmux != def.Tmux {
+		cfg.Store.BusyTimeoutMs != def.Store.BusyTimeoutMs || cfg.State != def.State || cfg.Tmux != def.Tmux ||
+		cfg.Launch != def.Launch {
 		t.Errorf("non-path defaults drifted on error: got=%+v want=%+v", cfg, def)
 	}
 	return ce
@@ -451,5 +453,113 @@ func TestTmuxRefusalNamesKeysInTableOrder(t *testing.T) {
 			t.Errorf("[tmux] %s is named out of table order: %q", tc.key.Name(), desc)
 		}
 		last = at
+	}
+}
+
+// TestLoadRefusesLaunchValue is the SR-5.0 refusal: a [launch] value that is
+// neither empty, an absolute path nor "~/..." is a *ConfigError whose
+// description names the key and the value, ends "An empty value counts as
+// unset." and is never replaced by a default; both refused keys are named in
+// key order. A non-string value fails the decode, still naming the key.
+func TestLoadRefusesLaunchValue(t *testing.T) {
+	const tail = ". An empty value counts as unset."
+	clause := func(key, value string) string {
+		return fmt.Sprintf(`%s = %q, which must be an absolute path or start with "~/"`, key, value)
+	}
+	cases := []struct {
+		name, content, want string
+	}{
+		{"claude_blank", "[launch]\nclaude_path = \" \"\n", clause("claude_path", " ")},
+		{"codex_blank", "[launch]\ncodex_path = \"\\t\"\n", clause("codex_path", "\t")},
+		{"claude_relative", "[launch]\nclaude_path = \"bin/claude\"\n", clause("claude_path", "bin/claude")},
+		{"codex_relative", "[launch]\ncodex_path = \"./codex\"\n", clause("codex_path", "./codex")},
+		{"claude_bare_name", "[launch]\nclaude_path = \"claude\"\n", clause("claude_path", "claude")},
+		{"claude_tilde_alone", "[launch]\nclaude_path = \"~\"\n", clause("claude_path", "~")},
+		{"codex_tilde_alone", "[launch]\ncodex_path = \"~\"\n", clause("codex_path", "~")},
+		{"claude_other_user", "[launch]\nclaude_path = \"~user/x\"\n", clause("claude_path", "~user/x")},
+		{"codex_other_user", "[launch]\ncodex_path = \"~root/codex\"\n", clause("codex_path", "~root/codex")},
+		{"table_in_another_letter_case", "[LAUNCH]\nCLAUDE_PATH = \"claude\"\n", clause("claude_path", "claude")},
+		{"both_refused_in_key_order", "[launch]\ncodex_path = \"b\"\nclaude_path = \"a\"\n",
+			clause("claude_path", "a") + "; " + clause("codex_path", "b")},
+		{"beside_valid_value", "[launch]\nclaude_path = \"/a/claude\"\ncodex_path = \"codex\"\n", clause("codex_path", "codex")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			desc := loadConfigError(t, makeConfigFile(t, tc.content)).Err.Error()
+
+			if want := "refused [launch] values: " + tc.want + tail; desc != want {
+				t.Errorf("description = %q\nwant          %q", desc, want)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, content, key string }{
+		{"claude_integer", "[launch]\nclaude_path = 5\n", "claude_path"},
+		{"codex_boolean", "[launch]\ncodex_path = true\n", "codex_path"},
+		{"claude_array", "[launch]\nclaude_path = [\"/a/claude\"]\n", "claude_path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			desc := loadConfigError(t, makeConfigFile(t, tc.content)).Err.Error()
+
+			if !strings.Contains(desc, tc.key) {
+				t.Errorf("description does not name %s: %q", tc.key, desc)
+			}
+		})
+	}
+}
+
+// TestLoadRefusesLaunchTildeWithoutHome: a "~/" [launch] value cannot be
+// resolved while HOME is unset or empty, so Load refuses it naming the key
+// and saying to use an absolute path; an absolute value and an empty one still load.
+func TestLoadRefusesLaunchTildeWithoutHome(t *testing.T) {
+	for _, home := range []struct {
+		name  string
+		unset bool
+	}{{"home_empty", false}, {"home_unset", true}} {
+		t.Run(home.name, func(t *testing.T) {
+			path := makeConfigFile(t, "[launch]\nclaude_path = \"~/bin/claude\"\ncodex_path = \"/b/codex\"\n")
+			t.Setenv("HOME", "")
+			if home.unset {
+				if err := os.Unsetenv("HOME"); err != nil {
+					t.Fatalf("Unsetenv HOME: %v", err)
+				}
+			}
+
+			_, err := config.Load(path)
+
+			var ce *config.ConfigError
+			want := `refused [launch] values: claude_path = "~/bin/claude", which must be an absolute path or start with "~/", ` +
+				`but HOME is unset or empty so "~/" cannot be resolved; use an absolute path` + ". An empty value counts as unset."
+			if !errors.As(err, &ce) || ce.Err.Error() != want {
+				t.Fatalf("Load error = %v; want a ConfigError describing %q", err, want)
+			}
+			cfg, err := config.Load(makeConfigFile(t, "[launch]\nclaude_path = \"\"\ncodex_path = \"/b/codex\"\n"))
+			if err != nil || cfg.Launch != (config.Launch{CodexPath: "/b/codex"}) {
+				t.Errorf("absolute and empty values without HOME: Load = %+v, %v; want them to load", cfg.Launch, err)
+			}
+		})
+	}
+}
+
+// TestLoadRefusesLaunchCaseVariantKeys: a [launch] key set under two spellings
+// is refused naming both (b.p8n), never reading one of the values at random.
+func TestLoadRefusesLaunchCaseVariantKeys(t *testing.T) {
+	cases := []struct{ name, content, want string }{
+		{"two_key_spellings", "[launch]\nclaude_path = \"/a\"\nCLAUDE_PATH = \"/b\"\n",
+			caseVariantText("[launch] claude_path and [launch] CLAUDE_PATH")},
+		{"two_table_spellings", "[launch]\ncodex_path = \"/a\"\n\n[Launch]\ncodex_path = \"/b\"\n",
+			caseVariantText("[launch] codex_path and [Launch] codex_path")},
+		// launchRefusal would have checked whichever value the decoder kept.
+		{"refused_value_under_one_name", "[launch]\nclaude_path = \"relative\"\nCLAUDE_PATH = \"/a/claude\"\n",
+			caseVariantText("[launch] claude_path and [launch] CLAUDE_PATH")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := makeConfigFile(t, tc.content)
+			for i := range 100 {
+				if got := loadConfigError(t, path).Err.Error(); got != tc.want {
+					t.Fatalf("load %d: description = %q\nwant                %q", i+1, got, tc.want)
+				}
+			}
+		})
 	}
 }

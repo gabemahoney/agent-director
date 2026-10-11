@@ -60,7 +60,7 @@ func holderSession(sessionID, label string) faketmuxfix.Session {
 func spawnHeld(t *testing.T, home, fakeDir string, extraEnv map[string]string) errorEnvelope {
 	t.Helper()
 	_, stderr, code := runSpawnCLIEnv(t, home, fakeDir, extraEnv,
-		"spawn", "--cwd", t.TempDir(), "--tmux-session-name", heldName, "--no-pre-trust")
+		withAgent("claude", "spawn", "--cwd", t.TempDir(), "--tmux-session-name", heldName, "--no-pre-trust")...)
 	if code != 1 {
 		t.Fatalf("exit = %d; want 1 (stderr=%q)", code, stderr)
 	}

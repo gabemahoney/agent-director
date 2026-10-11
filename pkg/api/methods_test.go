@@ -86,7 +86,7 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	}
 	for name, call := range map[string]func() (any, error){
 		"Version":      func() (any, error) { return c.Version() },
-		"Spawn":        func() (any, error) { return c.Spawn(api.SpawnParams{}) },
+		"Spawn":        func() (any, error) { return c.Spawn(api.SpawnParams{Agent: "claude"}) },
 		"Status":       func() (any, error) { return c.Status("") },
 		"Get":          func() (any, error) { return c.Get("") },
 		"List":         func() (any, error) { return c.List(api.ListParams{}) },
@@ -100,7 +100,7 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		"Expire":       func() (any, error) { return c.Expire(nil) },
 		"Delete":       func() (any, error) { return adminapi.Delete(c, nil) },
 		"KillFinished": func() (any, error) { return adminapi.KillFinished(c, "") },
-		"MakeTemplate": func() (any, error) { return c.MakeTemplate(api.MakeTemplateParams{}) },
+		"MakeTemplate": func() (any, error) { return c.MakeTemplate(api.MakeTemplateParams{Agent: "claude"}) },
 	} {
 		res, err := call()
 		if !errors.Is(err, api.ErrClientClosed) {
@@ -174,7 +174,7 @@ func TestClientVerbsDelegate(t *testing.T) {
 		want error
 	}{
 		{"Version", func() error { _, err := empty.Version(); return err }, nil},
-		{"Spawn with no cwd", func() error { _, err := empty.Spawn(api.SpawnParams{}); return err }, spawn.ErrCwdMissing},
+		{"Spawn with no cwd", func() error { _, err := empty.Spawn(api.SpawnParams{Agent: "claude"}); return err }, spawn.ErrCwdMissing},
 		{"Get", func() error {
 			r, err := rows.Get("id-waiting")
 			return unless(r.InstanceID == "id-waiting", err, "Get = %+v", r)
@@ -210,7 +210,7 @@ func TestClientVerbsDelegate(t *testing.T) {
 			return unless(r.Results != nil && len(r.Results) == 0, err, "Results = %#v; want a non-nil empty map", r.Results)
 		}, nil},
 		{"MakeTemplate", func() error {
-			r, err := empty.MakeTemplate(api.MakeTemplateParams{Name: "meth-test-tmpl", CWD: "/tmp"})
+			r, err := empty.MakeTemplate(api.MakeTemplateParams{Agent: "claude", Name: "meth-test-tmpl", CWD: "/tmp"})
 			if err == nil {
 				_, err = os.Stat(r.Path)
 			}

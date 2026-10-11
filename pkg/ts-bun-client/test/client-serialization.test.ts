@@ -11,7 +11,7 @@
 import { test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homeStore, openClient, seedOuterParent, withProcessEnv } from "./internal/helper.js";
+import { homeStore, openClient, seedOuterParent, spawnClaude, withProcessEnv } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 const RECORDER = path.resolve(import.meta.dir, "fixtures/epic-a/serialization-recorder.js");
@@ -36,7 +36,7 @@ test("5 parallel spawn() calls on one Client execute serially in submission orde
     const resolved: number[] = [];
     const results = await Promise.all(
       Array.from({ length: N }, (_, i) =>
-        client.spawn({ cwd: homeDir, label: [`seq=${i}`] }).then((r) => {
+        spawnClaude(client, { cwd: homeDir, label: [`seq=${i}`] }).then((r) => {
           resolved.push(i);
           return r;
         })

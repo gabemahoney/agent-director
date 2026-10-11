@@ -291,13 +291,15 @@ func DescPreCheckRead() DescCase {
 // DescCase.withRowReset); ExplicitSpawnID is a plain spawn of a
 // caller-supplied id, whose description also names the opted-in retry after
 // the launch-timeout rule (b.1qq). A minted id's plain spawn, resume and
-// reuse leave it unset.
+// reuse leave it unset. Agent is the new row's agent, which that opted-in
+// retry names (SR-4.4; claude when empty); only ExplicitSpawnID uses it.
 type LaunchTimeout struct {
 	InstanceID      string
 	Timeout         time.Duration
 	Unrecognised    bool
 	RowReset        bool
 	ExplicitSpawnID bool
+	Agent           string
 }
 
 // rowStaysPending is the row sentence of a launch failure that leaves the
@@ -317,12 +319,14 @@ const (
 
 // The opted-in retry a plain spawn of a caller-supplied id names after the
 // launch-timeout rule (b.1qq): in its timeout description
-// (spawnTimeoutReuseRetry, with the opt-in in its one spelling, reuseOptIn)
-// and in the spawn manifest text (spawnManifestReuseRetry, surface-neutral).
-const (
-	spawnTimeoutReuseRetry  = launchRetryRule + "; then a retry with this id uses " + reuseOptIn
-	spawnManifestReuseRetry = "then retry an explicit id with the reuse opt-in"
-)
+// (spawnTimeoutReuseRetry, with the opt-in in its one spelling and the row's
+// agent, reuseSpawn; SR-4.4) and in the spawn manifest text
+// (spawnManifestReuseRetry, surface-neutral, for no particular row).
+const spawnManifestReuseRetry = "then retry an explicit id with the reuse opt-in and " + rowAgentPointer
+
+func spawnTimeoutReuseRetry(agent string) string {
+	return launchRetryRule + "; then a retry with this id uses " + reuseSpawn(agent)
+}
 
 // DescLaunchTimeout is ErrTmuxUnresponsive for a launch whose session
 // creation timed out or gave an unrecognised reply. With ExplicitSpawnID it
@@ -336,7 +340,7 @@ func DescLaunchTimeout(p LaunchTimeout) DescCase {
 	}
 	mustNot := append([]string{"nothing was done", "retry later"}, unresponsiveMustNot...)
 	if p.ExplicitSpawnID {
-		req = append(req, spawnTimeoutReuseRetry)
+		req = append(req, spawnTimeoutReuseRetry(p.Agent))
 	} else {
 		mustNot = append(mustNot, "reuse opt-in")
 	}

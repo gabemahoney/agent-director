@@ -3,6 +3,7 @@ package spawn
 import (
 	"fmt"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -26,13 +27,34 @@ const LaunchRetryRule = "do not retry until get shows the row ended or missing"
 // spelling the runtime error texts build on (b.1qq, b.c4u).
 const ReuseOptIn = "the reuse opt-in " + manifest.ReuseOptInSpelling
 
+// AgentSpelling names the agent a spawn is made with, in advice built for a
+// known row or call (SR-4.4, P-66): "agent <name> (--agent <name> on the
+// CLI)", the param every surface takes then the CLI flag. For no known agent
+// (an empty or unrecognised one) it is manifest.RowAgentPointer's pointer to
+// the row's agent, which get shows.
+func AgentSpelling(agent string) string {
+	if !config.ValidAgent(agent) {
+		return manifest.RowAgentPointer
+	}
+	return "agent " + agent + " (--agent " + agent + " on the CLI)"
+}
+
+// ReuseSpawn is the spawn-again advice's argument list: the reuse opt-in in
+// its one spelling (ReuseOptIn) and the spawn's agent (AgentSpelling), since a
+// spawn names its agent and the reused row takes it (SR-4.4, P-66).
+func ReuseSpawn(agent string) string {
+	return ReuseOptIn + " and " + AgentSpelling(agent)
+}
+
 // ReuseRetry names the retry that works for a plain spawn whose row for this
 // id is, or will be, finished (b.1qq): a plain spawn of the id collides with
 // that row at the collision pre-check (ErrInstanceIdCollision), so the retry
-// uses the reuse opt-in (ReuseOptIn). Its reason follows it as
-// PlainSpawnCollides.
+// uses the reuse opt-in and the row's agent (ReuseSpawn). Its reason follows
+// it as PlainSpawnCollides.
 // pkg/api's held-name retry sentences build on both.
-const ReuseRetry = "a retry with this id uses " + ReuseOptIn
+func ReuseRetry(agent string) string {
+	return "a retry with this id uses " + ReuseSpawn(agent)
+}
 
 // PlainSpawnCollides is ReuseRetry's reason: a plain spawn of the id
 // collides with its row.
@@ -43,7 +65,9 @@ const PlainSpawnCollides = "since a plain spawn of the id now collides"
 // retry, since once get shows the row ended or missing a plain spawn of the
 // id collides with it. A minted id keeps LaunchRetryRule alone: its retry
 // mints a new id.
-const explicitIDTimeoutRetry = LaunchRetryRule + "; then " + ReuseRetry + ", " + PlainSpawnCollides
+func explicitIDTimeoutRetry(agent string) string {
+	return LaunchRetryRule + "; then " + ReuseRetry(agent) + ", " + PlainSpawnCollides
+}
 
 // TmuxUnavailableError is the one mapping of a "tmux unavailable" call
 // failure, the binary not run or the socket "Permission denied" reply, to
@@ -106,7 +130,7 @@ func (e *SocketDeniedError) Is(target error) bool {
 // followed by the opted-in retry (explicitIDTimeoutRetry, b.1qq). No
 // description carries a label value, a token, another row's id or a
 // session-environment value.
-func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis int64, minted bool) error {
+func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis int64, minted bool, agent string) error {
 	switch o.Kind {
 	case CreateLabelled, CreateLostReply:
 		return nil
@@ -117,9 +141,10 @@ func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis
 			Socket:                req.Socket,
 			Token:                 req.Token,
 			LaunchStartedAtMillis: launchStartMillis,
+			Agent:                 agent,
 		}
 	case CreateUnresponsive:
-		retry := explicitIDTimeoutRetry
+		retry := explicitIDTimeoutRetry(agent)
 		if minted {
 			retry = LaunchRetryRule
 		}
@@ -158,6 +183,9 @@ type HeldNameError struct {
 	// LaunchStartedAtMillis is the launch start the insert recorded (the
 	// row's launch_started_at), in milliseconds.
 	LaunchStartedAtMillis int64
+	// Agent is the new row's agent (the spawn's resolved agent), which the
+	// held-name retry advice names (SR-4.4).
+	Agent string
 }
 
 // Error says the create found the name held; it names the requested name and

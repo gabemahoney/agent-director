@@ -76,10 +76,13 @@ func (f *spawnFix) spawn(id string, reuse bool) (string, error) {
 }
 
 // spawnWith runs a spawn of p without pre-trust, in f.CWD unless p names a
-// cwd, and returns the spawned id.
+// cwd and with agent claude unless p names an agent, and returns the spawned id.
 func (f *spawnFix) spawnWith(p api.SpawnParams) (string, error) {
 	if p.CWD == "" {
 		p.CWD = f.CWD
+	}
+	if p.Agent == "" {
+		p.Agent = "claude"
 	}
 	p.NoPreTrust = true
 	res, err := f.API.Spawn(p)
