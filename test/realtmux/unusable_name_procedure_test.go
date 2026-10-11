@@ -16,7 +16,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// The README "Operator actions" item "A row whose recorded name cannot be
+// The docs/operator-actions.md item "A row whose recorded name cannot be
 // used" on real tmux (SRD SR-18.17 steps 2-5, SR-20.7 last bullet, Appendix
 // E.10 N6; PRD AC-DOC-18): tmux's rewriting of '.', ':' and invalid UTF-8 in
 // a new session's name, and the procedure's by-id tmux steps followed by
@@ -87,11 +87,11 @@ type procCandidate struct {
 	Ended bool
 }
 
-// procedureRemove runs the README steps 2 to 5 for row (recorded name n) by
+// procedureRemove runs the docs/operator-actions.md steps 2 to 5 for row (recorded name n) by
 // session id only: it ends each candidate whose label, or with no label
 // whose environment, names row's id, checks it left the listing, then
 // deletes the row through adminapi.Delete and checks it left the store.
-// Later README procedure tests run their steps with it, never their own copy.
+// Later operator-actions procedure tests run their steps with it, never their own copy.
 func (f *killFix) procedureRemove(t *testing.T, row tmux.Launch, n tmuxfix.StoredName) []procCandidate {
 	t.Helper()
 	var cands []procCandidate

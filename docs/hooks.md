@@ -17,7 +17,7 @@ is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
 "args": ["hook"]}` — so Claude Code starts `agent-director hook`
 directly, with no shell in between, and feeds it the payload JSON on
 stdin. The hook's parent process is therefore the Claude process that
-fired it. The README states the minimum supported Claude Code version.
+fired it. install.md states the minimum supported Claude Code version.
 
 A Claude Code version older than that ignores `args` and runs the bare
 binary through `/bin/sh`, so each hook reaches agent-director with no
@@ -270,7 +270,7 @@ launch: it may sit at a startup screen or idle at its prompt. To act on
 it, the caller reads the pane (`read-pane`), then types (`send-keys`
 with `allow_pending`, `--allow-pending` on the CLI); only a caller that
 looked should type. A caller that cannot judge the pane ends the launch
-with the live-row sequence of the README's "Caller contract" (`kill`,
+with the live-row sequence of caller-contract.md (`kill`,
 then `find-missing`) or hands it to a human. `send-keys` still refuses a
 `pending` row without `allow_pending`, noted or not.
 

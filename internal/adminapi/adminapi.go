@@ -120,7 +120,7 @@ var Verbs = []Verb{
 			"A live row (pending included) is refused with ErrSpawnNotResumable, with no lookup; an unknown id is ErrSpawnNotFound. " +
 			"These refusals send no kill and change nothing: ErrInternal (unusable recorded tmux session name), ErrTmuxUnresponsive (still stopping or still starting: wait and run it again; or tmux did not answer usably), ErrTmuxSessionConflict (never reported in, or conflicting labels), ErrTmuxNotAvailable. " +
 			"ErrTmuxKillFailed means the agent process still runs: retry later. After a sent kill, ErrTmuxUnresponsive or ErrTmuxNotAvailable means the kill may or may not have taken effect: check again later. " +
-			"\"A finished row's own old session\" under \"Operator actions\" in the agent-director README describes every case. " +
+			"\"A finished row's own old session\" in agent-director's docs/operator-actions.md describes every case. " +
 			"Its ad.kill.called trail record carries include_finished true. " + sameUserText + " " + errorsText,
 		Flags: []Flag{
 			{Name: idFlagName, Description: "Id of the finished row. Required."},

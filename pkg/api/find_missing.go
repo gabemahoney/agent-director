@@ -696,7 +696,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // its own (tmux_session_name_empty, tmux_session_name_control_char or
 // tmux_session_name_rewritten, the first fault in that order), with no tmux
 // call; removing such a row is a human's decision (see "Operator actions" in
-// the agent-director README).
+// agent-director's docs/operator-actions.md).
 //
 // Every other row whose process cannot be checked is looked up in tmux: one
 // lookup of its recorded socket, else the caller's, shared by every row of
@@ -707,7 +707,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // no pane carries it); a session left from an earlier life, or no session of
 // its current launch, marks it missing whatever holds its name, and a
 // session holding its recorded name is named in the trail and never touched
-// (see "Operator actions" in the agent-director README); an answer that
+// (see "Operator actions" in agent-director's docs/operator-actions.md); an answer that
 // cannot be used, or no answer, leaves it unverified with a liveness note.
 // After an unreadable or unavailable answer on a socket, no more tmux calls
 // are made on that socket, and the run's tmux time (sweep_budget_seconds

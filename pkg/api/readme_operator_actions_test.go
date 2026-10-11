@@ -1,11 +1,11 @@
 package api_test
 
-// readme_operator_actions_test.go checks the README's "Operator actions"
+// readme_operator_actions_test.go checks docs/operator-actions.md's
 // removal procedure for a row whose recorded name cannot be used gives its
 // five steps in order, and that every tmux command in the section targets a
 // session or pane by id (SR-18.17, SR-20.6), on readme_sections_test.go's
 // shared mdDoc parser. Its extractors and checkSteps serve every later
-// README procedure check.
+// operator-actions procedure check.
 
 import (
 	"fmt"
@@ -31,7 +31,7 @@ var (
 	stepRe      = regexp.MustCompile(`^(\d+)\.[ \t]`)
 )
 
-// tmuxCmd is one tmux command of the README: its 1-based line, its words
+// tmuxCmd is one tmux command of a doc: its 1-based line, its words
 // joined by single spaces, its subcommand and the words after it.
 type tmuxCmd struct {
 	line int
@@ -99,7 +99,7 @@ func (c tmuxCmd) hasFlag(f byte) bool {
 	})
 }
 
-// tmuxCommands collects the tmux commands of lines (README lines from index
+// tmuxCommands collects the tmux commands of lines (doc lines from index
 // first on), in line order: each fenced-block line and each inline code span.
 func tmuxCommands(lines []string, first int) []tmuxCmd {
 	var cmds []tmuxCmd
@@ -137,7 +137,7 @@ type procStep struct {
 
 func (s procStep) text() string { return normalised(strings.Join(s.lines, " ")) }
 
-// numberedSteps splits lines (README lines from index first on) into their
+// numberedSteps splits lines (doc lines from index first on) into their
 // top-level numbered steps; the list ends at an unindented non-step line.
 func numberedSteps(lines []string, first int) []procStep {
 	var steps []procStep
@@ -216,7 +216,7 @@ func operatorActionsItem(t *testing.T, d mdDoc, title string) mdHeading {
 // procedure gives SR-18.17's five steps in order, each with its content.
 func TestReadmeOperatorActionsUnusableNameSteps(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	from, to := sectionLines(d, operatorActionsItem(t, d, unusableNameItemTitle))
 	checkSteps(t, d, unusableNameItemTitle, numberedSteps(d.lines[from:to], from), unusableNameSteps())
 }
@@ -268,7 +268,7 @@ func checkSteps(t *testing.T, d mdDoc, item string, steps []procStep, want []ste
 // "Operator actions" is a session-id or pane-id placeholder, never a name.
 func TestReadmeOperatorActionsTargetsByID(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	from, to := sectionLines(d, operatorActions(t, d))
 	cmds := tmuxCommands(d.lines[from:to], from)
 	targeted := 0

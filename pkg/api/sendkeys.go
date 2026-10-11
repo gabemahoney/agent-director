@@ -547,7 +547,7 @@ func isInteractiveState(state string) bool {
 // cannot be used (it is empty, contains a control character, or contains a
 // character tmux stores differently) gets ErrInternal (an error matching no
 // catalogued sentinel) with no tmux call; removing the row is a human's
-// decision (see "Operator actions" in the agent-director README).
+// decision (see "Operator actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director send-keys
 //

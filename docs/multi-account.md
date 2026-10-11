@@ -96,7 +96,7 @@ from the persisted row … including CLAUDE_CONFIG_DIR and any auth vars").
 That means the auth token sits at rest in `~/.agent-director/state.db`;
 the store file is forced `0600` in a `0700` directory on every open, so
 it is readable only by the owner. (See also the secrets-at-rest caveat
-in the README's Configuration section.)
+in configuration.md.)
 
 **Caveat — templates persist `extra_env` as plaintext TOML.** Both
 paths now put auth vars on disk; the difference is *where*. Per-spawn

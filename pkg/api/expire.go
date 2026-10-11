@@ -461,7 +461,7 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // process check or tmux call, with reason empty_session_name,
 // control_char_session_name or rewritten_session_name (the first fault in
 // that order); removing it is a human's decision (see "Operator actions" in
-// the agent-director README).
+// agent-director's docs/operator-actions.md).
 //
 // For every other row, expire reads tmux to decide. A selected row whose
 // recorded agent process still runs is kept with no tmux call; otherwise one

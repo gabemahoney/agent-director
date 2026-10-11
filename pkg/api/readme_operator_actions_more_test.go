@@ -1,6 +1,6 @@
 package api_test
 
-// readme_operator_actions_more_test.go checks the README's "Operator actions"
+// readme_operator_actions_more_test.go checks docs/operator-actions.md's
 // items for stopping a set of agents and an install outside the caller's
 // switch-over (AC-DOC-19, SR-18.17), and "This store's id" with the items that
 // point to it (SR-5.4), on readme_operator_actions_test.go's helpers.
@@ -27,7 +27,7 @@ const (
 )
 
 // storeIDBusyTimeoutPlaceholder stands in storeIDCommand for the operator's
-// [store] busy_timeout_ms, which the README names instead of a literal
+// [store] busy_timeout_ms, which the doc names instead of a literal
 // (b.c7f); the run of the line substitutes it.
 const storeIDBusyTimeoutPlaceholder = "<busy_timeout_ms>"
 
@@ -117,7 +117,7 @@ func acDoc19Items() []acDocItem {
 					{sub: "list-sessions", want: []string{socket, "-F", "#{session_id}", "#{session_name}"}},
 				}},
 				{"pause, else kill and the live-row sequence", []string{"agent-director pause --claude-instance-id <id>",
-					"`agent-director kill`", "live-row sequence", "(#caller-contract)",
+					"`agent-director kill`", "live-row sequence", "(caller-contract.md)",
 					"agent-director status --claude-instance-id <id>", "Never delete a row"}, nil},
 				{"hand the rest to the other items", []string{"items of this section",
 					quoted(agentProcessItemTitle), quoted(leftoverItemTitle), quoted(pendingItemTitle)}, nil},
@@ -145,7 +145,7 @@ func acDoc19Items() []acDocItem {
 					{"stop the set with this release's binary", []string{quoted(stoppingItemTitle), "this release's binary", "Forward step 2"}, nil},
 					{"stop long-running processes", []string{"Stop every long-running agent-director process"}, nil},
 					{"restore the store, then the previous binary", []string{"Restore the store, then the previous binary",
-						"`state.db`", "`-wal`", "`-shm`", "(docs/migration-guide.md#v5--v4-reverses-migratev4tov5)"}, nil},
+						"`state.db`", "`-wal`", "`-shm`", "(migration-guide.md#v5--v4-reverses-migratev4tov5)"}, nil},
 					{"start the caller's old version", []string{"Start the caller's old version"}, nil},
 					{"later, the switch-over runbook", []string{"switch-over runbook from its start"}, nil},
 				}},
@@ -158,7 +158,7 @@ func acDoc19Items() []acDocItem {
 // once each, in order after the pending-row item, with their content.
 func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	prev := operatorActionsItem(t, d, pendingItemTitle)
 	for _, it := range acDoc19Items() {
 		h := operatorActionsItem(t, d, it.title)
@@ -222,7 +222,7 @@ func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 		knownSeen = knownSeen || strings.Contains(text, fold(apitest.OperatorActionsTitle))
 		for _, title := range []string{stoppingItemTitle, switchOverItemTitle} {
 			if strings.Contains(text, fold(title)) {
-				t.Errorf("%s names the README item %q; only the README's %q may", source, title, apitest.OperatorActionsTitle)
+				t.Errorf("%s names the operator-actions item %q; only %s may", source, title, mdOperatorActions)
 			}
 		}
 	}
@@ -240,7 +240,7 @@ func TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible(t *testing.T) {
 // read-only sqlite3 lookup, once, with its facts.
 func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	if cmds := storeIDItemCommands(t, d); len(cmds) != 1 || normalised(cmds[0]) != storeIDCommand {
 		t.Errorf("%s %q gives sqlite3 commands %q; want exactly %q", d.path, storeIDItemTitle, cmds, storeIDCommand)
 	}
@@ -258,7 +258,7 @@ func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 // store's id links to "This store's id" beside the trail record's store_id.
 func TestReadmeOperatorActionsStoreIDPointers(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	link := fmt.Sprintf("[%s](#%s)", storeIDItemTitle, mdAnchor(storeIDItemTitle))
 	for _, c := range []struct {
 		item string

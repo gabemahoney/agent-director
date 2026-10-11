@@ -257,7 +257,7 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 // empty, contains a control character, or contains a character tmux stores
 // differently) gets ErrInternal (an error matching no catalogued sentinel)
 // with no tmux call; removing the row is a human's decision (see "Operator
-// actions" in the agent-director README).
+// actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director read-pane
 //

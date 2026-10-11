@@ -64,16 +64,20 @@ type DescSession struct {
 	ID   string
 }
 
-// OperatorActionsTitle is the title of the agent-director README section the
+// OperatorActionsTitle is the title of OperatorActionsDoc, which the
 // "Operator actions" pointer names (SR-18.17): the one definition that
-// PointsToOperatorActions and the README section check both read.
+// PointsToOperatorActions and the doc section check both read.
 const OperatorActionsTitle = "Operator actions"
 
-// PointsToOperatorActions returns c also requiring the pointer to the
-// OperatorActionsTitle section of the agent-director README (SR-1.4,
-// SR-18.17), quoted by its title.
+// OperatorActionsDoc is the repo path of the operator-actions doc the
+// pointer names.
+const OperatorActionsDoc = "docs/operator-actions.md"
+
+// PointsToOperatorActions returns c also requiring the pointer to
+// OperatorActionsDoc (SR-1.4, SR-18.17). Error descriptions also quote its
+// title; the manifest texts, which help prints, name the path alone.
 func (c DescCase) PointsToOperatorActions() DescCase {
-	c.Require = append(append([]string(nil), c.Require...), strconv.Quote(OperatorActionsTitle), "agent-director README")
+	c.Require = append(append([]string(nil), c.Require...), OperatorActionsDoc)
 	return c
 }
 
@@ -103,7 +107,7 @@ var OperatorActionNames = regexp.MustCompile(`(?i)include.?finished|kill.?finish
 // agent-visible text from telling an agent to run a tmux command: "tmux
 // attach" matches as whole words only, so "tmux session" and "tmux
 // attached" pass. The by-hand attach command of ad.launch.name_held (a trail
-// read by humans) and the README's "Operator actions" are not checked here.
+// read by humans) and docs/operator-actions.md are not checked here.
 var (
 	tmuxEndingForms = []form{
 		{"the tmux command kill-session", regexp.MustCompile(`(?i)\bkill-session\b`)},
@@ -543,7 +547,7 @@ func DescSpawnScanRefusal() DescCase {
 		Name: "spawn manifest, label scan refusal",
 		Require: []string{
 			"ErrTmuxSessionConflict", "CONFLICT", scanLeftoverWord,
-			strconv.Quote(OperatorActionsTitle), "nothing is written",
+			OperatorActionsDoc, "nothing is written",
 		},
 		MustNot: rowEndedStatements,
 	}

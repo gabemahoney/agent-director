@@ -602,7 +602,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	}
 	id := row.ClaudeInstanceID
 	if hasControlChar(id) {
-		return ResumeResult{}, errors.New(`resume: the instance id contains a control character, so its session cannot be labelled; removing the row is a human's decision, see "Operator actions" in the agent-director README; no tmux call was made and nothing was written`)
+		return ResumeResult{}, errors.New(`resume: the instance id contains a control character, so its session cannot be labelled; removing the row is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md; no tmux call was made and nothing was written`)
 	}
 
 	socket, err := spawn.ResolveRowLaunchSocket(row.Identity.Socket)
@@ -775,7 +775,7 @@ func launchInProgressError(row Spawn) error {
 // ErrTmuxSessionConflict naming it as this id's own abandoned launch, which
 // agent-director ends only through its operator tool, so ending it is a
 // human's decision. ErrTmuxSessionConflict is CONFLICT and lasts
-// until a human looks (see "Operator actions" in the agent-director README). A
+// until a human looks (see "Operator actions" in agent-director's docs/operator-actions.md). A
 // tmux server other than the one the agent was launched on, or tmux that
 // cannot be run, gives ErrTmuxNotAvailable (ENVIRONMENT), and an answer that
 // cannot be read ErrTmuxUnresponsive. A refusal before the move to pending
@@ -832,7 +832,7 @@ func launchInProgressError(row Spawn) error {
 // empty, contains a control character, or contains a character tmux stores
 // differently) gets ErrInternal (an error matching no catalogued sentinel)
 // with no tmux call, and nothing is written; removing the row is a human's
-// decision (see "Operator actions" in the agent-director README).
+// decision (see "Operator actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director resume
 //
@@ -904,7 +904,7 @@ func launchInProgressError(row Spawn) error {
 //     at the re-lookup, this is not the agent's tmux server), followed by the
 //     restore.
 //   - [ErrTmuxSessionConflict]: CONFLICT, until a human looks (see
-//     "Operator actions" in the agent-director README). At the pre-launch
+//     "Operator actions" in agent-director's docs/operator-actions.md). At the pre-launch
 //     lookup, before anything is written and with no session touched, a
 //     session holds the recorded name (another row's agent, another
 //     agent-director store's agent, which must not be ended, or a session with

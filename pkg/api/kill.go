@@ -523,19 +523,19 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionID
 // it: a retried call checks only the agent process, so once the agent is gone
 // it succeeds with KillSent false whether or not that process still runs. A
 // retry's success means only that the agent is gone; the named process needs
-// a human (see "Operator actions" in the agent-director README). If the row
+// a human (see "Operator actions" in agent-director's docs/operator-actions.md). If the row
 // finishes while Kill waits and the agent outlives the wait, Kill returns
 // ErrTmuxKillFailed, and a retried call is a finished-row no-op.
 //
 // Error classes: ErrTmuxKillFailed and ErrTmuxUnresponsive are UNAVAILABLE
 // (retry later), ErrTmuxSessionConflict is CONFLICT (permanent until a human
-// looks; see "Operator actions" in the agent-director README) and
+// looks; see "Operator actions" in agent-director's docs/operator-actions.md) and
 // ErrTmuxNotAvailable is ENVIRONMENT; for Kill, GONE is success. A repeated
 // Kill right after the last session on its tmux server ends can get
 // ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the
 // caller waits and checks again. None of these errors means that the agent is
-// dead. The live-row sequence in the agent-director README's caller-contract
-// summary says what a caller does next.
+// dead. The live-row sequence in "Caller contract" in agent-director's
+// docs/caller-contract.md says what a caller does next.
 //
 // The caller must run as the same user and in the same tmux environment as
 // the agents. Two consequences: Kill's success on a finished row is not
@@ -547,7 +547,7 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, agentPID int, sessionID
 // contains a control character, or contains a character tmux stores
 // differently) gets ErrInternal (an error matching no catalogued sentinel)
 // with no tmux call; removing the row is a human's decision (see "Operator
-// actions" in the agent-director README).
+// actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director kill
 //

@@ -118,7 +118,7 @@ second store. Put that Spawn's config in
 `/path/to/alt-home/.agent-director/config.toml`. Run every later call on
 that store the same way. Manage that store's agents only with that
 store's own agent-director (see
-[A session of another agent-director store](../README.md#a-session-of-another-agent-director-store)).
+[A session of another agent-director store](operator-actions.md#a-session-of-another-agent-director-store)).
 Claude Code in the new pane runs under the alternate `HOME` too, so it
 reads its user files there: the user tier above is the alternate
 `HOME`'s `~/.claude/settings.json`, and the alternate `HOME` needs

@@ -281,7 +281,7 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // contains a control character, or contains a character tmux stores
 // differently) gets ErrInternal (an error matching no catalogued sentinel)
 // with no tmux call and no wait; removing the row is a human's decision (see
-// "Operator actions" in the agent-director README).
+// "Operator actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director pause
 //

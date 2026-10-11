@@ -193,7 +193,7 @@ func hasControlChar(id string) bool {
 // tmux lookup for a session of this agent-director store still labelled with
 // that id. One left over from an earlier life refuses the spawn with
 // ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the
-// README's "Operator actions"), and nothing is written. A minted id is not
+// docs/operator-actions.md), and nothing is written. A minted id is not
 // looked up.
 //
 // If the requested tmux session name is already held when the session is
@@ -206,7 +206,7 @@ func hasControlChar(id string) bool {
 // session is never ended, read or typed into. A session of another row, or
 // of another agent-director store, is another agent and must not be ended; a
 // session left over from an earlier life of this id, or one with no valid
-// instance id, is for a human to end (README "Operator actions"), after
+// instance id, is for a human to end (docs/operator-actions.md), after
 // which the id is spawned again with ReuseFinished (reuse_finished over MCP,
 // --reuse-finished on the CLI).
 //
@@ -214,8 +214,8 @@ func hasControlChar(id string) bool {
 // be used (it is empty, contains a control character, or contains a
 // character tmux stores differently) gets ErrInternal (an error matching no
 // catalogued sentinel) with no tmux call, and nothing is changed; removing
-// the row is a human's decision (see "Operator actions" in the agent-director
-// README).
+// the row is a human's decision (see "Operator actions" in agent-director's
+// docs/operator-actions.md).
 //
 // CLI: agent-director spawn
 //
@@ -306,7 +306,7 @@ func hasControlChar(id string) bool {
 //   - ErrTmuxSessionConflict: with an explicit ClaudeInstanceID that has no
 //     row, the label scan found a session of an earlier life of that id,
 //     labelled by this store, or conflicting labels; nothing was written, and
-//     a human must look (README "Operator actions"). Also, after "duplicate
+//     a human must look (docs/operator-actions.md). Also, after "duplicate
 //     session", the requested name is held by a session left over from an
 //     earlier life of this id, by another row's session (a different
 //     instance id), by a session of another agent-director store, or by one
@@ -322,8 +322,8 @@ func hasControlChar(id string) bool {
 //     "duplicate session", the same cases for the session holding the
 //     requested name, then the row is restored. For a leftover, this row's
 //     own old session, this id's own abandoned launch, conflicting labels or
-//     a session with no valid instance id, a human must look (README
-//     "Operator actions"); another row's or another agent-director store's
+//     a session with no valid instance id, a human must look
+//     (docs/operator-actions.md); another row's or another agent-director store's
 //     session is another agent and must not be ended.
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed, or it

@@ -86,7 +86,7 @@
 //     forbid values. AssertAgentText is the forbidden-only check for
 //     manifest-like texts (the same session-ending, attach and opt-in forms,
 //     so no agent-visible text tells an agent to run a tmux command; the
-//     ad.launch.name_held trail and the README's "Operator actions" are not
+//     ad.launch.name_held trail and docs/operator-actions.md are not
 //     checked); AssertAgentTextCase adds
 //     a DescCase's phrases for a rule such a text must state (for example
 //     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). AssertMustNot checks

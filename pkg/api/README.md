@@ -130,7 +130,7 @@ a session of another agent-director store, or one with no valid instance
 id, or the labels conflict; the new row is ended and the error names the
 blocking session. Another row's or another store's session is another
 agent and is never ended; the other cases need a human, see "Operator
-actions" in the [top-level README](../../README.md#operator-actions)).
+actions" in [docs/operator-actions.md](../../docs/operator-actions.md)).
 After "duplicate session" the new row is ended too when the holding
 session is gone by the re-lookup (`ErrTmuxSessionCreate`), the re-lookup
 cannot be read (`ErrTmuxUnresponsive`), or tmux cannot be run or the
@@ -441,7 +441,7 @@ Errors (check them with `errors.Is` against the exported sentinels):
 | `ErrSpawnNotFound` | — | No row has this id |
 | `ErrTmuxKillFailed` | UNAVAILABLE | The agent process, or another process of the session's panes, still ran after the kill exit wait; or it cannot be checked and its labelled session is still there; or no session or pane of this launch was found while it runs. Retry later; never delete the row |
 | `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably, before or after a kill was sent. Retry later with backoff |
-| `ErrTmuxSessionConflict` | CONFLICT | The session found is not this launch's session, or tmux holds conflicting labels; no kill was sent. A human must look: see "Operator actions" in the [top-level README](../../README.md#operator-actions) |
+| `ErrTmuxSessionConflict` | CONFLICT | The session found is not this launch's session, or tmux holds conflicting labels; no kill was sent. A human must look: see "Operator actions" in [docs/operator-actions.md](../../docs/operator-actions.md) |
 | `ErrTmuxNotAvailable` | ENVIRONMENT | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on |
 
 A live row whose recorded tmux session name cannot be used (empty, with a
@@ -467,8 +467,8 @@ case errors.Is(err, api.ErrTmuxSessionConflict):
 
 The caller must run as the same user and in the same tmux environment as
 the agents. What to do next with a stuck live row is the live-row sequence
-in the top-level README's
-[Caller contract](../../README.md#caller-contract). See `(*Client).Kill`
+in
+[Caller contract](../../docs/caller-contract.md#caller-contract). See `(*Client).Kill`
 godoc.
 
 ---

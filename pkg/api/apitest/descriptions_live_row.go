@@ -86,7 +86,7 @@ func liveRowSteps() []liveRowStep {
 // about 5 s" and a last find-missing; (5) a human; (6) resume or spawn with
 // the reuse opt-in in its one spelling (reuseOptInSpelling, b.c4u), and a
 // caller whose ids agent-director mints spawns fresh.
-// It must not carry the rationale the README keeps ("history belongs to a
+// It must not carry the rationale docs/caller-contract.md keeps ("history belongs to a
 // life", "unreachable for good", SR/OFR citations), the long form's or the
 // pointer's opening, or the pointer. Check it with AssertAgentTextCase.
 func DescLiveRowSequence() DescCase {

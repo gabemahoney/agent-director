@@ -10,7 +10,7 @@ import (
 
 // unusableNameConsequence ends every unusable-name description (SR-1.4): the
 // name cannot be used, removing the row is a human's decision with the
-// pointer to the README's "Operator actions" (SR-18.17), and no tmux call was
+// pointer to "Operator actions" in docs/operator-actions.md (SR-18.17), and no tmux call was
 // made.
 const unusableNameConsequence = "the name cannot be used, so removing the row is a human's decision, " + operatorActionsPointer + "; no tmux call was made"
 
