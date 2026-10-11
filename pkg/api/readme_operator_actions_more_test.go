@@ -2,8 +2,8 @@ package api_test
 
 // readme_operator_actions_more_test.go checks docs/operator-actions.md's
 // items for stopping a set of agents and an install outside the caller's
-// switch-over (AC-DOC-19, SR-18.17), and "This store's id" with the items that
-// point to it (SR-5.4), on readme_operator_actions_test.go's helpers.
+// switch-over (AC-DOC-19, SR-18.17), and "This store's id" with the places
+// that point to it (SR-5.4), on readme_operator_actions_test.go's helpers.
 
 import (
 	"fmt"
@@ -12,18 +12,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // Item titles of "Operator actions" that the checks below find or name.
 const (
-	stoppingItemTitle     = "Stopping a set of agents before a binary change"
-	switchOverItemTitle   = "agent-director was installed outside the caller's switch-over"
-	storeIDItemTitle      = "This store's id"
-	leftoverItemTitle     = "A leftover, or a session with no valid label, or one that never reported in on a finished row"
-	pendingItemTitle      = "A `pending` row with no launch start or token"
-	agentProcessItemTitle = "An agent process that runs with no session or pane of its launch"
+	stoppingItemTitle   = "Stopping a set of agents before a binary change"
+	switchOverItemTitle = "agent-director was installed outside the caller's switch-over"
+	storeIDItemTitle    = "This store's id"
+	pendingItemTitle    = "A `pending` row with no launch start or token"
 )
 
 // storeIDBusyTimeoutPlaceholder stands in storeIDCommand for the operator's
@@ -54,37 +51,12 @@ func storeIDItemCommands(t *testing.T, d mdDoc) []string {
 	return cmds
 }
 
-// liveStateForms is the two accepted ways a step names the live states: every
-// live state, or every state but the terminal ones (store.IsLiveState splits
-// the state constants).
-func liveStateForms() [][]string {
-	var live, terminal []string
-	for _, s := range []string{store.StatePending, store.StateWaiting, store.StateWorking,
-		store.StateAskUser, store.StateCheckPermission, store.StateEnded, store.StateMissing} {
-		if store.IsLiveState(s) {
-			live = append(live, "`"+s+"`")
-		} else {
-			terminal = append(terminal, "`"+s+"`")
-		}
-	}
-	return [][]string{live, {"any state but " + strings.Join(terminal, " and ")}}
-}
-
-// stepForms requires step (1 on) to hold every string of at least one form.
-type stepForms struct {
-	step  int
-	name  string
-	forms [][]string
-}
-
 // itemProcedure is an item's numbered list, named name: the first list after
-// the item's first line that starts with lead ("" for the item's first
-// list). Each of forms is checked beside the steps.
+// the item's first line that starts with lead ("" for the item's first list).
 type itemProcedure struct {
 	name  string
 	lead  string
 	steps []stepSpec
-	forms []stepForms
 }
 
 // acDocItem is an AC-DOC-19 item: statements anywhere in it, the items it
@@ -100,54 +72,39 @@ func quoted(title string) string { return `"` + title + `"` }
 
 // acDoc19Items is SR-18.17's two items in order, with their content.
 func acDoc19Items() []acDocItem {
-	socket := "tmux -u -S '<socket>'"
 	list := "agent-director list --label <key>=<value>"
 	return []acDocItem{
 		{
 			title: stoppingItemTitle,
-			prose: []string{"in this order", "Never delete, hand-edit or migrate `state.db`", "never delete a row"},
-			refs:  []string{agentProcessItemTitle, leftoverItemTitle, pendingItemTitle},
-			procs: []itemProcedure{{name: "procedure", forms: []stepForms{{3, "live states", liveStateForms()}}, steps: []stepSpec{
-				{"stop what starts agents", []string{"Stop whatever starts agents first", "schedulers", "cron jobs"}, nil},
-				{"choose a binary by the schema refusal", []string{"Use a binary that opens the store", list,
-					"`ErrSchemaMismatch`", "the binary that wrote the store", "`ErrSchemaMigrationRequired`",
-					"use the previous binary", "Keep a copy of the previous binary", "`ErrConfigMalformed`"}, nil},
-				{"note the live rows", []string{"Note every row of the set"}, nil},
-				{"a pre-release binary's prefix check", []string{"before this release", "prefix match", "(step 6)"}, []cmdShape{
-					{sub: "list-sessions", want: []string{socket, "-F", "#{session_id}", "#{session_name}"}},
-				}},
+			prose: []string{"in this order", "Never delete a row or edit `state.db`"},
+			procs: []itemProcedure{{name: "procedure", steps: []stepSpec{
+				{"stop what starts agents", []string{"Stop whatever starts agents", "schedulers", "cron jobs"}, nil},
+				{"list the set, choose a binary by the schema refusal", []string{list,
+					"`ErrSchemaMismatch`", "use the binary that wrote it", "`ErrSchemaMigrationRequired`",
+					"use the previous binary", "`ErrConfigMalformed`"}, nil},
 				{"pause, else kill and the live-row sequence", []string{"agent-director pause --claude-instance-id <id>",
-					"`agent-director kill`", "live-row sequence", "(caller-contract.md)",
-					"agent-director status --claude-instance-id <id>", "Never delete a row"}, nil},
-				{"hand the rest to the other items", []string{"items of this section",
-					quoted(agentProcessItemTitle), quoted(leftoverItemTitle), quoted(pendingItemTitle)}, nil},
-				{"confirm, then stop every serve", []string{"no live row of the set", list,
-					"Then stop every other long-running agent-director process", "`agent-director serve`", "change the binary"}, []cmdShape{
-					{sub: "list-sessions", want: []string{socket, "-F", "#{session_id}", "#{session_created}", "#{session_name}"}},
-				}},
+					"`waiting` row", "`agent-director kill`", "steps 1 to 5 of the live-row sequence", "(caller-contract.md)"}, nil},
+				{"hand the rest to the other items, then stop every serve", []string{"items above", "list the set again (step 2)",
+					"(step 1 of " + quoted(inspectBlockTitle) + ")",
+					"`serve`", "change the binary"}, nil},
 			}}},
 		},
 		{
 			title: switchOverItemTitle,
-			prose: []string{"step 1 of " + quoted(stoppingItemTitle), "Never delete those rows"},
+			prose: []string{"step 1 of " + quoted(stoppingItemTitle)},
 			refs:  []string{stoppingItemTitle, pendingItemTitle},
 			procs: []itemProcedure{
 				{name: "Forward", lead: "**Forward**", steps: []stepSpec{
-					{"find the rows from before the install", []string{"`tmux_socket`", "`launch_started_at`",
-						list, "agent-director get --claude-instance-id <id>"}, nil},
-					{"end each live one's agent by its session id", []string{"by its session id", quoted(pendingItemTitle),
-						"`pause` never end such a row's session"}, nil},
-					{"restart long-running processes", []string{"Restart every long-running agent-director process", "`agent-director serve`"}, nil},
-					{"find-missing", []string{"`agent-director find-missing`"}, nil},
-					{"deploy the caller's version", []string{"Deploy the caller's version", "`resume`", "`--reuse-finished`"}, nil},
+					{"end the agent of each live pre-upgrade row", []string{"`get`", "no `tmux_socket`", "no `launch_started_at`",
+						quoted(pendingItemTitle), "`agent-director find-missing`"}, nil},
+					{"deploy the caller's version", []string{"Deploy the caller's version", "never delete them"}, nil},
 				}},
 				{name: "Back", lead: "**Back**", steps: []stepSpec{
-					{"stop the set with this release's binary", []string{quoted(stoppingItemTitle), "this release's binary", "Forward step 2"}, nil},
-					{"stop long-running processes", []string{"Stop every long-running agent-director process"}, nil},
-					{"restore the store, then the previous binary", []string{"Restore the store, then the previous binary",
-						"`state.db`", "`-wal`", "`-shm`", "(migration-guide.md#v5--v4-reverses-migratev4tov5)"}, nil},
-					{"start the caller's old version", []string{"Start the caller's old version"}, nil},
-					{"later, the switch-over runbook", []string{"switch-over runbook from its start"}, nil},
+					{"stop the set and every serve", []string{quoted(stoppingItemTitle), "stop every agent of the set and every `serve`"}, nil},
+					{"restore the store or downgrade, then the previous binary", []string{"Put back the pre-upgrade copy of `state.db`",
+						"`-wal`", "`-shm`", "(migration-guide.md#v6--v5-reverses-migratev5tov6)",
+						"(migration-guide.md#v5--v4-reverses-migratev4tov5)", "Install the previous binary",
+						"start the caller's old version"}, nil},
 				}},
 			},
 		},
@@ -191,20 +148,6 @@ func TestReadmeOperatorActionsACDOC19Items(t *testing.T) {
 					}
 					steps := numberedSteps(lines[at:], from+at)
 					checkSteps(t, d, it.title, steps, p.steps)
-					for _, f := range p.forms {
-						t.Run(fmt.Sprintf("step %d %s", f.step, f.name), func(t *testing.T) {
-							if f.step > len(steps) {
-								t.Fatalf("%s %q: step %d (%s) is missing", d.path, it.title, f.step, f.name)
-							}
-							text := steps[f.step-1].text()
-							if !slices.ContainsFunc(f.forms, func(form []string) bool {
-								return !slices.ContainsFunc(form, func(s string) bool { return !strings.Contains(text, s) })
-							}) {
-								t.Errorf("%s:%d: step %d (%s) holds none of these forms in full: %q; its text: %s",
-									d.path, steps[f.step-1].first+1, f.step, f.name, f.forms, text)
-							}
-						})
-					}
 				})
 			}
 		})
@@ -245,17 +188,16 @@ func TestReadmeOperatorActionsStoreIDCommand(t *testing.T) {
 		t.Errorf("%s %q gives sqlite3 commands %q; want exactly %q", d.path, storeIDItemTitle, cmds, storeIDCommand)
 	}
 	text := normalised(d.body(operatorActionsItem(t, d, storeIDItemTitle)))
-	for _, want := range []string{"agents' user", "16 lowercase hexadecimal characters", "changes nothing",
-		"`db_path`", "prerequisite of `install.sh`", "`ad.launch.name_held`",
-		"Replace `" + storeIDBusyTimeoutPlaceholder + "` with your config's `[store] busy_timeout_ms`"} {
+	for _, want := range []string{"`store_id`", "16 hexadecimal characters", "`db_path`",
+		"with `" + storeIDBusyTimeoutPlaceholder + "` set to your `[store] busy_timeout_ms`"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%s %q lacks %q", d.path, storeIDItemTitle, want)
 		}
 	}
 }
 
-// TestReadmeOperatorActionsStoreIDPointers checks each item that needs this
-// store's id links to "This store's id" beside the trail record's store_id.
+// TestReadmeOperatorActionsStoreIDPointers checks each place that compares a
+// session label's store id with this store's links to "This store's id".
 func TestReadmeOperatorActionsStoreIDPointers(t *testing.T) {
 	t.Parallel()
 	d := readMD(t, mdOperatorActions)
@@ -264,9 +206,8 @@ func TestReadmeOperatorActionsStoreIDPointers(t *testing.T) {
 		item string
 		step int // 0: anywhere in the item
 	}{
-		{leftoverItemTitle, 2},
+		{inspectBlockTitle, 0},
 		{unusableNameItemTitle, 3},
-		{`A spawn refused as "left over from an earlier life"`, 0},
 		{"A session of another agent-director store", 0},
 	} {
 		t.Run(fmt.Sprintf("%s step %d", c.item, c.step), func(t *testing.T) {
@@ -277,11 +218,24 @@ func TestReadmeOperatorActionsStoreIDPointers(t *testing.T) {
 			} else if c.step > 0 {
 				text = steps[c.step-1].text()
 			}
-			for _, want := range []string{link, "`store_id`"} {
-				if !strings.Contains(text, want) {
-					t.Errorf("%s %q (step %d; 0 is the whole item) lacks %q", d.path, c.item, c.step, want)
-				}
+			if !strings.Contains(text, link) {
+				t.Errorf("%s %q (step %d; 0 is the whole item) lacks %q", d.path, c.item, c.step, link)
 			}
 		})
 	}
+}
+
+// linesOutsideCode returns lines without the fenced code blocks and their fences.
+func linesOutsideCode(lines []string) []string {
+	var out []string
+	inFence := false
+	for _, line := range lines {
+		switch {
+		case codeFenceRe.MatchString(line):
+			inFence = !inFence
+		case !inFence:
+			out = append(out, line)
+		}
+	}
+	return out
 }

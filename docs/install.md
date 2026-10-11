@@ -2,156 +2,99 @@
 
 ## Requirements
 
-- A Linux x86_64 or Apple Silicon (arm64) macOS host. Other hosts,
-  Linux arm64 included, are not supported.
-- `claude` (Claude Code) 2.1.280 or later on PATH — install per
-  <https://claude.com/claude-code>. agent-director launches only
-  Claude Code; other agent CLIs are unsupported. With an older Claude Code
-  the agent's hooks may apply nothing: rows stay `pending` and the trail
-  records `ad.hook.ignored` with reason `no_exec_form`; upgrade Claude Code.
-  - The `claude` on PATH must be the agent process itself: Claude Code's
-    native binary, or a wrapper that `exec`s it. A hook moves a row only
-    when its parent process is the pane's own process, so a launcher or
-    shim that runs Claude Code as a child (for example a JS launcher left
-    by an install that skipped its scripts, or a version-manager shim)
-    makes every hook `ad.hook.ignored` with reason `pid_mismatch`, and the
-    rows stay `pending` (see
-    [A row stays `pending` and the trail shows `pid_mismatch`](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch)).
-- `tmux` 3.2 or later on PATH. Verified: 3.2a and 3.3a.
-  - Keep `remain-on-exit` off, the tmux default. With it on, a finished
-    agent's session outlives its agent: `resume` and `spawn
-    --reuse-finished` get `ErrTmuxUnresponsive`, then
-    `ErrTmuxSessionConflict`, and `expire` keeps the row on every run.
-    `find-missing` still marks a row whose agent process is dead,
-    whatever tmux shows.
-  - No tmux server needs to be running: agent-director starts one when
-    it launches an agent.
-  - Agents need `HOME` set. A tmux server started from a systemd system
-    unit with no `User=` gives its panes no `HOME`: Claude Code still
-    runs there, but agent-director's hooks refuse to work without `HOME`,
-    so rows stay `pending`.
+- Linux x86_64 or macOS arm64 (Apple Silicon); no other platform.
+- `claude` (Claude Code) 2.1.280 or later on PATH
+  (<https://claude.com/claude-code>): its native binary, or a wrapper that
+  `exec`s it, not a shim that runs it as a child.
+- `tmux` 3.2 or later on PATH (verified: 3.2a and 3.3a), with `remain-on-exit`
+  off (the default). No tmux server needs to be running.
+- Agents need `HOME` set (a tmux server started from a systemd system unit
+  with no `User=` has none).
 - `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
 
 ## Install from a release
 
-agent-director ships with its operator tool `agent-director-admin` from the
-same build. Install both with:
+This installs agent-director and its operator tool `agent-director-admin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
 ```
 
-That fetches `install.sh` from `main` and runs it with `--from-release`. It
-detects your OS/arch, downloads the matching binaries from the
-[latest GitHub release](https://github.com/gabemahoney/agent-director/releases/latest),
-sets up `~/.agent-director/`, drops a PATH symlink for `agent-director`,
-installs `agent-director-admin` at
-`~/.agent-director/admin/agent-director-admin` (never on PATH), brings
-`state.db` to the current schema (creating it on a fresh host, or upgrading
-it in place; a schema problem fails the install loudly rather than
-half-installing), and installs the SessionStart/SessionEnd help hooks.
+It downloads the binaries from the
+[latest release](https://github.com/gabemahoney/agent-director/releases/latest),
+sets up `~/.agent-director/`, symlinks `agent-director` (see `--symlink-dir`),
+installs `agent-director-admin` at `~/.agent-director/admin/` (never on PATH),
+migrates `state.db` and installs the SessionStart/SessionEnd help hooks.
 
 `install.sh` flags:
 
-- `--register-mcp` — register the stdio MCP server with Claude Code.
-  To register it yourself instead, run
+- `--from-release [tag]`: download from GitHub Releases (latest, or a tag of
+  0.11.0 or later). To verify, pass both `--sha256 <hex>` and
+  `--admin-sha256 <hex>`, or neither.
+- `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
+  of the same build.
+- `--register-mcp`: register the stdio MCP server with Claude Code; by hand:
   `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`
-  (or give the path of your binary).
-- `--no-hooks` — leave `~/.claude/settings.json` untouched.
-- `--symlink-dir <dir>` — override the default PATH-symlink directory.
-- `--binary <path>` — install from an explicit source binary.
-- `--admin-binary <path>` — install `agent-director-admin` from an
-  explicit source binary, from the same build as `--binary`.
-- `--from-release [tag]` — download pre-built binaries for this host's
-  OS/arch from GitHub Releases (latest, or a specific tag, 0.11.0 or
-  later) and install them. To verify the downloads, pass both
-  `--sha256 <hex>` and `--admin-sha256 <hex>`; one without the other is
-  refused.
+- `--no-hooks`: leave `~/.claude/settings.json` untouched.
+- `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
+- `--no-symlink`: create no PATH symlink.
+- `--keep-prior`: keep each overwritten binary as `<target>.prior` (roll back
+  with `mv`).
 
 ## Install binaries you downloaded
 
-Grab both assets for your platform from the
-[latest release](https://github.com/gabemahoney/agent-director/releases/latest),
-then point the installer at them:
+Both assets must come from the same
+[release](https://github.com/gabemahoney/agent-director/releases/latest); this
+needs no clone:
 
 ```sh
-# Linux amd64:
-curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-amd64
-curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-linux-amd64
-# macOS Apple Silicon:
-curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-arm64
-curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-darwin-arm64
-
+p=linux-amd64   # or darwin-arm64
+base=https://github.com/gabemahoney/agent-director/releases/latest/download
+curl -fL -o agent-director "$base/agent-director-$p"
+curl -fL -o agent-director-admin "$base/agent-director-admin-$p"
 chmod +x agent-director agent-director-admin
-bash skills/install-agent-director/install.sh --binary ./agent-director --admin-binary ./agent-director-admin
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --binary ./agent-director --admin-binary ./agent-director-admin
 ```
-
-The two binaries must come from the same release: `install.sh` refuses
-a pair whose `version` stamps differ or carry no commit.
 
 ## Install from inside Claude Code
 
-The `install-agent-director` skill ships in this repo at
-`skills/install-agent-director/`. Claude Code loads skills only from
-`~/.claude/skills/` (or a project's `.claude/skills/`), so link the skill
-there once, from the root of your clone:
+From the root of your clone, link the `install-agent-director` skill once,
+then say **install agent-director** in Claude Code:
 
 ```sh
-mkdir -p ~/.claude/skills
-ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
+mkdir -p ~/.claude/skills && ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
 ```
 
-Then, in Claude Code, say:
-
-> **install agent-director**
-
-The skill asks four questions (binary source, PATH symlink, MCP
-registration, persistent help hooks), then runs `install.sh` with the
-resolved flags.
+The skill asks four questions (source, symlink, MCP, hooks), then runs
+`install.sh`.
 
 ## Install from source
 
-`make build` builds both `bin/agent-director` and
-`bin/agent-director-admin`:
+In a git checkout (`install.sh` refuses a plain `go build`):
 
 ```sh
 make build
 bash skills/install-agent-director/install.sh --binary ./bin/agent-director --admin-binary ./bin/agent-director-admin
 ```
 
-`install.sh` compares the binary's `version` stamp with `git rev-parse HEAD`
-and refuses a stale `--binary`; re-run `make build` to refresh it. It also
-refuses unless `agent-director-admin version` reports the same stamp, with
-a real commit: `make build` in a git checkout stamps both, a plain
-`go build` does not.
-
 ## Upgrade
 
-Run the install again, by any of the paths above. It brings an existing
-`state.db` up to the current schema. If a session reports a schema-version
-error, re-run the install. If the store is newer than the binary, install
-the matching agent-director release instead. If a command that opens the
-store still reports a schema error after the install has run, restore the
-copy of `~/.agent-director/state.db` (with its `-wal` and `-shm` files)
-taken before the install, then re-run the install.
+Stop every agent and every `agent-director serve` first, as in
+[Stopping a set of agents before a binary change](operator-actions.md#stopping-a-set-of-agents-before-a-binary-change).
+Copy `~/.agent-director/state.db`, `state.db-wal` and `state.db-shm`. Then run
+the install again by any path above, with `--keep-prior` to keep the previous
+binaries; it brings `state.db` to the current schema. A store newer than the
+binary needs the matching release.
 
 ## Install the TypeScript client
 
-The `agent-director` npm package is the TypeScript/Bun client only: it runs
-the installed CLI binary as a subprocess per call. It does not install the
-CLI; install that first.
-
-```sh
-bun add agent-director
-```
-
-Load it from Bun as ESM; it is not built for webpack. The package ships no
-lifecycle scripts and no native or optional platform dependencies. Its API is in `pkg/ts-bun-client/README.md`. The Go library,
-`github.com/gabemahoney/agent-director/pkg/api`, is in `pkg/api/README.md`.
+The `agent-director` npm package is the TypeScript/Bun client only; it runs the
+installed CLI per call, so install the CLI first, then `bun add agent-director`.
+APIs: `pkg/ts-bun-client/README.md` (TypeScript), `pkg/api/README.md` (Go).
 
 ## Uninstall
 
 ```sh
-skills/install-agent-director/uninstall.sh           # preserve state.db + templates
+skills/install-agent-director/uninstall.sh           # keep state.db + templates
 skills/install-agent-director/uninstall.sh --purge   # remove everything
 ```

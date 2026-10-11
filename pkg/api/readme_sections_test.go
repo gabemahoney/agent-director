@@ -153,7 +153,7 @@ func mdAnchor(title string) string {
 }
 
 // TestREADMESectionHeadings checks each pointed-to section heading exists
-// exactly once in its file (SR-18.1, SR-18.17), and that the first sentence of
+// exactly once in its file (SR-18.1, SR-18.17), and that the intro paragraph of
 // "Operator actions" says automated callers must not perform its actions.
 func TestREADMESectionHeadings(t *testing.T) {
 	t.Parallel()
@@ -167,11 +167,25 @@ func TestREADMESectionHeadings(t *testing.T) {
 		}
 	}
 	d := readMD(t, mdOperatorActions)
-	first, _, _ := strings.Cut(normalised(d.body(operatorActions(t, d))), ". ")
-	for _, want := range []string{"automated callers", "must not perform"} {
-		if !strings.Contains(first, want) {
-			t.Errorf("%s %q first sentence %q lacks %q", d.path, apitest.OperatorActionsTitle, first, want)
+	oa := operatorActions(t, d)
+	opening := strings.TrimSpace(d.body(oa))
+	for _, h := range d.headings { // the text before the first item heading
+		if h.line > oa.line {
+			opening = strings.TrimSpace(strings.Join(d.lines[oa.line+1:h.line], "\n"))
+			break
 		}
+	}
+	intro, _, _ := strings.Cut(opening, "\n\n")
+	intro = strings.ToLower(normalised(intro))
+	for _, want := range []string{"automated callers", "must not perform"} {
+		if !strings.Contains(intro, want) {
+			t.Errorf("%s %q intro paragraph %q lacks %q", d.path, apitest.OperatorActionsTitle, intro, want)
+		}
+	}
+	// The text before the first item tells the operator to run every command as
+	// the agents' user: another user's tmux socket and files are not the agents'.
+	if text := normalised(opening); !strings.Contains(text, "as the agents' user") {
+		t.Errorf("%s %q text before its first item lacks %q", d.path, apitest.OperatorActionsTitle, "as the agents' user")
 	}
 }
 
