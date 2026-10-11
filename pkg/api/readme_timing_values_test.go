@@ -1,9 +1,9 @@
 package api_test
 
-// readme_timing_values_test.go pins the README's [tmux] example block and
-// timing table, and the listed README and architecture statements of the
+// readme_timing_values_test.go pins docs/configuration.md's [tmux] example block and
+// timing table, and the listed user-doc and architecture statements of the
 // [tmux] timing defaults, safe minimums and kill and pause worst cases, to
-// the internal/config constants, and the README's Claude Code minimum
+// the internal/config constants, and the user docs' Claude Code minimum
 // statements to each other (Epic 21, decision 6). Key names come from
 // config.TmuxKey (SR-20.2), never spelt here. -run TestReadmeTimingValues
 // selects them all.
@@ -25,6 +25,7 @@ const (
 	stopSemanticsTitle    = "Stop semantics"
 	packageInventoryTitle = "Package inventory"
 	prerequisitesTitle    = "Prerequisites"
+	requirementsTitle     = "Requirements"
 	noExecFormItemTitle   = "A row stays `pending` and the trail shows `no_exec_form`"
 )
 
@@ -45,12 +46,15 @@ func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 func keyCode(k config.TmuxKey) string { return "`" + k.Name() + "`" }
 
 // worstCases recomputes, at the defaults, SR-13.2's two kill paths, (i)
-// 2Q + 2A + E + 4W and (ii) 3Q + 2A + 5W, and pause's tmux phase 3Q + 3A + 6W
-// (its line clear, C-u, b.9o4, one action call more than kill's path (ii)).
-func worstCases() (kill1, kill2, pause time.Duration) {
+// 2Q + 2A + E + 4W and (ii) 3Q + 2A + 5W; kill-finished on this id's own
+// abandoned launch, its follow-up then its wait, 3Q + 2A + E + 5W for one
+// session and 2A + 2W for each more (b.myx); and pause's tmux phase
+// 3Q + 3A + 6W (its line clear, C-u, b.9o4, one action call more than kill's
+// path (ii)).
+func worstCases() (kill1, kill2, abandoned, perSession, pause time.Duration) {
 	q, a := tmuxDefault(config.TmuxQueryTimeoutMs), tmuxDefault(config.TmuxActionTimeoutMs)
 	e, w := tmuxDefault(config.TmuxKillExitWaitMs), tmuxDefault(config.TmuxPipeCloseWaitMs)
-	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 3*a + 6*w
+	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 2*a + e + 5*w, 2*a + 2*w, 3*q + 3*a + 6*w
 }
 
 // normalised collapses each run of whitespace in text to one space, so a
@@ -100,15 +104,14 @@ func statedNumbers(text string, anchors []string) ([]string, error) {
 }
 
 // docTimingStatements lists the pinned prose statements of the timing
-// defaults, minimums and kill and pause worst cases in the README and the
+// defaults, minimums and kill and pause worst cases in the user docs and the
 // architecture doc.
 func docTimingStatements() []docStatement {
 	start, window := config.TmuxStartingSessionSeconds, config.TmuxStoppingWindowSeconds
-	grace := config.TmuxPendingGraceSeconds
-	create, pipe, exitWait := config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
+	pipe, exitWait := config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
 	fixed := func(vals ...string) func([]string) []string { return func([]string) []string { return vals } }
-	p1, p2, pause := worstCases()
-	arch, readme := mdArchitecture, mdTopREADME
+	p1, p2, abandoned, perSession, pause := worstCases()
+	arch, conf := mdArchitecture, mdConfiguration
 	return []docStatement{
 		{"architecture Stop semantics: kill exit wait default", arch, stopSemanticsTitle,
 			[]string{keyCode(exitWait)}, fixed(docSeconds(tmuxDefault(exitWait)))},
@@ -121,6 +124,8 @@ func docTimingStatements() []docStatement {
 			}},
 		{"architecture Stop semantics: kill's time on tmux alone", arch, stopSemanticsTitle,
 			[]string{"at most 3Q + 2A + 5W"}, fixed(docSeconds(p2))},
+		{"architecture Stop semantics: kill-finished on this id's own abandoned launch, one session and each more", arch,
+			stopSemanticsTitle, []string{"3Q + 2A + E + 5W (", "2A + 2W ("}, fixed(docSeconds(abandoned), docSeconds(perSession))},
 		{"architecture Stop semantics: pause's tmux phase", arch, stopSemanticsTitle,
 			[]string{"3Q + 3A + 6W,"}, fixed(docSeconds(pause))},
 		{"architecture Stop semantics: pause wait default", arch, stopSemanticsTitle,
@@ -137,35 +142,11 @@ func docTimingStatements() []docStatement {
 			[]string{"Safe minimums: bound", "stopping window", "grace period", "⌉ +"},
 			fixed(itoa(config.MinStartingSessionSeconds), itoa(config.MinStoppingWindowSeconds),
 				itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds))},
-		{"README caller contract: pending grace period default", readme, callerContractTitle,
-			[]string{"pending grace period ("}, fixed(itoa(config.DefaultPendingGraceSeconds))},
-		{"README timing settings: grace period minimum rule", readme, timingSettingsTitle,
-			[]string{"its minimum:", keyCode(pipe)}, fixed(itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds))},
-		{"README timing settings: grace period table-row example", readme, timingSettingsTitle,
-			[]string{"Example: with `" + create.Name() + " =", "grace period is"}, func(got []string) []string {
-				return []string{got[0], itoa(unsetGrace(got[0]))}
-			}},
-		{"README timing settings: grace period paragraph worked example", readme, timingSettingsTitle,
-			[]string{"For example, `" + create.Name() + " =", "minimum to", "default", keyCode(grace), "setting it to", "set"},
-			func(got []string) []string {
-				in, _ := strconv.ParseInt(got[0], 10, 64)
-				m := config.PendingGraceMinimumSeconds(in, 0)
-				def := itoa(config.DefaultPendingGraceSeconds)
-				if m <= config.DefaultPendingGraceSeconds {
-					def = "(none: the default " + def + " is not below the minimum " + itoa(m) + ")"
-				}
-				return []string{got[0], itoa(m), def, itoa(unsetGrace(got[0])), def, itoa(m)}
-			}},
+		{"configuration timing settings: grace period minimum rule", conf, timingSettingsTitle,
+			[]string{"Grace period minimum.", keyCode(pipe)}, fixed(itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds))},
+		{"configuration timing settings: unset grace period", conf, timingSettingsTitle,
+			[]string{"Unset gives"}, fixed(itoa(config.DefaultPendingGraceSeconds))},
 	}
-}
-
-// unsetGrace is the grace period, in seconds, that an unset
-// pending_grace_seconds gives beside the stated createTimeoutMs, with
-// pipe_close_wait_ms at its default: the larger of the default and the
-// derived minimum (b.9e1).
-func unsetGrace(createTimeoutMs string) int64 {
-	in, _ := strconv.ParseInt(createTimeoutMs, 10, 64)
-	return max(config.DefaultPendingGraceSeconds, config.PendingGraceMinimumSeconds(in, 0))
 }
 
 // TestReadmeTimingValuesStatements: each listed statement of a timing
@@ -195,11 +176,11 @@ func TestReadmeTimingValuesStatements(t *testing.T) {
 	}
 }
 
-// TestReadmeTimingValuesExampleBlock: the README's commented [tmux] example
+// TestReadmeTimingValuesExampleBlock: docs/configuration.md's commented [tmux] example
 // block lists exactly the nine keys, in table order, each at its default.
 func TestReadmeTimingValuesExampleBlock(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdConfiguration)
 	start := -1
 	for i, line := range d.lines {
 		if strings.HasPrefix(line, "[tmux]") {
@@ -235,12 +216,12 @@ func TestReadmeTimingValuesExampleBlock(t *testing.T) {
 	}
 }
 
-// TestReadmeTimingValuesTable: the README's [tmux] table has one row per
+// TestReadmeTimingValuesTable: docs/configuration.md's [tmux] table has one row per
 // key, in table order, each with its unit, its default and its safe minimum
 // ("none" for a key without one), comparing each cell's leading number.
 func TestReadmeTimingValuesTable(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdConfiguration)
 	var rows [][]string
 	for _, line := range strings.Split(sectionBody(t, d, timingSettingsTitle), "\n") {
 		if strings.HasPrefix(line, "| `") {
@@ -287,30 +268,141 @@ func TestReadmeTimingValuesTable(t *testing.T) {
 	}
 }
 
-// TestReadmeTimingValuesClaudeCodeMinimum: each of the README's three Claude
-// Code minimum statements (Prerequisites, and twice in the no_exec_form
-// item, found through operatorActionsItem) appears exactly once in its
-// section, and all three state the same version.
+// TestReadmeTimingValuesClaudeCodeMinimum: the README's Prerequisites and
+// install.md's Requirements each state the Claude Code minimum exactly once
+// and the same version; operator-actions.md's no_exec_form item, found
+// through operatorActionsItem, points to install.md's Requirements instead of
+// repeating it.
 func TestReadmeTimingValuesClaudeCodeMinimum(t *testing.T) {
 	t.Parallel()
 	const version = `([0-9]+\.[0-9]+\.[0-9]+)`
-	d := readMD(t, mdTopREADME)
-	item := normalised(d.body(operatorActionsItem(t, d, noExecFormItemTitle)))
+	readme, install, oa := readMD(t, mdTopREADME), readMD(t, mdInstall), readMD(t, mdOperatorActions)
+	prereq := "`claude` \\(Claude Code\\) " + version + ` or later`
 	var versions, stated []string
-	for _, s := range []struct{ section, text, pattern string }{
-		{prerequisitesTitle, normalised(sectionBody(t, d, prerequisitesTitle)), "`claude` \\(Claude Code\\) " + version + ` or later`},
-		{noExecFormItemTitle, item, `the supported minimum is ` + version},
-		{noExecFormItemTitle, item, "Upgrade `claude` on PATH to " + version + ` or later`},
+	for _, s := range []struct{ path, section, text string }{
+		{readme.path, prerequisitesTitle, normalised(sectionBody(t, readme, prerequisitesTitle))},
+		{install.path, requirementsTitle, normalised(sectionBody(t, install, requirementsTitle))},
 	} {
-		ms := regexp.MustCompile(s.pattern).FindAllStringSubmatch(s.text, -1)
+		ms := regexp.MustCompile(prereq).FindAllStringSubmatch(s.text, -1)
 		if len(ms) != 1 {
-			t.Fatalf("%s section %q: %d statements match %q; want 1", d.path, s.section, len(ms), s.pattern)
+			t.Fatalf("%s section %q: %d statements match %q; want 1", s.path, s.section, len(ms), prereq)
 		}
 		versions, stated = append(versions, ms[0][1]), append(stated, fmt.Sprintf("%q", ms[0][0]))
 	}
-	for _, v := range versions[1:] {
-		if v != versions[0] {
-			t.Fatalf("the README's Claude Code minimum statements disagree: %s", strings.Join(stated, "; "))
+	if versions[0] != versions[1] {
+		t.Fatalf("the user docs' Claude Code minimum statements disagree: %s", strings.Join(stated, "; "))
+	}
+	item := normalised(oa.body(operatorActionsItem(t, oa, noExecFormItemTitle)))
+	if link := "[Requirements](install.md#" + mdAnchor(requirementsTitle) + ")"; !strings.Contains(item, link) {
+		t.Errorf("%s section %q lacks the pointer %s to the minimum", oa.path, noExecFormItemTitle, link)
+	}
+}
+
+// docConfigKeys are the non-[tmux] keys of docs/configuration.md, each with
+// the default it states, from the internal/config constants and Default(), and
+// the "1 to N" range cell it states where the key has a maximum (rng empty
+// otherwise). noExample marks a key the doc's example block leaves out:
+// inject_help_hook, whose default (false) is not what install.sh writes (true).
+func docConfigKeys() []struct {
+	key, def, rng string
+	noExample     bool
+} {
+	c := config.Default()
+	b := func(v bool) string { return strconv.FormatBool(v) }
+	rng := func(max int64) string { return "1 to " + itoa(max) }
+	return []struct {
+		key, def, rng string
+		noExample     bool
+	}{
+		{"defaults.relay_mode", c.Defaults.RelayMode, "", false},
+		{"defaults.expire_retention_days", itoa(int64(c.Defaults.ExpireRetentionDays)), rng(int64(config.MaxExpireRetentionDays)), false},
+		{"defaults.disable_askuserquestion", b(c.Defaults.DisableAskUserQuestion), "", false},
+		{"defaults.inject_help_hook", b(c.Defaults.InjectHelpHook), "", true},
+		{"relay.poll_base_ms", itoa(int64(c.Relay.PollBaseMs)), "", false},
+		{"relay.poll_jitter_ms", itoa(int64(c.Relay.PollJitterMs)), "", false},
+		{"relay.timeout_seconds", itoa(int64(c.Relay.TimeoutSeconds)), rng(int64(config.MaxRelayTimeoutSeconds)), false},
+		{"relay.permission_request_cap", itoa(int64(c.Relay.PermissionRequestCap)), "", false},
+		{"pause.timeout_seconds", itoa(int64(c.Pause.TimeoutSeconds)), rng(int64(config.MaxPauseTimeoutSeconds)), false},
+		{"pre_trust.lock_wait_seconds", itoa(int64(c.PreTrust.LockWaitSeconds)), rng(int64(config.MaxPreTrustLockWaitSeconds)), false},
+		{"store.db_path", c.Store.DbPath, "", false},
+		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},
+		{"state.settle_ms", itoa(int64(c.State.SettleMs)), "", false},
+		{"log.error_log_path", c.Log.ErrorLogPath, "", false},
+	}
+}
+
+// TestReadmeTimingValuesConfigKeys: docs/configuration.md's Keys table has one
+// row for each non-[tmux] key, in order, whose Default (and, where the key has
+// a maximum, Range) cell states the internal/config value; and the example
+// block's value for each key it lists is the default, and it lists every key
+// except those marked noExample.
+func TestReadmeTimingValuesConfigKeys(t *testing.T) {
+	t.Parallel()
+	d := readMD(t, mdConfiguration)
+	keys := docConfigKeys()
+	var rows [][]string
+	for _, line := range strings.Split(sectionBody(t, d, "Keys"), "\n") {
+		if strings.HasPrefix(line, "| `[") {
+			cells := strings.Split(strings.Trim(line, "|"), "|")
+			for i := range cells {
+				cells[i] = strings.Trim(strings.TrimSpace(cells[i]), "`")
+			}
+			rows = append(rows, cells)
 		}
+	}
+	if len(rows) != len(keys) {
+		t.Fatalf("%s Keys table has %d key rows; want %d", d.path, len(rows), len(keys))
+	}
+	for i, k := range keys {
+		t.Run(k.key, func(t *testing.T) {
+			row := rows[i]
+			if len(row) < 3 {
+				t.Fatalf("row %d has %d cells; want key, range, default: %v", i+1, len(row), row)
+			}
+			section, name, _ := strings.Cut(k.key, ".")
+			if want := "[" + section + "] " + name; row[0] != want {
+				t.Fatalf("row %d names %q; want %q", i+1, row[0], want)
+			}
+			if row[2] != k.def {
+				t.Errorf("default cell %q; the constant is %q", row[2], k.def)
+			}
+			if k.rng != "" && row[1] != k.rng {
+				t.Errorf("range cell %q; the constants give %q", row[1], k.rng)
+			}
+		})
+	}
+
+	// The example block, outside [tmux] (TestReadmeTimingValuesExampleBlock).
+	example := map[string]string{}
+	section, inFence := "", false
+	for _, line := range d.lines {
+		switch line = strings.TrimSpace(line); {
+		case mdFenceRe.MatchString(line):
+			inFence = !inFence
+		case !inFence, line == "", strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, "["):
+			section, _, _ = strings.Cut(strings.TrimPrefix(line, "["), "]")
+		case section != "tmux":
+			kv, _, _ := strings.Cut(line, "#")
+			name, val, _ := strings.Cut(kv, "=")
+			example[section+"."+strings.TrimSpace(name)] = strings.Trim(strings.TrimSpace(val), `"`)
+		}
+	}
+	listed := 0
+	for _, k := range keys {
+		got, ok := example[k.key]
+		switch {
+		case k.noExample:
+			if ok {
+				t.Errorf("%s example block lists %s = %q; the block leaves it out", d.path, k.key, got)
+			}
+		case !ok || got != k.def:
+			t.Errorf("%s example block gives %s = %q (present: %v); the default is %q", d.path, k.key, got, ok, k.def)
+		default:
+			listed++
+		}
+	}
+	if len(example) != listed {
+		t.Errorf("%s example block has %d non-[tmux] keys; want %d: %v", d.path, len(example), listed, example)
 	}
 }

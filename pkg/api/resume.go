@@ -133,9 +133,9 @@ type ResumeResult struct {
 	//     (SpawnParams.NoPreTrust); nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (the .claude.json file is missing, or could not be read, parsed or
-	//     written, or the row's extra env sets CLAUDE_CONFIG_DIR, or with no
-	//     CLAUDE_CONFIG_DIR sets HOME, to a path that is not absolute); the
-	//     agent may stop at Claude Code's folder-trust prompt.
+	//     written, or the row's extra env sets CLAUDE_CONFIG_DIR to a path
+	//     that is not absolute); the agent may stop at Claude Code's
+	//     folder-trust prompt.
 	//
 	// A pre-trust failure never fails the resume.
 	PreTrust string `json:"pre_trust"`
@@ -222,7 +222,25 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     a spawn's or reuse's launch that never reported in and that
 //     find-missing marked missing (guard 2's refusal of its pending row
 //     named the recourse: a spawn of the id with the reuse opt-in).
-//  4. JSONL transcript file must exist on disk → otherwise
+//  4. The row's stored extra env must not have a key that sets HOME (any
+//     value): the exact key HOME, or a key such as "HOME=/x" whose name
+//     before the first '=' is HOME (spawn.ReservedHomeKey, the rule spawn
+//     validation shares) → otherwise ErrReservedEnvKey (homeInExtraEnvError,
+//     bug b.nas), naming the first such key in sorted order. Spawn
+//     validation refuses such a key in extra_env, so only a row spawned
+//     before that refusal can carry one; relaunching it would send the
+//     agent's hook events to another agent-director store. No transcript is
+//     looked up. Then the stored extra env must not have a key that is not a
+//     valid env-var name: empty, or holding '=' or a NUL byte
+//     (spawn.InvalidEnvKey, the rule spawn validation shares) → otherwise
+//     ErrReservedEnvKey too (invalidEnvKeyError, bug b.vpb), naming the
+//     first such key in sorted order and saying what is wrong with it. Only
+//     a row spawned before spawn refused such keys can carry one;
+//     relaunched, tmux would set a different variable than the one
+//     pre-trust and the transcript lookup below read (a key
+//     "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR). No transcript is
+//     looked up.
+//  5. JSONL transcript file must exist on disk → otherwise
 //     ErrJsonlMissing. Pure os.Stat pre-flight; no read. Candidate
 //     resolution follows a strict precedence (decision of record,
 //     bug b.1ba):
@@ -292,6 +310,13 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	if row.ClaudeSessionID == "" {
 		return ResumeResult{}, fmt.Errorf("%w: spawn %s has no claude_session_id",
 			ErrNoSessionId, params.ClaudeInstanceID)
+	}
+
+	if key, ok := spawn.ReservedHomeKey(row.ExtraEnv); ok {
+		return ResumeResult{}, homeInExtraEnvError(row.ClaudeInstanceID, key)
+	}
+	if key, ok := spawn.InvalidEnvKey(row.ExtraEnv); ok {
+		return ResumeResult{}, invalidEnvKeyError(row.ClaudeInstanceID, key)
 	}
 
 	// Resolve the transcript path against a strict precedence (bug b.1ba):
@@ -437,6 +462,35 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	return ResumeResult{}, fmt.Errorf("%w: %s", ErrJsonlMissing, formatJsonlAttempts(attempts))
 }
 
+// homeInExtraEnvError is resume's refusal of a row whose stored extra env has
+// key, a key that sets HOME (spawn.ReservedHomeKey: "HOME" itself or, say,
+// "HOME=/x"; bug b.nas): spawn.ErrReservedEnvKey, wrapped, naming the
+// instance, quoting the key as given (%q, so a key with '=' or a control
+// character stays on one line) and saying it sets HOME and why
+// (spawn.ReservedHomeReason), that nothing was written or launched, and the
+// way on: the row cannot be resumed with its extra env, so the agent runs
+// again only through a spawn of the id with the reuse opt-in and an extra env
+// without HOME, which starts a new life.
+func homeInExtraEnvError(id, key string) error {
+	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %s (a reused id starts a new life with no memory of this conversation), and %s",
+		spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, spawn.ReuseOptIn, spawn.ReservedHomeEnvKey, spawn.ReservedHomeAlternative)
+}
+
+// invalidEnvKeyError is resume's refusal of a row whose stored extra env has
+// key, a key that is not a valid env-var name (spawn.InvalidEnvKey: empty, or
+// holding '=' or a NUL byte; bug b.vpb): spawn.ErrReservedEnvKey, wrapped, the
+// one name for every refused extra_env key, naming the instance, quoting the
+// key as given (%q, so a key with '=' or a NUL byte stays on one line) and
+// saying it is not a valid env-var name and what is wrong with it
+// (spawn.EnvKeyProblem), that nothing was written or launched, and the way
+// on: the row cannot be resumed with its extra env, so the agent runs again
+// only through a spawn of the id with the reuse opt-in and an extra env
+// without that key, which starts a new life.
+func invalidEnvKeyError(id, key string) error {
+	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (a reused id starts a new life with no memory of this conversation), and %s",
+		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseOptIn, key, spawn.InvalidEnvKeyAlternative)
+}
+
 // jsonlAttempt records one candidate transcript path resume tried to
 // stat, its provenance (persisted jsonl_path vs CLAUDE_CONFIG_DIR-aware
 // fallback), and the stat error that ruled it out. Collected so the
@@ -548,7 +602,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	}
 	id := row.ClaudeInstanceID
 	if hasControlChar(id) {
-		return ResumeResult{}, errors.New(`resume: the instance id contains a control character, so its session cannot be labelled; removing the row is a human's decision, see "Operator actions" in the agent-director README; no tmux call was made and nothing was written`)
+		return ResumeResult{}, errors.New(`resume: the instance id contains a control character, so its session cannot be labelled; removing the row is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md; no tmux call was made and nothing was written`)
 	}
 
 	socket, err := spawn.ResolveRowLaunchSocket(row.Identity.Socket)
@@ -721,7 +775,7 @@ func launchInProgressError(row Spawn) error {
 // ErrTmuxSessionConflict naming it as this id's own abandoned launch, which
 // agent-director ends only through its operator tool, so ending it is a
 // human's decision. ErrTmuxSessionConflict is CONFLICT and lasts
-// until a human looks (see "Operator actions" in the agent-director README). A
+// until a human looks (see "Operator actions" in agent-director's docs/operator-actions.md). A
 // tmux server other than the one the agent was launched on, or tmux that
 // cannot be run, gives ErrTmuxNotAvailable (ENVIRONMENT), and an answer that
 // cannot be read ErrTmuxUnresponsive. A refusal before the move to pending
@@ -743,13 +797,24 @@ func launchInProgressError(row Spawn) error {
 // ErrTmuxSessionCreate.
 //
 // Before its launch, Resume pre-trusts the row's working directory (marks it
-// trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, else of
-// the row's extra-env HOME, else ~/.claude.json) so the agent skips Claude
-// Code's folder-trust prompt, as a spawn does, unless the spawn that began
-// the row's life turned pre-trust off (SpawnParams.NoPreTrust); then nothing
-// is pre-trusted, on every resume of that life, and pre_trust is skipped. A
-// pre-trust failure never fails the launch. A resume refused before its move
-// to pending writes no trust entry.
+// trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
+// ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
+// spawn does, unless the spawn that began the row's life turned pre-trust off
+// (SpawnParams.NoPreTrust); then nothing is pre-trusted, on every resume of
+// that life, and pre_trust is skipped. A pre-trust failure never fails the
+// launch. A resume refused before its move to pending writes no trust entry.
+//
+// A row whose stored extra env sets HOME, by the key HOME or by a key such as
+// "HOME=/x" whose name before the first '=' (the name tmux sets) is HOME
+// (only a row spawned before spawn refused such keys in extra_env can), is
+// refused with ErrReservedEnvKey before any transcript lookup, tmux call or
+// write: relaunched, its agent's hook would report to another agent-director
+// store (bug b.nas). Likewise a row whose stored extra env has a key that is
+// not a valid env-var name (empty, or holding '=' or a NUL byte; only a row
+// spawned before spawn refused such keys can) is refused, also with
+// ErrReservedEnvKey, before any transcript lookup, tmux call or write:
+// relaunched, tmux would set a different variable than the one pre-trust and
+// the transcript lookup read (bug b.vpb).
 //
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the
@@ -767,7 +832,7 @@ func launchInProgressError(row Spawn) error {
 // empty, contains a control character, or contains a character tmux stores
 // differently) gets ErrInternal (an error matching no catalogued sentinel)
 // with no tmux call, and nothing is written; removing the row is a human's
-// decision (see "Operator actions" in the agent-director README).
+// decision (see "Operator actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director resume
 //
@@ -795,6 +860,24 @@ func launchInProgressError(row Spawn) error {
 //     launch-in-progress refusal above names this recourse). Recourse: spawn
 //     again with the same id, opting in to reuse (SpawnParams.ReuseFinished);
 //     the reused id starts a new life with no memory of the earlier one.
+//   - ErrReservedEnvKey: the row's stored extra env sets HOME (any value),
+//     by the key HOME or a key such as "HOME=/x" (the message quotes the
+//     first such key in sorted order), which spawn now refuses: relaunched,
+//     the agent's hook would report to another agent-director store.
+//     Nothing was written and nothing was launched. Recourse: spawn again
+//     with the same id, opting in to reuse (SpawnParams.ReuseFinished), with
+//     an ExtraEnv without HOME (an absolute CLAUDE_CONFIG_DIR gives the agent
+//     its own Claude Code config); the reused id starts a new life with no
+//     memory of the earlier one. Also returned, when no key sets HOME, for a
+//     row whose stored extra env has a key that is not a valid env-var name:
+//     empty, or holding '=' or a NUL byte (the message quotes the first such
+//     key in sorted order, says it is not a valid env-var name and says what
+//     is wrong with it), which spawn now refuses too: relaunched, tmux would
+//     set a different variable than the one pre-trust and the transcript
+//     lookup read. Nothing was written and nothing was launched. Recourse: spawn
+//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished),
+//     with an ExtraEnv without that key; the reused id starts a new life with
+//     no memory of the earlier one.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
 //     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
 //     fallback, nor any transcript of the visible history (the message
@@ -821,7 +904,7 @@ func launchInProgressError(row Spawn) error {
 //     at the re-lookup, this is not the agent's tmux server), followed by the
 //     restore.
 //   - [ErrTmuxSessionConflict]: CONFLICT, until a human looks (see
-//     "Operator actions" in the agent-director README). At the pre-launch
+//     "Operator actions" in agent-director's docs/operator-actions.md). At the pre-launch
 //     lookup, before anything is written and with no session touched, a
 //     session holds the recorded name (another row's agent, another
 //     agent-director store's agent, which must not be ended, or a session with

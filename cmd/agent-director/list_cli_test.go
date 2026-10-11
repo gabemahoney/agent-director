@@ -47,6 +47,9 @@ func TestListCLIFlags(t *testing.T) {
 	if got := listIDs(t, home, fakeDir, "--limit", "1"); len(got) != 1 {
 		t.Errorf("list --limit 1 = %v; want one row", got)
 	}
+	if got := listIDs(t, home, fakeDir, "--limit", "0"); len(got) != 3 {
+		t.Errorf("list --limit 0 = %v; want every row (no cap)", got)
+	}
 	if stdout, stderr, _ := runSpawnCLI(t, home, fakeDir, "list", "--tmux-session-name", "nonexistent"); stdout != "{\"spawns\":[]}\n" {
 		t.Errorf("list matching nothing stdout = %q; want {\"spawns\":[]} (stderr=%q)", stdout, stderr)
 	}

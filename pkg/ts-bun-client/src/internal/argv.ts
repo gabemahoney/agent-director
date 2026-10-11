@@ -14,15 +14,21 @@
  *   - Optional fields are omitted when undefined / falsy.
  *   - Boolean flags (--no-pre-trust, --reuse-finished, --ansi, --overwrite)
  *     are only appended when the field is explicitly true.
- *   - Global flags (b.32k: --store-path, --home, --tmux-command) appear
- *     BEFORE the verb token so the CLI's global-flag parser in
- *     internal/clisetup/globalflags.go strips them prior to verb dispatch.
+ *   - Global flags (b.32k: --store-path, --home, --tmux-command; b.78b:
+ *     --create-if-missing) appear BEFORE the verb token so the CLI's
+ *     global-flag parser in internal/clisetup/globalflags.go strips them
+ *     prior to verb dispatch.
+ *   - spawn's and make-template's extra_env keys that are not valid env-var
+ *     names are refused with ErrReservedEnvKey, the name the CLI gives every
+ *     refused extra_env key, thrown from buildArgv, so no subprocess runs
+ *     (b.vpb, b.66q; see extraEnvFlags).
  *
  * Implements SRD SR-1.2 (argv construction is verb-driven and shell-free).
  *
  * Internal — NOT re-exported from src/index.ts.
  */
 
+import { ErrReservedEnvKey } from "../errors.js";
 import type { VerbName } from "./verbs.js";
 import type {
   SpawnParams,
@@ -46,11 +52,11 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * GlobalArgvOptions — values for the three global CLI flags introduced by
- * bug b.32k. Each field is optional; when undefined the corresponding flag
- * is omitted from argv and the CLI's own default-resolution kicks in.
+ * GlobalArgvOptions — values for the global CLI flags (b.32k, b.78b). Each
+ * field is optional; when undefined the corresponding flag is omitted from
+ * argv and the CLI's own default-resolution kicks in.
  *
- * Values are forwarded verbatim; the CLI expands `~` in them (b.38a).
+ * Path values are forwarded verbatim; the CLI expands `~` in them (b.38a).
  */
 export interface GlobalArgvOptions {
   /** Path forwarded to the CLI as `--store-path`. */
@@ -59,6 +65,12 @@ export interface GlobalArgvOptions {
   home?: string;
   /** Path forwarded to the CLI as `--tmux-command`. */
   tmuxCommand?: string;
+  /**
+   * `false` is forwarded to the CLI as `--create-if-missing false`. `true`
+   * adds no flag: creating a missing store is already the CLI's default, and
+   * a binary older than the flag would reject every call that carries it.
+   */
+  createIfMissing?: boolean;
 }
 
 /**
@@ -75,9 +87,9 @@ export interface GlobalArgvOptions {
  * @param verb       The kebab-case verb name (must be a VerbName).
  * @param params     The typed params object for the verb.
  * @param globalOpts Optional global-flag values (--store-path / --home /
- *                   --tmux-command). When undefined or all-fields-omitted,
- *                   no global flags appear in argv and the CLI applies its
- *                   own default-resolution.
+ *                   --tmux-command / --create-if-missing). When undefined or
+ *                   all-fields-omitted, no global flags appear in argv and
+ *                   the CLI applies its own default-resolution.
  * @returns          The full argv array starting with cliPath.
  */
 export function buildArgv(
@@ -94,7 +106,8 @@ export function buildArgv(
 /**
  * buildGlobalFlags returns the global-flag tokens that go BEFORE the verb
  * name. Each flag is emitted in two-token `--flag value` form only when the
- * corresponding field on globalOpts is set.
+ * corresponding field on globalOpts is set; `--create-if-missing` only when
+ * createIfMissing is `false` (see GlobalArgvOptions.createIfMissing).
  */
 function buildGlobalFlags(opts: GlobalArgvOptions | undefined): string[] {
   if (!opts) return [];
@@ -102,6 +115,7 @@ function buildGlobalFlags(opts: GlobalArgvOptions | undefined): string[] {
   if (opts.storePath !== undefined) f.push("--store-path", opts.storePath);
   if (opts.home !== undefined) f.push("--home", opts.home);
   if (opts.tmuxCommand !== undefined) f.push("--tmux-command", opts.tmuxCommand);
+  if (opts.createIfMissing === false) f.push("--create-if-missing", "false");
   return f;
 }
 
@@ -180,11 +194,9 @@ function buildSpawn(p: SpawnParams): string[] {
     for (const lv of p.label) f.push("--label", lv);
   }
 
-  // Repeatable --extra-env K=V (Record<string, string> → K=V strings)
-  if (p.extra_env) {
-    for (const [k, v] of Object.entries(p.extra_env))
-      f.push("--extra-env", `${k}=${v}`);
-  }
+  // Repeatable --extra-env K=V; a key that is not a valid env-var name is
+  // refused first (b.vpb).
+  if (p.extra_env) f.push(...extraEnvFlags("spawn", p.extra_env));
 
   // Repeatable permission flags
   if (p.allow) {
@@ -203,6 +215,70 @@ function buildSpawn(p: SpawnParams): string[] {
   }
 
   return f;
+}
+
+/**
+ * extraEnvFlags returns env as repeatable `--extra-env K=V` arguments, in
+ * insertion order, for spawn's and make-template's argv. It first refuses a key
+ * that is not a valid env-var name (invalidExtraEnvKey) by throwing
+ * ErrReservedEnvKey for verb, with the Go side's description, so no subprocess
+ * runs (b.vpb for spawn, b.66q for make-template): the CLI splits each K=V at
+ * its first "=", so it could not carry such a key unchanged.
+ */
+function extraEnvFlags(verb: VerbName, env: Record<string, string>): string[] {
+  const bad = invalidExtraEnvKey(env);
+  if (bad !== undefined) {
+    const key = JSON.stringify(bad.key);
+    throw new ErrReservedEnvKey(
+      verb,
+      "ErrReservedEnvKey",
+      `extra_env key ${key} is not a valid env-var name: ${bad.problem}; remove ${key} from extra_env, and ${INVALID_ENV_KEY_ALTERNATIVE}`,
+    );
+  }
+  const f: string[] = [];
+  for (const [k, v] of Object.entries(env)) f.push("--extra-env", `${k}=${v}`);
+  return f;
+}
+
+/**
+ * What a caller whose extra_env key is not a valid env-var name does instead;
+ * the same text as spawn.InvalidEnvKeyAlternative in the Go source.
+ */
+const INVALID_ENV_KEY_ALTERNATIVE =
+  "give each variable its own name as the key (not empty, with no '=' and no NUL byte) and its value as the value";
+
+/**
+ * invalidExtraEnvKey returns the first key of env, in sorted order, that is
+ * not a valid env-var name, with what is wrong with it; undefined when every
+ * key is valid (b.vpb). A key is invalid when it is empty, contains "=" or
+ * contains a NUL character, the rule and texts of the Go side's
+ * spawn.InvalidEnvKey and spawn.EnvKeyProblem, which spawn and make-template
+ * apply for MCP and Go callers (and spawn for a template's keys).
+ *
+ * This client must check it itself: it passes each entry as one
+ * `--extra-env K=V` argument, and the CLI splits that at its first "=". A key
+ * holding "=" would reach spawn as a different key and value (silently
+ * rewritten), an empty key would be refused as a malformed flag
+ * (ErrInvalidFlags), and a NUL cannot be carried in an argument.
+ */
+function invalidExtraEnvKey(
+  env: Record<string, string>,
+): { key: string; problem: string } | undefined {
+  for (const key of Object.keys(env).sort()) {
+    if (key === "") {
+      return { key, problem: "it is empty, so tmux would be given \"=<value>\", which names no variable" };
+    }
+    if (key.includes("=")) {
+      return {
+        key,
+        problem: "it contains '=', and tmux splits each KEY=VALUE entry at its first '=', so it would set a different variable",
+      };
+    }
+    if (key.includes("\0")) {
+      return { key, problem: "it contains a NUL byte, which no env-var name can hold and no tmux argument can carry" };
+    }
+  }
+  return undefined;
 }
 
 function buildStatus(p: StatusParams): string[] {
@@ -228,7 +304,10 @@ function buildSendKeys(p: SendKeysParams): string[] {
 
 function buildReadPane(p: ReadPaneParams): string[] {
   const f: string[] = ["read-pane", "--claude-instance-id", p.claude_instance_id];
-  if (p.n_lines !== undefined && p.n_lines > 0)
+  // 0 means the default, which the CLI applies when the flag is absent; any
+  // other value goes through, so the CLI refuses a negative one (b.c4n)
+  // rather than this builder dropping it.
+  if (p.n_lines !== undefined && p.n_lines !== 0)
     f.push("--n-lines", String(p.n_lines));
   if (p.ansi === true) f.push("--ansi");
   if (p.allow_pending === true) f.push("--allow-pending");
@@ -299,11 +378,9 @@ function buildMakeTemplate(p: MakeTemplateParams): string[] {
     for (const lv of p.label) f.push("--label", lv);
   }
 
-  // Repeatable --extra-env K=V
-  if (p.extra_env) {
-    for (const [k, v] of Object.entries(p.extra_env))
-      f.push("--extra-env", `${k}=${v}`);
-  }
+  // Repeatable --extra-env K=V; a key that is not a valid env-var name is
+  // refused first, as for spawn (b.66q).
+  if (p.extra_env) f.push(...extraEnvFlags("make-template", p.extra_env));
 
   // Repeatable permission flags
   if (p.allow) {
@@ -339,7 +416,9 @@ function buildList(p: ListParams): string[] {
   if (p.cwd !== undefined) f.push("--cwd", p.cwd);
   if (p.tmux_session_name !== undefined)
     f.push("--tmux-session-name", p.tmux_session_name);
-  if (p.limit !== undefined && p.limit > 0)
+  // 0 is the CLI's default; any other value goes through, so the CLI refuses
+  // a negative one (b.c4n) rather than this builder dropping it.
+  if (p.limit !== undefined && p.limit !== 0)
     f.push("--limit", String(p.limit));
 
   return f;

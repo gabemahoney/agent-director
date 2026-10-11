@@ -65,8 +65,8 @@ func dirEntries(t *testing.T, home string) map[string]string {
 // The global flags as the whole help lists them, and the pointer to them each
 // verb's help ends with (whitespace-collapsed).
 var (
-	globalFlagNames = []string{"--store-path <path>", "--home <dir>", "--tmux-command <path>"}
-	globalPointer   = "Global flags (--store-path, --home, --tmux-command): see 'agent-director-admin help'."
+	globalFlagNames = []string{"--store-path <path>", "--home <dir>", "--tmux-command <path>", "--create-if-missing <true|false>"}
+	globalPointer   = "Global flags (--store-path, --home, --tmux-command, --create-if-missing): see 'agent-director-admin help'."
 )
 
 // TestHelpOpensWithApprovalStatement: the no-verb run (global flags only

@@ -45,7 +45,8 @@ type Options struct {
 	//
 	// true — CLI contract: the store is created (parent dir + file + schema)
 	// on first use, matching the pre-refactor behavior of the binary.
-	// The CLI's setupClient sets this to true.
+	// The CLI's setupClient sets this to true unless its global
+	// --create-if-missing false is given (b.78b).
 	CreateIfMissing bool
 
 	// TmuxClient is an optional injection seam for tests. When non-nil it

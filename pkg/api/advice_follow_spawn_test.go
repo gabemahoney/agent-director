@@ -199,12 +199,12 @@ func TestAdviceFollow_A2_ScanUnreadableRetryLater(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_A3_ScanLeftoverHumanEnds: A3 "ending such a session is a human's decision, see "Operator actions" in the agent-director README".
+// TestAdviceFollow_A3_ScanLeftoverHumanEnds: A3 "ending such a session is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md".
 func TestAdviceFollow_A3_ScanLeftoverHumanEnds(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const leftover = "$3"
 	advSpawnScanRetry(t, api.ErrTmuxSessionConflict,
-		`nothing was written and no row was created; ending such a session is a human's decision, see "Operator actions" in the agent-director README`,
+		`nothing was written and no row was created; ending such a session is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md`,
 		func(e heldEnv, id string) { e.rec.SeedSessions(e.socket, e.leftover("adv-old-life", leftover, id, 0)) },
 		func(e heldEnv) { adviceEndSession(t, e.rec, e.socket, leftover) })
 }
@@ -391,8 +391,8 @@ func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
 func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const (
-		decision = `ending the session is a human's decision, see "Operator actions" in the agent-director README`
-		look     = `a human must look, see "Operator actions" in the agent-director README`
+		decision = `ending the session is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md`
+		look     = `a human must look, see "Operator actions" in agent-director's docs/operator-actions.md`
 	)
 	cases := []struct {
 		name, phrase string
@@ -419,7 +419,7 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 			}
 			advSpawnHeldTrigger(t, e, id, p, arrange, api.ErrTmuxSessionConflict, tc.phrase)
 			adviceAssertManifest(t, "spawn", "", "a leftover of an earlier life or a session with no valid instance id is a human's to end "+
-				`(see the README's "Operator actions"); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)`)
+				`(see docs/operator-actions.md); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)`)
 			advSpawnFreeName(t, e)
 			before := e.readRow(t, id)
 			if tc.failEnd {

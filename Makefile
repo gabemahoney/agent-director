@@ -31,13 +31,18 @@ GO_TEST_TIMEOUT ?= 30m
 # every non-release build stamps the dev sentinel literal `0.0.0-dev`.
 #
 # Release path: `make release-binaries` reads .version from
-#               pkg/ts-bun-client/package.json via jq.
+#               $(RELEASE_PKG_DIR)/package.json (default
+#               pkg/ts-bun-client/package.json) via jq. If it cannot (no
+#               jq, no readable package.json, no .version), it stops with
+#               an error and builds nothing (b.x7z).
 # Dev path:     `make build` (and all other targets) stamps 0.0.0-dev.
+#               Only release-binaries runs jq to read the version, and
+#               make never runs jq while reading this file.
 # Env override: set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z to stamp a custom
 #               value on any target; takes precedence over both paths.
 #               Any non-empty value is stamped verbatim; the caller is
 #               responsible for passing a value the discovery pipeline
-#               can parse.
+#               can parse. With it set, release-binaries runs no jq.
 VERSION_PKG     := github.com/gabemahoney/agent-director/internal/version
 ifneq ($(strip $(AGENT_DIRECTOR_BUILD_VERSION)),)
 VERSION_STR     := $(AGENT_DIRECTOR_BUILD_VERSION)
@@ -61,15 +66,33 @@ RELEASE_PKG_DIR ?= pkg/ts-bun-client
 # delete the dir) never collide on the shared repo-root dist/ (b.aur).
 RELEASE_DIST_DIR ?= dist
 
-# RELEASE_VERSION is lazily evaluated: only computed when a recipe expands it
-# (so `make build` never invokes jq).
-RELEASE_VERSION = $(shell jq -r .version $(RELEASE_PKG_DIR)/package.json)
+# RELEASE_VERSION is lazily evaluated (recursive `=`): jq runs only when a
+# recipe expands it, never while make reads this file. Only the
+# release-binaries recipe expands it, once per run, through its VERSION_LDFLAGS
+# below, so only release-binaries runs jq to read the version.
+RELEASE_VERSION = $(shell jq -r .version '$(RELEASE_PKG_DIR)/package.json')
+
+# _release_version_checked returns its argument, the version jq read, when it
+# is one word other than `null` (what jq -r prints for a missing .version).
+# Anything else stops make with an error before any binary is built: jq not
+# on PATH, a missing, unreadable or invalid package.json, or no .version all
+# leave it empty or `null`, and jq's or the shell's own message is printed
+# just above the error. Without this check release-binaries stamped an empty
+# version (b.x7z). Called with $(RELEASE_VERSION) as its argument, so jq runs
+# once however often the value is used here.
+_release_version_checked = $(if $(and $(filter 1,$(words $(1))),$(filter-out null,$(1))),$(1),$(error release-binaries: cannot read the release version: jq -r .version '$(RELEASE_PKG_DIR)/package.json' gave '$(1)', want one version string. Install jq and check that file has a .version field, or set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z. No binary was built))
 
 # Target-scoped override: make release-binaries stamps from package.json.
-# AGENT_DIRECTOR_BUILD_VERSION env still wins (env override is evaluated above).
-release-binaries: VERSION_STR := $(if $(strip $(AGENT_DIRECTOR_BUILD_VERSION)),$(AGENT_DIRECTOR_BUILD_VERSION),$(RELEASE_VERSION))
-release-binaries: VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
+# AGENT_DIRECTOR_BUILD_VERSION still wins, and then jq never runs: $(if)
+# expands only the branch it takes. Both lines must stay recursive (`=`). A
+# target-specific `:=` expands its right-hand side while make reads the line,
+# and so ran jq on every make invocation, whatever the target (b.x7z).
+release-binaries: VERSION_STR = $(if $(strip $(AGENT_DIRECTOR_BUILD_VERSION)),$(AGENT_DIRECTOR_BUILD_VERSION),$(call _release_version_checked,$(RELEASE_VERSION)))
+release-binaries: VERSION_LDFLAGS = -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
 
+# all runs generate, so outside the sandbox it stops at generate's
+# _require-sandbox guard (b.8yq) before anything runs; build waits for that
+# guard too, also under make -j (see _require-sandbox).
 all: generate build
 
 # build builds both binaries with the same version stamp: agent-director and
@@ -79,59 +102,25 @@ build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director-admin ./cmd/agent-director-admin
 
-test: envelope-diff-ts test-install-sh
+# test runs go test and bun test, so it runs only in the sandbox
+# (_require-sandbox, b.8yq); outside it nothing runs, not even the builds of
+# its other prerequisites, also under make -j (see _require-sandbox). Its
+# refusal names make test-sandbox for it, which runs everything test runs:
+# `make sandbox CMD="make test"` cannot work, because test-install-sh starts a
+# container and the sandbox has no container engine.
+test: _require-sandbox envelope-diff-ts test-install-sh
 	go test -timeout $(GO_TEST_TIMEOUT) ./...
 
-# test-install-sh runs test/install-sh/retry.sh, which checks install.sh's:
-#   - --from-release download retries against a fake curl (b.kym), for both
-#     release assets (b.vqr); a release before 0.11.0 is refused at once
-#     (exit 3, no retry; b.vqr)
-#   - --sha256 and --admin-sha256 checks; either flag without --from-release
-#     exits 2 (b.vqr)
-#   - PATH symlink: agent-director only, never agent-director-admin (b.vqr)
-#   - user_version reads in an upgrade: they wait out a held store lock
-#     (b.ady), and a ~/.sqliterc that changes sqlite3's output (.headers on,
-#     .mode json) still lets the migration run and verify (b.hk7)
-#   - umask: installs and upgrades succeed under 0777 and 0222, and a hooks-on
-#     install's new ~/.claude and settings.json get the owner's access and the
-#     umask's group/other bits (b.7j2)
-#   - step-3 sentinel: a failed mv leaves no temp file behind (b.hk7)
-#   - [store] db_path: with the store moved out of ~/.agent-director (written
-#     with ~/, as an unclean absolute path, or relative), a fresh install and
-#     an upgrade that migrates read, authorize and verify that store, the
-#     sentinel beside it; a stale default state.db beside a moved store is
-#     left alone; the default store reads and is named as before; a db_path
-#     install.sh cannot read stops the install in pre-flight (exit 5), on a
-#     fresh HOME and over an installed store, before anything on disk changes
-#     (b.2io)
-#   - config.toml merge: a hooks-on install, run twice, sets
-#     inject_help_hook = true inside the [defaults] table whether its header
-#     has blanks inside or before the brackets, a trailing comment, a CRLF or
-#     a UTF-8 BOM, rewriting an existing line, ending the table at an
-#     indented next header and appending no second [defaults];
-#     agent-director list then loads the config, and uninstall.sh takes the
-#     key out again (b.onv); the header and the key match in any letter case
-#     ([Defaults], INJECT_HELP_HOOK), leaving the key set once, in the table
-#     that set it, else in the first defaults table; INJECT_HELP_HOOKS is not
-#     the key (b.hhk)
-#   - config.toml merge pre-check: a hooks-on install over a config that sets
-#     defaults as a key before any header (an inline table, in any letter
-#     case, also after a BOM with CRLF line ends) stops in pre-flight (exit 5),
-#     on a fresh HOME and over an installed store, before anything on disk
-#     changes; with --no-hooks the same config installs, left as it was, and
-#     agent-director list loads it; defaults in a comment, in a longer key or
-#     under another table merges as before (b.whe)
-#   - merge modes: a hooks-on re-install under umask 022 or 000 keeps the
-#     modes of the settings.json (a symlinked one too) and config.toml it
-#     merges into and gives their .bak copies the same, also over an earlier
-#     run's .new and .bak leftovers; each .new and .bak is owner-only until
-#     its chmod, each new file already has its mode when moved into place,
-#     and no backup uses cp -p (a cp that fails on it, as on NFS) (b.ojn)
-# It builds and runs agent-director and agent-director-admin binaries, so it
-# runs in the sandbox only (retry.sh refuses anywhere else, b.8dr); no
-# network. test-sandbox runs it too, through test/install-sh/retry_test.go.
-# This target runs the script alone. Fast — a fake sleep makes the backoffs
-# cost no wall time, and the scenarios pick small fail-first counts.
+# test-install-sh runs test/install-sh/retry.sh, install.sh's regression
+# script: --from-release installs and their download retries (b.kym), upgrades
+# that migrate the store, and the hooks-on merge into settings.json and
+# config.toml. The list of what it checks is retry.sh's header comment, beside
+# the cases; it is not repeated here, so it cannot drift (b.s4h). It builds
+# and runs agent-director and agent-director-admin binaries, so it runs in the
+# sandbox only (retry.sh refuses anywhere else, b.8dr); no network.
+# test-sandbox runs it too, through test/install-sh/retry_test.go. This target
+# runs the script alone. Fast — a fake sleep makes the backoffs cost no wall
+# time, and the scenarios pick small fail-first counts.
 test-install-sh: _sandbox-build
 	$(_SANDBOX_RUN) bash test/install-sh/retry.sh
 
@@ -146,17 +135,19 @@ test-install-sh: _sandbox-build
 test-install-sh-advice: _sandbox-build
 	$(_SANDBOX_RUN) bash test/install-sh/advice_follow.sh
 
-generate:
+# generate, surface-json and errnames-json run go generate, so each runs only
+# in the sandbox (_require-sandbox, b.8yq): make sandbox CMD="make generate".
+generate: _require-sandbox
 	go generate ./...
 
 # surface-json regenerates pkg/api/manifest/surface.json from the manifest.
 # Also run by 'make generate' via the //go:generate directive in pkg/api/manifest/doc.go.
-surface-json:
+surface-json: _require-sandbox
 	go generate ./pkg/api/manifest/...
 
 # errnames-json regenerates pkg/api/errnames/catalog.json from the err_name catalog.
 # Also run by 'make generate' via the //go:generate directive in pkg/api/errnames/doc.go.
-errnames-json:
+errnames-json: _require-sandbox
 	go generate ./pkg/api/errnames/...
 
 lint:
@@ -168,20 +159,24 @@ lint:
 #   (c) callable-verb manifest ErrorNames ⊆ errnames.Catalog
 #   (d) errnames.Catalog ⊆ callable-verb manifest ErrorNames
 #   (e) catalog.json and surface.json match their generators (via sub-tests)
-err-coherence:
+# It runs go test, so only in the sandbox (_require-sandbox, b.8yq).
+err-coherence: _require-sandbox
 	go test -timeout $(GO_TEST_TIMEOUT) ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
 
 # check-doccomments asserts that every exported identifier in pkg/api has a
 # non-empty doc comment. Exits non-zero with per-identifier diagnostics if
 # any are missing. Run this locally when adding a new exported symbol to
 # ensure it is documented before pushing. Wired into the doc-drift CI gate.
-check-doccomments:
+# It runs go run, so only in the sandbox (_require-sandbox, b.8yq):
+# make sandbox CMD="make check-doccomments".
+check-doccomments: _require-sandbox
 	go run ./tools/check-doccomments -package ./pkg/api
 
 # nondet-coverage checks that every callable verb in manifest.CallableVerbs()
 # has a top-level key in test/envelope-diff/nondeterministic.json and vice
-# versa. Exits non-zero with a descriptive message on any mismatch.
-nondet-coverage:
+# versa. Exits non-zero with a descriptive message on any mismatch. It runs
+# go run, so only in the sandbox (_require-sandbox, b.8yq).
+nondet-coverage: _require-sandbox
 	go run ./tools/check-nondet test/envelope-diff/nondeterministic.json
 
 # check-sandbox-bypass asserts that the sandbox-guard bypass
@@ -267,8 +262,11 @@ test-docker: test-image
 # list-test-docker-epics emits one Docker harness EPIC slug per line on
 # stdout, reading from test/docker-epics.txt (blank lines and comments
 # stripped). Consumed by the /release skill's coverage gate (E5) to
-# discover the test-docker EPIC set programmatically. Exits zero on
-# success; non-zero only if the source file is missing.
+# discover the test-docker EPIC set programmatically, and by the
+# docker-epics job of .github/workflows/integration.yml, which builds its
+# one-job-per-slug matrix from it (b.ug8). Exits zero on success; non-zero
+# if the source file is missing or lists no slug (grep then selects no
+# line).
 .PHONY: list-test-docker-epics
 list-test-docker-epics:
 	@if [ ! -f test/docker-epics.txt ]; then \
@@ -322,7 +320,7 @@ test-docker-install-mode: test-image
 # docs/engineering-guide.md "Sandboxed execution" for the per-host rationale.
 #
 # Targets:
-#   test-sandbox        full suite (go test ./... AND bun test)
+#   test-sandbox        full suite (build pkg/ts-bun-client, then go test ./... AND bun test)
 #   sandbox-shell       interactive bash in the container+mounts
 #   sandbox CMD="…"     run an arbitrary command in the container+mounts
 # ─────────────────────────────────────────────────────────────────────────
@@ -333,6 +331,10 @@ SANDBOX_IMAGE ?= agent-director-sandbox
 
 # CONTAINER_ENGINE — prefer podman, else docker. Override to force one:
 #   make test-sandbox CONTAINER_ENGINE=docker
+# The `command -v` here only chooses an engine; it never skips anything. With
+# neither engine on PATH it picks docker, and _sandbox-preflight (the first
+# prerequisite of every sandbox target) then fails with exit 1 and names the
+# missing engine (b.ug8 audit).
 CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 # _SANDBOX_UIDMAP — uid-mapping flag(s), engine-specific:
@@ -440,7 +442,7 @@ _SANDBOX_RUN = $(_SANDBOX_ENV) $(CONTAINER_ENGINE) run --rm \
 # then cached) and prints the detected configuration so a run is self-
 # documenting — done here, not in preflight, because the pid flag can only be
 # probed after the image is built.
-.PHONY: _sandbox-preflight _sandbox-build
+.PHONY: _sandbox-preflight _sandbox-build _require-sandbox
 _sandbox-preflight:
 	@if ! command -v $(CONTAINER_ENGINE) >/dev/null 2>&1; then \
 		echo "ERROR: container engine '$(CONTAINER_ENGINE)' not found on PATH." >&2; \
@@ -470,14 +472,185 @@ _sandbox-build: _sandbox-preflight
 	pid="$$(cat "$$f" 2>/dev/null)"; \
 	echo "[sandbox] engine=$(CONTAINER_ENGINE) net='$(_SANDBOX_NET)' pid='$$pid' uidmap='$(_SANDBOX_UIDMAP)'$(if $(strip $(SANDBOX_FLAGS)), extra='$(SANDBOX_FLAGS)',)"
 
+# _require-sandbox (b.8yq) is the one guard for the targets that run a go or
+# bun tool themselves (go generate, go run, go test, bun test): generate,
+# surface-json, errnames-json, check-doccomments, nondet-coverage,
+# err-coherence, release-smoke, envelope-diff-ts and test, and all through
+# generate. Each lists it as a prerequisite, so make stops before that
+# target's recipe runs; a dry run (make -n) only prints the check. When one
+# of them is a goal, every other recipe waits for the guard as well (b.uc7,
+# the block below): nothing runs before it, whatever the order of the goals,
+# under make -j too. It passes, printing nothing, where those tools may run:
+#   - inside the sandbox container: AGENT_DIRECTOR_TEST_SANDBOX is set there
+#     (_SANDBOX_RUN sets it), e.g. make sandbox CMD="make generate";
+#   - with BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS set, the CI bypass that
+#     sandboxguard.Require() also honours, for a runner with no real
+#     ~/.agent-director to damage (b.175). The doc-drift workflow sets it on
+#     each step that runs one of these targets directly (make generate,
+#     check-doccomments, err-coherence, surface-json, errnames-json and
+#     nondet-coverage) on its GitHub-hosted runner.
+# Anywhere else, such as a development host, it exits 2 and names the command
+# that runs the same goals in the sandbox: _REQUIRE_SANDBOX_ADVICE, which works
+# when followed as printed. It is built from all the goals, never from the
+# target that reached the guard first, and once, at global scope, so no
+# target's own variables change it (b.uc7): it is the same whatever their order
+# and under -j. The goals that cannot run in the sandbox never go in a
+# make sandbox CMD= (b.4a1); they run on the host: test as make test-sandbox
+# (make test cannot run in the sandbox, see test), and each goal in
+# _REQUIRE_SANDBOX_HOST_GOALS (below) as itself. All the other goals run in one
+# make sandbox CMD="make <those goals>". The host goals that come before the
+# first sandbox goal run in one make <goals> before that sandbox command, the
+# rest in one make <goals> after it, each in goal order, and the commands are
+# joined by &&. So the sandbox still runs once, and each host goal keeps its
+# place before or after it (with test alone among them: test-sandbox first
+# when test is the first goal, else last):
+#   make generate surface-json    make sandbox CMD="make generate surface-json"
+#   make test                     make test-sandbox
+#   make test generate            make test-sandbox && make sandbox CMD="make generate"
+#   make generate test surface-json
+#                                 make sandbox CMD="make generate surface-json" && make test-sandbox
+#   make generate test-docker     make sandbox CMD="make generate" && make test-docker
+#   make test-image generate test test-docker
+#                                 make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker
+# The variables given on the command line (EPIC=…, GO_TEST_TIMEOUT=…, CMD=…)
+# go in the advice too (b.qgr), so a goal that needs one still gets it: each
+# as one single-quoted 'NAME=value' word, sorted by name, on every make the
+# advice runs, the make inside the sandbox command's CMD= included. CMD
+# itself goes on the host makes only, as the sandbox command's CMD= is the
+# advice's own and no goal run inside it reads CMD:
+#   make generate test-docker EPIC=harness-smoke
+#     make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'" && make test-docker 'EPIC=harness-smoke'
+# Each value is copied unexpanded ($(value)), so building the advice runs
+# nothing in it, and the advice reaches printf through the environment (see
+# _require-sandbox), so no quote, newline or other character in a value can
+# end the recipe's quoting or start a command of its own (b.ay3).
+# Like AGENT_DIRECTOR_TEST_SANDBOX itself it is an accident-prevention gate,
+# not a security boundary: it keeps the rule that nothing runs on the host.
+_REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
+# _REQUIRE_SANDBOX_HOST_GOALS are the goals that work only on the host (b.4a1),
+# so the advice never puts one in a make sandbox CMD=. Each one runs a
+# container engine, itself or through a prerequisite (_sandbox-build or
+# test-image), and the sandbox image has none; or runs a host tool the image
+# lacks (shellcheck, the TLA job scheduler CLI); or checks or prints the
+# host's own setup (tla-print, measure-exit-print, _measure-exit-credentials).
+# Must use: a new target like these joins this list. A goal that runs the
+# same in either place (build, lint, list-test-docker-epics, …) stays out of
+# it and runs in the sandbox with the guarded goals.
+_REQUIRE_SANDBOX_HOST_GOALS := test-sandbox sandbox sandbox-shell \
+	_sandbox-preflight _sandbox-build test-install-sh test-install-sh-advice \
+	test-image test-image-smoke test-docker test-docker-install-mode \
+	verify-prerelease-linux measure-exit-dryrun measure-exit-print \
+	measure-image measure-exit _measure-exit-credentials \
+	release-shellcheck tla tla-print
+_REQUIRE_SANDBOX_ON_HOST = test $(_REQUIRE_SANDBOX_HOST_GOALS)
+# _require_sandbox_lead returns the goals of $(1) that come before the first
+# one that runs in the sandbox: all of them when none does.
+_require_sandbox_lead = $(if $(filter $(_REQUIRE_SANDBOX_ON_HOST),$(firstword $(1))),$(firstword $(1)) $(call _require_sandbox_lead,$(wordlist 2,$(words $(1)),$(1))))
+_REQUIRE_SANDBOX_LEAD = $(call _require_sandbox_lead,$(_REQUIRE_SANDBOX_GOALS))
+_REQUIRE_SANDBOX_REST = $(wordlist $(words x $(_REQUIRE_SANDBOX_LEAD)),$(words $(_REQUIRE_SANDBOX_GOALS)),$(_REQUIRE_SANDBOX_GOALS))
+_REQUIRE_SANDBOX_IN = $(filter-out $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
+_REQUIRE_SANDBOX_TAIL = $(filter $(_REQUIRE_SANDBOX_ON_HOST),$(_REQUIRE_SANDBOX_REST))
+# _REQUIRE_SANDBOX_VARS are the names of the variables given on the command
+# line, sorted. They are found by origin: MAKEOVERRIDES, where make lists
+# them, is emptied below (b.ay3).
+_REQUIRE_SANDBOX_VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v))))
+# _require_sandbox_q quotes $(1) as one POSIX shell word: in single quotes,
+# each ' in it as '\''.
+_require_sandbox_q = '$(subst ','\'',$(1))'
+# _require_sandbox_dq escapes $(1) for the inside of a "…" in a POSIX shell.
+_require_sandbox_dq = $(subst `,\`,$(subst $$,\$$,$(subst ",\",$(subst \,\\,$(1)))))
+# _require_sandbox_var returns NAME=value for the variable named $(1), as it
+# was given: the value unexpanded ($(value)), and when make had already
+# expanded it (:= or != on the command line) with each $ doubled, so the
+# NAME=value reads back the same.
+_require_sandbox_var = $(1)=$(if $(filter simple,$(flavor $(1))),$(subst $$,$$$$,$(value $(1))),$(value $(1)))
+# _require_sandbox_vars returns a space and the quoted NAME=value of each
+# variable named in $(1), space-separated; nothing when $(1) is empty.
+_require_sandbox_vars = $(if $(1), $(foreach v,$(1),$(call _require_sandbox_q,$(call _require_sandbox_var,$(v)))))
+# _require_sandbox_host_cmd returns make <the goals of $(1)> and the
+# command-line variables, run on the host, with test as test-sandbox; nothing
+# when $(1) is empty.
+_require_sandbox_host_cmd = $(if $(strip $(1)),make $(patsubst test,test-sandbox,$(strip $(1)))$(call _require_sandbox_vars,$(_REQUIRE_SANDBOX_VARS)))
+# The sandbox command takes every command-line variable but CMD, on make
+# sandbox and on the make inside its CMD=.
+_REQUIRE_SANDBOX_IN_VARS = $(call _require_sandbox_vars,$(filter-out CMD,$(_REQUIRE_SANDBOX_VARS)))
+_REQUIRE_SANDBOX_IN_CMD = $(if $(_REQUIRE_SANDBOX_IN),make sandbox$(_REQUIRE_SANDBOX_IN_VARS) CMD="$(call _require_sandbox_dq,make $(_REQUIRE_SANDBOX_IN)$(_REQUIRE_SANDBOX_IN_VARS))")
+# _require_sandbox_and joins two commands with &&, or returns the one that is
+# not empty. It strips nothing: a value's own spaces must stay.
+_require_sandbox_and = $(if $(1),$(if $(2),$(1) && $(2),$(1)),$(2))
+# The advice is built once, here at global scope (:=), not when the guard's
+# recipe runs (b.uc7). There _require-sandbox would see the target-specific
+# variables of the target that reached it first, as each prerequisite inherits
+# them: sandbox's override SANDBOX_FLAGS += … gives a command-line
+# SANDBOX_FLAGS the origin override and another value, so the advice of
+# make sandbox generate SANDBOX_FLAGS=… would drop it. Here every variable has
+# its global origin, value and flavor, whatever the goals' order. := expands
+# the line once and keeps the result as it is: the values copied by $(value)
+# are never expanded.
+_REQUIRE_SANDBOX_ADVICE := $(call _require_sandbox_and,$(call _require_sandbox_and,$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_LEAD)),$(_REQUIRE_SANDBOX_IN_CMD)),$(call _require_sandbox_host_cmd,$(_REQUIRE_SANDBOX_TAIL)))
+# The advice reaches the recipe in the environment, never in its text (b.qgr):
+# in the text a ' in a value would end the shell's quoting, and a newline would
+# end the line, which make runs as its own command. printf prints it as is,
+# where dash's echo would rewrite its backslashes.
+_require-sandbox: export AGENT_DIRECTOR_SANDBOX_ADVICE = $(_REQUIRE_SANDBOX_ADVICE)
+_require-sandbox:
+	@if [ -z "$$AGENT_DIRECTOR_TEST_SANDBOX" ] && [ -z "$$BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS" ]; then \
+		echo 'ERROR: make $(_REQUIRE_SANDBOX_GOALS) runs go or bun tools, which run only in the sandbox, never on the host (b.8yq).' >&2; \
+		echo '       AGENT_DIRECTOR_TEST_SANDBOX is unset, so this is not the sandbox. Nothing was run.' >&2; \
+		printf '       Run it in the sandbox: %s\n' "$$AGENT_DIRECTOR_SANDBOX_ADVICE" >&2; \
+		exit 2; \
+	fi
+
+# _REQUIRE_SANDBOX_GUARDED are the targets that reach the guard: those that
+# list _require-sandbox, and all, through generate.
+# Must use: a new target that lists _require-sandbox, or reaches one that
+# does through its prerequisites, joins this list.
+_REQUIRE_SANDBOX_GUARDED := generate surface-json errnames-json \
+	check-doccomments nondet-coverage err-coherence release-smoke \
+	envelope-diff-ts test all
+# _REQUIRE_SANDBOX_WAIT are the targets with a recipe of their own that do not
+# list _require-sandbox: the host goals and the others below. When a goal is in
+# _REQUIRE_SANDBOX_GUARDED, each of them waits for the guard (b.uc7), so no
+# recipe runs before its refusal: not a goal given before the guarded ones,
+# which make would otherwise build in full first (make test-docker generate),
+# nor a go build or docker build that make -j would start together with the
+# guard (make -j8 generate test-docker, make -j8 test). The wait is order-only,
+# so the guard never makes a file such as bin/ts-helper out of date. With no
+# such goal nothing waits: make build, make test-image and the sandbox targets
+# run on the host. In the sandbox the guard passes and the rest runs after it.
+# The list is kept by hand: a global .EXTRA_PREREQS would cover new targets
+# itself, but GNU make 4.3 does not add it to a target with variables of its
+# own (release-binaries, sandbox, tla, …).
+# Must use: a new target with a recipe joins this list (a host goal does
+# through _REQUIRE_SANDBOX_HOST_GOALS), unless it lists _require-sandbox.
+_REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint \
+	check-sandbox-bypass list-test-docker-epics consumer-dryrun \
+	release-binaries release-binaries-smoke release-bats \
+	verify-installed-pkg-full bin/ts-helper test/fake-tmux/tmux
+ifneq ($(filter $(_REQUIRE_SANDBOX_GUARDED),$(_REQUIRE_SANDBOX_GOALS)),)
+$(_REQUIRE_SANDBOX_WAIT): | _require-sandbox
+endif
+
 # test-sandbox runs the FULL suite (go test ./... then bun test) in the
 # container. The suite's exit code propagates and output streams live.
 # Both suites always run (the go result does NOT short-circuit bun, so one
 # invocation reports both), and the combined exit is non-zero if EITHER fails.
 # Each Go package gets GO_TEST_TIMEOUT, not Go's 10m default (see above).
+#
+# Before either suite it runs `bun install --frozen-lockfile` and `bun run
+# build` in pkg/ts-bun-client (b.2b3). node_modules/ and dist/ are gitignored,
+# so a fresh worktree or clone has neither, yet both suites read dist/: the
+# packaging and version-floor bun tests, and the Go synthetic-regression tests
+# that pack the package (verify-restage and others). Building it first means no
+# test depends on another test having built it. If either step fails, the target
+# stops with an error before any test runs.
 test-sandbox: _sandbox-build
 	$(_SANDBOX_RUN) \
-		bash -c 'rc=0; (cd /work && go test -timeout $(GO_TEST_TIMEOUT) ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
+		bash -c 'cd /work/pkg/ts-bun-client || exit 1; \
+			echo "[test-sandbox] bun install --frozen-lockfile and bun run build in pkg/ts-bun-client"; \
+			bun install --frozen-lockfile || { echo "ERROR: test-sandbox: bun install --frozen-lockfile failed in pkg/ts-bun-client; no tests ran. If package.json changed, run bun install there (make sandbox CMD=...) and commit bun.lock." >&2; exit 1; }; \
+			bun run build || { echo "ERROR: test-sandbox: bun run build failed in pkg/ts-bun-client; no tests ran. Both suites need its dist/; fix the build errors above." >&2; exit 1; }; \
+			rc=0; (cd /work && go test -timeout $(GO_TEST_TIMEOUT) ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
 
 # sandbox-shell drops you into an interactive bash inside the container with the
 # same mounts as the test targets — the place to run builds, `go generate`,
@@ -842,41 +1015,65 @@ agent-director: build
 #   fake-tmux      — ensures test/fake-tmux/tmux is built
 #
 # The test runner is invoked from the pkg/ts-bun-client directory so that
-# bunfig.toml and the local package.json are in scope.
-envelope-diff-ts: agent-director ts-helper fake-tmux
+# bunfig.toml and the local package.json are in scope. It runs bun test, so
+# only in the sandbox (_require-sandbox, b.8yq); outside it nothing is built
+# first, also under make -j (see _require-sandbox). In the sandbox:
+# make sandbox CMD="make envelope-diff-ts".
+envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
 	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 
 # release-shellcheck runs shellcheck against gate scripts under
-# skills/release-agent-director/gates/. The target is a no-op when
-# shellcheck is not installed locally so that bare `make` runs do not
-# require it. Add `SC2086` etc. to the disable list inline in the
-# respective script rather than globally here.
+# skills/release-agent-director/gates/. Its automated caller is the lint
+# workflow (.github/workflows/lint.yml), on every PR and push to main.
+#
+# It FAILS (exit 1) when shellcheck is not on PATH. It used to print
+# "skipping" and exit 0, so a run without shellcheck looked the same as a
+# clean one, and the target had never really run (b.ug8). To skip on
+# purpose on a machine without shellcheck, set SHELLCHECK_OPTIONAL=1
+# (`make release-shellcheck SHELLCHECK_OPTIONAL=1`): it then prints that
+# nothing was checked and exits 0. No automated caller sets it.
+#
+# -x -P SCRIPTDIR makes shellcheck follow each script's
+# `# shellcheck source=` directive (b.zs6). Add `SC2086` etc. to the disable
+# list inline in the respective script, with a one-line reason, rather than
+# globally here.
+SHELLCHECK_OPTIONAL ?=
 release-shellcheck:
-	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/gates/**/*.sh"; \
-		find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -x -P SCRIPTDIR -s bash; \
-	else \
-		echo "[release-shellcheck] shellcheck not installed — skipping"; \
-	fi
+	@if ! command -v shellcheck >/dev/null 2>&1; then \
+		if [ "$(SHELLCHECK_OPTIONAL)" = 1 ]; then \
+			echo "[release-shellcheck] shellcheck not on PATH — SKIPPED, nothing was checked (SHELLCHECK_OPTIONAL=1)" >&2; \
+			exit 0; \
+		fi; \
+		echo "ERROR: release-shellcheck: shellcheck is not on PATH, so no gate script was checked." >&2; \
+		echo "       Install shellcheck, or set SHELLCHECK_OPTIONAL=1 to skip this check on purpose." >&2; \
+		exit 1; \
+	fi; \
+	echo "[release-shellcheck] shellcheck skills/release-agent-director/gates/**/*.sh"; \
+	find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -x -P SCRIPTDIR -s bash
 
 # release-smoke runs the synthetic-regression test suite that replaced the
 # legacy test-*.sh harnesses (E10 retirement). Each test covers one gate or
-# phase invariant from the /release skill.
-release-smoke:
+# phase invariant from the /release skill. It runs go test, so only in the
+# sandbox (_require-sandbox, b.8yq): make sandbox CMD="make release-smoke".
+release-smoke: _require-sandbox
 	go test -timeout $(GO_TEST_TIMEOUT) ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
 
 # release-bats was retired alongside the cabi-matrix removal — the only
 # bats tests under skills/release-agent-director/tests/ exercised the
 # deleted cabi-collection paths. The target is kept as a no-op so any
-# stale CI lane that still calls it stays green.
+# stale CI lane that still calls it stays green. It checks nothing, so it
+# must never count as a gate: no workflow under .github/workflows/ and no
+# /release phase calls it (checked for b.ug8).
 release-bats:
 	@echo "[release-bats] no release bats tests in tree — skipping"
 
 # verify-installed-pkg-full performs a self-contained end-to-end install
 # verification of the ts-bun-client package against a real packed tarball.
-# It builds the release binaries, stages the host CLI into the platform
-# sub-packages, packs the umbrella tarball, installs it into an isolated
-# consumer project, and runs the --full makeTemplate gauntlet driver.
+# It builds the release binaries, packs the package, installs the tarball
+# into an isolated consumer project, and runs the --full makeTemplate
+# gauntlet driver against the host's stamped dist/agent-director-<os>-<arch>
+# binary, passed as AD_CLI_PATH (the package ships no CLI). bun --no-install
+# makes an unresolved import fail instead of fetching it from npm.
 # Temp HOME and consumer project dir are cleaned up via EXIT trap.
 verify-installed-pkg-full: SHELL = /bin/bash
 verify-installed-pkg-full: release-binaries
@@ -886,40 +1083,39 @@ verify-installed-pkg-full: release-binaries
 	_OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
 	_ARCH=$$(uname -m); \
 	case "$${_OS}-$${_ARCH}" in \
-		linux-x86_64)  _HOST_CROSS="linux-amd64"; _HOST_PKG="linux-x64" ;; \
-		darwin-arm64)  _HOST_CROSS="darwin-arm64"; _HOST_PKG="darwin-arm64" ;; \
+		linux-x86_64)  _HOST_CROSS="linux-amd64" ;; \
+		darwin-arm64)  _HOST_CROSS="darwin-arm64" ;; \
 		*) echo "unsupported host: $${_OS}-$${_ARCH}" >&2; exit 1 ;; \
 	esac; \
-	echo "[verify-installed-pkg-full] staging CLI into platform packages"; \
-	_STAGE_SRC="$$REPO_ROOT/dist/agent-director-$${_HOST_CROSS}"; \
-	_STAGE_DEST="$$REPO_ROOT/pkg/ts-bun-client/platforms/$${_HOST_PKG}/bin"; \
-	if [[ ! -f "$$_STAGE_SRC" ]]; then echo "missing $$_STAGE_SRC — was make release-binaries run?" >&2; exit 1; fi; \
-	mkdir -p "$$_STAGE_DEST"; \
-	cp "$$_STAGE_SRC" "$$_STAGE_DEST/agent-director"; \
-	chmod 0755 "$$_STAGE_DEST/agent-director"; \
-	log verify-installed-pkg-full "staged $$_STAGE_SRC → $$_STAGE_DEST/agent-director"; \
+	_CLI_PATH="$$REPO_ROOT/dist/agent-director-$${_HOST_CROSS}"; \
+	if [[ ! -f "$$_CLI_PATH" ]]; then echo "missing $$_CLI_PATH — was make release-binaries run?" >&2; exit 1; fi; \
+	log verify-installed-pkg-full "CLI under test: $$_CLI_PATH"; \
 	TMP_STAGING=$$(mktemp -d); \
 	TMP_HOME=$$(mktemp -d); \
 	TMP_CONSUMER=$$(mktemp -d); \
 	trap 'rm -rf "$$TMP_STAGING" "$$TMP_HOME" "$$TMP_CONSUMER"' EXIT; \
 	echo "[verify-installed-pkg-full] installing devDependencies (bun-types, typescript) for build"; \
 	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun install --no-progress >/dev/null; \
-	echo "[verify-installed-pkg-full] packing umbrella tarball"; \
+	echo "[verify-installed-pkg-full] packing package tarball"; \
 	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING"; \
 	TARBALL=$$(ls "$$TMP_STAGING"/*.tgz); \
 	echo "[verify-installed-pkg-full] installing into consumer project"; \
 	cd "$$TMP_CONSUMER"; \
 	printf '{"name":"verify-consumer","version":"1.0.0","type":"module"}\n' > package.json; \
 	HOME="$$TMP_HOME" bun add "$$TARBALL"; \
-	HOME="$$TMP_HOME" bun add "file:$$REPO_ROOT/pkg/ts-bun-client/platforms/$$_HOST_PKG"; \
 	echo "[verify-installed-pkg-full] running --full gauntlet"; \
 	cp "$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts" "$$TMP_CONSUMER/"; \
-	HOME="$$TMP_HOME" bun "$$TMP_CONSUMER/verify-installed-pkg.ts" --full
+	HOME="$$TMP_HOME" AD_CLI_PATH="$$_CLI_PATH" bun --no-install "$$TMP_CONSUMER/verify-installed-pkg.ts" --full
 
 # verify-prerelease-linux runs the pre-release Linux Docker verify gate.
-# Stages the linux-amd64 CLI binary, packs the umbrella tarball on the host,
-# copies the linux-x64 platform sub-package into the staging tmpdir, then mounts
-# everything into the test container and runs the consumer-install + --full flow.
+# Packs the package tarball on the host, then mounts it, the verify script and
+# the stamped dist/agent-director-linux-amd64 binary (at /agent-director)
+# read-only into the test container, and runs the consumer-install + --full
+# flow there with AD_CLI_PATH=/agent-director (the package ships no CLI).
+# The script runs from a copy inside the consumer dir: run as /verify.ts, Bun
+# finds no node_modules beside it and auto-installs the published package
+# from npm instead of the tarball (b.1ce); --no-install makes any such
+# fallback fail instead.
 # OTQ-1 resolution: test/Dockerfile already pins Bun (BUN_VERSION=1.3.13) and
 # installs it; this recipe reuses $(TEST_IMAGE) from make test-image —
 # no new Dockerfile added.
@@ -930,33 +1126,24 @@ verify-prerelease-linux: release-binaries
 	log() { local lvl="$$1"; shift; echo "[$$lvl] $$*"; }; \
 	TMP_STAGING=$$(mktemp -d); \
 	trap 'rm -rf "$$TMP_STAGING"' EXIT; \
-	log verify-prerelease-linux "staging linux-x64 CLI binary"; \
-	_STAGE_SRC="$$REPO_ROOT/dist/agent-director-linux-amd64"; \
-	_STAGE_DEST="$$REPO_ROOT/pkg/ts-bun-client/platforms/linux-x64/bin"; \
-	if [[ ! -f "$$_STAGE_SRC" ]]; then printf 'FAIL stage-cli: missing %s\n' "$$_STAGE_SRC" >&2; exit 1; fi; \
-	mkdir -p "$$_STAGE_DEST"; \
-	cp "$$_STAGE_SRC" "$$_STAGE_DEST/agent-director"; \
-	chmod 0755 "$$_STAGE_DEST/agent-director" \
-		|| { printf 'FAIL stage-cli\n' >&2; exit 1; }; \
-	log verify-prerelease-linux "packing umbrella tarball → $$TMP_STAGING"; \
+	CLI_BIN="$$REPO_ROOT/dist/agent-director-linux-amd64"; \
+	if [[ ! -f "$$CLI_BIN" ]]; then printf 'FAIL cli-binary: missing %s — was make release-binaries run?\n' "$$CLI_BIN" >&2; exit 1; fi; \
+	log verify-prerelease-linux "packing package tarball → $$TMP_STAGING"; \
 	( cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING" ) \
 		|| { printf 'FAIL bun-pack\n' >&2; exit 1; }; \
-	log verify-prerelease-linux "copying linux-x64 platform sub-package into staging dir"; \
-	mkdir -p "$$TMP_STAGING/platforms"; \
-	cp -r "$$REPO_ROOT/pkg/ts-bun-client/platforms/linux-x64" "$$TMP_STAGING/platforms/linux-x64" \
-		|| { printf 'FAIL copy-platform\n' >&2; exit 1; }; \
 	log verify-prerelease-linux "building/reusing $(TEST_IMAGE)"; \
 	$(MAKE) test-image \
 		|| { printf 'FAIL test-image\n' >&2; exit 1; }; \
 	VERIFY_SCRIPT="$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts"; \
-	INNER_CMD="set -eu; C=\$$(mktemp -d); cd \$$C && jq -n '{name:\"verify-consumer\",version:\"1.0.0\",type:\"module\"}' > package.json && bun add /staging/*.tgz && bun add file:/staging/platforms/linux-x64 && bun /verify.ts --full"; \
+	INNER_CMD="set -eu; C=\$$(mktemp -d); cd \$$C && jq -n '{name:\"verify-consumer\",version:\"1.0.0\",type:\"module\"}' > package.json && bun add /staging/*.tgz && cp /verify.ts ./verify.ts && AD_CLI_PATH=/agent-director bun --no-install ./verify.ts --full"; \
 	if [[ -n "$${VERIFY_PRERELEASE_DRY_RUN:-}" ]]; then \
-		echo "docker run --rm -v \"$$TMP_STAGING\":/staging:ro -v \"$$VERIFY_SCRIPT\":/verify.ts:ro $(TEST_IMAGE) bash -c \"$$INNER_CMD\""; \
+		echo "docker run --rm -v \"$$TMP_STAGING\":/staging:ro -v \"$$VERIFY_SCRIPT\":/verify.ts:ro -v \"$$CLI_BIN\":/agent-director:ro $(TEST_IMAGE) bash -c \"$$INNER_CMD\""; \
 		exit 0; \
 	fi; \
 	docker run --rm \
 		-v "$$TMP_STAGING":/staging:ro \
 		-v "$$VERIFY_SCRIPT":/verify.ts:ro \
+		-v "$$CLI_BIN":/agent-director:ro \
 		$(TEST_IMAGE) \
 		bash -c "$$INNER_CMD" \
 		|| { printf 'FAIL docker-run\n' >&2; exit 1; }

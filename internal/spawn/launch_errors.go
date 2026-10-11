@@ -22,8 +22,8 @@ const LaunchRetryRule = "do not retry until get shows the row ended or missing"
 // ReuseOptIn names the reuse opt-in in its one spelling for a description
 // every surface shows, manifest.ReuseOptInSpelling (b.c4u): the param name
 // MCP and the TypeScript client take, then the CLI flag, which the manifest's
-// spawn, kill and delete Descriptions use too. It is the one spelling the
-// runtime error texts build on (b.1qq, b.c4u).
+// spawn and kill (live-row step 6) Descriptions use too. It is the one
+// spelling the runtime error texts build on (b.1qq, b.c4u).
 const ReuseOptIn = "the reuse opt-in " + manifest.ReuseOptInSpelling
 
 // ReuseRetry names the retry that works for a plain spawn whose row for this

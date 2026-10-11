@@ -66,9 +66,21 @@ export interface ClientOptions {
    */
   home?: string;
   /**
-   * When `true`, create the store and initialize the database schema if the
-   * store file does not yet exist. When `false` (the default), opening a
-   * non-existent store returns an error. Mirrors `pkg/api.Options.CreateIfMissing`.
+   * Whether a call that opens the store creates it when it does not exist.
+   *
+   * - Omitted: the CLI's default, which creates a missing store.
+   * - `true`: a missing store is created (parent directories, file and
+   *   schema) by the first call that opens it. No flag is forwarded, since
+   *   this is the CLI's default.
+   * - `false`: forwarded as `--create-if-missing false`. A call that opens a
+   *   missing store rejects with `ErrStoreOpen` (its cause: the store is not
+   *   initialized) and creates none of it. Calls that open no store, such as
+   *   `version`, are unaffected.
+   *
+   * `true` and `false` mirror `pkg/api.Options.CreateIfMissing`; unlike that
+   * field, omitting this one keeps the CLI's default, which creates the store.
+   * `false` needs a CLI binary that knows `--create-if-missing`: an older
+   * binary rejects every call made with it. b.78b.
    */
   createIfMissing?: boolean;
   /** Optional logger for client-side warnings (e.g., non-fatal close errors). */
@@ -302,10 +314,11 @@ export interface ListRow {
 // Verb Params / Result interfaces
 //
 // One pair per callable verb in src/internal/verbs.ts.
-// Params field names follow the CLI flag names accepted by the
-// agent-director CLI subprocess (kebab-case flags map to snake_case keys
-// here). For verbs where pkg/api exposes a Params struct, the json tags on
-// that struct are authoritative.
+// Each Params field is named by its parameter's one snake_case name, the
+// same name MCP takes (a CLI flag, where there is one, is its dashed form),
+// except FindMissingParams.timeout_ms, which is TS-only and ignored.
+// For verbs where pkg/api exposes a Params struct, the json tags on that
+// struct are authoritative.
 // Result wire names follow the json:"..." tags on pkg/api result structs.
 // ---------------------------------------------------------------------------
 
@@ -327,16 +340,26 @@ export interface SpawnParams {
   ask?: string[];
   /** "on" | "off" | "" (use config default). */
   relay_mode?: string;
-  /** KEY→VALUE env-var overrides injected on the tmux session. */
+  /**
+   * KEY→VALUE env-var overrides injected on the tmux session. `AGENT_DIRECTOR_*`
+   * keys and `HOME` (any value) are refused with `ErrReservedEnvKey`, a template's
+   * included: an extra_env `HOME` would move the agent's hook to another
+   * agent-director store. Set an absolute `CLAUDE_CONFIG_DIR` to give the agent its
+   * own Claude Code config. A key that is not a valid env-var name (empty, or
+   * containing `=` or a NUL character, which tmux would read as a different
+   * variable) is refused with `ErrReservedEnvKey` too, a template's included,
+   * and never rewritten; the description says what is wrong with it, and
+   * nothing is launched.
+   */
   extra_env?: Record<string, string>;
-  /** Pass-through argv to `claude` after --settings. */
+  /** Pass-through argv to `claude` after the supervisor's own flags. */
   claude_args?: string[];
   /**
    * Skip pre-writing the folder-trust entry for `cwd` (into
    * `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets `CLAUDE_CONFIG_DIR`,
-   * else `<HOME>/.claude.json` when it sets `HOME`, otherwise `~/.claude.json`). The
-   * choice is recorded on the row for its life, and every `resume` of that life
-   * follows it. The result then reports `pre_trust: "skipped"`. Default false.
+   * otherwise `~/.claude.json`). The choice is recorded on the row for its life,
+   * and every `resume` of that life follows it. The result then reports
+   * `pre_trust: "skipped"`. Default false.
    */
   no_pre_trust?: boolean;
   /** Explicit tmux session name. Auto-derived when absent. */
@@ -362,15 +385,14 @@ export interface SpawnResult {
    * written. `"skipped"`: pre-trust was off for this launch because the caller passed
    * `no_pre_trust`; nothing was attempted. `"failed"`: pre-trust was attempted and the
    * entry was not written (the `.claude.json` file is missing, or could not be read,
-   * parsed or written, or `extra_env` sets `CLAUDE_CONFIG_DIR`, or with no
-   * `CLAUDE_CONFIG_DIR` sets `HOME`, to a path that is not absolute); the agent may
-   * stop at Claude Code's folder-trust prompt. A pre-trust failure never fails the
-   * spawn.
+   * parsed or written, or `extra_env` sets `CLAUDE_CONFIG_DIR` to a path that is not
+   * absolute); the agent may stop at Claude Code's folder-trust prompt. A pre-trust
+   * failure never fails the spawn.
    */
   pre_trust: "ok" | "skipped" | "failed";
 }
 
-/** Mirrors the `status` CLI verb's --claude-instance-id flag (pkg/api.Client.Status arg). */
+/** Mirrors the `status` verb's `claude_instance_id` param (pkg/api.Client.Status arg). */
 export interface StatusParams {
   /** Id of the Spawn to inspect. */
   claude_instance_id: string;
@@ -401,7 +423,7 @@ export interface StatusResult {
   launch_started_at?: string | null;
 }
 
-/** Mirrors the `get` CLI verb's --claude-instance-id flag (pkg/api.Client.Get arg). */
+/** Mirrors the `get` verb's `claude_instance_id` param (pkg/api.Client.Get arg). */
 export interface GetParams {
   /** Id of the Spawn to fetch. */
   claude_instance_id: string;
@@ -556,7 +578,7 @@ export interface SendKeysResult {}
 export interface ReadPaneParams {
   /** Id of the Spawn whose pane will be captured. */
   claude_instance_id: string;
-  /** Trailing lines to return. Defaults to 25 when 0/omitted. */
+  /** Trailing lines to return. Defaults to 25 when 0/omitted. A negative value is refused (ErrInvalidFlags). */
   n_lines?: number;
   /** When true return raw bytes (ANSI preserved); when false strip ANSI (default). */
   ansi?: boolean;
@@ -798,9 +820,8 @@ export interface ResumeResult {
    * the spawn that began its life turned it off (`no_pre_trust`); nothing was attempted.
    * `"failed"`: pre-trust was attempted and the entry was not written (the `.claude.json`
    * file is missing, or could not be read, parsed or written, or the row's `extra_env`
-   * sets `CLAUDE_CONFIG_DIR`, or with no `CLAUDE_CONFIG_DIR` sets `HOME`, to a path that
-   * is not absolute); the agent may stop at Claude Code's folder-trust prompt. A
-   * pre-trust failure never fails the resume.
+   * sets `CLAUDE_CONFIG_DIR` to a path that is not absolute); the agent may stop at
+   * Claude Code's folder-trust prompt. A pre-trust failure never fails the resume.
    */
   pre_trust: "ok" | "skipped" | "failed";
 }
@@ -852,7 +873,7 @@ export interface FindMissingResult {
   unverified_ids: string[];
 }
 
-/** Mirrors the `expire` CLI verb's --older-than flag (pkg/api.Client.Expire arg). */
+/** Mirrors the `expire` verb's `older_than` param (pkg/api.Client.Expire arg). */
 export interface ExpireParams {
   /**
    * Duration override (e.g. "7d", "2h", "0d"). When omitted, the config
@@ -903,9 +924,14 @@ export interface MakeTemplateParams {
   cwd?: string;
   /** Default relay mode: "on" | "off" | "" (inherit). */
   relay_mode?: string;
-  /** Default claude argv. Per-call --claude-args replaces wholesale. */
+  /** Default claude argv. Per-call `claude_args` replaces wholesale. */
   claude_args?: string[];
-  /** Env-var overrides to bake in. */
+  /**
+   * Env-var overrides to bake in. A key spawn would refuse is refused here with
+   * `ErrReservedEnvKey` and nothing is written: `AGENT_DIRECTOR_*` keys, `HOME`
+   * (any value), and a key that is not a valid env-var name (empty, or
+   * containing `=` or a NUL character); the description says which.
+   */
   extra_env?: Record<string, string>;
   /** Label k=v entries to bake in. */
   label?: string[];
@@ -944,7 +970,7 @@ export interface ListParams {
   cwd?: string;
   /** Filter by tmux session name exact match. */
   tmux_session_name?: string;
-  /** Cap result count. 0/omitted means no cap. */
+  /** Cap result count. 0/omitted means no cap. A negative value is refused (ErrInvalidFlags). */
   limit?: number;
 }
 

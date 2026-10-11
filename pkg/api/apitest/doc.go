@@ -106,7 +106,7 @@
 //     forbid values. AssertAgentText is the forbidden-only check for
 //     manifest-like texts (the same session-ending, attach and opt-in forms,
 //     so no agent-visible text tells an agent to run a tmux command; the
-//     ad.launch.name_held trail and the README's "Operator actions" are not
+//     ad.launch.name_held trail and docs/operator-actions.md are not
 //     checked); AssertAgentTextCase adds
 //     a DescCase's phrases for a rule such a text must state (for example
 //     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). AssertMustNot checks
@@ -188,7 +188,7 @@
 //     DescFindMissingField, its ids and unverified_ids result fields;
 //     DescMissingNotProof, SR-18.2's full statement for a text that states
 //     it in full, and DescMissingNotProofShort, its short form for the
-//     kill, resume, pause, expire and delete descriptions (decision-0930e);
+//     kill, resume, pause and expire descriptions (decision-0930e);
 //     and FindMissingOwnText, which cuts find-missing's own text
 //     before the pointer), or of expire's manifest texts
 //     (descriptions_expire.go: DescExpireManifest, its Description;

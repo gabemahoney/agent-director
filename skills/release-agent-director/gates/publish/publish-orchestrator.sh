@@ -17,15 +17,20 @@
 #     --notes <path-to-notes.md>    # release notes file for gh release
 #     --binaries <comma-sep-paths>  # CLI binaries to attach as gh release assets
 #
-#   Path inputs (--tarball, --notes, --binaries): relative paths are resolved to
-#   absolute AT PARSE TIME against the caller's current working directory (NOT
-#   the worktree root), before any substep cd's. All resolved paths must exist as
-#   readable files — the artifact preflight (see below) checks this before any
-#   substep runs.
+#   Path inputs (--tarball, --notes, --binaries, --prior-phases): relative paths
+#   are resolved to absolute AT PARSE TIME against the caller's current working
+#   directory (NOT the worktree root), before any substep cd's. The resolved
+#   --tarball/--notes/--binaries paths must exist as readable files — the
+#   artifact preflight (see below) checks this before any substep runs.
 #     [--release | --dry-run]       # default: dry-run
 #     [--worktree-root <path>]      # defaults to "."
 #     [--release-branch <name>]     # defaults to "release/v<target>"
-#     [--prior-phases <json-file>]  # JSON array from earlier phases; default []
+#     [--prior-phases <json-file>]  # JSON array from earlier phases; default [].
+#                                   # When given, it must be a readable regular
+#                                   # file holding exactly one JSON array, or
+#                                   # the run exits 2 before any substep. It is
+#                                   # read once, at startup; later changes to
+#                                   # the file do not reach the report.
 #     [--bump-kind <patch|minor|major>]  # for the report; default "unknown"
 #     [--source-version <semver>]        # for the report; default "unknown"
 #     [--simulate-failure-at <substep>]  # DEBUG: force a substep to exit 1 in
@@ -60,7 +65,8 @@
 #      --tarball/--notes/--binaries path is not a readable file — checked in both
 #      --release and --dry-run before any substep) OR substep failure
 #      (halt-on-failure). SR-14 diagnostic emitted to stderr in both cases.
-#   2  argument error
+#   2  argument error, including a --prior-phases file that is missing,
+#      unreadable, not a regular file, or does not hold exactly one JSON array
 
 set -uo pipefail
 
@@ -161,8 +167,9 @@ _resolve_abs_path() {
 # Resolve every file-input argument to an absolute path NOW, at the top level,
 # while $PWD is still the caller's CWD (no substep has cd'd anywhere yet). This
 # makes the values independent of the pkg/ts-bun-client subshell cd in
-# _do_npm_publish and of any future cd (b.mjd). Existence is validated later by
-# validate_publish_artifacts; here we only make the paths absolute.
+# _do_npm_publish and of any future cd (b.mjd). Existence of the artifacts is
+# validated later by validate_publish_artifacts, and of --prior-phases by the
+# snapshot below; here we only make the paths absolute.
 #
 # CALLER_CWD is the directory relative inputs were resolved against — captured
 # here, while $PWD is still the caller's CWD. validate_publish_artifacts surfaces
@@ -172,21 +179,44 @@ CALLER_CWD="${PWD}"
 TARBALL="$(_resolve_abs_path "${TARBALL}")"
 NOTES="$(_resolve_abs_path "${NOTES}")"
 for _i in "${!BINARY_PATHS[@]}"; do
-  BINARY_PATHS[$_i]="$(_resolve_abs_path "${BINARY_PATHS[$_i]}")"
+  BINARY_PATHS[_i]="$(_resolve_abs_path "${BINARY_PATHS[_i]}")"
 done
 unset _i
+PRIOR_PHASES_FILE="$(_resolve_abs_path "${PRIOR_PHASES_FILE}")"
 
-# JSON-escape: backslash → \\, double-quote → \", newline → \n
-_jesc() {
-  printf '%s' "$1" \
-    | sed -e 's/\\/\\\\/g' \
-          -e 's/"/\\"/g' \
-          -e ':a;N;$!ba;s/\n/\\n/g'
-}
+# ─── --prior-phases snapshot ──────────────────────────────────────────────────
+# A named --prior-phases file must be a readable regular file holding exactly
+# one JSON array. Otherwise the run exits 2 here — before the artifact preflight
+# and any substep, writing no report — instead of the file being dropped from,
+# or emptying, the report after the irreversible substeps have run (b.2wr).
+#
+# The file is read exactly once, here: PRIOR_PHASES_JSON holds its array
+# (compact JSON) and is the only copy write_report and emit_terminal_summary
+# use, so a file deleted, emptied or rewritten while the substeps run cannot
+# shift or empty the report. jq reads the file itself, and the copy reaches
+# later jq calls through printf (a bash builtin) on stdin; it is never passed
+# as an argument or exported, so Linux's 128 KiB MAX_ARG_STRLEN does not limit
+# its size. Without --prior-phases the phases are [].
+PRIOR_PHASES_JSON="[]"
+if [[ -n "${PRIOR_PHASES_FILE}" ]]; then
+  if [[ ! -f "${PRIOR_PHASES_FILE}" || ! -r "${PRIOR_PHASES_FILE}" ]]; then
+    printf 'publish-orchestrator.sh: --prior-phases is not a readable regular file: %s\n' \
+      "${PRIOR_PHASES_FILE}" >&2
+    exit 2
+  fi
+  if ! PRIOR_PHASES_JSON="$(jq -sc \
+      'if length == 1 and (.[0] | type) == "array" then .[0]
+       else error("not exactly one JSON array") end' \
+      "${PRIOR_PHASES_FILE}")"; then
+    printf 'publish-orchestrator.sh: --prior-phases file does not hold exactly one JSON array: %s\n' \
+      "${PRIOR_PHASES_FILE}" >&2
+    exit 2
+  fi
+fi
 
 # ─── emit_publish_diagnostic ──────────────────────────────────────────────────
-# Emits an extended SR-14 diagnostic (publish-phase fields) to stderr and
-# appends the JSON string to the DIAGNOSTICS array.
+# Emits an extended SR-14 diagnostic (publish-phase fields) to stderr as one
+# compact JSON line and appends the same line to the DIAGNOSTICS array.
 #
 # Usage: emit_publish_diagnostic <substep-short-name> <description> \
 #                                <corrective_action> <upstream_verbatim> \
@@ -196,6 +226,17 @@ _jesc() {
 # behaviour of every call site that does not pass it. Callers that know the
 # bad path (e.g. validate_publish_artifacts) pass the resolved absolute path so
 # operators can consult the recovery-cheatsheet field directly (b.mjd).
+#
+# The four caller-supplied strings reach jq on stdin, never as arguments (b.nsa,
+# the same rule emit_diagnostic follows since b.v46): upstream_verbatim is raw
+# npm/gh/git output and the description and corrective action can embed paths,
+# and one argument over Linux's MAX_ARG_STRLEN (128 KiB) makes the exec of jq
+# fail with "Argument list too long", so no diagnostic at all would be written.
+# Each string is turned into one JSON string by its own `jq -Rs .` (printf is a
+# bash builtin, so the pipe has no size limit; -Rs keeps the value unchanged,
+# trailing newlines included) and the final jq slurps the four of them as an
+# array. Only the gate name and the list of succeeded substep names, both
+# short, go as arguments.
 emit_publish_diagnostic() {
   local substep="$1"
   local description="$2"
@@ -203,36 +244,35 @@ emit_publish_diagnostic() {
   local upstream_verbatim="$4"
   local offending="${5:-}"
 
-  # Build prior_substeps_succeeded JSON array
+  # Build prior_substeps_succeeded JSON array (at most six substep names).
   local prior_json="[]"
   if [[ ${#SUCCEEDED_SUBSTEPS[@]} -gt 0 ]]; then
     prior_json="$(printf '%s\n' "${SUCCEEDED_SUBSTEPS[@]}" | jq -R . | jq -sc '.')"
   fi
 
-  # Empty → JSON null; non-empty → JSON string (jq --arg handles escaping).
-  local offending_json="null"
-  if [[ -n "${offending}" ]]; then
-    offending_json="$(jq -n --arg v "${offending}" '$v')"
-  fi
-
+  # offending_file_or_artifact: empty → JSON null; non-empty → JSON string.
   local diag
-  diag="$(jq -n \
-    --arg gate                    "publish.${substep}" \
-    --arg description             "$description" \
-    --arg corrective_action       "$corrective" \
-    --arg which_substep_failed    "publish.${substep}" \
-    --argjson prior_substeps_succeeded "$prior_json" \
-    --arg upstream_response_verbatim   "$upstream_verbatim" \
-    --argjson offending_file_or_artifact "$offending_json" \
-    '{
-      gate:                       $gate,
-      offending_file_or_artifact: $offending_file_or_artifact,
-      description:                $description,
-      corrective_action:          $corrective_action,
-      which_substep_failed:       $which_substep_failed,
-      prior_substeps_succeeded:   $prior_substeps_succeeded,
-      upstream_response_verbatim: $upstream_response_verbatim
-    }')"
+  diag="$(
+    {
+      printf '%s' "$offending"         | jq -Rs .
+      printf '%s' "$description"       | jq -Rs .
+      printf '%s' "$corrective"        | jq -Rs .
+      printf '%s' "$upstream_verbatim" | jq -Rs .
+    } | jq -cs \
+      --arg     gate                     "publish.${substep}" \
+      --arg     which_substep_failed     "publish.${substep}" \
+      --argjson prior_substeps_succeeded "$prior_json" \
+      '. as [$offending, $description, $corrective_action, $upstream_response_verbatim]
+      | {
+          gate:                       $gate,
+          offending_file_or_artifact: (if $offending == "" then null else $offending end),
+          description:                $description,
+          corrective_action:          $corrective_action,
+          which_substep_failed:       $which_substep_failed,
+          prior_substeps_succeeded:   $prior_substeps_succeeded,
+          upstream_response_verbatim: $upstream_response_verbatim
+        }'
+  )"
 
   printf '%s\n' "$diag" >&2
   DIAGNOSTICS+=("$diag")
@@ -242,6 +282,10 @@ emit_publish_diagnostic() {
 # Appends a substep result JSON object to SUBSTEP_RESULTS.
 #
 # Usage: record_substep <full-name> <outcome> <command> <started_at> <response_excerpt>
+#
+# response_excerpt is a substep's raw output (on failure, the same text as the
+# diagnostic's upstream_response_verbatim), so it reaches jq on stdin rather
+# than as an argument, which Linux caps at 128 KiB (b.nsa).
 record_substep() {
   local name="$1"
   local outcome="$2"
@@ -249,18 +293,17 @@ record_substep() {
   local started_at="$4"
   local response_excerpt="$5"
 
-  SUBSTEP_RESULTS+=("$(jq -n \
+  SUBSTEP_RESULTS+=("$(printf '%s' "$response_excerpt" | jq -Rs \
     --arg name             "$name" \
     --arg outcome          "$outcome" \
     --arg command          "$command" \
     --arg started_at       "$started_at" \
-    --arg response_excerpt "$response_excerpt" \
     '{
       name:             $name,
       outcome:          $outcome,
       command:          $command,
       started_at:       $started_at,
-      response_excerpt: $response_excerpt
+      response_excerpt: .
     }')")
 }
 
@@ -332,8 +375,20 @@ failure_description() {
 
 # ─── write_report ─────────────────────────────────────────────────────────────
 # Writes dist/release-report.json with all collected substep results.
+#
+# The prior phases, substeps and diagnostics arrays carry gate and substep
+# output verbatim, so they reach jq on stdin as three JSON values rather than
+# as --argjson, which Linux caps at 128 KiB per argument (b.nsa, b.2wr). The
+# prior phases come from PRIOR_PHASES_JSON, the copy taken at startup, never
+# from re-reading the file. jq refuses anything but exactly three arrays, so
+# a missing or extra value can never shift the fields.
+#
+# If jq or the write fails, the partial report is removed and the failure is
+# reported on stderr in place of the "written" line, and write_report returns
+# non-zero.
 write_report() {
   local elapsed_seconds="$1"
+  local report="${DIST_DIR}/release-report.json"
 
   local substeps_json="[]"
   if [[ ${#SUBSTEP_RESULTS[@]} -gt 0 ]]; then
@@ -345,22 +400,19 @@ write_report() {
     diagnostics_json="$(printf '%s\n' "${DIAGNOSTICS[@]}" | jq -sc '.')"
   fi
 
-  local prior_phases_json="[]"
-  if [[ -n "${PRIOR_PHASES_FILE}" && -f "${PRIOR_PHASES_FILE}" ]]; then
-    prior_phases_json="$(cat "${PRIOR_PHASES_FILE}")"
-  fi
-
-  jq -n \
+  local rc=0
+  printf '%s\n%s\n%s\n' "${PRIOR_PHASES_JSON}" "${substeps_json}" "${diagnostics_json}" | jq -s \
     --arg      invocation_timestamp "${INVOCATION_TS}" \
     --arg      mode                 "${MODE}" \
     --arg      bump_kind            "${BUMP_KIND}" \
     --arg      source_version       "${SOURCE_VERSION}" \
     --arg      target_version       "${TARGET}" \
-    --argjson  phases               "${prior_phases_json}" \
-    --argjson  publish_substeps     "${substeps_json}" \
-    --argjson  diagnostics          "${diagnostics_json}" \
     --argjson  elapsed_seconds      "${elapsed_seconds}" \
-    '{
+    'if length != 3 or any(.[]; type != "array") then
+       error("want 3 JSON arrays (phases, publish_substeps, diagnostics), got \(map(type))")
+     else . end
+    | . as [$phases, $publish_substeps, $diagnostics]
+    | {
       invocation_timestamp: $invocation_timestamp,
       mode:                 $mode,
       bump_kind:            $bump_kind,
@@ -370,9 +422,16 @@ write_report() {
       publish_substeps:     $publish_substeps,
       diagnostics:          $diagnostics,
       elapsed_seconds:      $elapsed_seconds
-    }' > "${DIST_DIR}/release-report.json"
+    }' > "${report}" || rc=$?
 
-  printf 'release-report written → %s/release-report.json\n' "${DIST_DIR}" >&2
+  if [[ ${rc} -ne 0 ]]; then
+    rm -f "${report}"
+    printf 'publish-orchestrator.sh: ERROR: release-report NOT written: jq or the write to %s failed (exit %s)\n' \
+      "${report}" "${rc}" >&2
+    return "${rc}"
+  fi
+
+  printf 'release-report written → %s\n' "${report}" >&2
 }
 
 # ─── emit_terminal_summary ────────────────────────────────────────────────────
@@ -380,13 +439,11 @@ emit_terminal_summary() {
   local elapsed="$1"
   local mode_label="${MODE}"
 
-  # phases line from prior-phases file
-  local phases_line="(none)"
-  if [[ -n "${PRIOR_PHASES_FILE}" && -f "${PRIOR_PHASES_FILE}" ]]; then
-    phases_line="$(jq -r '[.[] | "\(.name)=\(.outcome)"] | join(", ")' \
-      "${PRIOR_PHASES_FILE}" 2>/dev/null || echo "(none)")"
-    [[ -z "$phases_line" ]] && phases_line="(none)"
-  fi
+  # phases line from the --prior-phases copy taken at startup ([] without it)
+  local phases_line
+  phases_line="$(printf '%s' "${PRIOR_PHASES_JSON}" \
+    | jq -r '[.[] | "\(.name)=\(.outcome)"] | join(", ")' 2>/dev/null || echo "(none)")"
+  [[ -z "$phases_line" ]] && phases_line="(none)"
 
   # publish substeps line
   local publish_line=""

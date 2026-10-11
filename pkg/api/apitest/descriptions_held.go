@@ -249,7 +249,7 @@ func appendMissing(list []string, ps ...string) []string {
 // conflicts for another row's or another store's session point nowhere
 // (SR-1.4).
 func (c DescCase) withoutOperatorActions() DescCase {
-	c.MustNot = append(append([]string(nil), c.MustNot...), strconv.Quote(OperatorActionsTitle))
+	c.MustNot = append(append([]string(nil), c.MustNot...), OperatorActionsDoc)
 	return c
 }
 
@@ -366,7 +366,7 @@ func DescSpawnHeldName() DescCase {
 			"already held", "ends its new row at once", "ErrTmuxSessionConflict naming the holder",
 			"holder vanished", "ErrTmuxSessionConflict is CONFLICT (permanent until a human looks)",
 			"another row's", "another agent-director store", "must not be ended", "no valid instance id",
-			strconv.Quote(OperatorActionsTitle), "spawn the id again with " + reuseOptInSpelling,
+			OperatorActionsDoc, "spawn the id again with " + reuseOptInSpelling,
 		},
 		MustNot: []string{
 			heldRowSentences[HeldRowEnded], heldRowSentences[HeldRowLeftAsIs], heldRowSentences[HeldRowStoreError],

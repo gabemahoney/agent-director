@@ -1,6 +1,6 @@
 package api_test
 
-// readme_store_id_test.go runs the README's "This store's id" sqlite3 command
+// readme_store_id_test.go runs docs/operator-actions.md's "This store's id" sqlite3 command
 // against a fresh store under a temp HOME and checks it prints the store's
 // own id (Store.StoreID). The command's documented shape and the pointers to
 // it are pinned in readme_operator_actions_more_test.go, not here.
@@ -23,7 +23,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
-// runnableStoreIDLine returns the one sqlite3 line of the README's "This
+// runnableStoreIDLine returns the one sqlite3 line of docs/operator-actions.md's "This
 // store's id" item (storeIDItemCommands), refusing a line that is not
 // read-only, since the test runs it. Its one <busy_timeout_ms> placeholder
 // becomes config.DefaultStoreBusyTimeoutMs, the value of the temp HOME's
@@ -31,7 +31,7 @@ import (
 // placeholder as 0 and never wait for a lock.
 func runnableStoreIDLine(t *testing.T) string {
 	t.Helper()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	cmds := storeIDItemCommands(t, d)
 	if len(cmds) != 1 || !strings.HasPrefix(cmds[0], "sqlite3 -readonly ") {
 		t.Fatalf("%s %q: want exactly one sqlite3 line, with -readonly, in a code block; found %q", d.path, storeIDItemTitle, cmds)
@@ -115,7 +115,7 @@ func operatorSQLiteRC(t *testing.T, rc string) string {
 	return "AGENT_DIRECTOR_TEST_SQLITERC=" + rc
 }
 
-// TestReadmeStoreIDCommandPrintsStoreID runs the README's store-id line with
+// TestReadmeStoreIDCommandPrintsStoreID runs docs/operator-actions.md's store-id line with
 // HOME at a temp dir holding a fresh store: closed, held open, while another
 // connection briefly holds its exclusive lock (b.ady), and under an operator
 // ~/.sqliterc that turns headers on (b.hk7). A missing sqlite3 fails inside
@@ -127,7 +127,7 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 		if os.Getenv(sandboxguard.EnvVar) != "" {
 			t.Fatalf("sqlite3 not on PATH inside the sandbox (%s is set): the sandbox image must install it: %v", sandboxguard.EnvVar, err)
 		}
-		t.Skip("sqlite3 not on PATH: the README's store-id command cannot be run here (the sandbox image installs it)")
+		t.Skip("sqlite3 not on PATH: the operator-actions store-id command cannot be run here (the sandbox image installs it)")
 	}
 	line := runnableStoreIDLine(t)
 	for _, tc := range []struct {
@@ -179,13 +179,13 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 			start := time.Now()
 			out, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("README line %s: %v; stderr: %s", line, err, stderr.String())
+				t.Fatalf("operator-actions line %s: %v; stderr: %s", line, err, stderr.String())
 			}
 			if got := strings.TrimSpace(string(out)); got != want {
-				t.Errorf("README line %s printed %q; Store.StoreID() is %q", line, got, want)
+				t.Errorf("operator-actions line %s printed %q; Store.StoreID() is %q", line, got, want)
 			}
 			if waited := time.Since(start); waited < tc.lockFor/2 {
-				t.Errorf("README line returned after %v, well before the %v lock was released: the lock never blocked it", waited, tc.lockFor)
+				t.Errorf("operator-actions line returned after %v, well before the %v lock was released: the lock never blocked it", waited, tc.lockFor)
 			}
 		})
 	}

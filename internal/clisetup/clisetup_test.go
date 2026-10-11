@@ -5,7 +5,32 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
+
+// TestAPIOptions: the overrides' store path and tmux command pass through, and
+// a missing store is created unless --create-if-missing false set it off (Pin 1, b.78b).
+func TestAPIOptions(t *testing.T) {
+	cases := []struct {
+		name   string
+		o      clisetup.Overrides
+		create bool
+	}{
+		{"no overrides", clisetup.Overrides{}, true},
+		{"paths, no --create-if-missing", clisetup.Overrides{StorePath: "/s.db", TmuxCommand: "/bin/tmux"}, true},
+		{"--create-if-missing true", clisetup.Overrides{CreateIfMissing: true, CreateIfMissingSet: true}, true},
+		{"--create-if-missing false", clisetup.Overrides{StorePath: "/s.db", CreateIfMissingSet: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := pkgapi.Options{ConfigPath: clisetup.ConfigPath, CreateIfMissing: tc.create,
+				StorePath: tc.o.StorePath, TmuxCommand: tc.o.TmuxCommand}
+			if got := clisetup.APIOptions(tc.o); got != want {
+				t.Errorf("APIOptions(%+v) = %+v; want %+v", tc.o, got, want)
+			}
+		})
+	}
+}
 
 // TestOpenErrorIs: an OpenError matches the sentinel its Name names and no
 // other clisetup sentinel, and its cause still matches (b.vma, b.cm7).

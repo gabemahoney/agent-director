@@ -1,6 +1,6 @@
 package api_test
 
-// sendkeys_pending_test.go: send-keys --allow-pending on a pending launch of
+// sendkeys_pending_test.go: send-keys with allow_pending on a pending launch of
 // a fresh spawn and a reuse (SR-7.1, SR-7.2, SR-3.4, SR-3.6, SR-22.7, SR-22.8,
 // SR-10; AC-PANE-08, AC-PANE-09, AC-SPN-07, AC-LKP-20): delivered only into
 // the current launch's own pane by id, the refusals with nothing sent, the

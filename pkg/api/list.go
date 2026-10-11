@@ -46,7 +46,8 @@ type ListParams struct {
 	// TmuxSessionName filters by tmux session name exact match. Empty means
 	// no filter. Matches both live and ended rows.
 	TmuxSessionName string
-	// Limit caps the number of rows returned. 0 means no cap.
+	// Limit caps the number of rows returned. 0 means no cap. A negative
+	// value is refused with [ErrInvalidFlags].
 	Limit int
 }
 
@@ -132,10 +133,16 @@ type ListResult struct {
 //   - Returned order is unspecified. Callers wanting stable order
 //     sort the slice themselves (e.g. via jq).
 //
-// Validation: every Labels entry must contain a literal `=`. A label
-// of the form `foo` (no separator) yields ErrListInvalidLabel; the
-// store is never reached. Empty key (`=v`) is also rejected so the
-// json_extract path never receives an empty key string.
+// Validation: a negative Limit yields ErrInvalidFlags, refused rather than
+// read as "no cap" (b.c4n). Every Labels entry must contain a literal `=`.
+// A label of the form `foo` (no separator) yields ErrListInvalidLabel. Empty
+// key (`=v`) is also rejected so the json_extract path never receives an
+// empty key string. On either refusal the store is never reached.
+//
+// Every failure (a negative limit, an invalid label, the store read's error,
+// the permission-request read's error, or ErrClientClosed from (c
+// *Client).List) returns Spawns as a non-nil empty slice, as ListResult
+// documents (b.hbt).
 //
 // Each row in check_permission carries its open permission requests with
 // their delivery facts, judged through v and read as Get reads them (the
@@ -158,11 +165,15 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 // before (permission requests are never debounced). With no settle time it
 // is List exactly as before b.3ie. It never waits for a state to settle.
 func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListParams) (ListResult, error) {
+	if params.Limit < 0 {
+		return ListResult{Spawns: []ListRow{}}, fmt.Errorf("%w: limit = %d is negative; pass 0 (or omit it) for no cap, or a positive number of rows",
+			ErrInvalidFlags, params.Limit)
+	}
 	labels := make(map[string]string, len(params.Labels))
 	for _, raw := range params.Labels {
 		idx := strings.IndexByte(raw, '=')
 		if idx <= 0 {
-			return ListResult{}, fmt.Errorf("%w: %q is not in key=value form", ErrListInvalidLabel, raw)
+			return ListResult{Spawns: []ListRow{}}, fmt.Errorf("%w: %q is not in key=value form", ErrListInvalidLabel, raw)
 		}
 		labels[raw[:idx]] = raw[idx+1:]
 	}
@@ -177,7 +188,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 		Settle:          settle,
 	})
 	if err != nil {
-		return ListResult{}, err
+		return ListResult{Spawns: []ListRow{}}, err
 	}
 
 	j := newRelayJudge(v)
@@ -206,7 +217,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 		if r.State == store.StateCheckPermission {
 			infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, r.ClaudeInstanceID)
 			if err != nil {
-				return ListResult{}, err
+				return ListResult{Spawns: []ListRow{}}, err
 			}
 			row.PermissionRequests = infos
 		}
@@ -237,6 +248,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 // CLI: agent-director list
 //
 // Errors:
+//   - [ErrInvalidFlags]: Limit is negative; refused before the store is read.
 //   - [ErrListInvalidLabel]: a Labels entry is not in "key=value" form.
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether each
@@ -244,7 +256,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 // the rows State selects.
 func (c *Client) List(params ListParams) (ListResult, error) {
 	if err := c.checkClosed(); err != nil {
-		return ListResult{}, err
+		return ListResult{Spawns: []ListRow{}}, err
 	}
 	return listSettled(c.st, c.relayView(), c.settleRead(), params)
 }

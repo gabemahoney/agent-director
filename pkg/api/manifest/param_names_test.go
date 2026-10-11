@@ -5,8 +5,8 @@ package manifest_test
 // references publish; CLI flags stay dashed), every verb Description, which
 // every surface shows, names the reuse opt-in in one spelling only, and a
 // param text naming another param gives its manifest name with the CLI flag.
-// b.ro3 adds that no verb or param text names a param by its CLI flag alone;
-// b.pti that a param spawn and make-template share has one Type on both.
+// b.ro3 adds that no verb or param text names a param by its CLI flag alone
+// (b.ia3: nor any result-field text); b.pti that a param spawn and make-template share has one Type on both.
 
 import (
 	"regexp"
@@ -67,8 +67,8 @@ func TestManifestParamOlderServeSentences(t *testing.T) {
 // TestManifestParamReuseOptInOneSpelling: no verb Description names the reuse
 // opt-in in any spelling other than "reuse_finished (--reuse-finished on the
 // CLI)" (make-template's list of refused param names aside). The advice that
-// uses it (spawn, kill's live-row step 6, delete) is pinned word for word by
-// its Desc* cases and advice-follow tests.
+// uses it (spawn, kill's live-row step 6) is pinned word for word by its Desc*
+// cases and advice-follow tests.
 func TestManifestParamReuseOptInOneSpelling(t *testing.T) {
 	const spelling = "reuse_finished (--reuse-finished on the CLI)"
 	for _, v := range manifest.Verbs {
@@ -85,10 +85,10 @@ func TestManifestParamReuseOptInOneSpelling(t *testing.T) {
 	}
 }
 
-// TestManifestTextsNameParamsNotFlags: no verb or param Description names a
-// param by its CLI flag alone; a flag that is a param's dashed name appears
-// only as "<param> (--<flag> on the CLI)" (b.ro3). Other programs' flags
-// (claude's --settings) are not params.
+// TestManifestTextsNameParamsNotFlags: no verb, param or result-field
+// Description names a param by its CLI flag alone; a flag that is a param's
+// dashed name appears only as "<param> (--<flag> on the CLI)" (b.ro3, b.ia3).
+// Other programs' flags (claude's --settings) are not params.
 func TestManifestTextsNameParamsNotFlags(t *testing.T) {
 	params := map[string]bool{}
 	for _, v := range manifest.Verbs {
@@ -101,6 +101,9 @@ func TestManifestTextsNameParamsNotFlags(t *testing.T) {
 		texts := map[string]string{"description": v.Description}
 		for _, p := range v.Params {
 			texts["param "+p.Name] = p.Description
+		}
+		for _, f := range v.ResultFields {
+			texts["result field "+f.Name] = f.Description
 		}
 		for where, text := range texts {
 			for _, loc := range flag.FindAllStringIndex(text, -1) {

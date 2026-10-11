@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
@@ -37,10 +38,29 @@ import (
 // caller in the envelope and its audit is the ad.kill.called trail event.
 // The two Clients have distinct logger ownership.
 //
+// o is the run's global --store-path, --tmux-command and --create-if-missing
+// overrides, the same ones setupClient opened run()'s Client with (b.32k). The
+// MCP Client is built from them too (mcpClientOptions), so the MCP tools use
+// the same store and tmux as setupClient's Client: the store serve opened and
+// checked at startup (b.wb7). With no overrides both fall back alike, to the
+// config's db_path or the default store (Pin 2) and to the tmux on PATH.
+// serve honours --create-if-missing false like every store-backed verb: on a
+// missing store setupClient refuses it (ErrStoreOpen) before serve starts, and
+// the MCP Client would refuse it alike, so serve never creates it (b.78b).
+// --home needs no threading: run() set HOME before either Client expands a
+// "~/" path.
+//
+// newClient opens the MCP Client: pkg/api.New in production (handlers()); a
+// test passes a stand-in to reach the failure path. A failed open is named
+// by clisetup.NewOpenError, as setupClient's Open names its own: a schema
+// refusal is ErrSchemaMismatch or ErrSchemaMigrationRequired, anything else
+// ErrStoreOpen (b.uii).
+//
 // Pin H6: cfg is threaded in directly from run() via setupClient() so
 // newMCPLogger can receive it without a Client.Config() accessor, which
 // would leak internal/config.Config into pkg/api's public surface.
-func serveHandlerWith(cfg config.Config, args []string) error {
+func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
+	newClient func(pkgapi.Options) (*pkgapi.Client, error), args []string) error {
 	var stdioFlag bool
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -55,17 +75,13 @@ func serveHandlerWith(cfg config.Config, args []string) error {
 		return nil
 	}
 
-	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4).
-	// Logger: nil so the verbs that still log (Spawn, Resume, FindMissing,
-	// Expire) are silent for MCP; Kill has no logger path at all (SR-6.3).
-	// CreateIfMissing: true so the MCP server can create the DB on first run.
-	mcpClient, err := pkgapi.New(pkgapi.Options{
-		ConfigPath:      configPath,
-		CreateIfMissing: true,
-		Logger:          nil, // intentional: logging verbs are silent on MCP; kill has no logger path (Pin H4)
-	})
+	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4), on the
+	// store and tmux command o selects (b.wb7), and name a failed open as
+	// clisetup.Open does (b.uii).
+	mcpClient, err := newClient(mcpClientOptions(o))
 	if err != nil {
-		return writeApiErrorAndDispatch("ErrStoreOpen", err.Error())
+		oe := clisetup.NewOpenError(err)
+		return writeApiErrorAndDispatch(oe.Name, oe.Error())
 	}
 	defer mcpClient.Close()
 
@@ -91,6 +107,19 @@ func serveHandlerWith(cfg config.Config, args []string) error {
 	}()
 
 	return server.Serve(ctx, stdin, os.Stdout)
+}
+
+// mcpClientOptions returns the pkg/api.Options of the MCP dispatcher's Client:
+// clisetup.APIOptions(o), the options setupClient's Client is built from, so
+// the --store-path, --tmux-command and --create-if-missing overrides in o
+// reach the MCP tools (b.wb7, b.78b), and CreateIfMissing is true unless o
+// turns it off, so serve can create the store on first run. Logger stays nil
+// so the verbs that still log (Spawn, Resume, FindMissing, Expire) are silent
+// for MCP; Kill has no logger path at all (SR-6.3).
+func mcpClientOptions(o clisetup.Overrides) pkgapi.Options {
+	opts := clisetup.APIOptions(o)
+	opts.Logger = nil // intentional: logging verbs are silent on MCP; kill has no logger path (Pin H4)
+	return opts
 }
 
 // newSignalCtx returns a context that is canceled when the process

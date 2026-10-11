@@ -33,11 +33,21 @@ See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 
-The v1 supported-platform set is **`linux/amd64`**, **`linux/arm64`**,
-and **`darwin/arm64`**. `darwin/amd64` (Intel Mac) was **dropped on
-2026-05-24** (no Intel Mac users to serve). The CLI is released for
-all three; the TS Client's npm sub-packages ship the CLI binary for
-linux-x64 and darwin-arm64.
+The supported install hosts are **`linux/amd64`** and **`darwin/arm64`**.
+`install.sh`'s pre-flight host check (`uname -s` / `uname -m`) admits
+only `Linux/x86_64` and `Darwin/arm64` and exits 2 on any other host,
+`Linux/aarch64` included, before it downloads or writes anything. The
+release builds the CLI for three targets, those two and
+**`linux/arm64`** (see [Build paths](#build-paths)), but no installer
+admits a `linux/arm64` host: b.fg3 deferred it. `darwin/amd64` (Intel
+Mac) was **dropped on 2026-05-24** (no Intel Mac users to serve). The
+TS Client's npm package ships no CLI binary: it drives the CLI installed
+on the host (see
+[System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)),
+and its `package.json` declares `"os": ["linux", "darwin"]` and
+`"cpu": ["x64", "arm64"]`. That pair also admits `linux/arm64` and
+`darwin/x64`, where the package installs but `install.sh` installs no
+CLI for it to drive.
 
 Each target gets two binaries, `agent-director` and `agent-director-admin`
 (six in all). All are pure `CGO_ENABLED=0` cross-compiles (pure-Go
@@ -67,15 +77,15 @@ in `init`. The verb registry
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `version` and their aliases never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. It still opens the verbs' store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). It opens that store with `store.OpenOrInitWithBusyTimeout` and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook` and `newHookLogger` (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
-| `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `version` and their aliases never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. It still opens the verbs' store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). It opens that store with `store.OpenOrInitWithBusyTimeout` and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook` and `newHookLogger` (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
+| `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, `--create-if-missing`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
-| `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`) and returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the four names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels are not `store.ErrSchemaMismatch` and `store.ErrSchemaMigrationRequired`, which an `OpenError`'s cause still wraps: only an `OpenError` matches them, so `Classify` still names any other error that wraps a store schema sentinel, such as `pkg/api.New`'s own, `ErrInternal` (open as b.x8s). `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup or flag parser. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests in its own transaction, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the four names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels are the store's own, `store.ErrSchemaMismatch` and `store.ErrSchemaMigrationRequired` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens, so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests in its own transaction, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v8; see "Schema v8" below), exposes typed CRUD primitives (added in later Tasks). Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it, in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. **Must use:** read it only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
-| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds every name the command binaries give outside a verb handler, so it lists every err_name the CLI writes in an error envelope (b.cm7): the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired`, which `internal/clisetup.Open` gives before any verb runs (b.vma, b.cm7); the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which the binaries write themselves; and `ErrInternal`, `Classify`'s fallback, paired with the unexported sentinel `errInternal`, which no error wraps (see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (its seven sentinels only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
+| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds every name the command binaries give outside a verb handler, so it lists every err_name the CLI writes in an error envelope (b.cm7): the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired`, which `internal/clisetup.Open` gives before any verb runs (b.vma, b.cm7), and the last three of which `serve` gives through `clisetup.NewOpenError` when it cannot open its MCP Client (b.uii); the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which the binaries write themselves; and `ErrInternal`, `Classify`'s fallback, paired with the unexported sentinel `errInternal`, which no error wraps (see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (its seven sentinels only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags`; every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; its read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
@@ -710,7 +720,7 @@ release with `Close()`.
 | `ConfigPath` | `~/.agent-director/config.toml` | Tilde-expanded by `New`. |
 | `TmuxCommand` | binary on `PATH` | Override for testing or unusual installs. |
 | `Logger` | `log.New(io.Discard, …)` | CLI passes a real logger; MCP callers pass nil (intentional silence). |
-| `CreateIfMissing` | `false` | CLI sets `true` to preserve first-run UX (see below). |
+| `CreateIfMissing` | `false` | CLI sets `true` to preserve first-run UX, unless its global `--create-if-missing false` is given (see below). |
 
 **StorePath three-tier precedence.** `New` resolves the store path in order:
 
@@ -776,6 +786,18 @@ code review):
 CLI callers set `Options.CreateIfMissing = true` to preserve the pre-refactor
 first-run UX: the store is created automatically on first invocation, matching
 what the binary did before the facade was introduced.
+
+The global flag `--create-if-missing false` (both command binaries, `serve`
+included) turns that off for one run (b.78b): `clisetup.APIOptions` passes
+`CreateIfMissing: false`, so a store-backed verb on a missing store fails
+with `ErrStoreOpen` (`clisetup.NewOpenError`; cause
+`store.ErrStoreNotInitialized`, `database not initialized`) before the verb
+runs, and nothing is created: no parent directory, file or schema.
+`--create-if-missing true`, or no flag, keeps the default. Verbs that open no
+store (`help`, `version`, the no-verb run, `trail-emit`) are unaffected, and
+`hook`, which takes no global flags, still opens its store with
+`OpenOrInitWithBusyTimeout`. The TS client's `createIfMissing: false`
+forwards the flag (see [Client lifecycle](#client-lifecycle)).
 
 **`Close`.** Releases store and tmux resources. Idempotent: a second call
 returns `nil` without double-closing the underlying `*store.Store`. After
@@ -2104,13 +2126,29 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
 
 **Consumers of `Verbs`.**
 
-1. CLI dispatch table in `cmd/agent-director/main.go`.
-2. MCP tool schema served in `mcp` mode (Epic 11).
+1. The CLI's `help` output: `helpHandler` in
+   `cmd/agent-director/main.go` prints `pkg/api.Help()`, which lists each
+   verb's name and description from `Verbs`. The rest of the CLI does not
+   read `Verbs`. No non-test file under `cmd/agent-director` imports
+   `pkg/api/manifest`; the `handlers()` dispatch table and each verb's
+   `flag.FlagSet` are written by hand. `cli_manifest_parity_test.go`
+   checks that hand-wired CLI against `Verbs` (see "The structural parity
+   guard" under
+   [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
+2. The MCP tool list, served by the `serve` verb (`serve --stdio`):
+   `buildToolList` in `internal/mcp/server.go` builds `tools/list` from
+   `Verbs`, skipping the verbs `ExposedVerb` excludes (see
+   [Stdio MCP server](#stdio-mcp-server)).
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
-Verb additions/edits go in `pkg/api/manifest` only; the CI doc-drift
-gate re-runs `go generate` and fails if any tracked file changes.
+Verb additions/edits start in `pkg/api/manifest`, but it is not the only
+place to change. A new verb also needs its hand-written `handlers()`
+entry and, unless `ExposedVerb` excludes it, a `LiveDispatcher.Call`
+case. A new param also needs its CLI flag and, on an MCP-exposed verb,
+its `LiveDispatcher.Call` decoding. Make these in the same change (see "How to add a verb" and
+"Prohibitions" below). The CI doc-drift gate re-runs `go generate` and
+fails if any tracked file changes.
 
 **Help size guard.** `TestHelpSizeGuard` in
 `cmd/agent-director/help_size_test.go` measures `agent-director help`'s
@@ -2158,7 +2196,7 @@ puts a fixed upper limit on that. To keep repeated text out of every
 description, a statement several verbs need goes into one constant in
 `pkg/api/manifest/manifest.go` with a short form (for example
 `liveRowSequence` and `missingNotProofShort`), and the full text lives in
-one description, the README and this document (see
+one description, docs/caller-contract.md and this document (see
 [Live-row sequence](#live-row-sequence) and
 "`missing` is a judgement, not proof" in
 [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
@@ -2208,12 +2246,14 @@ never-reported-in session, a held name), and `internal/spawn`'s
 list hint) for any further text that names the param; never one surface's
 spelling alone.
 
-**Params named in Descriptions.** A verb or param Description that names a
-param gives its manifest name, either bare (make-template's "Per-call cwd
-overrides.", expire's "older_than overrides") or with the CLI flag as an
-aside, `<param> (--<flag> on the CLI)` (make-template's per-call
-`claude_args`); never the CLI flag alone. `TestManifestTextsNameParamsNotFlags` checks
-every verb and param text on the manifest, and `TestSurfaceJSONMirrorsManifest`
+**Params named in Descriptions.** A verb, param or result-field Description
+that names a param gives its manifest name, either bare (make-template's
+"Per-call cwd overrides.", expire's "older_than overrides") or with the CLI
+flag as an aside, `<param> (--<flag> on the CLI)` (make-template's per-call
+`relay_mode`). Where the CLI takes the value some other way, the aside says
+how (make-template's per-call `claude_args`: "on the CLI, spawn's arguments
+after --"). Never the CLI flag alone. `TestManifestTextsNameParamsNotFlags` checks
+every verb, param and result-field text on the manifest, and `TestSurfaceJSONMirrorsManifest`
 holds `surface.json` to the same texts. Another
 program's flag, such as claude's `--settings`, is not a param and is not
 checked.
@@ -2233,22 +2273,62 @@ checked.
    call `client.VerbName(params)`, and marshal the result as JSON via
    `writeJSON`. The `cmd/` file must contain no implementation logic —
    only flag parsing, the `client.X(params)` call, and JSON output.
-4. If the verb emits new error sentinels, follow the checklist in
+4. If `ExposedVerb` (`internal/mcp/server.go`) exposes the verb, add its
+   `case` to `LiveDispatcher.Call` in `internal/mcp/dispatch.go`: decode
+   its params, if it has any, with `decodeParams` into a params struct
+   whose json tags are the manifest param names, then call
+   `client.VerbName(params)`. Without the case, `tools/list` lists the
+   tool but a call to it returns `ErrUnknownTool`;
+   `TestToolsCallDispatchMatrix` (`internal/mcp/dispatch_matrix_test.go`)
+   fails for an exposed verb with no case or no `matrixCases()` entry, and
+   `TestMCPParamParity` fails for a param the case does not decode (see
+   "Prohibitions" below and
+   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)).
+5. If the verb emits new error sentinels, follow the checklist in
    [Err-name five-way coherence](#err-name-five-way-coherence) before
    proceeding — the CI drift gate will fail if any of the five sources
    are out of sync.
-5. Run `make generate` to regenerate `docs/cli-reference.md` and
-   `docs/mcp-reference.md` from the manifest.
-6. Verify idempotency: re-run `make generate` and confirm `git status`
-   shows no diff. A second run that produces a diff means the generator is
-   non-deterministic — fix it before merging.
+6. Run `make sandbox CMD="make generate"` to regenerate
+   `docs/cli-reference.md` and `docs/mcp-reference.md` from the manifest.
+   A bare `make generate` on a development host refuses (exit 2) and
+   prints that command; see
+   [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
+7. Verify idempotency: re-run `make sandbox CMD="make generate"` and
+   confirm `git status` shows no diff. A second run that produces a diff
+   means the generator is non-deterministic — fix it before merging.
 
 **Prohibitions.**
 
 - Do not hand-edit `docs/cli-reference.md` or `docs/mcp-reference.md`.
   They are auto-generated; the CI drift gate will fail.
-- Do not define CLI flags outside the manifest. New params go in the
-  matching `VerbDef.Params` literal, named with underscores, never a dash.
+- Do not register a main-CLI flag that is not one of its verb's manifest
+  params. Each verb's flags are registered by hand on its own
+  `flag.FlagSet`, not generated from the manifest. A new param goes in the
+  matching `VerbDef.Params` literal, named with underscores, never a dash,
+  and its verb registers it as the dashed flag in the same change.
+  `TestCLIFlagsAreManifestParams` fails on a flag that is not a param and
+  on a param with no flag, bar the three a verb takes otherwise; the global
+  flags, parsed without the `flag` package, are outside its reach (see "The
+  structural parity guard" under
+  [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin)).
+- Do not register a main-CLI integer flag with a `flag` package integer
+  helper (`IntVar`, `Int`, `Int64Var`, `UintVar`, `Uint64Var` and the
+  like). Those parse with base 0, so `--limit 010` would be 8 and `0x10`,
+  `0o7`, `0b1` and `1_000` would be accepted, values MCP's JSON integers
+  and the TypeScript client's `String(n)` cannot send. **Must use:** every
+  int flag in `cmd/agent-director` registers with
+  `fs.Var(newDecimalInt(&dst, def), name, usage)`, the shared
+  `decimalIntValue` in `cmd/agent-director/flags.go`, which sets `dst` to
+  the default `def` and parses base 10 only (`strconv.ParseInt(s, 10, 0)`):
+  `010` is 10, and a hex, octal or binary prefix, an underscore, a leading
+  `+` or a value out of range fails `fs.Parse`, which the verb's handler
+  reports as `ErrInvalidFlags` (b.c4n). A leading `-` parses; where a
+  negative value is not allowed, the verb refuses it (`list`'s `limit` and
+  `read-pane`'s `n_lines` in the shared verb layer, `trail-emit`'s byte
+  counts in its handler). `TestCLIIntFlagsAreDecimal`
+  (`cli_manifest_parity_test.go`) fails on a flag registered with a
+  `FlagSet` integer helper and on any call to a `flag` package integer
+  function.
 - Do not add an MCP-exposed param without decoding it in
   `LiveDispatcher.Call` through `decodeParams`: `TestMCPParamParity` fails
   for a param the dispatcher drops or whose wrongly typed value is not
@@ -2324,15 +2404,27 @@ agent-director ships a single Go build path:
 | Static CLI and operator tool (host) | `make build` | `CGO_ENABLED=0` | `bin/agent-director`, `bin/agent-director-admin` |
 | Release cross-compile (3 platforms, 6 binaries) | `make release-binaries` | `CGO_ENABLED=0` | `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}`, `dist/agent-director-admin-{linux-amd64,linux-arm64,darwin-arm64}` |
 
-Both binaries of a build carry the same version stamp. The CLI and the
-operator tool are statically linked everywhere (pure-Go SQLite via
+Both binaries of a build carry the same version stamp. `make build` stamps
+`0.0.0-dev`. `make release-binaries` stamps `.version` from
+`$(RELEASE_PKG_DIR)/package.json` (default `pkg/ts-bun-client`), read with
+jq. When it cannot read one version string (jq not on PATH,
+`package.json` missing or unreadable, `.version` missing, `null`, empty or
+more than one word), make stops with `release-binaries: cannot read the
+release version: …` and builds nothing, rather than stamping an empty
+version. `AGENT_DIRECTOR_BUILD_VERSION` overrides both, and then no jq runs.
+Only `release-binaries` runs jq to read the version, and make never runs
+jq while reading the Makefile (b.x7z; the Makefile comment on the
+`release-binaries:` assignments says why they must stay recursive).
+`test-image-smoke` and `release-binaries-smoke` run `jq -e` in their
+recipes to check `help` output, not to read the version. The CLI
+and the operator tool are statically linked everywhere (pure-Go SQLite via
 `modernc.org/sqlite`). Linux binaries pass an `ldd → "not a dynamic
 executable"` check in `make release-binaries-smoke`.
 
 ### TS Client → CLI subprocess
 
 There is no FFI / shared-library path. The TS Client (`pkg/ts-bun-client`)
-spawns the bundled CLI binary as a subprocess per verb call; see
+spawns the installed CLI binary as a subprocess per verb call; see
 [TS/Bun client library — Subprocess Client](#tsbun-client-library-pkgts-bun-client)
 below.
 
@@ -2453,6 +2545,10 @@ hidden or CLI-only flag, and none of them can run either action.
   `handlers()` key counts as a main-CLI verb, so a verb alias (`--help`,
   `-h`, `--version`, `-v`) put there fails as a verb the manifest lacks;
   aliases live in `verbAliases` (b.fv2).
+  The same scan backs `TestCLIIntFlagsAreDecimal`, which fails on any flag
+  registered with a `flag` package integer helper, so every int flag reads
+  base 10 through `newDecimalInt` (b.c4n; see "Prohibitions" under
+  [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
   `TestMCPExposedVerbExceptions` pins `mcp.ExposedVerb`'s exception list:
   the only manifest verbs MCP does not expose are exactly `hook`, `serve`
   and `trail-emit`.
@@ -2466,8 +2562,9 @@ hidden or CLI-only flag, and none of them can run either action.
   `internal/adminapi` and a verb in its `Verbs`, never an exported
   `pkg/api` symbol, a manifest param or a CLI flag.
 - **Same store, same conventions.** It parses and applies the main CLI's
-  global flags (`--store-path`, `--home`, `--tmux-command`, before or after
-  the verb) and opens its Client through `internal/clisetup`
+  global flags (`--store-path`, `--home`, `--tmux-command`,
+  `--create-if-missing`, before or after the verb) and opens its Client
+  through `internal/clisetup`
   (`ParseGlobalFlags`, `GlobalFlags.Apply`, `Open`), exactly as
   `agent-director` does. It prints JSON on stdout, or one
   `{err_name, err_description}` envelope on stderr with exit 1, the names
@@ -2499,25 +2596,25 @@ hidden or CLI-only flag, and none of them can run either action.
 
 `pkg/ts-bun-client/` is the TypeScript client library for agent-director.
 It ships as a Bun-native ESM package (`type: "module"`, `target: "bun"`)
-and spawns the bundled CLI binary as a subprocess per verb call.
+and spawns the host's installed CLI binary as a subprocess per verb call.
 
 ### Subprocess Client (post-b.eiv architecture)
 
-The public `Client` is `src/internal/subprocessClient.ts` (re-exported
-from `src/client.ts`). For every verb call the Client spawns the
-bundled `agent-director` CLI binary with a JSON params envelope on
+The public `Client` (`src/client.ts`) extends `SubprocessClient`
+(`src/internal/subprocessClient.ts`) with the async factory
+`Client.create()`. For every verb call the Client spawns the
+installed `agent-director` CLI binary with a JSON params envelope on
 argv, reads the stdout JSON envelope back, and returns it (or throws
 the matching `Err*` subclass for stderr error envelopes).
 
 ```
   agent-director (TS/Bun)
        │
-       │  src/client.ts            (public Client = SubprocessClient)
+       │  src/client.ts            (public Client extends SubprocessClient; create())
        │        │
        │  src/internal/
        │     subprocessClient.ts   (per-call spawn + parse)
-       │     spawner.ts            (Bun.spawn wrapper, stderr/stdout pumps)
-       │     platformResolve.ts    (binary path resolver; called per-spawn in production)
+       │     platformResolve.ts    (Bun runtime-version guard, run by create())
        │     argv.ts               (verb name + JSON params → argv)
        │     errorMap.ts           (stderr envelope → typed Err* class)
        │        │
@@ -2551,7 +2648,9 @@ other precedence) and probed with `<bin> version --json` under a bounded
 invocation policy (5000 ms timeout, SIGTERM → 2000 ms grace → SIGKILL,
 allowlist-only env scrub, stdin closed, cwd=/, stdout/stderr capped at
 64 KiB each). The probed version is compared against `MIN_BINARY_VERSION`
-(sourced from `dist/version-floor.json` at build time). Each failure
+(`src/internal/constants.ts` imports the package-root `version-floor.json`,
+which the build inlines into the bundle; `dist/version-floor.json` is a
+copy `build.ts` makes for shell scripts). Each failure
 mode surfaces as one of:
 
 - `ErrSystemInstallNotFound` (no candidate found anywhere)
@@ -2604,142 +2703,62 @@ hook command pointing at AD's CLI binary is an absolute path to a
 binary that remains callable for the lifetime of the configuration
 that referenced it.
 
-### Per-platform optional-dependency packaging
+### npm packaging and version scripts
 
-**Distribution model.** `pkg/ts-bun-client/` follows the [esbuild distribution
-model](https://esbuild.github.io/getting-started/#download-a-build) for native
-binaries: the top-level package ships zero binaries; each supported
-platform gets its own optional sub-package that carries exactly one CLI
-binary at `bin/agent-director`. `npm install` (and `bun install`)
-resolve only the sub-package that matches `os` + `cpu` on the installing
-host, leaving the others absent.
+**One package, no binary.** `pkg/ts-bun-client/` publishes one npm
+package, `agent-director`. Its `package.json` `files` list ships the
+bundle (`dist/**/*.js`, `dist/**/*.d.ts`), `dist/version-floor.json` and
+`README.md`, and no CLI binary. It has no `optionalDependencies` and no
+per-platform sub-packages.
+`Client.create()` and `resolveSystemBinary()` find the CLI the host has
+installed instead (see
+[System-install discovery pipeline](#system-install-discovery-pipeline-bw3q)).
 
-**Sub-packages (v1 — two platforms):**
+**Bun runtime guard — `src/internal/platformResolve.ts`.** All that is
+left in this file (internal, not re-exported from `src/index.ts`) is
+`checkBunVersion()`: it throws `ErrBunVersionTooOld` when `Bun.version` is
+below `MIN_BUN_VERSION` (`"1.0.21"`, also `engines.bun` in
+`package.json`). `Client.create()` and `resolveSystemBinary()` call it
+first, before discovery.
 
-| npm package | Platform | Binary file |
-| --- | --- | --- |
-| `@agent-director/linux-x64` | Linux x86-64 | `bin/agent-director` |
-| `@agent-director/darwin-arm64` | macOS Apple Silicon | `bin/agent-director` |
+**version-bump script.** `scripts/version-bump.ts` (`bun run
+version-bump-publish --version X.Y.Z`) sets `version` in
+`pkg/ts-bun-client/package.json`. Its one `--target` selector,
+`umbrella-version`, is also what a run without `--target` does. It skips
+the write, logging `version-bump [umbrella-version]: already at <version> —
+skipped`, when the file already carries the version, so a second run with
+the same version writes nothing.
 
-> **v1 scope note (2026-05-24).** `@agent-director/darwin-x64` (macOS
-> Intel) was **dropped** from the v1 set — no Intel Mac users to serve
-> and the GH-hosted `macos-13` 10x billing multiplier was not worth the
-> spend. Linux ARM64 (`linux-arm64`) remains deferred to v2; a
-> sub-package `@agent-director/linux-arm64` will be added then.
+**check-version-coherence script.**
+`scripts/check-version-coherence.ts --scope verify|publish
+--expected-version X.Y.Z` runs these checks under both scopes, reports
+every failure, and exits 1 if there is one:
 
-Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
-contains only `package.json`, `README-binary-source.md`, and
-(release-injected) the CLI binary under `bin/agent-director`. The
-binary is gitignored; the `/release` skill stages it after `make
-release-binaries` cross-compiles.
+| Check | Asserts |
+| --- | --- |
+| `site-3a` | `package.json` `version` equals the expected version |
+| `site-dist-no-inline` | `dist/index.js` exists and holds neither `NPM_PACKAGE_VERSION` nor `"0.0.0"` (the package version is read at run time, never inlined) |
+| `site-floor-lockstep` | `version-floor.json` and `dist/version-floor.json` exist and are byte-equal; `min_binary_version` is strict SemVer and not `0.0.0-dev`; the `MIN_BINARY_VERSION` that `dist/index.js` exports equals it |
 
-For local development, `bun run prepare-platforms` copies the matching
-`dist/agent-director-<os>-<arch>` into `platforms/<tuple>/bin/agent-director`.
-The TS test preload (`test/setup.ts`) does the same at test time so
-`resolveCliPath()` succeeds against the in-repo binary.
+`--scope publish` also re-hashes every tarball listed in the manifest that
+`AGENT_DIRECTOR_RELEASE_SHASUMS` names, and fails when that variable is
+unset or a SHA-256 differs from the manifest's.
 
-**Resolver flow — `src/internal/platformResolve.ts`.**
-
-`platformResolve.ts` (internal, not re-exported from `src/index.ts`)
-implements a five-step resolution sequence. In production it is called
-on every verb spawn — not cached — so the client recovers transparently
-from a binary replacement between construction and spawn (b.i5y). It is
-also called once eagerly at construction to surface install errors
-immediately (see Construction step 2 below):
-
-1. **Bun version check.** Compare `Bun.version` against `MIN_BUN_VERSION`
-   (`"1.0.21"`). Fail fast with `ErrBunVersionTooOld` before attempting any
-   module resolution.
-2. **Tuple lookup.** Build `<process.platform>-<process.arch>` and look it up
-   in a static map. An unsupported tuple throws `ErrUnsupportedPlatform`.
-3. **Sub-package resolution.** Call
-   `import.meta.resolve("<subpkg>/package.json")` (Bun-synchronous,
-   returns a `file://` URL). On failure (package not installed), throw
-   `ErrPlatformPackageMissing`. Construct
-   `<pkgDir>/bin/agent-director`.
-4. **Stat the binary.** `statSync` on the resolved path; if absent,
-   throw `ErrPlatformPackageMissing` (the message differentiates the
-   two missing cases).
-5. **Execute-bit check.** Check `S_IXUSR | S_IXGRP | S_IXOTH` against
-   the current uid/gid; if not executable throw `ErrCliNotExecutable`.
-
-**Four platform error subclasses** (all TS-only):
-
-| Class | Thrown when | Key field in message |
-| --- | --- | --- |
-| `ErrBunVersionTooOld` | `Bun.version` < `1.0.21` | actual version + minimum |
-| `ErrUnsupportedPlatform` | tuple not in supported set | tuple string (e.g. `linux-arm64`) |
-| `ErrPlatformPackageMissing` | sub-package not installed or binary absent | sub-package name |
-| `ErrCliNotExecutable` | binary exists but lacks execute permission | binary path |
-
-**version-bump script.** `scripts/version-bump.ts` is the canonical tool for
-all version-stamp mutations at release time. Only `verify_phase` calls it,
-in a two-pass sequence, against the stage directory (never the live working
-tree). A bare invocation with no `--target` stamps all five version-bearing
-sites in one pass:
-
-```sh
-bun run version-bump-publish --version X.Y.Z
-```
-
-The five sites and their four `--target` selectors:
-
-| `--target` selector | File(s) | Field |
-| --- | --- | --- |
-| `platform-version` | `platforms/linux-x64/package.json`, `platforms/darwin-arm64/package.json` | `version` |
-| `umbrella-version` | `package.json` | `version` |
-| `opt-deps` | `package.json` | `optionalDependencies` (`file:` → `^X.Y.Z` pins) |
-| `skill-frontmatter` | `skills/install-agent-director/SKILL.md` | frontmatter `version:` |
-
-Omitting `--target` runs all four selectors in canonical order:
-`platform-version` → `umbrella-version` → `opt-deps` → `skill-frontmatter`.
-The flag is repeatable for targeted single-site runs.
-
-**Idempotence.** Every target skips the write if the file already carries the
-target version, logging `version-bump [<target>]: already at <version> —
-skipped`. Running the script twice with the same version produces zero file
-writes on the second pass.
-
-**OTQ-2 frontmatter robustness.** The `skill-frontmatter` target is strictly
-frontmatter-scoped: the file must open with `---` and the frontmatter block
-extends to the next `---`. Exactly one `version:` line must appear inside that
-block — zero or multiple `version:` lines → non-zero exit with a descriptive
-error. Lines after the closing `---` (the document body) are never scanned or
-modified, even if they contain the word `version:`.
-
-**check-version-coherence script.** `scripts/check-version-coherence.ts`
-is the version-coherence gate run by `verify_phase` and `publish_phase` to
-assert that all version-stamp sites agree with the release version before any
-irreversible step. The gate accepts `--scope verify` or `--scope publish` and
-checks five sites:
-
-| Site ID | File | Field |
-| --- | --- | --- |
-| `site-1` | `platforms/linux-x64/bin/agent-director`, `platforms/darwin-arm64/bin/agent-director` | `version --json` output (`"v${ver}"`) |
-| `site-3a` | `package.json` | `version` |
-| `site-3b` | `platforms/linux-x64/package.json`, `platforms/darwin-arm64/package.json` | `version` |
-| `site-4` | `package.json` | `optionalDependencies` (`^X.Y.Z` pins) |
-| `site-5` | `skills/install-agent-director/SKILL.md` | frontmatter `version:` |
-
-**Site-4 verify-scope skip.** Under `--scope verify`, site-4 is skipped when
-all `optionalDependencies` entries still carry `file:` paths — this is normal
-because `verify_phase` stamps opt-deps only after `bun install`, running the
-first gate before the opt-deps pass. After the opt-deps pass, a second
-`--scope verify` gate runs and site-4 must pass (opt-deps are now `^X.Y.Z`).
-
-**Publish-scope additions.** `--scope publish` additionally performs a
-SHA-256 round-trip check (SR-1.3 / SR-1.5): it reads
-`AGENT_DIRECTOR_RELEASE_SHASUMS` (the manifest written by `verify_phase`) and
-re-hashes every listed tarball. A hash mismatch means bytes were mutated after
-`verify_phase` packed them; the gate aborts before `npm publish` fires.
-`--scope publish` also runs the `dist/index.js` negative-grep
-(SR-2.3), making publish ⊇ verify per SR-2.2.
+**Who runs them.** No `/release` gate runs either script against the
+release tree. The release's `branch-and-bump` phase writes the version into
+`package.json` itself (`gates/branch/create-release-worktree.sh`), and its
+`coherence` gates check the stamped version
+(`gates/coherence/binary-version.sh`, `gates/coherence/tarball-and-bump.sh`;
+see [The release skill](#the-release-skill)). The bun suite runs both
+scripts on a staged copy of the package: `test/version-bump.test.ts`,
+`test/check-version-coherence.test.ts` and
+`test/release-version-coherence.test.ts`.
 
 ### Release blockers
 
-The npm-name blocker (H3) was resolved on 2026-05-24: the umbrella package
-publishes as `agent-director` (unscoped) and the three per-platform sub-packages
-publish under the `@agent-director` scope. The H3 entry in
+The npm-name blocker (H3) was resolved on 2026-05-24: the package publishes
+as `agent-director` (unscoped). It is the only npm package (see
+[npm packaging and version scripts](#npm-packaging-and-version-scripts)). The H3 entry in
 [docs/release-blockers.md](release-blockers.md) records the resolution and is
 kept as the template for any future release blockers.
 
@@ -2747,27 +2766,30 @@ kept as the template for any future release blockers.
 
 ```
 pkg/ts-bun-client/
-├── package.json          name: agent-director, version 0.0.0
+├── package.json          name: agent-director; its version is the repo's one version source (SR-16)
+├── version-floor.json    min_binary_version, the CLI version floor (MIN_BINARY_VERSION)
 ├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
 ├── .eslintrc.cjs         @typescript-eslint strict rules
-├── build.ts              Bun.build (ESM, single entry) → tsc (declarations)
+├── build.ts              Bun.build (ESM, single entry) → tsc (declarations) → copy version-floor.json to dist/
 ├── go.mod                module-boundary stub, no Go code (see below)
+├── scripts/              release and check scripts (version-bump.ts, check-version-coherence.ts, …)
 ├── src/
 │   ├── index.ts          public re-exports (client, errors, types)
-│   ├── client.ts         thin re-export: Client = SubprocessClient
+│   ├── client.ts         Client (extends SubprocessClient; adds create()) + resolveSystemBinary()
 │   ├── errors.ts         typed error subclasses
 │   ├── types.ts          param/result types
 │   └── internal/
 │       ├── subprocessClient.ts  per-call CLI spawn + envelope parse
-│       ├── spawner.ts           Bun.spawn wrapper, stderr/stdout pumps
-│       ├── platformResolve.ts   CLI binary path resolver (called per-spawn in production)
+│       ├── discovery.ts         system-install discovery + candidate validation
+│       ├── probe.ts             bounded `<bin> version --json` probe
+│       ├── semver.ts            strict SemVer parse + compare (floor check)
+│       ├── constants.ts         MIN_BINARY_VERSION, read from version-floor.json
+│       ├── platformResolve.ts   Bun runtime-version guard (checkBunVersion)
+│       ├── spawner.ts           ErrSubprocessCrash, plus a runSubprocess helper the Client does not use
 │       ├── argv.ts              verb name + JSON params → argv
 │       ├── errorMap.ts          stderr envelope → typed Err* class
 │       ├── verbs.ts             callable-verb list (mirrors manifest.CallableVerbs)
 │       └── tsOnlyErrors.ts      TS-only error allow-list (catalog-drift exemption)
-├── platforms/            per-platform npm sub-packages
-│   ├── linux-x64/        @agent-director/linux-x64 → bin/agent-director
-│   └── darwin-arm64/     @agent-director/darwin-arm64 → bin/agent-director
 ├── test/                 bun:test suite
 └── dist/                 build output (gitignored)
 ```
@@ -2787,18 +2809,25 @@ package.
 
 ### Client lifecycle
 
-A `Client` (aliased from `SubprocessClient`) owns no Go-side resources;
+A `Client` (a subclass of `SubprocessClient`) owns no Go-side resources;
 each verb call is a one-shot subprocess.
 
-**Construction.** `new Client(opts)` is synchronous. All `ClientOptions` fields are optional; omitted fields fall through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). The constructor:
+**Construction.** `await Client.create(opts)` is the only entry point. The constructor is not public (`protected` on `SubprocessClient`; `Client` declares none), so `new Client(...)` is a compile-time TS error. `create` is async and runs one subprocess, the version probe, before it resolves, so a resolved Client has a binary that answered. All `ClientOptions` fields are optional; an omitted `storePath`, `home`, `tmuxCommand` or `createIfMissing` falls through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). `create(opts)` runs, in order:
 
-1. Calls `resolveCliPath()` eagerly to surface platform/install errors at construction time (ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable, ErrBunVersionTooOld), but does **not** cache the result. Each verb call re-resolves the binary path fresh so that a binary replacement between construction and spawn (e.g. a background `bun install` upgrading the global package) does not cause ENOENT failures on long-lived clients.
-2. Stores the caller-supplied options, `storePath`, `home` and `tmuxCommand` verbatim (see **Tilde expansion** below), for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
-3. Initializes `#npmPkgVersion` to `undefined`. The npm package version is loaded lazily on the first `version()` call and cached for the lifetime of the instance (see `loadNpmPackageVersion()` below).
+1. **Bun check.** `checkBunVersion()` (`src/internal/platformResolve.ts`) rejects with `ErrBunVersionTooOld` when `Bun.version` is below `MIN_BUN_VERSION` (`1.0.21`).
+2. **Find the binary.** `discoverSystemBinary()` runs the [System-install discovery pipeline](#system-install-discovery-pipeline-bw3q) against `HOME` and `PATH`. It rejects with `ErrSystemInstallNotFound` when no candidate exists, and with `ErrSystemInstallUnreachable` (`reason` `not-a-regular-file` or `not-executable`) when the candidate fails validation. The `_cliPath` option (a DI hatch for tests, not on `ClientOptions`) replaces this step: discovery and its validation are skipped, and `canonicalizePath()` makes the path absolute and resolves its symlinks, rejecting with `ErrSystemInstallUnreachable` (`not-a-regular-file`) when it cannot.
+3. **Probe.** `runProbe()` spawns `<binary> version --json` under the bounded policy of the discovery pipeline. A failed probe, or a reported version that is not strict SemVer, rejects with `ErrSystemInstallUnreachable`, whose `reason` names the failure.
+4. **Floor check.** A probed version below `MIN_BINARY_VERSION` (from `version-floor.json`) rejects with `ErrSystemInstallTooOld`. The dev build's `0.0.0-dev` passes any floor (`src/internal/semver.ts`).
+5. **Caller cwd check.** `assertCallerCwdReachable()` rejects with `ErrCallerCwdUnreachable` when `process.cwd()` throws, is gone or is not a directory (b.cot). Every verb subprocess inherits that cwd, and a gone cwd would fail each spawn with an ENOENT that looks like a missing binary.
+6. **Allocate.** It calls the `SubprocessClient` constructor (`src/internal/subprocessClient.ts`) with `opts`, the binary path and the probed version. The constructor:
+   - Throws a plain `Error` when `callTimeoutMs` is zero or negative (omitted means 30 000 ms); `create` rejects with it, after the probe has run.
+   - Keeps the path as `#binaryPath` and the probed version as `#binaryVersion`, read through the `binaryPath` and `binaryVersion` getters. Every verb call spawns that path; the Client never looks for the binary again (see [Subprocess call recipe](#subprocess-call-recipe)).
+   - Stores the caller-supplied options, `storePath`, `home` and `tmuxCommand` verbatim (see **Tilde expansion** below) and `createIfMissing` (see **`createIfMissing`** below), for forwarding on each verb call. Only a field the caller set is stored.
+   - Opens the Client. `#npmPkgVersion` stays `undefined`: the npm package version is loaded lazily on the first `version()` call and cached for the lifetime of the instance (see `loadNpmPackageVersion()` below).
 
 **`close()`.**
 
-- Sets `_open = false` so subsequent verb calls throw `ErrClientClosed`.
+- Sets `#open = false` so subsequent verb calls throw `ErrClientClosed`.
 - Has no subprocess to terminate (every verb call is its own short-lived subprocess) — so it cannot fail mid-call.
 - **Idempotent**: a second `close()` call is a no-op.
 
@@ -2806,12 +2835,12 @@ each verb call is a one-shot subprocess.
 
 ```ts
 {
-  using client = new Client({});
+  using client = await Client.create({});
   // use client …
 } // client.close() called automatically here
 ```
 
-**`_assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
+**`#assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
 
 **Tilde expansion** of `storePath`, `home` and `tmuxCommand` is the CLI's,
 never the TS side's (b.38a). The Client forwards the three values verbatim,
@@ -2835,6 +2864,19 @@ home directory itself (no `os.homedir()`, which is the passwd home under
 Bun): a second expander with its own fallback is how a `home` of `~` with
 no `HOME` reached the real `~/.agent-director` (b.vqj, fixed by b.38a).
 
+**`createIfMissing`** (b.78b) reaches the CLI only as `--create-if-missing
+false`, when it is `false`. `true` and an omitted value add no flag: creating
+a missing store is already the CLI's default (see
+[`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)). With `false`, a call
+that opens a missing store rejects with `ErrStoreOpen` (cause
+`database not initialized`) and creates none of it; calls that open no store,
+such as `version`, are unaffected, and an existing store opens as usual. The
+version floor does not require a binary that knows the flag. An older binary
+takes `--create-if-missing` for its verb, so with `false` every call rejects
+with `ErrUnknownVerb`, after that binary has opened the store, creating it
+when missing. **Must not:** forward `--create-if-missing true`, which would
+make every call fail on such a binary for no change in behaviour.
+
 **`loadNpmPackageVersion()`** — runtime npm package version resolver (b.6o1). `version()` calls this on its first invocation and caches the result in `#npmPkgVersion` — one disk read per `Client` instance. Not called at construction time. Internal to `subprocessClient.ts`; not re-exported. Code that needs the npm package version must go through `client.version()`.
 
 Resolution order:
@@ -2849,23 +2891,47 @@ Every verb call from `Client` follows this four-step recipe inside
 1. **Build argv.** `src/internal/argv.ts` maps the verb name + params
    object to the canonical CLI argv (e.g. `["send-keys",
    "--claude-instance-id", "<id>", "--text", "..."]`). Per-Client
-   global options (`storePath`, `home`, `tmuxCommand`) are prepended
-   BEFORE the verb token as `--store-path`, `--home`,
-   `--tmux-command` so the CLI's global-flag pre-scan
+   global options (`storePath`, `home`, `tmuxCommand`, `createIfMissing`)
+   are prepended BEFORE the verb token as `--store-path`, `--home`,
+   `--tmux-command`, `--create-if-missing` so the CLI's global-flag pre-scan
    (`clisetup.ParseGlobalFlags` in `internal/clisetup/globalflags.go`,
    which `run()` in `cmd/agent-director/main.go` calls) strips them prior to
    per-verb dispatch. Each is emitted only when the corresponding
-   `ClientOptions` field was set by the caller (b.32k). An empty
+   `ClientOptions` field was set by the caller (b.32k), and
+   `--create-if-missing false` only when `createIfMissing` is `false`
+   (b.78b; see [Client lifecycle](#client-lifecycle)). An empty
    string counts as set and is forwarded as given (e.g.
    `--store-path ""`); the pre-scan rejects it, so every verb call
    rejects with `ErrInvalidFlags` (`<flag> requires a value`) and the
    CLI never falls back to its default (b.pu2). JSON-only
    fields go through `--params-json` for verbs that accept it.
-2. **Spawn the CLI.** `resolveCliPath()` is called fresh to obtain the
-   binary path (production) or the `_cliPath` DI override is used verbatim
-   (tests). `src/internal/spawner.ts` then calls `Bun.spawn` with that
-   path, pipes stdin (closed), captures stdout and stderr, and respects
-   `callTimeoutMs` (default 30 s).
+   An integer param goes as `String(n)`, which the CLI's int flags read in
+   base 10 (see "Prohibitions" under
+   [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
+   `read-pane`'s `n_lines` and `list`'s `limit` are left out only when 0 (0 and an
+   absent flag give the same default); any other value, a negative one
+   included, is passed, so the CLI refuses a negative count with
+   `ErrInvalidFlags` as MCP and Go do, rather than the builder dropping it
+   and the call running with the default (b.c4n).
+   For `spawn` and `make-template`, an `extra_env` key that is empty or
+   holds `=` or a NUL is refused here: the CLI splits each
+   `--extra-env K=V` at its first `=`, so it could not carry such a key
+   unchanged. `buildArgv` throws `ErrReservedEnvKey` and no
+   subprocess runs (b.vpb, b.66q; see
+   [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
+2. **Spawn the CLI.** The binary path is `#binaryPath`, fixed by
+   `Client.create` (the discovered path, or the canonicalized `_cliPath` in
+   tests); no verb call looks for the binary again or re-probes it, so
+   `binaryVersion` stays the version `create` probed. `#doCall` passes the
+   argv, with that path first, to `Bun.spawn` itself: stdin piped and
+   closed at once, stdout and stderr captured, env a copy of `process.env`,
+   cwd the caller's. It respects `callTimeoutMs` (default 30 s). When
+   `Bun.spawn` throws ENOENT, `#doCall` names the cause:
+   `ErrSystemInstallDisappeared` when `#binaryPath` no longer exists or is
+   no longer a regular file, else `ErrCallerCwdUnreachable` when
+   `process.cwd()` is gone or not a directory, else the original error
+   (b.xht). Any other spawn failure is rethrown as is. A Client does not
+   follow a binary that moved; create a new one.
 3. **Parse the envelope.** On exit code 0, parse stdout as a JSON
    object → return it. On non-zero exit, parse stderr as a JSON
    error envelope (`{ "err_name": "...", "err_description": "..." }`,
@@ -2880,13 +2946,13 @@ Every verb call from `Client` follows this four-step recipe inside
 ```
 Client.sendKeys(params)
   │
-  ▼  src/internal/subprocessClient.ts → callVerb("send-keys", params)
+  ▼  src/internal/subprocessClient.ts → #enqueue → #doCall("send-keys", params)
   │
-  ▼  argv.ts → [verb, ...flags]
+  ▼  argv.ts → buildArgv(#binaryPath, verb, params, globals) → [#binaryPath, ...globals, verb, ...flags]
+  │           (#binaryPath fixed at Client.create; never re-resolved)
   │
-  ▼  resolveCliPath() → cliPath (fresh per-call)
-  │
-  ▼  spawner.ts → Bun.spawn(cliPath, argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  ▼  Bun.spawn({ cmd: argv, stdin: "pipe" (closed at once), stdout: "pipe", stderr: "pipe", env: { ...process.env } })
+  │     throws ENOENT → ErrSystemInstallDisappeared | ErrCallerCwdUnreachable | original error
   │
   ▼  read stdout to EOF; await exit
   │
@@ -2901,7 +2967,7 @@ shared Go-runtime state to preserve across calls.
 
 Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string), and, on a refusal that gives its facts as fields, the optional object `err_details` (b.146 rule 15; see "Error envelope" under [Stdio MCP server](#stdio-mcp-server)). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for the named errors the TS client maps to classes. It contains 55 entries at time of writing: the verb-surface names, the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (b.vma, b.cm7), the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, and `ErrInternal` (b.cm7). Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package (`clisetup` for the CLI-setup and CLI-internal names, `errnames` for `ErrInternal`). The catalog lists every `err_name` the CLI writes in an error envelope (b.cm7; MCP's `ErrUnknownTool` is no CLI name), so the TS client has a class for every name a binary of its own version gives; `ErrUnknownErrorName` means the binary is of another version, most often a newer one. **Must:** a new `err_name` the CLI writes, from a verb or from the binary itself, gets a `Catalog` entry, so the TS client never meets a name of its own version as `ErrUnknownErrorName`. No test enforces this rule yet (open as b.zvb).
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for the named errors the TS client maps to classes. It contains 55 entries at time of writing: the verb-surface names, the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (b.vma, b.cm7), the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, and `ErrInternal` (b.cm7). Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package (`clisetup` for the CLI-setup and CLI-internal names, `errnames` for `ErrInternal`). The catalog lists every `err_name` the CLI writes in an error envelope (b.cm7; MCP's `ErrUnknownTool` is no CLI name), so the TS client has a class for every name a binary of its own version gives; `ErrUnknownErrorName` means the binary is of another version, most often a newer one. **Must:** a new `err_name` the CLI writes, from a verb or from the binary itself, gets a `Catalog` entry, so the TS client never meets a name of its own version as `ErrUnknownErrorName`. `TestEnvelopeErrNamesCatalogued` (`pkg/api/errnames/envelope_names_test.go`) fails on an `err_name` that `cmd/` or `internal/` hands an error envelope or an envelope writer (`writeError`, `writeApiErrorAndDispatch`) and that `Catalog` lacks; `ErrUnknownTool` is exempt only in `internal/mcp` (b.zvb).
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string, err_details?: Readonly<Record<string, unknown>> | null)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`, `errDetails` (the envelope's `err_details` object as sent, `null` when it carries none). Message format: `"${err_name}: ${err_description}"`. The object's shapes are exported as types (`RelayFallenBackDetails` with `OpenRequestFacts`, `PaneAnswerInProgressDetails`, `ClaimTooSoonDetails`, `PaneChangedDetails`); the field itself is untyped, so a caller narrows it by the error's class.
 
@@ -2925,7 +2991,7 @@ subclass in `src/errors.ts` carries a comment cross-referencing this module.
 
 **Factory.** `errorFromEnvelope(verb, err_name, err_description, err_details?): AgentDirectorError` in `src/errors.ts`. Maintains an internal `ERROR_TABLE` literal that maps every `err_name` string to its constructor. Unknown `err_name` values produce a plain `AgentDirectorError` with a `console.warn` so callers are not silently swallowed.
 
-**Wiring.** When the CLI exits non-zero and stderr parses as an error envelope, `subprocessClient.ts` calls `throwFromEnvelope(verb, envelope)` in `src/internal/errorMap.ts`. It looks `err_name` up in `errorMap`, built at module load from `catalog.json` and the classes `src/errors.ts` exports, and throws that class with the envelope's `err_details` when it is a JSON object (any other value is dropped, as an envelope without the key); a name with no class there throws `ErrUnknownErrorName`, carrying `unknownName` and the `envelope`.
+**Wiring.** When the CLI exits non-zero and stderr parses as an error envelope, `subprocessClient.ts` calls `throwFromEnvelope(verb, envelope)` in `src/internal/errorMap.ts`. It looks `err_name` up in `errorMap`, built at module load from `catalog.json` and the classes `src/errors.ts` exports, and throws that class with the envelope's `err_details` when it is a JSON object (any other value is dropped, as an envelope without the key); a name with no class there throws `ErrUnknownErrorName`, carrying `unknownName` and the `envelope`. One catalog class is also thrown by the client itself, with no envelope: `buildArgv` throws `ErrReservedEnvKey` for a malformed `spawn` or `make-template` `extra_env` key, before any subprocess runs (b.vpb, b.66q; see [Subprocess call recipe](#subprocess-call-recipe)).
 
 **Catalog drift enforcement gate.** `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`
 reads `pkg/api/errnames/catalog.json` at test time (the single source of truth,
@@ -3707,7 +3773,7 @@ safe, and bounded by the step); a jump forward can settle a change early.
 The model assumes one clock.
 
 **A polling caller** with T set needs no streak counter: it polls `status`
-and acts on each change of `state` (the README's "Watch a Spawn's state").
+and acts on each change of `state` (`docs/usage.md`'s "Watch a Spawn's state").
 
 **Model.** `spec/tla/settle/`: `B3ieSettle.tla`, its README (the design,
 invariants, mutations and findings) and the run logs of its 32 scheduler
@@ -3740,9 +3806,10 @@ so each stage can be tested in isolation against synthesized input.
         │        (template wins); non-nil replaces wholesale.
         ▼
    ┌──────────┐   SRD §7.2: cwd shape/existence/type;
-   │ Validate │   relay_mode; denied flags; reserved env keys;
-   └────┬─────┘   explicit tmux session name (see below).
-        │         No side effects on failure.
+   │ Validate │   relay_mode; denied flags; reserved env keys
+   └────┬─────┘   (AGENT_DIRECTOR_*, HOME), then malformed env keys
+        │         (empty, '=', NUL; see below); explicit tmux
+        │         session name (see below). No side effects on failure.
         ▼
    ┌────────────┐   SRD §7.3: UUID4 if no claude_instance_id;
    │ ApplyDefaults│  <basename(cwd)>-<id[:8]> session name;
@@ -3895,6 +3962,265 @@ processed by tmux's escaping (SR-9.2). All other characters are allowed.
 The name is never rewritten: a caller-supplied name is used byte for
 byte or rejected. Defaulted names go through `SanitizeSessionName`
 instead.
+
+### Reserved `HOME` in `extra_env` (b.nas)
+
+`ValidateExtraEnv` (`internal/spawn/validate.go`), the whole `extra_env`
+check that spawn and `make-template` share (see
+[`make-template` runs the same check](#make-template-runs-the-same-check-b66q)),
+refuses two kinds of reserved key with `ErrReservedEnvKey`. Both rules match a key's env-var name, not
+the raw key: the part before the first `=`, or the whole key when it has
+none (`envVarName`), because that is the name tmux sets. tmux is given
+each entry as `key=value` (`sortedEnvFlags` in `internal/tmux`) and
+splits it at its first `=`, so the key `HOME=/tmp/b` sets `HOME` (to
+`/tmp/b=<value>`) just as the key `HOME` does. Such a key can reach
+spawn over MCP, from Go and from a template. The CLI's
+`--extra-env KEY=VALUE` splits at the first `=`, so its keys never hold
+one, and the TypeScript client, which passes `extra_env` as those flags,
+refuses a key holding `=` itself, as a malformed key (see
+[Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)). The two
+rules:
+
+- a name with the `AGENT_DIRECTOR_` prefix;
+- a name that is exactly `HOME` (`spawn.ReservedHomeEnvKey`), whatever
+  the value, an empty one included.
+
+The match is case-sensitive, as POSIX env vars are: `home`, `HOMEDIR`
+and `MY_HOME` pass. `=HOME` and `X=HOME` pass these two rules too (their
+names are empty and `X`), and are then refused as malformed keys.
+`HOME` is checked first, then the prefix. Each rule names the smallest
+matching key in sorted order
+(`firstEnvKey`), not the first in map order, so a refusal names the same
+key on every run. It checks the merged extra env, so a template's key is
+refused too. `Validate` runs before any side effect, so a refused spawn,
+a reuse included, writes no row or trust entry and launches nothing. A
+malformed key that sets no reserved name (an empty key, or one such as
+`A=B`) is refused after these two rules, also with `ErrReservedEnvKey`
+(see [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
+
+Why `HOME` is reserved: the extra env reaches the agent's pane through
+tmux `new-session -e`, and the agent's hooks run a bare
+`agent-director hook`, which resolves its config
+(`~/.agent-director/config.toml`) and store (`EffectiveDbPath`) from the
+pane's `HOME`. An `extra_env` `HOME` would send the agent's hook events to
+another agent-director store, and the spawner's row would stay `pending`
+until `find-missing` marks it `missing`, with no error to the caller.
+Every other `HOME`-derived path (pre-trust's `.claude.json`, the
+transcript lookup of `resume` and `find-missing`) would need a second
+home too. Refusing at validation closes that whole class with one check,
+and is loud, typed and launches nothing. agent-director refuses rather
+than drops the key, because dropping it would launch an agent with an
+env the caller did not ask for. An absolute `CLAUDE_CONFIG_DIR` is the
+supported way to give an agent its own Claude Code config; it leaves the
+agent-director store alone.
+
+**The spawner's own `HOME` and store are not checked (b.3en).** The same
+split happens, unrefused, when the spawner's store is not the one the
+pane's `HOME` names: a spawn run with another `HOME`, `--home`
+(`GlobalFlags.Apply` sets the process `HOME`), `--store-path` or the
+TypeScript client's `home` / `storePath` writes its row to its own store,
+while the hook (no `--store-path`; config and `EffectiveDbPath` from the
+pane's `HOME`) opens the other. `composeEnv` puts no `HOME` in the `-e`
+env, and tmux's default `update-environment` does not carry the client's
+`HOME`, so on a running server the pane gets the server's global `HOME`.
+`ResolveSocket` picks the server from `TMUX`, then `TMUX_TMPDIR` or
+`/tmp` plus the uid, never from `HOME`; a spawn that starts the server
+gives it the spawner's `HOME` for every later pane. Nothing refuses or
+warns: agent-director makes no `show-environment` call, so it does not
+see the server's `HOME`. The contract is the caller's: `HOME`, `--home`,
+`--store-path` and the TypeScript `home` and `storePath` must name the
+store of the server the spawn reaches, and an alternate `HOME` is safe only with no
+`TMUX` and its own existing `TMUX_TMPDIR`, which starts a separate server
+([docs/permissions.md](permissions.md#one-spawn-under-another-home-or-store)).
+
+`resume` refuses a row whose stored extra env has a key that sets `HOME`
+(only a row spawned before this refusal can) with `ErrReservedEnvKey`,
+before any transcript lookup, tmux call or write (step 4 of
+[Resume](#resume)). `ComposeRelaunch` and pre-trust therefore never see
+an `extra_env` `HOME`.
+
+**The shared rule, `spawn.ReservedHomeKey(env)`.** It returns the
+smallest key of `env` whose name before the first `=` is `HOME`, and
+whether there is one. The `extra_env` check (`ValidateExtraEnv`: spawn
+validation and `make-template`) and resume's stored-row guard
+(`resumeImpl`) both call it, so they refuse the same keys and name the
+same one.
+
+The error name is the existing `ErrReservedEnvKey`, so no catalog,
+manifest or TypeScript client entry is added; the manifest lists it
+among `resume`'s and `make-template`'s errors. The name is the contract; the description is
+advice. Each description quotes the key as given (Go `%q`, so a key
+holding `=` or a control character stays on one line). Spawn's says the
+key sets `HOME` and why (`spawn.ReservedHomeReason`), to remove that
+key, and what to set instead (`spawn.ReservedHomeAlternative`):
+`ErrReservedEnvKey: extra_env key "HOME=/tmp/b" sets HOME, which is
+reserved: <reason>; remove "HOME=/tmp/b" from extra_env, and
+<alternative>`. Resume's (`homeInExtraEnvError` in `pkg/api/resume.go`)
+also names the instance id, says nothing was written or launched, and
+gives the recourse, a spawn of the id with the reuse opt-in
+(`spawn.ReuseOptIn`) and an extra env without `HOME`:
+`ErrReservedEnvKey: resume of instance <id>: the row's extra_env key
+"HOME" sets HOME, which is reserved: <reason>; nothing was written and
+nothing was launched; to run the agent again, spawn the id with …`. The
+prefix refusal is the quoted key alone: `ErrReservedEnvKey:
+"AGENT_DIRECTOR_X"`.
+
+Pinned by `TestValidateOrder` and `TestReservedHomeKey`
+(`internal/spawn/validate_test.go`), `TestSpawnRefusesHomeInExtraEnv`
+and `TestResumeRefusesHomeInExtraEnv` (`pkg/api/reserved_home_test.go`),
+and the literal-follow tests A14 and B11
+(`pkg/api/advice_follow_reserved_home_test.go`).
+
+**Must use:** code that asks whether an extra env sets `HOME` calls
+`spawn.ReservedHomeKey`; do not compare a key with `"HOME"` or split it
+at `=` by hand. Code that refuses or explains a reserved `HOME` uses
+`spawn.ReservedHomeEnvKey`, `spawn.ReservedHomeReason` and
+`spawn.ReservedHomeAlternative`; do not restate the key or the text.
+
+### Malformed `extra_env` keys (b.vpb)
+
+After the two reserved rules, `ValidateExtraEnv` refuses a key that is
+not a valid env-var name, with the same `ErrReservedEnvKey` (see **The
+error** below for why no new name). A key is malformed when it:
+
+- is empty;
+- contains `=`;
+- contains a NUL byte.
+
+Nothing else is checked: `home`, `my-var` and `1ST` pass. The key is
+refused, never rewritten.
+
+Why: tmux is given each entry as `key=value` (`sortedEnvFlags`) and
+splits it at its first `=`, so a malformed key sets a different
+variable than the one asked for. The key `CLAUDE_CONFIG_DIR=/x` with the
+value `""` gives the pane `CLAUDE_CONFIG_DIR=/x=`, so Claude Code uses
+`/x=`. Pre-trust (`extraEnv["CLAUDE_CONFIG_DIR"]`) and resume's
+transcript fallback (`row.ExtraEnv["CLAUDE_CONFIG_DIR"]`) look the
+variable up by its exact key and find none, so pre-trust writes
+agent-director's own `~/.claude.json` and resume looks under its own
+`~/.claude`. An empty key gives tmux
+`=value`, which names no variable. No env-var name can hold a NUL byte,
+and no tmux argument can carry one. Rewriting the key would launch an
+agent with an env the caller did not ask for, so it is refused, as a
+reserved key is.
+
+**Order.** `HOME`, then the `AGENT_DIRECTOR_` prefix, then malformed
+keys; each refusal is `ErrReservedEnvKey` and only its description
+differs. A key that is both reserved and malformed (`HOME=/x`,
+`AGENT_DIRECTOR_X=y`) gets the reserved description, and a reserved key
+wins over a malformed key that sorts before it. The whole `extra_env` step
+runs after the denied-flag check and before the session-name checks
+(`TestValidateOrder`). The refusal names the smallest malformed key in
+sorted order (`firstEnvKey`). It checks the merged extra env, so a
+template's key is refused too.
+
+**Where such a key comes from.**
+
+- MCP passes `extra_env` through as sent, and Go callers set
+  `SpawnParams.ExtraEnv` directly; spawn validation refuses the key.
+- A template: `make-template` refuses such a key and saves nothing (see
+  [`make-template` runs the same check](#make-template-runs-the-same-check-b66q)),
+  so only a template saved before that check, or edited by hand, holds
+  one, and each `spawn` that uses it is refused.
+- The CLI's `--extra-env KEY=VALUE` (`kvSliceValue` in
+  `cmd/agent-director/flags.go`) splits at the first `=`, so its keys
+  never hold one. An empty key (`--extra-env =v`) is `ErrInvalidFlags` at
+  flag parse, before validation.
+- The TypeScript client passes `extra_env` as `--extra-env K=V` flags,
+  so the CLI would split a key holding `=` into another key and value
+  and spawn the wrong variable without an error. `buildArgv`
+  (`src/internal/argv.ts`, `extraEnvFlags` calling `invalidExtraEnvKey`)
+  therefore refuses a malformed `spawn` or `make-template` key itself.
+  It throws `ErrReservedEnvKey` (verb `spawn` or `make-template`, the
+  malformed-key description) and runs no subprocess. This check runs
+  before the CLI's reserved rules, so from TypeScript the key `HOME=/x`
+  gets the malformed-key description where MCP and Go give the `HOME`
+  one; the name is `ErrReservedEnvKey` on every surface, and nothing is
+  launched or saved.
+
+`resume` refuses a row whose stored extra env has a malformed key (only
+a row spawned before this refusal can) with `ErrReservedEnvKey`,
+wrapped. It runs after the `HOME` check and before any transcript
+lookup, tmux call or write (step 4 of [Resume](#resume)). A stored key
+that also sets `HOME` gets the `HOME` description. `ComposeRelaunch`,
+pre-trust and the transcript lookup therefore never see a malformed
+key.
+
+**The shared rule.** `spawn.InvalidEnvKey(env)` returns the smallest
+malformed key of `env`, and whether there is one.
+`spawn.EnvKeyProblem(key)` says what is wrong with a key (`""` when it is
+valid). The `extra_env` check (`ValidateExtraEnv`: spawn validation and
+`make-template`) and resume's stored-row guard (`resumeImpl`) both call
+`InvalidEnvKey`, so they refuse the same keys and name the same one. The TypeScript client cannot call Go, so
+`invalidExtraEnvKey` and `INVALID_ENV_KEY_ALTERNATIVE` in
+`src/internal/argv.ts` restate the rule and its texts.
+
+**The error.** The name is the existing `ErrReservedEnvKey`, not a new
+one: b.grg §3 allows no new or renamed error name on `spawn`,
+`make-template` or `resume`, because a caller that classes refusals by
+name treats a name it does not know as unclassified until it learns it.
+So no catalog or TypeScript client entry is added; the manifest lists
+the name among `make-template`'s errors as well (b.66q). The name is the contract:
+an `extra_env` key was refused and nothing was written or launched. The
+description is advice and says which rule refused the key. Each
+description quotes the key as given (Go `%q`; `JSON.stringify` in the
+TypeScript client), so a key with a NUL byte stays on one line and the
+message holds no raw NUL. Spawn's says the key is not a valid env-var
+name, what is wrong with it (`spawn.EnvKeyProblem`), to remove it, and
+what to do instead (`spawn.InvalidEnvKeyAlternative`):
+`ErrReservedEnvKey: extra_env key "CLAUDE_CONFIG_DIR=/x" is not a
+valid env-var name: it contains '=', and tmux splits each KEY=VALUE
+entry at its first '=', so it would set a different variable; remove
+"CLAUDE_CONFIG_DIR=/x" from extra_env, and give each variable its own
+name as the key (not empty, with no '=' and no NUL byte) and its value as
+the value`. Resume's (`invalidEnvKeyError` in `pkg/api/resume.go`) is
+described in step 4 of [Resume](#resume).
+
+Pinned by `TestValidateOrder`, `TestValidateRefusesInvalidEnvKey` and
+`TestInvalidEnvKey` (`internal/spawn/validate_test.go`).
+
+**Must use:** code that asks whether an `extra_env` key is a valid env-var
+name calls `spawn.InvalidEnvKey` or `spawn.EnvKeyProblem`; do not test
+for an empty key, `=` or NUL by hand. Code that refuses or explains a
+malformed key uses `spawn.EnvKeyProblem` and
+`spawn.InvalidEnvKeyAlternative`; do not restate the text. A change to
+the rule or its texts also changes `invalidExtraEnvKey` and
+`INVALID_ENV_KEY_ALTERNATIVE` in the TypeScript client.
+
+### `make-template` runs the same check (b.66q)
+
+`MakeTemplate` (`pkg/api/make_template.go`) passes the template's own
+`extra_env` to `spawn.ValidateExtraEnv`, so it never saves a template
+that every spawn using it would refuse. Its checks run in this order:
+the name (`config.ValidateTemplateName`), `relay_mode`, then
+`ValidateExtraEnv` (`HOME`, then the `AGENT_DIRECTOR_` prefix, then a
+malformed key, each `ErrReservedEnvKey` with its own description). All
+run before `config.EnsureTemplatesDir`, so a refused call creates no
+templates directory and writes or replaces no file, whatever
+`Overwrite` is. The error and its description are the ones spawn gives
+for that `extra_env`. The CLI and MCP `make-template` go through
+`api.MakeTemplate`. The manifest lists `ErrReservedEnvKey` among
+`make-template`'s errors; no error name is new (b.grg §3).
+
+The TypeScript client's `makeTemplate` refuses a malformed key itself
+before it runs the CLI, as its `spawn` does (`extraEnvFlags`, verb
+`make-template`; see [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
+
+A template saved before this check, or edited by hand, can still hold
+such a key; spawn checks the merged extra env, so it still refuses each
+spawn that uses that template.
+
+Pinned by `TestMakeTemplateRefusesSpawnRefusedEnvKey`
+(`pkg/api/make_template_test.go`), the literal-follow tests A14 and A15
+(`pkg/api/advice_follow_make_template_env_test.go`),
+`TestMakeTemplateHasErrorNames` (`pkg/api/manifest/manifest_test.go`)
+and the `make-template` row of `argv-builder.test.ts`.
+
+**Must use:** code that checks an `extra_env` map before it is launched
+or saved calls `spawn.ValidateExtraEnv`; do not call
+`spawn.ReservedHomeKey`, the prefix rule and `spawn.InvalidEnvKey` in
+sequence by hand. In the TypeScript client, a builder that passes
+`extra_env` as `--extra-env` flags calls `extraEnvFlags`.
 
 ### Launch identity
 
@@ -4194,7 +4520,7 @@ agent (a leftover's included) changes nothing and is logged as
 `ad.hook.ignored` (`no_pane_recorded`). Afterwards a plain spawn of the
 id returns `ErrInstanceIdCollision`, `resume` returns `ErrNoSessionId`
 (the row never had a session id), and a spawn with the reuse opt-in
-(`--reuse-finished`) is decided by its lookup like any finished row's
+`reuse_finished` (`--reuse-finished` on the CLI) is decided by its lookup like any finished row's
 reuse.
 
 **Shared launch-error builders** (`internal/spawn/launch_errors.go`,
@@ -4354,7 +4680,10 @@ a sweep never builds the record or the holder facts another way.
 failed kill leaves an unlabelled session of agent-director's that may
 run; the error says so. A plain spawn's recorded socket comes from the
 caller's tmux environment (`TMUX`, `TMUX_TMPDIR`), so a caller with a
-different environment launches on a different server.
+different environment launches on a different server. A caller whose
+store is not the one the server's `HOME` names launches an agent whose
+hooks write to that other store, so its row stays `pending` (see
+[Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas), b.3en).
 
 **A launch onto an existing row** (`resume`, see [Resume](#resume); reuse,
 see [Reuse of a finished id](#reuse-of-a-finished-id)). Its socket comes from `spawn.ResolveRowLaunchSocket(recorded)`
@@ -4407,7 +4736,7 @@ SR-16.4). `status` and `list` do not carry it, and no error description
 names it. It is display only: no verb reads it back, and a launch onto an
 existing row takes its socket from the store through
 `ResolveRowLaunchSocket`, never from a caller. It is the `-S` socket of the
-README's "Operator actions" commands. A plain spawn refused by the label
+docs/operator-actions.md commands. A plain spawn refused by the label
 scan ("left over from an earlier life") inserts no row, so `get` has
 nothing to show; that socket comes from the refusal's
 `ad.launch.name_held` trail record instead. After a held name the row
@@ -4504,7 +4833,7 @@ read by the pre-check, with no second read: a name that is empty, holds a
 control character, or holds a character tmux stores differently (`.`,
 `:`, invalid UTF-8) → `ErrInternal` (`unusableNameError`, prefixed with
 the instance id), with no tmux call and nothing written or changed;
-removing the row is a human's decision (README "Operator actions"). The
+removing the row is a human's decision (docs/operator-actions.md). The
 requested name is not checked here. Then it:
 
 1. Resolves the launch socket with `spawn.ResolveRowLaunchSocket` (the
@@ -4709,37 +5038,34 @@ write, it never lengthens the window between the launch start and the
 create.
 
 The step resolves the target `.claude.json` (`claudeJSONFor`) from the
-launch's extra env, so that it is the file the launched Claude Code
-reads. Claude Code reads `<CLAUDE_CONFIG_DIR or else its home
-directory>/.claude.json` (2.1.280: `CLAUDE_CONFIG_DIR || os.homedir()`,
-and Bun's `os.homedir()` returns `$HOME` as set), and the extra env
-reaches its pane through tmux `new-session -e`, so an extra-env `HOME`
-moves the file too (b.wb4). In order:
+launch's extra env `CLAUDE_CONFIG_DIR`, so that it is the file the
+launched Claude Code reads (2.1.280:
+`CLAUDE_CONFIG_DIR || os.homedir()`):
 
-1. The extra env's `CLAUDE_CONFIG_DIR` is set (non-empty): an absolute
-   path gives `<CLAUDE_CONFIG_DIR>/.claude.json`; any other value
-   (relative, `~`-prefixed or whitespace-only) is refused (b.nje). `HOME`
-   is not consulted either way.
-2. Else the extra env's `HOME` is set (non-empty): an absolute path
-   gives `<HOME>/.claude.json`; any other value is refused by the same
-   rule (b.wb4).
-3. Else (both absent or empty): the operator's `~/.claude.json`, from
-   agent-director's own `HOME`.
+- Absent or empty: the operator's `~/.claude.json`, from
+  agent-director's own `HOME`.
+- An absolute path: `<CLAUDE_CONFIG_DIR>/.claude.json`.
+- Set but not an absolute path (relative, `~`-prefixed or
+  whitespace-only): refused (b.nje). Pre-trust reads, writes and stats
+  no file, makes no lock dir, and reports `failed` (below). Claude Code
+  resolves a relative value against its pane's cwd, while agent-director
+  would resolve it against its own caller's cwd, which differs for each
+  caller, so the entry could land in a file the agent never reads.
+  Falling back to `~/.claude.json` could also write a file the agent
+  never reads, so pre-trust does not fall back.
 
-A refused value resolves no file: pre-trust reads, writes and stats no
-file, makes no lock dir, and reports `failed` (below). Claude Code
-resolves a relative value against its pane's cwd, while agent-director
-would resolve it against its own caller's cwd, which differs for each
-caller, so the entry could land in a file the agent never reads. A
-refused value is never replaced by the next step: falling back to
-`<HOME>/.claude.json` or `~/.claude.json` could also write a file the
-agent never reads.
+The extra env's `HOME` is never consulted. No launch carries one:
+`spawn` validation refuses a key that sets `HOME` in `extra_env` and
+`resume` refuses a row whose stored extra env has one, both with
+`ErrReservedEnvKey` and before pre-trust (see [Reserved `HOME` in
+`extra_env`](#reserved-home-in-extra_env-bnas)).
 
-Pre-trust following an extra-env `HOME` does not by itself make such a
-launch work: the agent's hooks resolve agent-director's config and store
-from the pane's `HOME` too, so they open that home's store, not the
-launching one, and the launching row can stay `pending` unless that
-home's config points `db_path` at the launching store (b.nas).
+The exact-key lookup of `CLAUDE_CONFIG_DIR` sees the variable the launch
+sets. No launch carries a key such as `CLAUDE_CONFIG_DIR=/x`, which tmux
+would read as `CLAUDE_CONFIG_DIR`: `spawn` validation refuses a
+malformed key and `resume` refuses a row whose stored extra env has one,
+both with `ErrReservedEnvKey` and before pre-trust (see [Malformed
+`extra_env` keys](#malformed-extra_env-keys-bvpb)).
 
 For `resume` the extra env is the row's, so it targets the same file the
 row's spawn did. With a file resolved, the step sets
@@ -4766,23 +5092,20 @@ resolve is never replaced: pre-trust writes nothing and reports
 (its target removed, or turned into a loop) fails the write with the
 reason `resolve symlink <path>: …`.
 
-**One rule for `CLAUDE_CONFIG_DIR` and `HOME` (b.1ba, b.nje, b.wb4).**
-Whether a `CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
+**One rule for `CLAUDE_CONFIG_DIR` (b.1ba, b.nje).** Whether a
+`CLAUDE_CONFIG_DIR` value is usable is `spawn.ConfigDirUsable`
 (`internal/spawn/pretrust.go`): only an absolute path is. Every reader
 of the value shares it: pre-trust's file resolution above, and the
 transcript paths `resume`'s fallback and `find-missing`'s heal compose
 (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
-Only the response to an unusable `CLAUDE_CONFIG_DIR` differs: those
-read paths treat it as absent and look under `~/.claude`, while
-pre-trust, which writes, refuses it. Pre-trust applies the same rule,
-and the same refusal, to the extra env's `HOME`. The transcript paths
-do not read the extra env's `HOME` at all: with no usable `CLAUDE_CONFIG_DIR` they look under
-agent-director's own `~/.claude`, so a transcript
-Claude Code wrote under an extra-env `HOME` is found only through its
-recorded `jsonl_path` (b.s52). **Must use:** code that reads
-`CLAUDE_CONFIG_DIR` or `HOME` from a launch's or row's extra env decides
-whether to use it with `spawn.ConfigDirUsable`; do not write a second
-check.
+Only the response to an unusable value differs: those read paths treat
+it as absent and look under `~/.claude`, while pre-trust, which writes,
+refuses it. **Must use:** code that reads `CLAUDE_CONFIG_DIR` from a
+launch's or row's extra env decides whether to use it with
+`spawn.ConfigDirUsable`; do not write a second check. No reader derives
+a path from an `extra_env` `HOME`: it is a reserved key (see [Reserved
+`HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)), so do not add
+one.
 
 **Config lock (b.zjm).** Claude Code writes the same file, at startup
 and while it runs, and saves it under a lock: it takes the lock,
@@ -4898,10 +5221,9 @@ with the rest of that life.
 
 Pre-trust is best effort on both verbs: a failure never fails the
 launch. When the write cannot be made (the extra env's
-`CLAUDE_CONFIG_DIR`, or with none its `HOME`, is set but not an absolute
-path, or the resolved file does not exist, as on a fresh Claude Code
-install or a fresh `CLAUDE_CONFIG_DIR` or extra-env `HOME`, or it cannot
-be read, parsed or written, or its
+`CLAUDE_CONFIG_DIR` is set but not an absolute path, or the resolved
+file does not exist, as on a fresh Claude Code install or a fresh
+`CLAUDE_CONFIG_DIR`, or it cannot be read, parsed or written, or its
 lock cannot be taken, stays held by another process through the
 `lock_wait_seconds` wait, was held too long to write under, or was taken
 over by another process before the write), `PreTrust` returns `failed` and
@@ -4913,14 +5235,12 @@ gave up after waiting 12s` (the configured wait, as Go formats a
 duration) for a lock that stayed held, and `pre-trust:
 lock <path>.lock was taken over by another process, so wrote nothing`
 for a lock taken over before the write. An unusable `CLAUDE_CONFIG_DIR`
-or `HOME` resolves no file, so its line names none and gives the
-variable's name and its value quoted (Go `%q`) instead:
-`agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR "rel" is
-not an absolute path); the agent may stop at Claude Code's folder-trust
-prompt`, or `… (pre-trust: HOME "rel" is not an absolute path) …`. The
-line names no label, token or environment value other than the extra
-env's `CLAUDE_CONFIG_DIR` and `HOME`. The launch proceeds, and the agent
-may wait at the trust dialog.
+resolves no file, so its line names none and quotes the value (Go `%q`)
+instead: `agent-director: pre-trust failed (pre-trust: CLAUDE_CONFIG_DIR
+"rel" is not an absolute path); the agent may stop at Claude Code's
+folder-trust prompt`. The line names no label, token or environment
+value other than the extra env's `CLAUDE_CONFIG_DIR`. The launch
+proceeds, and the agent may wait at the trust dialog.
 
 **The `pre_trust` result field.** Every successful `spawn` and `resume`
 result carries `pre_trust`, always exactly one of three values:
@@ -4935,9 +5255,9 @@ result carries `pre_trust`, always exactly one of three values:
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
   written, its lock held by another process included, or the extra
-  env's `CLAUDE_CONFIG_DIR`, or with none its `HOME`, is set but not an
-  absolute path, so no file was touched). The launch still proceeds, and
-  the agent may stop at Claude Code's folder-trust prompt.
+  env's `CLAUDE_CONFIG_DIR` is set but not an absolute path, so no file
+  was touched). The launch still proceeds, and the agent may stop at
+  Claude Code's folder-trust prompt.
 
 A `failed` pre-trust never fails the launch; a launch that fails returns
 its error, not a result. The value is the `PreTrustOutcome` the shared
@@ -5326,7 +5646,7 @@ unusable-recorded-name check:
 a recorded session name that is empty, holds a control character, or
 holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
 `ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing sent;
-removing the row is a human's decision (README "Operator actions"). Only
+removing the row is a human's decision (docs/operator-actions.md). Only
 then the row's socket and the one lookup.
 
 ### `read-pane`
@@ -5334,9 +5654,10 @@ then the row's socket and the one lookup.
 `pkg/api/readpane.go` holds the flow (`ReadPane`, unexported `readPane`
 and `readPaneRun`, built on `paneRun`). It captures the last N lines of
 the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
-Default `n=25`, no upper cap (SRD §12 explicitly leaves the bound to the
-caller). `n` counts lines of history before the visible pane, so
-`n_lines: 1` is the smallest capture.
+Default `n=25` (for `n_lines` 0 or omitted), no upper cap (SRD §12
+explicitly leaves the bound to the caller). `n` counts lines of history
+before the visible pane, so `n_lines: 1` is the smallest capture. A
+negative `n_lines` is refused, never read as the default (b.c4n).
 
 Its result is `pane` and `pane_sha256`, the SHA-256 (lowercase hex,
 `paneSHA256`) of exactly the bytes of `pane` (b.146 rule 7). A caller that
@@ -5346,12 +5667,16 @@ chooses what to type, or what to record, from that pane passes it back as
 (ANSI stripped), so the hash of an `ansi` read never matches. It is a
 checksum: agent-director does not look at what the bytes say.
 
-Order (`readPane`): the row read (unknown id → `ErrSpawnNotFound`); then,
+Order (`readPane`): a negative `n_lines` first → `ErrInvalidFlags`,
+before the row is read (so an unknown id gets it too), with no tmux call;
+as supplementary advice its description reads "n_lines = <n> is negative;
+pass 0 (or omit it) for the default of 25 lines, or a positive number of
+lines". Then the row read (unknown id → `ErrSpawnNotFound`); then,
 for a row in any state, the unusable-recorded-name check: a recorded
 session name that is empty, holds a control character, or holds a
 character tmux stores differently (`.`, `:`, invalid UTF-8) →
 `ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing read;
-removing the row is a human's decision (README "Operator actions"). Then
+removing the row is a human's decision (docs/operator-actions.md). Then
 the row's socket and the one lookup.
 
 Outcomes of its one lookup (SRD SR-7.2, SR-7.5):
@@ -5498,46 +5823,57 @@ map a tree by recursive listings.
 
 ## Install flows
 
-There are two complementary install surfaces, separated by what they
-touch on disk. **Pattern A** (the npm postinstall) ships
-`/install-agent-director` into Claude Code's skill registry so the
-operator can discover the install skill in one step; **Pattern B**
-(the install skill itself) is the only path that touches the CLI
-binary, state DB, and Claude Code hooks. Pattern A is silent; Pattern
-B is explicit and operator-confirmed.
+agent-director ships one installer, `install.sh`, the script of the
+`install-agent-director` skill
+([Pattern B](#pattern-b--installsh-the-install-skill)). It installs
+`agent-director` and `agent-director-admin`, brings `state.db` to the
+current schema, and merges the Claude Code hooks (unless `--no-hooks`).
+The npm package is not an installer: it installs nothing outside
+`node_modules/`, so it neither installs the CLI nor stages the skill
+(see [Staging the install skill](#staging-the-install-skill)).
 
-### Pattern A — Postinstall skill copy
+### Staging the install skill
 
-When the umbrella package is installed:
+The skill is `SKILL.md`, `install.sh` and `uninstall.sh` in
+`skills/install-agent-director/`. Claude Code finds personal skills in
+`~/.claude/skills/` and project skills in a project's `.claude/skills/`;
+the repo's top-level `skills/` is neither, and nothing in agent-director
+copies the skill into either. The npm package does not carry it:
 
-```
-bun add agent-director
-  → bun resolves umbrella + platform sub-package
-  → bun runs pkg/ts-bun-client/scripts/postinstall.ts
-      → host-pair gate (linux/x64 or darwin/arm64, else exit 1)
-      → ${HOME}/.claude/skills/install-agent-director/ atomic copy
-        of the bundled skill body
-  → claude /install-agent-director is now invokable in any Claude
-    Code session run by that operator
-```
+- `pkg/ts-bun-client/package.json` `files` lists only the `dist/` output
+  (`dist/**/*.js`, `dist/**/*.d.ts`, `dist/version-floor.json`) and
+  `README.md`.
+- Its `scripts` (build, lint, typecheck, the test runners and two release
+  helpers) include no lifecycle script a package manager runs on
+  install, so `bun add agent-director` runs no package code, with or
+  without `--ignore-scripts`. Installing the package writes nothing
+  under `~/.claude/`, `~/.agent-director/` or `~/.local/bin/`. See
+  [npm packaging and version scripts](#npm-packaging-and-version-scripts).
 
-The postinstall **only** writes under `${HOME}/.claude/skills/`
-(plus a sibling tmp dir and an optional timestamped backup). It does
-NOT touch `~/.local/bin/agent-director`, `~/.agent-director/`,
-`~/.claude/settings.json`, or `~/.claude/config.toml`. Those side
-effects are reserved for Pattern B's `install.sh`. Keeping
-postinstall narrow protects operators who install the library purely
-to import it from TypeScript code and never want the CLI / state DB
-/ hooks materialized.
+`install.sh` is reached three ways:
 
-The three-way decision (identical / older-or-absent / newer) is
-governed by the YAML frontmatter `version:` field on
-`SKILL.md`. Authoritative spec lives in SRD `t1.fg3.7i` SR-1.4.
+1. **The skill.** The operator copies or symlinks
+   `skills/install-agent-director/` into `~/.claude/skills/` (or a
+   project's `.claude/skills/`), then invokes `/install-agent-director`
+   in Claude Code. The skill runs the `install.sh` beside its `SKILL.md`.
+2. **A checkout.** `bash skills/install-agent-director/install.sh` with
+   its options.
+3. **The one-liner.** It fetches `install.sh` from `main` and installs
+   the latest release's binaries:
+
+   ```
+   curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+   ```
+
+Without `--binary` or `--from-release`, a symlinked skill directory
+installs the `bin/` build of the checkout it points into, held to that
+checkout's `HEAD`; a copy has no checkout behind it. See "The two
+binaries" and "The source-tree version check" under Pattern B.
 
 ### Pattern B — `install.sh` (the install skill)
 
 Invoked from inside Claude Code via `/install-agent-director` (which
-runs the skill body Pattern A copied), or directly via
+runs the skill body the operator staged; see [Staging the install skill](#staging-the-install-skill)), or directly via
 `bash skills/install-agent-director/install.sh`:
 
 ```
@@ -5553,13 +5889,19 @@ claude /install-agent-director (or `bash install.sh`)
   → hooks on only: a config.toml that sets defaults as a key before any
     header (defaults = { ... }) → exit 5, nothing on disk changed (see
     "The config.toml merge" below)
+  → hooks on only: a symlinked settings.json or config.toml the merges
+    cannot write through (its links loop, or its target's directory is
+    missing or cannot be written in) → exit 4 for settings.json, exit 5
+    for config.toml, nothing on disk changed (see "A symlinked
+    settings.json or config.toml" below)
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
   → find both source binaries (agent-director-admin last from its
     installed path, never PATH; see "The two binaries" below); --binary
     and --admin-binary arch probes
-  → source-tree version check (a local agent-director in a git checkout
-    must be built from HEAD)
+  → source-tree version check (a local agent-director must be built from
+    the HEAD of the checkout install.sh takes bin/ from, else exit 3; see
+    "The source-tree version check" below)
   → version-stamp pairing: agent-director and agent-director-admin must
     report the same `version` stamp (version and commit), with a real
     commit, else exit 3
@@ -5577,12 +5919,15 @@ claude /install-agent-director (or `bash install.sh`)
     under a one-shot migrate-authorized sentinel (full six-step flow in
     install-agent-director/SKILL.md)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
-    (not valid JSON, or valid JSON of another shape → exit 4, the file
-    left as it was)
+    (an empty or whitespace-only file is merged as {}; not valid JSON,
+    more than one JSON document, or valid JSON of another shape → exit
+    4, the file left as it was; see "The settings.json merge" below)
   → set inject_help_hook = true in config.toml's [defaults] table (see
     "The config.toml merge" below); --no-hooks skips this and the
-    settings.json merge; both merges keep the file's mode (see "Merged
-    files keep their mode" below)
+    settings.json merge; both merges keep the file's mode and write
+    through a symlink to its target, keeping the link (see "Merged files
+    keep their mode" and "A symlinked settings.json or config.toml"
+    below)
   → optional MCP registration (--register-mcp)
   → print the admin path once, for the human
 ```
@@ -5591,8 +5936,9 @@ Pattern B is where the CLI / state / hooks side effects happen.
 
 **Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
 (`--help`) lists its exit codes: 2 pre-flight, 3 the source binaries or
-their version stamps, 4 the `settings.json` hook merge, 5 the config file
-or the store open and schema migration. Exit 5 has causes needing
+their version stamps, 4 the `settings.json` hook merge (with hooks on, a
+symlinked `settings.json` it cannot write through included, refused in
+pre-flight), 5 the config file or the store open and schema migration. Exit 5 has causes needing
 different remedies, so every exit-5 path ends with one line on stderr, its
 last, `install.sh: err_name=<Name>`. That line is the contract: a caller
 branches on `<Name>`, never on the English above it. The status stays 5
@@ -5601,9 +5947,9 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `<Name>` | Sites | Remedy |
 |---|---|---|
 | `ErrVersionUnreadable` | `ad_fail_unreadable_version`: step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
-| `ErrConfigMalformed` | pre-flight `ad_store_db_path`, `ad_store_busy_timeout_ms` and (hooks on) `ad_config_merge_check`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml`, then re-run |
+| `ErrConfigMalformed` | pre-flight `ad_store_db_path`, `ad_store_busy_timeout_ms` and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run |
 | `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
-| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded, or a readable `user_version` that is not the target | a human |
+| `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target | a human, following the advice (fix or check what it names, then re-run) |
 | any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
 `ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
@@ -5622,6 +5968,83 @@ exits 5 on a runtime error, so the `settings.json` merge checks jq's status
 and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
 (jq's error is above)"); sqlite3 exits 5 on a busy database, and each
 caller of `ad_user_version` captures the read's status beside its output.
+
+**The settings.json merge (b.cfq, b.zbg).** With hooks on, step 6 merges
+both `agent-director help` entries into `~/.claude/settings.json` with one
+jq filter, and writes the result after the usual `.bak` (see "Merged files
+keep their mode" below). jq runs a filter once per JSON document it reads,
+so install.sh first counts the file's documents
+(`jq -n '[inputs] | length'`):
+
+- **jq fails** (not valid JSON): exit 4, `install.sh: ~/.claude/settings.json is not valid JSON`.
+- **None** (empty, or only whitespace, as `touch` leaves it): merged as
+  `{}`. Claude Code reads such a file as no settings. Without the count
+  the filter would print nothing, and the file would be rewritten with
+  no hooks under `hooks   : injected`.
+- **One:** merged.
+- **More than one:** exit 4, before the filter runs, with
+  `install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds <N> JSON documents`
+  and advice to make the file one JSON object and re-run. Without the
+  count, each document would be merged and written back.
+
+Every exit 4 here leaves the file as it was, byte for byte, with nothing
+written beside it, and comes after the binaries are installed (step 6).
+The filter's "already there" test reads only lists (`arrays`), where
+Claude Code reads hooks: an entry counts only when it sits in the event's
+list and holds the help command in its own `hooks` list. So an entry
+whose `hooks` is an object gets a proper entry appended beside it, and an
+event value that is not a list (an object, say) fails the append (jq's
+runtime error, exit 4 as above), never passing as already merged. A merge
+that succeeds therefore writes one object holding both entries in lists,
+and `hooks   : injected` is true. **Must use:** a jq rewrite of `settings.json` in either script
+counts the documents first and runs only on exactly one, of the outer
+shape this merge needs (an object whose `hooks` holds `SessionStart` and
+`SessionEnd` lists, after the merge's fill-ins); install.sh refuses
+another outer shape with exit 4, uninstall.sh leaves it alone. The two
+agree on that outer shape only, not on the values inside the lists. The
+merge's "already there" test indexes each entry it reads (`.hooks`,
+`.matcher`) and each hook in that entry's `hooks` list (`.command`), so
+one that is neither an object nor `null`, such as an entry that is a
+string (`{"hooks":{"SessionStart":["x"]}}`) or a `hooks` list holding a
+string, fails the merge too (exit 4); a `null` one indexes to `null` and
+passes. Only a value the merge reads is refused: `any` stops at the
+first match, and the `hooks` list of a `SessionEnd` entry whose `matcher`
+is not `"compact"` is not read, so a file holding such values can still
+merge (exit 0); `advice_follow.sh`'s J18 pins both, each value kept as it
+was. uninstall.sh edits around all of them, keeping them
+verbatim (its side is in [Uninstall semantics](#uninstall-semantics)).
+
+After the merge's jq fails, install.sh says which side of the event
+lists is wrong (b.dzu). A second jq query, with the merge's fill-ins,
+lists the path of every entry in the `SessionStart` and `SessionEnd`
+lists, and every hook in an entry's `hooks` list, that is neither an
+object nor `null`, whether or not the merge read it: `SessionStart`'s
+first, then `SessionEnd`'s, each by index. When the outer shape is right
+and it finds some, the headline is followed by
+
+```
+  It is valid JSON, and its hooks hold event lists, but an entry in an
+  event list, or a hook in an entry's hooks list, is not an object, the
+  shape Claude Code reads. Not an object:
+    .hooks.SessionStart[0]
+  Fix it, then re-run this install.
+```
+
+with one indented path per line. Otherwise, including a file wrong in
+both ways, it is `It is valid JSON, but not an object whose hooks hold
+event lists, the shape Claude Code reads. Fix it, then re-run this
+install.` The contract is exit 4 with the file unchanged; both messages
+are advice for whoever fixes the file.
+`advice_follow.sh`'s J18 (valid JSON of another shape, an object-valued
+`SessionStart` holding the help hook among them, and event lists holding
+values that are neither objects nor `null`, with `null` values kept on
+the fix: each message, the paths listed, and a file wrong in both ways
+getting the outer-shape one) and J21 (several documents, each
+refusal followed by its fix and a re-run), `test/install-sh/retry.sh`'s
+`settings-empty-*`, `settings-whitespace-*` and
+`settings-entry-hooks-object-*` rows,
+`TestUninstallLeavesSettingsWithoutOneDocument` and
+`TestUninstallLeavesSettingsItCannotEdit` pin this.
 
 **The two binaries (b.vqr).** Every install installs both
 `agent-director` and the operator tool `agent-director-admin` (see
@@ -5665,8 +6088,8 @@ and J9 (an installed admin from another build, refused, then
   a plain `go build` reports `{"version":"dev","commit":"unknown"}`, so two
   such builds from different trees would otherwise pass as a pair. `make
   build` in a git checkout stamps both with the checkout's commit, and
-  release assets are stamped; the advice for both refusals is `make build`
-  or `--from-release`.
+  release assets are stamped; the advice for both refusals is `make -C
+  <checkout> build` or `--from-release` (see "The build advice" below).
 - **Both staged before either is replaced.** After any `--keep-prior`
   snapshots, install.sh creates the admin directory and makes both sibling
   temp copies with their modes, and only then runs the two `mv`s back to
@@ -5682,6 +6105,78 @@ and J9 (an installed admin from another build, refused, then
   without the CDN retry, because such a release has no admin asset
   ("release <tag> has no agent-director-admin binary"; the advice is a
   release of 0.11.0 or later).
+
+**The source-tree version check (b.go9, b.1rs).** When `agent-director`
+comes from `--binary` or the in-repo build (never from PATH, never with
+`--from-release`), install.sh holds its stamp's commit to `source_head`,
+the `HEAD` of `source_root`: the tree two levels above the script,
+resolved physically (`cd -P … && pwd -P`), the same tree it takes `bin/`
+from. Both are read once, early (before `--from-release`), and shared
+with the build advice below. `source_head` is set only when
+`source_root` has a `cmd/agent-director` and a `.git` of its own that
+git can open (a directory in a clone, a `gitdir:` file in a linked
+worktree), read with `git --git-dir="$source_root/.git" rev-parse HEAD`,
+which never walks up to a repo that encloses the script; no git or an
+unborn `HEAD` leaves it empty. The check runs only when it is set; unlike
+the build advice, it needs no `Makefile`. So a worktree nested inside
+another checkout is held to its own `HEAD`, and a symlinked skill
+directory to the `HEAD` of the checkout it points into. Not checked: an
+installed skill copy inside a dotfiles `~` or `~/.claude`, a copy
+outside any checkout, and an agent-director tree inside an enclosing
+repo (a monorepo, a dotfiles `~`) whose own `.git` is missing or one git
+cannot open (empty, half-copied). A commit that differs, is `unknown`,
+or cannot be read is exit 3: "install.sh: source-tree version check
+failed.", a `  HEAD    : <sha> (<source_root>)` line, and the advice
+`<build_advice>` (below; `make -C <source_root> build` when it has a
+`Makefile`) or `--from-release`.
+`advice_follow.sh`'s J5 pins this: a clone, a linked worktree whose path
+has a space, a nested worktree, a symlinked skill directory, and five
+unchecked layouts (the installed skill in a dotfiles `~`, a dotfiles
+`~/.claude`, or a `~/.claude` that is a linked worktree; an
+agent-director tree under a dotfiles `~` whose `.git` is missing or
+empty). Each refusal is run, and its advice followed, from a directory
+outside the checkout.
+
+**The build advice (b.3qt).** The contract of these refusals is exit 3
+with nothing installed; the advice is supplementary text for whoever
+fixes the build. Every refusal that advises a build names where to run
+it, so the advice works from any directory: the installed
+skill is often a symlink into a clone, run from `~`, where a bare `make
+build` fails. install.sh sets two strings once, from `source_root` and
+`source_head` (above), before `--from-release`:
+
+| `source_root` | `build_advice` | `build_rerun` |
+|---|---|---|
+| a git checkout of agent-director's source (`source_head` set) with a `Makefile` | `make -C <source_root> build` | `bash <$0>` |
+| anything else (a curled script, an installed skill copy in no checkout or in another repo) | `make -C <path-to-agent-director-checkout> build` | `bash <path-to-agent-director-checkout>/skills/install-agent-director/install.sh` |
+
+`source_root` and `$0` are written with `printf '%q'`, as is `$0` in
+the no-release line "point at local binaries:
+`bash <$0> --binary <path> --admin-binary <path>`", so a path with a
+space or other shell metacharacter can be pasted into a shell as is; a
+plain path prints unchanged. In a checkout, `make build` stamps both
+binaries with its commit, as the source-tree check and the stamp pairing
+require. With no checkout known, the placeholder stands for the
+operator's own, and the re-run is that checkout's install.sh, which
+takes the rebuilt binaries from its `bin/`. Where the advice appears:
+
+- the source-tree version check: `rebuild it first:    <build_advice>`
+- both stamp-pairing refusals: `rebuild both first:  <build_advice>`
+- `--from-release` with no release published (exit 3):
+  `build from source: <build_advice> && <build_rerun>`
+
+**Must use:** an install.sh message that advises a build prints
+`$build_advice` (and `$build_rerun` for the re-run after it), never a bare
+`make build`. `advice_follow.sh` pins the advice text and follows it from
+a directory outside any checkout: J1 (the no-release lines: build from
+source from a checkout, a linked worktree whose path has a space, a copy
+in no checkout and a copy in a dotfiles `~/.claude`, the last two in
+placeholder form with the checkout put in its place; point at local
+binaries from a copy in no checkout and one whose path has a space), J5
+(above, the spaced linked worktree's path quoted) and J9 (a stale
+`agent-director-admin` in a checkout's `bin/`, and a plain-`go build`
+pair passed with `--binary` and `--admin-binary` to a copy in no
+checkout, placeholder form).
 
 **The operator's umask (b.7j2).** install.sh runs `umask u=rwx` right
 after `set -euo pipefail`. That clears the owner's bits from the umask
@@ -5785,9 +6280,11 @@ over `<file>`. The file keeps its mode (a 0600 file stays 0600 under umask
 022), and its new contents are never readable, even before the `mv`, by
 anyone who could not read the old. The mode is read with `stat -L` (GNU
 `-c '%a'`, else BSD `-f '%Lp'`), so a symlinked `<file>` gives its target's
-mode; the `mv` replaces the link with a regular file and leaves the target
-as it was. A `<file>` that does not exist yet takes the umask's mode (a new
-`config.toml` is then `chmod 0600`). The timestamped `.bak` copies are made
+mode; for a symlinked `<file>` the `.new` and the `mv` act on the file the
+link resolves to, and the link is kept (see "A symlinked `settings.json`
+or `config.toml`" below). A `<file>` that does not exist yet takes the
+umask's mode (a new `config.toml` is then `chmod 0600`). The timestamped
+`.bak` copies are made
 with `ad_backup_keeping_mode <file> <bak>` the same way: it removes any
 `<bak>` (an earlier run's copy of the same second), copies with a plain
 `cp -f` under `umask 077`, then `chmod`s the copy to `<file>`'s mode. It
@@ -5798,14 +6295,155 @@ uses the same functions for its two rewrites. **Must use:** a rewrite of
 an existing operator file in either script goes through
 `ad_replace_keeping_mode` and its backup through `ad_backup_keeping_mode`,
 never a bare tempfile and `mv`, a `cp -f` alone, or a `cp -p`;
-`ad_mode_of`, `ad_replace_keeping_mode` and `ad_backup_keeping_mode`
-exist in both scripts (install.sh, uninstall.sh) and change together.
+`ad_mode_of`, `ad_resolve_link`, `ad_link_write_check`,
+`ad_replace_keeping_mode` and `ad_backup_keeping_mode` exist in both
+scripts (install.sh, uninstall.sh) and change together.
 `test/install-sh/retry.sh`'s merge-modes table and
 `TestUninstallKeepsFileModes` pin this with `chmod` and `cp` stand-ins on
 `PATH`: each `.new` is 600 and each `.bak` holds only its original's owner
 bits before its `chmod` (retry.sh's `-written-owner-only` rows), and a
 `cp` that fails on `-p`/`--preserve`, as on NFS, is never hit (its
 `-no-cp-p` rows); a change adds its cases to both.
+
+**A symlinked `settings.json` or `config.toml` (b.nw5).** When
+`~/.claude/settings.json` or `~/.agent-director/config.toml` is a symlink
+(a dotfile-managed link into a dotfiles repo, say), install.sh's merges and
+uninstall.sh's reversals write through it, as pre-trust's write of a
+symlinked `.claude.json` does (see "A symlinked `.claude.json`" above): the
+link stays in place and the file it resolves to gets the edit. A `mv` over
+the link itself would replace it with a regular file and leave its target
+stale, so later edits made in the dotfiles repo would no longer reach
+Claude Code or agent-director. `ad_replace_keeping_mode` first resolves
+`<file>` with `ad_resolve_link <file>`, which follows the chain one link at
+a time with `readlink`, each relative target taken against its own link's
+directory, and prints the path at its end, or `<file>` itself when it is
+not a link. It is a loop over `readlink` because older macOS has no
+`readlink -f`. The `.new` is written beside that resolved file and `mv`'d
+over it, so the rename stays within one directory even when the link
+points to another filesystem, and the resolved file keeps its mode as
+above. The `.bak` is still made beside the link: `cp` reads through the
+link, so it is a regular copy of the target's contents at the target's
+mode. A dangling link whose directory exists is taken for a missing file
+(`settings.json`'s merge starts from `{}`, `config.toml` gets the created
+file): install.sh creates the file the link names, keeping the link, and
+that file takes the umask's mode (`config.toml` is then `chmod 0600`,
+through the link). The `config.toml` create branch writes with `>` and
+`chmod`s, both of which follow a link.
+
+The write fails when the links loop, when the resolved file's directory
+is missing, or when that directory cannot be written in, so both scripts
+check a symlinked file before anything on disk changes, never at the
+write. `ad_link_write_check <file>` returns 0 for a file that is not a
+symlink, or one whose links end (`ad_resolve_link` succeeds) at a file
+whose directory exists and can be written in (`-w` and `-x`; `-w` also
+fails on a read-only mount). Otherwise it sets `link_target` (the resolved
+file, empty for a loop) and `link_why` (one sentence saying why) and
+returns 1. It refuses:
+
+- **a loop:** more than 40 links, as the kernel counts them;
+- **a missing directory:** the resolved file's directory does not exist
+  (a dotfiles repository not cloned yet, say);
+- **a directory that cannot be written in:** home-manager's links into
+  the read-only `/nix/store`, say.
+
+Each script uses it as follows.
+
+- **install.sh, hooks on:** right after `ad_config_merge_check` and before
+  `pre-flight OK`, it checks `settings.json`, then `config.toml`.
+  `ad_link_refuse <file>` reports a refusal on stderr: first line
+  `install.sh: cannot merge into <file> through its symlink; refusing to install.`,
+  then `link    : <file>`, `target  : <target>` (none for a loop), the
+  reason, the advice, and
+  `Nothing was installed or changed. Re-run this install after the change.`
+  `settings.json` exits 4; `config.toml` exits 5 through
+  `ad_exit_5 ErrConfigMalformed`. The advice gives two ways out: fix the
+  link so it reaches a file in a directory one can write in; or re-run
+  with `--no-hooks`, which edits neither file, and add what the merges add
+  where the files come from (the dotfiles or home-manager source): in
+  `settings.json` a SessionStart hook and a SessionEnd hook with matcher
+  `compact`, each a command hook running `<bin dir>/agent-director help`,
+  and in `config.toml` `inject_help_hook = true` under `[defaults]`. The
+  check never reads the file, so a hooks-on install over such a link is
+  refused even when the file already holds those entries.
+- **install.sh, `--no-hooks`:** neither file is written, so neither is
+  checked.
+- **uninstall.sh** works out both edits first (`settings.json`'s jq
+  filter, `config.toml`'s `awk`). Then, in this order, it checks
+  `settings.json`, asks the `--purge` confirmation (see "Uninstall
+  semantics" below) and checks `config.toml`, each check only for a file
+  it will edit, all before any edit and before the binaries are removed.
+  It edits a file
+  only when it resolves to a regular file (`-f`), so a loop or a dangling
+  link (a missing directory included) is left alone and never reaches the
+  check; only a directory that cannot be written in is refused. Its own
+  `ad_link_refuse <file> <what> <remedy>...` exits 2: first line
+  `uninstall.sh: cannot <what> <file> through its symlink; refusing to uninstall.`,
+  then the link, target and reason, the advice (fix the link, or remove
+  agent-director's entries where the file comes from: each SessionStart
+  and SessionEnd entry holding a hook whose command starts with
+  `<bin dir>/agent-director`, or `inject_help_hook` from `[defaults]` and
+  the header too when only blank lines and comments are left under it),
+  and `Nothing was removed or changed. Re-run this uninstall after the change.`
+  A `settings.json` that cannot be written through but holds none of
+  agent-director's hook entries is left alone instead, and the uninstall
+  goes on, with the stdout line
+  `uninstall.sh: left <file> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
+  uninstall.sh rewrites every `settings.json` holding one JSON document
+  of the outer shape install.sh's merge needs, so a refusal there would
+  stop every uninstall until the link went. A `settings.json` uninstall.sh
+  leaves alone while working out its edit (not valid JSON, not one
+  document, the wrong outer shape, or the filter failing; see "Uninstall
+  semantics" below) is not edited, so its link is not checked. The count
+  of entries to remove runs only after the check has refused the link;
+  should jq fail on it, the file is left alone too, after that check. A
+  `config.toml` without
+  the key needs no edit, so it is not checked.
+  Under a confirmed `--purge`, a `config.toml` that cannot be written
+  through is left alone instead of refused, with the stdout line
+  `uninstall.sh: left <file> alone: its symlink cannot be written through, and --purge removes the link; its target, <target>, keeps inject_help_hook`.
+  The purge's `rm -rf` removes the link, never the file it resolves to,
+  so a refusal would only stop the purge; that file keeps
+  `inject_help_hook`, and the line names it. A `config.toml` link that can
+  be written through is edited through as without `--purge`, so a target
+  outside `~/.agent-director` (a dotfiles repo, say) loses the key; its
+  `.bak`, made beside the link, goes with the purge. `--purge` never waives
+  `settings.json`'s check, as that file lives outside
+  `~/.agent-director`; the check runs before the prompt, so no refusal
+  follows a `y`.
+
+**Must use:** a script that writes through a symlinked operator file
+checks it with `ad_link_write_check` before anything on disk changes.
+`ad_resolve_link`'s own loop failure in `ad_replace_keeping_mode` stays
+only as a backstop for a link changed after the check: it prints
+`<script>: <file>: too many levels of symbolic links`, the rewrite writes
+nothing, and `set -e` stops the script with exit 1.
+
+`test/install-sh/retry.sh` pins install.sh's side: its
+`keep-mode-symlink` case (both files absolute links into `~/dotfiles`;
+its `-links-kept` row), `link-chain` (two relative links, the first
+through `..`), `link-dangling`, the four `link-<setup>-settings` and
+`link-<setup>-config` refusals (`<setup>` `loop` or `missing-dir`; each
+checks the exit code, the refusal's first lines, the last stderr line, no
+`pre-flight OK`, and HOME unchanged), and `link-no-hooks`.
+`advice_follow.sh`'s J20 has the third refusal, a link into a directory
+that cannot be written in (a 0555 directory standing in for a read-only
+one), for each file: it checks the exit code, the first stderr line, the
+whole advice and HOME unchanged, then follows both ways out.
+`TestUninstallKeepsFileModes`' symlinked case (`config.toml`
+an absolute link, `settings.json` a relative one, each kept, its target
+edited), `TestUninstallRefusesUnwritableLink` (the refusal changes
+nothing; each way out, followed, lets the re-run finish, with the
+left-alone line for `settings.json`) and `TestUninstallPurge` pin
+uninstall.sh's. `TestUninstallPurge`'s rows: `--force` over a `config.toml`
+linked into a 0555 directory (the left-alone line, the target keeping the
+key, `~/.agent-director` gone); that link with `n` answered (the exit-2
+refusal after the prompt, HOME unchanged); a plain `config.toml` with `n`
+answered (a plain uninstall, last line `uninstall.sh: --purge aborted`,
+exit 0); `--force` over a `config.toml` linked into `~/dotfiles` (the
+target edited, `~/.agent-director` gone); a `settings.json` linked into a
+0555 directory with `y` on stdin (the exit-2 refusal, with no prompt, HOME
+unchanged); and end of input (the prompt, exit 1, HOME unchanged). A
+change adds its cases to both scripts' tests.
 
 #### Schema migration at install-time
 
@@ -5939,6 +6577,35 @@ Drift guards and their matrix: see
 side (`resolvePathField`, `EffectiveDbPath`, `resolveStorePath`,
 `sentinelPath`, or the reader) adds its cases to the `dbpathfix` matrix.
 
+**No store after the open (b.iks).** Step 5 first checks that
+`$state_db` exists. The open succeeded, so a missing one is exit 5
+`ErrSchemaVerifyFailed`, headline
+`install.sh: <$state_db_name> was not created by the store open`. The
+binary takes its store path only from `[store] db_path`
+(`resolveStorePath`; install.sh passes neither `--store-path` nor
+`--home`, and no `AGENT_DIRECTOR_*` variable moves it), which
+`ad_store_db_path` read in pre-flight. So a missing store means one of:
+`db_path` changed after pre-flight, something removed or moved the store
+after the open, or the installed binary resolves its store differently
+from `ad_store_db_path`. On an upgrade step 2 read `$state_db`, so there
+it was removed or moved: either of the other two causes would have left
+it in place. The report prints `state.db: <$state_db>` and
+`config  : <config.toml>`, then advises checking `db_path` and any
+cleanup, putting a moved store back at the `state.db:` path first (a
+re-run with no store there creates a new, empty one), and a re-run, which
+reads `db_path` again and opens the store there. That re-run finishes
+after the first two causes; one that fails the same way points to the
+third, and the advice is to contact the maintainers.
+`advice_follow.sh`'s J22 pins this in five cases. A `db_path` changed
+between pre-flight and the open, a store moved after the open and put
+back, the same with `db_path` set to `~/custom/s.db` before the first
+install (the headline and the `state.db:` line name that path, and the
+store put back there is the one the re-run installs over), and a moved
+store not put back each finish on the re-run (the last with a new store,
+the moved one unchanged). An open that makes no store at the `state.db:`
+path with `db_path` unset and nothing moved, standing in for a binary
+that resolves its store elsewhere, fails the re-run with the same stderr.
+
 **How long: `[store] busy_timeout_ms` (b.c7f).** Every `sqlite3` read of
 the store's `user_version` (`ad_user_version`) waits as long as the
 binary's own connections do (see "Busy timeout" under
@@ -6067,19 +6734,6 @@ operator to *this install flow* and nowhere else. `architecture.md`,
 `install-agent-director/SKILL.md`, and docs/migration-guide.md are
 internal/admin-facing, which is why they may name it.
 
-### Pattern B fallback (postinstall skipped)
-
-When `bun add --ignore-scripts agent-director` (or any client that
-suppresses lifecycle scripts) is used, the postinstall does not run.
-Pattern B is still reachable two ways:
-
-1. Manual: `cp -r node_modules/agent-director/skills/install-agent-director ~/.claude/skills/` then invoke the skill.
-2. Direct: invoke `claude /install-agent-director` — the skill body
-   knows how to copy itself into `~/.claude/skills/` as a side
-   effect of running install.sh.
-
-Same end state in both cases.
-
 ## Install layout
 
 The `skills/install-agent-director/` skill (Epic 12) lays out the
@@ -6197,13 +6851,70 @@ legacy versioned-binary siblings left over from pre-b.43y installs),
 `agent-director-admin` with its `.prior` and the `admin/` directory (left
 in place, with a note, when it holds other files),
 the optional PATH symlink, and the two hook entries it injected
-(matched by the install root prefix in their command string), and the
+(matched by the install root prefix in their command string; see the
+`ours` test below), and the
 `inject_help_hook` key the config merge set in `config.toml`'s
 `[defaults]` (see "The config.toml merge" above). Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
 rewrite of `settings.json` or `config.toml` takes a timestamped `.bak`
-first and keeps the file's mode, as install.sh's merges do (see "Merged
-files keep their mode" above).
+first, keeps the file's mode and writes through a symlink to its target,
+keeping the link, as install.sh's merges do (see "Merged files keep their
+mode" and "A symlinked `settings.json` or `config.toml`" above). Both
+edits are worked out first; a symlinked file to be edited whose target's
+directory cannot be written in is refused (exit 2) before anything is
+removed or changed, except a `settings.json` holding none of
+agent-director's hook entries, and a `config.toml` under a confirmed
+`--purge`, each left alone with a note.
+Its `settings.json` filter, like install.sh's merge, runs once per JSON
+document it reads, so uninstall.sh counts the documents first, as
+install.sh does (b.zbg; see "The settings.json merge" above), and edits
+only a file holding exactly one. A file holding none (empty, or only
+whitespace) has no entries to remove and is left alone with no note and
+no `.bak`. One that is not valid JSON, or holds more than one document,
+is left alone with a stderr note
+(`uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`,
+or `uninstall.sh: ~/.claude/settings.json holds <N> JSON documents, not one; leaving it alone`).
+A single document must also have the outer shape install.sh's merge
+needs (b.ak5): an object whose `hooks` is an object holding
+`SessionStart` and `SessionEnd` lists. The check runs the merge's own
+fill-ins (`.hooks //= {}`, each event `//= []`, so a missing, `null` or
+`false` one passes, as does a `null` document) and then asks for two
+lists, so the two scripts agree on that outer shape (the document,
+`hooks` and the two event lists): a document install.sh refuses there
+with exit 4 (b.cfq) is left alone, with
+`uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone`.
+They do not agree inside the lists: install.sh's merge also refuses
+(exit 4) a value there that is neither an object nor `null` when it reads
+it, such as an entry that is a string
+(`{"hooks":{"SessionStart":["x"]}}`) or a `hooks` list holding a string,
+and lists each such value's path (b.dzu; see "The settings.json merge"
+above), while uninstall.sh's filter takes any such value and keeps it
+verbatim (see below).
+Should jq still fail, on the filter or on the symlink branch's count of
+entries to remove (see "A symlinked `settings.json` or `config.toml`"
+above), the file is left alone with jq's error, then
+`uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone`.
+In each case the uninstall goes on and exits 0, with no `.bak`. The
+file's symlink is not checked, as the file is not edited, except on a
+jq failure on the count, which runs only after the check has refused
+the link.
+
+Inside the event lists the filter takes any value. **Must use:**
+uninstall.sh's `hook_ours_jq` defines `ours`, the one test of an
+agent-director entry, shared by the filter and the symlink branch's
+count: an object whose `hooks` is a list holding an object whose
+`command` is a string starting with `<bin dir>/agent-director`. Every
+other value (a string, a number, an entry whose `hooks` is not a list, a
+`command` that is not a string) is kept verbatim, never indexed or read
+as a string, and agent-director's entries beside it are still removed.
+`TestUninstallLeavesSettingsWithoutOneDocument` (empty, whitespace, two
+documents, not valid JSON), `TestUninstallLeavesSettingsItCannotEdit`
+(the wrong outer shapes, one of them behind an unwritable link, a
+stand-in jq failing on the filter and on the count, and an unwritable
+link holding only odd values) and
+`TestUninstallRemovesHookEntriesBesideOddValues` (odd values beside the
+help hooks, a `null` event list, a `null` document) pin this.
+
 `~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.
 
@@ -6212,7 +6923,28 @@ frequently want to keep templates and state.db across reinstalls.
 (`--force` skips the prompt). State, templates, and any local
 edits to `config.toml` are lost. `uninstall.sh` does not read `[store]
 db_path`, so a store that `db_path` puts outside `~/.agent-director`
-survives `--purge`.
+survives `--purge`. `rm -rf` removes a symlink under
+`~/.agent-director`, never the file it points to.
+
+The confirmation is asked before anything is removed or changed: after
+`settings.json`'s symlink check, which `--purge` does not waive, so that
+check's refusal (exit 2) comes before any prompt; and before
+`config.toml`'s, whose outcome it decides (see "A symlinked
+`settings.json` or `config.toml`" above). The prompt,
+`uninstall.sh: --purge will rm -rf <dir> — proceed? [y/N] `, reads one
+line from stdin. Each reply, and what a caller sees:
+
+- **`y`, `Y`, `yes` or `YES`:** the purge runs; exit 0.
+- **any other line:** a declined purge is a plain uninstall, so a
+  `config.toml` link it cannot write through is refused with exit 2, as
+  without `--purge`. Otherwise its last stdout line is
+  `uninstall.sh: --purge aborted`, where the purge would have run;
+  exit 0.
+- **end of input:** no line (stdin at its end, as for a tool call with
+  no stdin, or an answer without its newline) makes `read` fail, and
+  `set -e` stops the script at the prompt with exit 1, nothing removed or
+  changed. A non-interactive caller passes `--force`, or a whole line on
+  stdin.
 
 ### ErrSchemaMismatch recovery
 
@@ -6278,11 +7010,14 @@ don't take effect until the next `serve --stdio` invocation.
 
 ### Drift-free schema generation
 
-The tool list is generated from `pkg/api/manifest.Verbs` — the
-same single source of truth that drives the CLI flag definitions
-and the reference docs (`cli-reference.md`, `mcp-reference.md`).
-Adding a verb to the manifest exposes it via MCP on the next server
-start with NO source changes in `internal/mcp`. The
+The tool list is generated from `pkg/api/manifest.Verbs`, the
+source the reference docs (`cli-reference.md`, `mcp-reference.md`) are
+generated from and the CLI's hand-written flags are checked against.
+A verb added to the manifest is listed in `tools/list` on the next
+server start with no source change in `internal/mcp`, but a call to it
+returns `ErrUnknownTool` until it has its `LiveDispatcher.Call` case (see
+"How to add a verb" under
+[`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). The
 drift-by-construction invariant is pinned by
 `TestToolsListMatchesManifest` in `internal/mcp/server_test.go`:
 the test enumerates `manifest.Verbs` at run time and compares the
@@ -6334,6 +7069,29 @@ CLI's main Client (constructed in
 `setupClient`, through `internal/clisetup.Open`) and the MCP's Client have
 distinct logger ownership; neither
 shares the other's `log.Logger`.
+
+**Same store and tmux as the CLI's Client (b.wb7).** Only the logger
+differs between the two Clients. `run()` hands the run's global-flag
+overrides (`clisetup.Overrides`, the ones `setupClient` opened the main
+Client with) through `handlers()` to `serveHandlerWith`, and the MCP Client
+is opened with `mcpClientOptions(o)`: `clisetup.APIOptions(o)` (the config
+path, `CreateIfMissing` as `--create-if-missing` leaves it, `--store-path`
+and `--tmux-command`) with `Logger` left nil. So with `agent-director --store-path X serve --stdio`
+every MCP tool reads and writes store X, the store serve opened and checked
+at startup, and serve creates no other store; with `--tmux-command`, the
+tools run that tmux, as the CLI does. With neither flag, both Clients fall
+back alike: to the config's `db_path` or the default store (store-path
+tiers 2 and 3, see [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle))
+and to the `tmux` on `PATH`. With `--create-if-missing false` on a missing
+store, `setupClient` refuses it with `ErrStoreOpen` before serve starts, and
+nothing is created (b.78b). `--home` needs no threading: `run()`
+sets `HOME` before either Client expands a `~/` path.
+
+**A failed MCP Client open is named as the CLI's (b.uii).** When the MCP
+Client's `pkg/api.New` fails, `serveHandlerWith` writes one error envelope
+named by `clisetup.NewOpenError`, the naming `clisetup.Open` gives
+`setupClient`'s open: `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`
+when the store's schema refuses the open, `ErrStoreOpen` for anything else.
 
 ### Filtered verbs
 
@@ -6401,8 +7159,9 @@ ErrInvalidFlags: spawn: arguments must be a JSON object
 ```
 
 `arguments` that is absent or JSON `null` is no arguments. No error name is
-added: `spawn` stays the only MCP tool whose `ErrorNames` lists
-`ErrInvalidFlags` (see the `ErrInvalidFlags` exclusion under
+added: these refusals add `ErrInvalidFlags` to no tool's `ErrorNames`, which
+list it only for `spawn`, `read_pane` and `list`, whose shared verb layer
+returns it (see the `ErrInvalidFlags` exclusion under
 [Err-name five-way coherence](#err-name-five-way-coherence)).
 `TestMCPParamUnknownRefused` and `TestMCPParamUnknownRefusalText`
 (`internal/mcp/param_test.go`) pin both refusals.
@@ -6431,22 +7190,22 @@ ErrInvalidFlags: list: parameter "limit" must be an integer
 
 The value reads "a string", "a boolean", "an integer", "an array of
 strings" or "an object with string values"; for a `duration` param
-(`expire`'s `older_than`) it reads "a string holding a non-negative Go
-duration like "12h" or trailing-d days like "7d" up to "106751d""
+(`expire`'s `older_than`) it reads "a string holding a Go duration like
+"12h" or trailing-d days like "7d" up to "106751d", with no sign"
 (`api.OlderThanForm`).
 Two value checks after the decode refuse the same way: a `label` entry
 with no `=` or an empty key on `spawn` and `make_template` (`labelMap`),
 and an `older_than` on `expire` that `api.ParseOlderThan` rejects, which
-is one in neither duration form, a negative Go duration such as `"-2h"`,
-or a day count above 106751 such as `"365000d"` (`Expire` would take a
-negative window, or the one such a count wraps to, as selecting every
-finished row):
+is one in neither duration form, one with a leading `+` or `-` in either
+form, such as `"-2h"`, `"-0s"` or `"+7d"` (b.c4n), or a day count above
+106751 such as `"365000d"` (`Expire` would take a negative window, or the
+one such a count wraps to, as selecting every finished row):
 
 ```
 ErrInvalidFlags: spawn: parameter "label" entry "nokv" must be key=value
-ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
-ErrInvalidFlags: expire: parameter "older_than" value "-2h" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
-ErrInvalidFlags: expire: parameter "older_than" value "365000d" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
+ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign
+ErrInvalidFlags: expire: parameter "older_than" value "-2h" must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign
+ErrInvalidFlags: expire: parameter "older_than" value "365000d" must be a Go duration like "12h" or trailing-d days like "7d" up to "106751d", with no sign
 ```
 
 Any other decode failure is agent-director's own fault and stays
@@ -6464,13 +7223,25 @@ does not decode, or decodes another way, fails the test.
 `TestAdviceFollow_I6_OlderThanDurationForm`
 (`internal/mcp/advice_follow_mcp_test.go`) pin the `label` and
 `older_than` refusals and follow them; the `older_than` one refuses, among
-others, `"-2h"`, `"106752d"` and `"365000d"` with nothing deleted and no
-tmux call, and its `"106751d"` follow keeps a row that `"12h"` and `"7d"`
-delete. `TestExpireMCPOlderThanSign` (`internal/mcp/expire_test.go`) pins
-that a negative `older_than` keeps a row that finished a minute ago, with
-no tmux call, while `"0d"` and `"0s"` still delete it. The refusal of a
+others, `"-2h"`, `"+12h"`, `"+7d"`, `"106752d"` and `"365000d"` with
+nothing deleted and no tmux call, and its `"106751d"` follow keeps a row
+that `"12h"` and `"7d"` delete. `TestExpireMCPOlderThanSign`
+(`internal/mcp/expire_test.go`) pins that an `older_than` with a leading
+`-` or `+` in either form (`"-2h"`, `"-0s"`, `"-0d"`, `"+2h"`, `"+7d"`)
+keeps a row that finished a minute ago, with no tmux call, while `"0d"`
+and `"0s"` still delete it. The refusal of a
 day count past an `int`'s range, such as `"9223372036854775808d"`, is
 pinned only by `TestParseOlderThan` (`pkg/api/older_than_test.go`).
+
+**A negative count is the verb's refusal, not the decode's.** A negative
+`read_pane` `n_lines` or `list` `limit` is a well-typed integer, so it
+decodes; the verb's shared layer then refuses it with `ErrInvalidFlags`,
+as it does on every surface, so those two tools list `ErrInvalidFlags` in
+their `ErrorNames` (b.c4n; see [`read-pane`](#read-pane) and the
+`ErrInvalidFlags` exclusion under
+[Err-name five-way coherence](#err-name-five-way-coherence)).
+`TestMCPParamNegativeCountRefused` (`internal/mcp/param_test.go`) pins
+both refusals with no tmux call, and `limit` 0 as no cap.
 
 **Declared, listed and decoded shapes agree.** `goTypeToJSONSchema`
 (`internal/mcp/schema.go`) turns each param's manifest `Type` into its
@@ -6627,18 +7398,21 @@ of carrying the err_name in both the `err_name` field and the
 handler: `internal/clisetup.Open` names them when a command binary cannot
 open its Client (the config cannot be loaded; the store cannot be opened;
 the store's schema is newer than the binary or needs a migration), before
-any verb runs. They are `Catalog` entries, package `clisetup` in
+any verb runs, and `serve` names the last three alike when it cannot open
+its MCP Client, through `clisetup.NewOpenError`, the naming `Open` uses
+(b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). They are `Catalog` entries, package `clisetup` in
 `catalog.json`, so the surfaces built from the catalog know them; the TS
 client's classes of those names come from it. Their sentinels are
 `clisetup.ErrConfigMalformed`, `clisetup.ErrStoreOpen`,
-`clisetup.ErrSchemaMismatch` and `clisetup.ErrSchemaMigrationRequired`, and
-only a `*clisetup.OpenError` of that `Name` matches one (`OpenError.Is`), so
-`Classify` gives such an error its `Name` and no verb error's name changes.
-The two schema sentinels are not the store's: an error that wraps
-`store.ErrSchemaMismatch` or `store.ErrSchemaMigrationRequired` but is no
-`OpenError`, such as `pkg/api.New`'s, still classifies as `ErrInternal`,
-although the CLI reports the same refusal by its schema name (open as
-b.x8s). No verb lists them in its `ErrorNames`, so the manifest, MCP tool
+`clisetup.ErrSchemaMismatch` and `clisetup.ErrSchemaMigrationRequired`; a
+`*clisetup.OpenError` matches the one its `Name` names (`OpenError.Is`), so
+`Classify` gives such an error its `Name`. The two schema sentinels are the
+store's own, `store.ErrSchemaMismatch` and `store.ErrSchemaMigrationRequired`
+(`pkg/api` re-exports them as `api.ErrSchemaMismatch` and
+`api.ErrSchemaMigrationRequired`), so an error from `pkg/api.New` that wraps
+one classifies by the schema name the CLI reports for the same refusal
+(b.x8s). The store returns them only when it opens, so no verb error wraps
+them and no verb error's name changes. No verb lists them in its `ErrorNames`, so the manifest, MCP tool
 descriptions and `help` do not name them, and the five-way coherence check
 excepts them (see "Documented exclusions" under
 [Err-name five-way coherence](#err-name-five-way-coherence)). The TS client
@@ -6649,8 +7423,10 @@ rule that the refusal has no catalog entry and no TS error class.
 
 **CLI-internal names (b.cm7).** `ErrUnknownVerb` (a verb the binary does
 not know), `ErrJSONMarshal` (the binary cannot write a verb's JSON result,
-after the verb ran; `help` and `version` also give it when `Help()` or
-`Version()` fails, which is no marshal failure, open as b.3jc) and
+after the verb ran: only a `json.Marshal` failure of that result gives it;
+a `Help()` failure in `help`, or a `Version()` failure in either binary's
+`version`, is named by `Classify`, as any verb's error is, `ErrInternal`
+when it is no catalogued error, b.3jc) and
 `ErrTrailWrite` (`agent-director trail-emit`
 cannot write its trail event) are written by the command binaries
 themselves as string literals, outside any verb handler; `Classify` never
@@ -6670,8 +7446,8 @@ special-cases `errors.Is(err, ErrUnknownTool)` before delegating to
 
 **`catalog.json`** — a machine-readable snapshot of `Catalog`,
 generated deterministically by `go generate ./pkg/api/errnames/...`.
-The doc-drift CI gate (`make doc-drift`) enforces that the checked-in
-`catalog.json` stays in sync with the Go source.
+The doc-drift CI gate (`.github/workflows/doc-drift.yml`) enforces that
+the checked-in `catalog.json` stays in sync with the Go source.
 
 **Consumers:** `cmd/agent-director`'s envelope writer and
 `internal/mcp`'s `classifyDispatchError` both call `errnames.Classify`
@@ -6724,19 +7500,24 @@ or catalog Go source requires regenerating the corresponding JSON file.
   `ErrorNames`. It is in `check3Exceptions`, so the (b) ⊆ (c) check skips it;
   `TestDiffExclusions` proves that the exception alone keeps that check quiet.
 - `ErrInvalidFlags` has four sources. First, CLI flag parsing emits it for every verb: the
-  `cmd/agent-director` flag handlers write it as a string literal in the error envelope.
+  `cmd/agent-director` flag handlers write it as a string literal in the error envelope,
+  for an undefined flag or a bad flag value, such as an integer flag value that is not
+  base-10 decimal (b.c4n).
   Second, the MCP server returns it for every tool whose `arguments` carry a key that is
   not one of the verb's manifest params or are not a JSON object (`checkParamNames`), or
   carry a param value of the wrong JSON type (`decodeParams`), and for a `label` entry
   that is not key=value (`spawn`, `make_template`) or an `older_than` that is in
-  neither duration form, is negative or is a day count above 106751 (`expire`); see
+  neither duration form, has a leading `+` or `-` or is a day count above 106751
+  (`expire`); see
   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments).
-  Third, the shared verb layer returns it for `spawn`, from the explicit-id check in
-  `runSpawn` (see [Explicit-id check](#explicit-id-check)), for `decide`, for a
+  Third, the shared verb layer returns it on every surface for six verbs: `spawn`, from
+  the explicit-id check in `runSpawn` (see [Explicit-id check](#explicit-id-check));
+  `read-pane`, for a negative `n_lines` (see [`read-pane`](#read-pane)); `list`, for a
+  negative `limit`, refused before the store is read (b.c4n); `decide`, for a
   negative `max_wait_ms` (`DecideParams.MaxWaitMs`; the CLI refuses a negative
-  `--max-wait-ms` first), for `send-keys`, for a combination of params the call's
+  `--max-wait-ms` first); `send-keys`, for a combination of params the call's
   shape does not allow (`planSendKeys`: a pane answer without `as`, `key` or
-  `expect_pane_sha256` or with `text`, and the rest; b.146 rule 8), and for
+  `expect_pane_sha256` or with `text`, and the rest; b.146 rule 8); and
   `record-pane-answer`, for a missing token, an `as` other than allow, deny or
   unknown, or a missing or malformed hash (b.146 rule 13). Fourth, the exported Go
   function `Expire` refuses a negative `retentionDays` or a negative `olderThan` with it
@@ -6745,10 +7526,10 @@ or catalog Go source requires regenerating the corresponding JSON file.
   through it, and the CLI, MCP and the TypeScript client never pass one: they parse
   `older_than` with `ParseOlderThan`, which refuses a negative value first (the first two
   sources). It is in the Catalog. It is
-  listed in `spawn`'s, `decide`'s, `send-keys`' and `record-pane-answer`'s manifest
-  `ErrorNames` and their Go "Errors:" lists, because they are the verbs whose shared
-  verb layer emits it on every surface. No other
-  callable verb lists it, because the
+  listed in the manifest `ErrorNames` and the Go "Errors:" lists of `spawn`, `read-pane`,
+  `list`, `decide`, `send-keys` and `record-pane-answer`, the verbs whose shared verb
+  layer emits it on every surface (the rule: a shared-layer emission is listed, b.f4v).
+  No other callable verb lists it, because the
   CLI flag-parse and MCP argument emissions are the surfaces' checks of the caller's
   arguments, which every verb gets, not emissions of a verb's shared layer, and no
   `expire` surface reaches `Expire`'s refusal: only a Go caller passing a negative
@@ -6756,13 +7537,14 @@ or catalog Go source requires regenerating the corresponding JSON file.
   says "Errors: none" for the CLI, MCP and TypeScript client and states that Go-only
   refusal beside it. It stays in `check3Exceptions` in
   `pkg/api/errnames/coherence_diff_test.go`, next to `ErrInternal`; that list feeds the
-  (b) ⊆ (c) check ("Check 3" in that file). Because those four verbs list it, that check passes
-  without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
+  (b) ⊆ (c) check ("Check 3" in that file). Because those six verbs list
+  it, that check passes without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
 - The CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen` (b.vma), `ErrSchemaMismatch`
   and `ErrSchemaMigrationRequired` (b.cm7), and the CLI-internal names `ErrUnknownVerb`,
   `ErrJSONMarshal` and `ErrTrailWrite` (b.cm7), are in the Catalog but listed in no
   callable verb's `ErrorNames`: `clisetup.Open` names the first four when a command binary
-  cannot open its Client, before any verb runs, and the binaries write the last three
+  cannot open its Client, before any verb runs (and `clisetup.NewOpenError` all but
+  `ErrConfigMalformed` when `serve` cannot open its MCP Client, b.uii), and the binaries write the last three
   themselves, outside any verb handler, so none is a callable verb's error (`trail-emit`
   lists `ErrTrailWrite` but is not callable). They are in `check3Exceptions` beside
   `ErrInternal` and `ErrInvalidFlags`, so the (b) ⊆ (c) check skips them;
@@ -6801,6 +7583,16 @@ or catalog Go source requires regenerating the corresponding JSON file.
    docs/engineering-guide.md §10 and
    [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
 
+The workflow's make targets that run `go generate`, `go run` or `go test`
+(`check-doccomments`, `generate`, `err-coherence`, `errnames-json`,
+`surface-json`, `nondet-coverage`) refuse outside the sandbox container
+(the Makefile's `_require-sandbox` guard, b.8yq). The workflow sets
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` on each step that runs one, as
+its hosted runner holds no real store. On a development host, run each of
+them as `make sandbox CMD="make <target>"`; the drift steps' `::error::`
+annotations print that form for `generate`, `surface-json` and
+`errnames-json`.
+
 **Adding a new sentinel**
 
 1. Add `var ErrFoo = errors.New("ErrFoo: ...")` to `pkg/api/errors.go`.
@@ -6812,8 +7604,10 @@ or catalog Go source requires regenerating the corresponding JSON file.
    attribution that reflection can recover, so the generator cannot infer the origin
    package automatically. A missing entry causes the generator to exit 1 with an explicit
    error message.
-6. Run `make errnames-json && make surface-json` to refresh the committed JSON outputs.
-7. Run `make err-coherence` locally to confirm all five checks pass before pushing.
+6. Run `make sandbox CMD="make errnames-json surface-json"` to refresh the committed
+   JSON outputs.
+7. Run `make sandbox CMD="make err-coherence"` to confirm all five checks pass before
+   pushing.
 
 ### Registration
 
@@ -6823,7 +7617,7 @@ claude mcp add agent-director /path/to/agent-director serve --stdio
 
 `serve`'s manifest Description does not carry this command, so `help`
 and the generated CLI and MCP references do not show it. It is stated
-here, in the README's install section (beside the installer's
+here, in docs/install.md (beside the installer's
 `--register-mcp` flag, for a human registering by hand), in the install
 skill (`skills/install-agent-director/SKILL.md`) and in `serve`'s own
 stderr hint (`cmd/agent-director/serve_cmd.go`).
@@ -6831,7 +7625,9 @@ stderr hint (`cmd/agent-director/serve_cmd.go`).
 Claude Code stores this in its MCP config and launches the binary
 on session start. The binary's `~/.agent-director/config.toml` is
 the same one the CLI uses; SRD §3.3 says edits take effect on the
-next session.
+next session. Global flags in the registered command
+(`agent-director --store-path <path> serve --stdio`) apply to every tool
+call, as they do to a CLI verb (see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)).
 
 ## Permission relay
 
@@ -6853,8 +7649,9 @@ Conceptually:
                                                          returns delivery)
 ```
 
-The caller-facing contract is in `docs/permissions.md` ("Relay mode") and
-the README ("Intercept permission prompts"). This section is the mechanism
+The caller-facing contract is in `docs/permissions.md` ("Relay mode"),
+`docs/usage.md` ("Intercept permission prompts" and "Answer a request at the
+pane") and `docs/caller-contract.md` ("Permission relay"). This section is the mechanism
 (b.146 step 2: the rules and problems of the design, numbered as in
 `timeout-design-final.md`). Every request carries a set of delivery facts
 derived when it is read; the store records only what the relay hook,
@@ -8090,7 +8887,7 @@ does not show the stderr line. Past its grace period a scheduled
 `find-missing` (run with `HOME` set) finds the agent's pane process alive
 and notes the row `unreported` (see [`find-missing`](#find-missing)); the
 row stays `pending`, and no hook of that agent clears the note. The
-README's prerequisites say agents need `HOME` set.
+docs/install.md's requirements say agents need `HOME` set.
 
 ### The hook gate on the relay path
 
@@ -8711,7 +9508,7 @@ are also emitted but are not listed here.
 | `ad.spawn.reuse_restored` | `ad_spawn` | Exactly once per restore attempt after a failed reuse launch (a failure other than a timeout, "duplicate session" included), applied or not; fail-open. Carries `claude_instance_id`, `applied` (boolean: true only when the restore applied), `launch_error` (the err_name of the error the spawn returns, through `errorName`; after "duplicate session", the classified error the re-lookup gave) and `restore_error` (null, or the store error's text when the restore's write failed), and `source`. Written after `ad.spawn.reused`; after "duplicate session" it precedes the call's `ad.provenance.disagree` records and its `ad.launch.name_held`. Emitted by `finishedLaunch.restore` (`pkg/api/finished_launch.go`) with reuse's values (`reuseLaunchVerb`), on the `pkg/api` spawn path, so every surface gets it. Not an `ad.spawn.state_transition`: the restore emits none (SR-10.4, SR-10.6, SR-14) |
 | `ad.send_keys.called` | `ad_send_keys` | One per `Client.SendKeys` call past the closed check (every `agent-director send-keys` invocation), on every return path, fail-open (mirroring `ad.decide.called`); emitted by `emitSendKeysCalled` (`pkg/api/sendkeys_trail.go`). The exported `SendKeys` writes none. Carries `claude_instance_id`; `allow_pending`; `row_state` (the stored state of the row the verb read, `""` when no row was read: it tells keys typed into a launching agent's startup prompt, a `pending` row, from keys sent to a live conversation, and records the state a refusal met); `outcome` (`ok` or the err_name from `errorName`: `ErrTmuxUnresponsive`, `ErrTmuxSessionConflict`, `ErrTmuxNotAvailable`, `ErrTmuxSendKeys`, `ErrSpawnNotInteractive` (its `pending`-row triggers included), `ErrSendKeysWhileRelayed`, `ErrSpawnNotFound`, and b.146 step 2b's `ErrRelayFallenBack`, `ErrPaneChanged`, `ErrPaneAnswerInProgress`, `ErrInvalidFlags`, `ErrNoOpenPermissionRequest`, `ErrAlreadyDecided` and `ErrStoreBusy`, and b.146 step 2c's `ErrDialogMaybeOpen`, by name; `ErrInternal` only for an error none of those matches, such as a relay-guard store error); the AD-collected `caller_*` identity (collected once per call); and a `guard_evaluation` field — `not-applicable` (relay guard did not apply: `relay_mode` is not on, or the call was refused before it), `held` (b.146 rule 7 refused the call: `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneAnswerInProgress`, or a pane answer's request not open), `released` (rule 7 let it through: no relay hook of the Spawn may still answer and, for a plain call, no open request has fallen back and every request is proven gone or the call carries `expect_pane_sha256`, or, for a pane answer, its request has fallen back; a pane answer is the audited recovery of a fallen-back relay) or `error` (the guard's store read failed) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2, SR-7.4). Never the typed text or key. `pause` and `read-pane` write no call event |
 | `ad.launch.name_held` | `ad_spawn`; `ad_resume`; `ad_find_missing` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), exactly one per plain spawn whose create answered "duplicate session" (the held-name path; see [Launch identity](#launch-identity)), exactly one per `resume` whose create answered "duplicate session" (see [After "duplicate session"](#after-duplicate-session)), and exactly one per reuse whose create answered "duplicate session" (see [Reuse of a finished id](#reuse-of-a-finished-id)). Carries `source`, `claude_instance_id`, `launch` (`spawn`, `resume` or `reuse`), `tmux_session_name` (the requested name; for the scan, the first leftover's; for `resume`, the recorded name), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; true and true for a current label, which only the re-lookup of `resume` or reuse can meet (the row's own session); false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after a plain spawn's "duplicate session"; `restored`, `left_changed` or `still_pending` after a `resume`'s or a reuse's, as its restore went), `store_error` (the end write's or the restore's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. **resume** (source `ad_resume`, `launch` `resume`, written by `finishedLaunch.heldName` in `pkg/api/finished_launch.go`) writes exactly one per call whose create answered "duplicate session", after its re-lookup, its restore attempt and `ad.resume.restored`, whatever the outcome: the holder fields from the re-lookup, `tmux_socket` the launch socket, `lookup_outcome` the re-lookup's token, `outcome` the returned error's name, `row_result` the restore's (`restored`: the restore applied; `left_changed`: the row changed or was removed after the move; `still_pending`: the restore failed in the store, with `store_error`); no `leftover_count`. A refusal at `resume`'s pre-launch lookup writes none. **reuse** (source `ad_spawn`, `launch` `reuse`, written by the same `finishedLaunch.heldName`) writes exactly one per call whose create answered "duplicate session", after `ad.spawn.reused`, its re-lookup, its restore attempt and `ad.spawn.reuse_restored`, in that order, whatever the outcome, with the same fields as `resume`'s: `tmux_session_name` the requested name, `row_result` the restore's (`left_changed`: the row changed or was removed after the reset). A refusal before the reset (the old-row lookup or the new-name pre-check) writes none. **find-missing** (source `ad_find_missing`, `emitRowNameHeld` in `pkg/api/find_missing_lookup.go`) writes exactly one per row per sweep whose mark attempt had tick reason `tmux_name_held`, whatever the mark's outcome, with the same field set: `launch` and `outcome` null; `tmux_session_name` the row's recorded name; `tmux_socket` the socket the lookup used; `store_id` this store's, as for every source; the holder fields from the row's lookup (`heldHolderFacts`), so `carries_this_id` false and `current_launch` null when the holder is another store's session, and the holder fields null when more than one listing entry matches the name; `lookup_outcome` the lookup's token (`gone` or `leftover`); `row_result` `marked_missing` (the mark applied), `left_changed` (the row was changed or absent) or `still_pending` (the mark failed in the store, with `store_error`); no `leftover_count`. The sweep never touches the holding session (see [`find-missing`](#find-missing)). Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
-| `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `claude_instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed; `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session, or of the sessions of this id's own abandoned launch the operator-only opt-in ended together with those sessions' agent pane processes wherever their panes now are, still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in the README's "Operator actions" procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
+| `ad.kill.called` | `ad_kill` | Exactly one per kill call (`runKill` in `pkg/api/kill.go`, behind the exported `Kill` and `agent-director-admin kill-finished`), on every return path, so `Client.Kill`, direct callers and the admin verb all get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `claude_instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`; `ErrSpawnNotResumable` only for the operator-only opt-in on a live row); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, a finished row without the operator-only opt-in, the operator-only opt-in on a live row, an unusable recorded name, an unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed, except that the wait after the follow-up on this id's own abandoned launch, which never reads the agent, keeps its `unreadable` or `not_recorded`, survivors listed or not, beside that follow-up's `followup_outcome` (b.myx); `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session, or of the sessions of this id's own abandoned launch the operator-only opt-in ended together with those sessions' agent pane processes wherever their panes now are, still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set: true only for `agent-director-admin kill-finished`, whose `caller_process` is `agent-director-admin`); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in docs/operator-actions.md procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
 | `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_send_keys` for both keys verbs, `send-keys` and `pause`, told apart by `verb`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`, and for reuse's old-row lookup and its re-lookup after "duplicate session"; `ad_resume` for `resume`'s pre-launch lookup and its re-lookup after "duplicate session"; `ad_find_missing`; `ad_expire`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `claude_instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`; `send-keys` and `pause` write `keys_sent` (the text and Enter both went through, or `send-keys`' one key did), `text_sent` (the text or key call timed out, or the text went through and the Enter call failed or timed out) or `nothing_sent` (no text or key call, `pause`'s failed `C-u` included, or the text or key call failed other than by timing out); plain spawn its held-name row result `ended`, `left_changed` or `still_pending`; `resume` and reuse `refused` or `proceeded` at their pre-launch lookup, and their restore's row result `restored`, `left_changed` or `still_pending` after "duplicate session") and the `caller_*` identity. **resume** (source `ad_resume`, `verb` `resume`, written by `emitFinishedRowDisagree` in `pkg/api/finished_launch.go`, over `emitLookupDisagree`) writes each distinct reason at most once per call, on a refusal too, never `adopted` (`resume` adopts nothing). Its pre-launch lookup's records (the lookup's reasons and `name_changed`) are written right after the decision, before any write, with `action` `refused` or `proceeded`. After "duplicate session" the re-lookup's records follow `ad.resume.restored`, with every reason the pre-launch lookup already wrote skipped and `action` the restore's row result; a `name_changed` record there names the row's own session, every other reason the name's holder (else the own session). `tmux_socket` is the lookup's socket and `tmux_session_name` the recorded name. **reuse** (source `ad_spawn`, `verb` `spawn`, written by the same `emitFinishedRowDisagree` with reuse's values) follows the same rules: each distinct reason at most once per call, never `adopted`; its old-row lookup's records right after the decision, before pre-trust and the reset, with `action` `refused` or `proceeded`; after "duplicate session" the re-lookup's records after `ad.spawn.reuse_restored`, skipping reasons already written, with `action` the restore's row result. `tmux_session_name` is the row's recorded (old) name, never the requested one, and `name_changed` compares against it. **send-keys and pause** (source `ad_send_keys`, `verb` `send-keys` or `pause`, written by the shared `keysRun.emitDisagree` in `pkg/api/pane_keys.go`) collect their reasons as `kill` does: the first lookup's, `name_changed`, a failed pane listing's, `adopted` only when the adoption write applied, and the follow-up lookup's; they write none when the call made no lookup. `pause` writes its records before its wait, so the wait's outcome neither adds nor removes one. `read-pane` writes none. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup (a row whose recorded session name cannot be used included) or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live` (a `pending` row whose agent is alive and whose note is `provenance_conflict` included: it keeps that note), `left_unreported` (a live `pending` row noted `unreported`, or found already noted so, and left `pending`, b.kdf), `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. **expire** (source `ad_expire`, `verb` `expire`, written by `expireRun.emitRow` in `pkg/api/expire_trail.go` once the row's delete attempt has settled) writes one record per distinct reason per row per run, and none for a row with no reason, a row kept for an unusable recorded name, a `process_alive` row or a row whose lookup was Skipped. Its reasons are the lookup's own and `name_changed`; it never writes `adopted`, because `expire` never adopts. `tmux_socket` is the socket the lookup used, `tmux_session_id` and `current_session_name` come from the lookup's session, `server` and `verdict` from the lookup (`not_run` when none ran), and `action` is the row's outcome: `deleted`, the row's kept reason (such as `ours` or `leftover_running`), or `left_changed` (another caller removed the row first). The caller identity is collected at most once per run (`lazyCaller`). Never a label's content or another row's id (SR-14, SR-15) |
 | `ad.expire.kept` | `ad_expire` | Exactly one per row `expire` kept, per run, written by `expireRun.emitRow` (`pkg/api/expire_trail.go`) once the row's outcome is final, `changed_since_examined` and `store_error` included; fail-open (a trail-write failure never changes the run's result). A deleted row and a row another caller removed first get none. Carries exactly `claude_instance_id`, `reason` (the kept reason: `empty_session_name`, `control_char_session_name`, `rewritten_session_name` (an unusable recorded name, checked before every other reason, with no tmux call), `process_alive`, `tmux_skipped`, `leftover_running`, `ours`, `tmux_server_changed`, `provenance_conflict`, `cant_tell`, `tmux_unavailable`, `changed_since_examined` or `store_error` as built; the list is not closed), `tmux_session_name` (the recorded name, JSON-encoded like every trail field, so a control character below 0x20 appears escaped (DEL as is) and a byte that is not valid UTF-8 appears as U+FFFD) and `source`. Never session-environment content, a label value or another row's id (SR-12.5, SR-14, SR-15) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
@@ -8810,11 +9607,11 @@ Same `claude_instance_id`, fresh tmux session, same JSONL transcript.
 ### Verb (`pkg/api/resume.go`)
 
 Steps run in order (SR-8.1). Every refusal before the move to `pending`
-(step 10) writes nothing: no row, parent-id, trust, history or
+(step 11) writes nothing: no row, parent-id, trust, history or
 permission-request write, no `ad.resume.*` event and no create. The only
-tmux call before the move is the pre-launch lookup (step 7), whose
+tmux call before the move is the pre-launch lookup (step 8), whose
 `ad.provenance.disagree` records are the one thing such a refusal may
-still write. A refusal before pre-trust (step 9) also writes no trust
+still write. A refusal before pre-trust (step 10) also writes no trust
 entry; a move that loses its race after pre-trust leaves the entry
 written, harmlessly:
 
@@ -8847,9 +9644,43 @@ written, harmlessly:
    reuse's launch that never reported in and that `find-missing` marked
    `missing` (the step-2 refusal of its `pending` row named this
    recourse). Recourse: spawn again
-   with the same id, opting in to reuse (`--reuse-finished`); the new
-   life starts with no memory of the old one.
-4. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
+   with the same id, opting in to reuse with `reuse_finished`
+   (`--reuse-finished` on the CLI); the new life starts with no memory of
+   the old one.
+4. The row's stored extra env has no key that sets `HOME`, whatever its
+   value, an empty one included: neither the key `HOME` nor one such as
+   `HOME=/x` whose name before the first `=` is `HOME`
+   (`spawn.ReservedHomeKey`, the rule spawn validation shares) →
+   otherwise `ErrReservedEnvKey` (`homeInExtraEnvError`, b.nas). `spawn`
+   refuses such a key in `extra_env` (see [Reserved `HOME` in
+   `extra_env`](#reserved-home-in-extra_env-bnas)), so only a row spawned
+   before that refusal can carry one; relaunched, its agent's hook would
+   report to another agent-director store. The check uses the row as step
+   1 read it, before any transcript lookup or tmux call. The description
+   names the instance id, quotes the smallest such key in sorted order,
+   says it sets `HOME` and why
+   (`spawn.ReservedHomeReason`) and that nothing was written or launched,
+   and gives the recourse: spawn the id again with the reuse opt-in
+   (`spawn.ReuseOptIn`) and an extra env without `HOME`
+   (`spawn.ReservedHomeAlternative`: an absolute `CLAUDE_CONFIG_DIR` gives
+   the agent its own Claude Code config); the new life starts with no
+   memory of the old conversation. Then the stored extra env must have
+   no malformed key: one that is empty or holds `=` or a NUL byte
+   (`spawn.InvalidEnvKey`, the rule spawn validation shares) → otherwise
+   `ErrReservedEnvKey` too, wrapped (`invalidEnvKeyError`, b.vpb). Only a
+   row spawned before spawn refused such keys can carry one; relaunched,
+   tmux would set a different variable than the one pre-trust and the
+   transcript lookup below read (the key `CLAUDE_CONFIG_DIR=/x` sets
+   `CLAUDE_CONFIG_DIR`). The description names the instance id, quotes
+   the smallest such key in sorted order, says it is not a valid env-var
+   name and what is wrong with it (`spawn.EnvKeyProblem`) and that
+   nothing was written or launched, and
+   gives the recourse: spawn the id again with the reuse opt-in
+   (`spawn.ReuseOptIn`) and an extra env without that key, each variable
+   named by its own key (`spawn.InvalidEnvKeyAlternative`); the new life
+   starts with no memory of the old conversation. See [Malformed
+   `extra_env` keys](#malformed-extra_env-keys-bvpb).
+5. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
    `ErrJsonlNeverWritten` (see below). Pure `os.Stat` pre-flight; no read.
    Candidate resolution follows a strict precedence (decision of record, bug
    b.1ba, extended by b.v2c):
@@ -8905,13 +9736,15 @@ written, harmlessly:
      messaged; a fresh Claude session writes no `.jsonl` until its first
      user turn). `resume` returns it only for a finished row, which
      `send-keys` refuses, so the row cannot be messaged. Recourse: spawn
-     again with the same id, opting in to reuse (`--reuse-finished`); the
-     new life starts with no memory of the old conversation.
+     again with the same id, opting in to reuse with `reuse_finished`
+     (`--reuse-finished` on the CLI); the new life starts with no memory of
+     the old conversation.
    - `ErrJsonlMissing` otherwise — the persisted path was set and has
      rotted, or the visible history is non-empty and none of its
      transcripts exists. Recourse: spawn again with the same id, opting in
-     to reuse (`--reuse-finished`); the new life starts with no memory of
-     the old conversation, which cannot be resumed through agent-director
+     to reuse with `reuse_finished` (`--reuse-finished` on the CLI); the new
+     life starts with no memory of the old conversation, which cannot be
+     resumed through agent-director
      afterwards.
 
    Both messages report each path tried with its source (`persisted`,
@@ -8919,13 +9752,13 @@ written, harmlessly:
    from the current session's own two candidates or the current life's
    visible history (see
    [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
-   Steps 1 to 4 read the row once (`GetSpawn`). Everything after works
+   Steps 1 to 5 read the row once (`GetSpawn`). Everything after works
    from that read: the row is never altered in memory, and the winning
    candidate's session id is passed on as the session to resume. The row
    is re-read only once, and only when the pre-launch lookup refuses a
    Leftover (`resumeLostRace`), solely to compare snapshots (the "lost
    race" case below).
-5. The first statement of `resumeAfterJsonl` (SR-8.1 step 2), the
+6. The first statement of `resumeAfterJsonl` (SR-8.1 step 2), the
    recorded name before the id. First a recorded session name that is
    empty, holds a control character, or holds a character tmux stores
    differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
@@ -8935,13 +9768,13 @@ written, harmlessly:
    SR-3.13) → `ErrInternal` (no catalogued sentinel), because its session
    could never be labelled. Both come before the socket, with no tmux
    call and nothing written, and both descriptions point to "Operator
-   actions" in the README. A recorded name that tmux rewrites (such as
+   actions" in docs/operator-actions.md. A recorded name that tmux rewrites (such as
    `mix.$b`, whose `.` tmux stores as `_`) is refused here, before the
    pre-launch lookup, which could not match that name's holder.
-6. The launch's socket: `spawn.ResolveRowLaunchSocket` on the row's
+7. The launch's socket: `spawn.ResolveRowLaunchSocket` on the row's
    recorded `tmux_socket` (see [Launch identity](#launch-identity)). A
    refusal → `ErrTmuxNotAvailable`.
-7. The pre-launch lookup (SR-8.1 step 3, SR-8.2; `resumeAfterJsonl`,
+8. The pre-launch lookup (SR-8.1 step 3, SR-8.2; `resumeAfterJsonl`,
    decided by `decidePreLaunch` in `pkg/api/resume_lookup.go`): exactly
    one [`tmux.Lookup`](#shared-tmux-lookup) on the launch's socket for the
    row's launch identity as read (its instance id, launch token and
@@ -8953,17 +9786,17 @@ written, harmlessly:
    `ad.provenance.disagree` records are written right after the decision,
    before any write. A refusal makes no further tmux call, touches no
    session and writes nothing else.
-8. A new launch token (`spawn.NewLaunchToken`; a failure → `ErrInternal`),
+9. A new launch token (`spawn.NewLaunchToken`; a failure → `ErrInternal`),
    then `spawn.ComposeRelaunch` composes env, synthesized settings and
    the argv `claude --resume <session_id> --settings <json> [user
    claude_args]` into a `CreateRequest`. Both run before the move, so a
    failure writes nothing.
-9. Pre-trust (`spawn.PreTrust`, SR-8.1 step 4, SR-22.6) for the row's
-   cwd and extra env, skipped when the row records the spawn's opt-out
-   (`NoPreTrust`). Best effort: its outcome never changes resume's control
-   flow or error. See
-   [Workspace-trust pre-write](#workspace-trust-pre-write).
-10. The move to `pending` (`MoveToPending`, SR-8.3): one conditional write
+10. Pre-trust (`spawn.PreTrust`, SR-8.1 step 4, SR-22.6) for the row's
+    cwd and extra env, skipped when the row records the spawn's opt-out
+    (`NoPreTrust`). Best effort: its outcome never changes resume's control
+    flow or error. See
+    [Workspace-trust pre-write](#workspace-trust-pre-write).
+11. The move to `pending` (`MoveToPending`, SR-8.3): one conditional write
     guarded on the row's `RowSnapshot` as read. It sets the launch start
     (one read of the Client's clock), the new token, the launch's socket,
     the `parent_id` re-derived from the caller's
@@ -8978,14 +9811,14 @@ written, harmlessly:
     row changed after resume examined it"); the row is gone →
     `ErrSpawnNotFound`; a store error → `ErrInternal`. In each case
     nothing is written to the store and nothing is launched.
-11. The create (`spawn.Relaunch`, the shared create-and-label step) on
+12. The create (`spawn.Relaunch`, the shared create-and-label step) on
     the launch's socket, with the recorded name, labelled `ad1 <token>
     <$N> <instance id> <store id>`. It runs directly after the move, with
     no store, file or network I/O between them. When it returns, resume
     emits `ad.resume.moved_to_pending` (`claude_instance_id`,
     `prior_state`, the row's `claude_session_id` as read, source
     `ad_resume`), fail-open.
-12. The outcome (`finishedLaunch.outcome` in `pkg/api/finished_launch.go`,
+13. The outcome (`finishedLaunch.outcome` in `pkg/api/finished_launch.go`,
     built by `resumeDeps.launchOnto` with `resumeLaunchVerb` and shared
     with reuse; SR-8.5):
     - A labelled session: the identity write, `spawn.RecordLaunchIdentity`
@@ -9044,7 +9877,7 @@ and comes on top.
 
 ### The pre-launch lookup
 
-`decidePreLaunch` maps the one lookup (step 7) to "proceed" or one
+`decidePreLaunch` maps the one lookup (step 8) to "proceed" or one
 refusal. Every refusal wraps exactly one sentinel and says "nothing was
 done" (the Leftover refusal says "nothing was written"). What it names
 depends on the case: most name the instance id and the quoted recorded
@@ -9266,8 +10099,8 @@ the restore is `RestoreAfterFailedReuse`; the events are
 
 When `resume` is refused because a session is in the way, the recourse
 depends on the case (SR-18.5, AC-DOC-04). The steps that end a session are
-a human's and are described only in the README's "Operator actions"
-section; this section names no command for them.
+a human's and are described only in docs/operator-actions.md;
+this section names no command for them.
 
 - **This row's own id, still stopping or still starting**
   (`ErrTmuxUnresponsive` "appears to still be stopping" or "appears to
@@ -9298,14 +10131,15 @@ section; this section names no command for them.
   describes, then retries `resume`.
 - **A different instance id** (`ErrTmuxSessionConflict`): never end that
   session, which is another row's agent. Wait for its row to finish, or
-  respawn with the reuse opt-in (`--reuse-finished`) and a different
-  explicit session name.
+  respawn with the reuse opt-in `reuse_finished` (`--reuse-finished` on
+  the CLI) and a different explicit session name.
 - **Another agent-director store** (`ErrTmuxSessionConflict`; the holder's
   label carries another store's id): never end that session from this
   store. It is another store's agent, found and stopped only through that
   store's own agent-director ("Operator actions"); or respawn this agent
-  with the reuse opt-in (`--reuse-finished`) and a different explicit
-  session name. (SR-18.5 lists no such case; WD 2026-09-29 STORE.)
+  with the reuse opt-in `reuse_finished` (`--reuse-finished` on the CLI)
+  and a different explicit session name. (SR-18.5 lists no such case; WD
+  2026-09-29 STORE.)
 
 A `resume` or reuse right after `pause` returns, or right after an agent's
 natural exit, can get "appears to still be stopping" while the agent's
@@ -9326,7 +10160,7 @@ originally created it:
 - A Spawn originally parented to A and later resumed by B → `parent_id
   = B`.
 
-Resume writes the parent id only in its move to `pending` (step 10
+Resume writes the parent id only in its move to `pending` (step 11
 above). A refusal before the move writes none, and a restore after a
 failed launch keeps the value the move wrote. The store's `SetParentID`
 is called by no verb.
@@ -9441,14 +10275,14 @@ fallback** and stats that (bug b.1ba). Two resolvers back this:
   Reuse it whenever you need a transcript path under an explicit config
   dir — do not re-derive the layout by hand. The fallback decides
   whether to use the value by the rule pre-trust's file resolution
-  shares (see "One rule for `CLAUDE_CONFIG_DIR` and `HOME`" under
+  shares (see "One rule for `CLAUDE_CONFIG_DIR`" under
   [Workspace-trust pre-write](#workspace-trust-pre-write)); a relative
   value would resolve against the resuming process's cwd, which differs
   for each caller.
 - **`spawn.JsonlPath(cwd, sessionID)`** — a thin wrapper over
   `JsonlPathIn` that resolves the config dir to `$HOME/.claude`,
-  agent-director's own `HOME`; a `HOME` in the row's extra env is not
-  read (b.s52). Used
+  agent-director's own `HOME` (an `extra_env` `HOME` is reserved, see
+  [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)). Used
   for the default-config fallback (the row's `CLAUDE_CONFIG_DIR` absent,
   empty or not an absolute path). It reconstructs the default layout:
 
@@ -9992,7 +10826,7 @@ Where agent-visible text states it (decision-0930e):
   find-missing)." Every verb description reaches `help` and MCP, so
   the full sentence at each would cost every agent tokens on every session
   and turn (see the [help size guard](#pkgapimanifest--verb-registry)).
-- The README, this document, the Go docs and the error descriptions
+- docs/caller-contract.md, this document, the Go docs and the error descriptions
   (SR-1.4) keep the full statement; none of them is in `help`.
 
 **Cron user story (SR-18.7).** `find-missing` must run as the agents' user,
@@ -10134,7 +10968,7 @@ per-socket stop and spends none of the budget, and it writes no
 `pending` row is checked only once past it), then the process (alive or
 gone still decides the row), then the unusable name, then the lookup. The
 row is never marked from tmux evidence; removing it is a human's decision
-(the README's "Operator actions").
+(docs/operator-actions.md).
 
 **The tmux path (SR-11.3, SR-3.15).** Only rows whose process evidence is
 unknown or absent, and whose recorded session name can be used, reach
@@ -10207,7 +11041,7 @@ emitter `emitNameHeld`: source `ad_find_missing`, `launch` and `outcome`
 null, this store's `store_id`, and `row_result` `marked_missing`,
 `left_changed`, or `still_pending` with the store error's text. The sweep
 never kills, reads or types into the holding session; it keeps running
-until a human ends it (the README's "Operator actions").
+until a human ends it (docs/operator-actions.md).
 
 **Wedged tmux and the budget (SR-3.15, SR-13.3, SR-13.5).** After an
 unreadable or tmux-unavailable result on a socket (from its lookup or its
@@ -10228,7 +11062,10 @@ missed or failed in the store, a row found alive (its note cleared or
 none to clear, or a live `pending` row's `provenance_conflict` kept) and a
 live `pending` row noted `unreported` (or found already noted so) are in
 neither list; `get` and `list` show the note. Both lists are sorted and
-never null. The verb adds no
+never null, on a failure too: the live-row read's error, and
+`ErrClientClosed` from `Client.FindMissing` on a closed Client, come with
+an empty `FindMissingResult` (counts 0, `IDs` and `UnverifiedIDs` non-nil
+and empty), as a sweep that judged no row does (b.hbt). The verb adds no
 verb-level error; `ErrProbeUnsupported` stays in its error list (SR-1.7)
 but is never returned.
 
@@ -10303,12 +11140,16 @@ is refused (b.f4v).
   reaches 0, a negative count or the cap.
 - **`older_than`.** The CLI and MCP parse it with `ParseOlderThan`
   (`pkg/api/older_than.go`): a Go duration, or decimal digits followed by
-  `d` for days. It rejects a value in neither form, a negative Go duration
-  and a day count above 106751 (checked digit by digit, so no count wraps,
-  however long), and each surface refuses such a value with
-  `ErrInvalidFlags` stating `OlderThanForm` before `Expire` runs, so a
-  sign slip such as `-2h` or a count such as `365000d` deletes nothing. A
-  caller that means every finished row passes `0d` or `0s`. The exported
+  `d` for days, either with no sign. It rejects a value in neither form,
+  a value with a leading `+` or `-` in either form (`-2h`, `-0s`, `-0d`,
+  `+2h` and `+7d` alike: one sign rule, b.c4n) and a day count above
+  106751 (checked digit by digit, so no count wraps, however long), and
+  each surface refuses such a value with `ErrInvalidFlags` stating
+  `OlderThanForm` before `Expire` runs, so a sign slip such as `-2h` or a
+  count such as `365000d` deletes nothing. A sign is refused, never
+  ignored: `older_than` is never negative, so a sign carries nothing, and
+  `-0s` reads like a sign slip. A caller that means every finished row
+  passes `0d` or `0s`. The exported
   `Expire` refuses a negative `olderThan` itself too (b.f4v), so a Go
   caller of `Expire` or `Client.Expire` that never calls `ParseOlderThan`
   gets the same protection.
@@ -10336,7 +11177,10 @@ stored text in the `storeTimestamp` layout), in instance-id order, each an
 judged like any other. Live rows, `pending` included, and rows with a NULL
 `ended_at` are never selected and get no tmux call. A failed candidate read
 is logged and fails the verb, with no tmux call; besides the two refusals
-above, it is the verb's only failure.
+above, it is the verb's only failure, and `Client.Expire` adds
+`ErrClientClosed` on a closed Client. Every failure returns the refusals'
+empty `ExpireResult` (counts 0, `IDs` and `KeptIDs` non-nil and empty, so
+`[]` in JSON), as a run that selected no row does (b.hbt).
 
 **Per-row order (SR-12.2).** Rows are judged in instance-id order, so the
 per-socket stop and the budget's cut-off fall on the same rows on every
@@ -10353,7 +11197,7 @@ run. For each row:
    its socket or the run. It is kept on every
    run, listed in `kept_ids` with one `ad.expire.kept` carrying its reason,
    and gets no `ad.provenance.disagree`. Removing it is a human's decision
-   (the README's "Operator actions").
+   (docs/operator-actions.md).
 1. The agent process (`tmux.SelectAgentProcess` over the SessionStart
    identity and the recorded pane's, judged once by `tmux.JudgeProcess`).
    Alive with its recorded start time keeps the row `process_alive`, with
@@ -10463,7 +11307,12 @@ the unexported `Client.deleteRows` (`pkg/api/delete.go`). It processes ids
 one at a time, returning a per-row map of `{id: "ok" | "<err_name>"}`
 (`adminapi.DeleteResult`). The batch never aborts on a partial
 failure — every id in the input is attempted; the map records the
-outcome.
+outcome. The map is never nil, on a failure too: the hook's refusal of a
+`c` that is not a non-nil `*api.Client` (`admin.go`) and `ErrClientClosed`
+from `Client.deleteRows` on a closed Client come with an empty `Results`
+(`{}` in JSON), as Expire, FindMissing and List return their empty lists
+(b.4nt, b.hbt). The admin binary prints the error envelope on any error,
+so only a Go caller sees that result.
 
 `delete` bypasses every state-precondition guard. A live-state row
 is removed by id exactly the same way a terminal row is. The verb
@@ -10473,10 +11322,10 @@ by the schema's `ON DELETE CASCADE`.
 
 It is a human's repair tool for a row nothing else removes (a row whose
 recorded tmux session name cannot be used, which `resume` and reuse
-refuse and `expire` keeps; the README's "Operator actions" gives the
+refuse and `expire` keeps; docs/operator-actions.md gives the
 procedure), not a cleanup or recovery step: `expire` removes finished
 rows, and a finished id is spawned again with the reuse opt-in
-(`--reuse-finished`).
+`reuse_finished` (`--reuse-finished` on the CLI).
 
 ### Cron user invariant
 
@@ -10555,13 +11404,14 @@ ways, and the errors mean different things:
   not yet messaged: a fresh Claude session writes no `.jsonl` until its first
   user turn. There is genuinely nothing to resume, and the finished row
   cannot be messaged (`send-keys` refuses it). Recovery: spawn again with
-  the same id, opting in to reuse (`--reuse-finished`); the new life starts
-  with no memory of the old one.
+  the same id, opting in to reuse with `reuse_finished` (`--reuse-finished`
+  on the CLI); the new life starts with no memory of the old one.
 - `ErrJsonlMissing` — the persisted path was recorded and has since rotted, or
   the visible history is non-empty and none of its transcripts exists. The
   paths it names all come from the current life. Recovery: spawn again with
-  the same id, opting in to reuse (`--reuse-finished`); the new life starts
-  with no memory of the old conversation, which cannot be resumed through
+  the same id, opting in to reuse with `reuse_finished` (`--reuse-finished`
+  on the CLI); the new life starts with no memory of the old conversation,
+  which cannot be resumed through
   agent-director afterwards.
 
 `get`'s `transcript_status` field surfaces this distinction **before** a resume
@@ -10591,10 +11441,14 @@ guarded on `life_number = 0`.
 
 **Recovery is `find-missing` → `resume`, or a reuse.** `find-missing`
 then `resume` brings the conversation back. When `resume` cannot
-(`ErrNoSessionId`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`), the
-recovery is to spawn the id again, opting in to reuse
-(`--reuse-finished`): the agent starts a new life with no memory of the
-old conversation. Callers cannot delete a row (`delete` is on the
+(`ErrNoSessionId`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`, or
+`ErrReservedEnvKey` for a row whose stored `extra_env` sets `HOME` or
+has a malformed key; see [Reserved `HOME` in
+`extra_env`](#reserved-home-in-extra_env-bnas) and [Malformed
+`extra_env` keys](#malformed-extra_env-keys-bvpb)), the recovery is to
+spawn the id again, opting in to reuse with `reuse_finished`
+(`--reuse-finished` on the CLI), with an `extra_env` without the key the `ErrReservedEnvKey` description names:
+the agent starts a new life with no memory of the old conversation. Callers cannot delete a row (`delete` is on the
 operator tool only), and a human's `delete` is not a recovery step: it
 removes the row along with its `claude_session_id`, labels and
 `extra_env`. (A resume that fails with
@@ -10618,13 +11472,13 @@ reuse.
 ## Caller contract: tmux refusal classes
 
 This is the one written contract for the programs and agents that call
-agent-director's tmux-backed verbs (SRD SR-18.1). The README summarises it
+agent-director's tmux-backed verbs (SRD SR-18.1). docs/caller-contract.md summarises it
 and links here. Each verb's manifest description states the class of every
 tmux error it can return; this section says what each class means and what
 a caller does about it. Each subsection is a table or a list, so a rule
 added later goes in as a row or a bullet under the subsection it belongs
 to. Where a human is
-needed, the contract points to the README's "Operator actions" section and
+needed, the contract points to docs/operator-actions.md and
 names no command for a caller to run. Its limits are listed under
 [Known limitations](#known-limitations), and what a caller must now
 assume differently from earlier releases under
@@ -10643,7 +11497,7 @@ adds it here.
 | `ErrTmuxCaptureFailed` | GONE | `read-pane` | As `ErrTmuxSendKeys`: only that the row's session is not there; nothing was read. |
 | `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` | tmux did not answer usably. Retry later with backoff and a retry cap, and alert when the cap is reached. The description says whether anything was sent first (for `kill`: "the kill was sent and may or may not have taken effect"; for `send-keys` and `pause` after a timed-out text or Enter call, or `pause`'s `C-u`: "the keys may have been delivered"). Where `send-keys`' text may be in the pane, its description ends with the next step in place of "retry later", and the caller follows that step instead of sending the text again: after a timed-out text call, `read-pane`, then `send-keys` with empty text (Enter only) if the text is typed, otherwise the same `send-keys`; after a failed or timed-out Enter, `send-keys` with empty text, which submits it. `pause` keeps "retry later": a retried `pause` sends `C-u` before typing `/exit` (see [`pause`](#pause)). For `resume` it also means the row's own session or agent "appears to still be stopping" or "appears to still be starting" (the starting-session bullet under [Reading a refusal](#reading-a-refusal)), that this id's own abandoned launch "appears to still be starting" (the abandoned-launch bullet there), or that more than one session's name matches the recorded name. After `resume`'s "duplicate session" the description ends with the retry sentence the restore picks, in place of "retry later" unless the row was restored: "do not retry until get shows the row ended or missing" when the row changed or stays `pending`, and "there is no row left to resume; later, a spawn of the id starts afresh" when it was removed (see [After "duplicate session"](#after-duplicate-session)). For `spawn` with the reuse opt-in it means the same at the old-row lookup (the row's own session or agent still stopping or starting, this id's own abandoned launch still starting, an unreadable answer, or more than one session's name matching the requested name; nothing was changed, retry later), the same cases at the re-lookup after "duplicate session" (then the row is restored, and the description ends "retry later" when it was restored or removed, else "do not retry until get shows the row ended or missing"), or a launch timeout after the reset (the row was reset and stays `pending`; the launch-timeout bullet under [Retrying](#retrying)). |
 | `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only | The agent process still runs after `kill`, cannot be checked while its labelled session is still there, or runs while no session or pane of the launch was found (no kill sent). The description says which. Retry `kill` later with backoff and a cap; alert when the cap is reached; never delete the row. |
-| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` | The session found is not this launch's session, or tmux holds conflicting labels. For the pane verbs it also means the agent's pane was not found in the session carrying this row's id, or (for `read-pane`) more than one leftover session exists. For a plain `spawn` it also means the requested name is held by another session (see the held-name bullet under [Reading a refusal](#reading-a-refusal)). For `resume` it means a session is in the way of the relaunch: one left over from an earlier life, this id's own abandoned launch past the starting-session bound (the abandoned-launch bullet under [Reading a refusal](#reading-a-refusal)), one holding the recorded name, or the row's own session (the own-id conflict bullet there). For `spawn` with the reuse opt-in it means the same before anything is changed: a session left over from an earlier life of the id, this id's own abandoned launch past the starting-session bound, the row's own old session ("this row's own id"), conflicting labels, or the requested name held by another row's session, another agent-director store's session or one with no valid instance id; after "duplicate session", the same cases for the holder of the requested name, then the row is restored. Another row's or another store's session is another agent and is never ended. Stop, surface the named session to a human (README "Operator actions") and never end it yourself; retrying changes nothing until a human has acted. |
+| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` | The session found is not this launch's session, or tmux holds conflicting labels. For the pane verbs it also means the agent's pane was not found in the session carrying this row's id, or (for `read-pane`) more than one leftover session exists. For a plain `spawn` it also means the requested name is held by another session (see the held-name bullet under [Reading a refusal](#reading-a-refusal)). For `resume` it means a session is in the way of the relaunch: one left over from an earlier life, this id's own abandoned launch past the starting-session bound (the abandoned-launch bullet under [Reading a refusal](#reading-a-refusal)), one holding the recorded name, or the row's own session (the own-id conflict bullet there). For `spawn` with the reuse opt-in it means the same before anything is changed: a session left over from an earlier life of the id, this id's own abandoned launch past the starting-session bound, the row's own old session ("this row's own id"), conflicting labels, or the requested name held by another row's session, another agent-director store's session or one with no valid instance id; after "duplicate session", the same cases for the holder of the requested name, then the row is restored. Another row's or another store's session is another agent and is never ended. Stop, surface the named session to a human (docs/operator-actions.md) and never end it yourself; retrying changes nothing until a human has acted. |
 | `ErrTmuxNotAvailable` | ENVIRONMENT | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` (with or without the reuse opt-in); never `find-missing` or `expire` | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on. For `spawn` with the reuse opt-in: at the old-row lookup, before anything is changed (a different server, tmux unavailable, an unusable socket directory), or, after the reset, at session creation or the re-lookup after "duplicate session", then the row is restored. An environment problem for an operator to fix; alert, and never read it as gone. |
 | `ErrTmuxSessionCreate` | LAUNCH FAILURE | `spawn` (with or without the reuse opt-in), `resume` | The launch's session could not be created or labelled. The description says what became of the row (a plain spawn's new row stays `pending`, or, when the create found the name held but its holder was gone by the re-lookup, is ended; a `resume` and a reuse restore their rows: after the reset, a failed create, a session that could not be labelled, or a holder gone by the re-lookup after "duplicate session"); follow it. A name found held by a session that is still there is never this class: `resume` and reuse return it only for a launch failure or for a holder their re-lookup after "duplicate session" did not find. That is usually a holder that vanished first, but a holder still there can also go unmatched (a name with `$` or `\`, which stays usable), so this class does not prove the name is free. |
 
@@ -10662,8 +11516,9 @@ adds it here.
   classified error naming the blocking session: its tmux id and whether
   its label names this instance id. No caller waits for `find-missing`.
   When the holder is a session left over from an earlier life of this id,
-  a human ends it (README "Operator actions"), and the id is then spawned
-  again with the reuse opt-in (`--reuse-finished`). Another row's
+  a human ends it (docs/operator-actions.md), and the id is then spawned
+  again with the reuse opt-in `reuse_finished` (`--reuse-finished` on the
+  CLI). Another row's
   session, and another agent-director store's, is never ended. The
   description says what became of the new row: ended, left as it is
   because it changed after the spawn inserted it, or still `pending`
@@ -10681,7 +11536,7 @@ adds it here.
   window). The agent may be hung or running on a row wrongly marked
   finished. An automated caller stops, surfaces the named session to a
   human and never ends it itself; how a human proceeds is only in the
-  README's "Operator actions" section.
+  docs/operator-actions.md.
 - The starting-session rule decides when a finished row's own session, or
   its still-running agent process, blocks a relaunch (SR-4.2). The
   stopping window is checked first: a row that ended less than the
@@ -10860,7 +11715,7 @@ adds it here.
   session has no pane carrying the launch's pane label counts as gone.
   When a session holds the row's recorded name, the sweep writes one
   `ad.launch.name_held` record naming it; that session keeps running until
-  a human ends it (README "Operator actions").
+  a human ends it (docs/operator-actions.md).
 - So `find-missing` heals a launch that never reports in and has no
   session: past the grace period its row is marked `missing`. It reports,
   and never moves, a launch whose agent runs but no hook has reported
@@ -11002,7 +11857,7 @@ adds it here.
   Gone and checks only the agent process, so once the agent is gone it
   succeeds with `kill_sent` false whether or not the survivor still runs.
   A retry's success means only that the agent is gone. Ending a survivor is
-  the README's "Operator actions" procedure.
+  docs/operator-actions.md procedure.
 - The promise covers the Claude process, not processes it detached.
   `kill` never signals a process itself and never changes the row's state.
 - If the row finished while `kill` waited, a retried `kill` is a
@@ -11024,8 +11879,8 @@ adds it here.
   description and `Client.Kill`'s Go doc state this limitation.
 - On a `pending` row, `kill` ends only the current launch's session and
   refuses a session left over from an earlier launch with
-  `ErrTmuxSessionConflict`, so a leftover is ended only by a human (README
-  "Operator actions").
+  `ErrTmuxSessionConflict`, so a leftover is ended only by a human
+  (docs/operator-actions.md).
 - `kill` on a `pending` row is the way to abort a stuck launch. A `kill`
   made before the launch created its session returns `kill_sent` false and
   does not stop the launch; the live-row sequence's re-check covers it.
@@ -11067,7 +11922,7 @@ follows this bounded, paced sequence (SR-18.6). Where it is stated
   kill's description." Every surface that shows one description shows all
   three (`help`, MCP `tools/list`, the generated references), so the
   pointer always resolves.
-- The README's "Caller contract" and this section state it in full, with
+- docs/caller-contract.md and this section state it in full, with
   the rationale of steps 2 and 6.
 
 The short form is kept out of the other descriptions because `help` goes
@@ -11132,7 +11987,7 @@ the section that describes it in detail.
   covers rows created between 2026-05-18 and the b.gqe fix of 2026-05-27
   (commit `dab3a80`) whose default names took a `.` from their id.
   agent-director never touches such a row's session; a human removes the
-  row by the procedure in the README's "Operator actions" section, whose
+  row by the procedure in docs/operator-actions.md, whose
   last step is `agent-director-admin`'s `delete`.
 - **Names with `$` or `\`** (SR-3.5, SR-3.10). New explicit names may not
   contain them, but existing rows' names may. Such a session is labelled
@@ -11300,10 +12155,10 @@ the section that describes it in detail.
     SessionEnd hook budget is raised past half the stopping window by
     `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`, which has no stated cap and
     can come from the host environment, a settings `env` block or a
-    spawn's `extra_env` (agent-director reserves only
+    spawn's `extra_env` (agent-director reserves only `HOME` and
     `AGENT_DIRECTOR_`-prefixed keys there). An operator covers it by
-    keeping the window at least twice the budget, as the README's
-    [Timing settings](../README.md#timing-settings-tmux) say (see also
+    keeping the window at least twice the budget, as configuration.md's
+    [Timing settings](configuration.md#timing-settings-tmux) say (see also
     [`[tmux]` timing settings](#tmux-timing-settings)).
   - A server-scope `@ad_pane` value, which only a deliberate
     `set-option -s` sets, hides every pane's own value, so a lost reply's
@@ -11794,6 +12649,20 @@ meaning and links to the section that describes it in detail.
   `errName`. `ErrUnknownErrorName` now means only that the binary is of
   another version than the client. The names the CLI and MCP give are
   unchanged (see [Error mapping](#error-mapping)).
+- **Go `errnames.Classify` names a schema refusal from `api.New` (b.x8s).**
+  On an error from `pkg/api.New` that wraps `api.ErrSchemaMismatch` or
+  `api.ErrSchemaMigrationRequired`, `Classify` returns `ErrSchemaMismatch`
+  or `ErrSchemaMigrationRequired`, the name the CLI gives the same refusal;
+  before, it returned `ErrInternal`. `errors.Is` on these errors is
+  unchanged, no verb error's name changes, and the names the CLI, MCP and
+  the TypeScript client give are unchanged (see "CLI-setup names" under
+  [err_name catalog](#err_name-catalog)).
+- **`serve`'s MCP Client open names a schema refusal (b.uii).** When
+  `serve --stdio` cannot open the Client its MCP tools use, a schema
+  refusal is `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`, as on
+  every other CLI path; before, every such failure was `ErrStoreOpen`. Any
+  other failure there is still `ErrStoreOpen` (see
+  [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)).
 - **Plain `spawn`'s held name.** `ErrTmuxSessionCreate` is narrowed to
   launch failures; a held name now gives `ErrTmuxSessionConflict`,
   `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`, unless the holder
@@ -11812,6 +12681,46 @@ meaning and links to the section that describes it in detail.
   row from before this release has pre-trust allowed, the column's
   default, so its `resume` now pre-trusts whatever its spawn chose (see
   [Workspace-trust pre-write](#workspace-trust-pre-write)).
+- **`HOME` in `extra_env` is refused (b.nas).** `spawn`, a reuse and a
+  template's `extra_env` included, returns `ErrReservedEnvKey` for a key
+  that sets `HOME` (the key `HOME`, or one such as `HOME=/x`, which tmux
+  splits at its first `=`), whatever its value, and writes and launches
+  nothing; before, it launched with that `HOME`, the agent's hooks
+  reported to the agent-director store under it, and the row stayed
+  `pending`. `resume` can now return `ErrReservedEnvKey` too, for a row
+  spawned with such a key before this release, and writes and launches
+  nothing; the recourse is a
+  spawn of the id with `reuse_finished` and an `extra_env` without
+  `HOME`. No error name is new (see
+  [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas)).
+- **A malformed `extra_env` key is refused (b.vpb).** `spawn`, a reuse
+  and a template's `extra_env` included, returns `ErrReservedEnvKey`
+  for a key that is empty or holds `=` or a NUL byte, and writes and
+  launches nothing. Before, it launched, and tmux read such a key as
+  another variable (the key `CLAUDE_CONFIG_DIR=/x` set
+  `CLAUDE_CONFIG_DIR` to `/x=<value>`, while pre-trust and resume read no
+  `CLAUDE_CONFIG_DIR`). `resume` returns `ErrReservedEnvKey` for a row
+  spawned with such a key before this release, and writes and launches
+  nothing; the recourse is a spawn of the id with `reuse_finished` and an
+  `extra_env` without that key. The TypeScript client throws
+  `ErrReservedEnvKey` for such a key in `spawn`'s `extra_env` before it
+  runs the CLI. Before, the CLI split a key holding `=` into another key
+  and value and spawn went on with them, and an empty key got
+  `ErrInvalidFlags`. Only the description says the key is malformed
+  rather than reserved. No error name is new (b.grg §3; see
+  [Malformed `extra_env` keys](#malformed-extra_env-keys-bvpb)).
+- **`make-template` refuses an `extra_env` key spawn refuses (b.66q).**
+  `make-template` returns `ErrReservedEnvKey`, with spawn's description,
+  for a key that sets `HOME`, starts with `AGENT_DIRECTOR_` or is
+  malformed, and creates, writes and replaces nothing, `overwrite` or
+  not. Before, it saved the template and each spawn using it was
+  refused. The TypeScript client's `makeTemplate` throws
+  `ErrReservedEnvKey` for a malformed key before it runs the CLI;
+  before, the CLI split a key holding `=` into another key and value and
+  saved them, and an empty key got `ErrInvalidFlags`. `make-template`'s
+  error list gains `ErrReservedEnvKey`; no error name is new. A template
+  saved before this release is still refused at spawn (see
+  [`make-template` runs the same check](#make-template-runs-the-same-check-b66q)).
 - **`resume`'s trail.** `resume` records its move
   (`ad.resume.moved_to_pending`) and each restore attempt
   (`ad.resume.restored`), and SessionStart's `ad.spawn.state_transition`
@@ -11896,6 +12805,33 @@ meaning and links to the section that describes it in detail.
   is now `ErrInvalidFlags` on the CLI and over MCP, and nothing runs;
   before, the count wrapped to another window, which could select every
   finished row (see [`expire`](#expire)).
+- **A signed `older_than` is refused (b.c4n).** An `older_than`
+  (`--older-than` on the CLI) with a leading `+` or `-` in either form is
+  `ErrInvalidFlags` on the CLI and over MCP, and nothing runs. Before,
+  `-0s` selected every finished row like `0s` and `+2h` was read as `2h`,
+  while `-0d` and `+7d` were refused. Write zero as `0s` or `0d`. No error
+  name is new (see [`expire`](#expire)).
+- **A negative `read-pane` `n_lines` or `list` `limit` is refused
+  (b.c4n).** Each is `ErrInvalidFlags` on every surface, and nothing is
+  read: `read-pane` makes no tmux call, `list` reads no row. Before, a
+  negative `n_lines` captured the default 25 lines and a negative `limit`
+  meant no cap; 0 or an omitted value still gives the default 25 lines
+  and no cap. The TypeScript client now passes a
+  negative value to the CLI, so it rejects with `ErrInvalidFlags` too;
+  before, it left the flag out and the call ran with the default.
+  `read-pane`'s and `list`'s error lists gain `ErrInvalidFlags`; no error
+  name is new (see [`read-pane`](#read-pane) and the `ErrInvalidFlags`
+  exclusion under [Err-name five-way coherence](#err-name-five-way-coherence)).
+- **CLI integer flags are decimal only (b.c4n).** `--limit`, `--n-lines`
+  and `trail-emit relay-attempt`'s `--bytes-sent` and `--bytes-received`
+  read base 10: `--limit 010` is 10, where it was 8. A hex, octal or
+  binary prefix (`0x10`, `0o7`, `0b1`), an underscore (`1_000`) and a
+  leading `+` (`+5`) are refused with `ErrInvalidFlags`; before, they were
+  accepted. MCP and the TypeScript client could never send these forms, so
+  they are unchanged. `trail-emit relay-attempt` also refuses a negative
+  byte count with `ErrInvalidFlags` and writes no trail line (see
+  "Prohibitions" under
+  [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
 - **Go `api.Expire`'s `retentionDays` of 0 keeps 31 days.** The exported
   `Expire` reads a `retentionDays` of 0 as the default 31 days, as
   `[defaults] expire_retention_days = 0` does, and refuses a negative
@@ -11984,10 +12920,13 @@ this is how the code gets there.
    (`sessionProcesses`), then each older session's agent pane process
    wherever its pane now is, so one moved into another session is waited
    for too (`appendProcesses`: each pid once, never the agent's, none
-   whose start time could not be read). The follow-up lookup does not
-   consult the listed processes: with the youngest session's agent not
-   checkable, an older agent whose pane was moved out can outlive its
-   pane kill and the call still succeed (b.myx, open). Nothing is
+   whose start time could not be read). The check waits for every listed
+   process whether or not the youngest session's agent process can be
+   checked: with it, in the one process wait; without it, after a
+   follow-up lookup that finds none of those sessions still listed
+   (`killRun.waitListed`, b.myx; see the check below). So any of them,
+   an older agent whose pane was moved out included, that outlives the
+   kill exit wait is `ErrTmuxKillFailed` naming its pid. Nothing is
    adopted and the row is never written. Such a launch never reports in (the hook gate
    needs a recorded pane), so its label and `recordsNoLaunchSession` are
    the whole evidence that it is this id's; a human chose to run the
@@ -11996,7 +12935,7 @@ this is how the code gets there.
    recorded session name is empty, holds a control character, or holds a
    character tmux stores differently (`.`, `:`, invalid UTF-8) →
    `ErrInternal` with no tmux call (`unusableNameError`); removing the row
-   is a human's decision (README "Operator actions").
+   is a human's decision (docs/operator-actions.md).
 4. **Socket.** The row's recorded socket, used as recorded; a row that
    records none uses the caller's socket resolved as tmux would, creating
    nothing. An unusable socket directory → `ErrTmuxNotAvailable`, "nothing
@@ -12049,10 +12988,15 @@ this is how the code gets there.
      `ErrTmuxSessionConflict`; an answer it cannot read (timeout,
      unrecognised reply) → `ErrTmuxUnresponsive`.
 
-**The check** runs after a kill was sent, and is either the wait or the
-follow-up, never both. The first reading of the agent process decides:
+**The check** (`killRun.check`) runs after a kill was sent, and is either
+the wait or the follow-up, never both, except on this id's own abandoned
+launch (step 2), where a follow-up that finds none of the ended sessions
+is followed by the wait over the listed processes (b.myx). The first
+reading of the agent process decides:
 
-- **Checkable** (alive or gone): the process wait. The agent process and
+- **Checkable** (alive or gone): the process wait (`killRun.wait`; its
+  polling, `killRun.pollExit`, is shared with the wait after the follow-up
+  below). The agent process and
   the listed processes are read every `killPollInterval` (100 ms), through
   the injected clock and sleep, for up to the kill exit wait
   (`kill_exit_wait_ms`, 5 s by default). A zombie counts as gone; a later
@@ -12061,31 +13005,40 @@ follow-up, never both. The first reading of the agent process decides:
   `ErrTmuxKillFailed`, naming the agent's pid if it still runs and each
   survivor's pid; the row stays live.
 - **Not checkable** (no process recorded, or unreadable): exactly one
-  follow-up lookup, with no wait. The current label gone (Gone or
-  Leftover) → success, `kill_sent` true. Still there (Ours) →
+  follow-up lookup, made right after the kills with no pause. The current
+  label gone (Gone or Leftover) → success, `kill_sent` true, with no wait:
+  the listed processes are not waited for. Still there (Ours) →
   `ErrTmuxKillFailed` ("the agent process cannot be checked and its
   labelled session is still there"). After the kill sequence on this id's
   own abandoned launch (step 2), the answer is judged by the sessions it
   ended instead (`stillThere`): any of their tmux ids still listed with a
   label of this row's id in this store, as Ours or as a leftover, →
-  `ErrTmuxKillFailed`; any other Ours, Leftover or Gone → success. Can't
-  tell → `ErrTmuxUnresponsive` or
+  `ErrTmuxKillFailed`, with no wait; any other Ours, Leftover or Gone →
+  the process wait over the listed processes alone (`killRun.waitListed`,
+  b.myx), polled as on the checkable path but never reading the agent
+  process: all gone → success, `kill_sent` true (at once, with no pause,
+  when nothing is listed); any still running when the wait ends →
+  `ErrTmuxKillFailed` ("still running after the kill exit wait"), naming
+  each survivor's pid. Can't tell → `ErrTmuxUnresponsive` or
   `ErrTmuxNotAvailable`, saying the kill was sent and may or may not have
-  taken effect. If the killed session was the server's last, the recorded
-  server answering with no sessions is Gone, so the follow-up succeeds
+  taken effect, with no wait. If the killed session was the server's
+  last, the recorded server answering with no sessions is Gone, so the
+  follow-up succeeds
   (LFR H5; b.47f); while that server exits (tmux's `exit-empty`) and no
   longer answers, its process still running, the follow-up gives
   `ErrTmuxNotAvailable` or `ErrTmuxUnresponsive` (SR-3.3). Another server
   re-bound on the socket while the recorded one runs gives
   `ErrTmuxNotAvailable`, with or without sessions.
 
-**Survivors, per call.** Success needs every process the call listed and
-the agent process gone. `ErrTmuxKillFailed` names each survivor's pid,
+**Survivors, per call.** Success after a process wait needs every process
+the call listed gone, and the agent process too when it was checkable;
+success after the follow-up alone (the current label, agent not
+checkable) needs only that label gone. `ErrTmuxKillFailed` names each survivor's pid,
 and `ad.kill.called` carries them in `survivor_pids`. A later call does not
 track them: a retried `kill` finds the lookup Gone and checks only the
 agent process, so once the agent is gone it succeeds with `kill_sent`
 false whether or not a survivor still runs. Ending a survivor is the
-README's "Operator actions" procedure.
+docs/operator-actions.md procedure.
 
 **Rules.**
 
@@ -12118,11 +13071,15 @@ max(2Q + 2A + E + 4W, 3Q + 2A + 5W): **12.4 s** at the defaults on path
 (i) (lookup, pane listing, pane kill, session kill, then the exit wait),
 and 9 s on path (ii) (the same four calls, then the follow-up lookup).
 Its time waiting on tmux alone is at most 3Q + 2A + 5W (9 s); E counts in
-full. That bound is for the row's own session. The operator tool's
-`kill-finished` on this id's own abandoned launch (step 2) sends a pane
-kill and a session kill for each of its N sessions, so its bound grows by
-2A for each session beyond the first; agent-facing `kill` never takes that
-path.
+full. That bound is for the row's own session, where the check is the
+wait or the follow-up, never both. The operator tool's `kill-finished` on
+this id's own abandoned launch (step 2) is the one path that can make
+both: with the youngest session's agent not checkable, the follow-up
+lookup and then the exit wait, so for one session it takes at most
+3Q + 2A + E + 5W (**14 s** at the defaults). It also sends a pane kill
+and a session kill for each of its N sessions, so that bound grows by
+2A + 2W (4.2 s at the defaults) for each session beyond the first;
+agent-facing `kill` never takes that path.
 
 ### `pause`
 
@@ -12161,8 +13118,8 @@ SR-7.1 to SR-7.3). `pause` is the only verb with a polling loop:
    is empty, holds a control character, or holds a character tmux stores
    differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
    (`unusableNameError`, SR-3.2), no tmux call, `/exit` not sent and no
-   wait; removing the row is a human's decision (README "Operator
-   actions"). A finished row never reaches this check (step 2).
+   wait; removing the row is a human's decision (docs/operator-actions.md).
+   A finished row never reaches this check (step 2).
 6. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
    directory → `ErrTmuxNotAvailable`), one lookup by the row's current
    label and, on Ours, one pane listing; then `C-u`, a key send
@@ -12290,7 +13247,7 @@ steps and says when to escalate to a human.
 
 Pre-release operator checklist: see bee `b.dc1` in the `Release` hive.
 
-### Supported platforms
+### Release build targets
 
 agent-director ships as six pre-built static binaries, two per target
 tuple: `agent-director-<os>-<arch>` and the operator tool
@@ -12306,7 +13263,10 @@ both built by `make release-binaries` with the same version stamp
 | linux | arm64 | ELF 64 LE | yes (no libc dep) |
 | darwin | arm64 | Mach-O 64 LE | n/a (no system linker) |
 
-Windows is not supported (SRD §16.1).
+A build target is not a supported install host. `linux/arm64` is
+built and shipped, but `install.sh`, the only installer, exits 2 on
+`Linux/aarch64` (b.fg3 deferred it); the supported install hosts are
+`linux/amd64` and `darwin/arm64`. Windows is not supported (SRD §16.1).
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
@@ -12367,7 +13327,7 @@ successful live run).
 
 **Source-of-truth invariant.** `pkg/ts-bun-client/package.json` is the
 sole authoritative version string in the repo (SR-16). Every other site —
-binary ldflags, npm sub-packages, release notes — derives from it. The
+binary ldflags, the npm package, release notes — derives from it. The
 SR-16 gate (`pkg/ts-bun-client/scripts/check-source-of-truth.ts`) enforces
 this invariant and fires on any independent version site detected outside
 the derivation chain.
@@ -12395,6 +13355,48 @@ gates/compile/      gates/smoke/        gates/coherence/
 gates/pack/         gates/notes/        gates/publish/
 gates/finalize/
 ```
+
+**Gate diagnostics.** A failing gate writes each SR-14 diagnostic to stderr
+as one compact JSON object per line. Gate scripts must build every
+diagnostic with `emit_diagnostic` from `gates/lib/emit-diagnostic.sh`, never
+by hand; the sole exception is the publish orchestrator, whose
+`emit_publish_diagnostic` adds the publish-only fields. Both build the
+object with `jq -c`, so the line is valid JSON whatever its fields carry,
+raw command output with TABs, CRs or other control characters included. The
+guard test `TestNoHandRolledDiagnosticJSON`
+(`skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars/`)
+fails on any `printf` of a `{"gate"` line in `gates/**/*.sh`. One invalid
+line costs a whole gate's diagnostics: the parallel executor
+(`gates/lib/run-parallel.sh`) parses every stderr line of a gate that
+starts with `{` in a single `jq -s`, and records an empty list if that
+fails.
+
+**Command output reaches `jq` on stdin.** Linux caps one argument at
+128 KiB (`MAX_ARG_STRLEN`). A larger `--arg` or `--argjson` makes the exec
+of `jq` fail with "Argument list too long", and the diagnostic, sub-check
+or report it was building is lost. So a script in `gates/` passes any value
+that can carry command output, or any collection of such values, to `jq`
+on stdin or in a file `jq` reads, never as an argument;
+`printf '%s' "$v" | jq -Rs .` turns a string into one JSON string with no
+change to its content. Only short values such as gate names, outcomes,
+paths built by the script and numbers go as `--arg` or `--argjson`. The
+values that follow this rule today (b.v46, b.nsa, b.2wr):
+
+- `emit_diagnostic`: the description.
+- `emit_publish_diagnostic`: the offending path, description, corrective
+  action and `upstream_response_verbatim` (the failed command's last 50
+  stderr lines).
+- The publish orchestrator's `record_substep` (`response_excerpt`) and
+  `write_report` (the `--prior-phases` array, from the copy read once at
+  startup, and the substeps and diagnostics arrays).
+- `finalize/write-report.sh`: the phases and diagnostics arrays. The cap
+  also limits the script's own arguments, so its caller passes each array
+  as the path of a file holding it, never as the array itself.
+- `run-parallel.sh`: each sub-check's `stderr_excerpt` and `diagnostics`,
+  and the combined `sub_checks`, which `jq` reads from the per-gate files.
+- `smoke/per-binary-smoke.sh`: a sub-check's `detail` (`ldd` or `help`
+  output). `jq` is the only thing that escapes it, so the decoded value
+  equals the raw output.
 
 **Run report.** `dist/release-report.json` is written on every run (dry
 and live). It captures every phase, every sub-check, every publish substep,
@@ -12476,6 +13478,11 @@ than `go test ./...`.
   `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
   the Docker hook pattern's stand-ins).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
+- Sets `AGENT_DIRECTOR_TEST_HARNESS=1` (an image `ENV`), the marker that
+  this is the Docker test harness container. `db-reset.sh` refuses to run
+  without exactly that value (see [Driver](#driver)). The sandbox container
+  does not set it; like `AGENT_DIRECTOR_TEST_SANDBOX` it is an
+  accident-prevention gate, not a security boundary.
 - Default command is `/opt/driver/run-testplan.sh`.
 
 The image is built via `make test-image`. `make test-image-smoke` exercises
@@ -12493,13 +13500,35 @@ it standalone: confirms `claude --version` reports the pinned version,
 2. Case order comes from the t1's `children:` YAML list. Alphabetical
    basename sort would scramble paired cases (e.g. the smoke-2 / smoke-3
    DB-isolation pair) — `children:` preserves authoring order.
-3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`: it
-   removes `~/.agent-director/state.db` + WAL/SHM, kills tmux sessions
-   matching the `cd-` prefix, then calls `agent-director list` to
-   rebuild the store at the binary's current schema version (a fresh DB
-   is created directly at that version, not migrated up from v1). Cases must therefore derive the expected `user_version` from the
+3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`
+   (b.8yq). In order, it:
+   - refuses, exit 2 with nothing changed, unless
+     `AGENT_DIRECTOR_TEST_HARNESS=1` (set by the image, see
+     [Container](#container)): it ends every tmux server of its user and
+     deletes the store, so it must never run on a host;
+   - ends every tmux server whose socket is in a `tmux-<uid>` directory up
+     to four levels under `/tmp`, `$HOME` or its own `TMUX_TMPDIR`, so every
+     session goes, whatever its name: the default and `-L` servers, and
+     those of a case that points `TMUX_TMPDIR` at its own directory. If the
+     script itself runs inside tmux, it ends that server's other sessions
+     and spares its own;
+   - waits for the processes of those servers' panes to exit, and after a
+     grace of 5 to 6 s kills (`SIGKILL`, by the pane's process session)
+     whatever still runs, naming each such pane on stderr. A real Claude
+     Code left by an earlier case cannot rewrite `~/.claude.json` under the
+     next one;
+   - removes `~/.agent-director/state.db` + WAL/SHM;
+   - calls `agent-director list` to rebuild the store at the binary's
+     current schema version (a fresh DB is created directly at that
+     version, not migrated up from v1). It exits 1 if that fails.
+
+   Cases must therefore derive the expected `user_version` from the
    shipped binary rather than hard-code a literal; hard-coding a stale
-   version is what turned this lane red in b.m9q.
+   version is what turned this lane red in b.m9q. A case never relies on a
+   tmux server, session or pane process from an earlier case.
+   `harness-smoke`'s smoke-5 checks the reset end to end: four servers,
+   none with a `cd-` session, and a pane that ignores `SIGHUP` and
+   `SIGTERM`.
 4. For each case, the driver runs in one of two modes:
    - `DRIVER_MODE=shell` (default) — extracts the t2 body's fenced
      ```bash``` block and executes it directly. No API calls. Used by
@@ -12547,8 +13576,9 @@ research notes under `reference/`:
   `reference/max-account-auth-research.md`.
 
 `make test-docker` inherits both env vars from the calling process — never
-hard-coded in the Makefile. CI sources them from secrets (see
-`.github/workflows/integration.yml`).
+hard-coded in the Makefile. CI sources them from secrets and passes them
+only to the `harness-smoke` job of the Docker harness matrix (see
+[CI lane](#ci-lane)).
 
 Test credentials should be CI-secret-scoped, distinct from the operator's
 primary account.
@@ -12599,8 +13629,9 @@ prose says `sqlite3`. Never write another `sqlite3` wrapper or call
 runs in `make test-sandbox` (`go test ./...`); no workflow runs it. The
 `sql.sh` tests use temp-dir stores and a real `sqlite3` (with none on PATH
 they fail inside the sandbox and skip elsewhere); the re-run test uses a
-temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`. None
-touches `~/.agent-director`, tmux or Docker.
+temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`; the
+`db-reset.sh` test uses a temp HOME and logging fakes of tmux, `pkill` and
+`agent-director`. None touches `~/.agent-director`, tmux or Docker.
 
 - **`sqlite_guard_test.go`**:
   - `TestNoBareSqlite3InCasesOrDriver` scans every `bash`, `sh` and
@@ -12637,6 +13668,13 @@ touches `~/.agent-director`, tmux or Docker.
   case and again before the re-run, that the re-run's trace shows the
   case's own failure, and that `details` say `xtrace rerun skipped:
   db-reset failed before it` when the second reset fails.
+- **`db_reset_test.go`**: `TestDBResetRefusesOutsideTheHarness` (b.8yq)
+  runs the real `db-reset.sh` with `AGENT_DIRECTOR_TEST_HARNESS` unset,
+  empty, `0` and `true`. Each run must exit 2 with the refusal on stderr,
+  run no tmux, `pkill` or `agent-director`, and leave a seeded store
+  untouched. It never sets the marker to `1`; the harness's smoke-5 case
+  covers the reset itself. `DB_RESET_UNDER_TEST=<path>` runs it against
+  another copy, to prove the fails-before direction.
 
 **Must use:** a test of a `test/driver/` script goes in
 `test/driver-scripts/` and reuses its `newStore`, `holdLock`,
@@ -12657,7 +13695,7 @@ each would print nothing and write `ad.hook.ignored` `no_exec_form`. No
 Docker case relies on a real Claude Code hook (the pinned agent stops at
 first-run onboarding and sends none): every case that needs a hook uses
 the stand-in pattern below. A future case that needs a real agent's hook
-to apply must bump the pin to the README's minimum Claude Code version,
+to apply must bump the pin to the minimum Claude Code version in README.md,
 and harness-smoke's `claude --version` check with it.
 
 ### Docker hook pattern: the stand-in `claude` and `pane-hook.sh`
@@ -13499,15 +14537,58 @@ test cache does not track files that only the runner subprocess reads.
 
 ### CI lane
 
-`.github/workflows/integration.yml` defines two jobs:
+`.github/workflows/integration.yml` runs on every PR, on push to `main`
+and on `workflow_dispatch`. It defines four jobs:
 
-- `linux-integration` — runs `make test-docker EPIC=harness-smoke` on
-  `ubuntu-latest` for every PR and push to `main`. Auth env vars come
-  from `${{ secrets.ANTHROPIC_API_KEY }}` and
-  `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
-- `macos-stub` — runs on `macos-latest`, exits 0 with a stub message.
-  Epic 8 (sysctl-based liveness probe) will swap this for a real macOS
-  test that exercises the sysctl path. SRD §19 Q7.
+- `docker-epics` — turns `make list-test-docker-epics` (which reads
+  `test/docker-epics.txt`) into a JSON array of Docker-harness slugs. On
+  push to `main` and on `workflow_dispatch` the array holds every listed
+  slug; on a PR it holds `harness-smoke` alone, because the Docker suite
+  is kept off the pre-merge path (b.ug8). The job also outputs `pr_epic`,
+  the group a PR runs (`PR_EPIC`, `harness-smoke`). The job fails when
+  the list is empty (or `make list-test-docker-epics` fails), when a slug
+  has a character outside `[A-Za-z0-9._-]`, or, on a PR, when
+  `harness-smoke` is not listed. An empty list fails with the annotation
+  `make list-test-docker-epics listed no Docker harness group:
+  test/docker-epics.txt is missing or has no slug`.
+- `linux-integration` — a matrix over that array, one job per slug, named
+  `Docker harness — <slug>`, with `fail-fast: false`, so a failed group is
+  named by its job and the other groups still run. Each job runs
+  `make build` and `make test-docker EPIC=<slug>` on `ubuntu-latest` in
+  the default `DRIVER_MODE=shell`, which needs no credential. Only the
+  job whose slug equals `pr_epic` gets `${{ secrets.ANTHROPIC_API_KEY }}`
+  and `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`, for `DRIVER_MODE=claude`
+  (see [Auth](#auth)). Every other group's job gets empty strings, so the
+  secrets still reach one job, as before the matrix. A new secret in this
+  job uses the same
+  `matrix.epic == needs.docker-epics.outputs.pr_epic && secrets.X || ''`
+  form; `cigates` fails on any other.
+- `macos-probe` — runs `go build ./...` and `go test ./internal/probe/...`
+  on `macos-latest`, against the darwin sysctl readers. SRD §19 Q7.
+- `envelope-diff` — see [Envelope-diff regression
+  harness](#envelope-diff-regression-harness).
+
+The `/release` coverage gate (`gates/coverage/docker-epics.sh`) reads the
+same list through the same target, so CI after a merge and a release run
+the same groups. Adding or dropping a slug in `test/docker-epics.txt`
+needs no workflow edit.
+
+`.github/workflows/lint.yml` runs static checks that build nothing, on
+every PR and push to `main`. Its one `lint` job runs
+`make release-shellcheck` (shellcheck over
+`skills/release-agent-director/gates/**/*.sh`), first installing
+shellcheck from apt if the runner image lacks it. The job runs on
+`ubuntu-24.04`, not `ubuntu-latest`, because the image's Ubuntu release
+fixes the shellcheck version (0.9.0, from apt). A newer shellcheck can
+add findings, so a move of `ubuntu-latest` would turn `main` red with no
+change to the scripts. Move the pin on purpose, with the new version's
+findings fixed. The job logs `shellcheck --version`. It is that target's
+only automated caller; no `/release` phase runs it. The target exits 1
+when shellcheck is not on PATH. `SHELLCHECK_OPTIONAL=1` makes it skip
+instead, printing that nothing was checked; no workflow sets it. A new
+lint check is one more step in the `lint` job, with
+`if: ${{ !cancelled() }}` so it still reports after an earlier check
+fails.
 
 The TLA+ model check has no workflow and no CI hook. It is an on-demand
 check that runs only through `make tla`, on the fast tier by default (see
@@ -13745,13 +14826,12 @@ detail.
   parallel. `Temp` enforces that the way `t.Chdir` does: it sets `$PWD`
   with `t.Setenv`, which panics in a parallel test and makes a later
   `t.Parallel` call panic.
-- Users: `TestPreTrustRefusesUnusableConfigLocation`
-  (`internal/spawn/pretrust_home_test.go`), which checks that a relative
-  `CLAUDE_CONFIG_DIR` (alone or over an absolute `HOME`) and a relative
-  extra-env `HOME` touch nothing where they would resolve from the
+- Users: `TestPreTrustRefusesUnusableConfigDir`
+  (`internal/spawn/pretrust_test.go`), which checks that a relative
+  `CLAUDE_CONFIG_DIR` touches nothing where it would resolve from the
   process cwd; `seedRelativeTrustConfig`
   (see [pkg/api pre-trust fixture](#pkgapi-pre-trust-fixture-package-internal-test-fixture)),
-  which does the same for a relative `CLAUDE_CONFIG_DIR`; and
+  which does the same through `spawn` and `resume`; and
   `TestRefusedStorePathCreatesNothing`
   (`internal/store/expand_tilde_test.go`), which checks that a `~/` store
   path refused for an unset or empty `HOME`, and an empty store path,
@@ -13828,7 +14908,9 @@ uses a per-test `TMUX_TMPDIR` with `TMUX` unset, or puts the fake first on
 `PATH`. Existing per-package fixtures that do this: `newSpawnEnv` in
 `pkg/api/spawn_test.go` (temp `HOME`, per-test `TMUX_TMPDIR`, `TMUX`
 unset); `spawnTmuxTmpdir` in `cmd/agent-director/testhelpers_test.go`
-(`<home>/tmux-tmpdir`, which `runSpawnCLIEnv` passes to the child);
+(`<home>/tmux-tmpdir`, which `fakeTmuxEnv` puts in a child's environment
+with the fake first on `PATH`; `runSpawnCLIEnv` and the `serve --stdio`
+global-flag tests use it);
 `ownSocketDir` on the `pkg/api` kill fixture (`useOwnTmuxTmpdir`); and
 `usePrivateFakeTmux` in `test/envelope-diff/error_cases_spawn_tmux.go`
 (fresh `TMUX_TMPDIR` and `FAKE_TMUX_TABLES`, `TMUX` empty), which the
@@ -14428,7 +15510,7 @@ so it skips in the sandbox. That is the run's one skip.
   at mode 000, rows with no process identity stay live with
   `process_not_seen_tmux_unchecked` after one refused tmux call.
 - `unusable_name_procedure_test.go` (SR-18.17 steps 2 to 5, SR-20.7,
-  Appendix E.10 N6; AC-DOC-18): the README "Operator actions" item "A row
+  Appendix E.10 N6; AC-DOC-18): the docs/operator-actions.md item "A row
   whose recorded name cannot be used" on real tmux, on the kill fixture.
   Each catalogue N6 name (holding `.`, `:` or a byte that is not valid
   UTF-8) is listed under its stored form with its session id, and the
@@ -14651,10 +15733,10 @@ comment has the detail):
   exists.
 - Operator procedure (`unusable_name_procedure_test.go`): `n6Names(t)` and
   `dotX(t)` give the catalogue's E.10 N6 entries (`tmuxfix.StoredNames()`
-  with source `E.10 N6`). `rt.procedureListing(t)` runs the README step 2
+  with source `E.10 N6`). `rt.procedureListing(t)` runs the docs/operator-actions.md step 2
   listing (`list-sessions -F` with session id, creation time and name) and
   returns `listedSession` (`ID`, `Name`) in order.
-  `f.procedureRemove(t, row, n)` runs the README steps 2 to 5 for a row
+  `f.procedureRemove(t, row, n)` runs the docs/operator-actions.md steps 2 to 5 for a row
   recorded under `n`, targeting every session by id only: it reads each
   candidate's label (class by the production `ClassOf`) and environment
   line, ends only a candidate that is the row's own, checks it left the
@@ -14680,7 +15762,7 @@ doubles in `pkg/api` and `cmd/agent-director-admin`)
 seeds its rows and runs the verb through the kill fixture (`liveRow`,
 `seedRow`, `kill`, `findMissing`, `paneVerb` or a sibling built the same
 way on `open`), never through its own store or client setup. A test of a
-README tmux procedure runs its steps through `rt.run`/`rt.must` with
+docs/operator-actions.md tmux procedure runs its steps through `rt.run`/`rt.must` with
 every `-t` target a session or pane id, as `procedureRemove` does. It checks refusals with `assertVerbError` and
 adoption with `assertAdopted`. It observes panes by pane id through
 `rt.capture`, `idtWorld` and `idtSame`, and uses `waitPaneShows` or
@@ -15347,7 +16429,7 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       `forbid`.
   - Unusable recorded name (`descriptions_unusable.go`, SR-1.4, SR-1.7,
     SR-3.2, SR-11.3, SR-12.2, SR-18.11). No case may say "delete" as an
-    instruction (SR-18.8); only the README's "Operator actions" does.
+    instruction (SR-18.8); only docs/operator-actions.md does.
     - `DescUnusableNameEmpty()`, `DescUnusableNameControlChar(name)` and
       `DescUnusableNameRewritten(name, RewrittenChars{Dot, Colon,
       InvalidUTF8})`: the three `ErrInternal` refusals every looking-up
@@ -15504,7 +16586,7 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       description states, by key phrase: its opening "Live-row sequence (a
       pending row included):" and each numbered step. Its grace-period
       phrase is built from `config.DefaultPendingGraceSeconds`. The
-      rationale the README and this doc keep, SR/OFR citations, the
+      rationale docs/caller-contract.md and this doc keep, SR/OFR citations, the
       pointer and the pointer's opening are must-nots. Check it with
       `AssertAgentTextCase`.
     - `LiveRowPointer`: the pointer sentence, verbatim, that ends the
@@ -15731,10 +16813,10 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     stopping window, "nothing was written", "dead" or "gone".
 
   `call` is a `tmux.Call` (for example `tmux.CallCreate`).
-  `DescCase.PointsToOperatorActions()` adds the pointer to the README's
-  "Operator actions" section. The scan-leftover and conflicting-labels
+  `DescCase.PointsToOperatorActions()` adds the pointer to
+  `apitest.OperatorActionsDoc`, "Operator actions". The scan-leftover and conflicting-labels
   cases already include it. `apitest.OperatorActionsTitle` is that
-  section's title. The pointer and the README section check
+  doc's title. The pointer and the doc section check
   (`pkg/api/readme_sections_test.go`) are both built from it.
 
 **Rules (must use):**
@@ -15759,7 +16841,7 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   `DescLiveRowPointer` or `LiveRowPointer`; how often a text states either
   goes through `LiveRowSequenceCount` or `LiveRowPointerCount`. A check
   of `find-missing`'s own sentences cuts them with `FindMissingOwnText`. A
-  check of a text that points to the README's "Operator actions" section
+  check of a text that points to docs/operator-actions.md
   goes through `PointsToOperatorActions` or `OperatorActionsTitle`. Never
   spell the sequence's phrases, the pointer or the section title as
   literals in a test. This applies to later changes to those texts too
@@ -16043,7 +17125,7 @@ carry the detail.
   so a test can check that pre-trust touches nothing there. A test using
   it must not call `t.Parallel`; `cwdfix.Temp` makes that call panic.
 - `c.env()` is the `apitest.SpawnOption` that points a seeded row's
-  `CLAUDE_CONFIG_DIR` at `dir`; `c.extraEnv()` is the same as an extra-env
+  `CLAUDE_CONFIG_DIR` at `dir`; `c.extraEnv()` is the same as an `extra_env`
   map for a launch. Either gives each test its own config directory.
 - `c.reset(t)` writes the seeded bytes back, removing an entry a resume
   wrote.
@@ -16142,7 +17224,9 @@ each file's doc comments carry the detail.
   own abandoned launch (b.6sa) is tested in `kill_optin_abandoned_test.go`
   (one session; several, their kill order and which agent is waited for,
   an older session's agent pane moved into an unrelated session
-  included; a row that records its launch's server or pane, or no token,
+  included; with the youngest session's agent not checkable, the wait
+  over the listed processes after a follow-up that finds none of the
+  sessions, b.myx; a row that records its launch's server or pane, or no token,
   which keeps "never reported in"), whose `e.seedAbandoned(t, state,
   sessions...)` seeds a finished row that `recordsNoLaunchSession`
   matches beside sessions of earlier launches of its id, each `age` old at
@@ -16344,7 +17428,7 @@ each file's doc comments carry the detail.
   check of what a method's Go doc says (such as
   `DescUnusableNameTrigger` in `manifest_unusable_name_test.go`, or
   `kill`'s cases) reads the prose through it, never its own doc reader.
-- **README section checks** (`readme_sections_test.go`, SR-1.4, SR-18.1,
+- **User-doc section checks** (`readme_sections_test.go`, SR-1.4, SR-18.1,
   SR-18.17). The file holds the one Markdown heading parser in `pkg/api`
   tests:
   - `readMD(t, path)` returns an `mdDoc`: the file's lines and its ATX
@@ -16365,14 +17449,14 @@ each file's doc comments carry the detail.
     "manifest <verb> Description", "manifest <verb> param <name>" or
     "manifest <verb> result field <name>".
   - The pointer collector: `collectREADMEPointers(t)` gathers every
-    pointer to a README section by title (`readmePointer`, found by
-    `pointersIn`). It reads non-test Go sources (`walkGoSources`), every
+    pointer to a doc section by title (`readmePointer`, found by
+    `pointersIn`: a bare `docs/<file>.md` path, which must exist; `"<title>" in docs/<file>.md`; or any pointer naming the README, which is checked against the README). It reads non-test Go sources (`walkGoSources`), every
     manifest text (`eachManifestText`), and `apitest.OperatorActionsTitle`.
     `TestREADMEPointersNameExistingSections` checks that each pointer names
-    a heading that exists exactly once, and that a list of required sites
+    a heading that exists exactly once in its doc, and that a list of required sites
     all carry a pointer.
   - The anchor check: `TestREADMEAnchorLinksResolve` checks that every
-    relative link in `README.md` and `pkg/api/README.md` names an existing
+    relative link in the hand-written user docs (`mdUserDocs`) names an existing
     path and every anchored `.md` link resolves to exactly one heading.
     `TestREADMESectionHeadings` checks that each pointed-to heading exists
     exactly once, the "Caller contract: tmux refusal classes" heading of
@@ -16383,8 +17467,8 @@ each file's doc comments carry the detail.
   Five sibling files check sections on the same parser:
   - `readme_optin_test.go` (SR-6.8, SR-18.15, SR-18.17, b.vqr): `kill`'s
     finished-row opt-in, and the operator tool's `kill-finished`, are
-    spelled in the README only inside "Operator actions"; the opt-in is
-    spelled in no other doc under `docs/` or either package README, except
+    spelled only in `docs/operator-actions.md`; the opt-in is
+    spelled in no other doc under `docs/`, the README or either package README, except
     the generated `docs/admin-reference.md` and the opt-in's trail field in
     this document's `ad.kill.called` row. It holds the
     section helpers `operatorActions(t, d)` (the "Operator actions"
@@ -16427,7 +17511,7 @@ each file's doc comments carry the detail.
     `storeIDItemCommands(t, d)` returns the trimmed `sqlite3` lines in that
     item's fenced blocks.
   - `readme_store_id_test.go` (SR-5.4): `TestReadmeStoreIDCommandPrintsStoreID`
-    runs the README's store-id line (`runnableStoreIDLine`, through
+    runs `docs/operator-actions.md`'s store-id line (`runnableStoreIDLine`, through
     `storeIDItemCommands`, refusing a line without `-readonly`) with HOME at
     a temp dir holding a fresh store, closed and held open, and checks it
     prints `Store.StoreID`. A missing `sqlite3` fails inside the sandbox
@@ -16440,18 +17524,18 @@ each file's doc comments carry the detail.
     section, its `anchors` and the values the constants give; value i is
     the first whole number after anchors[i], searched from the end of
     value i-1, and an empty anchor takes the next number): the defaults,
-    safe minimums and the `kill` and `pause` worst cases in the README's
-    [Timing settings](../README.md#timing-settings-tmux) and caller
+    safe minimums and the `kill` and `pause` worst cases in `docs/configuration.md`'s
+    [Timing settings](configuration.md#timing-settings-tmux), `docs/caller-contract.md`
     contract and in this document's [Stop semantics](#stop-semantics),
     caller contract and package inventory. Anchors are key code spans,
     the worst-case formulas or short terms such as "stopping window is";
     the first occurrence after an anchor counts. Other timing statements
     in this document, the kill fixture's included, are not pinned. `TestReadmeTimingValuesExampleBlock`
-    and `TestReadmeTimingValuesTable` check the README's commented
+    and `TestReadmeTimingValuesTable` check `docs/configuration.md`'s commented
     `[tmux]` example block and its timing table: one entry per key in
     `config.TmuxKeys()` order, at its default, with its unit and safe
     minimum (or "none"). `TestReadmeTimingValuesClaudeCodeMinimum` checks
-    that the README's Claude Code minimum statements (Prerequisites and
+    that the user docs' Claude Code minimum statements (the README's Prerequisites, `docs/install.md`'s Requirements and
     the `no_exec_form` item, found through `operatorActionsItem`) state
     one version. Key names come from `config.TmuxKey`, never spelled.
     Run it with `go test ./pkg/api/ -run TestReadmeTimingValues -count=1`
@@ -16868,6 +17952,7 @@ test/
     tempHome.ts              # withTempHome() helper
     helper.ts                # runHelper() wrapper for ts-helper subprocess; openClient(), homeStore(), FAKE_TMUX_BIN, PKG_VERSION; privateTmuxSocket(); seedFallenBackRelayRow(); fakeTmuxCalls(), paneSends(), withProcessEnv(), withCwd(), withDeletedCwd(), rejection(), thrownBy(), CLAUDE_JSON, trustEntry(), seedOuterParent()
     stagedScript.ts          # stageScript(), runScript(), removeStaged(): a package script run in a staged copy
+    builtDist.ts             # requireBuiltDist(): fail clearly when dist/ is not built
 ```
 
 **`withTempHome` helper.**
@@ -17012,6 +18097,15 @@ Its other shared helpers, each with its must-use rule:
   as `parent_id`), so the foreign key holds; it does nothing otherwise.
   **Must use:** a TS test that launches into a fresh store seeds the outer
   parent through it, never its own seed.
+- `requireBuiltDist()` (`test/internal/builtDist.ts`) throws, naming the
+  missing `dist/index.js`, `dist/index.d.ts` or `dist/version-floor.json`,
+  when `dist/` is not built. `make test-sandbox` builds `dist/` before
+  either suite (b.2b3); a bare `bun test` does not. **Must use:** a test
+  that reads or packs the live `pkg/ts-bun-client/dist/` without building
+  it itself calls it first, and never relies on another test file having
+  built `dist/`. A test that builds the output it reads does not call it:
+  `public-surface.test.ts` emits its own `.d.ts` files and
+  `release-version-coherence.test.ts` builds in a staged copy.
 
 **`smoke-invariants.test.ts` meta-test.**
 
@@ -17027,7 +18121,7 @@ Allow-list for (c): `version`, `expire`, `find-missing` — verbs whose
 manifests declare no verb-level ErrorNames (errors surface in result maps or are
 untriggerable on Linux).
 
-**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks (go-smoke, integration, mac pre-release verify); release-blocking gates run locally so they execute against exactly the tree being tagged.
+**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks: `go-smoke.yml`, `integration.yml` and `lint.yml` (see [CI lane](#ci-lane)), `doc-drift.yml` and `pre-release-verify-mac.yml`; release-blocking gates run locally so they execute against exactly the tree being tagged.
 
 **Gate — Go smoke.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
 
@@ -17043,8 +18137,115 @@ otherwise (fail-closed, exit 1 with a message naming both):
 
 | Const | Variable | Meaning |
 | --- | --- | --- |
-| `sandboxguard.EnvVar` | `AGENT_DIRECTOR_TEST_SANDBOX` | The process is inside the sandbox container. Exported by the `make sandbox*` targets; also checked by the bun preload `pkg/ts-bun-client/test/setup.ts`. |
-| `sandboxguard.BypassEnvVar` | `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` | The caller asserts there is **no real `~/.agent-director` to damage** — true only on an ephemeral GitHub-hosted runner. Go-only. |
+| `sandboxguard.EnvVar` | `AGENT_DIRECTOR_TEST_SANDBOX` | The process is inside the sandbox container. Exported by the `make sandbox*` targets; also checked by the bun preload `pkg/ts-bun-client/test/setup.ts` and the Makefile's `_require-sandbox` guard (below). |
+| `sandboxguard.BypassEnvVar` | `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` | The caller asserts there is **no real `~/.agent-director` to damage** — true only on an ephemeral GitHub-hosted runner. Honoured by `Require()` and by `_require-sandbox`; the bun preload ignores it. |
+
+A third marker, `AGENT_DIRECTOR_TEST_HARNESS=1`, is not a sandbox marker
+and neither guard reads it: it marks the Docker test harness container and
+gates only `test/driver/db-reset.sh` (see [Test Harness](#test-harness)).
+
+**Makefile guard (`_require-sandbox`, b.8yq).** The same rule covers the
+make targets whose own recipe runs a go or bun tool outside
+`$(_SANDBOX_RUN)` (`go generate`, `go run`, `go test` or `bun test`):
+`generate`, `surface-json`, `errnames-json`, `check-doccomments`,
+`nondet-coverage`, `err-coherence`, `release-smoke`, `envelope-diff-ts` and
+`test`. Each of them lists the phony `_require-sandbox` as its first
+prerequisite, and `all` (the default goal) reaches it through `generate`.
+It passes, printing
+nothing, when `AGENT_DIRECTOR_TEST_SANDBOX` or
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is set. Otherwise it exits 2
+before the guarded goals' recipes run, and its stderr names the goals and
+a command that runs them and works when run as printed. The command is
+built from all the goals, so it is the same whatever their order and
+under `-j`, and once, when make reads the Makefile, so no target's own
+variables change it (b.uc7).
+
+A goal that cannot run in the sandbox never goes in a
+`make sandbox CMD=` (b.4a1); it runs on the host. `test` runs there as
+`make test-sandbox` (`test-install-sh` starts a container, and the
+sandbox image has no container engine). Each goal in the Makefile's
+`_REQUIRE_SANDBOX_HOST_GOALS` runs there as itself. Those goals start a
+container, themselves or through `_sandbox-build` or `test-image`
+(`sandbox`, `test-sandbox`, `test-image`, `test-docker`, `measure-exit`,
+`verify-prerelease-linux`, …), run a host tool the image lacks
+(`release-shellcheck`, `tla`), or check or print the host's own setup
+(`tla-print`, `measure-exit-print`, `_measure-exit-credentials`). Every
+other goal runs in one `make sandbox CMD="make <those goals>"`, so the
+sandbox starts once. The host goals before the first sandbox goal run in
+one `make <goals>` ahead of it, the rest in one `make <goals>` after it,
+each in goal order, joined by `&&`:
+
+| Goals | Advice |
+| --- | --- |
+| `generate surface-json` | `make sandbox CMD="make generate surface-json"` |
+| `test` | `make test-sandbox` |
+| `test generate` | `make test-sandbox && make sandbox CMD="make generate"` |
+| `generate test surface-json` | `make sandbox CMD="make generate surface-json" && make test-sandbox` |
+| `generate test-docker` | `make sandbox CMD="make generate" && make test-docker` |
+| `test-image generate test test-docker` | `make test-image && make sandbox CMD="make generate" && make test-sandbox test-docker` |
+
+Variables given on the command line (`EPIC=…`, `GO_TEST_TIMEOUT=…`,
+`CMD=…`) go on every make the advice runs (b.qgr), sorted by name, each as
+one single-quoted `'NAME=value'` word with its value as given, unexpanded
+(a `NAME:=value`, which make has already expanded, with each `$` doubled,
+so it reads back the same). The sandbox command carries all of them but `CMD`, on `make sandbox` and on
+the make inside its `CMD="…"`; `CMD` goes on the host makes only, as that
+`CMD=` is the advice's own. `make generate test-docker EPIC=harness-smoke`
+advises
+`make sandbox 'EPIC=harness-smoke' CMD="make generate 'EPIC=harness-smoke'" && make test-docker 'EPIC=harness-smoke'`.
+Building the advice expands no value, and no quote, `$`, newline or other
+shell character in a value can break or inject into the printed advice
+(b.ay3). Make syntax in a variable other than `CMD` is still expanded on
+the host, just as in the command the user typed: make expands each
+command-line variable but `CMD` (which is `unexport`ed) into every recipe's
+environment, so `make generate 'EPIC=$(shell …)'` runs the shell on the
+host during the refusal, and following the advice runs it on the host
+again. A variable set only in the environment is not copied: it reaches
+the advice's host makes, which read the same environment, but not the make
+inside the sandbox's `CMD=`: the container gets only the variables its
+`-e` flags pass, `AGENT_DIRECTOR_TEST_SANDBOX`, `AGENT_DIRECTOR_SANDBOX_CMD`
+and any in `SANDBOX_FLAGS`.
+
+When a goal reaches the guard (it is in `_REQUIRE_SANDBOX_GUARDED`: the
+targets that list `_require-sandbox`, and `all`), every target with a recipe
+that does not list it (`_REQUIRE_SANDBOX_WAIT`: the host goals, `build`,
+`lint`, `bin/ts-helper`, `release-binaries`, …) takes the guard as an
+order-only prerequisite (b.uc7). So no recipe runs before the refusal,
+whatever the order of the goals and under `make -j` too: not a host goal
+given first (`make test-docker generate`), and not a `go build` or
+`docker build` that `-j` would start beside the guard
+(`make -j8 generate test-docker`). Under `make -k` nothing runs either, so
+the refusal's `Nothing was run.` holds. In the sandbox the guard passes and
+the rest runs after it. With no guarded goal nothing waits: `make build`,
+`make test-image` and the `make sandbox*` targets still run on the host,
+and `make -n` still exits 0.
+
+**Must use:** a new make target whose recipe runs `go generate`, `go run`,
+`go test` or `bun test` outside `$(_SANDBOX_RUN)` lists `_require-sandbox`
+as its first prerequisite and joins `_REQUIRE_SANDBOX_GUARDED`, as does a
+new target that reaches one of them through its prerequisites. Never write
+another environment check in a recipe. `test/sandbox/requiresandbox` scans
+the Makefile's recipes for such targets, so a new one is checked without
+editing the test.
+
+**Must use:** a new make target that cannot run in the sandbox (it starts
+a container, itself or through a prerequisite or sub-make; runs a host
+tool the sandbox image lacks; or checks or prints the host's own setup)
+joins `_REQUIRE_SANDBOX_HOST_GOALS`, so the advice keeps it out of the
+`CMD=`. A target that runs the same in either place (`build`, `lint`,
+`list-test-docker-epics`, …) stays out of the list. `requiresandbox` also
+scans for targets that start a container and fails when one is missing
+from the list; the host-tool and host-setup kinds are not scanned.
+
+**Must use:** a new make target with a recipe that does not list
+`_require-sandbox` joins `_REQUIRE_SANDBOX_WAIT` (a host goal does so
+through `_REQUIRE_SANDBOX_HOST_GOALS`), so it waits for the guard. The list
+is kept by hand: GNU make 4.3 does not add a global `.EXTRA_PREREQS` to a
+target with variables of its own (`release-binaries`, `sandbox`, `tla`, …).
+`requiresandbox` runs every target with a recipe beside `generate`, and
+every target that reaches the guard beside `test-docker`, and fails when
+make starts any recipe but the guard's, so a target missing from either
+list is caught without editing the test.
 
 The guard defends against b.8dr: a host-side `go test` can rewrite the real
 store no matter how `HOME` is set. Redirecting `HOME` does not hold as a
@@ -17055,9 +18256,11 @@ all still reach real state. The container is the only isolation boundary; the
 bypass is not isolation, it is an assertion that there is nothing to isolate
 from.
 
-The bypass is set **only at the `job:`/`step:` level** of the two
-GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`), each with an
-in-file comment recording why it is safe there. It must never be a
+The bypass is set **only at the `job:`/`step:` level** of the three
+GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`,
+`doc-drift.yml`), each with an in-file comment recording why it is safe there.
+`doc-drift.yml` sets it on each step that runs a `_require-sandbox` target.
+It must never be a
 repository/organization-level Actions variable or secret, and never appear in
 `.github/workflows/pre-release-verify-mac.yml` — that job runs on
 `[self-hosted, macOS, ARM64]`, a persistent machine that plausibly holds a real
@@ -17066,6 +18269,94 @@ latter by grep; it also fails if the mac workflow file is missing, so the check
 cannot pass vacuously. Deliberately **not** implemented: a store-presence probe
 or any `CI` / `GITHUB_ACTIONS` / `$HOME`-derived discriminator — ambient signals
 would also disable the guard on the self-hosted runner (b.175).
+
+### sandboxtest: Makefile-plumbing test helpers (reusable test fixture)
+
+`test/sandbox/internal/sandboxtest` holds the helpers shared by the
+`test/sandbox/` regression tests (`gitmount` b.kbe, `cmdinject` b.ay3,
+`prebuild` b.2b3, `cigates` b.ug8, `releaseversion` b.x7z, `requiresandbox`
+b.8yq, b.4a1, b.qgr, b.uc7 and b.1ce). Those tests run `make` against the real
+repo Makefile with a fake container engine or tool on PATH, never a real
+container, and assert on what the recipe produced. They exec no built binary
+and open no store, so they carry no sandbox guard.
+
+`cigates` also checks the CI workflows (see [CI lane](#ci-lane)): it runs
+`integration.yml`'s `docker-epics` list step against a scratch
+`test/docker-epics.txt` (including missing, empty and no-break-space-only
+lists, which must fail with the no-group annotation), checks that the
+harness matrix is that step's output, that each secret reaches only the
+`pr_epic` job, and that a workflow calls `make release-shellcheck` and none
+sets `SHELLCHECK_OPTIONAL`. It also runs `make release-shellcheck` with a
+fake shellcheck, absent and present: with shellcheck present the target
+checks every gate script even under `SHELLCHECK_OPTIONAL=1`. It reads `.github/workflows/`, or the directory in
+`WORKFLOWS_UNDER_TEST` (local to that package), to prove the fails-before
+direction against pre-fix workflows.
+
+`releaseversion` copies the Makefile into a temp tree and puts a logging jq
+wrapper first on PATH. It checks that a dry run of a non-release target
+(`build`, `all`, `lint`, `list-test-docker-epics`), with no
+`pkg/ts-bun-client/package.json`, runs no jq, and that `release-binaries`
+stamps the `package.json` version, takes `AGENT_DIRECTOR_BUILD_VERSION`
+without running jq, and, with no jq, no `package.json`, no `.version` or an
+empty one, exits non-zero with the version error and creates no `dist/`.
+
+`requiresandbox` copies the Makefile into a temp tree and puts logging
+fakes of go, bun and docker first on PATH, with neither sandbox variable
+set. It finds every target whose recipe runs `go generate`, `go run`,
+`go test` or `bun test` outside `$(_SANDBOX_RUN)`, and checks that each
+one, `all`, the default goal, two goals at once and `test` with other
+goals in either order exit 2 with the refusal and its advice and run
+nothing, also under `-j8` for `test`, `all`, the default goal,
+`envelope-diff-ts` and the mixed-goal cells. It also finds every target
+that starts a container (in its recipe, or through a prerequisite or
+sub-make goal that does) and checks `make generate <that target>`, and it
+mixes `test`, `generate` and container goals (`test-docker generate test`,
+`test-image generate test test-docker`, `test test-docker`, also under
+`-j8`): no container goal goes in the advice's `CMD=` (b.4a1). A host goal
+given first (`make test-docker generate`, also under `-k`) runs
+nothing either. With `SANDBOX_FLAGS=…` on the command line,
+`make sandbox generate` and `make generate sandbox`, also under `-j8`, keep
+it in the advice, whichever goal reaches the guard first. Under `make --trace` it gives every target with a recipe
+with `generate` (`make <target> generate`, `make -j8 generate <target>`),
+and every target that reaches the guard with `test-docker` the same way,
+and checks that make exits 2 having started only the guard's recipe
+(b.uc7). It checks that the guard passes with the sandbox marker or the
+bypass, that `make -n`, the build-only targets and `make -j8 test-docker`
+still run outside the sandbox, that in the sandbox
+`make -j8 test-docker generate` runs every goal's tools, and that the
+advice, run as printed, exits 0: for `make generate` it runs
+`go generate` in the "container", and for `make generate test-docker`
+also `test-docker`'s go builds on the host. The fake engine runs a sandbox-image
+command with docker and podman on its PATH that fail, as the real image has
+no container engine.
+
+`requiresandbox` also reads the recipes of `verify-installed-pkg-full` and
+`verify-prerelease-linux` without running them (b.1ce). Neither may name
+`platforms/`, since the per-platform sub-packages are gone. Each must run
+the verify script as `bun --no-install <script> --full` with `AD_CLI_PATH`
+at the stamped `dist/agent-director-<os>-<arch>` binary; the package ships
+no CLI. In `verify-prerelease-linux`, every `docker run`, the dry-run echo
+included, must mount that binary at the `AD_CLI_PATH` path. The script must
+run from the consumer dir the tarball was installed in (the last `cd`
+before the last `bun add`): a path under that dir, or a relative path with
+no `cd` since the `bun add`, never with `..`. From anywhere else Bun finds
+no `node_modules` beside the script and would install the published package
+from npm instead of the tarball; `--no-install` makes that import fail
+instead.
+
+- `RepoRoot(t)` returns the directory holding the root `go.mod`.
+- `MakefileUnderTest(t)` returns the repo Makefile, or the path in
+  `MAKEFILE_UNDER_TEST`, so a reviewer can prove the fails-before direction
+  against a pre-fix copy without editing the real Makefile.
+- `RequireTools(t, skipMsg, bins...)` skips the test when a tool is not on PATH.
+- `ScrubbedMakeEnv(extra...)` returns the environment with `MAKEFLAGS`,
+  `MFLAGS` and `MAKELEVEL` emptied, so an outer `make` cannot leak overrides
+  into the child `make`.
+
+**Must use:** a new `test/sandbox/` test drives the Makefile through
+`MakefileUnderTest` and `ScrubbedMakeEnv`, never its own path lookup or
+environment. `cmdinject` still joins `RepoRoot(t)` and `Makefile` itself, so
+`MAKEFILE_UNDER_TEST` does not reach it.
 
 ### TS envelope-diff regression
 
@@ -17160,9 +18451,12 @@ The Makefile target builds all three required binaries incrementally, then
 runs the two test files:
 
 ```
-envelope-diff-ts: agent-director ts-helper fake-tmux
+envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
     cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 ```
 
-It is wired into `make test` so `go test ./...` will not run unless the TS
+It runs only in the sandbox (`make sandbox CMD="make envelope-diff-ts"`):
+outside it `_require-sandbox` refuses before any build starts (see
+[Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass)). It is
+wired into `make test` so `go test ./...` will not run unless the TS
 envelope-diff suite passes first.

@@ -48,10 +48,10 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
-	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, else <HOME>/.claude.json if HOME is set in extra-env, otherwise ~/.claude.json); default off (pre-trust IS performed); the choice is recorded on the row for its life and every resume of that life follows it")
+	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json); default off (pre-trust IS performed); the choice is recorded on the row for its life and every resume of that life follows it")
 	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --claude-instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --claude-instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success does not say whether a row was reset")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
@@ -128,7 +128,7 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
 	fs.StringVar(&p.Key, "key", "", "send this one key instead of text, no Enter: Escape, Enter, Up, Down, Tab, or one character")
 	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed; on a plain call a match also passes the hold of a permission request not proven gone (ErrDialogMaybeOpen); pass it only for a pane a person or LLM judged")
-	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
 	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
 	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")
 	if err := fs.Parse(args); err != nil {
@@ -153,7 +153,7 @@ func recordPaneAnswerHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.RequestToken, "request-token", "", "token of the permission request answered outside agent-director")
 	fs.StringVar(&p.As, "as", "", "how it was answered: allow, deny, or unknown when not seen (stored as the caller's claim)")
 	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane that showed it answered")
-	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
@@ -191,7 +191,7 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to read")
-	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "number of trailing pane lines to return")
+	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return (a negative value is refused)")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
 	if err := fs.Parse(args); err != nil {
@@ -223,7 +223,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off)")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
-	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
@@ -264,7 +264,7 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.Parent, "parent", "", "filter by parent_id exact match")
 	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
-	fs.IntVar(&p.Limit, "limit", 0, "cap result count (0 = no cap)")
+	fs.Var(newDecimalInt(&p.Limit, 0), "limit", "cap result count (0 = no cap; a negative value is refused)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}

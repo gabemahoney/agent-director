@@ -3,8 +3,8 @@ package main_test
 // global_flags_test.go covers agent-director's global flags on
 // agent-director-admin (b.vqr): --store-path and --home, before or after the
 // verb, open the store agent-director created with the same flag,
-// --tmux-command is the tmux kill-finished runs, and --home ~ with no HOME is
-// refused (b.38a).
+// --tmux-command is the tmux kill-finished runs, --home ~ with no HOME is
+// refused (b.38a), and --create-if-missing false refuses a missing store (b.78b).
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -95,6 +96,30 @@ func TestAdminHomeTildeWithoutHOMERefused(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(cwd); err != nil || len(entries) != 0 {
 		t.Errorf("cwd holds %v (err %v); want nothing created there", entries, err)
+	}
+}
+
+// TestAdminCreateIfMissing: --create-if-missing false refuses a missing store
+// with ErrStoreOpen and a value other than true or false is ErrInvalidFlags,
+// as on agent-director; neither creates the store's directory (b.78b).
+func TestAdminCreateIfMissing(t *testing.T) {
+	for _, tc := range []struct{ value, wantErr, wantDesc string }{
+		{"false", "ErrStoreOpen", "database not initialized"},
+		{"no", "ErrInvalidFlags", `--create-if-missing must be true or false, got "no"`},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			home := t.TempDir()
+
+			stdout, stderr, code := runAdmin(t, home, "--create-if-missing", tc.value, "delete", "--claude-instance-id", "x")
+
+			env := assertOnlyEnvelope(t, stdout, stderr, code, tc.wantErr)
+			if !strings.Contains(env.ErrDescription, tc.wantDesc) {
+				t.Errorf("err_description = %q; want it to contain %q", env.ErrDescription, tc.wantDesc)
+			}
+			if _, err := os.Stat(filepath.Dir(stateDB(home))); !os.IsNotExist(err) {
+				t.Errorf("store directory under HOME after the run (stat: %v); want none", err)
+			}
+		})
 	}
 }
 

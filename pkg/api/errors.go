@@ -227,16 +227,17 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     the wrong JSON type, with a description naming the param and its
 //     expected type, such as "an integer" or "an array of strings" (b.ewa);
 //     and a `label` entry that is not key=value (spawn, make_template) or
-//     an `older_than` that is not a non-negative duration, or whose day
-//     count is above 106751 (expire), with a description naming the param
-//     and the expected form (b.anw, b.hxn, b.sgw).
-//   - The shared verb layer, for spawn, decide, send-keys and
-//     record-pane-answer: runSpawn returns it (wrapped) when an explicit
-//     instance id contains an ASCII control character (0x00-0x1f or 0x7f),
-//     so the CLI, MCP, the Go client and the TypeScript client all return it
-//     (SR-9.1); decide returns it for a negative max_wait_ms
-//     (DecideParams.MaxWaitMs, b.146 decision 9 B), which the CLI refuses
-//     first; send-keys for a pane answer without as, key or
+//     an `older_than` that is in neither duration form, has a leading + or
+//     -, or whose day count is above 106751 (expire), with a description
+//     naming the param and the expected form (b.anw, b.hxn, b.sgw, b.c4n).
+//   - The shared verb layer, for spawn, read-pane, list, decide, send-keys
+//     and record-pane-answer, so the CLI, MCP, the Go client and the
+//     TypeScript client all return it: runSpawn returns it (wrapped) when an
+//     explicit instance id contains an ASCII control character (0x00-0x1f or
+//     0x7f) (SR-9.1); ReadPane for a negative NLines and List for a negative
+//     Limit, before anything is read (b.c4n); decide for a negative
+//     max_wait_ms (DecideParams.MaxWaitMs, b.146 decision 9 B), which the CLI
+//     refuses first; send-keys for a pane answer without as, key or
 //     expect_pane_sha256 or with text, and for any other combination its
 //     params do not allow (planSendKeys, b.146 rule 8); record-pane-answer
 //     for a missing token, an as other than allow, deny or unknown, or a
@@ -249,13 +250,13 @@ var ErrClaimTooSoon = errors.New("ErrClaimTooSoon")
 //     older_than with ParseOlderThan, which refuses a negative value first
 //     (the CLI flag-parse and MCP argument sources above).
 //
-// So spawn's, decide's, send-keys' and record-pane-answer's manifest
-// ErrorNames list it; no other callable verb lists it, because the CLI
-// flag-parse and MCP argument emissions are
-// not verb-specific and the expire verb's surfaces never reach Expire's
-// refusal: only a Go caller passing Client.Expire a negative olderThan does.
-// (The internal, non-callable trail-emit verb also lists it.)
-// It stays in five-way coherence check 3's exceptions per SR-1.7; while
-// spawn lists it, spawn's listing already satisfies check 3, so the
+// So spawn's, read-pane's, list's, decide's, send-keys' and
+// record-pane-answer's manifest ErrorNames list it; no other callable verb
+// lists it, because the CLI flag-parse and MCP argument emissions are not
+// verb-specific and the expire verb's surfaces never reach Expire's refusal:
+// only a Go caller passing Client.Expire a negative olderThan does. (The
+// internal, non-callable trail-emit verb also lists it.)
+// It stays in five-way coherence check 3's exceptions per SR-1.7; while a
+// callable verb lists it, that listing already satisfies check 3, so the
 // exception changes nothing.
 var ErrInvalidFlags = errors.New("ErrInvalidFlags")

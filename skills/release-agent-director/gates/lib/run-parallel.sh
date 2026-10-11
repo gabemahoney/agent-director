@@ -27,6 +27,12 @@
 
 set -uo pipefail
 
+# The missing-cwd diagnostic below goes through emit_diagnostic like every
+# gate's, so a gate name or cwd with quotes or control characters stays valid
+# JSON. The library defines only that one function and no globals.
+# shellcheck source=../lib/emit-diagnostic.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/emit-diagnostic.sh"
+
 # ─── argument validation ──────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
   printf 'usage: run-parallel.sh <gates-config.json>\n' >&2
@@ -104,8 +110,11 @@ for ((idx = 0; idx < GATE_COUNT; idx++)); do
 
     if [[ ! -d "$cwd" ]]; then
       # Emit an SR-14 style diagnostic for missing cwd; mark as failed.
-      printf '{"gate":"%s","offending_file_or_artifact":"%s","description":"gate cwd does not exist: %s","corrective_action":"Fix the cwd field in the gates-config.json for this gate."}\n' \
-        "$name" "$cwd" "$cwd" >&2
+      emit_diagnostic \
+        "$name" \
+        "$cwd" \
+        "gate cwd does not exist: ${cwd}" \
+        "Fix the cwd field in the gates-config.json for this gate."
       exit_code=1
     else
       (cd "$cwd" && bash -c "$cmd") || exit_code=$?
@@ -183,15 +192,24 @@ for ((idx = 0; idx < GATE_COUNT; idx++)); do
   fi
 
   # Write this gate's sub_check JSON to a temp file.
+  #
+  # stderr_excerpt (50 lines, each of any length) and diagnostics (every SR-14
+  # line, each carrying raw command output) reach jq on stdin as two JSON
+  # values, never as arguments: one argument over Linux's MAX_ARG_STRLEN
+  # (128 KiB) makes the exec of jq fail with "Argument list too long" and the
+  # gate's sub_check would be lost (b.nsa). `jq -Rs .` turns the excerpt into
+  # one JSON string unchanged; diagnostics_json is always one JSON array.
   sub_check_file="${prefix}.sub_check.json"
-  jq -n \
+  {
+    printf '%s' "$stderr_excerpt" | jq -Rs .
+    printf '%s\n' "$diagnostics_json"
+  } | jq -s \
     --arg     name           "$name"           \
     --arg     outcome        "$gate_outcome"   \
     --argjson duration_ms    "$duration_ms"    \
     --argjson exit_code      "$exit_code"      \
-    --arg     stderr_excerpt "$stderr_excerpt" \
-    --argjson diagnostics    "$diagnostics_json" \
-    '{
+    '. as [$stderr_excerpt, $diagnostics]
+    | {
       name:           $name,
       outcome:        $outcome,
       duration_ms:    $duration_ms,
@@ -203,15 +221,14 @@ for ((idx = 0; idx < GATE_COUNT; idx++)); do
   sub_check_files+=("$sub_check_file")
 done
 
-# Combine all sub_check JSON objects into a single array.
-all_sub_checks=$(jq -sc '.' "${sub_check_files[@]}")
-
-# Emit consolidated JSON to stdout.
-jq -n \
+# Combine all sub_check JSON objects into a single array and emit the
+# consolidated JSON to stdout. jq reads the sub_check files itself: their
+# combined size has no bound, so it must not pass through a --argjson (b.nsa).
+jq -s \
   --arg     phase_name  "$PHASE_NAME"      \
   --arg     outcome     "$overall_outcome" \
-  --argjson sub_checks  "$all_sub_checks"  \
-  '{phase_name: $phase_name, outcome: $outcome, sub_checks: $sub_checks}'
+  '{phase_name: $phase_name, outcome: $outcome, sub_checks: .}' \
+  "${sub_check_files[@]}"
 
 # Exit 1 if any gate failed; 0 if all passed.
 if [[ "$overall_outcome" == "passed" ]]; then

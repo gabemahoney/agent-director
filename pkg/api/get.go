@@ -70,7 +70,8 @@ type SpawnRow struct {
 	// from before this release, which records none. Display only: no verb
 	// reads it back (SR-3.3, SR-16.1).
 	TmuxSocket string `json:"tmux_socket,omitempty"`
-	// ClaudeArgs is the verbatim argv passed through to claude after --settings.
+	// ClaudeArgs is the verbatim argv passed through to claude after the
+	// supervisor's own flags.
 	// Always a non-nil slice (possibly empty) for JSON-stability.
 	ClaudeArgs []string `json:"claude_args"`
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
@@ -284,8 +285,30 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 	}
 }
 
+// emptySpawnRow is the SpawnRow every failure of Get and (c *Client).Get
+// returns: every field is zero except ClaudeArgs, Labels, PermissionRequests,
+// UnprovenRequests and PriorSessions, which are non-nil and empty, as SpawnRow
+// documents, so the result encodes them as [] and {} rather than null (b.4nt).
+// It builds a fresh value on each call, so no two results share a slice or
+// map.
+func emptySpawnRow() SpawnRow {
+	return SpawnRow{
+		ClaudeArgs:         []string{},
+		Labels:             map[string]string{},
+		PermissionRequests: []PermissionRequestInfo{},
+		UnprovenRequests:   []PermissionRequestInfo{},
+		PriorSessions:      []PriorSession{},
+	}
+}
+
 // Get returns the full Spawn row for the given claude_instance_id. Missing
 // rows surface store.ErrSpawnNotFound for the CLI to translate.
+//
+// Every failure (the row read's ErrSpawnNotFound or other error, the
+// session-history read's, the permission-request read's, and ErrClientClosed
+// from (c *Client).Get) returns emptySpawnRow: ClaudeArgs, Labels,
+// PermissionRequests, UnprovenRequests and PriorSessions non-nil and empty,
+// every other field zero (b.4nt).
 //
 // On a row in any state but ended and missing, every permission request of
 // the row is read once (PermissionRequestsForSpawn), by the check-before-read
@@ -351,7 +374,7 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
 	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
-		return SpawnRow{}, err
+		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
 		ClaudeInstanceID:        row.ClaudeInstanceID,
@@ -383,7 +406,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	// id".
 	lifeHistory, err := s.ListSessionHistory(instanceID, row.LifeNumber)
 	if err != nil {
-		return SpawnRow{}, err
+		return emptySpawnRow(), err
 	}
 	history := visibleHistory(row, lifeHistory)
 	for _, h := range history {
@@ -410,7 +433,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	if !finishedState(row.State) {
 		open, unproven, err := spawnRequestInfos(s.PermissionRequestsForSpawn, j, instanceID)
 		if err != nil {
-			return SpawnRow{}, err
+			return emptySpawnRow(), err
 		}
 		if row.State == store.StateCheckPermission {
 			out.PermissionRequests = open
@@ -453,7 +476,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // request's relay hook process runs; with a settle time, so does the state.
 func (c *Client) Get(claudeInstanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
-		return SpawnRow{}, err
+		return emptySpawnRow(), err
 	}
 	return getSettled(c.st, c.relayView(), c.settleRead(), claudeInstanceID)
 }

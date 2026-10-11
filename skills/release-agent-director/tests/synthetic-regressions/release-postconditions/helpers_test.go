@@ -8,17 +8,24 @@
 //   - positive_test.go — [TestReleasePostconditionsPositive] dry-run all-pass
 //   - negative_test.go — [TestReleasePostconditionsNegativePriorFailure] and
 //     [TestReleasePostconditionsNegativeSimulateFailure]
+//   - prior_phases_file_test.go — the orchestrator's --prior-phases file and
+//     report write (b.2wr)
+//   - write_report_files_test.go — write-report.sh's phases and diagnostics
+//     files (b.2wr)
 //
 // # SLOW TEST
 //
-// All tests invoke publish-orchestrator.sh (≈1–2 s due to jq calls).
-// They are skipped in -short mode.
+// All tests invoke publish-orchestrator.sh or write-report.sh (≈1–2 s due to
+// jq calls). They are skipped in -short mode.
 package releasepostconditions_test
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -201,6 +208,99 @@ func artifactSet(t *testing.T, dir string) (tarball, notes string, binaries []st
 		binaries = append(binaries, write(b, "fake binary"))
 	}
 	return tarball, notes, binaries
+}
+
+// oversizeText is gate output over Linux's 128 KiB single-argument limit, with
+// a quote, a TAB and a backslash that JSON must escape (b.2wr).
+var oversizeText = func() string {
+	chunk := "npm ERR! \"x\"\t\\ "
+	return strings.Repeat(chunk, (200<<10)/len(chunk))
+}()
+
+// oversizePhases is a report phases array whose failed gate carries
+// oversizeText as its stderr_excerpt and diagnostic description (b.2wr).
+func oversizePhases() []any {
+	return []any{
+		map[string]any{"name": "preflight", "outcome": "passed", "sub_checks": []any{}},
+		map[string]any{"name": "coverage", "outcome": "failed", "sub_checks": []any{
+			map[string]any{
+				"name": "coverage.go-root", "outcome": "failed", "stderr_excerpt": oversizeText,
+				"diagnostic": map[string]any{"gate": "coverage.go-root", "description": oversizeText},
+			},
+		}},
+	}
+}
+
+// writeJSONFile marshals v into a file under t.TempDir() and returns its path
+// and the value the file decodes back to.
+func writeJSONFile(t *testing.T, v any) (path string, decoded any) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("writeJSONFile: marshal: %v", err)
+	}
+	path = writeTempFile(t, string(data))
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("writeJSONFile: unmarshal: %v", err)
+	}
+	return path, decoded
+}
+
+// writeTempFile writes content to a new file under t.TempDir() and returns its path.
+func writeTempFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "input.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writeTempFile: %v", err)
+	}
+	return path
+}
+
+// fileWith returns a builder of a temp file holding content.
+func fileWith(content string) func(*testing.T) string {
+	return func(t *testing.T) string { return writeTempFile(t, content) }
+}
+
+// badArrayFiles builds, by case name, a path that is not a readable regular
+// file holding exactly one JSON array, which the report writers refuse (b.2wr).
+var badArrayFiles = map[string]func(*testing.T) string{
+	"missing":    func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.json") },
+	"directory":  func(t *testing.T) string { return t.TempDir() },
+	"empty":      fileWith(""),
+	"malformed":  fileWith(`[{"name":"preflight",`),
+	"object":     fileWith(`{"name":"preflight"}`),
+	"two_arrays": fileWith("[]\n[]"),
+}
+
+// jsonExcerpt is v as JSON, cut to 300 bytes, for failure messages.
+func jsonExcerpt(v any) string {
+	data, _ := json.Marshal(v)
+	if len(data) > 300 {
+		return string(data[:300]) + "…"
+	}
+	return string(data)
+}
+
+// reportFields decodes the report at path into generic JSON values by top-level key.
+func reportFields(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reportFields: read %s: %v", path, err)
+	}
+	var r map[string]any
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatalf("reportFields: report is not valid JSON (%d bytes): %v", len(data), err)
+	}
+	return r
+}
+
+// assertNoReport fails the test if a report exists at path.
+func assertNoReport(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("want no report at %s, got stat err %v", path, err)
+	}
 }
 
 // parseReport reads and JSON-decodes the release-report.json produced by the

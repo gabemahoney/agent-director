@@ -1,0 +1,68 @@
+# lint: static checks that build nothing and run no container.
+#
+# Today it runs one check, `make release-shellcheck`: shellcheck over the
+# /release gate scripts (skills/release-agent-director/gates/). This
+# workflow is that target's automated caller (b.ug8). Before it, nothing
+# ran the target, and the target passed whenever shellcheck was missing.
+# It runs on every PR as well as on push to main: it takes seconds, so it
+# is not the heavyweight pre-merge suite the operator ruled out for the
+# Docker harness (b.ug8).
+#
+# Adding a check (planned: b.7ep gofmt, b.hhi go vet): add one step to the
+# lint job that runs the check's make target, with
+# `if: ${{ !cancelled() }}` so it still runs and reports when an earlier
+# check failed. A Go check also needs the pinned actions/setup-go step the
+# other workflows use, placed before it.
+#
+# Local actionlint
+# ----------------
+#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
+#   actionlint .github/workflows/lint.yml
+
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight runs of the same PR/branch when a new commit arrives;
+# the convention matches integration.yml.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege GITHUB_TOKEN: the checks only read the repo.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    # Pinned, not ubuntu-latest: the image's Ubuntu release fixes the
+    # shellcheck version (24.04 ships 0.9.0, from apt), and a newer
+    # shellcheck can add findings. When ubuntu-latest moves to a newer
+    # image, main would turn red with no change to the scripts. Move this
+    # pin on purpose, with the new version's findings fixed.
+    runs-on: ubuntu-24.04
+    # Hard cap on runtime; each check takes seconds. 10m absorbs runner
+    # provisioning and an apt install of shellcheck.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # The ubuntu-24.04 image ships shellcheck; this step installs it
+      # from apt, the same 24.04 package, only if a runner-image change
+      # has removed it. It never skips: `shellcheck --version` fails the
+      # step if shellcheck is still missing, and logs the version that
+      # checks the scripts.
+      - name: Install shellcheck if the runner image lacks it
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends shellcheck
+          fi
+          shellcheck --version
+
+      - name: shellcheck the release gate scripts
+        run: make release-shellcheck

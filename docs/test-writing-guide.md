@@ -148,6 +148,23 @@ This is about the bun suite. Go tests in `pkg/api` run in parallel; see
 
 The `/release` skill invokes `bun test --parallel=1` as the coverage gate because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
 
+### Bun tests that read `dist/`
+
+`make test-sandbox` builds `pkg/ts-bun-client/dist/` before either suite
+(b.2b3), so no test may rely on another test file having built it. A bun test
+that reads or packs the live `pkg/ts-bun-client/dist/` without building it
+itself calls `requireBuiltDist()` from
+`pkg/ts-bun-client/test/internal/builtDist.ts` first: a missing build then fails
+with a message naming the missing files, not an ENOENT or a short tarball list.
+Use it rather than writing your own check. A test that builds the output it
+reads does not need it: `public-surface.test.ts` emits its own `.d.ts` files
+and `release-version-coherence.test.ts` builds in a staged copy. To run a test
+that calls `requireBuiltDist()` alone, install and build first, in the sandbox:
+
+```sh
+make sandbox CMD='cd pkg/ts-bun-client && bun install --frozen-lockfile && bun run build && bun test test/packaging.test.ts'
+```
+
 ### Documentation belongs in docs
 
 Fixture docstrings stay 1-2 lines. Test docstrings stay 1-2 lines. Long-form explanations of test architecture, fixture selection, or mocking strategy go in a dedicated testing doc — not buried inside the code.
@@ -278,7 +295,7 @@ its test. The test:
    refusal comes back unchanged while the condition holds and the operation
    succeeds once it clears.
 
-A human-only pointer (the README's "Operator actions") is not itself followed,
+A human-only pointer (to docs/operator-actions.md) is not itself followed,
 but an `ErrTmuxSessionConflict` refusal that carries one gets a
 condition-clears test (`TestAdviceFollow_HO<n>_…` in
 `pkg/api/advice_follow_conflict_test.go`): re-issued while the condition
@@ -413,18 +430,27 @@ Cross-reference: SRD §15 (testing strategy), §17 (audit standard), §18
 
 ### Structure
 
-Testplans live in the `testplans` bees hive at `tickets/testplans/`. Each
-Epic produces a t1 collector with a clear `harness-smoke`-style title slug;
-under it are t2 cases. The on-disk layout is what bees produces:
+Testplans live in `tickets/testplans/`. The files are shaped like bees
+tickets, but the folder is not a working bees hive: it is not registered,
+so `bees` commands cannot read or write it. Write and edit the files by
+hand. Each Epic produces a t1 collector with a clear `harness-smoke`-style
+title slug; under it are t2 cases. The on-disk layout is:
 
 ```
 tickets/testplans/<bee>/<t1>/<t2>/<t2>.md
 ```
 
-The driver does *not* read tier labels (the hive happens to use
-`Collector` / `Test case` for cosmetic reasons). It finds the t1 by title
+The driver does *not* read tier labels or statuses (the folder's `.hive` names
+`Collector` / `Test case`). It finds the t1 by title
 match (`title:.*<EPIC>`), then iterates t2 cases in the order from the
 t1's frontmatter `children:` list.
+
+A testplan runs automatically only once its slug is a line in
+`test/docker-epics.txt`. That line is all the wiring it needs: CI's Docker
+harness matrix (one job per slug on every push to `main`) and the `/release`
+coverage gate both read the list through `make list-test-docker-epics`. A
+pull request runs `harness-smoke` alone. Both run the shell driver, so every
+listed testplan's cases must pass under `DRIVER_MODE=shell`.
 
 ### t2 case body — required sections
 
@@ -543,12 +569,17 @@ exactly what was checked, not just that something exited 0.
 
 ### Adding a testplan for a new Epic
 
-1. Create a t1 in the `testplans` hive titled to include a short slug:
-   `bees create-ticket --ticket-type t1 --hive testplans --parent b.75s \
-   --title "Epic N — <slug> testplan" --body-file <t1-body>`.
-2. Add t2 cases under it (`--parent <t1-id>`), one per case. Order
-   matters: the `children:` list controls execution order.
-3. Commit `tickets/testplans/...` along with the rest of the Epic's
+1. Create the t1 collector by hand at
+   `tickets/testplans/b.75s/<t1-id>/<t1-id>.md`. Pick an unused id of the
+   form `t1.75s.<2 chars>`. Copy the frontmatter of an existing t1 there:
+   `id`, `type: t1`, a `title` that includes the slug
+   (`Epic N — <slug> testplan`), `parent: b.75s`, and a `children:` list.
+2. Add each t2 case at `<t1-id>/<t2-id>/<t2-id>.md`, with id
+   `t2.75s.<t1 chars>.<2 chars>`, `type: t2` and `parent: <t1-id>`, and
+   list its id under the t1's `children:`. Order matters: the `children:`
+   list controls execution order.
+3. Add the slug as a line of `test/docker-epics.txt`, and commit
+   `tickets/testplans/...` along with the rest of the Epic's
    implementation.
 4. Verify locally: `make test-docker EPIC=<slug>` exits 0 with one
    `{"status":"pass"}` line per case.

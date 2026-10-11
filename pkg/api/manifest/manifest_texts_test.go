@@ -43,8 +43,11 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 // pre-trust (SR-22.6); launch_started_at (SR-22.2); list's liveness fields
 // (SR-8.3); get's tmux socket (SR-3.3, SR-16.1); the pane verbs' tmux error
 // classes (SR-18.1); missing is not proof of death (SR-18.2, AC-DOC-02: the
-// full sentence, or the short form, decision-0930e); and make-template naming
-// spawn's per-call params by their manifest names, flag beside (b.c4u).
+// full sentence, or the short form, decision-0930e); make-template naming
+// spawn's per-call params by their manifest names, flag beside (b.c4u);
+// spawn's permission arrays and claude_args texts read right on every surface,
+// with no CLI-only spelling (b.ia3); and each integer count param stating that
+// a negative value is refused (b.c4n).
 func manifestTextCases() []textCase {
 	cases := []textCase{
 		{verb: "find-missing", own: true, c: apitest.DescFindMissingGrace()},
@@ -81,6 +84,15 @@ func manifestTextCases() []textCase {
 		{verb: "make-template", param: "relay_mode", c: tokens("per-call spelling", "Per-call relay_mode (--relay-mode on the CLI) overrides.")},
 		{verb: "make-template", param: "extra_env", c: tokens("per-call spelling",
 			"Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision.")},
+		{verb: "make-template", param: "claude_args", c: apitest.DescCase{Name: "per-call spelling",
+			Require: []string{"Per-call claude_args (on the CLI, spawn's arguments after --) REPLACES"}, Forbid: []string{"--claude-args"}}},
+		{verb: "spawn", param: "claude_args", c: tokens("after the supervisor's flags", "after the supervisor's own flags")},
+		{verb: "get", field: "claude_args", c: apitest.DescCase{Name: "after the supervisor's flags",
+			Require: []string{"after the supervisor's own flags"}, Forbid: []string{"--settings"}}},
+	}
+	for _, p := range []string{"allow", "deny", "ask"} {
+		cases = append(cases, textCase{verb: "spawn", param: p, c: apitest.DescCase{Name: "array, repeatable flag on the CLI",
+			Require: []string{"permissions." + p + " entries, one per array element (on the CLI, a repeatable flag)"}, Forbid: []string{"Repeated"}}})
 	}
 	for _, verb := range []string{"spawn", "resume"} {
 		cases = append(cases, textCase{verb: verb, c: tokens("names pre_trust", "Returns the claude_instance_id and pre_trust", "ok, skipped or failed")})
@@ -90,6 +102,11 @@ func manifestTextCases() []textCase {
 	}
 	for _, verb := range []string{"kill", "resume", "pause", "expire"} {
 		cases = append(cases, textCase{verb: verb, c: apitest.DescMissingNotProofShort()})
+	}
+	for _, s := range []struct{ verb, param string }{
+		{"read-pane", "n_lines"}, {"list", "limit"}, {"trail-emit", "bytes_sent"}, {"trail-emit", "bytes_received"},
+	} {
+		cases = append(cases, textCase{verb: s.verb, param: s.param, c: tokens("negative refused", "A negative value is refused (ErrInvalidFlags).")})
 	}
 	for _, v := range []apitest.PaneVerb{apitest.PaneReadPane, apitest.PaneSendKeys, apitest.PanePause} {
 		def, _ := manifest.Lookup(string(v)) // a missing verb fails at siteText

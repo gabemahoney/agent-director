@@ -25,7 +25,8 @@ The synthesized payload contains:
   the running `agent-director` binary's absolute path. See `hooks.md`
   for the per-event mapping.
 - **`permissions`** (optional) — `allow` / `deny` / `ask` arrays
-  populated from the `--allow` / `--deny` / `--ask` flags plus the
+  populated from the spawn's `allow` / `deny` / `ask` params
+  (`--allow` / `--deny` / `--ask` on the CLI) plus the
   `disable_askuserquestion` config flag. See `permissions.md`.
 
 agent-director never writes hooks or permissions to disk on behalf of a
@@ -92,7 +93,7 @@ for the source read of Claude Code's `B4H` merger function.
 | ---- | --- |
 | user | `["Bash(npm test)"]` |
 | project | `["Bash(go test)"]` |
-| per-Spawn (via `--allow`) | `["WebFetch"]` |
+| per-Spawn (via `allow`) | `["WebFetch"]` |
 
 Effective `allow` for the Spawn: `["Bash(npm test)", "Bash(go test)", "WebFetch"]`.
 
@@ -149,8 +150,8 @@ recording — see `hooks.md` for the caveat and mitigations.
 
 A agent-director **template** is a TOML file at
 `~/.agent-director/templates/<name>.toml` that bakes a default
-spawn-parameter set. Per-call `--template <name>` layers the per-call
-params on top per a fixed merge contract (SRD §7.1).
+spawn-parameter set. A spawn's `template` param (`--template <name>` on
+the CLI) layers the per-call params on top per a fixed merge contract (SRD §7.1).
 
 Templates are not the same as Claude Code's `settings.json` tier
 stack. The tier stack belongs to Claude Code; templates belong to
@@ -168,6 +169,17 @@ synthesizes for each spawn.
 
 Omitting per-call permissions inherits the template's entries
 unchanged.
+
+`spawn` validates the merged `extra_env`: an `AGENT_DIRECTOR_*` key,
+`HOME` with any value, or a key that is not a valid env-var name (empty,
+or containing `=` or a NUL byte, such as `"CLAUDE_CONFIG_DIR=/x"`), from
+the template or the call, returns `ErrReservedEnvKey` and launches
+nothing; the description says which. `make-template` runs the same check
+on the template's `extra_env` and refuses such a key with the same error,
+writing no template and replacing none. A template saved before that
+check, or edited by hand, can still hold one; each `spawn` that uses it
+is refused. To give a templated agent its own Claude Code config, set an
+absolute `CLAUDE_CONFIG_DIR` under `[extra_env]` instead of `HOME`.
 
 ### Reserved per-invocation params
 

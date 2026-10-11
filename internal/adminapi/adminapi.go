@@ -31,7 +31,8 @@ type KillResult struct {
 type DeleteResult struct {
 	// Results maps each requested id to its outcome: "ok" when the row was
 	// removed, or an err_name ("ErrSpawnNotFound", "ErrInternal"). It is never
-	// nil and has one entry per distinct requested id.
+	// nil: when the batch ran (nil error) it has one entry per distinct
+	// requested id, and when Delete returns an error it is empty.
 	Results map[string]string `json:"results"`
 }
 
@@ -101,6 +102,7 @@ var GlobalFlags = []Flag{
 	{Name: "--store-path <path>", Description: "Open the store at <path> instead of the configured one ([store] db_path in ~/.agent-director/config.toml, by default ~/.agent-director/state.db)."},
 	{Name: "--home <dir>", Description: "Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it."},
 	{Name: "--tmux-command <path>", Description: "Run <path> as tmux instead of the tmux on PATH."},
+	{Name: "--create-if-missing <true|false>", Description: "With false, refuse a store that does not exist (ErrStoreOpen) and create none of it; with true, or when omitted, create a missing store (parent directories, file and schema)."},
 }
 
 // Verbs is agent-director-admin's verb list, in help order.
@@ -118,7 +120,7 @@ var Verbs = []Verb{
 			"A live row (pending included) is refused with ErrSpawnNotResumable, with no lookup; an unknown id is ErrSpawnNotFound. " +
 			"These refusals send no kill and change nothing: ErrInternal (unusable recorded tmux session name), ErrTmuxUnresponsive (still stopping or still starting: wait and run it again; or tmux did not answer usably), ErrTmuxSessionConflict (never reported in, or conflicting labels), ErrTmuxNotAvailable. " +
 			"ErrTmuxKillFailed means the agent process still runs: retry later. After a sent kill, ErrTmuxUnresponsive or ErrTmuxNotAvailable means the kill may or may not have taken effect: check again later. " +
-			"\"A finished row's own old session\" under \"Operator actions\" in the agent-director README describes every case. " +
+			"\"A finished row's own old session\" in agent-director's docs/operator-actions.md describes every case. " +
 			"Its ad.kill.called trail record carries include_finished true. " + sameUserText + " " + errorsText,
 		Flags: []Flag{
 			{Name: idFlagName, Description: "Id of the finished row. Required."},

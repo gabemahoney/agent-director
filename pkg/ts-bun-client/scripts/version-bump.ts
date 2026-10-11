@@ -10,20 +10,12 @@
  * When --target is omitted, all selectors run in the canonical order:
  *   umbrella-version
  *
- * ─── Local development vs. publish-time flow ──────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────
  *
- * During local development the two optional sub-packages are wired via
- * `file:` paths so `bun install` resolves them from the workspace:
- *
- *   "@agent-director/linux-x64":  "file:./platforms/linux-x64"
- *   "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64"
- *
- * Before publishing to npm, CI must:
- *   1. Build each sub-package binary for its target platform.
- *   2. Run `bun run version-bump-publish --version X.Y.Z` to stamp all
- *      version-stamp sites (umbrella).
- *   3. Publish the two sub-packages first (`npm publish` in each platforms/* subdir).
- *   4. Publish the top-level package.
+ * The one version-stamp site is the `version` field of
+ * pkg/ts-bun-client/package.json, the only npm package (no per-platform
+ * sub-packages, no optionalDependencies). The package.json script
+ * `version-bump-publish` runs this file.
  *
  * All targets are idempotent: if a file is already at target version the
  * write is skipped and "already at <version> — skipped" is logged.

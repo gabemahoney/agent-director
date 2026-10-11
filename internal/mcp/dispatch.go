@@ -245,7 +245,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		// older_than goes through api.ParseOlderThan, the parser the CLI's
 		// --older-than shares, so a value it rejects (neither form,
-		// negative, b.hxn, or a day count above
+		// a leading + or -, b.hxn, b.c4n, or a day count above
 		// config.MaxExpireRetentionDays, 106751, b.sgw) is refused here
 		// and Expire never runs.
 		var older *time.Duration

@@ -176,7 +176,7 @@ func adviceHeldFollows() []adviceHeldFollow {
 
 // adviceAbandonedHuman is the next step the abandoned-launch conflict gives (b.1n6): a human ends the session with the
 // operator tool's kill-finished (adviceOperatorEnds; b.6sa).
-const adviceAbandonedHuman = `ending it is a human's decision, see "Operator actions" in the agent-director README, ` +
+const adviceAbandonedHuman = `ending it is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md, ` +
 	"after which the refused call can be re-issued"
 
 // adviceOperatorEnds follows the abandoned-launch conflict's "Operator actions" pointer as the human does (b.6sa): the

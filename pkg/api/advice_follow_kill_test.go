@@ -133,7 +133,7 @@ func TestAdviceFollow_C4_NoPaneRetryKillLater(t *testing.T) {
 	e.syncServers()
 	_, err := e.kill(r.ID)
 	adviceAssertAdvice(t, err, api.ErrTmuxKillFailed,
-		`a human can find and look at the process, see "Operator actions" in the agent-director README; `+advKillFailedTail)
+		`a human can find and look at the process, see "Operator actions" in agent-director's docs/operator-actions.md; `+advKillFailedTail)
 	advKillFollow(t, e, r, api.ErrTmuxKillFailed, advKillFailedTail, err,
 		func() { e.pc.Set(r.AgentPID, procfix.Gone()) }, false)
 	if n := len(e.rec.SocketCallsOf(tmux.CallKillPane)) + len(e.rec.SocketCallsOf(tmux.CallKillSession)); n != 0 {

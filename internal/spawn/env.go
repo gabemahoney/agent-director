@@ -17,7 +17,10 @@ import "strings"
 //     key normalized to env-var form (uppercase, non-alphanumeric → '_').
 //   - everything in ExtraEnv — including auth env vars (ANTHROPIC_API_KEY,
 //     CLAUDE_CODE_OAUTH_TOKEN). The validation step has already rejected
-//     AGENT_DIRECTOR_* keys, so no shadowing is possible here.
+//     every key whose env-var name (the part before the first '=', the name
+//     tmux sets) starts with AGENT_DIRECTOR_, so no shadowing is possible
+//     here, or is HOME (ReservedHomeKey, bug b.nas), which would move the
+//     agent's hook to another agent-director store.
 //
 // Label key collisions across normalization (e.g. "my-key" and "my_key"
 // both → "MY_KEY") use the iteration order of the input map; the SRD does

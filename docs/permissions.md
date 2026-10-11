@@ -45,7 +45,7 @@ Tiers (lowest precedence first):
 | ---- | --- |
 | user | `["Bash(rm -rf /)"]` |
 | project | `["WebFetch(http://example.com/*)"]` |
-| per-Spawn (via `--deny`) | `["Bash(npm publish)"]` |
+| per-Spawn (via `deny`) | `["Bash(npm publish)"]` |
 
 Effective `deny` for the Spawn:
 
@@ -53,8 +53,8 @@ Effective `deny` for the Spawn:
 ["Bash(rm -rf /)", "WebFetch(http://example.com/*)", "Bash(npm publish)"]
 ```
 
-A Spawn launched with `--deny "Bash(npm publish)"` adds that single
-entry. The operator's pre-existing rules continue to apply.
+A Spawn launched with `deny` `["Bash(npm publish)"]`
+(`--deny "Bash(npm publish)"` on the CLI) adds that single entry. The operator's pre-existing rules continue to apply.
 
 ## `disable_askuserquestion` config
 
@@ -74,15 +74,59 @@ of the AUQ tool" *and* removes the tool from the deferred-tool registry
 
 Recommended for orchestrator-driven setups where every Claude should
 make its own decisions rather than prompting a human. The deny is
-additive — caller-supplied `--deny` entries still concatenate, and the
+additive — caller-supplied `deny` entries still concatenate, and the
 user / project tiers still apply.
 
 To re-enable AUQ for a specific Spawn while keeping the global config
 off, either flip the config (affects every Spawn) or use a separate
 config file via `AGENT_DIRECTOR_CONFIG` (not yet wired; tracked for a
-future Epic). The cleanest current option is to spawn the special-case
-Spawn from an alternate `HOME` whose `~/.agent-director/config.toml`
-does not have the flag set.
+future Epic), or run that Spawn on a tmux server of its own, as below.
+
+### One Spawn under another `HOME` or store
+
+An alternate `HOME`, the global `--home` flag, `spawn --store-path`, and
+the TypeScript client's `home` and `storePath` options (which pass
+`--home` and `--store-path`) do not by themselves give one Spawn another
+config or store. All of them must name the store of the tmux server the
+spawn reaches, or the agent's hooks write to a different store. The
+hooks load agent-director's config and store from the pane's `HOME`,
+which on a running tmux server is the server's `HOME`, not the
+spawner's. The spawn picks the server by `$TMUX`, else by `TMUX_TMPDIR`
+(or `/tmp`) plus the uid, never by `HOME` (details in
+[Reserved `HOME` in `extra_env`](architecture.md#reserved-home-in-extra_env-bnas)).
+
+When the two stores differ, the agent's hook events go to the other
+store and the row stays `pending`, with no error to the caller:
+`find-missing` notes it `unreported` while the agent runs and marks it
+`missing` once the agent's process is gone. If no server was running, a
+spawn with an alternate `HOME` (or `--home`) starts the shared server
+with that `HOME`, and every later Spawn on that server sends its hook
+events to the alternate store.
+
+The safe way is a separate tmux server for the alternate `HOME`: run the
+spawn with that `HOME`, a `TMUX_TMPDIR` of its own that already exists,
+no `TMUX` and no `--store-path`:
+
+```sh
+mkdir -p /path/to/alt-tmux
+env -u TMUX HOME=/path/to/alt-home TMUX_TMPDIR=/path/to/alt-tmux agent-director spawn --cwd <dir>
+```
+
+The spawn starts a new server whose `HOME` is the alternate one, so the
+agent's hooks use the alternate store, and the agent's row lives in that
+second store. Put that Spawn's config in
+`/path/to/alt-home/.agent-director/config.toml`. Run every later call on
+that store the same way. Manage that store's agents only with that
+store's own agent-director (see
+[A session of another agent-director store](operator-actions.md#a-session-of-another-agent-director-store)).
+Claude Code in the new pane runs under the alternate `HOME` too, so it
+reads its user files there: the user tier above is the alternate
+`HOME`'s `~/.claude/settings.json`, and the alternate `HOME` needs
+Claude Code's own login (`~/.claude/.credentials.json`, or an auth
+variable passed through `extra_env`, see [Multi-Account](multi-account.md))
+and first-run setup (`~/.claude.json`, which pre-trust also needs).
+Without them the agent waits at a login or onboarding screen, where no
+hook fires, and its row stays `pending`.
 
 ## `--dangerously-skip-permissions`
 
@@ -98,7 +142,8 @@ let untrusted parties spawn Claude instances through agent-director.
 
 ## Relay mode
 
-A Spawn launched with `--relay-mode=on` hands every PermissionRequest
+A Spawn launched with `relay_mode` `on` (`--relay-mode=on` on the CLI)
+hands every PermissionRequest
 to the orchestrator instead of Claude Code's native consent dialog.
 Useful when an unattended supervisor needs to decide allow/deny based
 on policy rather than a human at the keyboard.

@@ -67,13 +67,6 @@ ADMIN=(0 0 0 1 1 1)
 ADMIN_HELP_FIRST_LINE="agent-director-admin is an operator tool. Do not run any of its commands without explicit approval from a human for this specific run. Agents and automated callers must not run it."
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
-_esc_json() {
-  printf '%s' "$1" \
-    | sed -e 's/\\/\\\\/g' \
-          -e 's/"/\\"/g' \
-          -e ':a;N;$!ba;s/\n/\\n/g'
-}
-
 _ms_since() {
   local start_s="$1"
   local end_s
@@ -83,25 +76,25 @@ _ms_since() {
 
 # Build a sub-check JSON object.
 #   $1 name  $2 outcome  $3 exit_code  $4 duration_ms  [$5 reason]  [$6 detail]
+# reason and detail are added only when non-empty.
+#
+# detail is passed raw (ldd or `help` output, unescaped): jq does the one and
+# only JSON escaping, so the decoded field equals the raw output (b.nsa). It
+# reaches jq on stdin, not as an argument, because it is command output and
+# Linux caps one argument at 128 KiB; -Rs keeps it unchanged.
 _sub_check_json() {
   local name="$1" outcome="$2" exit_code="$3" duration_ms="$4"
   local reason="${5:-}" detail="${6:-}"
 
-  local json
-  json=$(jq -n \
+  printf '%s' "$detail" | jq -cRs \
     --arg     name        "$name"     \
     --arg     outcome     "$outcome"  \
     --argjson exit_code   "$exit_code" \
     --argjson duration_ms "$duration_ms" \
-    '{name: $name, outcome: $outcome, exit_code: $exit_code, duration_ms: $duration_ms}')
-
-  if [[ -n "$reason" ]]; then
-    json=$(printf '%s' "$json" | jq --arg r "$reason" '. + {reason: $r}')
-  fi
-  if [[ -n "$detail" ]]; then
-    json=$(printf '%s' "$json" | jq --arg d "$detail" '. + {detail: $d}')
-  fi
-  printf '%s' "$json"
+    --arg     reason      "$reason"   \
+    '{name: $name, outcome: $outcome, exit_code: $exit_code, duration_ms: $duration_ms}
+     + (if $reason == "" then {} else {reason: $reason} end)
+     + (if . == "" then {} else {detail: .} end)'
 }
 
 # ─── main loop ────────────────────────────────────────────────────────────────
@@ -170,7 +163,7 @@ for i in "${!FILES[@]}"; do
         "$file" \
         "Binary is not statically linked: ldd output does not contain 'not a dynamic executable'." \
         "Ensure CGO_ENABLED=0 is set and only pure-Go dependencies are used."
-      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" 1 "$(_ms_since "$t0")" "" "$(_esc_json "$ldd_out")")")
+      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" 1 "$(_ms_since "$t0")" "" "$ldd_out")")
     fi
   fi
 
@@ -203,7 +196,7 @@ for i in "${!FILES[@]}"; do
         "$file" \
         "Host-exec check failed: '${file} help' exited ${exec_rc} or does not open with the human-approval statement." \
         "Ensure the binary runs on this host and every help it prints opens with internal/adminapi.ApprovalStatement."
-      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" "$exec_rc" "$(_ms_since "$t0")" "" "$(_esc_json "$exec_out")")")
+      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" "$exec_rc" "$(_ms_since "$t0")" "" "$exec_out")")
     fi
   else
     exec_out=$("$file" help 2>&1 | head -5)
@@ -217,20 +210,19 @@ for i in "${!FILES[@]}"; do
         "$file" \
         "Host-exec check failed: '${file} help' exited ${exec_rc} or produced no output." \
         "Ensure the binary runs on this host and 'help' is a valid verb."
-      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" "$exec_rc" "$(_ms_since "$t0")" "" "$(_esc_json "$exec_out")")")
+      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" "$exec_rc" "$(_ms_since "$t0")" "" "$exec_out")")
     fi
   fi
 
 done
 
 # ─── consolidated JSON output ─────────────────────────────────────────────────
-all_sub_checks=$(printf '%s\n' "${sub_check_jsons[@]}" | jq -sc '.')
-
-jq -n \
+# The sub-checks carry raw command output in detail, so they reach jq on stdin,
+# not as a --argjson that Linux would cap at 128 KiB (b.nsa).
+printf '%s\n' "${sub_check_jsons[@]}" | jq -s \
   --arg     phase_name "smoke"          \
   --arg     outcome    "$overall_outcome" \
-  --argjson sub_checks "$all_sub_checks"  \
-  '{phase_name: $phase_name, outcome: $outcome, sub_checks: $sub_checks}'
+  '{phase_name: $phase_name, outcome: $outcome, sub_checks: .}'
 
 if [[ "$overall_outcome" == "passed" ]]; then
   exit 0

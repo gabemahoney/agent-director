@@ -30,10 +30,10 @@ const adviceConflictLater = 2 * time.Minute
 // The pointers and sentences the conflicts carry (inventory HO1, HO3, HO5,
 // HO7, HO11; held_name.go for the holders with no pointer).
 const (
-	adviceLookLabels  = `a human must look, see "Operator actions" in the agent-director README; list tmux_session_name (--tmux-session-name on the CLI) shows whether a row uses a session name`
-	adviceLook        = `a human must look, see "Operator actions" in the agent-director README`
-	adviceEndLeftover = `ending such a session is a human's decision, see "Operator actions" in the agent-director README`
-	adviceCanLook     = `a human can look, see "Operator actions" in the agent-director README`
+	adviceLookLabels  = `a human must look, see "Operator actions" in agent-director's docs/operator-actions.md; list tmux_session_name (--tmux-session-name on the CLI) shows whether a row uses a session name`
+	adviceLook        = `a human must look, see "Operator actions" in agent-director's docs/operator-actions.md`
+	adviceEndLeftover = `ending such a session is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md`
+	adviceCanLook     = `a human can look, see "Operator actions" in agent-director's docs/operator-actions.md`
 )
 
 // adviceConflictVerb is a verb a conflict refuses: start seeds its row (a
@@ -264,7 +264,7 @@ func adviceAbandonedLaunch(operator bool) func(*testing.T, *killEnv, killRow) fu
 }
 
 // TestAdviceFollow_HO1_ConflictingLabelsClears: HO1 "conflicting labels" ...
-// "a human must look, see "Operator actions" in the agent-director README;
+// "a human must look, see "Operator actions" in agent-director's docs/operator-actions.md;
 // list tmux_session_name (--tmux-session-name on the CLI) shows whether a row
 // uses a session name".
 func TestAdviceFollow_HO1_ConflictingLabelsClears(t *testing.T) {
@@ -283,7 +283,7 @@ func TestAdviceFollow_HO1_ConflictingLabelsClears(t *testing.T) {
 }
 
 // TestAdviceFollow_HO3_NameHolderClears: HO3 "no valid instance id" ... "a
-// human must look, see "Operator actions" in the agent-director README"; also
+// human must look, see "Operator actions" in agent-director's docs/operator-actions.md"; also
 // the holders with no pointer ("... must not be ended"), which C22 retries alike.
 func TestAdviceFollow_HO3_NameHolderClears(t *testing.T) {
 	t.Parallel()
@@ -307,7 +307,7 @@ func TestAdviceFollow_HO3_NameHolderClears(t *testing.T) {
 
 // TestAdviceFollow_HO5_PreLaunchLeftoverClears: HO5 "left over from an
 // earlier life" ... "ending such a session is a human's decision, see
-// "Operator actions" in the agent-director README".
+// "Operator actions" in agent-director's docs/operator-actions.md".
 func TestAdviceFollow_HO5_PreLaunchLeftoverClears(t *testing.T) {
 	t.Parallel()
 	var cases []adviceConflictCase
@@ -319,7 +319,7 @@ func TestAdviceFollow_HO5_PreLaunchLeftoverClears(t *testing.T) {
 }
 
 // TestAdviceFollow_HO12_AbandonedLaunchClears: HO12 "this id's own abandoned launch" ... "ending it is a human's
-// decision, see "Operator actions" in the agent-director README, after which the refused call can be re-issued" (b.1n6);
+// decision, see "Operator actions" in agent-director's docs/operator-actions.md, after which the refused call can be re-issued" (b.1n6);
 // the human's step is kill-finished (b.6sa).
 func TestAdviceFollow_HO12_AbandonedLaunchClears(t *testing.T) {
 	t.Parallel()
@@ -339,7 +339,7 @@ func TestAdviceFollow_HO12_AbandonedLaunchClears(t *testing.T) {
 
 // TestAdviceFollow_HO7_KillLeftoverClears: HO7 "not this launch's session"
 // ... "no kill was sent; ending such a session is a human's decision, see
-// "Operator actions" in the agent-director README".
+// "Operator actions" in agent-director's docs/operator-actions.md".
 func TestAdviceFollow_HO7_KillLeftoverClears(t *testing.T) {
 	t.Parallel()
 	adviceConflictClears(t, []adviceConflictCase{{name: "leftover", verb: adviceConflictKill, noOwn: true,
@@ -347,8 +347,8 @@ func TestAdviceFollow_HO7_KillLeftoverClears(t *testing.T) {
 }
 
 // TestAdviceFollow_HO11_PaneLeftoverClears: HO11 "not this launch's session"
-// ... "a human can look, see "Operator actions" in the agent-director README".
-// Once it is ended, send-keys and pause give their gone error (the README's
+// ... "a human can look, see "Operator actions" in agent-director's docs/operator-actions.md".
+// Once it is ended, send-keys and pause give their gone error (docs/operator-actions.md's
 // next step is find-missing); read-pane, refused for several leftovers, reads the one left.
 func TestAdviceFollow_HO11_PaneLeftoverClears(t *testing.T) {
 	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).

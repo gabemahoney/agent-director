@@ -9,8 +9,9 @@ package api_test
 // sends nothing; past it each session's agent pane (the one carrying its
 // label's token, wherever it now is) and then the session are killed by id,
 // lowest $N first, the youngest's agent is waited for with the other pane
-// processes, or, when it cannot be checked, one follow-up lookup decides.
-// The row never changes. A
+// processes, or, when it cannot be checked, one follow-up lookup must find
+// none of the sessions and then the other pane processes are waited for
+// (b.myx). The row never changes. A
 // finished row that records its launch's server or pane, or no token, keeps
 // "never reported in"; a live row keeps kill's own Leftover refusal
 // (TestKillPendingBesideLeftover). A real plain spawn's row is
@@ -28,6 +29,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -145,12 +147,12 @@ func kabExitAtOwnPaneKill(e *killEnv, sessions []kabSeeded, exits []bool) {
 // TestKillIncludeFinishedAbandonedLaunch: one session of an earlier launch,
 // still starting, is refused with nothing sent; past the bound its agent pane
 // and the session are killed by id, its agent waited for, or, unreadable or
-// with no pane carrying its token, one follow-up lookup decides by whether
-// that session is still listed; a pane listing that cannot answer sends
-// nothing. The row never changes.
+// with no pane carrying its token, one follow-up lookup must find the session
+// gone, then its pane processes are waited for; a pane listing that cannot
+// answer sends nothing. The row never changes.
 func TestKillIncludeFinishedAbandonedLaunch(t *testing.T) {
 	t.Parallel()
-	sent := apitest.KillSent{Pane: true, Session: true}
+	sent, sessionOnly := apitest.KillSent{Pane: true, Session: true}, apitest.KillSent{Session: true}
 	followUp := append(slices.Clone(seqOurs), tmux.CallLookup)
 	kills := func(e *killEnv, r killRow, _ kabSeeded) {
 		e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallKillPane, tmux.CallKillSession)
@@ -162,23 +164,24 @@ func TestKillIncludeFinishedAbandonedLaunch(t *testing.T) {
 		})
 	}
 	cases := []struct {
-		name    string
-		session kabSession
-		exits   bool                                     // its agent exits at its pane kill
-		world   func(e *killEnv, r killRow, s kabSeeded) // more of the world (nil: none)
-		errName string
-		desc    func(e *killEnv, r killRow, s kabSeeded) apitest.DescCase
-		calls   []tmux.Call
-		stays   bool // the session is still listed after the call
-		trail   map[string]any
+		name     string
+		session  kabSession
+		exitAt   tmux.Call                                // the call whose return ends its pane's process ("": none)
+		world    func(e *killEnv, r killRow, s kabSeeded) // more of the world (nil: none)
+		errName  string
+		desc     func(e *killEnv, r killRow, s kabSeeded) apitest.DescCase
+		calls    []tmux.Call
+		stays    bool // the session is still listed after the call
+		survivor bool // its pane's process is named still running (survivor_pids)
+		trail    map[string]any
 	}{
 		{name: "younger than the bound by 1 s: still starting", session: kabSession{age: defBound - time.Second},
 			errName: "ErrTmuxUnresponsive", calls: []tmux.Call{tmux.CallLookup}, stays: true,
 			desc:  func(e *killEnv, r killRow, s kabSeeded) apitest.DescCase { return kabStarting(e, r, s) },
 			trail: map[string]any{"kill_sent": false, "pane_killed": false, "process_check": "not_run"}},
-		{name: "the bound old, its agent exits at its pane kill", session: kabSession{age: defBound}, exits: true,
-			calls: seqOurs, trail: map[string]any{"kill_sent": true, "pane_killed": true, "process_check": "gone",
-				"followup_outcome": "not_run"}},
+		{name: "the bound old, its agent exits at its pane kill", session: kabSession{age: defBound},
+			exitAt: tmux.CallKillPane, calls: seqOurs, trail: map[string]any{"kill_sent": true, "pane_killed": true,
+				"process_check": "gone", "followup_outcome": "not_run"}},
 		{name: "its agent outlives the kill exit wait", session: kabSession{age: defBound}, errName: "ErrTmuxKillFailed",
 			desc: func(e *killEnv, r killRow, s kabSeeded) apitest.DescCase {
 				return apitest.DescKillWaitExpired(apitest.KillWaitExpired{InstanceID: r.ID, Name: r.Name, Sent: sent,
@@ -196,8 +199,16 @@ func TestKillIncludeFinishedAbandonedLaunch(t *testing.T) {
 		{name: "its agent unreadable, only a later launch's session at the follow-up",
 			session: kabSession{age: defBound, agent: agentUnreadable}, world: laterLaunch, calls: followUp,
 			trail: map[string]any{"kill_sent": true, "process_check": "unreadable", "followup_outcome": "leftover"}},
-		{name: "no pane carries its token: the session kill, then the follow-up",
-			session: kabSession{age: defBound, agent: agentNotRecorded}, calls: seqFollowUp,
+		{name: "no pane carries its token, its pane's process exits at the session kill: the follow-up, then the wait",
+			session: kabSession{age: defBound, agent: agentNotRecorded}, exitAt: tmux.CallKillSession, calls: seqFollowUp,
+			trail: map[string]any{"kill_sent": true, "pane_killed": false, "process_check": "not_recorded",
+				"followup_outcome": "gone"}},
+		{name: "no pane carries its token, its pane's process outlives the wait (b.myx)",
+			session: kabSession{age: defBound, agent: agentNotRecorded}, errName: "ErrTmuxKillFailed",
+			desc: func(e *killEnv, r killRow, s kabSeeded) apitest.DescCase {
+				return apitest.DescKillWaitExpired(apitest.KillWaitExpired{InstanceID: r.ID, Name: r.Name, Sent: sessionOnly,
+					ExitWait: e.cfg.EffectiveKillExitWait(), SurvivorPIDs: []int{s.pid}})
+			}, calls: seqFollowUp, survivor: true,
 			trail: map[string]any{"kill_sent": true, "pane_killed": false, "process_check": "not_recorded",
 				"followup_outcome": "gone"}},
 		{name: "the pane listing times out: nothing sent", session: kabSession{age: defBound},
@@ -215,8 +226,8 @@ func TestKillIncludeFinishedAbandonedLaunch(t *testing.T) {
 			e := newKillEnv(t)
 			r, seeded := e.seedAbandoned(t, store.StateEnded, tc.session)
 			s := seeded[0]
-			if tc.exits {
-				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), s.pid)
+			if tc.exitAt != "" {
+				e.setAfterCall(tc.exitAt, procfix.Gone(), s.pid)
 			}
 			if tc.world != nil {
 				tc.world(e, r, s)
@@ -260,6 +271,13 @@ func TestKillIncludeFinishedAbandonedLaunch(t *testing.T) {
 				want[k] = v
 			}
 			kolAssertCalled(t, r.ID, want)
+			var survivors []int
+			if tc.survivor {
+				survivors = []int{s.pid}
+			}
+			if got := kcInts(kcTrail(t, r.ID)["survivor_pids"]); !slices.Equal(got, survivors) {
+				t.Errorf("ad.kill.called survivor_pids = %v; want %v", got, survivors)
+			}
 		})
 	}
 }
@@ -269,7 +287,9 @@ func TestKillIncludeFinishedAbandonedLaunch(t *testing.T) {
 // lowest $N first whatever the listing order, each agent pane before its
 // session. The youngest's agent is the agent; the others' processes, an agent
 // pane moved out of its session included, are waited for as other pane
-// processes. An unreadable youngest agent leaves the follow-up lookup to decide.
+// processes. When the youngest's agent cannot be checked (unreadable, or no
+// pane carries its token) the follow-up lookup must find none of the sessions,
+// and then those processes are still waited for (b.myx).
 func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 	t.Parallel()
 	// Listed by name they come highest $N first; $30 is the youngest.
@@ -282,18 +302,22 @@ func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 		return apitest.DescKillWaitExpired(apitest.KillWaitExpired{InstanceID: r.ID, Name: r.Name, Sent: sent,
 			ExitWait: e.cfg.EffectiveKillExitWait(), SurvivorPIDs: []int{s[2].pid}})
 	}
+	youngestHangsUp := func(e *killEnv, _ killRow, s []kabSeeded) { // $30's pane process exits at a session kill
+		e.setAfterCall(tmux.CallKillSession, procfix.Gone(), s[0].pid)
+	}
 	cases := []struct {
 		name     string
 		youngest time.Duration
 		agent    agentState // the youngest's agent
 		moved    bool       // $9's agent pane moved into an unrelated session
 		exits    []bool     // per session, its agent exits at its own pane kill
-		world    func(e *killEnv, r killRow)
+		world    func(e *killEnv, r killRow, s []kabSeeded)
 		errName  string
 		desc     func(e *killEnv, r killRow, s []kabSeeded) apitest.DescCase
 		survivor bool   // $9's agent is named still running
 		followUp string // the follow-up lookup's outcome ("": none made)
 		stays    bool   // $9 is still listed after the call
+		polls    int    // pauses of a wait that ends early (a survivor: the whole exit wait)
 	}{
 		{name: "all past the bound: each ended, lowest $N first", youngest: defBound, exits: []bool{true, true, true}},
 		{name: "an older session's agent outlives the wait", youngest: defBound, exits: []bool{true, true, false},
@@ -305,12 +329,29 @@ func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 			desc: survivor9},
 		{name: "the youngest's agent unreadable, $9's kills time out: $9 still listed at the follow-up", youngest: defBound,
 			agent: agentUnreadable, exits: []bool{false, true, false},
-			world: func(e *killEnv, r killRow) { // the first pane kill and session kill, $9's
+			world: func(e *killEnv, r killRow, _ []kabSeeded) { // the first pane kill and session kill, $9's
 				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallKillPane, tmux.CallKillSession)
 			}, errName: "ErrTmuxKillFailed", followUp: "leftover", stays: true,
 			desc: func(_ *killEnv, r killRow, _ []kabSeeded) apitest.DescCase {
 				return apitest.DescKillUncheckable(r.ID, r.Name, sent)
 			}},
+		// b.myx: the follow-up finds none of the sessions, then $9's moved agent is still waited for.
+		{name: "the youngest's agent unreadable, $9's agent pane moved: its agent exits at its pane kill",
+			youngest: defBound, agent: agentUnreadable, moved: true, exits: []bool{false, true, true}, followUp: "gone"},
+		{name: "the youngest's agent unreadable, $9's agent pane moved: its agent exits during the wait",
+			youngest: defBound, agent: agentUnreadable, moved: true, exits: []bool{false, true, false}, followUp: "gone",
+			world: func(e *killEnv, _ killRow, s []kabSeeded) {
+				e.setAfterWaiting(2*api.KillPollInterval, procfix.Gone(), s[2].pid)
+			}, polls: 2},
+		{name: "the youngest's agent unreadable, $9's agent pane moved: its agent outlives the wait",
+			youngest: defBound, agent: agentUnreadable, moved: true, exits: []bool{false, true, false}, followUp: "gone",
+			errName: "ErrTmuxKillFailed", survivor: true, desc: survivor9},
+		{name: "no pane carries the youngest's token, $9's agent pane moved: its agent exits at its pane kill",
+			youngest: defBound, agent: agentNotRecorded, moved: true, exits: []bool{false, true, true}, followUp: "gone",
+			world: youngestHangsUp},
+		{name: "no pane carries the youngest's token, $9's agent pane moved: its agent outlives the wait",
+			youngest: defBound, agent: agentNotRecorded, moved: true, exits: []bool{false, true, false}, followUp: "gone",
+			world: youngestHangsUp, errName: "ErrTmuxKillFailed", survivor: true, desc: survivor9},
 		{name: "the youngest still starting: nothing sent", youngest: defBound - time.Second,
 			exits: []bool{true, true, true}, errName: "ErrTmuxUnresponsive",
 			desc: func(e *killEnv, r killRow, s []kabSeeded) apitest.DescCase {
@@ -324,8 +365,11 @@ func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 			r, seeded := e.seedAbandoned(t, store.StateEnded, sessions(tc.youngest, tc.agent, tc.moved)...)
 			kabExitAtOwnPaneKill(e, seeded, tc.exits)
 			if tc.world != nil {
-				tc.world(e, r)
+				tc.world(e, r, seeded)
 			}
+			var sleeps []time.Duration
+			sleep := e.sleep
+			e.sleep = func(d time.Duration) { sleeps = append(sleeps, d); sleep(d) }
 			before, listed := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
 
 			res, err := e.killOptIn(r.ID)
@@ -336,6 +380,11 @@ func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 			}
 			kabAssertErr(t, err, tc.errName, desc, kabForbid(r, seeded))
 			e.assertRowUnchanged(t, r.ID, before)
+			polls := tc.polls
+			if tc.survivor {
+				polls = int(e.cfg.EffectiveKillExitWait() / api.KillPollInterval)
+			}
+			kcAssertPolls(t, sleeps, polls)
 			var got []tmuxfix.SocketCall
 			for _, c := range e.rec.SocketCalls() {
 				got = append(got, tmuxfix.SocketCall{Call: c.Call, Target: c.Target})
@@ -355,14 +404,19 @@ func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 				t.Error("kill_sent = false; want true")
 			}
 			want = append(want, tmuxfix.SocketCall{Call: tmux.CallListPanes})
-			for _, i := range []int{2, 1, 0} { // $9, $12, $30
-				want = append(want, tmuxfix.SocketCall{Call: tmux.CallKillPane, Target: seeded[i].pane},
-					tmuxfix.SocketCall{Call: tmux.CallKillSession, Target: seeded[i].ID})
+			for _, i := range []int{2, 1, 0} { // $9, $12, $30; no pane kill without a pane carrying the token
+				if i > 0 || tc.agent != agentNotRecorded {
+					want = append(want, tmuxfix.SocketCall{Call: tmux.CallKillPane, Target: seeded[i].pane})
+				}
+				want = append(want, tmuxfix.SocketCall{Call: tmux.CallKillSession, Target: seeded[i].ID})
 			}
-			check, followUp := "gone", "not_run"
+			check, followUp, agentPID := "gone", "not_run", any(float64(seeded[0].pid))
 			if tc.followUp != "" {
 				want = append(want, tmuxfix.SocketCall{Call: tmux.CallLookup})
 				check, followUp = "unreadable", tc.followUp
+			}
+			if tc.agent == agentNotRecorded {
+				check, agentPID = "not_recorded", nil
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("tmux calls = %+v; want %+v", got, want)
@@ -377,11 +431,11 @@ func TestKillIncludeFinishedAbandonedLaunchSessions(t *testing.T) {
 			if tc.survivor {
 				survivors = []int{seeded[2].pid}
 			}
-			if rec["agent_pid"] != float64(seeded[0].pid) || rec["process_check"] != check ||
+			if rec["agent_pid"] != agentPID || rec["process_check"] != check ||
 				rec["followup_outcome"] != followUp || rec["kill_sent"] != true ||
 				!slices.Equal(kcInts(rec["survivor_pids"]), survivors) {
-				t.Errorf("ad.kill.called = %v; want agent_pid %d (the youngest's), process_check %s, followup_outcome %s, "+
-					"kill_sent true, survivor_pids %v", rec, seeded[0].pid, check, followUp, survivors)
+				t.Errorf("ad.kill.called = %v; want agent_pid %v (the youngest's), process_check %s, followup_outcome %s, "+
+					"kill_sent true, survivor_pids %v", rec, agentPID, check, followUp, survivors)
 			}
 		})
 	}

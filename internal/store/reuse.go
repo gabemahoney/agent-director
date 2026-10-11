@@ -11,7 +11,7 @@ import (
 )
 
 // ReuseRow is reuse's pre-check read of one row (SR-10.2, SR-10.3, Appendix
-// F.4): what spawn --reuse-finished examines before it resets the row, and
+// F.4): what spawn with reuse_finished examines before it resets the row, and
 // the pre-reuse life it keeps for the restore (SR-10.4). It is read without
 // decoding labels, claude_args or extra_env and without failing on any stored
 // value of the SR-5.5 columns or the timestamp columns, so a row a hand edit

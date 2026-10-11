@@ -25,6 +25,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // errorEnvelope is the JSON shape emitted on stderr for CLI-level errors.
@@ -39,7 +40,9 @@ type errorEnvelope struct {
 }
 
 // CLI-internal error names. These signal dispatch and output failures of the
-// CLI itself, not errors a verb returns, so no verb lists them. They are in
+// CLI itself, not errors a verb returns, so no verb lists them:
+// errUnknownVerb for a verb the CLI does not know, errJSONMarshal only for a
+// json.Marshal failure of a verb's result. They are in
 // pkg/api/errnames.Catalog (with internal/clisetup's sentinels, b.cm7) so
 // the TS client knows them.
 const (
@@ -74,7 +77,9 @@ var verbAliases = map[string]string{
 // -h, --version, -v) are not in this table: run() has already replaced them
 // with their verbs (verbAliases). client and cfg are captured in closures so
 // each verb sees the same already-opened Client — construction is done once
-// in run() via setupClient().
+// in run() via setupClient(). o is the run's --store-path, --tmux-command and
+// --create-if-missing overrides setupClient opened client with; serve builds
+// its separate MCP Client from them too (b.wb7, b.78b).
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
@@ -87,7 +92,7 @@ var verbAliases = map[string]string{
 // entries are never reached (SR-4.1/4.2, b.93m). Their
 // closures here are the store-backed fallback only and behave identically —
 // helpHandler ignores its client and versionHandler consults no store.
-func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
+func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":               func(args []string) error { return helpHandler(client, args) },
 		"version":            func(args []string) error { return versionHandler(client, args) },
@@ -106,7 +111,7 @@ func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string
 		"resume":             func(args []string) error { return resumeHandlerWith(client, args) },
 		"find-missing":       func(args []string) error { return findMissingHandlerWith(client, args) },
 		"expire":             func(args []string) error { return expireHandlerWith(client, args) },
-		"serve":              func(args []string) error { return serveHandlerWith(cfg, args) },
+		"serve":              func(args []string) error { return serveHandlerWith(cfg, o, pkgapi.New, args) },
 		"trail-emit":         func(args []string) error { return trailEmitHandlerWith(args) },
 	}
 }
@@ -253,7 +258,7 @@ func hookTimeout(args []string) time.Duration {
 	var seconds int
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.IntVar(&seconds, "timeout", 0, "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
+	fs.Var(newDecimalInt(&seconds, 0), "timeout", "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
 	if err := fs.Parse(args); err != nil || seconds <= 0 || seconds > config.MaxRelayTimeoutSeconds {
 		return 0
 	}
@@ -354,11 +359,11 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 	verbs, err := pkgapi.Help()
 	if err != nil {
 		// pkg/api.Help never errors today, but if a future implementation
-		// changes that, surface it via the dispatch envelope path.
-		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
-			return werr
-		}
-		return errDispatch
+		// changes that, name the error as every verb handler does
+		// (errnames.Classify: its Catalog name, else ErrInternal), never
+		// ErrJSONMarshal, which is only for the json.Marshal below (b.3jc).
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	payload, err := json.Marshal(helpResult{Verbs: verbs})
 	if err != nil {
@@ -375,15 +380,15 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 
 // versionHandler implements the `version` verb. Prints
 // {"version": "<stamp>", "commit": "<sha>"} per the manifest. The client's
-// Version() never errors; the same envelope path as helpHandler is kept
-// for uniformity.
+// Version() fails only on a closed Client, and no caller passes one; a
+// failure is named as every verb handler names one
+// (errnames.Classify: its Catalog name, else ErrInternal), never
+// ErrJSONMarshal, which is only for the json.Marshal below (b.3jc).
 func versionHandler(client *pkgapi.Client, _ []string) error {
 	res, err := client.Version()
 	if err != nil {
-		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
-			return werr
-		}
-		return errDispatch
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	payload, err := json.Marshal(res)
 	if err != nil {
@@ -442,10 +447,13 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 // through clisetup.Open (whose comment holds the design pins), which
 // agent-director-admin shares so both binaries open the store alike.
 //
-// b.32k: o carries the --store-path and --tmux-command overrides of the
-// global flags run() parsed and applied before dispatch; --home was applied
-// there (os.Setenv) BEFORE this function runs, so every "~/" expansion of the
-// config and store paths sees the override.
+// b.32k: o carries the --store-path, --tmux-command and --create-if-missing
+// overrides of the global flags run() parsed and applied before dispatch;
+// --home was applied there (os.Setenv) BEFORE this function runs, so every
+// "~/" expansion of the config and store paths sees the override. With
+// --create-if-missing false a missing store is refused here (ErrStoreOpen)
+// before any verb runs, and none of it is created (b.78b). run() also hands o
+// to serve, whose MCP Client opens with the same overrides (b.wb7).
 //
 // On any error it writes the JSON envelope to stderr and returns errDispatch
 // so run() can exit non-zero without double-printing.
@@ -469,7 +477,8 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // os.Exit(run()) so deferred cleanup in run() still executes.
 //
 // Startup wiring (config + store) runs on every STORE-BACKED invocation to
-// satisfy Epic 1 AC #4 (idempotent dir/file creation) and AC #5
+// satisfy Epic 1 AC #4 (idempotent dir/file creation, which
+// --create-if-missing false turns off, b.78b) and AC #5
 // (ErrSchemaMismatch surfaces). The DB-free verbs below never reach it: help,
 // version (and their aliases --help, -h, --version and -v, b.fv2), the no-verb
 // run, and trail-emit are dispatched before setupClient so they neither open
@@ -494,13 +503,13 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // branch is keyed off os.Args[1] before anything else so a missing
 // config or broken DB cannot block Claude Code's hook fire — including
 // the global-flag parser below, which can return an error on a malformed
-// `--store-path`/`--home`/`--tmux-command` and would otherwise be a
-// blocking failure mode on the hook hot path.
+// `--store-path`/`--home`/`--tmux-command`/`--create-if-missing` and would
+// otherwise be a blocking failure mode on the hook hot path.
 //
-// b.32k: after the hook short-circuit, run() pre-scans argv for the three
-// global flags (--store-path, --home, --tmux-command) with
-// clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr), and
-// strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
+// b.32k: after the hook short-circuit, run() pre-scans argv for the four
+// global flags (--store-path, --home, --tmux-command, --create-if-missing)
+// with clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr),
+// and strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
 // HOME when --home is given, so config.Load's tilde-expansion picks it up —
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
@@ -519,8 +528,8 @@ func run() int {
 
 	// --home: set process HOME BEFORE config.Load runs (clisetup's
 	// GlobalFlags.Apply says why that covers every "~/" store/config path
-	// expansion); overrides carries --store-path and --tmux-command to
-	// setupClient. b.32k, b.hvf.
+	// expansion); overrides carries --store-path, --tmux-command and
+	// --create-if-missing to setupClient. b.32k, b.hvf, b.78b.
 	overrides, err := globals.Apply()
 	if err != nil {
 		if werr := writeError(os.Stderr, "ErrInvalidFlags", err.Error()); werr != nil {
@@ -598,7 +607,7 @@ func run() int {
 	}
 	defer client.Close()
 
-	if err := dispatch(strippedArgv, handlers(client, cfg)); err != nil {
+	if err := dispatch(strippedArgv, handlers(client, cfg, overrides)); err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
 		}

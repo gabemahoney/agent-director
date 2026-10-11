@@ -154,6 +154,7 @@ func TestExpireStoreErrors(t *testing.T) {
 				if !errors.Is(err, errInjectedStore) {
 					t.Fatalf("Expire err = %v; want %v", err, errInjectedStore)
 				}
+				assertExpireJSON(t, res, `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`) // non-nil lists (b.hbt)
 				e.assertLookupsOn(t)
 				for _, r := range []killRow{a, b, c} {
 					assertNoTrailSince(t, mark, r.ID)

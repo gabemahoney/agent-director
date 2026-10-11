@@ -592,9 +592,11 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	}
 }
 
-// TestListHasSRDErrorNames: list's label k=v parse rejection (SRD §13.1).
+// TestListHasSRDErrorNames pins list's, and Client.List's "Errors:" list, to
+// exactly its label k=v parse rejection (SRD §13.1) and ErrInvalidFlags, the
+// shared layer's refusal of a negative limit (b.c4n).
 func TestListHasSRDErrorNames(t *testing.T) {
-	assertErrorNames(t, "list", "", false, "ErrListInvalidLabel")
+	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel")
 }
 
 // TestKillHasSRDErrorNames pins kill's ErrorNames, and Client.Kill's "Errors:"
@@ -612,17 +614,28 @@ func TestPauseHasSRDErrorNames(t *testing.T) {
 		"ErrSendKeysWhileRelayed", "ErrRelayFallenBack", "ErrDialogMaybeOpen")
 }
 
-// TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five names.
+// TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five
+// names and ErrInvalidFlags, the shared layer's refusal of a negative n_lines (b.c4n).
 func TestReadPaneHasInteractErrorNames(t *testing.T) {
-	assertErrorNames(t, "read-pane", "ReadPane", true, "ErrSpawnNotFound", "ErrTmuxCaptureFailed", "ErrTmuxNotAvailable",
-		"ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
+	assertErrorNames(t, "read-pane", "ReadPane", true, "ErrInvalidFlags", "ErrSpawnNotFound", "ErrTmuxCaptureFailed",
+		"ErrTmuxNotAvailable", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive")
 }
 
-// TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names.
+// TestResumeHasSRDErrorNames pins resume's to exactly SR-1.7's nine names and
+// ErrReservedEnvKey (a row whose stored extra env has HOME, b.nas, or a
+// malformed key, b.vpb).
 func TestResumeHasSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "resume", "Resume", true, "ErrJsonlMissing", "ErrJsonlNeverWritten", "ErrNoSessionId",
-		"ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",
+		"ErrReservedEnvKey", "ErrSpawnNotFound", "ErrSpawnNotResumable", "ErrTmuxNotAvailable", "ErrTmuxSessionConflict",
 		"ErrTmuxSessionCreate", "ErrTmuxUnresponsive")
+}
+
+// TestMakeTemplateHasErrorNames pins make-template's to exactly its three
+// template names and ErrReservedEnvKey, spawn's one name for every refused
+// extra_env key, reserved or malformed (b.66q).
+func TestMakeTemplateHasErrorNames(t *testing.T) {
+	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrTemplateNameUnsafe", "ErrTemplateExists",
+		"ErrTemplateMalformed", "ErrReservedEnvKey")
 }
 
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven

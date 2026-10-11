@@ -85,6 +85,7 @@
 package coveragegorootfires_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,17 +95,17 @@ import (
 
 // Gate identifiers and assertion literals, declared once per package (SR-7.3).
 const (
-	// gateKey is the SR-14 diagnostic field proving the coverage.go-root gate
-	// emitted the failure.
-	gateKey = `"gate":"coverage.go-root"`
+	// gateName is the SR-14 diagnostic gate value proving the coverage.go-root
+	// gate emitted the failure.
+	gateName = "coverage.go-root"
 	// fixtureModulePath is the fixture module's import root.  It contains a "/"
 	// so the gate's anchored FIRST_FAIL regex resolves the import path.
 	fixtureModulePath = "example.test/gorootfixture"
 	// fixturePkgImportPath is the import path of the failing fixture package —
 	// what the firing diagnostic must name.
 	fixturePkgImportPath = fixtureModulePath + "/broken"
-	// offendingArtifactField is the exact SR-14 offending_file_or_artifact JSON
-	// field the firing diagnostic must carry. Its value is derived from the gate's
+	// wantOffending is the exact SR-14 offending_file_or_artifact value the
+	// firing diagnostic must carry. Its value is derived from the gate's
 	// anchored FIRST_FAIL parse (go-root.sh:37): the wrong-arity mutation is a
 	// build failure, so `go test` emits "FAIL\texample.test/gorootfixture/broken
 	// [build failed]" and the awk field-2 extraction yields the package import
@@ -112,7 +113,10 @@ const (
 	// field (not on a bare Contains of the import path, which the SR-14
 	// last-50-lines excerpt would also satisfy) makes a degraded parse
 	// ("(unknown package)") fail the test.
-	offendingArtifactField = `"offending_file_or_artifact":"` + fixturePkgImportPath + ` [build failed]"`
+	wantOffending = fixturePkgImportPath + " [build failed]"
+	// failLine is the tab-separated `go test` FAIL line the description's
+	// excerpt must carry once decoded, so the TAB survived as JSON (b.v46).
+	failLine = "FAIL\t" + wantOffending
 	// okLine is the substring of `go test` stdout proving the fixture module was
 	// actually tested (closes the cd-fallback hazard).
 	okLine = "ok  \t" + fixturePkgImportPath
@@ -191,6 +195,33 @@ func runGate(t *testing.T, root, worktreeRoot string) (exitCode int, stdout, std
 	return cmd.ProcessState.ExitCode(), stdoutBuf.String(), stderrBuf.String()
 }
 
+// diagnostic is the SR-14 object; Offending is nil for JSON null.
+type diagnostic struct {
+	Gate        string  `json:"gate"`
+	Offending   *string `json:"offending_file_or_artifact"`
+	Description string  `json:"description"`
+}
+
+// decodeDiagnostic requires exactly one stderr line starting with '{' (what
+// run-parallel.sh collects) and decodes it as strict JSON (b.v46).
+func decodeDiagnostic(t *testing.T, stderr string) diagnostic {
+	t.Helper()
+	var lines []string
+	for _, l := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(l, "{") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("firing: want 1 diagnostic line on stderr, got %d\nstderr:\n%s", len(lines), stderr)
+	}
+	var d diagnostic
+	if err := json.Unmarshal([]byte(lines[0]), &d); err != nil {
+		t.Fatalf("firing: diagnostic is not valid JSON: %v\nline: %q", err, lines[0])
+	}
+	return d
+}
+
 // repoRoot walks up from the package working directory until it finds go.mod.
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -242,8 +273,9 @@ func TestCoverageGoRootFires(t *testing.T) {
 	if exit == 0 {
 		t.Fatalf("firing: expected coverage.go-root to exit non-zero on wrong-arity mutation, got 0\nstderr:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, gateKey) {
-		t.Fatalf("firing: gate stderr missing %q\nstderr:\n%s", gateKey, stderr)
+	d := decodeDiagnostic(t, stderr)
+	if d.Gate != gateName {
+		t.Fatalf("firing: diagnostic gate = %q, want %q", d.Gate, gateName)
 	}
 	// Parse-derived identity: the offending_file_or_artifact field must carry the
 	// value the gate's anchored FIRST_FAIL parse produced for OUR injected build
@@ -252,8 +284,11 @@ func TestCoverageGoRootFires(t *testing.T) {
 	// embeds, so it could not distinguish a healthy parse from one that regressed
 	// to "(unknown package)". Anchoring on the JSON field asserts the parse itself
 	// resolved the import path, so a degraded parse fails this test (b.93m).
-	if !strings.Contains(stderr, offendingArtifactField) {
-		t.Fatalf("firing: diagnostic offending_file_or_artifact is not the parse-derived %q\nstderr:\n%s", offendingArtifactField, stderr)
+	if d.Offending == nil || *d.Offending != wantOffending {
+		t.Fatalf("firing: diagnostic offending_file_or_artifact is not the parse-derived %q\nstderr:\n%s", wantOffending, stderr)
+	}
+	if !strings.Contains(d.Description, failLine) {
+		t.Fatalf("firing: decoded description lacks the tab-separated %q\ndescription:\n%s", failLine, d.Description)
 	}
 
 	// ── PASSING PROOF ───────────────────────────────────────────────────────

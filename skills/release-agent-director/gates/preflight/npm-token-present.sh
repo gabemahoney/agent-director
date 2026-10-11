@@ -3,9 +3,17 @@
 # checks:      $NPM_TOKEN env var is set and non-empty
 # pass:        silent exit 0
 # fail:        emit SR-14 JSON diagnostic to stderr, exit 1
-# depends on:  (none — env check only)
+# depends on:  jq (via emit_diagnostic) — env check only
+
+GATE_LIB="$(cd "$(dirname "$0")/../lib" && pwd)"
+# shellcheck source=../lib/emit-diagnostic.sh
+source "${GATE_LIB}/emit-diagnostic.sh"
 
 if [ -z "${NPM_TOKEN:-}" ]; then
-  printf '{"gate":"preflight.npm-token-present","offending_file_or_artifact":null,"description":"NPM_TOKEN environment variable is not set or is empty.","corrective_action":"Set NPM_TOKEN in your shell before invoking /release."}\n' >&2
+  emit_diagnostic \
+    "preflight.npm-token-present" \
+    "null" \
+    "NPM_TOKEN environment variable is not set or is empty." \
+    "Set NPM_TOKEN in your shell before invoking /release."
   exit 1
 fi

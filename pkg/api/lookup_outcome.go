@@ -23,9 +23,9 @@ import (
 // (SR-1.4): no tmux action was sent and nothing was written.
 const nothingWasDone = "nothing was done"
 
-// operatorActionsPointer points a refusal that needs a human to the README's
-// "Operator actions" section by its title (SR-1.4, SR-18.17).
-const operatorActionsPointer = `see "Operator actions" in the agent-director README`
+// operatorActionsPointer points a refusal that needs a human to
+// docs/operator-actions.md, quoting its title (SR-1.4, SR-18.17).
+const operatorActionsPointer = `see "Operator actions" in agent-director's docs/operator-actions.md`
 
 // listSessionNameHint names the command that shows whether a row uses a
 // session name (SR-1.4); it ends no session. It names list's session-name

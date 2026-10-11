@@ -5,8 +5,9 @@
 // it at ~/.agent-director/admin/agent-director-admin and never on PATH.
 //
 // Like cmd/agent-director it is a thin shim: it parses and applies
-// agent-director's global flags (--store-path, --home, --tmux-command) with
-// the same code (clisetup.ParseGlobalFlags, GlobalFlags.Apply), parses the
+// agent-director's global flags (--store-path, --home, --tmux-command,
+// --create-if-missing) with the same code (clisetup.ParseGlobalFlags,
+// GlobalFlags.Apply), parses the
 // verb's flags, opens the pkg/api Client exactly as agent-director does
 // (clisetup.Open), calls through internal/adminapi and prints the result as
 // JSON on stdout, or one {err_name, err_description} envelope on stderr with
@@ -134,7 +135,10 @@ func helpHandler([]string) error {
 }
 
 // versionHandler prints the build-time version stamp as JSON, as
-// agent-director version does.
+// agent-director version does. pkg/api.Version never errors today; a failure
+// is named as runOnClient names a verb's (errnames.Classify: its Catalog
+// name, else ErrInternal), never ErrJSONMarshal, which is only for
+// writeJSON's json.Marshal (b.3jc).
 func versionHandler(args []string) error {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
 	if done, err := parseFlags(fs, args); done {
@@ -142,7 +146,8 @@ func versionHandler(args []string) error {
 	}
 	res, err := pkgapi.Version()
 	if err != nil {
-		return writeError(errJSONMarshal, err.Error())
+		name, desc := errnames.Classify(err)
+		return writeError(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(res)
 }

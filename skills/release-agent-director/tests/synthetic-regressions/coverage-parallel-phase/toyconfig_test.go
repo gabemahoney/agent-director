@@ -91,7 +91,7 @@ const (
 type toyGate struct {
 	Name    string `json:"name"`
 	Command string `json:"command"`
-	Cwd     string `json:"cwd"`
+	Cwd     string `json:"cwd,omitempty"` // empty omits the key (missing_cwd_test.go)
 }
 
 type toyConfig struct {

@@ -183,16 +183,22 @@ func runSpawnCLI(t *testing.T, home, fakeTmuxDir string, args ...string) (string
 // TMUX, so no two tests share a socket or fake table (SR-20.3).
 func runSpawnCLIEnv(t *testing.T, home, fakeTmuxDir string, extraEnv map[string]string, args ...string) (string, string, int) {
 	t.Helper()
-	env := []string{
-		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
-		"HOME=" + home,
-		"FAKE_TMUX_LOG=" + filepath.Join(home, "fake-tmux.log"),
-		"TMUX_TMPDIR=" + spawnTmuxTmpdir(t, home),
-	}
+	env := append(fakeTmuxEnv(t, home, fakeTmuxDir), "HOME="+home)
 	for k, v := range extraEnv {
 		env = append(env, k+"="+v)
 	}
 	return mustRun(t, cliOpts{env: env}, args...)
+}
+
+// fakeTmuxEnv is runSpawnCLI's environment without HOME: fakeTmuxDir first on
+// PATH, the fake's log at <home>/fake-tmux.log and home's TMUX_TMPDIR.
+func fakeTmuxEnv(t *testing.T, home, fakeTmuxDir string) []string {
+	t.Helper()
+	return []string{
+		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
+		"FAKE_TMUX_LOG=" + filepath.Join(home, "fake-tmux.log"),
+		"TMUX_TMPDIR=" + spawnTmuxTmpdir(t, home),
+	}
 }
 
 // errorEnvelope mirrors the JSON shape main.go emits on stderr for an error.

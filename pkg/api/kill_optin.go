@@ -132,9 +132,15 @@ func (k *killRun) leftover(leftovers []tmux.Session, launch tmux.Launch) error {
 // the kill sequence runs on every one of the sessions: one pane listing (no
 // server at the socket any more is decided as a Gone lookup, as on Ours, and
 // a listing that cannot decide is its error, nothing sent), endAbandoned's
-// kills, then the check, whose follow-up lookup, if the agent process cannot
-// be checked, succeeds only once none of those sessions is listed. No
-// adoption runs (the verdict is not Ours) and nothing is written.
+// kills, then the check. When the youngest session's agent process can be
+// checked, the process wait covers it and every listed process. When it
+// cannot, the follow-up lookup must find none of those sessions listed, and
+// then the process wait covers every listed process (check, waitListed;
+// b.myx), so a process that outlives its kill, an older session's agent
+// whose pane was moved into another session included, is ErrTmuxKillFailed
+// naming its pid on either path. Only this path can make both the follow-up
+// and the wait. No adoption runs (the verdict is not Ours) and nothing is
+// written.
 func (k *killRun) abandonedLaunch(leftovers []tmux.Session, launch tmux.Launch) error {
 	row := preLaunchRowOf(k.row, k.row.TmuxSessionName, k.socket).startingSessionRow
 	lim := startingSessionLimits{Bound: k.startingSession, Window: k.stoppingWindow}
@@ -163,12 +169,15 @@ func (k *killRun) abandonedLaunch(leftovers []tmux.Session, launch tmux.Launch) 
 // read now, before any kill, as an adoption would record it (none when it
 // cannot be read or is gone). The agent process the check judges is the
 // youngest session's (the one the age step judged); with no agent pane there
-// is none, so the check falls to the follow-up lookup. The listed processes
+// is none, so the check makes its follow-up lookup. The listed processes
 // are those of every pane the listing shows in the sessions
 // (sessionProcesses), then each older session's agent pane process wherever
 // its pane now is, so one moved out of those sessions is waited for too
 // (appendProcesses: each pid once, never the agent's, and none whose start
-// time could not be read, as sessionProcesses).
+// time could not be read, as sessionProcesses). The check waits for every
+// listed process whether or not the agent process can be checked: with it,
+// and without it after a follow-up lookup that finds none of the sessions
+// still listed (b.myx).
 //
 // Then, lowest $N first, for each session the pane kill of its agent pane
 // (each pane once) and, always, the session kill by its tmux id; a failed or

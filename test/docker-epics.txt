@@ -1,7 +1,11 @@
 # Canonical list of Docker harness EPIC slugs supported by `make test-docker EPIC=<slug>`.
 # Each line is one slug. Blank lines and lines starting with # are ignored.
-# Consumers: `make list-test-docker-epics` (auto-enumerates this file) and
-# the /release skill's coverage gate (E5).
+# Consumers: `make list-test-docker-epics` (auto-enumerates this file), the
+# /release skill's coverage gate (E5), and the CI matrix in
+# .github/workflows/integration.yml, which runs every listed slug on push to
+# main (a pull_request runs harness-smoke only). That matrix fails the run
+# when a slug has a character outside [A-Za-z0-9._-], and every pull_request
+# run fails if harness-smoke is not listed: keep it listed.
 epic-03-spawn
 epic-04-interact
 epic-05-stop

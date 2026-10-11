@@ -7,9 +7,9 @@ import (
 // TestTrailEmitRelayAttemptCLI: trail-emit relay-attempt, DB-free (SR-A-2.3),
 // prints {} and appends one ad.relay_attempt.completed line carrying its
 // flags, the outcome a JSON number for an HTTP status and a string for a named
-// class, the byte counts 0 when omitted, and source relay_hook (SR-A-1.4).
-// Its flag refusals are advice_follow_cli_test.go's H2 and H3; the outcome
-// parse is trail_emit_cmd_test.go's.
+// class, the byte counts 0 when omitted and read as decimal (b.c4n), and source
+// relay_hook (SR-A-1.4). Its flag refusals are advice_follow_cli_test.go's H2,
+// H3 and H7 and int_flags_cli_test.go's; the outcome parse is trail_emit_cmd_test.go's.
 func TestTrailEmitRelayAttemptCLI(t *testing.T) {
 	for _, tc := range []struct {
 		outcome     string
@@ -18,6 +18,7 @@ func TestTrailEmitRelayAttemptCLI(t *testing.T) {
 		wantBytes   float64
 	}{
 		{"404", []string{"--bytes-sent", "1024", "--bytes-received", "1024"}, float64(404), 1024},
+		{"200", []string{"--bytes-sent", "010", "--bytes-received", "010"}, float64(200), 10},
 		{"connection_refused", nil, "connection_refused", 0},
 	} {
 		t.Run(tc.outcome, func(t *testing.T) {

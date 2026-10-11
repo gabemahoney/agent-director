@@ -5,6 +5,8 @@ package main_test
 // source of this package, whether or not the file imports flag, and fails
 // when a verb's FlagSet registers a flag that is not one of the verb's
 // manifest params, a manifest param has no flag, or a flag has no usage text.
+// The same scan backs the decimal-only guard: no flag package integer helper
+// registers a flag (TestCLIIntFlagsAreDecimal, b.c4n).
 //
 // Every flag.FlagSet value must be a local variable defined from
 // flag.NewFlagSet with a constant name naming its verb, and used only as a
@@ -69,16 +71,26 @@ var nonFlagParams = map[string][]string{
 	"hook":       {"stdin"},       // the hook payload on stdin
 }
 
-// cliFlag is one flag registration found in the CLI's sources.
-type cliFlag struct{ name, usage, at string }
+// cliFlag is one flag registration found in the CLI's sources: the flag's
+// name, its usage text, its position and the FlagSet method registering it.
+type cliFlag struct{ name, usage, at, method string }
+
+// intFlagHelpers are the flag package's integer registrations, FlagSet
+// methods and package functions alike, which parse with base 0 (b.c4n).
+var intFlagHelpers = map[string]bool{
+	"Int": true, "IntVar": true, "Int64": true, "Int64Var": true,
+	"Uint": true, "UintVar": true, "Uint64": true, "Uint64Var": true,
+}
 
 // cliScan is what the source scan found: each verb's flags, keyed by the verb
-// its FlagSet is named for, the verbs that have a FlagSet, and the keys of the
-// dispatch table handlers returns.
+// its FlagSet is named for, the verbs that have a FlagSet, the keys of the
+// dispatch table handlers returns, and the position of every call to a flag
+// package integer function (intFlagHelpers).
 type cliScan struct {
 	flags      map[string][]cliFlag
 	sets       map[string]bool
 	dispatched []string
+	intFuncs   []string
 }
 
 // TestCLIFlagsAreManifestParams: every main-CLI verb registers exactly its
@@ -133,6 +145,27 @@ func TestMCPExposedVerbExceptions(t *testing.T) {
 	sort.Strings(hidden)
 	if want := []string{"hook", "serve", "trail-emit"}; !slices.Equal(hidden, want) {
 		t.Errorf("verbs MCP does not expose = %v; want exactly %v", hidden, want)
+	}
+}
+
+// TestCLIIntFlagsAreDecimal: no flag is registered with a flag package integer
+// helper, whose base-0 parse reads "010" as 8 and takes "0x10"; every int flag
+// uses newDecimalInt through FlagSet.Var instead (b.c4n).
+func TestCLIIntFlagsAreDecimal(t *testing.T) {
+	s := scanCLISources(t)
+	nLines := slices.IndexFunc(s.flags["read-pane"], func(f cliFlag) bool { return f.name == "n-lines" })
+	if nLines < 0 || s.flags["read-pane"][nLines].method == "" {
+		t.Fatalf("the scan found no read-pane --n-lines with its registering method (found %v); the checks below would pass vacuously", s.flags["read-pane"])
+	}
+	for _, verb := range sortedKeys(s.flags) {
+		for _, f := range s.flags[verb] {
+			if intFlagHelpers[f.method] {
+				t.Errorf("%s: %s flag --%s is registered with FlagSet.%s; register it with fs.Var(newDecimalInt(...), ...)", f.at, verb, f.name, f.method)
+			}
+		}
+	}
+	for _, at := range s.intFuncs {
+		t.Errorf("%s registers an integer flag on flag.CommandLine; use a verb's FlagSet and newDecimalInt", at)
 	}
 }
 
@@ -312,6 +345,9 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 				if _, reg := flagRegistrars[name]; reg {
 					bad(n, "flag.%s registers on flag.CommandLine, which no verb owns", name)
 				}
+				if intFlagHelpers[name] {
+					s.intFuncs = append(s.intFuncs, fset.Position(n.Pos()).String()+": flag."+name)
+				}
 				if name == "NewFlagSet" && !bound[n] {
 					bad(n, "a flag.NewFlagSet is not a new local variable's value; its flags cannot be attributed to a verb")
 				}
@@ -386,7 +422,7 @@ func (s *cliScan) flagSetCall(info *types.Info, n *ast.SelectorExpr, sel *types.
 		bad(call, "%s FlagSet.%s's flag name or usage is not a constant string; the scan cannot read it", verb, m)
 		return
 	}
-	s.flags[verb] = append(s.flags[verb], cliFlag{name: name, usage: usage, at: at})
+	s.flags[verb] = append(s.flags[verb], cliFlag{name: name, usage: usage, at: at, method: m})
 }
 
 // checkExcludedFile fails on a file this platform's build excludes that

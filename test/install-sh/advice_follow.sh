@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J19). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J22). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -37,7 +37,7 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 INSTALL_SRC="$REPO_ROOT/skills/install-agent-director/install.sh"
 SQLITE="$(command -v sqlite3)"
 ROOT="$(mktemp -d -t ad-advice-install.XXXXXX)"
-trap 'rm -rf "$ROOT"' EXIT
+trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
 die() { echo "advice_follow.sh: setup failed: $*" >&2; exit 1; }
 
@@ -136,10 +136,22 @@ printf '{"Replace":{"%s":"%s"}}\n' "$REPO_ROOT/internal/store/store.go" "$ROOT/s
 (cd "$REPO_ROOT" && CGO_ENABLED=0 go build -overlay "$ROOT/overlay.json" -ldflags "$STAMP" -o "$BIN_NEWER" ./cmd/agent-director) \
     || die "go build (newer)"
 
-# FAKE_AD (J17): a binary for this host stamped as ADMIN, so install.sh
+# FAKE_AD (J17, J22): a binary for this host stamped as ADMIN, so install.sh
 # installs it as agent-director; its `list` does what $HOME/fake-list says
 # (j17_fake), for the store-open outcomes the real binary does not give.
 FAKE_AD="$ROOT/bin/agent-director-fake"
+# FAKE_AROUND: its `list` in mode "around" (J22): BIN's own, with
+# $HOME/fake-before sourced before it and $HOME/fake-after after it succeeds,
+# each once, as a config edit or a cleanup between install.sh's pre-flight
+# and its step 5 would.
+FAKE_AROUND="$ROOT/fake-list-around.sh"
+cat >"$FAKE_AROUND" <<EOF
+#!/bin/bash
+if [[ -e "\$HOME/fake-before" ]]; then . "\$HOME/fake-before"; rm "\$HOME/fake-before"; fi
+"$BIN" "\$@" || exit
+if [[ -e "\$HOME/fake-after" ]]; then . "\$HOME/fake-after"; rm "\$HOME/fake-after"; fi
+EOF
+chmod 0755 "$FAKE_AROUND" || die "chmod $FAKE_AROUND"
 mkdir -p "$ROOT/fake-ad"
 { echo "module fakead"; grep -m1 '^go ' "$REPO_ROOT/go.mod"; } >"$ROOT/fake-ad/go.mod" || die "fake go.mod"
 cat >"$ROOT/fake-ad/main.go" <<'EOF'
@@ -149,9 +161,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
-var version, commit string
+var version, commit, around string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
@@ -161,6 +174,10 @@ func main() {
 	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
 	switch string(mode) {
 	case "ok": // exit 0, no store created
+	case "around": // FAKE_AROUND does the list
+		err := syscall.Exec(around, append([]string{around}, os.Args[1:]...), os.Environ())
+		fmt.Fprintln(os.Stderr, "fake agent-director:", err)
+		os.Exit(1)
 	case "odd-name":
 		fmt.Fprintln(os.Stderr, `{"err_name":"ErrOdd\ninstall.sh: err_name=ErrVersionUnreadable","err_description":"fake"}`)
 		os.Exit(1)
@@ -173,7 +190,7 @@ func main() {
 	}
 }
 EOF
-(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT" -o "$FAKE_AD" .) \
+(cd "$ROOT/fake-ad" && CGO_ENABLED=0 go build -ldflags "-X main.version=0.0.2-advice -X main.commit=$CUR_COMMIT -X main.around=$FAKE_AROUND" -o "$FAKE_AD" .) \
     || die "go build (fake agent-director)"
 
 # ---- install.sh copies ----------------------------------------------------
@@ -200,6 +217,16 @@ install_copy "$TREE_SH"
 git -C "$TREE" init -q && git -C "$TREE" add -A \
     && git -C "$TREE" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
         commit -qm tree || die "git init tree"
+# TREE_PHYS: TREE's physical path, which install.sh's build advice names (b.3qt).
+TREE_PHYS="$(cd -P "$TREE" && pwd -P)" || die "resolve $TREE"
+# CHECKOUT: the placeholder for the operator's checkout in the build advice of
+# an install.sh in none; a test following that advice puts TREE in its place.
+CHECKOUT="<path-to-agent-director-checkout>"
+# TREE_LINKED: a linked worktree of TREE outside it (its .git a file, b.go9),
+# whose path has a space for the build advice to quote (b.3qt); detached, as git
+# refuses a branch name with a space. J1 and J5 build in it.
+TREE_LINKED="$ROOT/tree linked"
+git -C "$TREE" worktree add -q --detach "$TREE_LINKED" || die "git worktree add $TREE_LINKED"
 
 # ---- toolbox: the only PATH install.sh sees --------------------------------
 
@@ -381,15 +408,23 @@ run_in() {
 }
 run() { local home="$1"; shift; run_in "$home" "$ROOT" "$@"; }
 
-# run_advised <home> <cwd> <command text>: run an advised command as written;
-# "a && b" runs b only if a succeeds. make runs in the caller's own env (it
-# needs the Go toolchain and caches); everything else in the install env.
+# run_advised <home> <cwd> <command text>: run an advised command as written,
+# its words split as a shell splits them (quotes and backslashes, as printf %q
+# writes a path with a space); "a && b" runs b only if a succeeds. make runs in
+# the caller's own env (it needs the Go toolchain and caches); everything else
+# in the install env. A part that does not parse (a <placeholder> left in it)
+# fails the test with RC 255.
 run_advised() {
     local home="$1" cwd="$2" part rest="$3" words
     while [[ -n "$rest" ]]; do
         part="${rest%% && *}"
         [[ "$part" == "$rest" ]] && rest="" || rest="${rest#* && }"
-        read -r -a words <<<"$part"
+        words=()
+        if ! eval "words=($part)" 2>/dev/null || [[ ${#words[@]} -eq 0 ]]; then
+            bad "advised command does not parse as shell words: $part"
+            RC=255
+            return 0
+        fi
         if [[ "${words[0]}" == make ]]; then
             RUN_N=$((RUN_N + 1)); OUT="$ROOT/runs/$RUN_N.out" ERR="$ROOT/runs/$RUN_N.err"
             (cd "$cwd" && "${words[@]}") >"$OUT" 2>"$ERR"; RC=$?
@@ -454,11 +489,13 @@ expect_installed() {
     [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
 }
 
-# hooks_injected <home>: home's settings.json holds both `agent-director help`
-# hooks, SessionStart and SessionEnd reason=compact.
+# hooks_injected <home>: home's settings.json is one JSON document holding both
+# `agent-director help` hooks, SessionStart and SessionEnd reason=compact, each
+# in an entry's hooks list (an entry that is null, or has no list, is passed over).
 hooks_injected() {
-    jq -e --arg c "$1/.agent-director/bin/agent-director help" 'any(.hooks.SessionStart[]; any(.hooks[]; .command == $c))
-        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks[]; .command == $c))' \
+    jq -se --arg c "$1/.agent-director/bin/agent-director help" 'length == 1 and (.[0]
+        | any(.hooks.SessionStart[]; any(.hooks | arrays | .[]; .command == $c))
+        and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks | arrays | .[]; .command == $c)))' \
         "$1/.claude/settings.json" >/dev/null 2>&1
 }
 
@@ -486,27 +523,49 @@ run_test() {
 
 # ---- J1: --from-release, no release published -------------------------------
 
-# J1: "point at local binaries: bash $0 --binary <path> --admin-binary <path>"
+# J1: "point at local binaries: bash <$0 %q> --binary <path> --admin-binary
+# <path>", from LOOSE and from a copy in no checkout whose path has a space,
+# which the advice quotes (b.3qt).
 test_J1_NoReleasePointAtLocalBinaries() {
-    local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --from-release --no-hooks --no-symlink
-    expect_rc 3 "no release published" || return
-    expect_advice "point at local binaries: bash $LOOSE --binary <path> --admin-binary <path>"
-    local cmd; cmd="$(advice_after "point at local binaries: ")" || { bad "no advised command"; return; }
-    cmd="${cmd/--binary <path>/--binary $BIN}"
-    run_advised "$h" "$ROOT" "${cmd/--admin-binary <path>/--admin-binary $ADMIN}"
-    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
+    local h sh cmd spaced="$ROOT/loose spaced/skills/install-agent-director/install.sh"
+    install_copy "$spaced"
+    for sh in "$LOOSE" "$spaced"; do
+        h="$(new_home)"
+        run "$h" bash "$sh" --from-release --no-hooks --no-symlink
+        expect_rc 3 "$sh: no release published" || continue
+        expect_advice "point at local binaries: bash $(printf '%q' "$sh") --binary <path> --admin-binary <path>"
+        cmd="$(advice_after "point at local binaries: ")" || { bad "$sh: no advised command"; continue; }
+        cmd="${cmd/--binary <path>/--binary $BIN}"
+        run_advised "$h" "$ROOT" "${cmd/--admin-binary <path>/--admin-binary $ADMIN}"
+        expect_rc 0 "$sh: advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
+    done
 }
 
-# J1: "build from source: make build && bash $0"
+# J1: "build from source: make -C <checkout %q> build && bash <$0 %q>", run and
+# followed outside any checkout (b.3qt): a checkout's install.sh names it (TREE,
+# and TREE_LINKED, whose path has a space); a copy in no checkout (LOOSE) or in
+# another repo (a dotfiles ~/.claude) names CHECKOUT and its install.sh, here TREE.
 test_J1_NoReleaseBuildFromSource() {
-    local h; h="$(new_home)"
-    run_in "$h" "$TREE" bash "$TREE_SH" --from-release --no-hooks --no-symlink
-    expect_rc 3 "no release published" || return
-    expect_advice "build from source: make build && bash $TREE_SH"
-    local cmd; cmd="$(advice_after "build from source: ")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
-    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+    local c h sh tree want cmd
+    for c in tree linked loose dotfiles; do
+        h="$(new_home)" tree="$TREE"
+        case "$c" in
+            tree) sh="$TREE_SH" ;;
+            linked) tree="$TREE_LINKED" sh="$TREE_LINKED/skills/install-agent-director/install.sh" ;;
+            loose) sh="$LOOSE" ;;
+            dotfiles) sh="$(j5_dotfiles "$h" claude)" || { bad "$c: dotfiles repo"; continue; } ;;
+        esac
+        want="make -C $CHECKOUT build && bash $CHECKOUT/skills/install-agent-director/install.sh"
+        if [[ "$c" == tree || "$c" == linked ]]; then
+            want="make -C $(printf '%q' "$(cd -P "$tree" && pwd -P)") build && bash $(printf '%q' "$sh")"
+        fi
+        run "$h" bash "$sh" --from-release --no-hooks --no-symlink
+        expect_rc 3 "$c: no release published" || continue
+        expect_advice "build from source: $want"
+        cmd="$(advice_after "build from source: ")" || { bad "$c: no advised command"; continue; }
+        run_advised "$h" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
+        expect_rc 0 "$c: advised: $cmd" && expect_installed "$h" "$tree/bin/agent-director" "$tree/bin/agent-director-admin"
+    done
 }
 
 # ---- J2: --from-release download failed after retries ------------------------
@@ -723,6 +782,39 @@ test_J3_InstalledSkillRerunPairsInstalledAdmin() {
     done
 }
 
+# J3: the refusal for both binaries names the in-repo paths it tried as
+# <root>/bin/..., with no ../.. (b.j6w), from install.sh's usual place and
+# through a symlinked skill directory (whose ../.. is the real root). With the
+# binaries put at those paths, the re-run's "source  :" and "admin source:"
+# name them the same way.
+test_J3_TriedPathsResolved() {
+    local dir sh h root="$ROOT/j3-tried"
+    install_copy "$root/skills/install-agent-director/install.sh"
+    mkdir -p "$ROOT/j3-tried-link/skills" \
+        && ln -s "$root/skills/install-agent-director" "$ROOT/j3-tried-link/skills/install-agent-director" \
+        || { bad "symlink the skill directory"; return; }
+    root="$(cd -P "$root" && pwd -P)"
+    for dir in j3-tried j3-tried-link; do
+        sh="$ROOT/$dir/skills/install-agent-director/install.sh" h="$(new_home)"
+        rm -rf "$root/bin"
+        run "$h" bash "$sh" --no-hooks --no-symlink
+        expect_rc 3 "$dir: no source binaries" || continue
+        grep -qxF "  Tried: $root/bin/agent-director" "$ERR" \
+            || bad "$dir: no \"Tried: $root/bin/agent-director\" line: $(flat "$ERR")"
+        grep -qxF "  Tried: $root/bin/agent-director-admin" "$ERR" \
+            || bad "$dir: no \"Tried: $root/bin/agent-director-admin\" line: $(flat "$ERR")"
+        { mkdir -p "$root/bin" && cp "$BIN" "$root/bin/agent-director" && cp "$ADMIN" "$root/bin/agent-director-admin"; } \
+            || { bad "$dir: put the binaries at the paths tried"; continue; }
+        run "$h" bash "$sh" --no-hooks --no-symlink
+        expect_rc 0 "$dir: re-run with the binaries at the paths tried" || continue
+        grep -qxF "  source  : $root/bin/agent-director" "$OUT" \
+            || bad "$dir: no \"source  : $root/bin/agent-director\" line: $(flat "$OUT")"
+        grep -qxF "  admin source: $root/bin/agent-director-admin" "$OUT" \
+            || bad "$dir: no \"admin source: $root/bin/agent-director-admin\" line: $(flat "$OUT")"
+        expect_installed "$h" "$BIN" "$ADMIN"
+    done
+}
+
 # ---- J4: wrong-architecture --binary ---------------------------------------------
 
 # J4: "Did you pass the wrong --binary?"
@@ -750,30 +842,31 @@ test_J4_ArchMismatchRightAdminBinary() {
 # ---- J5: source-tree version check -------------------------------------------------
 
 # j5_stale: put a binary not built from the tree's HEAD at the tree's bin/ and
-# run install.sh on it; leaves the J5 refusal in RC/ERR.
+# run install.sh on it from outside the tree; leaves the J5 refusal in RC/ERR.
 j5_stale() {
     mkdir -p "$TREE/bin" && cp "$BIN" "$TREE/bin/agent-director" && cp "$ADMIN" "$TREE/bin/agent-director-admin"
-    run_in "$1" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
+    run "$1" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
     expect_rc 3 "stale binary" || return 1
-    expect_advice "rebuild it first: make build"
+    expect_advice "rebuild it first: make -C $TREE_PHYS build"
     expect_advice "or download release: rerun with --from-release (omit --binary)"
 }
 
-# J5: "rebuild it first: make build", over an installed pair of another build:
-# the checkout's agent-director-admin is used, not the installed one (b.azo).
+# J5: "rebuild it first: make -C <checkout> build", followed outside the
+# checkout (b.3qt), over an installed pair of another build: the checkout's
+# agent-director-admin is used, not the installed one (b.azo).
 test_J5_StaleBinaryMakeBuild() {
-    local h got; h="$(new_home)"; j11_paths "$h"
+    local h want; h="$(new_home)"; j11_paths "$h"
     run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "install the old pair" || return
     j5_stale "$h" || return
     local cmd; cmd="$(advice_after "rebuild it first:")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
+    run_advised "$h" "$ROOT" "$cmd"
     expect_rc 0 "advised: $cmd" || return
-    run_in "$h" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
+    run "$h" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
     expect_rc 0 "re-run after make build" || return
-    got="$(grep -m1 '^  admin source: ' "$OUT")" got="${got#  admin source: }"
-    [[ -n "$got" && "$got" -ef "$TREE/bin/agent-director-admin" ]] \
-        || bad "admin source \"$got\"; want $TREE/bin/agent-director-admin, not the installed $J11A"
+    want="$TREE_PHYS/bin/agent-director-admin" # no ../.. (b.j6w)
+    grep -qxF "  admin source: $want" "$OUT" \
+        || bad "no \"admin source: $want\" line, not the installed $J11A: $(flat "$OUT")"
     expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
@@ -782,8 +875,110 @@ test_J5_StaleBinaryFromRelease() {
     local h; h="$(new_home)"
     j5_stale "$h" || return
     FAKE_CURL_API_TAG="$REL_TAG"
-    run_in "$h" "$TREE" bash "$TREE_SH" --no-hooks --no-symlink --from-release
+    run "$h" bash "$TREE_SH" --no-hooks --no-symlink --from-release
     expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# j5_worktree <worktree> <what> [<skill dir>]: J5 from a git worktree of TREE,
+# with the in-repo build (b.go9), running install.sh from skill dir (default
+# the worktree's own) outside any checkout. A stale pair in its bin/ is
+# refused, naming the worktree's own HEAD and physical path (b.1rs), and the
+# advice make -C that path, quoted for a shell (b.3qt); after following it
+# from the same directory, the same command installs the rebuilt pair.
+j5_worktree() {
+    local wt="$1" what="$2" h head cmd root
+    local -a argv=(bash "${3:-$wt/skills/install-agent-director}/install.sh" --no-hooks --no-symlink)
+    h="$(new_home)"
+    head="$(git -C "$wt" rev-parse HEAD)" || { bad "$what: git rev-parse HEAD"; return; }
+    root="$(cd -P "$wt" && pwd -P)" || { bad "$what: resolve $wt"; return; }
+    mkdir -p "$wt/bin" && cp "$BIN" "$wt/bin/agent-director" && cp "$ADMIN" "$wt/bin/agent-director-admin" \
+        || { bad "$what: put the stale pair in bin/"; return; }
+    run "$h" "${argv[@]}"
+    expect_rc 3 "$what: stale binary" || return
+    grep -qxF "install.sh: source-tree version check failed." "$ERR" || bad "$what: no check-failed line: $(flat "$ERR")"
+    grep -qxF "  HEAD    : $head ($root)" "$ERR" \
+        || bad "$what: \"$(grep -m1 '^  HEAD    : ' "$ERR")\"; want \"  HEAD    : $head ($root)\""
+    expect_advice "rebuild it first: make -C $(printf '%q' "$root") build"
+    expect_nothing_installed "$h"
+    cmd="$(advice_after "rebuild it first:")" || { bad "$what: no advised command"; return; }
+    run_advised "$h" "$ROOT" "$cmd"
+    expect_rc 0 "$what: advised: $cmd" || return
+    run "$h" "${argv[@]}"
+    expect_rc 0 "$what: re-run after make build" || return
+    grep -qxF "  version-check: binary commit matches HEAD ($head)" "$OUT" \
+        || bad "$what: no version-check line for $head: $(grep -F 'version-check' "$OUT")"
+    expect_installed "$h" "$wt/bin/agent-director" "$wt/bin/agent-director-admin"
+}
+
+# J5: "rebuild it first: make -C <checkout> build", in TREE_LINKED, a linked
+# worktree outside any other checkout, whose .git is a file (b.go9): the stale
+# pair is refused, not skipped; its path has a space, which the advice quotes,
+# so a shell runs it as one word (b.3qt).
+test_J5_LinkedWorktreeMakeBuild() {
+    j5_worktree "$TREE_LINKED" "linked worktree"
+}
+
+# J5: "rebuild it first: make -C <checkout> build", in a worktree nested
+# inside TREE and one commit ahead of it (b.go9): the check uses the
+# worktree's HEAD, not TREE's, and the advice names the worktree.
+test_J5_NestedWorktreeMakeBuild() {
+    local wt="$TREE/.claude/worktrees/nested"
+    git -C "$TREE" worktree add -q "$wt" \
+        && git -C "$wt" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
+            commit -q --allow-empty -m nested || { bad "nested worktree $wt"; return; }
+    j5_worktree "$wt" "nested worktree"
+}
+
+# J5: "rebuild it first: make -C <checkout> build", through a symlink to a
+# worktree's skill directory (b.1rs), run and followed outside the checkout, as
+# from ~ (b.3qt): the check and the advice use the checkout install.sh takes
+# bin/ from, though no checkout encloses the link.
+test_J5_SymlinkedSkillMakeBuild() {
+    local wt="$ROOT/tree-symlinked" link="$ROOT/j5-link/skills/install-agent-director"
+    git -C "$TREE" worktree add -q "$wt" && mkdir -p "${link%/*}" \
+        && ln -s "$wt/skills/install-agent-director" "$link" || { bad "worktree $wt linked at $link"; return; }
+    j5_worktree "$wt" "symlinked skill" "$link"
+}
+
+# j5_dotfiles <home> <layout>: a dotfiles repo with one commit and a copy of
+# install.sh in it, whose path it prints. Layouts: home (~ is the repo, the
+# installed skill under ~/.claude), claude (~/.claude is), claude-worktree
+# (~/.claude is a linked worktree of a repo outside ~, its .git a file),
+# source (~ is, and holds an agent-director tree ~/src/ad with no .git),
+# source-empty-git (as source, ~/src/ad/.git an empty directory, not a repo).
+j5_dotfiles() {
+    local h="$1" repo="$1" skill="$1/.claude/skills/install-agent-director"
+    case "$2" in
+        claude) repo="$h/.claude" ;;
+        claude-worktree) repo="$h.dotfiles" ;;
+        source*) skill="$h/src/ad/skills/install-agent-director" ;;
+    esac
+    mkdir -p "$repo" && git -C "$repo" init -q \
+        && git -C "$repo" -c user.name=advice -c user.email=advice@example.invalid -c commit.gpgsign=false \
+            commit -q --allow-empty -m dotfiles || return 1
+    case "$2" in
+        claude-worktree) git -C "$repo" worktree add -q --detach "$h/.claude" >/dev/null || return 1 ;;
+        source) mkdir -p "$h/src/ad/cmd/agent-director" || return 1 ;;
+        source-empty-git) mkdir -p "$h/src/ad/cmd/agent-director" "$h/src/ad/.git" || return 1 ;;
+    esac
+    install_copy "$skill/install.sh"
+    printf '%s' "$skill/install.sh"
+}
+
+# J5 does not come from a copy of install.sh in a dotfiles repo (b.1rs): not
+# the installed skill, and not an agent-director tree in it whose own .git is
+# missing or not a repo. Neither is a checkout of agent-director's source, so a
+# pair the repo's HEAD did not build, given as --binary and --admin-binary,
+# installs.
+test_J5_DotfilesSkillNotChecked() {
+    local layout h sh
+    for layout in home claude claude-worktree source source-empty-git; do
+        h="$(new_home)"
+        sh="$(j5_dotfiles "$h" "$layout")" || { bad "$layout: dotfiles repo"; continue; }
+        run "$h" bash "$sh" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+        expect_rc 0 "$layout: --binary from $sh" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+    done
 }
 
 # ---- J6: store open failed after install ------------------------------------------
@@ -1339,24 +1534,25 @@ EOF
 
 # ---- J9: agent-director and agent-director-admin stamps differ or carry no commit (b.vqr)
 
-# J9: "rebuild both first:  make build": a fresh agent-director beside a stale
-# agent-director-admin in the tree's bin/.
+# J9: "rebuild both first:  make -C <checkout> build": a fresh agent-director
+# beside a stale agent-director-admin in the tree's bin/, run and followed
+# outside the tree (b.3qt).
 test_J9_StampMismatchMakeBuild() {
     local h; h="$(new_home)"
     run_advised "$h" "$TREE" "make build"
     expect_rc 0 "make build in the tree" || return
     cp "$ADMIN_OLD" "$TREE/bin/agent-director-admin"
     local argv=(bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink)
-    run_in "$h" "$TREE" "${argv[@]}"
+    run "$h" "${argv[@]}"
     expect_rc 3 "stale agent-director-admin" || return
     expect_advice "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install."
     expect_advice "(0.0.1-advice-old $OLD_COMMIT)"
-    expect_advice "rebuild both first: make build"
+    expect_advice "rebuild both first: make -C $TREE_PHYS build"
     expect_nothing_installed "$h"
     local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
+    run_advised "$h" "$ROOT" "$cmd"
     expect_rc 0 "advised: $cmd" || return
-    run_in "$h" "$TREE" "${argv[@]}"
+    run "$h" "${argv[@]}"
     expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
@@ -1418,28 +1614,30 @@ test_J9_InstalledAdminStampMismatchFromRelease() {
     done
 }
 
-# J9: "rebuild both first:  make build" in j9_installed_mismatch's refusal,
-# run where install.sh ran, outside any checkout; the same command then
-# installs (a pair: install.sh refuses any other). Known broken: there is no
-# checkout to build in, and the re-run would pair the same two binaries (b.oo9).
+# J9: "rebuild both first:  make -C <path-to-agent-director-checkout> build"
+# in j9_installed_mismatch's refusal (the installed skill is in no checkout),
+# with TREE for the placeholder, run where install.sh ran, outside any
+# checkout; the same command then installs (a pair: install.sh refuses any
+# other). Known broken: the re-run pairs the same two binaries (b.oo9).
 test_J9_InstalledAdminStampMismatchMakeBuild() {
     local how cmd
     for how in PATH --binary; do
         j9_installed_mismatch "$how" || continue
-        expect_advice "rebuild both first: make build"
+        expect_advice "rebuild both first: make -C $CHECKOUT build"
         cmd="$(advice_after "rebuild both first:")" || { bad "$how: no advised command"; continue; }
-        known_broken J9 "filed as b.oo9: no checkout to run \"make build\" in, re-run of the installed skill" || return
-        run_advised "$J3H" "$ROOT" "$cmd"
+        known_broken J9 "filed as b.oo9: the re-run of the installed skill, in no checkout, pairs the same two binaries, not the rebuilt ones" || return
+        run_advised "$J3H" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
         expect_rc 0 "$how: advised: $cmd" || continue
         run "$J3H" "${J9ARGV[@]}"
         expect_rc 0 "$how: re-run after make build"
     done
 }
 
-# J9: "rebuild both first:  make build" when both binaries are plain `go
-# build`s (commit "unknown"), which nothing shows come from one build: refused
-# with nothing installed; make build in their checkout stamps both, and the
-# same command then installs them.
+# J9: "rebuild both first:  make -C <path-to-agent-director-checkout> build"
+# when both binaries are plain `go build`s (commit "unknown"), which nothing
+# shows come from one build: refused with nothing installed. LOOSE is in no
+# checkout, so the advice names a placeholder (b.3qt); make -C their checkout,
+# TREE, from outside it stamps both, and the same command then installs them.
 test_J9_NoCommitStampMakeBuild() {
     local h; h="$(new_home)"
     mkdir -p "$TREE/bin" && cp "$BIN_PLAIN" "$TREE/bin/agent-director" && cp "$ADMIN_PLAIN" "$TREE/bin/agent-director-admin" \
@@ -1450,10 +1648,10 @@ test_J9_NoCommitStampMakeBuild() {
     local want="install.sh: agent-director and agent-director-admin carry no commit stamp, so they cannot be shown to come from the same build; refusing to install."
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
     expect_advice "agent-director-admin: $TREE/bin/agent-director-admin (dev unknown)"
-    expect_advice "rebuild both first: make build"
+    expect_advice "rebuild both first: make -C $CHECKOUT build"
     expect_nothing_installed "$h"
     local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
-    run_advised "$h" "$TREE" "$cmd"
+    run_advised "$h" "$ROOT" "${cmd//"$CHECKOUT"/$TREE}"
     expect_rc 0 "advised: $cmd" || return
     run "$h" "${argv[@]}"
     expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
@@ -2218,30 +2416,56 @@ j17_fake other-name|install.sh: store open (agent-director list) failed after in
 EOF
 }
 
-# ---- J18: settings.json of another shape, hooks on (b.cfq) -------------------------
+# ---- J18: settings.json of another shape, hooks on (b.cfq, b.dzu) ------------------
 
 # J18: "It is valid JSON, but not an object whose hooks hold event lists, the
-# shape Claude Code reads. Fix it, then re-run this install." A hooks-on
-# install over such a settings.json exits 4, the hook merge failure, with jq's
-# error on the line above its headline and no exit-5 cause line, and leaves the
-# file as it was; rewritten to that shape, the re-run injects both hooks. Per
-# case <settings.json>|<fixed>.
+# shape Claude Code reads. Fix it, then re-run this install." Or, when the event
+# lists are lists but hold an entry, or an entry's hooks list a hook, that is
+# neither an object nor null (b.dzu): "It is valid JSON, and its hooks hold event
+# lists, but an entry in an event list, or a hook in an entry's hooks list, is
+# not an object, the shape Claude Code reads. Not an object:", each such value's
+# path on a line of its own, then "Fix it, then re-run this install." A file
+# wrong on both sides gets the first. A hooks-on install over such a
+# settings.json exits 4, the hook merge failure, with jq's error on the line
+# above its headline and no exit-5 cause line, and leaves the file byte for
+# byte with nothing beside it; rewritten to that shape (for the second, the
+# listed values taken out, nulls kept), the re-run injects both hooks. Per case
+# <settings.json>|<fixed>|<paths listed, none for the first>, @CMD@ the help
+# hook's command: a SessionStart object holding that hook is not the hook
+# already there (b.zbg).
 test_J18_SettingsShapeFixAndRerun() {
     local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
-    local h sj settings fixed above
+    local -a paths
+    local h sj settings fixed odd above
     local want="install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)"
-    while IFS='|' read -r settings fixed <&3; do
+    local outer="It is valid JSON, but not an object whose hooks hold event lists, the shape Claude Code reads."
+    local inner="It is valid JSON, and its hooks hold event lists, but an entry in an event list, or a hook in an entry's hooks list, is not an object, the shape Claude Code reads. Not an object:"
+    while IFS='|' read -r settings fixed odd <&3; do
         h="$(new_home)" sj="$h/.claude/settings.json"
+        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
+        fixed="${fixed//@CMD@/$h/.agent-director/bin/agent-director help}"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 4 "settings.json $settings" || continue
-        expect_advice "$want It is valid JSON, but not an object whose hooks hold event lists, the shape Claude Code reads. Fix it, then re-run this install."
+        if [[ -z "$odd" ]]; then
+            expect_advice "$want $outer Fix it, then re-run this install."
+            [[ "$(flat "$ERR")" != *"Not an object:"* ]] || bad "$settings: lists values for an outer shape: $(flat "$ERR")"
+        else
+            read -r -a paths <<<"$odd"
+            expect_advice "$want $inner $odd Fix it, then re-run this install."
+            [[ "$(grep -xE '    \.hooks\.\S+' "$ERR")" == "$(printf '    %s\n' "${paths[@]}")" ]] \
+                || bad "$settings: want each of \"$odd\" on a line of its own, indented 4: $(paste -sd'|' "$ERR")"
+            [[ "$(flat "$ERR")" != *"$outer"* ]] || bad "$settings: the outer-shape text for values in the lists: $(flat "$ERR")"
+        fi
         above="$(grep -m1 -xF -B1 "$want" "$ERR" | head -n 1)"
         [[ "$above" == "jq: error"* ]] || bad "$settings: the line above \"$want\" is not jq's error: $(paste -sd'|' "$ERR")"
+        # The merge's error only: the query that lists the paths fails too on
+        # some outer shapes ([] and {"hooks":"x"}), and its error stays hidden.
+        [[ "$(grep -c '^jq: error' "$ERR")" == 1 ]] || bad "$settings: want one jq error, the merge's: $(paste -sd'|' "$ERR")"
         if grep -q '^install\.sh: err_name=' "$ERR"; then
             bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
         fi
-        [[ "$(<"$sj")" == "$settings" ]] || bad "$settings: settings.json changed: $(<"$sj")"
+        cmp -s "$sj" <(printf '%s\n' "$settings") || bad "$settings: settings.json changed: $(<"$sj")"
         if compgen -G "$sj.*" >/dev/null; then
             bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
         fi
@@ -2250,9 +2474,40 @@ test_J18_SettingsShapeFixAndRerun() {
         expect_rc 0 "$settings fixed to $fixed: re-run" || continue
         hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
     done 3<<'EOF'
-[]|{}
-{"hooks":"x"}|{"hooks":{}}
-{"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}
+[]|{}|
+{"hooks":"x"}|{"hooks":{}}|
+{"hooks":{"SessionEnd":{}}}|{"hooks":{"SessionEnd":[]}}|
+{"hooks":{"SessionStart":{"x":{"hooks":[{"type":"command","command":"@CMD@"}]}}}}|{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]}]}}|
+{"hooks":{"SessionStart":["x"],"SessionEnd":{}}}|{"hooks":{"SessionStart":[],"SessionEnd":[]}}|
+{"hooks":{"SessionStart":["x"]}}|{"hooks":{"SessionStart":[]}}|.hooks.SessionStart[0]
+{"hooks":{"SessionStart":[{"hooks":["x"]}]}}|{"hooks":{"SessionStart":[{"hooks":[]}]}}|.hooks.SessionStart[0].hooks[0]
+{"hooks":{"SessionStart":[null,{"hooks":[null]}],"SessionEnd":[{"matcher":"compact","hooks":[null,{},"y"]},2]}}|{"hooks":{"SessionStart":[null,{"hooks":[null]}],"SessionEnd":[{"matcher":"compact","hooks":[null,{}]}]}}|.hooks.SessionEnd[0].hooks[2] .hooks.SessionEnd[1]
+{"hooks":{"SessionStart":[1,{"hooks":[{},false]}],"SessionEnd":[{"hooks":["y"]}]}}|{"hooks":{"SessionStart":[{"hooks":[{}]}],"SessionEnd":[{"hooks":[]}]}}|.hooks.SessionStart[0] .hooks.SessionStart[1].hooks[1] .hooks.SessionEnd[0].hooks[0]
+EOF
+}
+
+# J18: "Only a value the merge reads stops it, so such a file can still
+# install." (SKILL.md, b.dzu) A hooks-on install over a settings.json holding a
+# value that is neither an object nor null where the merge does not read it
+# exits 0, injects both hooks and keeps that value as it was. Per case
+# <settings.json>|<path>|<its value> (@CMD@ the help hook's command): the hooks
+# list of a SessionEnd entry whose matcher is not "compact", and a SessionStart
+# entry after the one holding the help hook, where `any` has stopped.
+test_J18_UnreadValueStillMerges() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings path value got
+    while IFS='|' read -r settings path value <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json"
+        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
+        mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "settings.json $settings" || continue
+        hooks_injected "$h" || bad "$settings: hooks not injected: $(<"$sj")"
+        got="$(jq -c "$path" "$sj")"
+        [[ "$got" == "$value" ]] || bad "$settings: $path is $got; want $value, as it was: $(<"$sj")"
+    done 3<<'EOF'
+{"hooks":{"SessionEnd":[{"hooks":["y"]}]}}|.hooks.SessionEnd[0]|{"hooks":["y"]}
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"@CMD@"}]},"x"]}}|.hooks.SessionStart[1]|"x"
 EOF
 }
 
@@ -2304,6 +2559,202 @@ older|[store]\nbusy_timeout_ms = "2500"|2 : busy_timeout_ms = "2500"|busy_timeou
 fresh|[store]\nbusy_timeout_ms = 2.5e3|2 : busy_timeout_ms = 2.5e3|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500
 fresh|[store]\nbusy_timeout_ms = 0x9c4 # ms|2 : busy_timeout_ms = 0x9c4 # ms|busy_timeout_ms's value is not a whole number in decimal digits, such as 10000, optionally followed by a # comment. Write it in that form, without quotes, a decimal point or a 0x, 0o or 0b prefix.|[store]\nbusy_timeout_ms = 2500 # ms
 EOF
+}
+
+# ---- J20: a symlinked settings.json or config.toml install.sh cannot write through (b.nw5)
+
+# J20: "Fix the link so it reaches a file in a directory you can write in. Or
+# re-run this install with --no-hooks, which edits neither file, and add what
+# the merges add where the files come from ..." With hooks on, a settings.json
+# (exit 4) or config.toml (exit 5) linked to a file in a 0555 directory (a
+# stand-in for a read-only /nix/store) is refused, changing nothing under HOME.
+# Per file, each way out: fix-link points the link at a copy in a directory one
+# can write in, and the re-run merges through it, keeping the link; no-hooks
+# re-runs with --no-hooks, which leaves the link and its file alone, then adds
+# to that file what the advice names, after which a hooks-on install over it
+# finds nothing to add.
+test_J20_LinkUnwritableFixOrNoHooks() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local file follow h dir link store plain before added now
+    for file in settings.json config.toml; do
+        for follow in fix-link no-hooks; do
+            h="$(new_home)" store="$h/store" dir="$h/.claude" plain='{"theme":"dark"}'
+            [[ "$file" == settings.json ]] || dir="$h/.agent-director" plain='[defaults]\nrelay_mode = "off"'
+            link="$dir/$file"
+            mkdir -p "$dir" "$store" && printf '%b\n' "$plain" >"$store/$file" && ln -s "$store/$file" "$link" \
+                && chmod 0555 "$store" || { bad "$file, $follow: setup failed"; continue; }
+            before="$(j14_snap "$h")"
+            run "$h" "${argv[@]}"
+            if [[ "$file" == settings.json ]]; then
+                expect_rc 4 "$file linked into a read-only directory" || continue
+            else
+                expect_exit5 ErrConfigMalformed "$file linked into a read-only directory" || continue
+            fi
+            [[ "$(head -n 1 "$ERR")" == "install.sh: cannot merge into $link through its symlink; refusing to install." ]] \
+                || bad "$file: first stderr line \"$(head -n 1 "$ERR")\""
+            expect_advice "link : $link target : $store/$file The target's directory, $store, cannot be written in (a read-only file system, say, such as home-manager's /nix/store). With hooks on, install.sh writes its merges into the file a symlinked settings.json or config.toml resolves to, keeping the link. Fix the link so it reaches a file in a directory you can write in. Or re-run this install with --no-hooks, which edits neither file, and add what the merges add where the files come from (your dotfiles or home-manager configuration, say): in settings.json, a SessionStart hook and a SessionEnd hook with matcher \"compact\", each a command hook running \"$h/.agent-director/bin/agent-director help\"; in config.toml, inject_help_hook = true under [defaults]. Nothing was installed or changed. Re-run this install after the change."
+            [[ "$(j14_snap "$h")" == "$before" ]] || bad "$file: the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+            if [[ "$follow" == fix-link ]]; then
+                mkdir "$h/dotfiles" && cp "$store/$file" "$h/dotfiles/$file" && ln -sfn "$h/dotfiles/$file" "$link"
+                run "$h" "${argv[@]}"
+                expect_rc 0 "$file: re-run after fixing the link" || continue
+                expect_installed "$h" "$BIN" "$ADMIN"
+                [[ "$(readlink "$link")" == "$h/dotfiles/$file" ]] || bad "$file: the re-run left the link naming \"$(readlink "$link")\""
+                if [[ "$file" == settings.json ]]; then
+                    hooks_injected "$h" || bad "$file: hooks not merged through the fixed link: $(<"$h/dotfiles/$file")"
+                else
+                    grep -qx 'inject_help_hook = true' "$h/dotfiles/$file" || bad "$file: key not merged through the fixed link: $(<"$h/dotfiles/$file")"
+                fi
+                continue
+            fi
+            run "$h" "${argv[@]}" --no-hooks
+            expect_rc 0 "$file: re-run with --no-hooks" || continue
+            expect_installed "$h" "$BIN" "$ADMIN"
+            [[ "$(readlink "$link")" == "$store/$file" && "$(<"$store/$file")" == "$(printf '%b' "$plain")" ]] \
+                || bad "$file: --no-hooks changed the link or its file: $(readlink "$link"), $(<"$store/$file")"
+            # Add what the advice names where the file comes from: the store,
+            # rebuilt, and left writable so the install below can show it adds
+            # nothing (settings.json compared as JSON, as the merge rewrites it).
+            chmod 0755 "$store"
+            if [[ "$file" == settings.json ]]; then
+                added="$(jq --arg c "$h/.agent-director/bin/agent-director help" '
+                    .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]
+                    | .hooks.SessionEnd += [{matcher: "compact", hooks: [{type: "command", command: $c}]}]' "$store/$file")"
+                printf '%s\n' "$added" >"$store/$file"
+                added="$(jq -S . "$store/$file")"
+            else
+                printf 'inject_help_hook = true\n' >>"$store/$file"
+                added="$(<"$store/$file")"
+            fi
+            run "$h" "${argv[@]}"
+            expect_rc 0 "$file: hooks-on install over what the advice added" || continue
+            [[ "$file" == settings.json ]] && now="$(jq -S . "$store/$file")" || now="$(<"$store/$file")"
+            [[ "$now" == "$added" ]] || bad "$file: the merge added to what the advice named: $(<"$store/$file")"
+            run "$h" "$h/.agent-director/bin/agent-director" list
+            expect_rc 0 "$file: agent-director list after the advice's additions"
+        done
+    done
+}
+
+# ---- J21: settings.json holding several JSON documents, hooks on (b.zbg) -----------
+
+# J21: "Each is valid JSON, but the file must hold one JSON object, the shape
+# Claude Code reads. Fix it, then re-run this install." A hooks-on install over
+# a settings.json holding several JSON documents exits 4, naming how many, with
+# no exit-5 cause line and no "hooks : injected", and leaves the file byte for
+# byte with nothing beside it; rewritten as one object, the re-run injects both
+# hooks. Per case <settings.json>|<documents>|<fixed> (printf %b).
+test_J21_SettingsDocumentsFixAndRerun() {
+    local -a argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink) # hooks on
+    local h sj settings docs fixed want
+    while IFS='|' read -r settings docs fixed <&3; do
+        h="$(new_home)" sj="$h/.claude/settings.json"
+        want="install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds $docs JSON documents"
+        mkdir -p "$h/.claude" && printf '%b\n' "$settings" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 4 "settings.json $settings" || continue
+        grep -qxF "$want" "$ERR" || bad "$settings: no stderr line \"$want\": $(paste -sd'|' "$ERR")"
+        expect_advice "$want Each is valid JSON, but the file must hold one JSON object, the shape Claude Code reads. Fix it, then re-run this install."
+        if grep -q '^install\.sh: err_name=' "$ERR"; then
+            bad "$settings: an exit-5 cause line on exit 4: $(flat "$ERR")"
+        fi
+        if grep -q 'hooks   : injected' "$OUT"; then
+            bad "$settings: \"hooks : injected\" printed on the refusal"
+        fi
+        cmp -s "$sj" <(printf '%b\n' "$settings") || bad "$settings: settings.json changed: $(<"$sj")"
+        if compgen -G "$sj.*" >/dev/null; then
+            bad "$settings: left beside settings.json: $(compgen -G "$sj.*")"
+        fi
+        printf '%b\n' "$fixed" >"$sj"
+        run "$h" "${argv[@]}"
+        expect_rc 0 "$settings fixed to $fixed: re-run" || continue
+        hooks_injected "$h" || bad "$settings fixed to $fixed: hooks not injected: $(<"$sj")"
+    done 3<<'EOF'
+{} {}|2|{}
+{"theme":"dark"}\n{"hooks":{}}\n{}|3|{"theme":"dark","hooks":{}}
+EOF
+}
+
+# ---- J22: no store where install.sh expects one after the open (b.iks) -------------
+
+# J22: "Check db_path in the config file, and whether anything (a cleanup, say)
+# removed or moved the store. To keep a moved store's sessions, put it back at
+# the state.db path above first: with no store there, a re-run creates a new,
+# empty one. Then re-run this install: it reads db_path again and opens the
+# store there. If a re-run fails this same way, ... contact the maintainers."
+# An install of FAKE_AD whose open succeeds and leaves no store at the state.db
+# path, per <cause>:
+#   db-path   db_path changed to ~/custom/s.db between pre-flight and the open
+#             (a fresh install), which made the store there: the config file
+#             names it, and the re-run installs over that store;
+#   moved     after the open migrated an older store, a cleanup moved it away:
+#             put back, the re-run installs over that same store;
+#   custom    as moved, with db_path set to ~/custom/s.db before the first
+#             install: the headline and the state.db line name that path, not
+#             state.db, and the store put back there is the one installed over;
+#   not-back  as moved, not put back: the re-run makes a new store, and the
+#             moved one stays as it was;
+#   none      the open makes no store: db_path is unset, nothing moved one, and
+#             the re-run fails the same way. Contacting the maintainers is a
+#             human step; not followed.
+test_J22_NoStoreAfterOpenCheckAndRerun() {
+    local -a J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    local cause h db cfg moved set_to want_set name put_back moved_sum first
+    for cause in db-path moved custom not-back none; do
+        h="$(new_home)" db="$h/.agent-director/state.db" cfg="$h/.agent-director/config.toml"
+        moved="$h/attic/state.db.bak" want_set="" name="state.db"
+        printf around >"$h/fake-list"
+        case "$cause" in
+            db-path)
+                want_set='"~/custom/s.db"'
+                printf '[store]\ndb_path = %s\n' "$want_set" >"$h/changed.toml"
+                echo 'mv "$HOME/changed.toml" "$HOME/.agent-director/config.toml"' >"$h/fake-before" ;;
+            moved | custom | not-back)
+                if [[ "$cause" == custom ]]; then
+                    want_set='"~/custom/s.db"' db="$h/custom/s.db" name="$h/custom/s.db"
+                    mkdir -p "$h/.agent-director"
+                    printf '[store]\ndb_path = %s\n' "$want_set" >"$cfg"
+                fi
+                run "$h" "${J7ARGV[@]}"
+                expect_rc 0 "$cause: first install" || continue
+                keep_older "$db"
+                printf 'mkdir "$HOME/attic" && mv "%s" "$HOME/attic/state.db.bak"\n' "$db" >"$h/fake-after" ;;
+            none) printf ok >"$h/fake-list" ;;
+        esac
+        run "$h" "${J7ARGV[@]}"
+        expect_exit5 ErrSchemaVerifyFailed "$cause: no store after the open" || continue
+        [[ "$(head -n 1 "$ERR")" == "install.sh: $name was not created by the store open" ]] \
+            || bad "$cause: first stderr line \"$(head -n 1 "$ERR")\"; want \"install.sh: $name was not created by the store open\""
+        expect_advice "state.db: $db config : $cfg The store open (agent-director list) succeeded, yet there is no store at the state.db path above, where install.sh expected it. agent-director opens its store at [store] db_path in the config file above (~/.agent-director/state.db when unset), and install.sh read that file before the open. So either db_path changed since and agent-director opened a store somewhere else, or something removed or moved the store after the open. Check db_path in the config file, and whether anything (a cleanup, say) removed or moved the store. To keep a moved store's sessions, put it back at the state.db path above first: with no store there, a re-run creates a new, empty one. Then re-run this install: it reads db_path again and opens the store there. If a re-run fails this same way, the installed agent-director does not open its store where this install.sh expects it: contact the maintainers."
+        # Check db_path in the config file the advice names.
+        set_to="$(sed -n 's/^db_path = //p' "$(advice_after "  config  : ")" 2>/dev/null)"
+        [[ "$set_to" == "$want_set" ]] || bad "$cause: db_path in the config file is \"$set_to\"; want \"$want_set\""
+        put_back="$(advice_after "  state.db: ")" || { bad "$cause: no state.db line"; continue; }
+        [[ "$put_back" == "$db" ]] || bad "$cause: the state.db line names \"$put_back\"; want \"$db\""
+        # db_path changed after pre-flight: the re-run opens the store there.
+        if [[ "$cause" == db-path ]]; then db="$h/custom/s.db"; fi
+        case "$cause" in
+            moved | custom) mv "$moved" "$put_back" || { bad "$cause: put the store back at $put_back"; continue; } ;;
+            not-back) moved_sum="$(sha256sum "$moved")" ;;
+            none) [[ -z "$(find "$h" -type f -name '*.db*')" ]] || bad "$cause: a store under HOME: $(find "$h" -type f -name '*.db*')" ;;
+        esac
+        first="$ERR"
+        run "$h" "${J7ARGV[@]}"
+        if [[ "$cause" == none ]]; then
+            expect_exit5 ErrSchemaVerifyFailed "$cause: re-run" || continue
+            cmp -s "$first" "$ERR" || bad "$cause: the re-run failed another way: $(diff "$first" "$ERR")"
+            continue
+        fi
+        expect_rc 0 "$cause: re-run" || continue
+        grep -qF " at $db (schema v$SCHEMA)" "$OUT" || bad "$cause: the re-run did not open the store at $db: $(flat "$OUT")"
+        expect_store "$h" "$db" "$cause: re-run"
+        case "$cause" in
+            moved | custom) [[ "$(is_kept "$db")" == 1 ]] || bad "$cause: the store at $db is not the one put back" ;;
+            not-back)
+                [[ "$(is_kept "$db")" == 0 ]] || bad "$cause: the store at $db is the moved one, not a new one"
+                [[ "$(sha256sum "$moved")" == "$moved_sum" ]] || bad "$cause: the moved store changed" ;;
+        esac
+    done
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"

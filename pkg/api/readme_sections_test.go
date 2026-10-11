@@ -1,11 +1,11 @@
 package api_test
 
-// readme_sections_test.go checks the README sections that descriptions and
+// readme_sections_test.go checks the user-doc sections that descriptions and
 // docs point to (SR-1.4, SR-18.1, SR-18.17): the "Operator actions" and
-// caller-contract headings exist exactly once, every pointer to a README
+// caller-contract headings exist exactly once, every pointer to a doc
 // section by title names one, every relative link names an existing path and
 // every anchored link resolves to exactly one heading. It holds the one
-// Markdown parser (mdDoc) every README check uses.
+// Markdown parser (mdDoc) every doc check uses.
 
 import (
 	"fmt"
@@ -22,15 +22,27 @@ import (
 )
 
 // Paths as seen from pkg/api/, where the test runs, and the caller-contract
-// headings (SR-18.1): the README summary and the architecture doc's full
-// contract it links to.
+// headings (SR-18.1): the caller-contract doc's summary and the architecture
+// doc's full contract it links to.
 const (
 	mdRepoRoot                 = "../.."
 	mdTopREADME                = "../../README.md"
 	mdArchitecture             = "../../docs/architecture.md"
+	mdOperatorActions          = "../../" + apitest.OperatorActionsDoc
+	mdCallerContract           = "../../docs/caller-contract.md"
+	mdConfiguration            = "../../docs/configuration.md"
+	mdInstall                  = "../../docs/install.md"
 	callerContractTitle        = "Caller contract"
 	callerContractClassesTitle = "Caller contract: tmux refusal classes"
 )
+
+// mdUserDocs are the hand-written user docs whose links are checked.
+var mdUserDocs = []string{
+	mdTopREADME, "README.md", mdInstall, "../../docs/usage.md", mdConfiguration,
+	"../../docs/maintenance.md", mdCallerContract, mdOperatorActions,
+	"../../docs/hooks.md", "../../docs/permissions.md", "../../docs/settings.md",
+	"../../docs/multi-account.md",
+}
 
 // mdHeading is one ATX heading of a Markdown file; line is its 0-based index.
 type mdHeading struct {
@@ -141,53 +153,80 @@ func mdAnchor(title string) string {
 }
 
 // TestREADMESectionHeadings checks each pointed-to section heading exists
-// exactly once in its file (SR-18.1, SR-18.17), and that the first sentence of
+// exactly once in its file (SR-18.1, SR-18.17), and that the intro paragraph of
 // "Operator actions" says automated callers must not perform its actions.
 func TestREADMESectionHeadings(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ path, title string }{
-		{mdTopREADME, apitest.OperatorActionsTitle},
-		{mdTopREADME, callerContractTitle},
+		{mdOperatorActions, apitest.OperatorActionsTitle},
+		{mdCallerContract, callerContractTitle},
 		{mdArchitecture, callerContractClassesTitle},
 	} {
 		if n := len(readMD(t, c.path).titled(c.title)); n != 1 {
 			t.Errorf("%s has %d headings titled %q; want exactly one", c.path, n, c.title)
 		}
 	}
-	d := readMD(t, mdTopREADME)
-	first, _, _ := strings.Cut(normalised(d.body(operatorActions(t, d))), ". ")
-	for _, want := range []string{"automated callers", "must not perform"} {
-		if !strings.Contains(first, want) {
-			t.Errorf("%s %q first sentence %q lacks %q", d.path, apitest.OperatorActionsTitle, first, want)
+	d := readMD(t, mdOperatorActions)
+	oa := operatorActions(t, d)
+	opening := strings.TrimSpace(d.body(oa))
+	for _, h := range d.headings { // the text before the first item heading
+		if h.line > oa.line {
+			opening = strings.TrimSpace(strings.Join(d.lines[oa.line+1:h.line], "\n"))
+			break
 		}
+	}
+	intro, _, _ := strings.Cut(opening, "\n\n")
+	intro = strings.ToLower(normalised(intro))
+	for _, want := range []string{"automated callers", "must not perform"} {
+		if !strings.Contains(intro, want) {
+			t.Errorf("%s %q intro paragraph %q lacks %q", d.path, apitest.OperatorActionsTitle, intro, want)
+		}
+	}
+	// The text before the first item tells the operator to run every command as
+	// the agents' user: another user's tmux socket and files are not the agents'.
+	if text := normalised(opening); !strings.Contains(text, "as the agents' user") {
+		t.Errorf("%s %q text before its first item lacks %q", d.path, apitest.OperatorActionsTitle, "as the agents' user")
 	}
 }
 
-// readmePointer is one place that points to a top-level README section: by
-// quoted title, or (byAnchor) as "README's <anchor> summary".
+// readmePointer is one place that points to a doc (path, as seen from
+// pkg/api/): to the whole doc by its path (docs/<file>.md, title empty), to a
+// section by quoted title ("<title>" in docs/<file>.md, or any form naming
+// the top-level README), or (byAnchor) as "README's <anchor> summary". A
+// pointer to the README is checked against the README, so a stale one naming
+// a section that moved out of it fails.
 type readmePointer struct {
 	source   string
+	path     string
 	title    string
 	byAnchor bool
 }
 
 var (
+	pointerDocPathRe     = regexp.MustCompile(`\bdocs/[\w-]+\.md\b`)
+	pointerDocRe         = regexp.MustCompile(`"([^"\n]{1,80})"\s+in\s+(?:agent-director's\s+)?(docs/[\w-]+\.md)\b`)
 	pointerTitleFirstRe  = regexp.MustCompile(`"([^"\n]{1,80})"\s+in\s+the\s+(?:[\w-]+\s+)?README\b`)
 	pointerREADMEFirstRe = regexp.MustCompile(`\bREADME(?:'s)?\s+(?:section\s+)?"([^"\n]{1,80})"`)
 	pointerAnchorRe      = regexp.MustCompile(`\bREADME's\s+([a-z0-9]+(?:-[a-z0-9]+)+)\s+summary\b`)
 	goCommentWrapRe      = regexp.MustCompile(`\n[ \t]*//[ \t]*`)
 )
 
-// pointersIn returns text's README section pointers, attributed to source.
+// pointersIn returns text's doc section pointers, attributed to source.
 func pointersIn(source, text string) []readmePointer {
 	var out []readmePointer
+	for _, m := range pointerDocPathRe.FindAllString(text, -1) {
+		out = append(out, readmePointer{source: source, path: filepath.Join(mdRepoRoot, m)})
+	}
+	for _, m := range pointerDocRe.FindAllStringSubmatch(text, -1) {
+		out = append(out, readmePointer{source: source, path: filepath.Join(mdRepoRoot, m[2]), title: m[1]})
+	}
 	for _, re := range []*regexp.Regexp{pointerTitleFirstRe, pointerREADMEFirstRe} {
 		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			out = append(out, readmePointer{source: source, title: m[1]})
+			out = append(out, readmePointer{source: source, path: mdTopREADME, title: m[1]})
 		}
 	}
 	for _, m := range pointerAnchorRe.FindAllStringSubmatch(text, -1) {
-		out = append(out, readmePointer{source: source, title: m[1], byAnchor: true})
+		out = append(out, readmePointer{source: source, path: mdTopREADME, title: m[1], byAnchor: true})
 	}
 	return out
 }
@@ -240,20 +279,32 @@ func eachManifestText(fn func(source, text string)) {
 // carry via PointsToOperatorActions.
 func collectREADMEPointers(t *testing.T) []readmePointer {
 	t.Helper()
-	ptrs := []readmePointer{{source: "apitest.OperatorActionsTitle", title: apitest.OperatorActionsTitle}}
+	ptrs := []readmePointer{{source: "apitest.OperatorActionsTitle", path: mdOperatorActions, title: apitest.OperatorActionsTitle}}
 	collect := func(source, text string) { ptrs = append(ptrs, pointersIn(source, text)...) }
 	walkGoSources(t, collect)
 	eachManifestText(collect)
 	return ptrs
 }
 
-// TestREADMEPointersNameExistingSections checks every pointer to a README
-// section names a heading the README has exactly once (SR-1.4, SR-18.17).
+// TestREADMEPointersNameExistingSections checks every pointer to a doc
+// names an existing file, and every pointer to a section names a heading its
+// doc has exactly once (SR-1.4, SR-18.17).
 func TestREADMEPointersNameExistingSections(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	docs := map[string]mdDoc{}
 	ptrs := collectREADMEPointers(t)
 	for _, p := range ptrs {
+		if p.title == "" {
+			if _, err := os.Stat(p.path); err != nil {
+				t.Errorf("%s: points to %s, which does not exist: %v", p.source, p.path, err)
+			}
+			continue
+		}
+		d, ok := docs[p.path]
+		if !ok {
+			d = readMD(t, p.path)
+			docs[p.path] = d
+		}
 		hs, kind := d.titled(p.title), "section"
 		if p.byAnchor {
 			hs, kind = d.anchored(p.title), "section anchor"
@@ -263,43 +314,43 @@ func TestREADMEPointersNameExistingSections(t *testing.T) {
 			if near := d.nearMiss(p.title); near != "" {
 				hint = fmt.Sprintf("; differs from heading %q only in case or spacing", near)
 			}
-			t.Errorf("%s: points to README %s %q, which %s has %d times; want exactly one%s", p.source, kind, p.title, d.path, len(hs), hint)
+			t.Errorf("%s: points to %s %q, which %s has %d times; want exactly one%s", p.source, kind, p.title, d.path, len(hs), hint)
 		}
 	}
 
 	// The collector must find the known pointer sites, or the check is vacuous.
-	for _, want := range []struct{ source, title string }{
-		{"pkg/api/kill.go", apitest.OperatorActionsTitle},
-		{"pkg/api/kill.go", callerContractTitle},
-		{"pkg/api/lookup_outcome.go", apitest.OperatorActionsTitle},
-		{"pkg/api/unusable_name.go", apitest.OperatorActionsTitle},
-		{"pkg/api/resume.go", apitest.OperatorActionsTitle},
-		{"pkg/api/spawn_scan.go", apitest.OperatorActionsTitle},
-		{"manifest kill Description", apitest.OperatorActionsTitle},
-		{"manifest spawn Description", apitest.OperatorActionsTitle},
+	for _, want := range []struct{ source, path, title string }{
+		{"pkg/api/kill.go", mdOperatorActions, apitest.OperatorActionsTitle},
+		{"pkg/api/kill.go", mdCallerContract, callerContractTitle},
+		{"pkg/api/lookup_outcome.go", mdOperatorActions, apitest.OperatorActionsTitle},
+		{"pkg/api/unusable_name.go", mdOperatorActions, apitest.OperatorActionsTitle},
+		{"pkg/api/resume.go", mdOperatorActions, apitest.OperatorActionsTitle},
+		{"pkg/api/spawn_scan.go", mdOperatorActions, apitest.OperatorActionsTitle},
+		{"internal/adminapi/adminapi.go", mdOperatorActions, "A finished row's own old session"},
+		{"manifest kill Description", mdOperatorActions, ""},
+		{"manifest spawn Description", mdOperatorActions, ""},
 	} {
 		found := false
 		for _, p := range ptrs {
-			found = found || p.source == want.source && (p.title == want.title || p.byAnchor && p.title == mdAnchor(want.title))
+			found = found || p.source == want.source && p.path == want.path && p.title == want.title
 		}
 		if !found {
-			t.Errorf("no pointer to README section %q found in %s; the collector missed a known site", want.title, want.source)
+			t.Errorf("no pointer to %s section %q found in %s; the collector missed a known site", want.path, want.title, want.source)
 		}
 	}
 }
 
-// TestREADMEAnchorLinksResolve checks every relative Markdown link in the two
-// READMEs names an existing path, and every anchored .md link resolves to
-// exactly one heading, the caller-contract links included.
+// TestREADMEAnchorLinksResolve checks every relative Markdown link in the
+// user docs (mdUserDocs) names an existing path, and every anchored .md link
+// resolves to exactly one heading, the caller-contract links included.
 func TestREADMEAnchorLinksResolve(t *testing.T) {
 	t.Parallel()
 	type link struct{ from, to, anchor string }
 	var links []link
-	for _, from := range []string{mdTopREADME, "README.md"} {
+	total := 0
+	for _, from := range mdUserDocs {
 		ms := mdLinkRe.FindAllStringSubmatch(strings.Join(readMD(t, from).lines, "\n"), -1)
-		if len(ms) == 0 {
-			t.Fatalf("no Markdown links found in %s; the link regex may be broken", from)
-		}
+		total += len(ms)
 		for _, m := range ms {
 			target, anchor, anchored := strings.Cut(m[2], "#")
 			if strings.Contains(target, "://") {
@@ -317,6 +368,9 @@ func TestREADMEAnchorLinksResolve(t *testing.T) {
 			}
 		}
 	}
+	if total == 0 {
+		t.Fatalf("no Markdown links found in %v; the link regex may be broken", mdUserDocs)
+	}
 	docs := map[string]mdDoc{}
 	for _, l := range links {
 		if _, ok := docs[l.to]; !ok {
@@ -328,8 +382,8 @@ func TestREADMEAnchorLinksResolve(t *testing.T) {
 	}
 
 	for _, want := range []link{
-		{mdTopREADME, filepath.Clean(mdArchitecture), mdAnchor(callerContractClassesTitle)},
-		{"README.md", filepath.Clean(mdTopREADME), mdAnchor(callerContractTitle)},
+		{mdCallerContract, filepath.Clean(mdArchitecture), mdAnchor(callerContractClassesTitle)},
+		{"README.md", filepath.Clean(mdCallerContract), mdAnchor(callerContractTitle)},
 	} {
 		found := false
 		for _, l := range links {

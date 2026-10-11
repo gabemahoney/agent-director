@@ -381,8 +381,11 @@ func findMissingAction(r findMissingRow) string {
 //     write settled.
 //  7. Provisional transcripts are healed (healProvisionalTranscripts).
 //
-// The result lists are sorted. The only error returned is the live-row
-// read's.
+// The result lists are sorted. The only error FindMissing returns is the
+// live-row read's, and (c *Client).FindMissing adds one, ErrClientClosed on a
+// closed Client, before it calls FindMissing. Every failure returns an empty
+// FindMissingResult (counts 0, IDs and UnverifiedIDs non-nil and empty), as
+// a sweep that judged no row does (b.hbt).
 //
 // A row marked missing is the sweep's judgement on the evidence available to
 // it, not proof that the agent has exited; neither ended nor missing means
@@ -398,7 +401,7 @@ func findMissingAction(r findMissingRow) string {
 func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc ProcChecker, pendingGrace, sweepBudget time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
 	identities, err := s.ListLiveSpawnIdentities()
 	if err != nil {
-		return FindMissingResult{}, err
+		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
 	}
 	identities = slices.Clone(identities)
 	sort.SliceStable(identities, func(i, j int) bool {
@@ -693,7 +696,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // its own (tmux_session_name_empty, tmux_session_name_control_char or
 // tmux_session_name_rewritten, the first fault in that order), with no tmux
 // call; removing such a row is a human's decision (see "Operator actions" in
-// the agent-director README).
+// agent-director's docs/operator-actions.md).
 //
 // Every other row whose process cannot be checked is looked up in tmux: one
 // lookup of its recorded socket, else the caller's, shared by every row of
@@ -704,7 +707,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // no pane carries it); a session left from an earlier life, or no session of
 // its current launch, marks it missing whatever holds its name, and a
 // session holding its recorded name is named in the trail and never touched
-// (see "Operator actions" in the agent-director README); an answer that
+// (see "Operator actions" in agent-director's docs/operator-actions.md); an answer that
 // cannot be used, or no answer, leaves it unverified with a liveness note.
 // After an unreadable or unavailable answer on a socket, no more tmux calls
 // are made on that socket, and the run's tmux time (sweep_budget_seconds
@@ -756,7 +759,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // Nondeterminism: none.
 func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
-		return FindMissingResult{}, err
+		return FindMissingResult{IDs: []string{}, UnverifiedIDs: []string{}}, err
 	}
 	res, err := FindMissing(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Tmux.EffectivePendingGrace(), c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
 	if err != nil {

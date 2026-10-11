@@ -16,7 +16,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestParseGlobalFlags covers the three global flags (b.32k), which
+// TestParseGlobalFlags covers the four global flags (b.32k, b.78b), which
 // agent-director and agent-director-admin share (b.vqr): each value lands on
 // its field with its Set sentinel true, in either form and anywhere in argv,
 // and the flag tokens are stripped from the argv the verb dispatch sees.
@@ -39,6 +39,16 @@ func TestParseGlobalFlags(t *testing.T) {
 			clisetup.GlobalFlags{Home: "~/h", HomeSet: true}, []string{"delete", "--claude-instance-id", "x"}},
 		{"other tokens pass through untouched", []string{"spawn", "--cwd", "/x", "--label", "k=v", "--homer=1"},
 			clisetup.GlobalFlags{}, []string{"spawn", "--cwd", "/x", "--label", "k=v", "--homer=1"}},
+		{"create-if-missing false two-token form", []string{"--create-if-missing", "false", "list"},
+			clisetup.GlobalFlags{CreateIfMissingSet: true}, []string{"list"}},
+		{"create-if-missing true two-token form", []string{"--create-if-missing", "true", "list"},
+			clisetup.GlobalFlags{CreateIfMissing: true, CreateIfMissingSet: true}, []string{"list"}},
+		{"create-if-missing false equals form after the verb", []string{"list", "--create-if-missing=false"},
+			clisetup.GlobalFlags{CreateIfMissingSet: true}, []string{"list"}},
+		{"create-if-missing true equals form", []string{"--create-if-missing=true", "list"},
+			clisetup.GlobalFlags{CreateIfMissing: true, CreateIfMissingSet: true}, []string{"list"}},
+		{"create-if-missing repeated, last copy wins", []string{"--create-if-missing", "false", "--create-if-missing", "true", "list"},
+			clisetup.GlobalFlags{CreateIfMissing: true, CreateIfMissingSet: true}, []string{"list"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,6 +80,9 @@ func TestParseGlobalFlagsMissingValue(t *testing.T) {
 		{[]string{"--store-path=", "version"}, "--store-path"},
 		{[]string{"--home", "", "version"}, "--home"},
 		{[]string{"spawn", "--cwd", "/x", "--tmux-command", ""}, "--tmux-command"},
+		{[]string{"list", "--create-if-missing"}, "--create-if-missing"},
+		{[]string{"--create-if-missing=", "list"}, "--create-if-missing"},
+		{[]string{"--create-if-missing", "", "list"}, "--create-if-missing"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.argv, "_"), func(t *testing.T) {
@@ -81,10 +94,34 @@ func TestParseGlobalFlagsMissingValue(t *testing.T) {
 	}
 }
 
+// TestParseGlobalFlagsCreateIfMissingInvalid: a --create-if-missing value
+// other than exactly "true" or "false", in either form and in any copy of a
+// repeated flag, is an error naming the value (b.78b).
+func TestParseGlobalFlagsCreateIfMissingInvalid(t *testing.T) {
+	cases := []struct {
+		argv []string
+		val  string
+	}{
+		{[]string{"--create-if-missing", "no", "list"}, "no"},
+		{[]string{"--create-if-missing=1", "list"}, "1"},
+		{[]string{"list", "--create-if-missing", "False"}, "False"},
+		{[]string{"--create-if-missing", "--store-path", "/x.db", "list"}, "--store-path"},
+		{[]string{"--create-if-missing", "no", "--create-if-missing", "false", "list"}, "no"},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.argv, "_"), func(t *testing.T) {
+			want := fmt.Sprintf("--create-if-missing must be true or false, got %q", tc.val)
+			if _, _, err := clisetup.ParseGlobalFlags(tc.argv); err == nil || err.Error() != want {
+				t.Errorf("argv %q: error = %v; want %q", tc.argv, err, want)
+			}
+		})
+	}
+}
+
 // TestGlobalFlagsApply: Apply sets HOME from --home (a bare "~" or a leading
-// "~/" expanded against the HOME before it), then returns --store-path as given
-// and --tmux-command with "~" expanded against the new HOME; unset flags leave
-// HOME and the overrides alone.
+// "~/" expanded against the HOME before it), then returns --store-path as given,
+// --tmux-command with "~" expanded against the new HOME and --create-if-missing
+// with its Set sentinel; unset flags leave HOME and the overrides alone.
 func TestGlobalFlagsApply(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -105,6 +142,10 @@ func TestGlobalFlagsApply(t *testing.T) {
 		{"--tmux-command expanded against --home", clisetup.GlobalFlags{Home: "/other", HomeSet: true,
 			TmuxCommand: "~/bin/tmux", TmuxCommandSet: true, StorePath: "/abs.db", StorePathSet: true},
 			"/other", clisetup.Overrides{StorePath: "/abs.db", TmuxCommand: "/other/bin/tmux"}},
+		{"--create-if-missing false (b.78b)", clisetup.GlobalFlags{CreateIfMissingSet: true},
+			"/orig", clisetup.Overrides{CreateIfMissingSet: true}},
+		{"--create-if-missing true (b.78b)", clisetup.GlobalFlags{CreateIfMissing: true, CreateIfMissingSet: true},
+			"/orig", clisetup.Overrides{CreateIfMissing: true, CreateIfMissingSet: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

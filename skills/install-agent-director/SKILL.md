@@ -341,7 +341,7 @@ This skill runs `install.sh` from the same directory. The script:
    `--admin-sha256` ("would install <the other binary> unverified;
    refusing to install"). Then it runs the
    following checks in order; any failure aborts with a clear message
-   and exit code `2`, or `3` or `5` where noted:
+   and exit code `2`, or `3`, `4` or `5` where noted:
 
    1. **Whitespace-in-install-path** — `$HOME` must not contain
       whitespace (SRD §4.3; tmux's direct-argv invocation requires
@@ -389,7 +389,11 @@ This skill runs `install.sh` from the same directory. The script:
       before any header (`defaults = { ... }`) stops the install here
       too (exit `5`, `ErrConfigMalformed`), before anything is installed
       or changed, because step 6's config merge cannot extend it; see
-      step 6 below.
+      step 6 below. Also with hooks on, a symlinked
+      `~/.claude/settings.json` or `config.toml` that step 6's merges
+      cannot write through stops the install here, before anything is
+      installed or changed: `settings.json` with exit `4`, `config.toml`
+      with exit `5` (`ErrConfigMalformed`); see step 6 below.
    5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
@@ -403,8 +407,12 @@ This skill runs `install.sh` from the same directory. The script:
       "Where install.sh looks for each binary" below describes, and
       verifies each is an executable regular file. Pre-flight prints
       the two it settled as `  source  : <path>` and
-      `  admin source: <path>`. A source not found is refused with
-      exit 3, naming every path tried and the flags to pass:
+      `  admin source: <path>`. These lines and every pre-flight
+      message name the in-repo build as `<checkout>/bin/<binary>`,
+      where `<checkout>` is the checkout's real path (symlinks
+      resolved), with no `../..`. A source not found is
+      refused with exit 3, naming every path tried and the flags to
+      pass:
       - agent-director not found: "install.sh: no source binary
         found.", `Tried:` the checkout's `bin/agent-director` and
         `command -v agent-director`, and "Pass --binary <path> to
@@ -454,10 +462,25 @@ This skill runs `install.sh` from the same directory. The script:
       The probe is independent of the OS/CPU gate above: even on a
       supported host, a wrong-arch binary is refused here.
    8. **Source-tree version check** — when the binary came from a
-      local source (`--binary` or the in-repo build) AND install.sh
-      lives inside a git checkout, the binary's embedded commit
-      must match `HEAD`. Catches the "operator forgot to
-      `make build` after pulling new code" footgun.
+      local source (`--binary` or the in-repo build) AND the tree
+      install.sh takes `bin/` from (two levels above the script,
+      symlinks resolved) is a git checkout of agent-director's
+      source, the binary's embedded commit must match that
+      checkout's `HEAD`. Otherwise install.sh exits 3 ("install.sh:
+      source-tree version check failed."), naming `HEAD` and the
+      checkout's real path, and advises `make -C <checkout> build`
+      (the checkout named, so it works from any directory) or
+      `--from-release`. That tree counts only with a `.git` of its
+      own that git can open (a directory in a clone, a file in a
+      linked worktree) and a `cmd/agent-director`; an empty or
+      half-copied `.git` skips the check. So a worktree nested
+      inside another checkout is held to its own `HEAD`, and a
+      symlinked skill directory to the `HEAD` of the checkout it
+      points into. A repo that only encloses the script is never
+      used: the installed skill inside a dotfiles `~` or
+      `~/.claude`, or a copy outside any checkout, is not checked.
+      Catches the "operator forgot to `make build` after pulling new
+      code" footgun.
    9. **Version-stamp pairing** — `agent-director version` and
       `agent-director-admin version` must report the same version and
       commit; otherwise (or when one stamp cannot be read) the install
@@ -465,10 +488,13 @@ This skill runs `install.sh` from the same directory. The script:
       whose commit is `unknown` or empty (a plain `go build`), or two
       unreadable stamps, are refused with exit 3 too ("carry no commit
       stamp, so they cannot be shown to come from the same build").
-      Both refusals advise `make build` (in a git checkout it stamps
-      both binaries with the checkout's commit) or `--from-release`.
-      Both binaries open the same store, so they must come from one
-      build.
+      Both refusals advise `make -C <checkout> build` (in a git
+      checkout it stamps both binaries with the checkout's commit) or
+      `--from-release`. The advice names the tree install.sh sits in
+      when that is a git checkout of agent-director's source with a
+      Makefile; otherwise it names no tree, only the placeholder
+      `<path-to-agent-director-checkout>`. Both binaries open the same
+      store, so they must come from one build.
 
 2. **Creates `~/.agent-director/`** (mode 0700) if missing, plus
    `~/.agent-director/bin/` for the binary and
@@ -598,6 +624,7 @@ This skill runs `install.sh` from the same directory. The script:
       it equals the target. On a mismatch (or if state.db wasn't
       created) the install **aborts non-zero (exit 5)** with a clear
       message; for a readable mismatch see "A version mismatch after
+      the store open" below, and for no state.db see "No store after
       the store open" below. An unreadable version also exits 5 when a migration was
       expected; with none expected (a fresh install or an
       already-current store) it is a warning and the install carries
@@ -621,12 +648,29 @@ This skill runs `install.sh` from the same directory. The script:
 
    The merge is additive: existing user hooks are preserved. Re-running
    the install is idempotent — duplicate entries are detected and
-   skipped. The pre-edit contents of `settings.json` are snapshotted
-   to a timestamped `.bak` sibling before the merge writes.
+   skipped. An entry counts as already there only where Claude Code
+   runs it: in the event's list, with the hook in the entry's own
+   `hooks` list. An entry whose `hooks` is an object does not count, so
+   the install adds a proper entry beside it (b.zbg). The pre-edit
+   contents of `settings.json` are snapshotted to a timestamped `.bak`
+   sibling before the merge writes.
+
+   An empty `settings.json`, or one holding only whitespace (a file
+   made with `touch`, say), is merged as `{}`: it is backed up and gets
+   both hooks (b.zbg).
 
    A `settings.json` the merge cannot use stops the install with
    **exit 4** and is left as it was, with no `.bak`:
    - not valid JSON: `install.sh: ~/.claude/settings.json is not valid JSON`;
+   - more than one JSON document (`{} {}`, say), each valid JSON on
+     its own (b.zbg). `N` is how many:
+
+         install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds N JSON documents
+           Each is valid JSON, but the file must hold one JSON object, the shape
+           Claude Code reads. Fix it, then re-run this install.
+
+     To fix it, rewrite the file as one JSON object holding the keys
+     to keep from each document (ask the operator which);
    - valid JSON of another shape: not an object (an array, say), a
      `hooks` that is not an object, or a `SessionStart` or `SessionEnd`
      under it that is not a list. jq's error comes first, then:
@@ -634,6 +678,24 @@ This skill runs `install.sh` from the same directory. The script:
          install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)
            It is valid JSON, but not an object whose hooks hold event lists, the
            shape Claude Code reads. Fix it, then re-run this install.
+
+     A file also wrong in the next way gets this message;
+   - an entry in an event list, or a hook in an entry's `hooks` list,
+     that is neither an object nor `null`
+     (`{"hooks":{"SessionStart":["x"]}}`, say; b.dzu). Only a value the
+     merge reads stops it, so such a file can still install. jq's error
+     comes first, then the path of every such value in either list, one
+     per line:
+
+         install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)
+           It is valid JSON, and its hooks hold event lists, but an entry in an
+           event list, or a hook in an entry's hooks list, is not an object, the
+           shape Claude Code reads. Not an object:
+             .hooks.SessionStart[0]
+           Fix it, then re-run this install.
+
+     To fix it, take the listed values out, or make them objects; `null`
+     ones can stay.
 
    By then the binaries (and the PATH symlink, if any) are in place
    and state.db is at the binary's version; config.toml was not merged
@@ -692,9 +754,59 @@ This skill runs `install.sh` from the same directory. The script:
    0600 file stays 0600 whatever your umask), and each `.bak` has the
    same mode as the file it copies (b.ojn).
 
+   When either file is a symlink (into a dotfiles repo, say), the merge
+   writes through it, following a chain of links too: the link is kept
+   and the file at its end gets the edit (b.nw5). The `.bak` is a regular
+   copy of that file, beside the link. A link to a file that does not
+   exist yet, in a directory that does, creates that file.
+
+   With hooks on, pre-flight refuses a link the merge cannot write
+   through, before anything is installed or changed: its links loop
+   (more than 40), the directory of the file it points to is missing (a
+   dotfiles repository not cloned yet, say), or that directory cannot be
+   written in (home-manager's links into the read-only `/nix/store`,
+   say). A `settings.json` link exits **4**; a `config.toml` link exits
+   **5** with `install.sh: err_name=ErrConfigMalformed` last. For
+   example:
+
+       install.sh: cannot merge into /home/<you>/.claude/settings.json through its symlink; refusing to install.
+         link    : /home/<you>/.claude/settings.json
+         target  : /nix/store/<hash>-settings.json
+         The target's directory, /nix/store, cannot be written in (a read-only file system, say, such as home-manager's /nix/store).
+         With hooks on, install.sh writes its merges into the file a symlinked
+         settings.json or config.toml resolves to, keeping the link. Fix the link
+         so it reaches a file in a directory you can write in. Or re-run this
+         install with --no-hooks, which edits neither file, and add what the
+         merges add where the files come from (your dotfiles or home-manager
+         configuration, say): in settings.json, a SessionStart hook and a
+         SessionEnd hook with matcher "compact", each a command hook running
+         "/home/<you>/.agent-director/bin/agent-director help"; in config.toml,
+         inject_help_hook = true under [defaults].
+         Nothing was installed or changed. Re-run this install after the change.
+
+   A loop has no `target` line. Show the message to the operator and ask
+   which way out they want:
+   - **Fix the link** so it reaches a file in a directory they can write
+     in, then re-run the install with the same flags.
+   - **Re-run with `--no-hooks` added**, then add the entries in the
+     dotfiles or home-manager source. In `settings.json`, add to each
+     event's list (beside any entries already there):
+
+         {"hooks": {
+           "SessionStart": [{"hooks": [{"type": "command", "command": "/home/<you>/.agent-director/bin/agent-director help"}]}],
+           "SessionEnd": [{"matcher": "compact", "hooks": [{"type": "command", "command": "/home/<you>/.agent-director/bin/agent-director help"}]}]
+         }}
+
+     In `config.toml`, set `inject_help_hook = true` under `[defaults]`.
+     Keep passing `--no-hooks` on later installs while the link points
+     into a directory install.sh cannot write in: the check does not read
+     the file, so a hooks-on install refuses the link even when it
+     already holds these entries.
+
    With `--no-hooks`, this step is skipped entirely: settings.json is
    not read, not backed up, not written — left byte-identical to its
-   pre-install state — and config.toml is not touched. The post-install
+   pre-install state — and config.toml is not touched; neither file's
+   symlink is checked in pre-flight. The post-install
    summary reports `hooks   : skipped (--no-hooks)`.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
@@ -739,7 +851,7 @@ install.sh exits 0 on success. Its own failures exit 2 to 5:
 |---|---|
 | 2 | Pre-flight: a bad flag or flag pair, whitespace in `$HOME`, an unsupported OS/CPU, a missing tool, or a binary built for another architecture. |
 | 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, or two version stamps that differ or carry no commit. |
-| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"). |
+| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). |
 | 5 | The config file, or the store open and schema migration. The cause line below names which. |
 | any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
 
@@ -762,9 +874,9 @@ no other exit status has a cause line.
 | `<Name>` | Cause | Remedy |
 |---|---|---|
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
-| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its check that the `[defaults]` merge can extend the file (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml, then re-run the install with the same flags. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
+| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml (or its symlink), then re-run the install with the same flags; a symlink also has a `--no-hooks` way out. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
 | `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
-| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open" and "No temp file for the sentinel". |
+| `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
 
 `ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
@@ -825,18 +937,30 @@ destructive *additions*.
 
    - *What this is:* with `--purge`, `uninstall.sh` prints
      `--purge will rm -rf ~/.agent-director/ — proceed? [y/N]`
-     and waits for a reply. `--force` suppresses that prompt.
+     before it removes or changes anything, and reads the reply from
+     its stdin. `--force` suppresses that prompt. Your tool call gives
+     the script no stdin, so the prompt gets no reply: the script then
+     exits 1, with nothing removed or changed.
    - *Options:*
      - **(a) Keep the prompt (default).** One more chance to back
-       out at the shell.
+       out, at the script's own prompt. The reply has to reach the
+       script's stdin: show the operator the prompt line above, ask
+       them `y` or `n`, and run the command with their reply on stdin,
+       `bash uninstall.sh --purge <other flags> <<< y` (or `<<< n`;
+       the reply needs its newline, which `<<<` adds).
+       Or the operator runs the command in their own terminal and
+       answers the prompt there.
      - **(b) Skip it (`--force`).** The `AskUserQuestion` you just
        answered counts as confirmation; the extra prompt is
-       redundant.
+       redundant. You run the command as assembled.
    - *Default:* (a). Belt-and-suspenders by default; the operator
      can opt into (b) explicitly.
    - *Reversibility:* once `--force` plus `--purge` runs, the
-     directory is gone with no further chance to abort. The
-     `--force` flag itself does nothing without `--purge`.
+     directory is gone with no further chance to abort. A reply
+     other than `y`, `Y`, `yes` or `YES` (`n`, say) cancels only the
+     purge: the plain uninstall still runs, and the script ends
+     `uninstall.sh: --purge aborted` with exit 0. The `--force` flag
+     itself does nothing without `--purge`.
 
 3. **Also deregister the MCP server? (`--mcp-also`)**
 
@@ -862,19 +986,82 @@ destructive *additions*.
 4. **Confirm and execute**
    - Display the assembled `bash uninstall.sh <resolved flags>`.
    - Ask "ready to run?". Only on explicit "yes" execute.
+   - With `--purge` but no `--force`, run it as question 2's (a)
+     says (the operator's reply on stdin, or the operator runs it),
+     never as a bare tool call: that stops at the prompt with exit 1,
+     having done nothing. If that happens, ask the operator for the
+     reply, or whether to add `--force`, and run it again.
 
 ### What uninstall.sh does
 
 - Removes the two help hook entries (only the entries this skill
   added; other user hooks are preserved), snapshotting
-  `settings.json` to a timestamped `.bak` first.
+  `settings.json` to a timestamped `.bak` first. A `settings.json`
+  that is empty or holds only whitespace has no entries to remove and
+  is left alone, with no `.bak` and no note. One the uninstall cannot
+  edit is left alone, with no `.bak` and a note on stderr, and the
+  uninstall goes on (the binaries are still removed; exit 0):
+  - not valid JSON (b.zbg):
+    `uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone`;
+  - more than one JSON document (b.zbg):
+    `uninstall.sh: ~/.claude/settings.json holds N JSON documents, not one; leaving it alone`;
+  - valid JSON of another outer shape (b.ak5), a shape install also
+    refuses (exit 4): not an object (an array, say), a `hooks` that is
+    not an object, or a `SessionStart` or `SessionEnd` under it that is
+    not a list (an object, say). A `hooks`, `SessionStart` or `SessionEnd`
+    that is missing or `null` is fine:
+    `uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone`;
+  - one jq fails on anyway (a backstop): jq's error, then
+    `uninstall.sh: cannot remove agent-director's hook entries from ~/.claude/settings.json (jq's error is above); leaving it alone`.
+
+  Tell the operator: the file may still hold agent-director's hook
+  entries, to remove by hand.
+
+  An entry is agent-director's only when it is an object whose `hooks`
+  is a list holding a hook whose `command` starts with
+  `~/.agent-director/bin/agent-director` (the path spelled out). Any
+  other value in the `SessionStart` and `SessionEnd` lists (a string,
+  a number, an entry whose `hooks` is an object or whose `command` is
+  not a string, say) is kept as it is, while agent-director's entries
+  beside it are removed (b.ak5).
 - Removes `inject_help_hook` from `config.toml`'s `[defaults]` table
   (the header and the key found however they are spaced and in any
   letter case, as install finds them), and the `[defaults]` header too
   when only blank lines and comments are left under it. When that
   changes the file, it is snapshotted to a timestamped `.bak` first.
 - Both rewrites keep the file's mode, and each `.bak` has the same
-  mode as the file it copies (b.ojn).
+  mode as the file it copies (b.ojn). A symlinked file is written
+  through: the link is kept and the file it points to gets the edit
+  (b.nw5). A link that points nowhere, or whose links loop, is left
+  alone.
+- It works out both edits before it changes anything. A symlinked file
+  it must edit but cannot write through, because the directory of the
+  file it points to cannot be written in (home-manager's read-only
+  `/nix/store`, say), stops the uninstall with **exit 2** before
+  anything is removed or changed (except a `config.toml` under a
+  confirmed `--purge`; see `--purge` below). With `--purge` and no
+  `--force`, a `settings.json` refusal comes before the purge prompt,
+  and a `config.toml` refusal after a reply that declines it. Stderr
+  names the link, its target and
+  why, then gives two ways out: fix the link so it reaches a file in a
+  directory you can write in, or remove agent-director's entries where
+  the file comes from (your dotfiles or home-manager configuration):
+  - `settings.json`: each `SessionStart` and `SessionEnd` entry holding
+    a hook whose command starts with
+    `~/.agent-director/bin/agent-director` (the path spelled out);
+  - `config.toml`: `inject_help_hook` from `[defaults]`, and the
+    `[defaults]` header too when only blank lines and comments are left
+    under it.
+
+  It ends
+  `Nothing was removed or changed. Re-run this uninstall after the change.`
+  Show it to the operator, and re-run the uninstall with the same flags
+  after the change.
+- Such a `settings.json` that holds none of agent-director's hook
+  entries is left alone, and the uninstall goes on, printing
+  `uninstall.sh: left <path> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
+  Such a `config.toml` without `inject_help_hook` needs no edit and is
+  not checked.
 - Removes the binary at `~/.agent-director/bin/agent-director` and
   the `.prior` snapshot if one is present.
 - Removes `~/.agent-director/admin/agent-director-admin`, its `.prior`
@@ -882,9 +1069,30 @@ destructive *additions*.
   directory (left in place, with a note, if it holds other files).
 - Unlinks the PATH symlink if one was created.
 - With `--purge`: also removes `~/.agent-director/` entirely
-  (including state.db + templates). Requires confirmation unless
-  `--force` is supplied. A store `[store] db_path` puts outside
-  `~/.agent-director/` is not removed.
+  (including state.db + templates). A store `[store] db_path` puts
+  outside `~/.agent-director/` is not removed. Unless `--force` is
+  supplied, it first prints
+  `--purge will rm -rf ~/.agent-director/ — proceed? [y/N]` and reads
+  one reply line from stdin, before anything is removed or changed
+  (but after the `settings.json` symlink check above). Then:
+  - `y`, `Y`, `yes` or `YES` (or `--force`): the purge runs. A
+    symlinked `config.toml` it cannot write through is not refused:
+    the purge removes the link, never the file it points to, so that
+    file is left alone, still holding `inject_help_hook`, and the
+    script prints
+    `uninstall.sh: left <path> alone: its symlink cannot be written through, and --purge removes the link; its target, <target>, keeps inject_help_hook`.
+    Tell the operator, so they can remove the key where the file
+    comes from if they want it gone. A symlinked `config.toml` it can
+    write through is edited through first (the file it points to, in
+    a dotfiles repo say, loses `inject_help_hook`), then the link is
+    removed; that edit's `.bak`, beside the link, goes with the purge.
+  - Any other reply: no purge. The rest runs as a plain uninstall
+    (so a symlinked `config.toml` it cannot write through is refused
+    with exit 2, as above) and ends `uninstall.sh: --purge aborted`,
+    exit 0.
+  - No reply (stdin at its end, as for a bare tool call): exit 1 after
+    the prompt, with nothing removed or changed. See question 2 of
+    the operator dialog for how to pass the reply, or use `--force`.
 - With `--mcp-also`: runs `claude mcp remove agent-director`.
 
 ## Schema migration: the six-step sentinel flow
@@ -1099,8 +1307,10 @@ Make the change it names, then re-run the install with the same flags.
    install creates state.db at the current version. `ErrConfigMalformed`
    here stops the install (exit 5) with the config advice; see "A
    refused config file" below.
-5. When a migration was expected (step 3 authorized one, or its probe
-   ran one), **verify** the post-open
+5. **Check state.db is there.** The open succeeded, so no file at
+   state.db's path fails the install (exit 5); see "No store after the
+   store open" below. Then, when a migration was expected (step 3
+   authorized one, or its probe ran one), **verify** the post-open
    `user_version` equals the target, and **fail the install loudly**
    (exit 5) if it does not; see "A version mismatch after the store
    open" below. An unreadable version also fails (exit 5) when a
@@ -1123,7 +1333,8 @@ your Spawn history. If the install's step 5 fails verification, do NOT
 delete state.db. If it reports `actual user_version: <unreadable>`,
 see "An unreadable schema version" below. If it reports a readable
 version that differs from the expected one, see "A version mismatch
-after the store open" below.
+after the store open" below. If it reports `state.db was not created by
+the store open`, see "No store after the store open" below.
 
 An operator can also author the sentinel by hand (write the JSON
 above, then run any store-opening verb once), but re-running the
@@ -1247,6 +1458,61 @@ or the read is wrong. Do NOT delete state.db.
    install.
 3. If a re-run fails this same way, capture the error and contact the
    maintainers.
+
+### No store after the store open
+
+When step 4's store open (`agent-director list`) succeeds but step 5
+finds no file at state.db's path, the install exits 5 with:
+
+    install.sh: state.db was not created by the store open
+      state.db: /home/<you>/.agent-director/state.db
+      config  : /home/<you>/.agent-director/config.toml
+      The store open (agent-director list) succeeded, yet there is no store
+      at the state.db path above, where install.sh expected it. agent-director
+      opens its store at [store] db_path in the config file above
+      (~/.agent-director/state.db when unset), and install.sh read that file
+      before the open. So either db_path changed since and agent-director
+      opened a store somewhere else, or something removed or moved the store
+      after the open.
+      Check db_path in the config file, and whether anything (a cleanup, say)
+      removed or moved the store. To keep a moved store's sessions, put it
+      back at the state.db path above first: with no store there, a re-run
+      creates a new, empty one. Then re-run this install: it reads db_path
+      again and opens the store there. If a re-run fails this same way, the
+      installed agent-director does not open its store where this install.sh
+      expects it: contact the maintainers.
+    install.sh: err_name=ErrSchemaVerifyFailed
+
+With `[store] db_path` set, the headline and the `state.db:` line name
+that store's path (see "Which database install.sh checks" above).
+agent-director takes its store's path only from `[store] db_path` in
+`~/.agent-director/config.toml`: no `AGENT_DIRECTOR_*` environment
+variable moves it, and install.sh passes it no store-path flag. install.sh
+read `db_path` in pre-flight, so a missing store means one of: `db_path`
+changed after pre-flight, something removed or moved the store after the
+open, or the installed agent-director opens its store somewhere other
+than where install.sh expects. The cause line names
+`ErrSchemaVerifyFailed`, which needs a human: only the operator knows
+whether the config was edited or a cleanup ran. The new binaries are
+already in place (and the PATH symlink, if any), but the hooks were not
+merged and MCP was not registered.
+
+1. Check `db_path` in the config file the report names. If it changed
+   after the install started, agent-director opened its store at the new
+   path (creating one if none was there), and the re-run checks that
+   store.
+2. Check whether anything (a cleanup, say) removed or moved the store.
+   On an upgrade, step 2 read the store at the `state.db:` path before
+   the open, and a changed `db_path` alone would have left it there, so
+   look for a removal or move. To keep a moved store's sessions,
+   put it back at the `state.db:` path before re-running: with no store
+   there, the re-run creates a new, empty one and leaves the moved store
+   as it is.
+3. Re-run the install with the same flags. It reads `db_path` again,
+   opens the store there and finishes the install.
+4. If a re-run fails this same way, the installed agent-director does
+   not open its store where install.sh expects it: capture the error and
+   contact the maintainers.
 
 ### A refused config file
 

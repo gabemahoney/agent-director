@@ -9,6 +9,7 @@ import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { requireBuiltDist } from "./internal/builtDist.js";
 
 const pkgDir = resolve(import.meta.dir, "..");
 const pkg = JSON.parse(readFileSync(resolve(pkgDir, "package.json"), "utf8")) as Record<string, any>;
@@ -30,6 +31,7 @@ test("package.json exports the bundle (SR-4.0) and dist/version-floor.json (SR-6
 });
 
 test("npm pack ships dist, version-floor.json, README and package.json, and nothing excluded (SR-6.1/6.2/6.5/6.7)", () => {
+  requireBuiltDist();
   const r = spawnSync("npm", ["pack", "--dry-run", "--json"], { cwd: pkgDir, encoding: "utf8" });
   expect(r.status, r.stderr).toBe(0);
   const files = (JSON.parse(r.stdout) as Array<{ files: Array<{ path: string }> }>)[0]!.files.map((f) => f.path);

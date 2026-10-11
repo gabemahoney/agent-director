@@ -4,7 +4,8 @@
 #
 #  1. Generated files (docs/, manifest/surface.json, errnames/catalog.json)
 #     stay in sync with their generators. Any PR that touches a generator
-#     without running `make generate` will fail here.
+#     without running `make generate` (on a development host,
+#     make sandbox CMD="make generate"; b.8yq) will fail here.
 #
 #  2. Every exported identifier in pkg/api has a non-empty doc comment
 #     (enforced by tools/check-doccomments, added in subtask 6a.m4). This is
@@ -12,7 +13,7 @@
 #     and the "Check pkg/api doc comments" step below will fail with a clear
 #     per-identifier diagnostic.
 #
-#     To reproduce locally:  make check-doccomments
+#     To reproduce locally:  make sandbox CMD="make check-doccomments"
 #     To fix:                add a // comment immediately before each flagged
 #                            declaration, then push again.
 #
@@ -39,48 +40,76 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           go-version-file: 'go.mod'
+      # The make targets below that run go generate, go run or go test
+      # (check-doccomments, generate, err-coherence, errnames-json,
+      # surface-json, nondet-coverage) refuse outside the sandbox container
+      # unless BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS is set (the Makefile's
+      # _require-sandbox guard, b.8yq), so each step that runs one sets it.
+      # This runner is a GitHub-HOSTED, ephemeral ubuntu-latest VM: there is no
+      # real ~/.agent-director on it and nothing to protect, so we bypass the
+      # container requirement instead of paying for it.
+      #
+      # Per b.175 this variable must be set ONLY at the job/step level of the
+      # GitHub-hosted workflows. It must NEVER be set as a repository- or
+      # organization-level Actions variable/secret, and NEVER in
+      # .github/workflows/pre-release-verify-mac.yml — that job runs on
+      # [self-hosted, macOS, ARM64], a persistent machine that plausibly holds
+      # a real store. `make check-sandbox-bypass` (the last step) enforces the
+      # latter.
       - name: Check pkg/api doc comments
+        env:
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"  # see the comment above
         run: make check-doccomments
       - name: Regenerate docs and surface.json
+        env:
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"  # see the comment above
         run: make generate
       - name: Check for drift in docs/
         run: |
           if ! git diff --exit-code docs/; then
-            echo "::error::Generated docs are out of date. Run 'make generate' locally and commit the result."
+            echo "::error::Generated docs are out of date. Run 'make sandbox CMD=\"make generate\"' and commit the result."
             git diff docs/
             exit 1
           fi
       - name: Check for drift in surface.json
         run: |
           if ! git diff --exit-code pkg/api/manifest/surface.json; then
-            echo "::error::pkg/api/manifest/surface.json is out of date. Run 'make surface-json' locally and commit the result."
+            echo "::error::pkg/api/manifest/surface.json is out of date. Run 'make sandbox CMD=\"make surface-json\"' and commit the result."
             git diff pkg/api/manifest/surface.json
             exit 1
           fi
       - name: Check for drift in catalog.json
         run: |
           if ! git diff --exit-code pkg/api/errnames/catalog.json; then
-            echo "::error::pkg/api/errnames/catalog.json is out of date. Run 'make errnames-json' locally and commit the result."
+            echo "::error::pkg/api/errnames/catalog.json is out of date. Run 'make sandbox CMD=\"make errnames-json\"' and commit the result."
             git diff pkg/api/errnames/catalog.json
             exit 1
           fi
       - name: Check err-name coherence
+        env:
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"  # see the comment above check-doccomments
         run: make err-coherence
       - name: Check catalog.json up-to-date
+        env:
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"  # see the comment above check-doccomments
         run: |
           make errnames-json
           if ! git diff --exit-code pkg/api/errnames/catalog.json; then
-            echo "::error::pkg/api/errnames/catalog.json is stale. Run 'make errnames-json' and commit the result."
+            echo "::error::pkg/api/errnames/catalog.json is stale. Run 'make sandbox CMD=\"make errnames-json\"' and commit the result."
             exit 1
           fi
       - name: Check surface.json up-to-date
+        env:
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"  # see the comment above check-doccomments
         run: |
           make surface-json
           if ! git diff --exit-code pkg/api/manifest/surface.json; then
-            echo "::error::pkg/api/manifest/surface.json is stale. Run 'make surface-json' and commit the result."
+            echo "::error::pkg/api/manifest/surface.json is stale. Run 'make sandbox CMD=\"make surface-json\"' and commit the result."
             exit 1
           fi
       - name: Check nondeterministic.json coverage
+        env:
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"  # see the comment above check-doccomments
         run: make nondet-coverage
       # b.175: the sandbox-guard bypass is safe only on ephemeral
       # GitHub-hosted runners. pre-release-verify-mac.yml runs on

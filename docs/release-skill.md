@@ -101,9 +101,17 @@ in the run report.
 ```
 
 Gate scripts produce diagnostics via
-`skills/release-agent-director/gates/lib/emit-diagnostic.sh`, which handles
-JSON-escaping of all four fields. Hand-rolling JSON in gate scripts is
-prohibited.
+`skills/release-agent-director/gates/lib/emit-diagnostic.sh`, which builds each
+object with `jq` and writes it as one compact line. Every field is escaped as
+JSON requires, control characters such as TAB and CR included, so a field may
+carry raw command output. The description reaches `jq` on stdin, so it may be
+any size. Hand-rolling JSON in gate scripts is prohibited; the test
+`TestNoHandRolledDiagnosticJSON` fails on any gate script that `printf`s a
+`{"gate"` line. The publish phase's extended diagnostics (such as
+`upstream_response_verbatim`) come from the publish orchestrator's own `jq`
+builder, `emit_publish_diagnostic`, which keeps the same contract: one compact
+line per diagnostic, and the offending path, description, corrective action and
+upstream response all reach `jq` on stdin, so none of them has a size limit.
 
 ---
 
@@ -142,8 +150,10 @@ inspection, CI upload, and audit trail.
 ```
 
 The report is written by
-`skills/release-agent-director/gates/finalize/write-report.sh`. See the inline
-comments in that file for the full positional argument contract.
+`skills/release-agent-director/gates/finalize/write-report.sh`. It takes the
+phases and diagnostics arrays as paths of files holding them, never as inline
+JSON, so they may be any size. See the inline comments in that file for the
+full positional argument contract.
 
 ---
 
@@ -188,16 +198,23 @@ make list-test-docker-epics
 ```
 
 This prints one EPIC slug per line on stdout and exits zero on success. If the
-source file (`test/docker-epics.txt`) is missing or unreadable, the target exits
-non-zero. The caller (the /release skill's coverage gate) treats an empty
-output set as a release-blocker — a release that doesn't exercise any Docker
-EPICs is not a complete pre-publish run.
+source file (`test/docker-epics.txt`) is missing or lists no slug (its `grep`
+then selects no line), the target exits non-zero. The caller (the /release
+skill's coverage gate) treats an empty output set as a release-blocker — a
+release that doesn't exercise any Docker EPICs is not a complete pre-publish
+run.
+
+The `docker-epics` job of `.github/workflows/integration.yml` reads the same
+list through the same target to build its one-job-per-slug CI matrix, and
+fails the same way on an empty list. So CI after a merge to `main` and a
+release run the same groups; a pull request runs `harness-smoke` only. See
+`docs/architecture.md` "CI lane".
 
 Each slug can be invoked individually via `make test-docker EPIC=<slug>` to
 run that EPIC's testplan in the harness container.
 
 ### Cross-compile phase (`compile.<plat>`)
-- The Makefile's `release-binaries` recipe loops over linux/amd64, linux/arm64, darwin/arm64 (the SR-7.1 supported platform set; verified by the preflight invariant gate) and builds both binaries for each: `dist/agent-director-<os>-<arch>` and `dist/agent-director-admin-<os>-<arch>`, six in all.
+- The Makefile's `release-binaries` recipe loops over linux/amd64, linux/arm64, darwin/arm64 (the SR-7.1 release target set; verified by the preflight invariant gate) and builds both binaries for each: `dist/agent-director-<os>-<arch>` and `dist/agent-director-admin-<os>-<arch>`, six in all.
 - Each binary is stamped with the target version via `-X $(VERSION_PKG).Version=<target>` ldflags. `cross-compile.sh` reads the target version from `pkg/ts-bun-client/package.json` via `jq` and exports it as `AGENT_DIRECTOR_BUILD_VERSION` before invoking `make release-binaries`; a caller-supplied `AGENT_DIRECTOR_BUILD_VERSION` is honored without overwrite.
 - The gate `compile.<plat>` produces one sub-check per binary: compile.linux-amd64, compile.linux-arm64, compile.darwin-arm64 for `agent-director`, and compile.admin-linux-amd64, compile.admin-linux-arm64, compile.admin-darwin-arm64 for `agent-director-admin`.
 - SR-7.2: No Go source file may carry a literal release-version constant. The `compile.no-literal-version-constant` gate enforces this — `internal/version/version.go`'s `var Version = "dev"` is the only allowed default; anything matching a SemVer literal fires the gate.
@@ -315,10 +332,20 @@ the remote release branch. Skipped entirely in dry-run mode.
 ### Publish phase
 
 Before any substep runs, the orchestrator resolves every file-input argument
-(`--tarball`, `--notes`, and each `--binaries` element) to an absolute path
-against the caller's working directory, then runs an artifact preflight,
-`publish.preflight-publish-artifacts`. That preflight asserts every one of
-those paths is a readable regular file and halts the run before the first
+(`--tarball`, `--notes`, each `--binaries` element and `--prior-phases`) to
+an absolute path against the caller's working directory.
+
+It then reads the `--prior-phases` file, if one is given. The file holds the
+earlier phases' JSON array, which goes into the report's `phases`. It must be
+a readable regular file holding exactly one JSON array. Otherwise the
+orchestrator exits 2 naming the path, before the artifact preflight or any
+substep runs, and writes no report. The file is read once, at startup: the
+report and terminal summary use that copy, so a later change to the file, or
+its removal, does not reach them.
+
+Next it runs an artifact preflight, `publish.preflight-publish-artifacts`.
+That preflight asserts every `--tarball`, `--notes` and `--binaries` path
+is a readable regular file and halts the run before the first
 irreversible substep if any is not. It runs in **both** `--release` and
 `--dry-run` mode, so a bad artifact path is caught the same way regardless of
 mode. On failure it emits the SR-14 diagnostic, records the failed substep
@@ -357,6 +384,13 @@ npm. Every substep is recorded in `dist/release-report.json` under
 `publish_substeps` with `outcome: skipped` and the would-be command captured
 verbatim.
 
+Each time it writes the report, the orchestrator prints
+`release-report written → <path>` on stderr. If `jq` or the write fails, it
+removes the partial file and prints
+`publish-orchestrator.sh: ERROR: release-report NOT written: …` in that
+line's place. The exit code stays what the run's outcome sets, so that line
+is the only sign the report is missing.
+
 Subprocess: `skills/release-agent-director/gates/publish/publish-orchestrator.sh`.
 
 ### Recovery cheatsheet
@@ -381,7 +415,10 @@ visibility into exactly what state the world is in.
 
 **Auth failures are surfaced verbatim.** A 401/403 from `git push`, `gh
 release create`, or `npm publish` appears in the diagnostic's
-`upstream_response_verbatim` field. The skill does NOT pre-verify
+`upstream_response_verbatim` field, which holds the last 50 lines of the
+failed command's stderr, however long those lines are (the substep's
+`response_excerpt` in `publish_substeps` holds the same text). The
+skill does NOT pre-verify
 publisher identity (the preflight gates check token presence + whoami
 but cannot guarantee the token has the right scopes).
 

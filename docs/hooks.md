@@ -17,7 +17,7 @@ is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
 "args": ["hook"]}` — so Claude Code starts `agent-director hook`
 directly, with no shell in between, and feeds it the payload JSON on
 stdin. The hook's parent process is therefore the Claude process that
-fired it. The README states the minimum supported Claude Code version.
+fired it. install.md states the minimum supported Claude Code version.
 The `PermissionRequest` entry's arguments are `["hook", "--timeout",
 "<N>"]`, N being the same per-hook `timeout` the entry gives Claude Code
 (`[relay] timeout_seconds`), so the relay hook knows when Claude Code will
@@ -77,7 +77,7 @@ and `list` show a state a hook wrote only once it has held that long, and
 the previous settled state until then. A hook's `ended` shows at once; a
 hook that moves a row out of `missing` or `ended` waits like any other
 change. Each hook reads the setting when it fires, to judge whether the
-state it replaces had settled. See the README's settle time section.
+state it replaces had settled. See [Settle time](configuration.md#settle-time-state).
 
 ### The idle-prompt Notification
 
@@ -300,12 +300,12 @@ agent alive keeps `provenance_conflict` rather than clearing it.
 
 `unreported` means the agent is alive but no hook has reported since its
 launch: it may sit at a startup screen or idle at its prompt. To act on
-it, the caller reads the pane (`read-pane`), then types
-(`send-keys --allow-pending`); only a caller that looked should type. A
-caller that cannot judge the pane ends the launch with the live-row
-sequence of the README's "Caller contract" (`kill`, then `find-missing`)
-or hands it to a human. `send-keys` still refuses a
-`pending` row without `--allow-pending`, noted or not.
+it, the caller reads the pane (`read-pane`), then types (`send-keys`
+with `allow_pending`, `--allow-pending` on the CLI); only a caller that
+looked should type. A caller that cannot judge the pane ends the launch
+with the live-row sequence of caller-contract.md (`kill`,
+then `find-missing`) or hands it to a human. `send-keys` still refuses a
+`pending` row without `allow_pending`, noted or not.
 
 The agent's next applied hook clears the note and
 `liveness_unverified_since`, as every applied hook clears both. A

@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -58,13 +59,18 @@ func TestFindMissingZeroLiveRowsIsNoopSuccess(t *testing.T) {
 	assertLookups(t, rec, 0)
 }
 
-// TestFindMissingListErrorAborts: a live-row read error fails the sweep before any reader or tmux call.
+// TestFindMissingListErrorAborts: a live-row read error fails the sweep before any reader or tmux call, with
+// empty non-nil lists (b.hbt).
 func TestFindMissingListErrorAborts(t *testing.T) {
 	t.Parallel()
 	pc := procfix.New()
 	rec := tmuxfix.NewRecorder()
-	if _, err := runFindMissing(&fakeFindMissingStore{listErr: errSentinel}, pc, fmSweep{tmux: rec}); err == nil {
-		t.Fatalf("FindMissing: nil error; want the list error to bubble up")
+	res, err := runFindMissing(&fakeFindMissingStore{listErr: errSentinel}, pc, fmSweep{tmux: rec})
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("FindMissing err = %v; want the list error %v to bubble up", err, errSentinel)
+	}
+	if got, want := jsonOf(t, res), `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`; got != want {
+		t.Errorf("FindMissing = %s; want %s", got, want)
 	}
 	if got := pc.StartTimeCalls(); len(got) != 0 {
 		t.Errorf("StartTime calls = %v; want none", got)

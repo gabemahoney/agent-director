@@ -93,7 +93,12 @@
 #      --from-release release before 0.11.0, which has no
 #      agent-director-admin binary), or the two binaries' version
 #      stamps differ or carry no commit stamp
-#   4  hook merge failure (~/.claude/settings.json malformed)
+#   4  hook merge failure (~/.claude/settings.json malformed, or holding
+#      more than one JSON document; an empty one is merged as {}), or
+#      (hooks on) a symlinked settings.json install.sh cannot resolve or
+#      write through: its links loop, or the file they resolve to sits in
+#      a directory that is missing or cannot be written in (refused in
+#      pre-flight, before anything on disk changes)
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
 #      existing state.db's user_version unreadable before the open (or
@@ -104,8 +109,10 @@
 #      expected), or a config file whose [store] db_path or
 #      busy_timeout_ms install.sh cannot read, or (hooks on) one that
 #      sets defaults as a key before any header (defaults = { ... }),
-#      which the config.toml merge cannot extend (all refused in
-#      pre-flight, before anything on disk changes). state.db here is
+#      which the config.toml merge cannot extend, or (hooks on) a
+#      symlinked config.toml install.sh cannot resolve or write through,
+#      as for settings.json under exit 4 (all refused in pre-flight,
+#      before anything on disk changes). state.db here is
 #      the store database agent-director opens: ~/.agent-director/state.db,
 #      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
 #      Every exit 5 ends with one line on stderr, its last, naming the
@@ -115,8 +122,19 @@
 #      agent-director), ErrSchemaVerifyFailed (needs a human), or, when the
 #      store open fails another way, agent-director's own err_name.
 #
-# Idempotent: re-running the script with no flags after a clean
-# install is a no-op (returns 0, prints "already installed at vX").
+# Idempotent: re-running it after a clean install, with the same
+# binaries (a no-flag re-run outside a checkout picks the
+# agent-director on PATH and the installed agent-director-admin, as
+# above) and the same --no-hooks, symlink and --register-mcp choices,
+# ends in the same state and returns 0 on success. Its steps run
+# again: the binaries are copied again (with --keep-prior, not
+# snapshotted: any earlier .prior files are kept), the store is opened
+# (a state.db already at its target version is not migrated) and, with
+# hooks on, settings.json and config.toml are merged again (no hook is
+# added twice), each after a fresh timestamped .bak. With
+# --register-mcp, `claude mcp add` refuses a name already registered in
+# its scope, so a re-run from the same directory prints
+# "registration failed (continuing anyway)" and still returns 0.
 
 set -euo pipefail
 
@@ -255,8 +273,8 @@ fi
 #   ErrVersionUnreadable  a user_version read gave no version
 #                         (ad_fail_unreadable_version): re-run.
 #   ErrConfigMalformed    config.toml refused, by agent-director or by
-#                         install.sh's pre-flight readers or merge check:
-#                         fix it, then re-run.
+#                         install.sh's pre-flight readers, merge check or
+#                         symlink check: fix it, then re-run.
 #   ErrSchemaMismatch     state.db newer than this binary (step 4's open):
 #                         install a newer agent-director.
 #   ErrSchemaVerifyFailed step 5 found state.db missing, or not at the
@@ -291,12 +309,13 @@ if [[ "$DEFAULT_INSTALL_ROOT" =~ [[:space:]] ]]; then
     exit 2
 fi
 
-# SRD §SR-2.1 / Idea Bee b.fg3: hard-refuse any host outside the v0.4.1
-# supported set {Linux/x86_64, Darwin/arm64} at preflight time, mirroring
-# the umbrella's npm/bun-side os/cpu gate + postinstall host-pair refusal
-# (Pattern A). install.sh is the direct-invocation surface (Pattern B
-# fallback + Pattern A second step); without this gate an operator on an
-# unsupported host could still copy a wrong-arch CLI into place.
+# SRD §SR-2.1 / Idea Bee b.fg3: refuse with exit 2 any host outside the
+# supported set {Linux/x86_64, Darwin/arm64}, before anything is
+# downloaded or written. Linux/aarch64 is refused too; b.fg3 deferred
+# it. install.sh is the only installer (the npm package installs nothing
+# outside node_modules/), so this is the only host check that can refuse
+# an install. ad_arch_probe (below) checks both source binaries against
+# the pair read here.
 uname_s="$(uname -s)"
 uname_m="$(uname -m)"
 case "${uname_s}/${uname_m}" in
@@ -953,11 +972,170 @@ if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "${DEFAULT_INSTALL_ROOT}/c
     ad_exit_5 ErrConfigMalformed
 fi
 
+# --------------------------------------------------------------------
+# Symlinked settings.json and config.toml pre-check (b.nw5)
+#
+# With hooks on, the merges below write through a symlinked
+# ~/.claude/settings.json or ~/.agent-director/config.toml to the file
+# its chain of links resolves to, keeping the link
+# (ad_replace_keeping_mode). The write puts a .new beside that file and
+# moves it over the file, so it fails, late (after the binaries are
+# installed, the store migrated and a .bak written), when the links
+# loop, when the resolved file's directory is missing (a dotfiles
+# repository not cloned yet, say), or when that directory cannot be
+# written in (home-manager links into a read-only /nix/store, say). With
+# hooks on, such a link is refused here instead, before anything on disk
+# changes: settings.json with exit 4 and config.toml with exit 5
+# (ErrConfigMalformed), as each file's other refusals. A plain file, and
+# a link that resolves to a file, existing or not, in a directory that
+# can be written in, pass. With --no-hooks neither file is written, so
+# neither is checked. uninstall.sh runs the same check before its edits.
+# --------------------------------------------------------------------
+
+# ad_resolve_link <file> — print the path <file> resolves to through its
+# chain of symlinks, or <file> itself when it is not a link (b.nw5). Each
+# relative link target is read against its own link's directory. A loop
+# over readlink, as readlink -f is missing from older macOS. A dangling
+# link gives the missing path it names. More than 40 links (a loop) fails,
+# as the kernel does.
+ad_resolve_link() {
+    local path="$1" link hops=0
+    while [[ -L "$path" ]]; do
+        if (( ++hops > 40 )); then
+            echo "install.sh: $1: too many levels of symbolic links" >&2
+            return 1
+        fi
+        link=$(readlink "$path") || return 1
+        case "$link" in
+            /*) path="$link" ;;
+            *) path="$(dirname "$path")/$link" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# ad_link_write_check <file> — return 0 when <file> is not a symlink, or
+# is one ad_replace_keeping_mode can write through: its links end, and
+# the directory of the file they resolve to exists and can be written in
+# (write and search permission, on a file system mounted read-write).
+# Otherwise set link_target to the file the links resolve to (empty when
+# they loop) and link_why to one sentence saying why the link cannot be
+# written through, and return 1.
+ad_link_write_check() {
+    local dir
+    link_target="" link_why=""
+    if [[ ! -L "$1" ]]; then
+        return 0
+    fi
+    if ! link_target=$(ad_resolve_link "$1" 2>/dev/null); then
+        link_target=""
+        link_why="The links loop: following them never reaches a file (more than 40 links)."
+        return 1
+    fi
+    dir=$(dirname "$link_target")
+    if [[ ! -d "$dir" ]]; then
+        link_why="There is no directory $dir to hold the target (a dotfiles repository not cloned yet, say)."
+        return 1
+    fi
+    if [[ ! -w "$dir" || ! -x "$dir" ]]; then
+        link_why="The target's directory, $dir, cannot be written in (a read-only file system, say, such as home-manager's /nix/store)."
+        return 1
+    fi
+}
+
+# ad_link_refuse <file> — report a symlinked <file> that
+# ad_link_write_check refused, from link_target and link_why, with the
+# ways out, on stderr. The caller exits.
+ad_link_refuse() {
+    echo "install.sh: cannot merge into $1 through its symlink; refusing to install." >&2
+    echo "  link    : $1" >&2
+    if [[ -n "$link_target" ]]; then
+        echo "  target  : $link_target" >&2
+    fi
+    echo "  $link_why" >&2
+    echo "  With hooks on, install.sh writes its merges into the file a symlinked" >&2
+    echo "  settings.json or config.toml resolves to, keeping the link. Fix the link" >&2
+    echo "  so it reaches a file in a directory you can write in. Or re-run this" >&2
+    echo "  install with --no-hooks, which edits neither file, and add what the" >&2
+    echo "  merges add where the files come from (your dotfiles or home-manager" >&2
+    echo "  configuration, say): in settings.json, a SessionStart hook and a" >&2
+    echo "  SessionEnd hook with matcher \"compact\", each a command hook running" >&2
+    echo "  \"${DEFAULT_BIN_DIR}/agent-director help\"; in config.toml," >&2
+    echo "  inject_help_hook = true under [defaults]." >&2
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+}
+
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
+    ad_link_refuse "$DEFAULT_SETTINGS_PATH"
+    exit 4
+fi
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
+    ad_link_refuse "${DEFAULT_INSTALL_ROOT}/config.toml"
+    ad_exit_5 ErrConfigMalformed
+fi
+
 echo "install.sh: pre-flight OK"
 echo "  claude  : $(claude --version 2>/dev/null || echo '<unknown>')"
 echo "  tmux    : $(tmux -V 2>/dev/null || echo '<unknown>')"
 if [[ "$state_db_name" != state.db ]]; then
     echo "  store   : $state_db ([store] db_path in ${DEFAULT_INSTALL_ROOT}/config.toml)"
+fi
+
+# --------------------------------------------------------------------
+# Source tree, and the build advice that names it
+# --------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# skills/install-agent-director sits two levels under the repo root;
+# bin/ is at the root. The root is resolved here, physically as the
+# kernel resolves ../.., so every message names <root>/bin/... with no
+# ../.. (b.j6w); a failed cd keeps the raw path. Without --from-release,
+# install.sh prefers the binaries in its bin/ (below), and the
+# source-tree version check holds a binary to this same root's HEAD
+# (b.1rs).
+source_root="$(cd -P "${SCRIPT_DIR}/../.." 2>/dev/null && pwd -P)" \
+    || source_root="${SCRIPT_DIR}/../.."
+
+# source_head: source_root's HEAD when source_root is a git checkout of
+# agent-director's source; empty otherwise. Read once, here, for the
+# build advice below and the source-tree version check.
+#
+# source_root is that checkout only when its own `.git` entry is a repo:
+# a directory in a plain clone, a `gitdir:` file in a linked worktree
+# (b.go9), so a worktree nested inside another checkout is held to its
+# own HEAD. --git-dir takes that entry as given and never searches
+# upward, as git -C would: a `.git` that is not a repo (empty,
+# half-copied) fails rev-parse, leaving source_head empty, rather than
+# letting git find a repo enclosing source_root (b.1rs); nor is CWD's
+# repo used. --git-dir also overrides an exported GIT_DIR. It is
+# agent-director's source when it has cmd/agent-director, which `make
+# build` builds into its bin/. A failed rev-parse (no git, an unborn
+# HEAD) leaves source_head empty whatever it printed.
+source_head=""
+if [[ -e "$source_root/.git" && -d "$source_root/cmd/agent-director" ]]; then
+    source_head=$(git --git-dir="$source_root/.git" rev-parse HEAD 2>/dev/null) \
+        || source_head=""
+fi
+
+# The refusals that advise a build (b.3qt) name where to run it, so the
+# advice works from any directory: the installed skill is often a
+# symlink into a clone, run from ~, where a bare `make build` fails.
+# They name source_root, with make -C, only when it is a git checkout of
+# agent-director's source (source_head set) with a Makefile, where `make
+# build` stamps both binaries with the checkout's commit, as the checks
+# below require. Otherwise (a curled tarball, an installed copy of the
+# skill in some other repo) install.sh knows no checkout, so the advice
+# names a placeholder for the operator's own, and the re-run after the
+# build is that checkout's install.sh, which takes the binaries from its
+# bin/. Paths are quoted with %q, as the sqlite3 commands below are, so
+# the line can be pasted into a shell as is: a plain path prints
+# unchanged.
+build_advice="make -C <path-to-agent-director-checkout> build"
+build_rerun="bash <path-to-agent-director-checkout>/skills/install-agent-director/install.sh"
+if [[ -n "$source_head" && -f "$source_root/Makefile" ]]; then
+    build_advice="make -C $(printf '%q' "$source_root") build"
+    build_rerun="bash $(printf '%q' "$0")"
 fi
 
 # --------------------------------------------------------------------
@@ -1001,8 +1179,8 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         if [[ -z "$FROM_RELEASE_TAG" || "$FROM_RELEASE_TAG" == "null" ]]; then
             echo "install.sh: --from-release: no releases published for $RELEASE_REPO_SLUG yet" >&2
             echo "  options:" >&2
-            echo "    - build from source: make build && bash $0" >&2
-            echo "    - point at local binaries: bash $0 --binary <path> --admin-binary <path>" >&2
+            echo "    - build from source: $build_advice && $build_rerun" >&2
+            echo "    - point at local binaries: bash $(printf '%q' "$0") --binary <path> --admin-binary <path>" >&2
             exit 3
         fi
     fi
@@ -1206,17 +1384,14 @@ fi
 # Locate source binary
 # --------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Defaults to 1; cleared to 0 only when BINARY_SRC came from PATH
 # (option (c)), since "whatever's on PATH" makes no claim about the
 # operator's source tree.
 VERSION_CHECK_REQUIRED=1
 
-# Prefer the in-repo builds (skills/install-agent-director sits two
-# levels under the repo root; bin/ is at the root).
-candidate="${SCRIPT_DIR}/../../bin/agent-director"
-admin_candidate="${SCRIPT_DIR}/../../bin/agent-director-admin"
+# Prefer the in-repo builds: bin/ of source_root, resolved above.
+candidate="${source_root}/bin/agent-director"
+admin_candidate="${source_root}/bin/agent-director-admin"
 
 if [[ -z "$BINARY_SRC" ]]; then
     if [[ -x "$candidate" ]]; then
@@ -1343,36 +1518,37 @@ ad_arch_probe "$ADMIN_SRC" "--admin-binary"
 # Source-tree version check
 #
 # When the operator points install.sh at a local binary (either via
-# --binary or via the in-repo ./bin/agent-director fallback) AND
-# install.sh itself lives inside a git checkout, refuse to install a
-# binary whose embedded commit doesn't match the checkout's HEAD.
-# Catches the "operator forgot to `make build` after pulling new
-# code" footgun — installing a stale artifact silently is exactly
-# what b.qag flagged.
+# --binary or via the in-repo bin/agent-director fallback) AND the tree
+# install.sh takes bin/ from (source_root: two levels above the script,
+# resolved physically) is a git checkout of agent-director's source,
+# refuse to install a binary whose embedded commit doesn't match that
+# checkout's HEAD. Catches the "operator forgot to `make build` after
+# pulling new code" footgun — installing a stale artifact silently is
+# exactly what b.qag flagged.
+#
+# That checkout and its HEAD are source_head, read above with the
+# source root: only source_root's own `.git` counts (a directory in a
+# plain clone, a `gitdir:` file in a linked worktree, b.go9), so a
+# worktree nested inside another checkout is held to its own HEAD; a
+# repo merely enclosing the script is never used (b.1rs), nor is CWD's.
+# Unlike the build advice, the check does not need a Makefile.
 #
 # Skipped when:
 #   - --from-release was used (the asset is by construction not the
 #     operator's source tree)
-#   - install.sh is not inside a git checkout (curled tarball case)
+#   - source_root is not a git checkout of agent-director's source
+#     (b.1rs): a curled tarball, or an installed copy of the skill in
+#     some other repo, such as a dotfiles ~ or ~/.claude, whose HEAD no
+#     agent-director binary is built from
 #   - BINARY_SRC came from `command -v` (option (c)): there's no
 #     promise it was built from this tree, and the user explicitly
 #     asked for "whatever's on PATH"
 # --------------------------------------------------------------------
 
 if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
-    # Find the script's repo root (walking up from SCRIPT_DIR). The
-    # script-path is what tells us "this checkout"; CWD might be
-    # somewhere unrelated.
-    repo_root=""
-    probe="$SCRIPT_DIR"
-    while [[ "$probe" != "/" && -n "$probe" ]]; do
-        if [[ -d "$probe/.git" ]]; then
-            repo_root="$probe"; break
-        fi
-        probe="$(dirname "$probe")"
-    done
-
-    if [[ -n "$repo_root" ]] && head_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null); then
+    # An empty source_head (no `.git` of source_root's own that git can
+    # read, or no cmd/agent-director) skips the check (b.1rs).
+    if [[ -n "$source_head" ]]; then
         # Run the binary's `version` verb. An older binary without the
         # verb will exit non-zero / emit an err_name envelope; jq -e
         # returns non-zero if .commit is absent or null. Either way we
@@ -1381,7 +1557,7 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
             | jq -er '.commit // empty' 2>/dev/null \
             || true)
 
-        if [[ -z "$bin_commit" || "$bin_commit" == "unknown" || "$bin_commit" != "$head_sha" ]]; then
+        if [[ -z "$bin_commit" || "$bin_commit" == "unknown" || "$bin_commit" != "$source_head" ]]; then
             echo "install.sh: source-tree version check failed." >&2
             echo "  binary  : $BINARY_SRC" >&2
             if [[ -z "$bin_commit" ]]; then
@@ -1391,16 +1567,16 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
             else
                 echo "  built from: $bin_commit" >&2
             fi
-            echo "  HEAD    : $head_sha ($repo_root)" >&2
+            echo "  HEAD    : $source_head ($source_root)" >&2
             echo "" >&2
             echo "  The binary at $BINARY_SRC was not built from this checkout's" >&2
             echo "  current HEAD. Installing it would silently substitute stale code" >&2
             echo "  for the source you're sitting on. Either:" >&2
-            echo "    - rebuild it first:    make build" >&2
+            echo "    - rebuild it first:    $build_advice" >&2
             echo "    - or download release: rerun with --from-release (omit --binary)" >&2
             exit 3
         fi
-        echo "  version-check: binary commit matches HEAD ($head_sha)"
+        echo "  version-check: binary commit matches HEAD ($source_head)"
     fi
 fi
 
@@ -1435,7 +1611,7 @@ if [[ "$main_stamp" != "$admin_stamp" ]]; then
     echo "" >&2
     echo "  Both binaries open the same store, so they must come from the same" >&2
     echo "  build (the same version and commit). Either:" >&2
-    echo "    - rebuild both first:  make build" >&2
+    echo "    - rebuild both first:  $build_advice" >&2
     echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi
@@ -1451,7 +1627,7 @@ if [[ -z "$main_stamp" || -z "$stamp_commit" || "$stamp_commit" == "unknown" ]];
     echo "  one (a plain 'go build' reports commit \"unknown\") match any other" >&2
     echo "  such build, from any tree. 'make build' in a git checkout stamps" >&2
     echo "  both with the checkout's commit. Either:" >&2
-    echo "    - rebuild both first:  make build" >&2
+    echo "    - rebuild both first:  $build_advice" >&2
     echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
     exit 3
 fi
@@ -1954,9 +2130,38 @@ fi
 # ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
 # The open succeeded, so a missing state.db means install.sh and
 # agent-director disagree on where the store is, or it was removed since:
-# needs a human (ErrSchemaVerifyFailed).
+# needs a human (ErrSchemaVerifyFailed). agent-director opens its store at
+# [store] db_path in $HOME/.agent-director/config.toml (pkg/api
+# resolveStorePath; its --store-path and --home flags aside, which
+# install.sh never passes), and no AGENT_DIRECTOR_* variable moves it.
+# install.sh read that file in pre-flight (ad_store_db_path), so the two
+# disagree only when db_path changed since or the installed binary resolves
+# it differently. On an upgrade step 2 read $state_db, so there it was
+# removed or moved: a changed db_path would have left it in place.
+#
+# A re-run reads db_path again and opens the store there, so it finishes
+# after a changed db_path. With no store at $state_db its step-4 open
+# creates a new, empty one, so the advice says to put a moved store back
+# first. A re-run that fails the same way means the binary resolves the
+# store differently from ad_store_db_path: the maintainers' turn.
 if [[ ! -f "$state_db" ]]; then
     echo "install.sh: ${state_db_name} was not created by the store open" >&2
+    echo "  state.db: $state_db" >&2
+    echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
+    echo "  The store open (agent-director list) succeeded, yet there is no store" >&2
+    echo "  at the state.db path above, where install.sh expected it. agent-director" >&2
+    echo "  opens its store at [store] db_path in the config file above" >&2
+    echo "  (~/.agent-director/state.db when unset), and install.sh read that file" >&2
+    echo "  before the open. So either db_path changed since and agent-director" >&2
+    echo "  opened a store somewhere else, or something removed or moved the store" >&2
+    echo "  after the open." >&2
+    echo "  Check db_path in the config file, and whether anything (a cleanup, say)" >&2
+    echo "  removed or moved the store. To keep a moved store's sessions, put it" >&2
+    echo "  back at the state.db path above first: with no store there, a re-run" >&2
+    echo "  creates a new, empty one. Then re-run this install: it reads db_path" >&2
+    echo "  again and opens the store there. If a re-run fails this same way, the" >&2
+    echo "  installed agent-director does not open its store where this install.sh" >&2
+    echo "  expects it: contact the maintainers." >&2
     ad_exit_5 ErrSchemaVerifyFailed
 fi
 chmod 0600 "$state_db" 2>/dev/null || true
@@ -2057,29 +2262,41 @@ ad_mode_of() {
 }
 
 # ad_replace_keeping_mode <file> <text> — replace <file> with <text> and a
-# newline: write <file>.new beside it, then mv it over <file>. An existing
-# <file> keeps its permission bits (b.ojn): the new file is written
-# owner-only (umask 077) and only then given them, so no one who could not
-# read the old contents can read the new ones, even before the mv. A new
-# <file> takes the umask's mode.
+# newline: write <file>.new beside it, then mv it over <file>. A symlinked
+# <file> is written through (b.nw5): the file its link chain resolves to
+# (ad_resolve_link, in pre-flight above) is the one replaced, from a .new
+# beside that file, so the link survives and the file it points at (a
+# dotfiles copy, say) gets the edit. A mv over the link itself would
+# replace it with a regular file and leave its target stale. A dangling
+# link gets the file it names created, as > through the link would.
+# Pre-flight (ad_link_write_check) refused a link this cannot write
+# through; ad_resolve_link's own loop failure stays as a backstop for a
+# link changed since. An existing <file> keeps its permission bits
+# (b.ojn): the new file is written owner-only (umask 077) and only then
+# given them, so no one who could not read the old contents can read the
+# new ones, even before the mv. A new <file> takes the umask's mode.
 ad_replace_keeping_mode() {
-    local tmp="${1}.new"
+    local target tmp
+    target=$(ad_resolve_link "$1") || return
+    tmp="${target}.new"
     rm -f "$tmp"
-    if [[ -f "$1" ]]; then
+    if [[ -f "$target" ]]; then
         (umask 077; printf '%s\n' "$2" >"$tmp")
-        chmod "$(ad_mode_of "$1")" "$tmp"
+        chmod "$(ad_mode_of "$target")" "$tmp"
     else
         printf '%s\n' "$2" >"$tmp"
     fi
-    mv -f "$tmp" "$1"
+    mv -f "$tmp" "$target"
 }
 
 # ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
 # permission bits, the same way (b.ojn): remove any <bak> first (an earlier
 # run's copy of the same second, at whatever mode it has), copy owner-only
-# (umask 077), then chmod. Not cp -p: GNU cp -p also copies ACLs and
-# xattrs, and fails where the file system cannot take them (NFS homes;
-# Ubuntu LP#2087769), which would stop the install here.
+# (umask 077), then chmod. cp reads through a symlinked <file>, so <bak> is
+# a regular copy of the link's target, beside the link. Not cp -p: GNU cp
+# -p also copies ACLs and xattrs, and fails where the file system cannot
+# take them (NFS homes; Ubuntu LP#2087769), which would stop the install
+# here.
 ad_backup_keeping_mode() {
     rm -f "$2"
     (umask 077; cp -f "$1" "$2")
@@ -2091,11 +2308,26 @@ if [[ "$NO_HOOKS" -eq 1 ]]; then
 else
     mkdir -p "$(dirname "$DEFAULT_SETTINGS_PATH")"
 
-    # Read existing settings or start from {}.
+    # Read existing settings or start from {}. The merge below writes one
+    # result per JSON document it reads, so the file's documents are
+    # counted first (b.zbg): with none it would write no hooks, and with
+    # several it would write several merged documents back. A file holding
+    # none (empty, or only whitespace: a touched file, say), which Claude
+    # Code reads as no settings, is merged as {}, after the usual backup. A
+    # file holding several is refused here, exit 4, and left as it was,
+    # as one that is not valid JSON is.
     if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         existing=$(<"$DEFAULT_SETTINGS_PATH")
-        if ! printf '%s' "$existing" | jq empty >/dev/null 2>&1; then
+        if ! settings_docs=$(printf '%s' "$existing" | jq -n '[inputs] | length' 2>/dev/null); then
             echo "install.sh: ~/.claude/settings.json is not valid JSON" >&2
+            exit 4
+        fi
+        if [[ "$settings_docs" -eq 0 ]]; then
+            existing='{}'
+        elif [[ "$settings_docs" -gt 1 ]]; then
+            echo "install.sh: cannot merge the hooks into ~/.claude/settings.json: it holds $settings_docs JSON documents" >&2
+            echo "  Each is valid JSON, but the file must hold one JSON object, the shape" >&2
+            echo "  Claude Code reads. Fix it, then re-run this install." >&2
             exit 4
         fi
     else
@@ -2112,30 +2344,71 @@ else
     #     already there (matched by command).
     #   - Ensure hooks.SessionEnd is an array; append our compact-matcher
     #     entry if not already there.
-    # Valid JSON of another shape (an array, or hooks a string, say) fails
-    # the merge with jq's runtime-error status, 5, which set -e would make
-    # the install's exit status: a hook merge failure is exit 4 (b.cfq).
+    # "Already there" reads only lists, where Claude Code reads hooks
+    # (b.zbg): []? would read an object's values too, and count an entry
+    # Claude Code never runs. So a merge that succeeds, of the one
+    # document counted above, is one object holding both entries in
+    # lists, and "hooks : injected" below is true; an event list that is
+    # an object fails the append instead.
+    # Valid JSON of another shape fails the merge with jq's runtime-error
+    # status, 5, which set -e would make the install's exit status: a hook
+    # merge failure is exit 4 (b.cfq). The shape is wrong either outside
+    # the event lists (an array, or hooks a string, say) or inside them:
+    # "already there" indexes each entry it reads (.hooks, .matcher) and
+    # each hook in an entry's hooks list (.command), so one that is
+    # neither an object nor null (a string, say) fails the merge too. A
+    # null one indexes to null and passes.
     if ! new_settings=$(printf '%s' "$existing" | jq \
         --arg cmd "$help_cmd" '
             .hooks //= {}
             | .hooks.SessionStart //= []
             | .hooks.SessionEnd //= []
             | (
-                if any(.hooks.SessionStart[]?; .hooks[]?.command == $cmd)
+                if any(.hooks.SessionStart | arrays | .[]; .hooks | arrays | any(.[]; .command == $cmd))
                   then .
                   else .hooks.SessionStart += [{"hooks":[{"type":"command","command":$cmd}]}]
                 end
             )
             | (
-                if any(.hooks.SessionEnd[]?; .matcher == "compact" and (.hooks[]?.command == $cmd))
+                if any(.hooks.SessionEnd | arrays | .[]; .matcher == "compact" and (.hooks | arrays | any(.[]; .command == $cmd)))
                   then .
                   else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
                 end
             )
         '); then
         echo "install.sh: cannot merge the hooks into ~/.claude/settings.json (jq's error is above)" >&2
-        echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
-        echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        # Which side of the event lists is wrong (b.dzu): with the merge's
+        # own fill-ins, an outer shape it takes yields the path of each
+        # entry, and each hook in an entry's hooks list, that is neither an
+        # object nor null, whether or not the merge read it. An outer shape
+        # it does not take yields nothing, or a jq error, and keeps the
+        # outer-shape message.
+        if odd_hook_values=$(printf '%s' "$existing" | jq -r '
+                def odd: type != "object" and type != "null";
+                .hooks //= {}
+                | .hooks.SessionStart //= []
+                | .hooks.SessionEnd //= []
+                | .hooks
+                | select((.SessionStart | type) == "array" and (.SessionEnd | type) == "array")
+                | ("SessionStart", "SessionEnd") as $e
+                | .[$e]
+                | range(length) as $i
+                | .[$i]
+                | if odd then ".hooks.\($e)[\($i)]"
+                  else .hooks | arrays | range(length) as $j
+                    | select(.[$j] | odd)
+                    | ".hooks.\($e)[\($i)].hooks[\($j)]"
+                  end
+            ' 2>/dev/null) && [[ -n "$odd_hook_values" ]]; then
+            echo "  It is valid JSON, and its hooks hold event lists, but an entry in an" >&2
+            echo "  event list, or a hook in an entry's hooks list, is not an object, the" >&2
+            echo "  shape Claude Code reads. Not an object:" >&2
+            sed 's/^/    /' <<<"$odd_hook_values" >&2
+            echo "  Fix it, then re-run this install." >&2
+        else
+            echo "  It is valid JSON, but not an object whose hooks hold event lists, the" >&2
+            echo "  shape Claude Code reads. Fix it, then re-run this install." >&2
+        fi
         exit 4
     fi
 
@@ -2149,7 +2422,8 @@ else
         echo "  backup  : $backup_settings"
     fi
 
-    # Atomic write: tempfile + mv, keeping an existing file's mode.
+    # Atomic write: tempfile + mv, keeping an existing file's mode, and
+    # writing through a symlinked settings.json to its target.
     ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new_settings"
 
     echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"

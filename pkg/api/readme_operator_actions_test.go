@@ -1,11 +1,11 @@
 package api_test
 
-// readme_operator_actions_test.go checks the README's "Operator actions"
+// readme_operator_actions_test.go checks docs/operator-actions.md's
 // removal procedure for a row whose recorded name cannot be used gives its
 // five steps in order, and that every tmux command in the section targets a
 // session or pane by id (SR-18.17, SR-20.6), on readme_sections_test.go's
 // shared mdDoc parser. Its extractors and checkSteps serve every later
-// README procedure check.
+// operator-actions procedure check.
 
 import (
 	"fmt"
@@ -31,7 +31,7 @@ var (
 	stepRe      = regexp.MustCompile(`^(\d+)\.[ \t]`)
 )
 
-// tmuxCmd is one tmux command of the README: its 1-based line, its words
+// tmuxCmd is one tmux command of a doc: its 1-based line, its words
 // joined by single spaces, its subcommand and the words after it.
 type tmuxCmd struct {
 	line int
@@ -99,7 +99,7 @@ func (c tmuxCmd) hasFlag(f byte) bool {
 	})
 }
 
-// tmuxCommands collects the tmux commands of lines (README lines from index
+// tmuxCommands collects the tmux commands of lines (doc lines from index
 // first on), in line order: each fenced-block line and each inline code span.
 func tmuxCommands(lines []string, first int) []tmuxCmd {
 	var cmds []tmuxCmd
@@ -137,7 +137,7 @@ type procStep struct {
 
 func (s procStep) text() string { return normalised(strings.Join(s.lines, " ")) }
 
-// numberedSteps splits lines (README lines from index first on) into their
+// numberedSteps splits lines (doc lines from index first on) into their
 // top-level numbered steps; the list ends at an unindented non-step line.
 func numberedSteps(lines []string, first int) []procStep {
 	var steps []procStep
@@ -179,24 +179,41 @@ type stepSpec struct {
 	cmds  []cmdShape
 }
 
-// unusableNameSteps is SR-18.17's five steps in order.
+// unusableNameSteps is SR-18.17's five steps in order. Its tmux commands are
+// the shared "Inspect and end a session by hand" block's, which the steps cite
+// by number (TestReadmeOperatorActionsInspectBlock).
 func unusableNameSteps() []stepSpec {
-	identify := []string{"kept_ids", "ad.expire.kept", "ErrInternal", "agent-director read-pane", "quotes", "`list`"}
+	identify := []string{"kept_ids", "ad.expire.kept", "agent-director read-pane", "`list`"}
 	for _, tok := range unusableNameTokens() {
-		identify = append(identify, "`"+tok.note+"`", "`"+tok.kept+"`")
+		identify = append(identify, "`"+tok.note+"`")
 	}
-	socket, byID := "-S '<socket>'", "-t '<session id>'"
-	listing := cmdShape{sub: "list-sessions", want: []string{socket, "-F", "#{session_id}", "#{session_created}", "#{session_name}"}}
 	return []stepSpec{
 		{"identify the row and its name", identify, nil},
-		{"find candidate sessions by id", []string{"stored form"}, []cmdShape{listing}},
-		{"confirm ownership", []string{"hint"}, []cmdShape{
-			{sub: "show-options", want: []string{socket, byID, "-v @ad_owner"}, noFlag: 'q'},
-			{sub: "show-environment", want: []string{socket, byID, "AGENT_DIRECTOR_INSTANCE_ID"}},
-		}},
-		{"end the session by id", []string{"by name", "`=`"}, []cmdShape{{sub: "kill-session", want: []string{socket, byID}}, listing}},
+		{"find candidate sessions by id", []string{"(step 1)", "`\\377`"}, nil},
+		{"confirm ownership", []string{"(step 2)", "(step 2b)", "AGENT_DIRECTOR_INSTANCE_ID=<this row's id>"}, nil},
+		{"end the session by id", []string{"by its session id", "(steps 4 and 5)"}, nil},
 		{"remove the row", []string{"agent-director-admin delete"}, nil},
 	}
+}
+
+// inspectBlockTitle is the item whose fenced block holds the tmux commands
+// that the other items cite by step number.
+const inspectBlockTitle = "Inspect and end a session by hand"
+
+// inspectBlockSpec is the shared block's numbered comments, which other items
+// cite ("steps 4 and 5", "step 2b"), and its tmux commands in order.
+func inspectBlockSpec() stepSpec {
+	socket, byID := "-S '<socket>'", "-t '<session id>'"
+	listing := cmdShape{sub: "list-sessions", want: []string{socket, "-F", "#{session_id}", "#{session_created}", "#{session_name}"}}
+	return stepSpec{"inspect and end by id", []string{"# 1.", "# 2.", "# 2b.", "# 3.", "# 4.", "# 4b.", "# 5.", "never by name"}, []cmdShape{
+		listing,
+		{sub: "show-options", want: []string{socket, byID, "-v @ad_owner"}, noFlag: 'q'},
+		{sub: "show-environment", want: []string{socket, byID, "AGENT_DIRECTOR_INSTANCE_ID"}},
+		{sub: "attach-session", want: []string{socket, byID, "-r"}},
+		{sub: "kill-session", want: []string{socket, byID}},
+		{sub: "list-panes", want: []string{socket, "-F", "#{pane_id}", "#{@ad_pane}"}},
+		{sub: "kill-pane", want: []string{socket, "-t '<pane id>'"}},
+	}}
 }
 
 // operatorActionsItem returns the item heading titled title, failing the test
@@ -213,13 +230,64 @@ func operatorActionsItem(t *testing.T, d mdDoc, title string) mdHeading {
 }
 
 // TestReadmeOperatorActionsUnusableNameSteps checks the unusable-name
-// procedure gives SR-18.17's five steps in order, each with its content.
+// procedure names its error and gives SR-18.17's five steps in order, each
+// with its content.
 func TestReadmeOperatorActionsUnusableNameSteps(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
-	from, to := sectionLines(d, operatorActionsItem(t, d, unusableNameItemTitle))
+	d := readMD(t, mdOperatorActions)
+	item := operatorActionsItem(t, d, unusableNameItemTitle)
+	if !strings.Contains(d.body(item), "`ErrInternal`") {
+		t.Errorf("%s %q never names `ErrInternal`, the error the procedure answers", d.path, unusableNameItemTitle)
+	}
+	from, to := sectionLines(d, item)
 	checkSteps(t, d, unusableNameItemTitle, numberedSteps(d.lines[from:to], from), unusableNameSteps())
 }
+
+// TestReadmeOperatorActionsInspectBlock checks the shared "Inspect and end a
+// session by hand" block gives, by session or pane id, the tmux commands and
+// the numbered comments the other items cite.
+func TestReadmeOperatorActionsInspectBlock(t *testing.T) {
+	t.Parallel()
+	d := readMD(t, mdOperatorActions)
+	from, to := sectionLines(d, operatorActionsItem(t, d, inspectBlockTitle))
+	checkSteps(t, d, inspectBlockTitle, []procStep{{num: "1", first: from, lines: d.lines[from:to]}}, []stepSpec{inspectBlockSpec()})
+
+	// Each label must head its own command: other items cite "step 2b" or
+	// "steps 4 and 5", so a label over the wrong command misleads the operator.
+	// Label 5 only tells the operator to list again (step 1) and has no command.
+	want := map[string]string{"1": "list-sessions", "2": "show-options", "2b": "show-environment",
+		"3": "attach-session", "4": "kill-session", "4b": "list-panes", "5": ""}
+	got, order := map[string]string{}, []string{}
+	label, inFence := "", false
+	for i, line := range d.lines[from:to] {
+		if codeFenceRe.MatchString(line) {
+			inFence = !inFence
+			continue
+		}
+		if !inFence {
+			continue
+		}
+		if m := inspectLabelRe.FindStringSubmatch(line); m != nil {
+			label = m[1]
+			order = append(order, label)
+			got[label] = ""
+		} else if c, ok := parseTmux(line, from+i+1); ok && label != "" && got[label] == "" {
+			got[label] = c.sub
+		}
+	}
+	if !slices.Equal(order, []string{"1", "2", "2b", "3", "4", "4b", "5"}) {
+		t.Errorf("%s %q has labelled comments %q; want 1, 2, 2b, 3, 4, 4b, 5 in order", d.path, inspectBlockTitle, order)
+	}
+	for label, sub := range want {
+		if got[label] != sub {
+			t.Errorf("%s %q: the first tmux command after comment %q is %q; want %q (\"\" is none)",
+				d.path, inspectBlockTitle, "# "+label+".", got[label], sub)
+		}
+	}
+}
+
+// inspectLabelRe is a numbered comment of the shared block ("# 2b. ...").
+var inspectLabelRe = regexp.MustCompile(`^#\s+(\d+[a-z]?)\.\s`)
 
 // checkSteps checks steps are want's steps, numbered 1 on, each naming its
 // prose and giving its tmux commands in order (one subtest per step).
@@ -268,7 +336,7 @@ func checkSteps(t *testing.T, d mdDoc, item string, steps []procStep, want []ste
 // "Operator actions" is a session-id or pane-id placeholder, never a name.
 func TestReadmeOperatorActionsTargetsByID(t *testing.T) {
 	t.Parallel()
-	d := readMD(t, mdTopREADME)
+	d := readMD(t, mdOperatorActions)
 	from, to := sectionLines(d, operatorActions(t, d))
 	cmds := tmuxCommands(d.lines[from:to], from)
 	targeted := 0

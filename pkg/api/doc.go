@@ -84,6 +84,7 @@
 //
 //  3. CreateIfMissing opt-in — CLI callers set Options.CreateIfMissing = true
 //     to preserve the first-run UX (store created automatically on first
-//     invocation). Library callers default to false and must initialize the
-//     store out-of-band.
+//     invocation), unless the CLI's global --create-if-missing false is
+//     given. Library callers default to false and must initialize the store
+//     out-of-band.
 package api
