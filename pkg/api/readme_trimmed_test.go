@@ -1,8 +1,9 @@
 package api_test
 
 // readme_trimmed_test.go pins b.3tg: the six user docs moved out of the README
-// stay within their size targets, wrapped at 80 columns, and free of the
-// history docs/user-docs-guide.md forbids.
+// stay free of the history docs/user-docs-guide.md forbids (lines 8-9). It checks
+// only that no-history rule. It does not check a doc's length or line width
+// (b.zd9).
 
 import (
 	"os"
@@ -11,71 +12,48 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
-// trimmedDocWidth is the wrap width of the user docs.
-const trimmedDocWidth = 80
-
-// trimmedDocs are the docs b.3tg trimmed and their `wc -l` targets.
-var trimmedDocs = []struct {
-	path     string
-	maxLines int
-}{
-	{mdOperatorActions, 300},
-	{mdConfiguration, 100},
-	{mdInstall, 100},
-	{"../../docs/maintenance.md", 60},
-	{"../../docs/usage.md", 100},
-	{mdCallerContract, 70},
+// trimmedDocs are the docs b.3tg trimmed.
+var trimmedDocs = []string{
+	mdOperatorActions,
+	mdConfiguration,
+	mdInstall,
+	"../../docs/maintenance.md",
+	"../../docs/usage.md",
+	mdCallerContract,
 }
 
-var (
-	// trimmedHistoryRe matches the history, release and date references the
-	// user-docs guide forbids. A bare "2.1.280 or later" minimum, a release
-	// candidate or a development build named as a version rule are current
-	// state and allowed. It runs over folded prose, so a marker split by the
-	// 80-column wrap ("before this", then "release") still matches.
-	trimmedHistoryRe = regexp.MustCompile(`(?i)before this release|releases? before|from v?\d+\.\d+\.\d+|` +
-		`\bsince (?:release|version|v?\d)|\b\d{4}-\d{2}-\d{2}\b|\bused to (?:be|have)\b|` +
-		`\bb\.[a-z0-9]{3}\b|\bSR-\d`)
-	// trimmedTokenRe is one word of a prose line; a code span or a link
-	// counts as one word even when it holds spaces.
-	trimmedTokenRe  = regexp.MustCompile("(?:`[^`]*`|\\[[^\\]]*\\]\\([^)]*\\)|\\S)+")
-	trimmedListMark = regexp.MustCompile(`^\s*(?:[-*]|\d+\.)\s+`)
-)
+// trimmedHistoryRe matches the history, release and date references the
+// user-docs guide forbids. A bare "2.1.280 or later" minimum, a release
+// candidate or a development build named as a version rule are current
+// state and allowed. It runs over folded prose, so a marker split across
+// lines ("before this", then "release") still matches.
+var trimmedHistoryRe = regexp.MustCompile(`(?i)before this release|releases? before|from v?\d+\.\d+\.\d+|` +
+	`\bsince (?:release|version|v?\d)|\b\d{4}-\d{2}-\d{2}\b|\bused to (?:be|have)\b|` +
+	`\bb\.[a-z0-9]{3}\b|\bSR-\d`)
 
-// trimmedDocProblems returns what is wrong with a doc's text: more lines than
-// maxLines (as `wc -l` counts), a prose line wider than 80 columns, or a
-// history marker. Code blocks, tables, headings and lines of one unbreakable
-// code span or link are not prose. History markers are looked for outside code
-// blocks, in the text with its line breaks folded to spaces; a blank line, a
-// heading or a table row ends the fold.
-func trimmedDocProblems(text string, maxLines int) []string {
+// trimmedDocProblems returns the history markers in a doc's text. It checks
+// nothing else: a doc's length and line width are never a problem. Markers are
+// looked for outside code blocks, in the text with its line breaks folded to
+// spaces; a blank line, a heading or a table row ends the fold.
+func trimmedDocProblems(text string) []string {
 	var problems []string
-	if n := strings.Count(text, "\n"); n > maxLines {
-		problems = append(problems, "has "+itoa(int64(n))+" lines; target "+itoa(int64(maxLines))+
-			" (from b.3tg and docs/user-docs-guide.md \"Keep it short\": trim the file first; raise the limit only deliberately)")
-	}
 	var folded strings.Builder
 	var starts, nums []int // the offset in folded of each line's text, and its 1-based line
 	inFence := false
 	for i, line := range strings.Split(text, "\n") {
-		at := "line " + itoa(int64(i+1)) + ": "
-		switch {
-		case codeFenceRe.MatchString(line):
+		if codeFenceRe.MatchString(line) {
 			inFence = !inFence
 			continue
-		case inFence:
+		}
+		if inFence {
 			continue
-		case strings.HasPrefix(line, "|"), strings.HasPrefix(line, "#"):
-		case utf8.RuneCountInString(line) > trimmedDocWidth &&
-			len(trimmedTokenRe.FindAllString(trimmedListMark.ReplaceAllString(line, ""), -1)) > 1:
-			problems = append(problems, at+"prose wider than 80 columns")
 		}
 		starts, nums = append(starts, folded.Len()), append(nums, i+1)
-		folded.WriteString(strings.TrimSpace(line))
-		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "|") || strings.HasPrefix(line, "#") {
+		line = strings.TrimSpace(line)
+		folded.WriteString(line)
+		if line == "" || strings.HasPrefix(line, "|") || strings.HasPrefix(line, "#") {
 			folded.WriteString("\n")
 		} else {
 			folded.WriteString(" ")
@@ -88,27 +66,27 @@ func trimmedDocProblems(text string, maxLines int) []string {
 	return problems
 }
 
-// TestTrimmedUserDocs checks each of the six trimmed user docs meets its size
-// target, its 80-column wrap and the no-history rule (b.3tg).
+// TestTrimmedUserDocs checks each of the six trimmed user docs keeps the
+// no-history rule (b.3tg). It does not check length or width.
 func TestTrimmedUserDocs(t *testing.T) {
 	t.Parallel()
-	for _, d := range trimmedDocs {
-		t.Run(d.path, func(t *testing.T) {
-			data, err := os.ReadFile(d.path)
+	for _, path := range trimmedDocs {
+		t.Run(path, func(t *testing.T) {
+			data, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, p := range trimmedDocProblems(string(data), d.maxLines) {
-				t.Errorf("%s %s", d.path, p)
+			for _, p := range trimmedDocProblems(string(data)) {
+				t.Errorf("%s %s", path, p)
 			}
 		})
 	}
 }
 
-// TestTrimmedDocProblemsFindsWrappedMarkers checks the history scan sees a
-// marker the 80-column wrap splits, reports the line it starts on, skips code
-// blocks and leaves current-state wording alone.
-func TestTrimmedDocProblemsFindsWrappedMarkers(t *testing.T) {
+// TestTrimmedDocProblems checks the history scan sees a marker split across
+// lines, reports the line it starts on, skips code blocks, leaves current-state
+// wording alone and sets no limit on a doc's length or a line's width (b.zd9).
+func TestTrimmedDocProblems(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name, text string
@@ -122,9 +100,11 @@ func TestTrimmedDocProblemsFindsWrappedMarkers(t *testing.T) {
 		{"used to be", "It used to be per user.\n", []string{"used to be"}},
 		{"since a version", "The count rose since\n3 runs.\n", []string{"since 3"}},
 		{"since inside a word", "The whatsince 3 runs.\n", nil},
+		{"long doc", strings.Repeat("A short line of prose.\n", 1000), nil},
+		{"wide prose line", "This marker-free line of plain prose runs well past eighty columns, so a width rule would flag it.\n", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := trimmedDocProblems(c.text, 100)
+			got := trimmedDocProblems(c.text)
 			if len(got) != len(c.want) {
 				t.Fatalf("problems %q; want %d matching %q", got, len(c.want), c.want)
 			}
