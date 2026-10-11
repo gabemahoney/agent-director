@@ -190,7 +190,7 @@ func refusalNamed(t *testing.T, name string) configRefusal {
 // hung lookup naming timeout.
 func (s *serveSession) killNamesTimeout(t *testing.T, id string, timeout time.Duration) {
 	t.Helper()
-	r := s.callTool(t, "kill", fmt.Sprintf(`{"claude_instance_id":%q}`, id))
+	r := s.callTool(t, "kill", fmt.Sprintf(`{"instance_id":%q}`, id))
 	if r.Error == nil {
 		t.Fatalf("kill tool result = %+v; want an error", r.Result)
 	}

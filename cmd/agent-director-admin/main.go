@@ -27,6 +27,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/clisetup"
+	"github.com/gabemahoney/agent-director/internal/oldnames"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
@@ -50,7 +51,7 @@ const (
 const binaryName = "agent-director-admin"
 
 // idFlag is the instance-id flag of kill-finished and delete.
-const idFlag = "claude-instance-id"
+const idFlag = "instance-id"
 
 // helpWidth is the column help text wraps at.
 const helpWidth = 80
@@ -192,6 +193,9 @@ func parseFlags(fs *flag.FlagSet, args []string) (done bool, err error) {
 	case errors.Is(perr, flag.ErrHelp):
 		return true, printVerbHelp(fs.Name())
 	case perr != nil:
+		if text, ok := oldnames.RefuseFlag(fs, perr); ok {
+			return true, writeError(errInvalidFlags, text)
+		}
 		return true, writeError(errInvalidFlags, perr.Error())
 	case fs.NArg() > 0:
 		return true, writeError(errInvalidFlags, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))

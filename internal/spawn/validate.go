@@ -77,7 +77,7 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //     callers spawning into /foo/bar and /foo/./bar end up with the same
 //     row.
 //  2. relay_mode is "on" / "off" / "" if set.
-//  3. claude_args contains no denied flag (both --flag VALUE and
+//  3. agent_args contains no denied flag (both --flag VALUE and
 //     --flag=VALUE forms).
 //  4. extra_env contains no key whose env-var name (the part before the
 //     first '=', the name tmux sets) is HOME or starts with AGENT_DIRECTOR_,
@@ -92,7 +92,7 @@ func Validate(r *Resolved) error {
 	if err := validateRelayMode(r.RelayMode); err != nil {
 		return err
 	}
-	if err := validateClaudeArgs(r.ClaudeArgs); err != nil {
+	if err := validateClaudeArgs(r.AgentArgs); err != nil {
 		return err
 	}
 	if err := ValidateExtraEnv(r.ExtraEnv); err != nil {

@@ -332,9 +332,9 @@ func WithRawLabels(text string) SpawnOption {
 	return func(o *spawnOpts) { o.set("labels", text) }
 }
 
-// WithRawClaudeArgs stores text in the agent_args column byte for byte (no
+// WithRawAgentArgs stores text in the agent_args column byte for byte (no
 // JSON encoding), for malformed-value cases.
-func WithRawClaudeArgs(text string) SpawnOption {
+func WithRawAgentArgs(text string) SpawnOption {
 	return func(o *spawnOpts) { o.set("agent_args", text) }
 }
 

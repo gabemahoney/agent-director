@@ -52,9 +52,9 @@ var errNotReady = errors.New("did not reach its prompt")
 // the claude arguments after spawn's "--" (an initial prompt, --mcp-config
 // <path>), and extra environment for the agent (spawn --extra-env).
 type spawnSpec struct {
-	CWD        string
-	ClaudeArgs []string
-	ExtraEnv   map[string]string
+	CWD       string
+	AgentArgs []string
+	ExtraEnv  map[string]string
 	// RelayMode, when set, is spawn's --relay-mode. The RN-9 drive uses
 	// "on" so a permission request is answered through agent-director's
 	// own decide verb.
@@ -66,7 +66,7 @@ type spawnSpec struct {
 // on. Under the parent-process hook gate (SR-22.9) the SessionStart identity
 // is the pane process, so the pane's pid and start time are that process.
 type agentRef struct {
-	InstanceID    string `json:"claude_instance_id"`
+	InstanceID    string `json:"instance_id"`
 	CWD           string `json:"cwd"`
 	Socket        string `json:"tmux_socket"`
 	SessionName   string `json:"tmux_session_name"`
@@ -80,12 +80,12 @@ type agentRef struct {
 
 // rowView is the part of get's output the harness reads.
 type rowView struct {
-	ClaudeInstanceID string     `json:"claude_instance_id"`
-	State            string     `json:"state"`
-	TmuxSessionName  string     `json:"tmux_session_name"`
-	TmuxSocket       string     `json:"tmux_socket"`
-	ClaudeSessionID  string     `json:"claude_session_id"`
-	EndedAt          *time.Time `json:"ended_at"`
+	InstanceID      string     `json:"instance_id"`
+	State           string     `json:"state"`
+	TmuxSessionName string     `json:"tmux_session_name"`
+	TmuxSocket      string     `json:"tmux_socket"`
+	SessionID       string     `json:"session_id"`
+	EndedAt         *time.Time `json:"ended_at"`
 	// PermissionRequests are the row's open requests; only their tokens
 	// and tool names are read (never the tool input get also returns).
 	PermissionRequests []struct {
@@ -118,21 +118,21 @@ func (h *harness) spawnAgent(caseID string, spec spawnSpec) (agentRef, error) {
 		}
 		argv = append(argv, "--extra-env", k+"="+spec.ExtraEnv[k])
 	}
-	if len(spec.ClaudeArgs) > 0 {
-		argv = append(append(argv, "--"), spec.ClaudeArgs...)
+	if len(spec.AgentArgs) > 0 {
+		argv = append(append(argv, "--"), spec.AgentArgs...)
 	}
 	res, err := h.inv.agentDirectorCall(caseID, actionSpawn, argv...)
 	if err != nil {
 		return agentRef{}, err
 	}
 	var out struct {
-		ClaudeInstanceID string `json:"claude_instance_id"`
-		PreTrust         string `json:"pre_trust"`
+		InstanceID string `json:"instance_id"`
+		PreTrust   string `json:"pre_trust"`
 	}
-	if err := json.Unmarshal(res.stdout, &out); err != nil || out.ClaudeInstanceID == "" {
+	if err := json.Unmarshal(res.stdout, &out); err != nil || out.InstanceID == "" {
 		return agentRef{}, fmt.Errorf("spawn: unexpected output %q", h.inv.excerpt(res.stdout))
 	}
-	a := agentRef{InstanceID: out.ClaudeInstanceID, CWD: spec.CWD, PreTrust: out.PreTrust}
+	a := agentRef{InstanceID: out.InstanceID, CWD: spec.CWD, PreTrust: out.PreTrust}
 	if err := h.ids.add(idInstance, a.InstanceID); err != nil {
 		return a, err
 	}
@@ -163,7 +163,7 @@ func (h *harness) spawnAgent(caseID string, spec spawnSpec) (agentRef, error) {
 
 // getRow reads one row with the read-only get verb.
 func (h *harness) getRow(caseID, instanceID string) (rowView, error) {
-	res, err := h.inv.agentDirectorCall(caseID, actionRead, "get", "--claude-instance-id", instanceID)
+	res, err := h.inv.agentDirectorCall(caseID, actionRead, "get", "--instance-id", instanceID)
 	if err != nil {
 		return rowView{}, err
 	}
@@ -246,7 +246,7 @@ func ignoredHookReasons(path, instanceID string) ([]string, error) {
 	for sc.Scan() {
 		var ev struct {
 			Event  string `json:"event"`
-			ID     string `json:"claude_instance_id"`
+			ID     string `json:"instance_id"`
 			Reason string `json:"reason"`
 		}
 		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Event != "ad.hook.ignored" || ev.ID != instanceID {
@@ -329,7 +329,7 @@ func (h *harness) killPane(caseID string, a agentRef) (time.Time, error) {
 // pause runs agent-director pause on the row (pause's /exit). kind is
 // actionMeasured for RN-2's pause case and actionDrive for an RN-9 drive.
 func (h *harness) pause(caseID string, kind actionKind, a agentRef) error {
-	_, err := h.inv.agentDirectorCall(caseID, kind, "pause", "--claude-instance-id", a.InstanceID)
+	_, err := h.inv.agentDirectorCall(caseID, kind, "pause", "--instance-id", a.InstanceID)
 	return err
 }
 

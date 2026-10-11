@@ -65,7 +65,7 @@ func TestSettleGuardSendKeysState(t *testing.T) {
 	r := e.seedRow(t, killRowSpec{})
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StatePending, e.clock.Now())
-	if _, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"}); err != nil {
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1"}); err != nil {
 		t.Fatalf("SendKeys on a raw waiting row reading pending: %v; want delivered", err)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
@@ -96,7 +96,7 @@ func TestSettleGuardSendKeysRelay(t *testing.T) {
 			api.SetClockForTest(c, func() time.Time { return now }) // the requests are stored at wall-clock time
 			unsettle(t, c, e.dbPath, r.ID, store.StateWaiting, now)
 
-			_, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"})
+			_, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "2"})
 
 			if decided {
 				assertDialogMaybeOpen(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
@@ -136,7 +136,7 @@ func TestSettleGuardDecide(t *testing.T) {
 			api.SetClockForTest(c, func() time.Time { return now })
 			unsettle(t, c, e.dbPath, r.ID, reported, now)
 
-			_, err := c.Decide(api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+			_, err := c.Decide(api.DecideParams{InstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 
 			if stopped {
 				assertOneSentinel(t, err, store.ErrNoOpenPermissionRequest)
@@ -185,7 +185,7 @@ func TestSettleGuardResume(t *testing.T) {
 	unsettle(t, c, e.dbPath, r.ID, store.StateMissing, e.clock.Now())
 	before := e.columns(t, r.ID)
 
-	_, err := c.Resume(api.ResumeParams{ClaudeInstanceID: r.ID})
+	_, err := c.Resume(api.ResumeParams{InstanceID: r.ID})
 
 	assertOneSentinel(t, err, api.ErrSpawnNotResumable)
 	adviceAssertPhrase(t, err, "state="+store.StateWaiting)
@@ -203,7 +203,7 @@ func TestSettleGuardPause(t *testing.T) {
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StateWaiting, e.clock.Now())
 
-	_, err := c.Pause(context.Background(), api.PauseParams{ClaudeInstanceID: r.ID})
+	_, err := c.Pause(context.Background(), api.PauseParams{InstanceID: r.ID})
 
 	assertOneSentinel(t, err, api.ErrSpawnNotPausable)
 	e.assertNoTmuxCall(t)
@@ -223,7 +223,7 @@ func TestSettleGuardKill(t *testing.T) {
 		unsettle(t, c, e.dbPath, id, store.StateMissing, e.clock.Now())
 	}
 
-	res, err := c.Kill(api.KillParams{ClaudeInstanceID: unusable.ID})
+	res, err := c.Kill(api.KillParams{InstanceID: unusable.ID})
 	assertOneName(t, err, "ErrInternal") // the live row's unusable name; a finished row is a no-op
 	if res.KillSent {
 		t.Errorf("Kill = %+v; want no kill sent", res)
@@ -267,7 +267,7 @@ func TestSettleGuardSpawnCollision(t *testing.T) {
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StateMissing, e.clock.Now())
 	for _, reuse := range []bool{false, true} {
-		_, err := c.Spawn(api.SpawnParams{ClaudeInstanceID: r.ID, ReuseFinished: reuse, CWD: t.TempDir(),
+		_, err := c.Spawn(api.SpawnParams{InstanceID: r.ID, ReuseFinished: reuse, CWD: t.TempDir(),
 			ExtraEnv: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()})
 		assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
 		adviceAssertPhrase(t, err, r.ID+" already live")

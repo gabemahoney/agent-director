@@ -54,8 +54,8 @@ var (
 
 // KillParams is the typed parameter shape for the kill verb.
 type KillParams struct {
-	// ClaudeInstanceID identifies the Spawn whose agent kill ends.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID identifies the Spawn whose agent kill ends.
+	InstanceID string `json:"instance_id"`
 }
 
 // KillResult is the typed return shape of the kill verb (SR-6.6).
@@ -120,7 +120,7 @@ const (
 // exitWait has passed, so a sleep that does not advance now loops forever.
 func Kill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
 	now func() time.Time, sleep func(time.Duration), params KillParams) (KillResult, error) {
-	return runKill(s, t, pc, startingSession, stoppingWindow, exitWait, now, sleep, params.ClaudeInstanceID, false)
+	return runKill(s, t, pc, startingSession, stoppingWindow, exitWait, now, sleep, params.InstanceID, false)
 }
 
 // runKill is one kill call on the row id, as Kill describes, with the
@@ -223,7 +223,7 @@ func (k *killRun) run() error {
 // launchFor is the lookup's view of the row with identity id (rowLaunch),
 // with this store's id and the row's socket.
 func (k *killRun) launchFor(id LaunchIdentity) tmux.Launch {
-	return rowLaunch(k.row.ClaudeInstanceID, id, k.s.StoreID(), k.socket)
+	return rowLaunch(k.row.InstanceID, id, k.s.StoreID(), k.socket)
 }
 
 // ours is the kill sequence on the labelled session (SR-6.1 steps 1 to 4).

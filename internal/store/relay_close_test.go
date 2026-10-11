@@ -231,7 +231,7 @@ func closeTrail(t *testing.T, mark int, c closer) []string {
 	t.Helper()
 	var got []string
 	for _, row := range readStoreTrailLines(t)[mark:] {
-		if row["claude_instance_id"] != relayID {
+		if row["instance_id"] != relayID {
 			continue
 		}
 		var fields map[string]string
@@ -370,7 +370,7 @@ func TestCloseWritesNothingUnlessItsWriteApplies(t *testing.T) {
 				t.Errorf("requests changed by a write that did not apply")
 			}
 			for _, row := range readStoreTrailLines(t)[mark:] {
-				if row["claude_instance_id"] == relayID {
+				if row["instance_id"] == relayID {
 					t.Errorf("a write that did not apply emitted %v; want no trail line", row["event"])
 				}
 			}

@@ -40,15 +40,15 @@ func (f *killFix) paneVerb(t testing.TB, verb apitest.PaneVerb, instanceID, text
 	defer c.Close() //nolint:errcheck
 	switch verb {
 	case apitest.PaneReadPane:
-		res, err := c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: instanceID})
+		res, err := c.ReadPane(api.ReadPaneParams{InstanceID: instanceID})
 		return paneCall{Pane: res.Pane, Err: err}
 	case apitest.PaneSendKeys:
-		_, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: instanceID, Text: text, AllowPending: true})
+		_, err := c.SendKeys(api.SendKeysParams{InstanceID: instanceID, Text: text, AllowPending: true})
 		return paneCall{Err: err}
 	case apitest.PanePause:
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := c.Pause(ctx, api.PauseParams{ClaudeInstanceID: instanceID})
+		_, err := c.Pause(ctx, api.PauseParams{InstanceID: instanceID})
 		if errors.Is(err, context.Canceled) {
 			err = nil
 		}

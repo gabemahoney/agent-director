@@ -7,7 +7,7 @@
  *   [cliPath, ...globalFlags, verbName, ...verbFlags]
  *
  * Rules:
- *   - Long-flag form only (e.g. --cwd, --claude-instance-id).
+ *   - Long-flag form only (e.g. --cwd, --instance-id).
  *   - No shell interpolation, no sh -c.
  *   - Mapping between camelCase method name and kebab CLI verb follows the
  *     same mapping in src/internal/verbs.ts.
@@ -18,6 +18,9 @@
  *     --create-if-missing) appear BEFORE the verb token so the CLI's
  *     global-flag parser in internal/clisetup/globalflags.go strips them
  *     prior to verb dispatch.
+ *   - A params object carrying an old key (OLD_PARAM_KEYS) is refused with
+ *     ErrInvalidFlags naming the new key, thrown from buildArgv before any
+ *     argv is built, so no subprocess runs (SR-4.3).
  *   - spawn's and make-template's extra_env keys that are not valid env-var
  *     names are refused with ErrReservedEnvKey, the name the CLI gives every
  *     refused extra_env key, thrown from buildArgv, so no subprocess runs
@@ -28,7 +31,7 @@
  * Internal — NOT re-exported from src/index.ts.
  */
 
-import { ErrReservedEnvKey } from "../errors.js";
+import { ErrInvalidFlags, ErrReservedEnvKey } from "../errors.js";
 import type { VerbName } from "./verbs.js";
 import type {
   SpawnParams,
@@ -98,9 +101,37 @@ export function buildArgv(
   params: unknown,
   globalOpts?: GlobalArgvOptions
 ): string[] {
+  refuseOldKeys(verb, params);
   const globalFlags = buildGlobalFlags(globalOpts);
   const verbFlags = buildVerbFlags(verb, params);
   return [cliPath, ...globalFlags, ...verbFlags];
+}
+
+/**
+ * OLD_PARAM_KEYS is the one table of parameter names this client refuses, each
+ * with the name that replaced it (SR-4.3). It is the only place in the client's
+ * sources where an old name may be spelled.
+ */
+const OLD_PARAM_KEYS: ReadonlyArray<{ readonly old: string; readonly renamed: string }> = [
+  { old: "claude_instance_id", renamed: "instance_id" },
+  { old: "claude_args", renamed: "agent_args" },
+];
+
+/**
+ * refuseOldKeys throws ErrInvalidFlags, naming the new key of each old key
+ * that params carries, so no subprocess runs. An old key is refused whatever
+ * the verb and is never dropped or mapped to its replacement.
+ */
+function refuseOldKeys(verb: VerbName, params: unknown): void {
+  if (typeof params !== "object" || params === null) return;
+  const found = OLD_PARAM_KEYS.filter(({ old }) =>
+    Object.prototype.hasOwnProperty.call(params, old),
+  );
+  if (found.length === 0) return;
+  const parts = found.map(
+    ({ old, renamed }) => `${JSON.stringify(old)} is no longer accepted; use ${JSON.stringify(renamed)}`,
+  );
+  throw new ErrInvalidFlags(verb, "ErrInvalidFlags", parts.join("; "));
 }
 
 /**
@@ -180,8 +211,7 @@ function buildSpawn(p: SpawnParams): string[] {
   f.push("--cwd", p.cwd);
 
   if (p.template !== undefined) f.push("--template", p.template);
-  if (p.claude_instance_id !== undefined)
-    f.push("--claude-instance-id", p.claude_instance_id);
+  if (p.instance_id !== undefined) f.push("--instance-id", p.instance_id);
   if (p.tmux_session_name !== undefined)
     f.push("--tmux-session-name", p.tmux_session_name);
   if (p.relay_mode !== undefined && p.relay_mode !== "")
@@ -209,9 +239,9 @@ function buildSpawn(p: SpawnParams): string[] {
     for (const a of p.ask) f.push("--ask", a);
   }
 
-  // claude_args go after '--' as positional args
-  if (p.claude_args && p.claude_args.length > 0) {
-    f.push("--", ...p.claude_args);
+  // agent_args go after '--' as positional args
+  if (p.agent_args && p.agent_args.length > 0) {
+    f.push("--", ...p.agent_args);
   }
 
   return f;
@@ -282,15 +312,15 @@ function invalidExtraEnvKey(
 }
 
 function buildStatus(p: StatusParams): string[] {
-  return ["status", "--claude-instance-id", p.claude_instance_id];
+  return ["status", "--instance-id", p.instance_id];
 }
 
 function buildGet(p: GetParams): string[] {
-  return ["get", "--claude-instance-id", p.claude_instance_id];
+  return ["get", "--instance-id", p.instance_id];
 }
 
 function buildSendKeys(p: SendKeysParams): string[] {
-  const f: string[] = ["send-keys", "--claude-instance-id", p.claude_instance_id];
+  const f: string[] = ["send-keys", "--instance-id", p.instance_id];
   if (p.text !== undefined) f.push("--text", p.text);
   if (p.allow_pending === true) f.push("--allow-pending");
   if (p.no_enter === true) f.push("--no-enter");
@@ -303,7 +333,7 @@ function buildSendKeys(p: SendKeysParams): string[] {
 }
 
 function buildReadPane(p: ReadPaneParams): string[] {
-  const f: string[] = ["read-pane", "--claude-instance-id", p.claude_instance_id];
+  const f: string[] = ["read-pane", "--instance-id", p.instance_id];
   // 0 means the default, which the CLI applies when the flag is absent; any
   // other value goes through, so the CLI refuses a negative one (b.c4n)
   // rather than this builder dropping it.
@@ -315,14 +345,14 @@ function buildReadPane(p: ReadPaneParams): string[] {
 }
 
 function buildKill(p: KillParams): string[] {
-  return ["kill", "--claude-instance-id", p.claude_instance_id];
+  return ["kill", "--instance-id", p.instance_id];
 }
 
 function buildDecide(p: DecideParams): string[] {
   const f: string[] = [
     "decide",
-    "--claude-instance-id",
-    p.claude_instance_id,
+    "--instance-id",
+    p.instance_id,
     "--decision",
     p.decision,
   ];
@@ -351,7 +381,7 @@ function buildRecordPaneAnswer(p: RecordPaneAnswerParams): string[] {
 }
 
 function buildResume(p: ResumeParams): string[] {
-  return ["resume", "--claude-instance-id", p.claude_instance_id];
+  return ["resume", "--instance-id", p.instance_id];
 }
 
 function buildFindMissing(): string[] {
@@ -393,9 +423,9 @@ function buildMakeTemplate(p: MakeTemplateParams): string[] {
     for (const a of p.ask) f.push("--ask", a);
   }
 
-  // Repeatable --claude-args (each element is a separate flag invocation)
-  if (p.claude_args) {
-    for (const a of p.claude_args) f.push("--claude-args", a);
+  // Repeatable --agent-args (each element is a separate flag invocation)
+  if (p.agent_args) {
+    for (const a of p.agent_args) f.push("--agent-args", a);
   }
 
   return f;
@@ -425,5 +455,5 @@ function buildList(p: ListParams): string[] {
 }
 
 function buildPause(p: PauseParams): string[] {
-  return ["pause", "--claude-instance-id", p.claude_instance_id];
+  return ["pause", "--instance-id", p.instance_id];
 }

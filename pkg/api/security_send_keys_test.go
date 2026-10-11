@@ -23,7 +23,7 @@ const skSecText = "status please"
 // securitySendKeysCall returns send-keys' call on the subject, with allowPending.
 func securitySendKeysCall(allowPending bool) func(*testing.T, *api.Client, *securityScene) (any, error) {
 	return func(_ *testing.T, c *api.Client, s *securityScene) (any, error) {
-		return c.SendKeys(api.SendKeysParams{ClaudeInstanceID: s.subject, Text: skSecText, AllowPending: allowPending})
+		return c.SendKeys(api.SendKeysParams{InstanceID: s.subject, Text: skSecText, AllowPending: allowPending})
 	}
 }
 

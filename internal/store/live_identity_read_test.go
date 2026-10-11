@@ -35,7 +35,7 @@ func TestListLiveSpawnIdentities(t *testing.T) {
 		{"working, session and process identity", store.StateWorking, "sess-life",
 			[]apitest.SpawnOption{apitest.WithPID(4242), apitest.WithProcStarttime(apitest.LinuxProcStarttime)}, func(w *live) {
 				w.PID, w.ProcStarttime = 4242, apitest.LinuxProcStarttime
-				w.Snapshot.PID, w.Snapshot.ProcStarttime, w.Snapshot.ClaudeSessionID = 4242, apitest.LinuxProcStarttime, "sess-life"
+				w.Snapshot.PID, w.Snapshot.ProcStarttime, w.Snapshot.SessionID = 4242, apitest.LinuxProcStarttime, "sess-life"
 			}},
 		{"ask_user, liveness note", store.StateAskUser, "", []apitest.SpawnOption{apitest.WithLivenessNote(note)},
 			func(w *live) { w.LivenessNote = note }},
@@ -46,8 +46,8 @@ func TestListLiveSpawnIdentities(t *testing.T) {
 			func(w *live) {
 				w.Identity = store.LaunchIdentity{Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: apitest.TestPanePID}
 			}},
-		{"malformed labels, claude_args and extra_env", store.StateWaiting, "", []apitest.SpawnOption{apitest.WithRawLabels("{not json"),
-			apitest.WithRawClaudeArgs("[unterminated"), apitest.WithRawExtraEnv("not an object")}, nil},
+		{"malformed labels, agent_args and extra_env", store.StateWaiting, "", []apitest.SpawnOption{apitest.WithRawLabels("{not json"),
+			apitest.WithRawAgentArgs("[unterminated"), apitest.WithRawExtraEnv("not an object")}, nil},
 	}
 	f := newV5Store(t)
 	want := map[string]live{}
@@ -55,7 +55,7 @@ func TestListLiveSpawnIdentities(t *testing.T) {
 		version, name := int64(100+i), fmt.Sprintf("live-%d", i)
 		id := f.seed(tc.state, tc.session, append([]apitest.SpawnOption{apitest.WithRowVersion(version),
 			apitest.WithStartedAt(startedAt), apitest.WithTmuxSessionName(name), apitest.WithLaunchIdentity(fullIdentity())}, tc.opts...)...)
-		w := live{ClaudeInstanceID: id, State: tc.state, TmuxSessionName: name, Identity: fullIdentity(),
+		w := live{InstanceID: id, State: tc.state, TmuxSessionName: name, Identity: fullIdentity(),
 			Snapshot: store.RowSnapshot{RowVersion: version, StartedAt: startedAt, TmuxSessionName: name}}
 		if tc.edit != nil {
 			tc.edit(&w)
@@ -73,7 +73,7 @@ func TestListLiveSpawnIdentities(t *testing.T) {
 		t.Errorf("listed %d rows; want the %d live ones", len(got), len(want))
 	}
 	for _, it := range got {
-		if w, ok := want[it.ClaudeInstanceID]; !ok || it != w {
+		if w, ok := want[it.InstanceID]; !ok || it != w {
 			t.Errorf("listed %+v;\n want %+v", it, w)
 		}
 	}

@@ -331,7 +331,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 	if err := validateRowAgent(fresh.Agent); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	argsJSON, err := encodeArgs(fresh.ClaudeArgs)
+	argsJSON, err := encodeArgs(fresh.AgentArgs)
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("%s: encode agent_args: %w", errPrefix, err)
 	}

@@ -49,6 +49,8 @@ import (
 	"unicode"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/gabemahoney/agent-director/internal/oldnames"
 )
 
 // Config is the top-level configuration tree. Field layout mirrors SRD §11.
@@ -71,8 +73,8 @@ type Defaults struct {
 	// DefaultExpireRetentionDays. Read it only through
 	// EffectiveExpireRetentionDays, which gives the default for 0. Load
 	// refuses a negative value and one above MaxExpireRetentionDays.
-	ExpireRetentionDays    int  `toml:"expire_retention_days"`
-	DisableAskUserQuestion bool `toml:"disable_askuserquestion"`
+	ExpireRetentionDays int  `toml:"expire_retention_days"`
+	DisableAskUser      bool `toml:"disable_ask_user"`
 	// InjectHelpHook controls dynamic per-Spawn injection of a
 	// SessionStart hook that runs `agent-director help`. Off by
 	// default — operators opt in via install.sh (Q4=yes) so a Spawn's
@@ -439,10 +441,10 @@ type Log struct {
 func Default() Config {
 	return Config{
 		Defaults: Defaults{
-			RelayMode:              "off",
-			ExpireRetentionDays:    DefaultExpireRetentionDays,
-			DisableAskUserQuestion: false,
-			InjectHelpHook:         false,
+			RelayMode:           "off",
+			ExpireRetentionDays: DefaultExpireRetentionDays,
+			DisableAskUser:      false,
+			InjectHelpHook:      false,
 		},
 		Relay: Relay{
 			PollBaseMs:           100,
@@ -502,7 +504,9 @@ func (e *ConfigError) Unwrap() error {
 // Default() with a nil error. Any other read or parse failure returns
 // Default() wrapped in *ConfigError.
 //
-// After a successful parse, Load refuses a file that sets one key under two
+// After a successful parse, Load refuses a file that sets an old key
+// ([defaults] disable_askuserquestion, in any letter case and form: oldKeyRefusal,
+// SR-4.3), naming the key that replaced it. It then refuses a file that sets one key under two
 // or more names differing only in letter case, such as db_path under both
 // [Store] and [store] (caseVariantRefusal, b.p8n): the decoder matches names
 // regardless of letter case, and which of the values it keeps changes from
@@ -551,6 +555,11 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
+		// An old key is refused before anything else is checked, naming the
+		// key that replaced it (SR-4.3); it is never read as the new one.
+		if err := oldKeyRefusal(meta); err != nil {
+			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
+		}
 		// Before validate, which would check whichever value of a key set
 		// twice the decoder happened to keep (b.p8n).
 		if err := caseVariantRefusal(meta); err != nil {
@@ -568,6 +577,25 @@ func Load(path string) (Config, error) {
 	}
 
 	return resolvePaths(cfg, home), nil
+}
+
+// oldKeyRefusal refuses a file, whose metadata is meta, that sets a key
+// internal/oldnames lists as an old [defaults] key (disable_askuserquestion),
+// whatever the letter case of its table's name or its own, as the decoder
+// matches them, and however the file writes it: under a [defaults] table, in
+// an inline table or as a dotted key. The error names the key that replaced
+// it. Keys the table does not list stay ignored, as the decoder ignores any
+// key it does not read.
+func oldKeyRefusal(meta toml.MetaData) error {
+	for _, k := range meta.Keys() {
+		if len(k) != 2 || !strings.EqualFold(k[0], "defaults") {
+			continue
+		}
+		if e, ok := oldnames.Find(oldnames.Config, k[1]); ok {
+			return errors.New("refused key " + e.ConfigText())
+		}
+	}
+	return nil
 }
 
 // caseVariantRefusal refuses a file, whose metadata is meta, that sets one key

@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/gabemahoney/agent-director/internal/oldnames"
 )
 
 // LoadTemplate reads ~/.agent-director/templates/<name>.toml and
@@ -26,6 +28,9 @@ import (
 //     relay_mode. This check comes first after the decode, so neither
 //     its text nor whether a later check refuses depends on which value
 //     the decoder kept.
+//   - An old key (claude_args, in any letter case) → ErrTemplateMalformed
+//     naming the key that replaced it (internal/oldnames, SR-4.3), at the
+//     unknown-key check's place in this order.
 //   - Unknown top-level keys → ErrTemplateMalformed (the BurntSushi
 //     decoder accepts unknown keys by default; we walk the
 //     MetaData.Undecoded() result and reject if any survive).
@@ -66,6 +71,14 @@ func LoadTemplate(name string) (TemplateFile, error) {
 	// fields our struct doesn't know about, which is almost certainly
 	// a typo or a forward-compat mismatch we want to surface loudly.
 	if extras := meta.Undecoded(); len(extras) > 0 {
+		// An old key (internal/oldnames) is refused naming the key that
+		// replaced it, in any letter case (SR-4.3); other unknown keys keep
+		// the text below.
+		for _, k := range extras {
+			if e, ok := oldnames.Find(oldnames.Template, k[0]); ok {
+				return TemplateFile{}, fmt.Errorf("%w: %s: %s", ErrTemplateMalformed, name, e.KeyText())
+			}
+		}
 		return TemplateFile{}, fmt.Errorf("%w: %s: unknown key(s): %v",
 			ErrTemplateMalformed, name, extras)
 	}

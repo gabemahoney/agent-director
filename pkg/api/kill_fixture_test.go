@@ -202,7 +202,7 @@ func (e *killEnv) ownSocketDir(t *testing.T) {
 // effective durations, e.clock.Now and e.sleep.
 func (e *killEnv) kill(id string) (api.KillResult, error) {
 	return api.Kill(e.store, e.rec, e.pc, e.cfg.EffectiveStartingSession(), e.cfg.EffectiveStoppingWindow(),
-		e.cfg.EffectiveKillExitWait(), e.clock.Now, e.sleep, api.KillParams{ClaudeInstanceID: id})
+		e.cfg.EffectiveKillExitWait(), e.clock.Now, e.sleep, api.KillParams{InstanceID: id})
 }
 
 // client builds a Client on e's store file with a config file holding

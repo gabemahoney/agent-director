@@ -72,7 +72,7 @@ var spawnReads = []struct {
 	{"ListSpawns", func(s *store.Store, id string) (store.Spawn, error) {
 		rows, err := s.ListSpawns(store.ListFilters{})
 		for _, sp := range rows {
-			if sp.ClaudeInstanceID == id {
+			if sp.InstanceID == id {
 				return sp, err
 			}
 		}
@@ -177,8 +177,8 @@ func TestV5ReadParity(t *testing.T) {
 		t.Fatalf("ListSpawns = %d rows, %v; want %d", len(listed), err, len(ids))
 	}
 	for _, fromList := range listed {
-		if fromGet, err := f.s.GetSpawn(fromList.ClaudeInstanceID); err != nil || !reflect.DeepEqual(fromGet, fromList) {
-			t.Errorf("row %s: GetSpawn (%v) and ListSpawns differ\nget:  %+v\nlist: %+v", fromList.ClaudeInstanceID, err, fromGet, fromList)
+		if fromGet, err := f.s.GetSpawn(fromList.InstanceID); err != nil || !reflect.DeepEqual(fromGet, fromList) {
+			t.Errorf("row %s: GetSpawn (%v) and ListSpawns differ\nget:  %+v\nlist: %+v", fromList.InstanceID, err, fromGet, fromList)
 		}
 	}
 }
@@ -242,7 +242,7 @@ func TestV5RowSnapshot(t *testing.T) {
 		apitest.WithProcStarttime(apitest.LinuxProcStarttime), apitest.WithTmuxSessionName("snap-ts")}
 	baseID := f.seed(store.StateWaiting, "sess-a", base...)
 	want := store.RowSnapshot{RowVersion: f.rawColumns(baseID).RowVersion.(int64), StartedAt: snapStartedAt,
-		ClaudeSessionID: "sess-a", PID: 4242, ProcStarttime: apitest.LinuxProcStarttime, TmuxSessionName: "snap-ts"}
+		SessionID: "sess-a", PID: 4242, ProcStarttime: apitest.LinuxProcStarttime, TmuxSessionName: "snap-ts"}
 	forEachRead(t, f, "stored values", baseID, func(t *testing.T, sp store.Spawn) {
 		if sp.Snapshot != want || sp.Snapshot.RowVersion != sp.RowVersion {
 			t.Errorf("Snapshot = %+v (RowVersion %d); want %+v", sp.Snapshot, sp.RowVersion, want)
@@ -257,7 +257,7 @@ func TestV5RowSnapshot(t *testing.T) {
 	}{
 		{"identical column values", "sess-a", nil, true},
 		{"started_at differs", "sess-a", apitest.WithStartedAt("2026-03-04T05:06:07.251+02:00"), false},
-		{"claude_session_id differs", "sess-b", nil, false},
+		{"session_id differs", "sess-b", nil, false},
 		{"pid differs", "sess-a", apitest.WithPID(4243), false},
 		{"proc_starttime differs", "sess-a", apitest.WithProcStarttime(apitest.DarwinProcStarttime), false},
 		{"tmux_session_name differs", "sess-a", apitest.WithTmuxSessionName("snap-ts-2"), false},

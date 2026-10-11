@@ -33,7 +33,7 @@ func spawnHandlerWith(client *pkgapi.Client, args []string) error {
 
 // parseSpawnFlags carves the argv into a SpawnParams. Stdlib `flag`
 // covers most of it; the `--` separator pulls the remainder into
-// ClaudeArgs verbatim.
+// AgentArgs verbatim.
 func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	var p pkgapi.SpawnParams
 	var (
@@ -45,18 +45,18 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.SetOutput(io.Discard) // we surface errors via the JSON envelope
 	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
 	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.agent-director/templates/<name>.toml")
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "explicit instance id (default: minted UUID4)")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
 	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json); default off (pre-trust IS performed); the choice is recorded on the row for its life and every resume of that life follows it")
-	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --claude-instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --claude-instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success does not say whether a row was reset")
+	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success does not say whether a row was reset")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
 	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR to give the agent its own Claude Code config")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
 	if err := fs.Parse(args); err != nil {
-		return p, err
+		return p, flagErr(fs, err)
 	}
 	// Distinguish "--tmux-session-name omitted" from
 	// "--tmux-session-name=" (explicit empty). Omitted falls through to
@@ -76,7 +76,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	// fires; non-empty trailing args replace the template wholesale.
 	// Mirrors the TmuxSessionNameSupplied sentinel pattern above.
 	if rest := fs.Args(); len(rest) > 0 {
-		p.ClaudeArgs = rest
+		p.AgentArgs = rest
 	}
 	return p, nil
 }
@@ -86,12 +86,12 @@ func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&id, "claude-instance-id", "", "id to inspect")
+	fs.StringVar(&id, "instance-id", "", "id to inspect")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if id == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	res, err := client.Status(id)
 	if err != nil {
@@ -122,7 +122,7 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	var p pkgapi.SendKeysParams
 	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to drive")
 	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input (default empty: Enter only)")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
 	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
@@ -132,10 +132,10 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.StringVar(&p.RequestToken, "request-token", "", "make the call a pane answer to this fallen-back permission request: needs --as, --key and --expect-pane-sha256; sends exactly one key, no Enter")
 	fs.StringVar(&p.As, "as", "", "a pane answer's claimed verdict, allow or deny, recorded as its decision")
 	if err := fs.Parse(args); err != nil {
-		return p, err
+		return p, flagErr(fs, err)
 	}
-	if p.ClaudeInstanceID == "" {
-		return p, fmt.Errorf("--claude-instance-id is required")
+	if p.InstanceID == "" {
+		return p, fmt.Errorf("--instance-id is required")
 	}
 	// Empty --text is allowed (a press-Enter-only call has no body); the
 	// verb-layer state guard still applies.
@@ -155,7 +155,7 @@ func recordPaneAnswerHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane that showed it answered")
 	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if p.RequestToken == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
@@ -190,22 +190,22 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	var p pkgapi.ReadPaneParams
 	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to read")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to read")
 	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "number of trailing pane lines to return (a negative value is refused)")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
 	if err := fs.Parse(args); err != nil {
-		return p, err
+		return p, flagErr(fs, err)
 	}
-	if p.ClaudeInstanceID == "" {
-		return p, fmt.Errorf("--claude-instance-id is required")
+	if p.InstanceID == "" {
+		return p, fmt.Errorf("--instance-id is required")
 	}
 	return p, nil
 }
 
 // makeTemplateHandlerWith implements `agent-director make-template`.
 // Flags mirror the per-call spawn surface minus the four reserved
-// per-invocation params (template, claude-instance-id, tmux-session-name,
+// per-invocation params (template, instance-id, tmux-session-name,
 // reuse-finished, which applies to one spawn call only).
 func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	var (
@@ -214,7 +214,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 		allow       []string
 		deny        []string
 		ask         []string
-		claudeArgs  []string
+		agentArgs   []string
 	)
 	var p pkgapi.MakeTemplateParams
 	fs := flag.NewFlagSet("make-template", flag.ContinueOnError)
@@ -227,17 +227,17 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
-	fs.Var(newStringSlice(&claudeArgs), "claude-args", "single claude arg (repeatable; replaces template's array wholesale at spawn time)")
+	fs.Var(newStringSlice(&agentArgs), "agent-args", "single agent arg (repeatable; replaces template's array wholesale at spawn time)")
 	fs.BoolVar(&p.Overwrite, "overwrite", false, "replace any existing template atomically (default false preserves O_EXCL create-only)")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if p.Name == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--name is required")
 	}
 	p.AgentDirectorLabels = labelKVs
 	p.ExtraEnv = extraEnvKVs
-	p.ClaudeArgs = claudeArgs
+	p.AgentArgs = agentArgs
 	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {
 		p.Permissions = &pkgapi.MakeTemplatePermissions{Allow: allow, Deny: deny, Ask: ask}
 	}
@@ -266,7 +266,7 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
 	fs.Var(newDecimalInt(&p.Limit, 0), "limit", "cap result count (0 = no cap; a negative value is refused)")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if stateRaw != "" {
 		for _, s := range strings.Split(stateRaw, ",") {
@@ -295,12 +295,12 @@ func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.PauseParams
 	fs := flag.NewFlagSet("pause", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to pause")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to pause")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
-	if p.ClaudeInstanceID == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	if p.InstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	result, err := client.Pause(context.Background(), p)
 	if err != nil {
@@ -340,7 +340,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 			return // client.Decide owns the emit for all API-layer outcomes.
 		}
 		_ = trail.Emit(context.Background(), "ad.decide.called", map[string]any{
-			"claude_instance_id":        p.ClaudeInstanceID,
+			"instance_id":               p.InstanceID,
 			"request_token":             p.RequestToken,
 			"submitted_decision":        p.Decision,
 			"submitted_decision_reason": p.Reason,
@@ -355,22 +355,22 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn awaiting a decision")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn awaiting a decision")
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
 	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
 	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); reached before the verdict is recorded: ErrStoreBusy, nothing recorded")
 	if err := fs.Parse(args); err != nil {
 		cliOutcome = "ErrInvalidFlags"
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if p.MaxWaitMs != nil && *p.MaxWaitMs < 0 {
 		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--max-wait-ms must not be negative")
 	}
-	if p.ClaudeInstanceID == "" {
+	if p.InstanceID == "" {
 		cliOutcome = "ErrInvalidFlags"
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	if p.RequestToken == "" {
 		cliOutcome = "ErrInvalidFlags"
@@ -394,12 +394,12 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.ResumeParams
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the finished (ended or missing) row to resume")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the finished (ended or missing) row to resume")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
-	if p.ClaudeInstanceID == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	if p.InstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	result, err := client.Resume(p)
 	if err != nil {
@@ -418,12 +418,12 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.KillParams
 	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to kill")
+	fs.StringVar(&p.InstanceID, "instance-id", "", "id of the Spawn to kill")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
-	if p.ClaudeInstanceID == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	if p.InstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	result, err := client.Kill(p)
 	if err != nil {
@@ -437,12 +437,12 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&id, "claude-instance-id", "", "id to fetch")
+	fs.StringVar(&id, "instance-id", "", "id to fetch")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if id == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
 	}
 	res, err := client.Get(id)
 	if err != nil {
@@ -461,7 +461,7 @@ func getPermissionHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the permission_requests row to fetch")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 	if p.RequestToken == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")

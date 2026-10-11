@@ -11,11 +11,11 @@ func TestPreTrustMismatch(t *testing.T) {
 		envelope string
 		wantErr  bool
 	}{
-		{"ok", `{"claude_instance_id":"x","pre_trust":"ok"}`, false},
-		{"missing", `{"claude_instance_id":"x"}`, true},
-		{"failed", `{"claude_instance_id":"x","pre_trust":"failed"}`, true},
-		{"skipped", `{"claude_instance_id":"x","pre_trust":"skipped"}`, true},
-		{"null", `{"claude_instance_id":"x","pre_trust":null}`, true},
+		{"ok", `{"instance_id":"x","pre_trust":"ok"}`, false},
+		{"missing", `{"instance_id":"x"}`, true},
+		{"failed", `{"instance_id":"x","pre_trust":"failed"}`, true},
+		{"skipped", `{"instance_id":"x","pre_trust":"skipped"}`, true},
+		{"null", `{"instance_id":"x","pre_trust":null}`, true},
 		{"not json", `not json`, true},
 	}
 	for _, tc := range cases {

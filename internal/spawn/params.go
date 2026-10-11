@@ -6,7 +6,7 @@ import "github.com/gabemahoney/agent-director/internal/config"
 // map onto SRD §12 verb parameters (PascalCase here per Go convention; the
 // CLI / MCP layers flatten to snake_case in their respective schemas).
 type SpawnParams struct {
-	// CWD is the directory the Spawn's Claude will start in. Required.
+	// CWD is the directory the Spawn's agent will start in. Required.
 	// Absolute or "~/"-prefixed; validation canonicalizes via EvalSymlinks.
 	CWD string
 
@@ -29,12 +29,12 @@ type SpawnParams struct {
 	// tmux_session_name (SR-5.2).
 	TmuxSessionNameSupplied bool
 
-	// ClaudeInstanceID is an explicit override. Almost always empty so the
+	// InstanceID is an explicit override. Almost always empty so the
 	// defaults pass mints a UUID4. When supplied, it collides with any
 	// existing row (ErrInstanceIdCollision) unless ReuseFinished is set, in
 	// which case a finished row is reused and a live row, pending included,
 	// still collides.
-	ClaudeInstanceID string
+	InstanceID string
 
 	// ExtraEnv injects KEY=VAL env vars on the tmux session. Keys whose
 	// env-var name (the part before the first '=', the name tmux sets) is
@@ -52,10 +52,10 @@ type SpawnParams struct {
 	// labels also persist into the spawns.labels JSON column.
 	AgentDirectorLabels map[string]string
 
-	// ClaudeArgs is the verbatim argv passed through to `claude` after
+	// AgentArgs is the verbatim argv passed through to `claude` after
 	// the supervisor's own flags. The denied-flag check rejects
 	// supervisor-owned flags.
-	ClaudeArgs []string
+	AgentArgs []string
 
 	// Permissions is the per-Spawn permission overlay synthesized into
 	// --settings. allow / deny / ask arrays concatenate with the user's
@@ -78,10 +78,10 @@ type SpawnParams struct {
 	// follows it: no resume pre-trusts over an opt-out (SR-22.6).
 	NoPreTrust bool
 
-	// ReuseFinished opts in to reusing an explicit ClaudeInstanceID whose
+	// ReuseFinished opts in to reusing an explicit InstanceID whose
 	// row is finished (ended or missing); a live row, pending included,
 	// still gives ErrInstanceIdCollision. It has no effect without an
-	// explicit ClaudeInstanceID (a minted id cannot collide) and applies to
+	// explicit InstanceID (a minted id cannot collide) and applies to
 	// this call only; templates and config never carry it. Default false
 	// keeps the collision behaviour: any existing row gives
 	// ErrInstanceIdCollision. A successful spawn does not say whether it
@@ -128,7 +128,7 @@ type Resolved struct {
 //     come first, per-call entries appended. A nil per-call
 //     Permissions field falls back to the template's value wholesale
 //     (no concat happens because there's nothing to append).
-//   - ClaudeArgs: per-call non-nil REPLACES the template's slice
+//   - AgentArgs: per-call non-nil REPLACES the template's slice
 //     wholesale. A nil per-call slice falls back to the template.
 //     Explicit empty (len=0, non-nil) replaces (with an empty slice).
 //
@@ -159,13 +159,13 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 	merged.ExtraEnv = mergeStringMap(tmpl.ExtraEnv, merged.ExtraEnv)
 	merged.AgentDirectorLabels = mergeStringMap(tmpl.AgentDirectorLabels, merged.AgentDirectorLabels)
 
-	// ClaudeArgs: per-call replace wholesale. nil per-call → use
+	// AgentArgs: per-call replace wholesale. nil per-call → use
 	// template. Explicit empty (`[]`) replaces with empty.
-	if merged.ClaudeArgs == nil {
+	if merged.AgentArgs == nil {
 		// Defensive copy of the template slice so the caller can't
 		// mutate the cached template state via the resolved struct.
-		if tmpl.ClaudeArgs != nil {
-			merged.ClaudeArgs = append([]string(nil), tmpl.ClaudeArgs...)
+		if tmpl.AgentArgs != nil {
+			merged.AgentArgs = append([]string(nil), tmpl.AgentArgs...)
 		}
 	}
 

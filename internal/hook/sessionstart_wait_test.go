@@ -252,8 +252,8 @@ func runSessionStartWait(t *testing.T, id string, kind swKind, tc swCase) {
 	if _, err := apitest.SeedSpawn(dbPath, id, state, "", "", kept, false, opts...); err != nil {
 		t.Fatalf("SeedSpawn(%q, %q): %v", id, state, err)
 	}
-	if kept != "" && mustGetSpawn(t, st, id).ClaudeSessionID != kept {
-		t.Fatalf("seeded claude_session_id = %q; want %q", mustGetSpawn(t, st, id).ClaudeSessionID, kept)
+	if kept != "" && mustGetSpawn(t, st, id).SessionID != kept {
+		t.Fatalf("seeded session_id = %q; want %q", mustGetSpawn(t, st, id).SessionID, kept)
 	}
 	parent := agentParent(t, st, id) // read before the pane lands: the agent whose pane lands
 	if tc.foreign {
@@ -369,8 +369,8 @@ func runSessionStartWait(t *testing.T, id string, kind swKind, tc swCase) {
 	}
 
 	row := mustGetSpawn(t, st, id)
-	if kept != "" && row.ClaudeSessionID != kept {
-		t.Errorf("claude_session_id = %q; want the kept %q", row.ClaudeSessionID, kept)
+	if kept != "" && row.SessionID != kept {
+		t.Errorf("session_id = %q; want the kept %q", row.SessionID, kept)
 	}
 	if row.State != tc.after {
 		t.Errorf("state = %q; want %q", row.State, tc.after)
@@ -391,7 +391,7 @@ func swAssertTrail(t *testing.T, before int, id, reason string, outcome store.Up
 	t.Helper()
 	var fired []any
 	for _, row := range readTrailLines(t, trailFile())[before:] {
-		if row["event"] == "ad.hook.fired" && row["claude_instance_id"] == id {
+		if row["event"] == "ad.hook.fired" && row["instance_id"] == id {
 			fired = append(fired, row["upsert_outcome"])
 		}
 	}

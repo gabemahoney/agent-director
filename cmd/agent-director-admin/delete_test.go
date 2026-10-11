@@ -30,7 +30,7 @@ func TestDeletePerRowResults(t *testing.T) {
 	}
 
 	stdout, stderr, code := runAdmin(t, home, "delete",
-		"--claude-instance-id", live, "--claude-instance-id", "absent", "--claude-instance-id", ended)
+		"--instance-id", live, "--instance-id", "absent", "--instance-id", ended)
 
 	if code != 0 || stderr != "" {
 		t.Fatalf("delete exit = %d, stderr = %q; want 0 and empty", code, stderr)
@@ -46,7 +46,7 @@ func TestDeletePerRowResults(t *testing.T) {
 	}
 	for _, id := range []string{live, ended} {
 		assertRowGone(t, home, id)
-		stdout, stderr, code := runMain(t, home, "get", "--claude-instance-id", id)
+		stdout, stderr, code := runMain(t, home, "get", "--instance-id", id)
 		assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotFound")
 	}
 	assertInvocationKinds(t, home)
@@ -63,7 +63,7 @@ func TestAdminRefusesUnmigratedStore(t *testing.T) {
 	r := seedFinishedWithSession(t)
 	current := stampUserVersion(t, r.home, 1)
 
-	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--claude-instance-id", r.id)
+	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--instance-id", r.id)
 
 	assertOnlyEnvelope(t, stdout, stderr, code, "ErrSchemaMigrationRequired")
 	assertInvocationKinds(t, r.home)

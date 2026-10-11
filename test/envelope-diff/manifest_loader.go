@@ -10,9 +10,9 @@
 // Example nondeterministic.json:
 //
 //	{
-//	  "spawn":   ["claude_instance_id"],
+//	  "spawn":   ["instance_id"],
 //	  "version": ["version", "commit"],
-//	  "list":    ["spawns[*].claude_instance_id", "spawns[*].started_at"],
+//	  "list":    ["spawns[*].instance_id", "spawns[*].started_at"],
 //	  "expire":  []
 //	}
 //

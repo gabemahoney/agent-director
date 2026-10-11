@@ -2,10 +2,12 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/gabemahoney/agent-director/internal/oldnames"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 )
 
@@ -151,4 +153,15 @@ func buildPermissions(allow, deny, ask []string) *spawn.Permissions {
 		return nil
 	}
 	return &spawn.Permissions{Allow: allow, Deny: deny, Ask: ask}
+}
+
+// flagErr is err, the error of fs.Parse, for a verb to report as
+// ErrInvalidFlags: an old flag (internal/oldnames' table) whose new flag fs
+// defines becomes the refusal naming the new flag (SR-4.3); any other error is
+// returned as it is.
+func flagErr(fs *flag.FlagSet, err error) error {
+	if text, ok := oldnames.RefuseFlag(fs, err); ok {
+		return errors.New(text)
+	}
+	return err
 }

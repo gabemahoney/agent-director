@@ -18,7 +18,7 @@ import (
 
 // agentInsert is the row the insert cases write, named agent.
 func agentInsert(agent string) store.Spawn {
-	return store.Spawn{ClaudeInstanceID: "ag-new", Agent: agent, CWD: "/tmp", TmuxSessionName: "ts-ag-new", RelayMode: "off"}
+	return store.Spawn{InstanceID: "ag-new", Agent: agent, CWD: "/tmp", TmuxSessionName: "ts-ag-new", RelayMode: "off"}
 }
 
 // TestAgentWriteRefused checks an empty, unknown, wrongly cased or padded

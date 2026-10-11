@@ -105,7 +105,7 @@ const (
 // Store sentinels — surface from verb calls and from api.New.
 
 // ErrSpawnNotFound is returned by most verbs when the requested
-// claude_instance_id does not exist in the store.
+// instance_id does not exist in the store.
 var ErrSpawnNotFound = store.ErrSpawnNotFound
 
 // ErrNoOpenPermissionRequest is returned by decide when the target Spawn has

@@ -17,7 +17,7 @@ test("status: happy path — returns state field for seeded spawn", async () => 
   await withTempHome(async (homeDir) => {
     runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-status-id", "create-store": true });
     using client = await openClient(homeStore(homeDir));
-    const result = await client.status({ claude_instance_id: "smoke-status-id" });
+    const result = await client.status({ instance_id: "smoke-status-id" });
     expect(result.state).toBe("working");
     expect(result.launch_started_at).toBeUndefined();
   });
@@ -27,7 +27,7 @@ test("status: pending row carries launch_started_at as RFC3339 UTC (SR-22.2)", a
   await withTempHome(async (homeDir) => {
     runHelper("seed-spawn", { store: homeStore(homeDir), state: "pending", id: "smoke-status-pending-id", "create-store": true });
     using client = await openClient(homeStore(homeDir));
-    const result = await client.status({ claude_instance_id: "smoke-status-pending-id" });
+    const result = await client.status({ instance_id: "smoke-status-pending-id" });
     expect(result.state).toBe("pending");
     expect(result.launch_started_at).toMatch(RFC3339_UTC_MS);
   });
@@ -36,6 +36,6 @@ test("status: pending row carries launch_started_at as RFC3339 UTC (SR-22.2)", a
 test("status: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.status({ claude_instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+    await expect(client.status({ instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
 }, 10_000);

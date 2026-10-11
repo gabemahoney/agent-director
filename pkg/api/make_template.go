@@ -16,7 +16,7 @@ import (
 // MakeTemplateParams is the typed parameter shape for the
 // make-template verb. The Name + per-call spawn parameters subset is
 // the SRD §10 surface; reserved per-invocation params (template,
-// claude_instance_id, tmux_session_name, reuse_finished) are intentionally
+// instance_id, tmux_session_name, reuse_finished) are intentionally
 // absent. reuse_finished applies to one spawn call only, so no template
 // records it.
 type MakeTemplateParams struct {
@@ -29,9 +29,9 @@ type MakeTemplateParams struct {
 	// RelayMode is an optional default relay mode: "on", "off", or "" (inherit
 	// config default). Per-call relay_mode overrides at spawn time.
 	RelayMode string
-	// ClaudeArgs is an optional default argv passed through to claude. Per-call
-	// claude_args REPLACES the template array wholesale (not concatenated).
-	ClaudeArgs []string
+	// AgentArgs is an optional default argv passed through to the agent program. Per-call
+	// agent_args REPLACES the template array wholesale (not concatenated).
+	AgentArgs []string
 	// ExtraEnv is an optional map of env-var overrides to bake in. Per-call
 	// extra_env entries merge by key; per-call wins on collision. A key
 	// spawn would refuse is refused here, by spawn's own check
@@ -130,7 +130,7 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	file := config.TemplateFile{
 		CWD:                 params.CWD,
 		RelayMode:           params.RelayMode,
-		ClaudeArgs:          params.ClaudeArgs,
+		AgentArgs:           params.AgentArgs,
 		ExtraEnv:            params.ExtraEnv,
 		AgentDirectorLabels: params.AgentDirectorLabels,
 	}

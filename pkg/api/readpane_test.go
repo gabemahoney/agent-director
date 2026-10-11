@@ -48,7 +48,7 @@ func TestReadPaneParameters(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
 			e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, raw)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: tc.nLines, ANSI: tc.ansi})
+			res, err := e.readPane(api.ReadPaneParams{InstanceID: r.ID, NLines: tc.nLines, ANSI: tc.ansi})
 			if err != nil {
 				t.Fatalf("ReadPane: %v", err)
 			}
@@ -78,9 +78,9 @@ func TestReadPaneNegativeNLinesRefused(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
 			e.setPaneTexts(r.Socket)
-			p := api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: -1}
+			p := api.ReadPaneParams{InstanceID: r.ID, NLines: -1}
 			if tc.unknown {
-				p.ClaudeInstanceID = "no-such-row"
+				p.InstanceID = "no-such-row"
 			}
 			read := e.readPane
 			if tc.client {
@@ -105,7 +105,7 @@ func TestReadPaneNoStateGuard(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{State: state})
 			e.setPaneTexts(r.Socket)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID, AllowPending: i%2 == 0})
+			res, err := e.readPane(api.ReadPaneParams{InstanceID: r.ID, AllowPending: i%2 == 0})
 			if want := paneText(r.Socket, r.Spawn.Identity.PaneID); err != nil || res.Pane != want {
 				t.Errorf("ReadPane = %q, %v; want %q", res.Pane, err, want)
 			}
@@ -153,7 +153,7 @@ func TestReadPaneSessionReplaced(t *testing.T) {
 				label = r.current()
 			}
 			e.rec.ReplaceSessionAfter(tc.after, r.Socket, r.Session.ID, label)
-			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
+			res, err := e.readPane(api.ReadPaneParams{InstanceID: r.ID})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v; want %v", err, tc.want)
 			}
@@ -238,7 +238,7 @@ func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 			before, sessions, mark := e.columns(t, r.ID), e.rec.Sessions(r.Socket), trailMark(t)
 			read := func() verbRun[api.ReadPaneResult] {
 				return runVerb(e, func() (api.ReadPaneResult, error) {
-					return e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: 1})
+					return e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID, NLines: 1})
 				})
 			}
 

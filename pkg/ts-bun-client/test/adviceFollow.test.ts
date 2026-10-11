@@ -3,7 +3,9 @@
  * advice: K1 triggers the callTimeoutMs refusal, asserts its advice, then omits
  * the field as told and asserts the client constructs and works; K2 (b.vpb,
  * b.66q) does the same for a malformed extra_env key given to spawn, and to
- * makeTemplate, whose saved template's spawn then pre-trusts as advised.
+ * makeTemplate, whose saved template's spawn then pre-trusts as advised; K3 and K4
+ * (SR-4.3) do the same for the old keys `claude_instance_id` and `claude_args`:
+ * the call renamed as the refusal says succeeds.
  */
 
 import { test, expect, afterAll } from "bun:test";
@@ -12,7 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Client } from "../src/client.js";
-import { ErrReservedEnvKey } from "../src/errors.js";
+import { ErrInvalidFlags, ErrReservedEnvKey } from "../src/errors.js";
 import type { SpawnResult } from "../src/types.js";
 import { CLAUDE_JSON, homeStore, openClient, rejection, seedOuterParent, trustEntry } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
@@ -95,6 +97,64 @@ for (const { verb, outcome, launch } of k2Cases) {
       const res = await launch(client, homeDir, { CLAUDE_CONFIG_DIR: cfg });
       expect(res.pre_trust).toBe("ok");
       expect(trustEntry(claudeJson, fs.realpathSync(homeDir))).toBe(true);
+    });
+  }, 10_000);
+}
+
+/** Renames each old key of params to the key its refusal advises ("use \"new\""), keeping the value. */
+function renamedAsAdvised(params: Record<string, unknown>, refusal: ErrInvalidFlags): Record<string, unknown> {
+  const out = { ...params };
+  for (const [, oldKey, newKey] of refusal.errDescription.matchAll(/"(\w+)" is no longer accepted; use "(\w+)"/g)) {
+    out[newKey!] = out[oldKey!];
+    delete out[oldKey!];
+  }
+  return out;
+}
+
+// K3 (SR-4.3): `"claude_instance_id" is no longer accepted; use "instance_id"`
+test("K3 claude_instance_id: passing instance_id as advised, spawn launches under that id and status finds it", async () => {
+  await withTempHome(async (homeDir) => {
+    seedOuterParent(homeStore(homeDir));
+    using client = await openClient(homeStore(homeDir));
+
+    const refusedSpawn = await rejection(client.spawn({ cwd: homeDir, claude_instance_id: "k3-id" } as never));
+    expect(refusedSpawn).toBeInstanceOf(ErrInvalidFlags);
+    expect((refusedSpawn as ErrInvalidFlags).errDescription).toContain('"claude_instance_id" is no longer accepted; use "instance_id"');
+    const spawned = await client.spawn(renamedAsAdvised({ cwd: homeDir, claude_instance_id: "k3-id" }, refusedSpawn as ErrInvalidFlags) as never);
+    expect(spawned.instance_id).toBe("k3-id");
+
+    const refusedStatus = await rejection(client.status({ claude_instance_id: "k3-id" } as never));
+    expect(refusedStatus).toBeInstanceOf(ErrInvalidFlags);
+    const status = await client.status(renamedAsAdvised({ claude_instance_id: "k3-id" }, refusedStatus as ErrInvalidFlags) as never);
+    expect(status.state).toBe("pending");
+  });
+}, 10_000);
+
+// K4 (SR-4.3): `"claude_args" is no longer accepted; use "agent_args"`
+for (const { verb, outcome, call } of [
+  {
+    verb: "spawn",
+    outcome: "launches",
+    call: (c: Client, cwd: string, p: Record<string, unknown>) => c.spawn({ cwd, ...p } as never),
+  },
+  {
+    verb: "make-template",
+    outcome: "saves the template",
+    call: (c: Client, cwd: string, p: Record<string, unknown>) => c.makeTemplate({ name: "k4", cwd, ...p } as never),
+  },
+]) {
+  test(`K4 ${verb} claude_args: passing agent_args as advised ${outcome}`, async () => {
+    await withTempHome(async (homeDir) => {
+      seedOuterParent(homeStore(homeDir));
+      using client = await openClient(homeStore(homeDir));
+      const params = { claude_args: ["--model", "sonnet"] };
+
+      const refusal = await rejection(call(client, homeDir, params));
+
+      expect(refusal).toBeInstanceOf(ErrInvalidFlags);
+      expect([(refusal as ErrInvalidFlags).verb, (refusal as ErrInvalidFlags).errName]).toEqual([verb, "ErrInvalidFlags"]);
+      expect((refusal as ErrInvalidFlags).errDescription).toContain('"claude_args" is no longer accepted; use "agent_args"');
+      await expect(call(client, homeDir, renamedAsAdvised(params, refusal as ErrInvalidFlags))).resolves.toBeDefined();
     });
   }, 10_000);
 }

@@ -148,7 +148,7 @@ func adoptIdentity(s identityAdopter, row Spawn, res tmux.Result, panes []tmux.P
 	if a.Identity == row.Identity {
 		return a
 	}
-	cr, err := s.AdoptIdentityIfUnchanged(row.ClaudeInstanceID, row.Snapshot, a.Identity)
+	cr, err := s.AdoptIdentityIfUnchanged(row.InstanceID, row.Snapshot, a.Identity)
 	a.Applied = err == nil && cr == CondApplied
 	return a
 }
@@ -243,12 +243,12 @@ func adoptInSweep(s sameLifeAdopter, sw *tmux.Sweep, pl tmux.PaneLister, it Live
 	if out.Identity == it.Identity {
 		return out
 	}
-	cr, now, err := s.AdoptIdentityIfSameLife(it.ClaudeInstanceID, it.Snapshot, out.Identity)
+	cr, now, err := s.AdoptIdentityIfSameLife(it.InstanceID, it.Snapshot, out.Identity)
 	out.Write = findMissingWrite{Wrote: true, Res: cr, Err: err}
 	switch {
 	case err != nil:
 		out.Write.Res = 0
-		logFindMissing(lg, "AdoptIdentityIfSameLife", it.ClaudeInstanceID, err)
+		logFindMissing(lg, "AdoptIdentityIfSameLife", it.InstanceID, err)
 		out.Left = true
 	case cr != CondApplied:
 		out.Left = true

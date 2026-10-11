@@ -190,6 +190,6 @@ func TestFindMissingGraceRaisedByCreateTimeout(t *testing.T) {
 
 // fgcSpawnParams is a spawn of id (reuse: with the opt-in) pre-trusting in its own new CLAUDE_CONFIG_DIR.
 func fgcSpawnParams(t *testing.T, id string, reuse bool) api.SpawnParams {
-	return api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse, CWD: t.TempDir(),
+	return api.SpawnParams{InstanceID: id, ReuseFinished: reuse, CWD: t.TempDir(),
 		ExtraEnv: map[string]string{"CLAUDE_CONFIG_DIR": t.TempDir()}}
 }

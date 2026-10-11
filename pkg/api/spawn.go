@@ -17,10 +17,10 @@ import (
 // its single-JSON-object stdout (SRD §12.3); the MCP server returns it as the
 // tool result.
 type SpawnResult struct {
-	// ClaudeInstanceID is the id under which the new Spawn is tracked.
-	// Nondeterministic when SpawnParams.ClaudeInstanceID was empty — a
+	// InstanceID is the id under which the new Spawn is tracked.
+	// Nondeterministic when SpawnParams.InstanceID was empty — a
 	// UUID4 is minted per call.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	InstanceID string `json:"instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
 	// of three values (SR-22.6):
 	//   - "ok": the folder-trust entry was written.
@@ -108,7 +108,7 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 // the label scan, then Launch, whose insert collision in a race is
 // ErrInstanceIdCollision (SR-9.3). A finished row goes to spawnReuse.
 func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, rs reuseStore, t spawnTmux, pc ProcChecker, cfg config.Config, now func() time.Time, lg *log.Logger, params spawn.SpawnParams) (SpawnResult, error) {
-	if err := validateExplicitInstanceID(params.ClaudeInstanceID); err != nil {
+	if err := validateExplicitInstanceID(params.InstanceID); err != nil {
 		return SpawnResult{}, err
 	}
 	r, err := spawn.Resolve(params, cfg)
@@ -118,10 +118,10 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err := spawn.Validate(&r); err != nil {
 		return SpawnResult{}, err
 	}
-	reuse := r.ReuseFinished && r.ClaudeInstanceID != ""
+	reuse := r.ReuseFinished && r.InstanceID != ""
 	var reused reusePreCheck
 	if reuse {
-		reused.row, reused.found, reused.err = rs.ReadForReuse(r.ClaudeInstanceID)
+		reused.row, reused.found, reused.err = rs.ReadForReuse(r.InstanceID)
 		collisions = reused
 	}
 	idCheck, err := spawn.ApplyDefaults(&r, cfg, collisions)
@@ -132,7 +132,7 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 		return spawnReuse(reuseDeps{rs: rs, t: t, pc: pc, cfg: cfg, storeID: s.StoreID(), now: now, lg: lg, who: callerIdentity()}, r, reused.row)
 	}
 	if idCheck == spawn.IDNoRow {
-		if err := scanForLeftover(t, pc, s.StoreID(), r.ClaudeInstanceID); err != nil {
+		if err := scanForLeftover(t, pc, s.StoreID(), r.InstanceID); err != nil {
 			return SpawnResult{}, err
 		}
 	}
@@ -144,7 +144,7 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	return SpawnResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil
+	return SpawnResult{InstanceID: id, PreTrust: string(preTrust)}, nil
 }
 
 // validateExplicitInstanceID rejects a caller-supplied instance id that
@@ -175,21 +175,21 @@ func hasControlChar(id string) bool {
 }
 
 // Spawn launches a tracked Claude Code instance inside a new tmux session.
-// The call returns the claude_instance_id and pre_trust (what the launch's
+// The call returns the instance_id and pre_trust (what the launch's
 // folder-trust pre-trust did: ok, skipped or failed; a failure never fails
 // the spawn) without waiting for the agent; the row is pending from its
-// insert until the agent reports in (Claude Code's SessionStart), then
+// insert until the agent reports in (its SessionStart hook), then
 // waiting. Use [Client.Status] or [Client.Get] to observe progress. The
 // session is labelled for this launch when it is created, and the
 // session-creating call is bounded by the create timeout. If it times out,
 // Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may
 // have been created and the new row stays pending; do not retry until get
 // shows the row ended or missing, since a retried spawn without an explicit
-// id would start a second agent. Then retry an explicit ClaudeInstanceID with
+// id would start a second agent. Then retry an explicit InstanceID with
 // ReuseFinished: without it, the spawn collides with the id's finished row
 // (ErrInstanceIdCollision).
 //
-// With an explicit ClaudeInstanceID that has no row, Spawn first makes one
+// With an explicit InstanceID that has no row, Spawn first makes one
 // tmux lookup for a session of this agent-director store still labelled with
 // that id. One left over from an earlier life refuses the spawn with
 // ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the
@@ -225,7 +225,7 @@ func hasControlChar(id string) bool {
 //   - ErrCwdNotFound: CWD does not exist on disk.
 //   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
 //   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
-//   - ErrSpawnDeniedFlag: a denied claude flag was passed in ClaudeArgs.
+//   - ErrSpawnDeniedFlag: a denied claude flag was passed in AgentArgs.
 //   - ErrReservedEnvKey: ExtraEnv (merged with the template's) contains a
 //     key whose name before the first '=' (the name tmux sets) is reserved:
 //     it starts with AGENT_DIRECTOR_, or it is HOME (the key HOME, or one
@@ -241,9 +241,9 @@ func hasControlChar(id string) bool {
 //     valid env-var name and says what is wrong with it. A key that is both
 //     reserved and malformed (such as "HOME=/x") gets the reserved-name
 //     message. Nothing is written or launched.
-//   - ErrInvalidFlags: ClaudeInstanceID contains an ASCII control character.
+//   - ErrInvalidFlags: InstanceID contains an ASCII control character.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
-//     for the explicit ClaudeInstanceID, in any state (the pre-check refuses
+//     for the explicit InstanceID, in any state (the pre-check refuses
 //     it before anything is written; the insert's primary key refuses a row
 //     created after the pre-check). With ReuseFinished, the row is live
 //     (pending included), or it changed or was removed after this spawn
@@ -280,8 +280,8 @@ func hasControlChar(id string) bool {
 //   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
-//     the row ended or missing, then retry an explicit ClaudeInstanceID with
-//     ReuseFinished. Also, with an explicit ClaudeInstanceID that has no
+//     the row ended or missing, then retry an explicit InstanceID with
+//     ReuseFinished. Also, with an explicit InstanceID that has no
 //     row, the label scan's lookup could not be read; nothing was written.
 //     Also, after "duplicate session", the re-lookup of the requested name
 //     could not be read; the new row is ended (the description says if it
@@ -303,7 +303,7 @@ func hasControlChar(id string) bool {
 //     Or the session-creating call timed out after the row was reset: the
 //     session may have been created, the row was reset and stays pending; do
 //     not retry until get shows the row ended or missing.
-//   - ErrTmuxSessionConflict: with an explicit ClaudeInstanceID that has no
+//   - ErrTmuxSessionConflict: with an explicit InstanceID that has no
 //     row, the label scan found a session of an earlier life of that id,
 //     labelled by this store, or conflicting labels; nothing was written, and
 //     a human must look (docs/operator-actions.md). Also, after "duplicate
@@ -331,8 +331,8 @@ func hasControlChar(id string) bool {
 //     case, or a relay_mode other than on/off.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.
 //
-// Nondeterminism: .claude_instance_id — a UUID4 is minted when
-// SpawnParams.ClaudeInstanceID is empty; the value differs on every call.
+// Nondeterminism: .instance_id — a UUID4 is minted when
+// SpawnParams.InstanceID is empty; the value differs on every call.
 func (c *Client) Spawn(params SpawnParams) (SpawnResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnResult{}, err

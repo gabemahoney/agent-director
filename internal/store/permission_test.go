@@ -28,7 +28,7 @@ const (
 // the agent's gated request INSERT applies (SR-22.9).
 func seedSpawnForPerm(t *testing.T, s *Store, id, relayMode string) {
 	t.Helper()
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-test-" + id, RelayMode: relayMode}); err != nil {
+	if err := insertAgentRow(s, Spawn{InstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-test-" + id, RelayMode: relayMode}); err != nil {
 		t.Fatalf("insertAgentRow(%s): %v", id, err)
 	}
 }
@@ -218,7 +218,7 @@ func TestGetPermissionRequestByToken(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetPermissionRequestByToken: %v", err)
 			}
-			if got.RequestID == 0 || got.ClaudeInstanceID != id || got.RequestToken != tokenA || got.ToolName != "Read" ||
+			if got.RequestID == 0 || got.InstanceID != id || got.RequestToken != tokenA || got.ToolName != "Read" ||
 				got.ToolInput != `{"file":"/tmp/x"}` || got.CreatedAt.Before(before) || got.CreatedAt.After(time.Now().UTC().Add(time.Second)) {
 				t.Errorf("row = %+v; want the inserted request", got)
 			}
@@ -507,7 +507,7 @@ func TestMarkMissingClosesOpenRequests(t *testing.T) {
 				want = append(want, "ad.row_mutation.committed/"+tok, "ad.find_missing.tick/"+tok)
 			}
 			for _, row := range readStoreTrailLines(t)[mark:] {
-				if row["claude_instance_id"] != id {
+				if row["instance_id"] != id {
 					continue
 				}
 				got = append(got, fmt.Sprintf("%v/%v", row["event"], row["request_token"]))

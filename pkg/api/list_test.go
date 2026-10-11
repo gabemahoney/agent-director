@@ -59,7 +59,7 @@ func TestListFilters(t *testing.T) {
 			}
 			var got []string
 			for _, r := range res.Spawns {
-				got = append(got, r.ClaudeInstanceID)
+				got = append(got, r.InstanceID)
 			}
 			sort.Strings(got)
 			if (tc.want != nil && !equalStrings(got, tc.want)) || (tc.want == nil && len(got) != tc.n) {
@@ -133,7 +133,7 @@ func TestListRowKeySetUnchanged(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"claude_instance_id", "cwd", "ended_at", "labels", "last_seen_at", "liveness_note",
+	want := []string{"cwd", "ended_at", "instance_id", "labels", "last_seen_at", "liveness_note",
 		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v (no jsonl_path, no extra_env, nothing new)", got, want)

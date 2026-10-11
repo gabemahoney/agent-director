@@ -86,10 +86,10 @@ var spawnTmuxErrorCases = []errorCase{
 			return srcDir, nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"cwd": "/tmp", "claude_instance_id": hungID, "no_pre_trust": true}
+			return map[string]any{"cwd": "/tmp", "instance_id": hungID, "no_pre_trust": true}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"spawn", "--cwd", "/tmp", "--claude-instance-id", hungID, "--no-pre-trust"}
+			return []string{"spawn", "--cwd", "/tmp", "--instance-id", hungID, "--no-pre-trust"}
 		},
 		desc: func(_ map[string]any) (apitest.DescCase, []string) {
 			return apitest.DescLaunchTimeout(apitest.LaunchTimeout{
@@ -126,10 +126,10 @@ var spawnTmuxErrorCases = []errorCase{
 			return filepath.Dir(dbPath), map[string]any{ctxStoreID: storeID}
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"cwd": "/tmp", "claude_instance_id": leftoverID, "no_pre_trust": true}
+			return map[string]any{"cwd": "/tmp", "instance_id": leftoverID, "no_pre_trust": true}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"spawn", "--cwd", "/tmp", "--claude-instance-id", leftoverID, "--no-pre-trust"}
+			return []string{"spawn", "--cwd", "/tmp", "--instance-id", leftoverID, "--no-pre-trust"}
 		},
 		desc: func(ctx map[string]any) (apitest.DescCase, []string) {
 			storeID, _ := ctx[ctxStoreID].(string)
@@ -161,11 +161,11 @@ var spawnTmuxErrorCases = []errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"cwd": "/tmp", "claude_instance_id": heldID,
+			return map[string]any{"cwd": "/tmp", "instance_id": heldID,
 				"tmux_session_name": heldName, "no_pre_trust": true}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"spawn", "--cwd", "/tmp", "--claude-instance-id", heldID,
+			return []string{"spawn", "--cwd", "/tmp", "--instance-id", heldID,
 				"--tmux-session-name", heldName, "--no-pre-trust"}
 		},
 		desc: func(_ map[string]any) (apitest.DescCase, []string) {

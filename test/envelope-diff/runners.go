@@ -185,7 +185,7 @@ func runCLI(t *testing.T, binPath, dbPath string, args ...string) (envelope []by
 //   - On error: json.Marshal({err_name,err_description}) → (bytes, true).
 //
 // params must contain the verb's parameters encoded as a map[string]any using
-// snake_case JSON-style keys (e.g. {"claude_instance_id":"…"}).
+// snake_case JSON-style keys (e.g. {"instance_id":"…"}).
 //
 // The fake-tmux binary is ensured on PATH (once per process) before the Client
 // is constructed so that any tmux.Client internal to the verb calls resolves to
@@ -326,9 +326,9 @@ func dispatchSpawn(c *api.Client, params map[string]any) ([]byte, bool) {
 	p := api.SpawnParams{
 		CWD:                 strParam(params, "cwd"),
 		Template:            strParam(params, "template"),
-		ClaudeInstanceID:    strParam(params, "claude_instance_id"),
+		InstanceID:          strParam(params, "instance_id"),
 		RelayMode:           strParam(params, "relay_mode"),
-		ClaudeArgs:          strSliceParam(params, "claude_args"),
+		AgentArgs:           strSliceParam(params, "agent_args"),
 		ExtraEnv:            strMapParam(params, "extra_env"),
 		AgentDirectorLabels: strMapParam(params, "labels"),
 		NoPreTrust:          boolParam(params, "no_pre_trust"),
@@ -345,7 +345,7 @@ func dispatchSpawn(c *api.Client, params map[string]any) ([]byte, bool) {
 }
 
 func dispatchStatus(c *api.Client, params map[string]any) ([]byte, bool) {
-	id := strParam(params, "claude_instance_id")
+	id := strParam(params, "instance_id")
 	res, err := c.Status(id)
 	if err != nil {
 		return marshalErrEnvelope(err), true
@@ -354,7 +354,7 @@ func dispatchStatus(c *api.Client, params map[string]any) ([]byte, bool) {
 }
 
 func dispatchGet(c *api.Client, params map[string]any) ([]byte, bool) {
-	id := strParam(params, "claude_instance_id")
+	id := strParam(params, "instance_id")
 	res, err := c.Get(id)
 	if err != nil {
 		return marshalErrEnvelope(err), true
@@ -480,7 +480,7 @@ func dispatchMakeTemplate(c *api.Client, params map[string]any) ([]byte, bool) {
 		Name:                strParam(params, "name"),
 		CWD:                 strParam(params, "cwd"),
 		RelayMode:           strParam(params, "relay_mode"),
-		ClaudeArgs:          strSliceParam(params, "claude_args"),
+		AgentArgs:           strSliceParam(params, "agent_args"),
 		ExtraEnv:            strMapParam(params, "extra_env"),
 		AgentDirectorLabels: strMapParam(params, "labels"),
 		Overwrite:           boolParam(params, "overwrite"),

@@ -58,7 +58,7 @@ func advPaneReadPane(t *testing.T, e *killEnv, r killRow) (func() error, func(*t
 	e.setPaneTexts(r.Socket)
 	var got api.ReadPaneResult
 	return func() (err error) {
-			got, err = e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+			got, err = e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
 			return err
 		}, func(t *testing.T) {
 			if want := paneText(r.Socket, r.Spawn.Identity.PaneID); got.Pane != want {
@@ -226,7 +226,7 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) 
 		t.Run(f.name, func(t *testing.T) {
 			e, r, in := advPaneKeysRefused(t, f)
 
-			read, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+			read, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
 			if err != nil {
 				t.Fatalf("read-pane: %v; want the agent's pane", err)
 			}
@@ -257,7 +257,7 @@ func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits(t *testing.T) {
 		t.Run(f.name, func(t *testing.T) {
 			e, r, in := advPaneKeysRefused(t, f)
 
-			if _, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID}); err != nil {
+			if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID}); err != nil {
 				t.Fatalf("send-keys with empty text: %v; want Enter delivered", err)
 			}
 			in.assertSubmittedOnce(t, skaText)
@@ -333,12 +333,12 @@ const (
 func advPaneAnswer(t *testing.T, e *killEnv, r killRow, token string, now time.Time) verbRun[struct{}] {
 	t.Helper()
 	e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "the agent's pane\n")
-	res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+	res, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
 	if err != nil {
 		t.Fatalf("read-pane: %v", err)
 	}
 	return runVerb(e, func() (struct{}, error) {
-		_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, RequestToken: token,
+		_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, RequestToken: token,
 			As: "allow", Key: "1", ExpectPaneSHA256: res.PaneSHA256})
 		return struct{}{}, err
 	})
@@ -435,7 +435,7 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide(t *testing.T) {
 			now, advance := advRelayHookClock(t, e, r, createdAt, tc.deny)
 			advance(createdAt.Add(tc.age))
 			send := func() error {
-				_, err := e.sendKeysAt(relayGuardWindow, *now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+				_, err := e.sendKeysAt(relayGuardWindow, *now, api.SendKeysParams{InstanceID: r.ID, Text: "1"})
 				return err
 			}
 			advRelayAdvice(t, send(), api.ErrSendKeysWhileRelayed, advSendKeysAnswerWithDecide(storefix.TestRequestTokenA))
@@ -443,7 +443,7 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedAnswerWithDecide(t *testing.T) {
 
 			// The advice, literally: decide the request it names; decide's wait moves the clock.
 			_, err := api.DecideWithSleep(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return *now }}, func(d time.Duration) { advance(now.Add(d)) },
-				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+				api.DecideParams{InstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 
 			switch tc.want {
 			case nil:
@@ -488,11 +488,11 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 			createdAt := advRequestCreatedAt(t, e, r)
 			now := createdAt.Add(relayGuardWindow / 2)
 			if _, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }},
-				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tok, Decision: "allow"}); err != nil {
+				api.DecideParams{InstanceID: r.ID, RequestToken: tok, Decision: "allow"}); err != nil {
 				t.Fatalf("decide in the window: %v; want the allow recorded", err)
 			}
 			send := func() error {
-				_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+				_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "1"})
 				return err
 			}
 
@@ -552,7 +552,7 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 				p := newPAEnv(t)
 				var err error
 				if from == "decide" {
-					_, err = api.Decide(p.st, p.view(), api.DecideParams{ClaudeInstanceID: p.r.ID, RequestToken: tok, Decision: "deny"})
+					_, err = api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: tok, Decision: "deny"})
 				} else {
 					err = p.sendKeys(p.plain("hi"))
 				}
@@ -598,7 +598,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	hookB := api.ProcessIdentity{PID: 54322, Starttime: relayEnvHook.Starttime, PIDNamespace: relayNS}
 	p.pc.Set(hookB.PID, procfix.Alive(hookB.Starttime))
 	p.seedRequest(t, tokB, "toolu_01B", hookB) // a subagent's request, its hook polling
-	_, err := api.Decide(p.st, p.view(), api.DecideParams{ClaudeInstanceID: p.r.ID, RequestToken: tokA, Decision: "allow"})
+	_, err := api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: tokA, Decision: "allow"})
 	advRelayAdvice(t, err, api.ErrRelayFallenBack, advRelayFallenBack)
 
 	refused := p.sendKeysRun(p.answer(tokA, "allow", "1"))
@@ -606,7 +606,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	if len(refused.calls) != 0 {
 		t.Fatalf("calls = %v; want none", paKinds(refused.calls))
 	}
-	if _, err := api.Decide(p.st, p.view(), api.DecideParams{ClaudeInstanceID: p.r.ID, RequestToken: tokB, Decision: "allow",
+	if _, err := api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: tokB, Decision: "allow",
 		MaxWaitMs: ptr(int64(0))}); err != nil {
 		t.Fatalf("decide %s, which the refusal names: %v; want the verdict recorded", tokB, err)
 	}
@@ -670,7 +670,7 @@ func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 				advance(createdAt.Add(a.age))
 
 				_, err := api.DecideWithSleep(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return *now }}, func(d time.Duration) { advance(now.Add(d)) },
-					api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+					api.DecideParams{InstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 				answered := false
 				var run verbRun[struct{}]
 				if errors.Is(err, api.ErrRelayFallenBack) {
@@ -716,7 +716,7 @@ func TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane(t *testing.T) {
 		{"the agent's next request decided", func(t *testing.T, e *killEnv, r killRow, now time.Time) {
 			storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{tokB})
 			if _, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }},
-				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tokB, Decision: "allow"}); err != nil {
+				api.DecideParams{InstanceID: r.ID, RequestToken: tokB, Decision: "allow"}); err != nil {
 				t.Fatalf("decide %s in its window: %v", tokB, err)
 			}
 		}},
@@ -734,9 +734,9 @@ func TestAdviceFollow_F6_DecideNotShownDoNotAnswerAtPane(t *testing.T) {
 			tc.after(t, e, r, now)
 
 			_, err := api.DecideWithSleep(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }}, func(d time.Duration) { now = now.Add(d) },
-				api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: tokA, Decision: "allow"})
+				api.DecideParams{InstanceID: r.ID, RequestToken: tokA, Decision: "allow"})
 			if errors.Is(err, api.ErrRelayFallenBack) { // E7's advice, as a caller branching on the name follows it
-				_, _ = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+				_, _ = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "1"})
 			}
 
 			advRelayAdvice(t, err, store.ErrNoOpenPermissionRequest, advDecideNotShown)
@@ -839,7 +839,7 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 				ds = decideSpawnEnds{Store: s, end: func() { end(t, s, dbPath) }, done: new(bool)}
 			}
 
-			_, err := api.Decide(ds, api.RelayView{Window: 24 * time.Hour}, api.DecideParams{ClaudeInstanceID: "id-d-1",
+			_, err := api.Decide(ds, api.RelayView{Window: 24 * time.Hour}, api.DecideParams{InstanceID: "id-d-1",
 				RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 
 			assertOneSentinel(t, err, tc.want)

@@ -20,10 +20,10 @@ func TestCLIIntFlagRefusals(t *testing.T) {
 		negative string // the refusal of -1; "" leaves -1 to H7
 	}{
 		{[]string{"list"}, "limit", "limit = -1 is negative"},
-		{[]string{"read-pane", "--claude-instance-id", "no-such-row"}, "n-lines", "n_lines = -1 is negative"},
-		{[]string{"send-keys", "--claude-instance-id", "no-such-row"}, "n-lines", ""},
+		{[]string{"read-pane", "--instance-id", "no-such-row"}, "n-lines", "n_lines = -1 is negative"},
+		{[]string{"send-keys", "--instance-id", "no-such-row"}, "n-lines", ""},
 		{[]string{"record-pane-answer", "--request-token", "no-such-token"}, "n-lines", ""},
-		{[]string{"decide", "--claude-instance-id", "no-such-row", "--request-token", "no-such-token", "--decision", "allow"},
+		{[]string{"decide", "--instance-id", "no-such-row", "--request-token", "no-such-token", "--decision", "allow"},
 			"max-wait-ms", "--max-wait-ms must not be negative"},
 		{relay, "bytes-sent", ""},
 		{relay, "bytes-received", ""},

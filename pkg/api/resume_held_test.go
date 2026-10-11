@@ -303,7 +303,7 @@ func TestResumeHeldRetryFollowsRestore(t *testing.T) {
 				if o.outcome == apitest.RestoreApplied {
 					w.afterMove(func() {
 						for _, ev := range []string{"Stop", "SessionStart"} {
-							got := apitest.ApplyAgentHook(t, e.dbPath, r.ID, ev, r.Spawn.ClaudeSessionID, apitest.HookTranscript(r.JSONLPath, true))
+							got := apitest.ApplyAgentHook(t, e.dbPath, r.ID, ev, r.Spawn.SessionID, apitest.HookTranscript(r.JSONLPath, true))
 							if got != (store.HookApplied{Reason: store.HookReasonNoPaneRecorded}) {
 								t.Errorf("%s before the restore = %+v; want ignored, %s", ev, got, store.HookReasonNoPaneRecorded)
 							}
@@ -382,7 +382,7 @@ func (e *killEnv) rhtAssertRecord(t *testing.T, run rhtRun, w rhtWant, rowResult
 	}
 	rec, r := run.recs[0], run.sc.r
 	want := map[string]any{
-		"source": "ad_resume", "claude_instance_id": r.ID, "launch": "resume", "tmux_session_name": r.Name,
+		"source": "ad_resume", "instance_id": r.ID, "launch": "resume", "tmux_session_name": r.Name,
 		"tmux_socket": r.Socket, "store_id": e.storeID, "lookup_outcome": w.lookup, "outcome": ptErrName(w.sentinel),
 		"row_result": rowResult, "store_error": storeError, "carries_this_id": w.carries, "current_launch": w.current,
 		"tmux_session_id": nil, "session_created": nil, "attach_command": nil, "end_command": nil,

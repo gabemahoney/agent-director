@@ -34,7 +34,7 @@ func newGuardFixture(t *testing.T) *guardFixture {
 	g.store = filepath.Join(g.home, ".agent-director")
 	g.shimLog = filepath.Join(t.TempDir(), "shim.log")
 	writeFile(t, filepath.Join(g.store, "state.db"), "stand-in database bytes\n")
-	writeFile(t, filepath.Join(g.store, "ad-trail.jsonl"), `{"event":"host.own","claude_instance_id":"host-row-1"}`+"\n")
+	writeFile(t, filepath.Join(g.store, "ad-trail.jsonl"), `{"event":"host.own","instance_id":"host-row-1"}`+"\n")
 	for _, name := range []string{"sqlite3", "agent-director", "tmux"} {
 		shim := "#!/bin/sh\necho \"" + name + " $*\" >> '" + g.shimLog + "'\nexit 0\n"
 		if err := os.WriteFile(filepath.Join(g.shimDir, name), []byte(shim), 0o755); err != nil {
@@ -346,13 +346,13 @@ func TestGuardBusyHost(t *testing.T) {
 			}
 		}, code: 0, text: "scanning 0 appended bytes"},
 		{name: "unrelated lines appended", during: func(t *testing.T, g *guardFixture) {
-			g.appendTrail(t, `{"event":"host.own","claude_instance_id":"host-row-2"}`+"\n")
+			g.appendTrail(t, `{"event":"host.own","instance_id":"host-row-2"}`+"\n")
 		}, code: 0, text: "none of the run's identifiers"},
 		{name: "an identifier only before the snapshot", before: func(t *testing.T, g *guardFixture) {
 			g.appendTrail(t, `{"run":"`+runID+`"}`+"\n")
 		}, code: 0, text: "none of the run's identifiers"},
 		{name: "an identifier appended", during: func(t *testing.T, g *guardFixture) {
-			g.appendTrail(t, `{"event":"ad.hook.fired","claude_instance_id":"6f1c2a9e-instance","prompt":"TRAIL-CONTENT-SENTINEL"}`+"\n")
+			g.appendTrail(t, `{"event":"ad.hook.fired","instance_id":"6f1c2a9e-instance","prompt":"TRAIL-CONTENT-SENTINEL"}`+"\n")
 		}, code: 1, text: "1 6f1c2a9e-instance"},
 		{name: "a truncated trail", during: func(t *testing.T, g *guardFixture) {
 			if err := os.Truncate(g.path("ad-trail.jsonl"), 3); err != nil {

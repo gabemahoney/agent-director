@@ -16,7 +16,7 @@ func TestToolsCallSpawnRejectsControlCharacterID(t *testing.T) {
 	const id = "mcp-head\nmcp-tail"
 	e, c := newReuseParamEnv(t)
 
-	resp := callTool(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"claude_instance_id": id}))
+	resp := callTool(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"instance_id": id}))
 
 	data := toolErrorData(t, resp)
 	if data.ErrName != "ErrInvalidFlags" {

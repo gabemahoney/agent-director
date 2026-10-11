@@ -203,14 +203,14 @@ func (e *killEnv) resume(id string) (api.ResumeResult, error) {
 func (e *killEnv) resumeWith(s api.ResumeStore, id string) (api.ResumeResult, error) {
 	cfg := config.Default()
 	cfg.Tmux = e.cfg
-	return api.Resume(s, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, api.ResumeParams{ClaudeInstanceID: id})
+	return api.Resume(s, e.rec, e.pc, cfg, e.storeID, e.clock.Now, nil, api.ResumeParams{InstanceID: id})
 }
 
 // resumeClient runs Client.Resume on id on a new e.client with settings.
 func (e *killEnv) resumeClient(t *testing.T, id string, settings ...apitest.TmuxSetting) (res api.ResumeResult, logs string, err error) {
 	t.Helper()
 	c, buf := e.client(t, settings...)
-	res, err = c.Resume(api.ResumeParams{ClaudeInstanceID: id})
+	res, err = c.Resume(api.ResumeParams{InstanceID: id})
 	return res, buf.String(), err
 }
 
@@ -298,7 +298,7 @@ func (e *killEnv) childIDs(t *testing.T, id string) []string {
 	}
 	ids := []string{}
 	for _, r := range rows {
-		ids = append(ids, r.ClaudeInstanceID)
+		ids = append(ids, r.InstanceID)
 	}
 	slices.Sort(ids)
 	return ids
@@ -338,7 +338,7 @@ func (e *killEnv) assertWroteNothing(t *testing.T, before writesSnapshot, except
 	}
 	for _, l := range readAPITrailLines(t)[before.mark:] {
 		if l["event"] != "ad.provenance.disagree" {
-			t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["claude_instance_id"])
+			t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["instance_id"])
 		}
 	}
 	if calls := e.rec.SocketCalls()[before.calls:]; len(calls) > 1 || (len(calls) == 1 && calls[0].Call != tmux.CallLookup) {

@@ -12,7 +12,7 @@ import (
 )
 
 // readinessQuery selects the five columns a store-readiness poll cares about
-// (state, identity pid+starttime, jsonl_path, claude_session_id) for one
+// (state, identity pid+starttime, jsonl_path, session_id) for one
 // instance. Shared by rowReady (the poll CONDITION) and observeRow (the timeout
 // DIAGNOSTIC) so the dump can never silently diverge from the condition it
 // explains (b.129).
@@ -20,7 +20,7 @@ const readinessQuery = `SELECT state, pid, proc_starttime, jsonl_path, session_i
 
 // rowReady reports whether the SessionStart hook has applied for instanceID:
 // state has left `pending` (→ waiting) AND pid, proc_starttime, jsonl_path and
-// claude_session_id are all non-NULL — the recorded agent process whose start
+// session_id are all non-NULL — the recorded agent process whose start
 // time find-missing judges, and the transcript resume's pre-flight stats.
 func rowReady(t *testing.T, dbPath, instanceID string) bool {
 	t.Helper()
@@ -40,7 +40,7 @@ func rowReady(t *testing.T, dbPath, instanceID string) bool {
 }
 
 // observeRow renders the row fields a store poll cares about (state, identity
-// pid+starttime, jsonl_path, claude_session_id) as a single diagnostic line,
+// pid+starttime, jsonl_path, session_id) as a single diagnostic line,
 // for inclusion in a waitFor timeout message (b.129). It never fails the test:
 // a poll that is already timing out must not be masked by a second failure, so
 // query/row errors are folded into the returned string. NULL columns render as
@@ -67,7 +67,7 @@ func observeRow(dbPath, instanceID string) func() string {
 			" pid=" + nullInt(pid) +
 			" proc_starttime=" + nullStr(starttime) +
 			" jsonl_path=" + nullStr(jsonlPath) +
-			" claude_session_id=" + nullStr(sessionID)
+			" session_id=" + nullStr(sessionID)
 	}
 }
 

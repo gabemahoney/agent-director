@@ -28,7 +28,7 @@ const callTableKeys = "call-table keys"
 // the pane of r.Session carrying its label's token, on r's socket.
 func sendKeysCallTableInvoke(allowPending bool) func(*testing.T, *killEnv, killRow) (bool, error) {
 	return func(t *testing.T, e *killEnv, r killRow) (bool, error) {
-		_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: callTableKeys, AllowPending: allowPending})
+		_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: callTableKeys, AllowPending: allowPending})
 		typed := len(e.rec.SocketCallsOf(tmux.CallSendText)) > 0
 		if typed {
 			pane := labelledPane(t, r.Session, r.Session.Label.Token)

@@ -38,7 +38,7 @@ func (r expireRow) action() string {
 // its delete attempt (SR-12.5, SR-14, SR-3.16):
 //
 //   - a kept row, changed_since_examined and store_error included, gets
-//     exactly one ad.expire.kept with claude_instance_id, reason, the
+//     exactly one ad.expire.kept with instance_id, reason, the
 //     recorded tmux_session_name and source ad_expire, and no other field; a
 //     deleted row and a row another caller removed get none;
 //   - one ad.provenance.disagree per distinct reason the row's lookup
@@ -55,10 +55,10 @@ func (r expireRow) action() string {
 func (r *expireRun) emitRow(cand ExpireCandidate, row expireRow) {
 	if row.reason != "" {
 		_ = trail.Emit(context.Background(), expireKeptEvent, map[string]any{
-			"claude_instance_id": cand.ClaudeInstanceID,
-			"reason":             row.reason,
-			"tmux_session_name":  cand.TmuxSessionName,
-			"source":             expireSource,
+			"instance_id":       cand.InstanceID,
+			"reason":            row.reason,
+			"tmux_session_name": cand.TmuxSessionName,
+			"source":            expireSource,
 		})
 	}
 	if len(row.disagree) == 0 {
@@ -67,7 +67,7 @@ func (r *expireRun) emitRow(cand ExpireCandidate, row expireRow) {
 	emitProvenanceDisagree(provenanceDisagree{
 		Verb:               "expire",
 		Source:             expireSource,
-		InstanceID:         cand.ClaudeInstanceID,
+		InstanceID:         cand.InstanceID,
 		Socket:             row.socket,
 		SessionName:        cand.TmuxSessionName,
 		SessionID:          row.res.Session.ID,

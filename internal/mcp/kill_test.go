@@ -59,7 +59,7 @@ func TestKillMCP(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t, tc.state, tc.seed)
 
-			resp := callTool(t, e.d, "kill", `{"claude_instance_id":"`+killMCPID+`"}`)
+			resp := callTool(t, e.d, "kill", `{"instance_id":"`+killMCPID+`"}`)
 
 			if tc.wantErr != "" {
 				if data := toolErrorData(t, resp); data.ErrName != tc.wantErr {

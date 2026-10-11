@@ -63,7 +63,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 		apitest.WithLivenessNote("move-test note"), apitest.WithLaunchIdentity(moveIdentity()),
 		apitest.WithLaunchStartedAt(1767225600999), apitest.WithLifeNumber(3), apitest.WithNoPreTrust(),
 		apitest.WithTmuxSessionName("move-ts"), apitest.WithRawLabels(`{"team":  "a", "b":"2"}`),
-		apitest.WithRawClaudeArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
+		apitest.WithRawAgentArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
 		apitest.WithJsonlPath("/tmp/ad-move-test/cur.jsonl"), apitest.WithPID(4242),
 		apitest.WithAgent(moveAgent), apitest.WithEndReportedAt(moveEndReported),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
@@ -84,9 +84,9 @@ func (f *v5Store) move(r moveRow, parentID string) (store.CondResult, int64, err
 // moveKept are the columns the move leaves exactly as stored.
 func moveKept(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
-		"session_id": c.ClaudeSessionID, "jsonl_path": c.JSONLPath, "life_number": c.LifeNumber,
+		"session_id": c.SessionID, "jsonl_path": c.JSONLPath, "life_number": c.LifeNumber,
 		"no_pre_trust": c.NoPreTrust, "started_at": c.StartedAt, "last_seen_at": c.LastSeenAt, "cwd": c.CWD,
-		"tmux_session_name": c.TmuxSessionName, "agent_args": c.ClaudeArgs, "relay_mode": c.RelayMode,
+		"tmux_session_name": c.TmuxSessionName, "agent_args": c.AgentArgs, "relay_mode": c.RelayMode,
 		"labels": c.Labels, "extra_env": c.ExtraEnv, "agent": c.Agent,
 	}
 }

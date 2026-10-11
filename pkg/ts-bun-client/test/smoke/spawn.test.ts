@@ -34,7 +34,7 @@ test.each([
     seedOuterParent(homeStore(homeDir));
     using client = await openClient(homeStore(homeDir));
     const result = await client.spawn({ cwd: homeDir, ...(noPreTrust ? { no_pre_trust: true } : {}) });
-    expect(result.claude_instance_id.length).toBeGreaterThan(0);
+    expect(result.instance_id.length).toBeGreaterThan(0);
     expect(result.pre_trust).toBe(want);
     if (noPreTrust) expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
     // The entry is keyed by the canonical cwd (the spawn resolves symlinks).
@@ -66,30 +66,30 @@ test.each([
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       const before = (await client.list({})).spawns.length;
       const err = await rejection(
-        client.spawn({ cwd: homeDir, claude_instance_id: `${prefix}${ctl}x`, ...(reuse ? { reuse_finished: true } : {}) })
+        client.spawn({ cwd: homeDir, instance_id: `${prefix}${ctl}x`, ...(reuse ? { reuse_finished: true } : {}) })
       );
       expect(err).toBeInstanceOf(ErrInvalidFlags);
       expect((err as AgentDirectorError).message).toContain("the instance id contains a control character");
       expect((err as AgentDirectorError).message).not.toContain(prefix);
       const after = (await client.list({})).spawns;
       expect(after.length).toBe(before);
-      expect(after.some((r) => r.claude_instance_id.startsWith(prefix))).toBe(false);
+      expect(after.some((r) => r.instance_id.startsWith(prefix))).toBe(false);
       expect(newSessionCount(logPath)).toBe(0);
 
       // Control: a clean id in the same wiring records new-session (the log is routed).
-      expect((await client.spawn({ cwd: homeDir, claude_instance_id: `${prefix}-ok` })).claude_instance_id).toBe(`${prefix}-ok`);
+      expect((await client.spawn({ cwd: homeDir, instance_id: `${prefix}-ok` })).instance_id).toBe(`${prefix}-ok`);
       expect(newSessionCount(logPath)).toBe(1);
     });
   });
 }, 20_000);
 
 // SR-10.1: reuse_finished has no effect without an explicit id; the spawn mints one.
-test("spawn: reuse_finished without claude_instance_id → fresh spawn with a minted id", async () => {
+test("spawn: reuse_finished without instance_id → fresh spawn with a minted id", async () => {
   await withTempHome(async (homeDir) => {
     seedOuterParent(homeStore(homeDir));
     using client = await openClient(homeStore(homeDir));
     const result = await client.spawn({ cwd: homeDir, reuse_finished: true });
-    expect((await client.get({ claude_instance_id: result.claude_instance_id })).state).toBe("pending");
+    expect((await client.get({ instance_id: result.instance_id })).state).toBe("pending");
   });
 }, 10_000);
 
@@ -103,8 +103,8 @@ test("spawn: reuse_finished over an ended row → reused, get shows pending", as
     runHelper("seed-spawn", { store: storePath, id, state: "ended", "create-store": true, socket: privateTmuxSocket(homeDir) });
     using client = await openClient(storePath);
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
-      expect((await client.spawn({ cwd: homeDir, claude_instance_id: id, reuse_finished: true })).claude_instance_id).toBe(id);
-      expect((await client.get({ claude_instance_id: id })).state).toBe("pending");
+      expect((await client.spawn({ cwd: homeDir, instance_id: id, reuse_finished: true })).instance_id).toBe(id);
+      expect((await client.get({ instance_id: id })).state).toBe("pending");
       expect(newSessionCount(logPath)).toBe(1);
     });
   });
@@ -123,14 +123,14 @@ test.each([
     runHelper("seed-spawn", { store: storePath, id, state: "ended", "create-store": true });
     using client = await openClient(storePath);
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
-      const before = await client.get({ claude_instance_id: id });
+      const before = await client.get({ instance_id: id });
       expect(before.state).toBe("ended");
-      await expect(client.spawn({ cwd: homeDir, claude_instance_id: id, ...extra })).rejects.toBeInstanceOf(ErrInstanceIdCollision);
-      expect(await client.get({ claude_instance_id: id })).toEqual(before);
+      await expect(client.spawn({ cwd: homeDir, instance_id: id, ...extra })).rejects.toBeInstanceOf(ErrInstanceIdCollision);
+      expect(await client.get({ instance_id: id })).toEqual(before);
       expect(newSessionCount(logPath)).toBe(0);
 
       // Control: a fresh id in the same wiring records new-session.
-      await client.spawn({ cwd: homeDir, claude_instance_id: `${id}-ok` });
+      await client.spawn({ cwd: homeDir, instance_id: `${id}-ok` });
       expect(newSessionCount(logPath)).toBe(1);
     });
   });

@@ -54,7 +54,7 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var (
 		storePath = fs.String("store", "", "path to SQLite store file (required)")
-		id        = fs.String("id", "", "claude_instance_id of an existing spawn (required)")
+		id        = fs.String("id", "", "instance_id of an existing spawn (required)")
 		settled   = fs.String("settled", "", "the row's settled_state, the state a read with a settle time reports until its raw state has held long enough (required)")
 		stampMs   = fs.Int64("stamp-ms", 0, "the row's state_changed_ms: when its raw state last changed, in Unix milliseconds")
 	)
@@ -69,7 +69,7 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 		printError(stderr, err)
 		return 1
 	}
-	if err := printResult(stdout, map[string]string{"claude_instance_id": *id}); err != nil {
+	if err := printResult(stdout, map[string]string{"instance_id": *id}); err != nil {
 		printError(stderr, err)
 		return 1
 	}

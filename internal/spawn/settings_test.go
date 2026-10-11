@@ -62,7 +62,7 @@ type settingsShape struct {
 // synthSettings synthesizes r's settings under cfg, failing the test on an error.
 func synthSettings(t *testing.T, r Resolved, cfg config.Config) string {
 	t.Helper()
-	r.ClaudeInstanceID = "id"
+	r.InstanceID = "id"
 	got, err := synthesizeSettings(r, cfg)
 	if err != nil {
 		t.Fatalf("synthesizeSettings: %v", err)
@@ -71,7 +71,7 @@ func synthSettings(t *testing.T, r Resolved, cfg config.Config) string {
 }
 
 // TestSynthesizeSettingsPermissions: the per-spawn overlay is written as given,
-// disable_ask_user_question adds AskUserQuestion to deny first, and with
+// disable_ask_user adds AskUserQuestion to deny first, and with
 // neither the permissions block is omitted.
 func TestSynthesizeSettingsPermissions(t *testing.T) {
 	withStubExe(t, "/bin/x")
@@ -92,7 +92,7 @@ func TestSynthesizeSettingsPermissions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Default()
-			cfg.Defaults.DisableAskUserQuestion = tc.disableAUQ
+			cfg.Defaults.DisableAskUser = tc.disableAUQ
 			var got settingsShape
 			if err := json.Unmarshal([]byte(synthSettings(t, Resolved{SpawnParams: SpawnParams{Permissions: tc.perms}}, cfg)), &got); err != nil {
 				t.Fatalf("Unmarshal: %v", err)

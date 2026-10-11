@@ -23,7 +23,7 @@ type PermissionRequestInfo struct {
 	// RequestToken is the UUIDv4 token minted by runRelay for this request.
 	// Callers pass it back to the decide verb to target a specific row.
 	RequestToken string `json:"request_token"`
-	// ToolName is the Claude Code tool that triggered the permission request
+	// ToolName is the agent's tool that triggered the permission request
 	// (e.g. "Bash", "Write").
 	ToolName string `json:"tool_name"`
 	// ToolInput is the raw JSON string of the tool's input as stored in the DB.
@@ -47,20 +47,20 @@ type PermissionRequestInfo struct {
 // match the SRD §4.2 column names so callers reading the verb output can
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
-	// ClaudeInstanceID is the stable id of the Spawn (UUID4 or caller-supplied).
-	ClaudeInstanceID string `json:"claude_instance_id"`
-	// ParentID is the claude_instance_id of the Spawn that launched this one
+	// InstanceID is the stable id of the Spawn (UUID4 or caller-supplied).
+	InstanceID string `json:"instance_id"`
+	// ParentID is the instance_id of the Spawn that launched this one
 	// (read from AGENT_DIRECTOR_INSTANCE_ID env at spawn time). Empty when
 	// launched from a plain shell.
 	ParentID string `json:"parent_id"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
 	// ask_user, check_permission, ended, missing. pending means a launch
 	// (spawn, reuse or resume) is in progress and the agent has not reported
-	// in yet (Claude Code's SessionStart); it may be loading or waiting at a
+	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history;
-	// a non-empty ClaudeSessionID tells it from a fresh one.
+	// a non-empty SessionID tells it from a fresh one.
 	State string `json:"state"`
-	// CWD is the canonicalized working directory the Spawn's Claude was started in.
+	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
 	// TmuxSessionName is the tmux session under which the Spawn is running.
 	TmuxSessionName string `json:"tmux_session_name"`
@@ -70,21 +70,21 @@ type SpawnRow struct {
 	// from before this release, which records none. Display only: no verb
 	// reads it back (SR-3.3, SR-16.1).
 	TmuxSocket string `json:"tmux_socket,omitempty"`
-	// ClaudeArgs is the verbatim argv passed through to claude after the
+	// AgentArgs is the verbatim argv passed through to the agent program after the
 	// supervisor's own flags.
 	// Always a non-nil slice (possibly empty) for JSON-stability.
-	ClaudeArgs []string `json:"claude_args"`
+	AgentArgs []string `json:"agent_args"`
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
 	// permission-relay flow.
 	RelayMode string `json:"relay_mode"`
 	// JSONLPath is the last known JSONL transcript path, persisted by the
 	// SessionStart hook; legacy rows may be empty. When empty, resume composes
-	// the path on demand from cwd + claude_session_id.
+	// the path on demand from cwd + session_id.
 	JSONLPath string `json:"jsonl_path"`
-	// ClaudeSessionID is the Claude Code session UUID extracted from the
+	// SessionID is the agent session UUID extracted from the
 	// SessionStart hook's transcript_path basename. Empty until the first
 	// SessionStart fires.
-	ClaudeSessionID string `json:"claude_session_id"`
+	SessionID string `json:"session_id"`
 	// Labels are the caller-supplied key-value tags set at spawn time.
 	// Always a non-nil map (possibly empty) for JSON-stability.
 	Labels map[string]string `json:"labels"`
@@ -162,7 +162,7 @@ type SpawnRow struct {
 	//                      different session id (see prior_sessions). This is
 	//                      the case a bare jsonl_path could not distinguish
 	//                      from "never_written".
-	//   - "no_session":    no claude_session_id yet (pre-first-SessionStart).
+	//   - "no_session":    no session_id yet (pre-first-SessionStart).
 	// A reuse starts a new life, so its status is decided on that life's
 	// history alone; a failed reuse's restore returns the row to its
 	// pre-reuse life, whose history counts again.
@@ -178,12 +178,12 @@ type SpawnRow struct {
 	PriorSessions []PriorSession `json:"prior_sessions"`
 }
 
-// PriorSession is one archived (claude_session_id, jsonl_path) pair the Spawn
+// PriorSession is one archived (session_id, jsonl_path) pair the Spawn
 // pointed at before a session rotation (b.v2c). JSONLPath is empty when the
 // archived session had no recorded transcript path.
 type PriorSession struct {
-	// ClaudeSessionID is the archived session's id.
-	ClaudeSessionID string `json:"claude_session_id"`
+	// SessionID is the archived session's id.
+	SessionID string `json:"session_id"`
 	// JSONLPath is the archived session's recorded transcript path (may be empty).
 	JSONLPath string `json:"jsonl_path"`
 	// RecordedAt is when the archive row was written (the rotation moment).
@@ -286,14 +286,14 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 }
 
 // emptySpawnRow is the SpawnRow every failure of Get and (c *Client).Get
-// returns: every field is zero except ClaudeArgs, Labels, PermissionRequests,
+// returns: every field is zero except AgentArgs, Labels, PermissionRequests,
 // UnprovenRequests and PriorSessions, which are non-nil and empty, as SpawnRow
 // documents, so the result encodes them as [] and {} rather than null (b.4nt).
 // It builds a fresh value on each call, so no two results share a slice or
 // map.
 func emptySpawnRow() SpawnRow {
 	return SpawnRow{
-		ClaudeArgs:         []string{},
+		AgentArgs:          []string{},
 		Labels:             map[string]string{},
 		PermissionRequests: []PermissionRequestInfo{},
 		UnprovenRequests:   []PermissionRequestInfo{},
@@ -301,12 +301,12 @@ func emptySpawnRow() SpawnRow {
 	}
 }
 
-// Get returns the full Spawn row for the given claude_instance_id. Missing
+// Get returns the full Spawn row for the given instance_id. Missing
 // rows surface store.ErrSpawnNotFound for the CLI to translate.
 //
 // Every failure (the row read's ErrSpawnNotFound or other error, the
 // session-history read's, the permission-request read's, and ErrClientClosed
-// from (c *Client).Get) returns emptySpawnRow: ClaudeArgs, Labels,
+// from (c *Client).Get) returns emptySpawnRow: AgentArgs, Labels,
 // PermissionRequests, UnprovenRequests and PriorSessions non-nil and empty,
 // every other field zero (b.4nt).
 //
@@ -377,16 +377,16 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
-		ClaudeInstanceID:        row.ClaudeInstanceID,
+		InstanceID:              row.InstanceID,
 		ParentID:                row.ParentID,
 		State:                   reported,
 		CWD:                     row.CWD,
 		TmuxSessionName:         row.TmuxSessionName,
 		TmuxSocket:              row.Identity.Socket,
-		ClaudeArgs:              row.ClaudeArgs,
+		AgentArgs:               row.AgentArgs,
 		RelayMode:               row.RelayMode,
 		JSONLPath:               row.JSONLPath,
-		ClaudeSessionID:         row.ClaudeSessionID,
+		SessionID:               row.SessionID,
 		Labels:                  row.Labels,
 		StartedAt:               row.StartedAt,
 		LastSeenAt:              row.LastSeenAt,
@@ -411,16 +411,16 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	history := visibleHistory(row, lifeHistory)
 	for _, h := range history {
 		out.PriorSessions = append(out.PriorSessions, PriorSession{
-			ClaudeSessionID: h.ClaudeSessionID,
-			JSONLPath:       h.JSONLPath,
-			RecordedAt:      h.RecordedAt,
+			SessionID:  h.SessionID,
+			JSONLPath:  h.JSONLPath,
+			RecordedAt: h.RecordedAt,
 		})
 	}
-	out.TranscriptStatus = deriveTranscriptStatus(row.ClaudeSessionID, row.JSONLPath, len(history))
-	// Normalize: callers reading `claude_args:null` cannot distinguish
+	out.TranscriptStatus = deriveTranscriptStatus(row.SessionID, row.JSONLPath, len(history))
+	// Normalize: callers reading `agent_args:null` cannot distinguish
 	// from `[]`; always emit a non-nil slice for the JSON output.
-	if out.ClaudeArgs == nil {
-		out.ClaudeArgs = []string{}
+	if out.AgentArgs == nil {
+		out.AgentArgs = []string{}
 	}
 	if out.Labels == nil {
 		out.Labels = map[string]string{}
@@ -470,15 +470,15 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // CLI: agent-director get
 //
 // Errors:
-//   - [ErrSpawnNotFound]: no row exists for claudeInstanceID.
+//   - [ErrSpawnNotFound]: no row exists for instanceID.
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether each
 // request's relay hook process runs; with a settle time, so does the state.
-func (c *Client) Get(claudeInstanceID string) (SpawnRow, error) {
+func (c *Client) Get(instanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptySpawnRow(), err
 	}
-	return getSettled(c.st, c.relayView(), c.settleRead(), claudeInstanceID)
+	return getSettled(c.st, c.relayView(), c.settleRead(), instanceID)
 }
 
 // Compile-time assertion that *store.Store provides the settled read the

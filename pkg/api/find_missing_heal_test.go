@@ -58,7 +58,7 @@ func TestFindMissingHealsProvisionalTranscript(t *testing.T) {
 			}
 			st := &fakeFindMissingStore{
 				rows:        []store.LiveSpawnIdentity{r},
-				provisional: []store.ProvisionalTranscript{{ClaudeInstanceID: id, ClaudeSessionID: session, CWD: cwd, ConfigDir: cfg}},
+				provisional: []store.ProvisionalTranscript{{InstanceID: id, SessionID: session, CWD: cwd, ConfigDir: cfg}},
 			}
 
 			res := mustFindMissing(t, st, pc)

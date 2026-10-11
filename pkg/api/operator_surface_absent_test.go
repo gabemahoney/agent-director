@@ -17,16 +17,16 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// TestKillParamsHasOnlyClaudeInstanceID: KillParams has exactly one field,
-// ClaudeInstanceID; the finished-row opt-in is not part of pkg/api.
-func TestKillParamsHasOnlyClaudeInstanceID(t *testing.T) {
+// TestKillParamsHasOnlyInstanceID: KillParams has exactly one field,
+// InstanceID; the finished-row opt-in is not part of pkg/api.
+func TestKillParamsHasOnlyInstanceID(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeOf(api.KillParams{})
 	var fields []string
 	for i := 0; i < typ.NumField(); i++ {
 		fields = append(fields, typ.Field(i).Name)
 	}
-	if want := []string{"ClaudeInstanceID"}; !slices.Equal(fields, want) {
+	if want := []string{"InstanceID"}; !slices.Equal(fields, want) {
 		t.Errorf("KillParams fields = %v; want exactly %v", fields, want)
 	}
 }

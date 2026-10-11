@@ -119,7 +119,7 @@ var launchVerbs = []launchVerb{
 			t.Fatalf("List: %v", err)
 		}
 		for _, row := range r.Spawns {
-			if row.ClaudeInstanceID == id {
+			if row.InstanceID == id {
 				return row.LaunchStartedAt, row
 			}
 		}

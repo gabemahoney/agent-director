@@ -36,7 +36,7 @@ func assertReadsRaw(t *testing.T, s *Store, ids []string, nows ...int64) {
 		}
 		listed := map[string]string{}
 		for _, row := range rows {
-			listed[row.ClaudeInstanceID] = row.ReportedState
+			listed[row.InstanceID] = row.ReportedState
 		}
 		for _, id := range ids {
 			reported, raw, _, err := s.SpawnStatusSettled(id, r)

@@ -211,8 +211,8 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 	}{
 		{name: "row_version differs", mutate: func(s *store.RowSnapshot) { s.RowVersion++ }, want: store.CondChanged},
 		{name: "started_at same instant, other text", mutate: func(s *store.RowSnapshot) { s.StartedAt = "2026-03-04 03:06:07.25" }, want: store.CondChanged},
-		{name: "claude_session_id differs", mutate: func(s *store.RowSnapshot) { s.ClaudeSessionID = "sess-other" }, want: store.CondChanged},
-		{name: "claude_session_id empty", mutate: func(s *store.RowSnapshot) { s.ClaudeSessionID = "" }, want: store.CondChanged},
+		{name: "session_id differs", mutate: func(s *store.RowSnapshot) { s.SessionID = "sess-other" }, want: store.CondChanged},
+		{name: "session_id empty", mutate: func(s *store.RowSnapshot) { s.SessionID = "" }, want: store.CondChanged},
 		{name: "pid differs", mutate: func(s *store.RowSnapshot) { s.PID++ }, want: store.CondChanged},
 		{name: "pid zero", mutate: func(s *store.RowSnapshot) { s.PID = 0 }, want: store.CondChanged},
 		{name: "proc_starttime differs", mutate: func(s *store.RowSnapshot) { s.ProcStarttime = apitest.DarwinProcStarttime }, want: store.CondChanged},

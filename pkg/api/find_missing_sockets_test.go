@@ -123,7 +123,7 @@ func fskAssertDisagree(t *testing.T, before int, id, socket, server, verdict str
 	t.Helper()
 	var got []string
 	for _, rec := range trailSince(t, before, "ad.provenance.disagree") {
-		if rec["claude_instance_id"] != id {
+		if rec["instance_id"] != id {
 			continue
 		}
 		got = append(got, rec["reason"].(string))

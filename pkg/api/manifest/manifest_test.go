@@ -455,7 +455,7 @@ type shape struct {
 
 // TestFieldShapes pins the type and markers of the params and result fields
 // whose shape a requirement names: decide's decision enum; the params whose
-// empty value means something (spawn's claude_instance_id mints a fresh id,
+// empty value means something (spawn's instance_id mints a fresh id,
 // send-keys' text presses Enter only, b.9o4); spawn's one optional bool
 // reuse_finished (SR-10.1, AC-REUSE-13); get's nullable ended_at, additive
 // liveness fields (SR-8.3) and tmux_socket (SR-3.3, SR-16.1, AC-LKP-22);
@@ -471,10 +471,10 @@ func TestFieldShapes(t *testing.T) {
 		want               shape
 	}{
 		{"decide", "decision", "", shape{"string", false, false, []string{"allow", "deny"}}},
-		{"spawn", "claude_instance_id", "", shape{"string", false, true, nil}},
+		{"spawn", "instance_id", "", shape{"string", false, true, nil}},
 		{"send-keys", "text", "", shape{"string", false, true, nil}},
 		{"spawn", "reuse_finished", "", shape{"bool", false, false, nil}},
-		{"spawn", "", "claude_instance_id", shape{"string", false, false, nil}},
+		{"spawn", "", "instance_id", shape{"string", false, false, nil}},
 		{"list", "", "spawns", shape{"[]Spawn", false, true, nil}},
 		{"get", "", "ended_at", shape{"timestamp?", true, false, nil}},
 		{"get", "", "liveness_unverified_since", shape{"timestamp?", true, false, nil}},

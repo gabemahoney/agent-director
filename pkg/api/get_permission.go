@@ -20,7 +20,7 @@ type GetPermissionStore interface {
 
 // GetPermissionParams is the typed parameter shape for the get-permission
 // verb. RequestToken is the UUIDv4 minted by runRelay; it uniquely identifies
-// the row across all Spawns (SR-3.5), so no claude_instance_id is needed.
+// the row across all Spawns (SR-3.5), so no instance_id is needed.
 type GetPermissionParams struct {
 	// RequestToken is the UUIDv4 token identifying the permission_requests
 	// row to fetch. Required; empty string is rejected at the CLI layer.
@@ -45,7 +45,7 @@ type GetPermissionResult struct {
 	RequestToken string `json:"request_token"`
 	// RequestID is the autoincrement primary key of the permission_requests row.
 	RequestID int64 `json:"request_id"`
-	// ToolName is the Claude Code tool that triggered the permission request
+	// ToolName is the agent's tool that triggered the permission request
 	// (e.g. "Bash", "Write").
 	ToolName string `json:"tool_name"`
 	// ToolInput is the raw JSON string of the tool's input as stored in the DB.
@@ -118,7 +118,7 @@ func GetPermission(s GetPermissionStore, v RelayView, params GetPermissionParams
 // identified by request_token, with its delivery facts: delivery
 // (delivered, not_confirmed or fallen_back), confirm_by, hook_alive,
 // hook_gone_at, attempted_decision, attempted_at and tool_use_id. The lookup
-// is token-only (no claude_instance_id needed) per SR-3.5; the UUIDv4 token
+// is token-only (no instance_id needed) per SR-3.5; the UUIDv4 token
 // is globally selective. GetPermission never waits for the store's write
 // lock.
 //

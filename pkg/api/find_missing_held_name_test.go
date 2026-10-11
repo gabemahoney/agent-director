@@ -135,7 +135,7 @@ func assertSweepRecord(t *testing.T, recs []map[string]any, r hnRow, socket, sto
 	}
 	rec := recs[0]
 	q := func(s string) string { return "'" + s + "'" }
-	want := map[string]any{"source": "ad_find_missing", "claude_instance_id": r.id, "launch": nil, "outcome": nil,
+	want := map[string]any{"source": "ad_find_missing", "instance_id": r.id, "launch": nil, "outcome": nil,
 		"tmux_session_name": r.name, "tmux_socket": socket, "store_id": storeID, "lookup_outcome": w.lookup,
 		"row_result": w.rowResult, "carries_this_id": w.carries, "current_launch": w.current, "store_error": nil,
 		"tmux_session_id": nil, "session_created": nil, "attach_command": nil, "end_command": nil}

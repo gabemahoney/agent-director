@@ -66,7 +66,7 @@ func TestReuseLifeHistory(t *testing.T) {
 	check("second reuse", 4, map[int64][]string{4: {}, 2: {"S2"}, 1: {"E1"}}) // life 3: D and R2, ordered by time
 	lives := map[string]int64{}
 	for _, e := range f.historyAllLives(id) {
-		lives[e.ClaudeSessionID] = e.LifeNumber
+		lives[e.SessionID] = e.LifeNumber
 	}
 	if want := map[string]int64{"E1": 1, "S2": 2, "D": 3, "R2": 3}; !reflect.DeepEqual(lives, want) {
 		t.Errorf("every-life history lives = %v; want %v", lives, want)

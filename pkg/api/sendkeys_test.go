@@ -35,7 +35,7 @@ func TestSendKeysText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
-			if _, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: tc.text}); err != nil {
+			if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: tc.text}); err != nil {
 				t.Fatalf("SendKeys: %v", err)
 			}
 			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, tc.want)
@@ -102,7 +102,7 @@ func TestSendKeysGuards(t *testing.T) {
 					2*sendKeysWindow())
 			}
 			// The requests are stored at wall-clock time, so the guard is judged against it.
-			_, err := e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{ClaudeInstanceID: r.ID,
+			_, err := e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{InstanceID: r.ID,
 				Text: "1", AllowPending: tc.allow})
 			if tc.want == nil {
 				if err != nil {
@@ -127,14 +127,14 @@ func TestSendKeysGuardStoreReadError(t *testing.T) {
 	r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})
 	storeErr := errors.New("permission_requests read exploded")
 	e.store.failPermissionRequests(storeErr)
-	_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+	_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1"})
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("err = %v; want %v", err, storeErr)
 	}
 	e.assertNoTmuxCall(t)
 	eval, refusal, gerr := api.EvaluateRelayGuardForTest(e.store,
 		api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()}, 0, r.Spawn,
-		api.SendKeysParams{ClaudeInstanceID: r.ID})
+		api.SendKeysParams{InstanceID: r.ID})
 	if !errors.Is(gerr, storeErr) || eval != api.GuardErrorEval || refusal != nil {
 		t.Errorf("guard = %q, refusal %v, err %v; want %q, nil, %v", eval, refusal, gerr, api.GuardErrorEval, storeErr)
 	}
@@ -166,7 +166,7 @@ func TestSendKeysEmptyTextPressesEnterOnly(t *testing.T) {
 			in := watchPaneInput(e, r.Spawn.Identity.PaneID, false)
 			in.box = tc.typed
 
-			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "", AllowPending: tc.allowPending})
+			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "", AllowPending: tc.allowPending})
 
 			if err != nil {
 				t.Fatalf("send-keys with empty text: %v; want Enter delivered", err)
@@ -229,21 +229,21 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	now := time.Now()
 
 	_, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }}, api.DecideParams{
-		ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+		InstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 	if !errors.Is(err, api.ErrRelayFallenBack) {
 		t.Fatalf("Decide err = %v; want ErrRelayFallenBack", err)
 	}
-	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"}); !errors.Is(err, api.ErrRelayFallenBack) {
+	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"}); !errors.Is(err, api.ErrRelayFallenBack) {
 		t.Fatalf("plain SendKeys after fallen-back: %v; want ErrRelayFallenBack", err)
 	}
 	e.assertNoTmuxCall(t)
 	advAssertPaneAnswered(t, e, r, storefix.TestRequestTokenA, advPaneAnswer(t, e, r, storefix.TestRequestTokenA, now))
 	e.rec.Reset()
-	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"})
+	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"})
 	assertDialogMaybeOpen(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
 	e.assertNoTmuxCall(t)
 	proveGone(t, e, r.ID, turnEnd)
-	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "2"}); err != nil {
+	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"}); err != nil {
 		t.Fatalf("plain SendKeys once the agent's Stop proved the request gone: %v", err)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "2")
@@ -364,7 +364,7 @@ func TestSendKeysRelayGuard(t *testing.T) {
 				now = tc.arrange(t, e, r)
 			}
 
-			_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+			_, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "1"})
 
 			if tc.advice != "" {
 				want := api.ErrSendKeysWhileRelayed

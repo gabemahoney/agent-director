@@ -84,7 +84,7 @@ func TestExpireMalformedRows(t *testing.T) {
 		noToken bool
 	}{
 		{name: "labels", opts: []apitest.SpawnOption{apitest.WithRawLabels(`{"team":`)}},
-		{name: "claude_args", opts: []apitest.SpawnOption{apitest.WithRawClaudeArgs(`["--model",`)}},
+		{name: "agent_args", opts: []apitest.SpawnOption{apitest.WithRawAgentArgs(`["--model",`)}},
 		{name: "extra_env", opts: []apitest.SpawnOption{apitest.WithRawExtraEnv(`not an object`)}},
 		{name: "launch start not an integer", opts: []apitest.SpawnOption{apitest.WithRawLaunchStartedAt("soon")}},
 		{name: "launch token malformed", ident: func(li *store.LaunchIdentity) { li.Token = "NOT-A-HEX-TOKEN!" }, noToken: true},

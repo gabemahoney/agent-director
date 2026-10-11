@@ -97,8 +97,8 @@ func TestDispatch(t *testing.T) {
 		if err := json.Unmarshal([]byte(strings.TrimRight(line, "\n")), &result); err != nil {
 			t.Fatalf("stdout not valid JSON: %v", err)
 		}
-		if result["claude_instance_id"] == "" {
-			t.Fatalf("expected non-empty claude_instance_id, got %v", result)
+		if result["instance_id"] == "" {
+			t.Fatalf("expected non-empty instance_id, got %v", result)
 		}
 	})
 

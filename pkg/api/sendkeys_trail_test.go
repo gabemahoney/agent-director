@@ -185,7 +185,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			if tc.seed != nil {
 				id = tc.seed(t, e).ID
 			}
-			p := api.SendKeysParams{ClaudeInstanceID: id, Text: "hi", AllowPending: tc.allow}
+			p := api.SendKeysParams{InstanceID: id, Text: "hi", AllowPending: tc.allow}
 
 			_, _, err := e.sendKeysClient(t, p)
 
@@ -212,7 +212,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 func sktAssertCalled(t *testing.T, rec map[string]any, p api.SendKeysParams, outcome, rowState, guard string) {
 	t.Helper()
 	fields := map[string]any{
-		"claude_instance_id": p.ClaudeInstanceID, "allow_pending": p.AllowPending, "row_state": rowState,
+		"instance_id": p.InstanceID, "allow_pending": p.AllowPending, "row_state": rowState,
 		"guard_evaluation": guard, "outcome": outcome, "source": "ad_send_keys",
 	}
 	for k, v := range fields {
@@ -249,7 +249,7 @@ func TestKeysVerbsTrailProvenanceDisagree(t *testing.T) {
 						ptrAssertOnlyDisagrees(t, mark, r.ID, false)
 						return
 					}
-					p := api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "hi"}
+					p := api.SendKeysParams{InstanceID: r.ID, Text: "hi"}
 					if client {
 						_, _, _ = e.sendKeysClient(t, p)
 					} else {
@@ -299,7 +299,7 @@ func sktFailOpenRuns(t *testing.T, prefix string, working bool) []string {
 		}
 		spec.ID = prefix + "-" + tc.name
 		r := sktRow(spec, tc.setups...)(t, e)
-		_, _, err := e.sendKeysClient(t, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "hi", AllowPending: tc.pending})
+		_, _, err := e.sendKeysClient(t, api.SendKeysParams{InstanceID: r.ID, Text: "hi", AllowPending: tc.pending})
 		if working && (len(sktCalled(t, r.ID)) != 1 || len(sktDisagrees(t, r.ID)) != tc.disagree) {
 			t.Fatalf("working trail: %s wrote %d ad.send_keys.called and %d disagree records; want 1 and %d",
 				r.ID, len(sktCalled(t, r.ID)), len(sktDisagrees(t, r.ID)), tc.disagree)

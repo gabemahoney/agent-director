@@ -112,7 +112,7 @@ func failIdentityWrite(e *launchEnv) {
 		e.t.Fatalf("open raw store: %v", err)
 	}
 	defer raw.Close()
-	if _, err := writefailfix.Install(raw, writefailfix.LaunchIdentityWrite, e.r.ClaudeInstanceID); err != nil {
+	if _, err := writefailfix.Install(raw, writefailfix.LaunchIdentityWrite, e.r.InstanceID); err != nil {
 		e.t.Errorf("install the identity write failure: %v", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestLaunchOwnerHeldOnlyDuringTheLaunch(t *testing.T) {
 		{name: "labelled, identity written", version: 1},
 		{name: "lost reply, released", script: &tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 0, Applied: true}, version: 1},
 		{name: "identity write not applied, released", duringFn: func(e *launchEnv) {
-			if err := e.s.SetParentID(e.r.ClaudeInstanceID, ""); err != nil {
+			if err := e.s.SetParentID(e.r.InstanceID, ""); err != nil {
 				e.t.Errorf("SetParentID: %v", err)
 			}
 		}, version: 2},
@@ -156,7 +156,7 @@ func TestLaunchOwnerHeldOnlyDuringTheLaunch(t *testing.T) {
 			}
 			var during store.Spawn
 			e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
-				during = e.row(e.r.ClaudeInstanceID)
+				during = e.row(e.r.InstanceID)
 				if tc.duringFn != nil {
 					tc.duringFn(e)
 				}
@@ -170,7 +170,7 @@ func TestLaunchOwnerHeldOnlyDuringTheLaunch(t *testing.T) {
 			if during.LaunchOwner != held {
 				t.Errorf("owner during the create = %+v; want this process %+v", during.LaunchOwner, held)
 			}
-			row := e.row(e.r.ClaudeInstanceID)
+			row := e.row(e.r.InstanceID)
 			if row.State != store.StatePending || row.LaunchOwner != tc.wantOwner || row.RowVersion != tc.version {
 				t.Errorf("row after the launch = state %q, owner %+v, row_version %d; want pending, %+v, %d",
 					row.State, row.LaunchOwner, row.RowVersion, tc.wantOwner, tc.version)

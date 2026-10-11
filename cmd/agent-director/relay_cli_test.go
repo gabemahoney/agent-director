@@ -111,7 +111,7 @@ func TestCLIDeliveryFactsJudgeRealProcesses(t *testing.T) {
 				}
 			}
 			check("get-permission", cliJSON(t, home, "get-permission", "--request-token", storefix.TestRequestTokenA))
-			check("get's request", onlyRequestOf(t, "get", cliJSON(t, home, "get", "--claude-instance-id", id)))
+			check("get's request", onlyRequestOf(t, "get", cliJSON(t, home, "get", "--instance-id", id)))
 			list := cliJSON(t, home, "list")
 			spawns, _ := list["spawns"].([]any)
 			if len(spawns) != 1 {
@@ -164,7 +164,7 @@ func TestCLIErrDetails(t *testing.T) {
 	home, id := seedCLIRelayRequest(t, gone)
 	for name, argv := range map[string][]string{
 		"decide":    decideArgv(id, storefix.TestRequestTokenA),
-		"send-keys": {"send-keys", "--claude-instance-id", id, "--text", "1"},
+		"send-keys": {"send-keys", "--instance-id", id, "--text", "1"},
 	} {
 		env := cliErrorEnvelope(t, home, argv...)
 		var details map[string]any

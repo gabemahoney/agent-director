@@ -104,7 +104,7 @@ func TestTmuxSocketStatusAndListOmit(t *testing.T) {
 	}
 	for _, r := range lr.Spawns {
 		if raw, ok := jsonField(t, r, "tmux_socket"); ok {
-			t.Errorf("list row %s tmux_socket = %s; want the key absent", r.ClaudeInstanceID, raw)
+			t.Errorf("list row %s tmux_socket = %s; want the key absent", r.InstanceID, raw)
 		}
 	}
 	for _, s := range shapes {

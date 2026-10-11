@@ -83,7 +83,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 		{name: "missing, NULL ended_at gets the failure time", spec: reuseSpec{state: store.StateMissing,
 			opts: []apitest.SpawnOption{apitest.WithNoEndedAt()}}},
 		{name: "malformed labels, args, env, token, text no_pre_trust and timestamps", spec: reuseSpec{opts: []apitest.SpawnOption{
-			apitest.WithRawLabels(`{bad`), apitest.WithRawClaudeArgs(`["unterminated`), apitest.WithRawExtraEnv(`not json`),
+			apitest.WithRawLabels(`{bad`), apitest.WithRawAgentArgs(`["unterminated`), apitest.WithRawExtraEnv(`not json`),
 			apitest.WithLaunchIdentity(badToken), apitest.WithRawNoPreTrust("yes"), apitest.WithEndedAt("not a time"),
 			apitest.WithStartedAt("not a start")}}},
 		// The driver reads a zero-length blob as nil, like NULL; only typeof() tells them apart.
@@ -103,7 +103,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 				t.Fatalf("seeded typeof(no_pre_trust) = %q; want %q", seededClass, tc.seedClass)
 			}
 			r := rrDoReset(t, f, id, reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust))
-			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "ClaudeSessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt"} {
+			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "SessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt"} {
 				b, a := reflect.ValueOf(r.before).FieldByName(col).Interface(), reflect.ValueOf(r.reset).FieldByName(col).Interface()
 				if reflect.DeepEqual(a, b) {
 					t.Fatalf("the reset left %s = %s; the restore check would be vacuous", col, rsShow(b))

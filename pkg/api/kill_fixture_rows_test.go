@@ -53,7 +53,7 @@ type killRowSpec struct {
 	NoSession        bool       // seed no session (seedSession or seedTeamSession later)
 	Teammates        int        // extra split panes in the row's session, each alive
 	RelayOn          bool       // relay_mode on (default off)
-	SessionID        string     // the row's claude_session_id (default none)
+	SessionID        string     // the row's session_id (default none)
 	CWD              string     // the row's cwd (default none; a resumable row needs one)
 	Opts             []apitest.SpawnOption
 }
@@ -150,7 +150,7 @@ func (e *killEnv) seedRow(t *testing.T, spec killRowSpec) killRow {
 }
 
 // seedRawRow seeds spec's row through apitest.SeedSpawn without reading it
-// back through GetSpawn, which refuses malformed labels, claude_args,
+// back through GetSpawn, which refuses malformed labels, agent_args,
 // extra_env and timestamps: a full launch identity with a new pane and pid,
 // edited by ident (nil: none), then spec.Opts; its agent in spec.Agent's
 // state. Name, Socket and Token are read raw; Spawn holds only the id, name
@@ -187,7 +187,7 @@ func (e *killEnv) seedRawRow(t *testing.T, spec killRowSpec, ident func(*store.L
 	li.Socket, _ = cols.TmuxSocket.(string)
 	li.Token, _ = cols.LaunchToken.(string)
 	r := killRow{ID: spec.ID, Name: name, Socket: li.Socket, Token: li.Token, StoreID: e.storeID, Agent: spec.Agent,
-		Spawn: api.Spawn{ClaudeInstanceID: spec.ID, TmuxSessionName: name, Identity: li}}
+		Spawn: api.Spawn{InstanceID: spec.ID, TmuxSessionName: name, Identity: li}}
 	if r.Socket == "" {
 		r.Socket = e.defaultSocket
 	}

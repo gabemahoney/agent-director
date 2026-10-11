@@ -28,7 +28,8 @@ const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"
 // as refused (nil: malformed type, only err_name and path are asserted) and
 // the [tmux] settings that fix the file (the keys outside [tmux] dropped).
 // A raw file is written as given instead, and refused for setting one key
-// under the caseVariant names (b.p8n).
+// under the caseVariant names (b.p8n) or for naming an old key, the
+// description then holding the oldKey phrase (SR-4.3).
 type configRefusal struct {
 	name        string
 	keys        apitest.ConfigKeys
@@ -36,13 +37,15 @@ type configRefusal struct {
 	refused     []apitest.ConfigRefusal
 	raw         string
 	caseVariant []string
+	oldKey      string
 	fix         []apitest.TmuxSetting
 }
 
 // configRefusals is the one table of refused [tmux], [defaults], [relay],
 // [pause], [pre_trust], [store] and [state] values driving every surface check: a minimum, the
-// derived grace rule, every table at once, a malformed type and db_path set
-// under two letter cases of [store] (b.p8n). The per-key refusals are
+// derived grace rule, every table at once, a malformed type, db_path set
+// under two letter cases of [store] (b.p8n) and the old [defaults] key
+// disable_askuserquestion (SR-4.3). The per-key refusals are
 // internal/config's config_errors_test.go and config_timeouts_test.go.
 func configRefusals() []configRefusal {
 	window, grace := config.TmuxStoppingWindowSeconds, config.TmuxPendingGraceSeconds
@@ -123,13 +126,17 @@ func (h refusedHome) repair(t *testing.T, rc configRefusal) {
 }
 
 // assertConfigRefused checks exit 1, empty stdout and a single
-// ErrConfigMalformed envelope naming the config path and the row's refused values.
+// ErrConfigMalformed envelope naming the config path and the row's refused values
+// (or its old key and the key that replaced it).
 func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, stderr string, code int) {
 	t.Helper()
 	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrConfigMalformed")
 	want := apitest.DescConfigRefused(h.cfgPath, rc.refused...)
 	if rc.caseVariant != nil {
 		want = apitest.DescConfigCaseVariant(h.cfgPath, rc.caseVariant...)
+	}
+	if rc.oldKey != "" {
+		want = apitest.DescCase{Name: "config old key", Require: []string{h.cfgPath, rc.oldKey}}
 	}
 	apitest.AssertDescription(t, env.ErrDescription, want)
 }
@@ -139,8 +146,8 @@ func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, 
 func assertRowUntouched(t *testing.T, h refusedHome) {
 	t.Helper()
 	cols := rowColumns(t, h.home, h.instanceID)
-	if session, _ := cols.ClaudeSessionID.(string); cols.State != store.StatePending || session != "" {
-		t.Errorf("row state=%v claude_session_id=%v; want pending with no session id", cols.State, cols.ClaudeSessionID)
+	if session, _ := cols.SessionID.(string); cols.State != store.StatePending || session != "" {
+		t.Errorf("row state=%v session_id=%v; want pending with no session id", cols.State, cols.SessionID)
 	}
 	st, err := store.Open(stateDB(h.home))
 	if err != nil {
@@ -227,7 +234,7 @@ func TestConfigRefusalStopsEverySurface(t *testing.T) {
 			if code != 0 || stderr != "" {
 				t.Fatalf("list after fix: exit=%d stderr=%q; want 0 and empty", code, stderr)
 			}
-			if !strings.Contains(stdout, `"claude_instance_id":"`+h.instanceID+`"`) {
+			if !strings.Contains(stdout, `"instance_id":"`+h.instanceID+`"`) {
 				t.Errorf("list after fix = %s; want the seeded row %s", stdout, h.instanceID)
 			}
 		}},
@@ -276,7 +283,7 @@ func TestTmuxConfigKillCLIHungLookup(t *testing.T) {
 	home, id, _ := hungKillRow(t, timeout)
 
 	began := time.Now()
-	stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--claude-instance-id", id)
+	stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--instance-id", id)
 	elapsed := time.Since(began)
 
 	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrTmuxUnresponsive")

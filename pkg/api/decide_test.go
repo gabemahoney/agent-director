@@ -24,7 +24,7 @@ import (
 func decideA(s *store.Store, window time.Duration, now time.Time, decision, reason string) (time.Duration, error) {
 	var slept time.Duration
 	_, err := api.DecideWithSleep(s, api.RelayView{Window: window, Now: func() time.Time { return now }}, func(d time.Duration) { slept += d }, api.DecideParams{
-		ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: decision, Reason: reason})
+		InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: decision, Reason: reason})
 	return slept, err
 }
 
@@ -67,7 +67,7 @@ func TestDecideRefusals(t *testing.T) {
 			if tc.rows > 1 {
 				openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0)
 			}
-			_, err := api.Decide(s, api.RelayView{Window: 24 * time.Hour}, api.DecideParams{ClaudeInstanceID: tc.id,
+			_, err := api.Decide(s, api.RelayView{Window: 24 * time.Hour}, api.DecideParams{InstanceID: tc.id,
 				RequestToken: tc.token, Decision: tc.decision})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v; want %v", err, tc.want)
@@ -224,7 +224,7 @@ func TestClientDecideWaitsForRelayHook(t *testing.T) {
 		relayHookTimeout(t, e, r.ID, storefix.TestRequestTokenA)
 	}
 
-	_, err := c.Decide(api.DecideParams{ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+	_, err := c.Decide(api.DecideParams{InstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 
 	assertOneSentinel(t, err, store.ErrAlreadyDecided)
 	adviceAssertPhrase(t, err, advDecideHookTimedOut)
@@ -278,7 +278,7 @@ func TestDecideFallenBackShownAlone(t *testing.T) {
 				}
 			}
 			if tc.capped {
-				if err := s.InsertPending(store.Spawn{ClaudeInstanceID: "id-d-2", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-d-2",
+				if err := s.InsertPending(store.Spawn{InstanceID: "id-d-2", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-d-2",
 					RelayMode: "on"}); err != nil {
 					t.Fatalf("InsertPending(id-d-2): %v", err)
 				}
@@ -402,7 +402,7 @@ func TestDecideFallenBackWriteBetweenReads(t *testing.T) {
 						write()
 					}
 				},
-				api.DecideParams{ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
+				api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
 
 			assertOneSentinel(t, err, tc.want)
 			if tc.phrase != "" {

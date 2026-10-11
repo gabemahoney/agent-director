@@ -43,11 +43,11 @@ func openErrStore(t *testing.T) (*store.Store, string) {
 func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 	t.Helper()
 	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: id,
-		Agent:            store.AgentClaude,
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-" + id,
-		RelayMode:        relayMode,
+		InstanceID:      id,
+		Agent:           store.AgentClaude,
+		CWD:             "/tmp",
+		TmuxSessionName: "cd-" + id,
+		RelayMode:       relayMode,
 	}); err != nil {
 		t.Fatalf("insertErrRow: InsertPending %s: %v", id, err)
 	}

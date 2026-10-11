@@ -31,20 +31,20 @@ import (
 // include_finished true. The parameters are Kill's, with the row's id in
 // place of KillParams.
 func killFinished(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
-	now func() time.Time, sleep func(time.Duration), claudeInstanceID string) (KillResult, error) {
-	return runKill(s, t, pc, startingSession, stoppingWindow, exitWait, now, sleep, claudeInstanceID, true)
+	now func() time.Time, sleep func(time.Duration), instanceID string) (KillResult, error) {
+	return runKill(s, t, pc, startingSession, stoppingWindow, exitWait, now, sleep, instanceID, true)
 }
 
 // killFinished runs killFinished on c's store, tmux client, start-time
 // reader, clock and sleep with c's configured durations, as Client.Kill runs
 // Kill.
-func (c *Client) killFinished(claudeInstanceID string) (KillResult, error) {
+func (c *Client) killFinished(instanceID string) (KillResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return KillResult{}, err
 	}
 	t := c.cfg.Tmux
 	return killFinished(c.st, c.tmuxClient, c.procChecker, t.EffectiveStartingSession(), t.EffectiveStoppingWindow(),
-		t.EffectiveKillExitWait(), c.now, c.sleep, claudeInstanceID)
+		t.EffectiveKillExitWait(), c.now, c.sleep, instanceID)
 }
 
 // neverReportedInTail ends both "never reported in" refusals (SR-1.4, SR-6.5):

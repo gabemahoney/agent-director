@@ -395,7 +395,7 @@ export class SubprocessClient {
   // Verb methods — one per callable verb in src/internal/verbs.ts.
   // -------------------------------------------------------------------------
 
-  /** spawn — launch a tracked Claude Code instance in a new tmux session. */
+  /** spawn — launch a tracked agent instance in a new tmux session. */
   async spawn(params: SpawnParams): Promise<SpawnResult> {
     this.#assertOpen();
     return this.#enqueue<SpawnResult>("spawn", params);
@@ -495,7 +495,7 @@ export class SubprocessClient {
    * pause — politely shut down a waiting Spawn. Held like a plain sendKeys without
    * expect_pane_sha256: rejects, typing nothing, with ErrSendKeysWhileRelayed, ErrRelayFallenBack
    * or ErrDialogMaybeOpen whenever that sendKeys would. It takes no pane hash, and the hold
-   * (ErrDialogMaybeOpen) lasts until Claude Code's hooks prove each request gone, whatever is
+   * (ErrDialogMaybeOpen) lasts until the agent's hooks prove each request gone, whatever is
    * done at the pane. Past it: readPane, answer any dialog, then sendKeys `/exit` with the judged
    * pane's expect_pane_sha256; or kill.
    */

@@ -204,7 +204,7 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 			r := e.seedRow(t, killRowSpec{State: state, RelayOn: true})
 
 			run := runVerb(e, func() (api.SendKeysResult, error) {
-				return e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "go"})
+				return e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "go"})
 			})
 
 			if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {

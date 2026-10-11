@@ -13,8 +13,8 @@ import (
 // Enter to the agent's pane, nothing typed.
 func TestSendKeysMCPEmptyText(t *testing.T) {
 	for _, tc := range []struct{ name, state, args string }{
-		{"live row", store.StateWaiting, `{"claude_instance_id":"` + killMCPID + `","text":""}`},
-		{"pending row with allow_pending", store.StatePending, `{"claude_instance_id":"` + killMCPID + `","text":"","allow_pending":true}`},
+		{"live row", store.StateWaiting, `{"instance_id":"` + killMCPID + `","text":""}`},
+		{"pending row with allow_pending", store.StatePending, `{"instance_id":"` + killMCPID + `","text":"","allow_pending":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t, tc.state, seedOurs)

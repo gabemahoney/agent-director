@@ -14,8 +14,8 @@
 // Examples:
 //
 //	"version"                         → top-level field
-//	"spawns[*].claude_instance_id"    → any element's field
-//	"spawns[0].claude_instance_id"    → first element's field
+//	"spawns[*].instance_id"    → any element's field
+//	"spawns[0].instance_id"    → first element's field
 //	"ids[*]"                          → any element of the top-level ids array
 //
 // JSON paths in structuralDiff use the same segment grammar but are rooted at
@@ -26,8 +26,8 @@ package envelope_diff
 
 import "strings"
 
-// pathMatchesSelector returns true if jsonPath (e.g. ".spawns[0].claude_instance_id")
-// matches selector (e.g. "spawns[*].claude_instance_id").
+// pathMatchesSelector returns true if jsonPath (e.g. ".spawns[0].instance_id")
+// matches selector (e.g. "spawns[*].instance_id").
 //
 // Matching rules:
 //   - Leading dot is stripped from jsonPath before comparison.

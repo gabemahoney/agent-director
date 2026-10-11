@@ -108,7 +108,7 @@ export class Client {
   }
 
   async decide(_params: {
-    claude_instance_id: string;
+    instance_id: string;
     decision: string;
     request_token?: string;
   }): Promise<unknown> {

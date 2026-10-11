@@ -86,7 +86,7 @@ func TestV5MigrationKeepsV4Rows(t *testing.T) {
 		t.Fatalf("ListSpawns = %d rows, %v; want %d", len(listed), err, len(f.ids))
 	}
 	for _, fromList := range listed {
-		id := fromList.ClaudeInstanceID
+		id := fromList.InstanceID
 		sp, err := s.GetSpawn(id)
 		if err != nil {
 			t.Fatalf("GetSpawn(%s): %v", id, err)
@@ -104,8 +104,8 @@ func TestV5MigrationKeepsV4Rows(t *testing.T) {
 		}
 		for i, e := range hist {
 			want := f.history[id][i]
-			if e.ClaudeSessionID != unquote(want["claude_session_id"]) || e.JSONLPath != unquote(want["jsonl_path"]) {
-				t.Errorf("%s history[%d] = {%q %q}; want {%s %s}", id, i, e.ClaudeSessionID, e.JSONLPath,
+			if e.SessionID != unquote(want["claude_session_id"]) || e.JSONLPath != unquote(want["jsonl_path"]) {
+				t.Errorf("%s history[%d] = {%q %q}; want {%s %s}", id, i, e.SessionID, e.JSONLPath,
 					want["claude_session_id"], want["jsonl_path"])
 			}
 		}
@@ -119,26 +119,26 @@ func assertSpawnMatchesRaw(t *testing.T, sp Spawn, raw map[string]string) {
 	if sp.PID != 0 {
 		pid = strconv.Itoa(sp.PID)
 	}
-	args, _ := json.Marshal(sp.ClaudeArgs)
+	args, _ := json.Marshal(sp.AgentArgs)
 	got := map[string]string{
 		"parent_id": sp.ParentID, "state": sp.State, "cwd": sp.CWD, "tmux_session_name": sp.TmuxSessionName,
-		"relay_mode": sp.RelayMode, "jsonl_path": sp.JSONLPath, "claude_session_id": sp.ClaudeSessionID,
+		"relay_mode": sp.RelayMode, "jsonl_path": sp.JSONLPath, "claude_session_id": sp.SessionID,
 		"pid": pid, "proc_starttime": sp.ProcStarttime, "liveness_unverified_since": sp.LivenessUnverifiedSince,
 		"liveness_note": sp.LivenessNote, "claude_args": string(args),
 	}
 	for col, g := range got {
 		if want := unquote(raw[col]); g != want {
-			t.Errorf("%s: GetSpawn %s = %q; want %q", sp.ClaudeInstanceID, col, g, want)
+			t.Errorf("%s: GetSpawn %s = %q; want %q", sp.InstanceID, col, g, want)
 		}
 	}
 	for col, m := range map[string]map[string]string{"labels": sp.Labels, "extra_env": sp.ExtraEnv} {
 		var want map[string]string
 		if err := json.Unmarshal([]byte(unquote(raw[col])), &want); err != nil || !reflect.DeepEqual(m, want) {
-			t.Errorf("%s: GetSpawn %s = %v; want %v (%v)", sp.ClaudeInstanceID, col, m, want, err)
+			t.Errorf("%s: GetSpawn %s = %v; want %v (%v)", sp.InstanceID, col, m, want, err)
 		}
 	}
 	if (sp.EndedAt == nil) != (raw["ended_at"] == "NULL") {
-		t.Errorf("%s: GetSpawn EndedAt = %v; raw ended_at %s", sp.ClaudeInstanceID, sp.EndedAt, raw["ended_at"])
+		t.Errorf("%s: GetSpawn EndedAt = %v; raw ended_at %s", sp.InstanceID, sp.EndedAt, raw["ended_at"])
 	}
 }
 
@@ -361,7 +361,7 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 			t.Fatalf("ListSessionHistory(%d): %v", life, err)
 		}
 		for _, e := range entries {
-			out = append(out, e.ClaudeSessionID)
+			out = append(out, e.SessionID)
 		}
 		return out
 	}

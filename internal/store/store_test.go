@@ -107,11 +107,11 @@ func TestConcurrentOpenOrInitWithWrites(t *testing.T) {
 			defer s.Close()
 
 			sp := Spawn{
-				ClaudeInstanceID: fmt.Sprintf("burst-worker-%02d", i),
-				State:            StatePending,
-				CWD:              "/tmp",
-				TmuxSessionName:  fmt.Sprintf("cd-burst-%02d", i),
-				RelayMode:        "off",
+				InstanceID:      fmt.Sprintf("burst-worker-%02d", i),
+				State:           StatePending,
+				CWD:             "/tmp",
+				TmuxSessionName: fmt.Sprintf("cd-burst-%02d", i),
+				RelayMode:       "off",
 			}
 			// The create's pane identity write lands before the agent's hook
 			// (SR-22.9: a hook applies only from the recorded pane process).
@@ -119,7 +119,7 @@ func TestConcurrentOpenOrInitWithWrites(t *testing.T) {
 				errs <- fmt.Errorf("worker %d: insertAgentRow: %w", i, err)
 				return
 			}
-			if err := agentHook(s, sp.ClaudeInstanceID, StateWaiting, false, "test_seed"); err != nil {
+			if err := agentHook(s, sp.InstanceID, StateWaiting, false, "test_seed"); err != nil {
 				errs <- fmt.Errorf("worker %d: ApplyHookTransition: %w", i, err)
 				return
 			}

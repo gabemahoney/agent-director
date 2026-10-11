@@ -31,7 +31,7 @@ for (const [name, bound] of [
       const id = "smoke-decide-id";
       const { store, token } = seedRequest(homeDir, id);
       using client = await openClient(store);
-      const result = await client.decide({ claude_instance_id: id, request_token: token, decision: "allow", max_wait_ms: bound });
+      const result = await client.decide({ instance_id: id, request_token: token, decision: "allow", max_wait_ms: bound });
       expect(result).toMatchObject({
         delivery: "not_confirmed",
         hook_alive: null,
@@ -49,7 +49,7 @@ test("decide: error — invalid decision string → ErrInvalidDecision", async (
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
     const call = client.decide({
-      claude_instance_id: "any-id",
+      instance_id: "any-id",
       request_token: "00000000-0000-0000-0000-000000000000",
       decision: "maybe" as "allow",
     });
@@ -62,7 +62,7 @@ test("decide: error — negative max_wait_ms → ErrInvalidFlags, nothing record
     const id = "smoke-decide-neg-id";
     const { store, token } = seedRequest(homeDir, id);
     using client = await openClient(store);
-    await expect(client.decide({ claude_instance_id: id, request_token: token, decision: "allow", max_wait_ms: -1 }))
+    await expect(client.decide({ instance_id: id, request_token: token, decision: "allow", max_wait_ms: -1 }))
       .rejects.toBeInstanceOf(ErrInvalidFlags);
     expect((await client.getPermission({ request_token: token })).decision).toBeNull();
   });

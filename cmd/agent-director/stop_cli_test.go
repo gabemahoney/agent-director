@@ -23,7 +23,7 @@ func TestKillCLIHappyPath(t *testing.T) {
 	sess := ownSession(t, home, id, "")
 	faketmuxfix.Tables{}.Write(t, socket, fakeTable(sess))
 
-	stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--claude-instance-id", id)
+	stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--instance-id", id)
 
 	if code != 0 || stderr != "" || stdout != "{\"kill_sent\":true}\n" {
 		t.Fatalf("kill exit = %d, stdout = %q, stderr = %q; want 0, {\"kill_sent\":true} and empty", code, stdout, stderr)
@@ -50,20 +50,20 @@ func TestKillCLIHappyPath(t *testing.T) {
 	}
 }
 
-// TestKillIncludeFinishedIsUnknownFlag: kill takes only --claude-instance-id
+// TestKillIncludeFinishedIsUnknownFlag: kill takes only --instance-id
 // (SR-6.8, b.vqr), so the former finished-row opt-in, in any form, and -h are
 // ErrInvalidFlags with no usage text, no tmux call and no ad.kill.called
 // line, leaving a finished row and its own session as they were (ending it is
 // agent-director-admin kill-finished's alone).
 func TestKillIncludeFinishedIsUnknownFlag(t *testing.T) {
-	usageRe := regexp.MustCompile(`(?i)usage|-claude-instance-id`)
+	usageRe := regexp.MustCompile(`(?i)usage|-instance-id`)
 	for _, flag := range []string{"--include-finished", "--include-finished=false", "-h"} {
 		t.Run(flag, func(t *testing.T) {
 			home, id, socket := seedRowOnSocket(t, store.StateEnded)
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "")))
 			before := rowColumns(t, home, id)
 
-			stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--claude-instance-id", id, flag)
+			stdout, stderr, code := runSpawnCLI(t, home, buildFakeTmux(t), "kill", "--instance-id", id, flag)
 
 			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
 			if flag == "-h" && apitest.OperatorActionNames.MatchString(stderr) {

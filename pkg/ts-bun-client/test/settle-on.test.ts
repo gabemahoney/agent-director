@@ -75,20 +75,20 @@ test("settle-on: status, get and list give each golden with only the state read 
 test("settle-on: a raw change younger than settle_ms reads the settled state, then the raw one", async () => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
-    const id = runHelper("seed-spawn", { store, state: "waiting", "create-store": true }).claude_instance_id as string;
+    const id = runHelper("seed-spawn", { store, state: "waiting", "create-store": true }).instance_id as string;
     writeSettleConfig(homeDir);
     using client = await openClient(store);
     const listIDs = async (state: string): Promise<string[]> =>
-      (await client.list({ state: [state] } as never)).spawns.map((s) => s.claude_instance_id);
+      (await client.list({ state: [state] } as never)).spawns.map((s) => s.instance_id);
 
     runHelper("set-settle", { store, id, settled: "working", "stamp-ms": String(Date.now()) });
-    expect((await client.status({ claude_instance_id: id } as never)).state).toBe("working");
-    expect((await client.get({ claude_instance_id: id } as never)).state).toBe("working");
+    expect((await client.status({ instance_id: id } as never)).state).toBe("working");
+    expect((await client.get({ instance_id: id } as never)).state).toBe("working");
     expect(await listIDs("working")).toEqual([id]);
     expect(await listIDs("waiting")).toEqual([]);
 
     runHelper("set-settle", { store, id, settled: "working", "stamp-ms": String(Date.now() - SETTLE_MS) });
-    expect((await client.status({ claude_instance_id: id } as never)).state).toBe("waiting");
+    expect((await client.status({ instance_id: id } as never)).state).toBe("waiting");
     expect(await listIDs("waiting")).toEqual([id]);
   });
 }, 60_000);

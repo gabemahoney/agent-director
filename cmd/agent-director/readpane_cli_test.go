@@ -50,7 +50,7 @@ func TestReadPaneCLIFlags(t *testing.T) {
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, ansi)))
 
 			stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-				append([]string{"read-pane", "--claude-instance-id", id}, tc.flags...)...)
+				append([]string{"read-pane", "--instance-id", id}, tc.flags...)...)
 
 			var res map[string]string
 			sum := sha256.Sum256([]byte(tc.wantPane))

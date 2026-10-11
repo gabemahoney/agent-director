@@ -162,7 +162,7 @@ func (f *killFix) kill(t testing.TB, instanceID string, wait time.Duration) kill
 	c := f.open(t, wait, "")
 	defer c.Close() //nolint:errcheck
 	start := time.Now()
-	res, err := c.Kill(api.KillParams{ClaudeInstanceID: instanceID})
+	res, err := c.Kill(api.KillParams{InstanceID: instanceID})
 	return killCall{Res: res, Err: err, Took: time.Since(start)}
 }
 

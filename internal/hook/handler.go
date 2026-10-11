@@ -264,15 +264,15 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	// regardless of exit path (SR-A-2.1). Fields not reached before an
 	// early exit are emitted as their zero value (nil → JSON null).
 	fields := map[string]any{
-		"source":             "ad_hook",
-		"relay_mode":         env(EnvRelayMode),
-		"matcher":            []string{"*"},
-		"claude_instance_id": nil,
-		"event_name":         nil,
-		"tool_name":          nil,
-		"session_id":         "",
-		"upsert_outcome":     nil,
-		"request_token":      nil,
+		"source":         "ad_hook",
+		"relay_mode":     env(EnvRelayMode),
+		"matcher":        []string{"*"},
+		"instance_id":    nil,
+		"event_name":     nil,
+		"tool_name":      nil,
+		"session_id":     "",
+		"upsert_outcome": nil,
+		"request_token":  nil,
 	}
 	defer func() {
 		_ = trail.Emit(ctx, "ad.hook.fired", fields)
@@ -317,7 +317,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		failClosed(fmt.Sprintf("resolve instance id: %v", err))
 		return nil
 	}
-	fields["claude_instance_id"] = instanceID
+	fields["instance_id"] = instanceID
 
 	res, err := ClassifyEvent(raw)
 	if err != nil {

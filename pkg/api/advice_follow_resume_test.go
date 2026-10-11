@@ -80,7 +80,7 @@ func advResumeNextStep(t *testing.T, e *killEnv, c *api.Client, id string) {
 		if _, err := e.resume(id); !errors.Is(err, api.ErrSpawnNotFound) {
 			t.Errorf("resume of the removed row = %v; want ErrSpawnNotFound", err)
 		}
-		if res, err := c.Spawn(fgcSpawnParams(t, id, false)); err != nil || res.ClaudeInstanceID != id {
+		if res, err := c.Spawn(fgcSpawnParams(t, id, false)); err != nil || res.InstanceID != id {
 			t.Fatalf("spawn of %s = %+v, %v; want it launched", id, res, err)
 		}
 		advResumeAssertState(t, c, id, store.StatePending)
@@ -178,10 +178,10 @@ func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 				t.Fatalf("get %s past the pending grace period: state %q; want missing", id, st)
 			}
 			row, err := c.Get(id)
-			if err != nil || (row.ClaudeSessionID == "") != o.noSession {
-				t.Fatalf("get %s once missing = session id %q, %v; want it empty: %v", id, row.ClaudeSessionID, err, o.noSession)
+			if err != nil || (row.SessionID == "") != o.noSession {
+				t.Fatalf("get %s once missing = session id %q, %v; want it empty: %v", id, row.SessionID, err, o.noSession)
 			}
-			if row.ClaudeSessionID != "" {
+			if row.SessionID != "" {
 				advResumeLaunches(t, e, id)
 				return
 			}
@@ -337,7 +337,7 @@ func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error) {
 	e.assertResumeWroteNothing(t, before)
 
 	res, logs, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
-	if err != nil || res.ClaudeInstanceID != r.ID {
+	if err != nil || res.InstanceID != r.ID {
 		t.Fatalf("spawn of %s with the reuse opt-in = %+v, %v (log %q); want it launched", r.ID, res, err, logs)
 	}
 	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != any(reuseLife+1) {

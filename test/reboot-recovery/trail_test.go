@@ -28,7 +28,7 @@ func trailRecords(t *testing.T, home, event, instanceID string) []map[string]any
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("trail line %q is not JSON: %v", line, err)
 		}
-		if rec["event"] == event && rec["claude_instance_id"] == instanceID {
+		if rec["event"] == event && rec["instance_id"] == instanceID {
 			out = append(out, rec)
 		}
 	}

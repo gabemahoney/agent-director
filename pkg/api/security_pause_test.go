@@ -20,7 +20,7 @@ import (
 
 // securityPauseCall is pause's call on the subject.
 func securityPauseCall(_ *testing.T, c *api.Client, s *securityScene) (any, error) {
-	return c.Pause(context.Background(), api.PauseParams{ClaudeInstanceID: s.subject})
+	return c.Pause(context.Background(), api.PauseParams{InstanceID: s.subject})
 }
 
 // psSecEnds ends the target's row as its own agent after the first Enter, so

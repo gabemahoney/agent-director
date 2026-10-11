@@ -182,7 +182,7 @@ func (r spawnRequests) find(token string) (PermissionRow, bool) {
 // Nothing is written here: a caller that refuses with ErrRelayFallenBack
 // records hook_gone_at through recordFallenBackGone.
 func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration, retry string) error {
-	id := r.sp.ClaudeInstanceID
+	id := r.sp.InstanceID
 	if pr, ok := r.liveHolder(); ok {
 		return relayGuardRefusal(id, pr.RequestToken, pr.Decision != "", retry)
 	}
@@ -219,8 +219,8 @@ func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration
 //   - Its relay hook may still answer it (not_confirmed):
 //     ErrSendKeysWhileRelayed.
 func (r spawnRequests) notFallenBackRefusal(pr PermissionRow, what string) error {
-	id := r.sp.ClaudeInstanceID
-	params := DecideParams{ClaudeInstanceID: id, RequestToken: pr.RequestToken}
+	id := r.sp.InstanceID
+	params := DecideParams{InstanceID: id, RequestToken: pr.RequestToken}
 	switch {
 	case r.fallenBack(pr):
 		return nil
@@ -271,7 +271,7 @@ func (r spawnRequests) inProgressRefusal(pr PermissionRow, hold time.Duration, w
 	}
 	return &DetailedError{
 		Err: fmt.Errorf("%w: %s request %s: a pane answer through agent-director (pane_as %q) is still being sent, its intent written at %s; %s",
-			ErrPaneAnswerInProgress, r.sp.ClaudeInstanceID, pr.RequestToken, pr.PaneAs,
+			ErrPaneAnswerInProgress, r.sp.InstanceID, pr.RequestToken, pr.PaneAs,
 			pr.PaneIntentAt.UTC().Format(time.RFC3339Nano), what),
 		Details: PaneAnswerInProgressDetails{
 			RequestToken: pr.RequestToken,

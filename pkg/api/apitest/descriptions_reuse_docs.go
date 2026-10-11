@@ -119,7 +119,7 @@ func DescReuseFinishedParam() DescCase {
 		Name: "spawn manifest, reuse_finished parameter",
 		Require: []string{
 			"whose row is finished (ended or missing)", "A live row (pending included) still collides",
-			"No effect without an explicit claude_instance_id", "Applies to this call only",
+			"No effect without an explicit instance_id", "Applies to this call only",
 			"no template or config setting carries it",
 			"The default (off) is unchanged: any existing row with the id collides",
 			"does not say whether it created a fresh row or reset a finished one",
@@ -166,7 +166,7 @@ func DescInstanceIDCollision(s CollisionSite) DescCase {
 type RecourseSite int
 
 // The recourse sites: a Go doc names SpawnParams.ReuseFinished; the
-// TypeScript README spawns the same claude_instance_id with reuse_finished.
+// TypeScript README spawns the same instance_id with reuse_finished.
 const (
 	RecourseGoDoc RecourseSite = iota
 	RecourseTSREADME
@@ -179,7 +179,7 @@ const (
 func DescReuseRecourse(site RecourseSite) DescCase {
 	req := map[RecourseSite][]string{
 		RecourseGoDoc:    {sameIDOptIn, "(SpawnParams.ReuseFinished"},
-		RecourseTSREADME: {"spawn the same `claude_instance_id` again", "`reuse_finished: true`"},
+		RecourseTSREADME: {"spawn the same `instance_id` again", "`reuse_finished: true`"},
 	}[site]
 	if req == nil {
 		panic("apitest: unknown RecourseSite")

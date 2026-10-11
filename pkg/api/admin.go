@@ -11,21 +11,21 @@ import (
 // (Client.killFinished) and delete (Client.deleteRows). Only
 // agent-director-admin calls them.
 func init() {
-	adminapi.KillFinished = func(c any, claudeInstanceID string) (adminapi.KillResult, error) {
+	adminapi.KillFinished = func(c any, instanceID string) (adminapi.KillResult, error) {
 		client, err := adminClient(c)
 		if err != nil {
 			return adminapi.KillResult{}, err
 		}
-		res, err := client.killFinished(claudeInstanceID)
+		res, err := client.killFinished(instanceID)
 		return adminapi.KillResult{KillSent: res.KillSent}, err
 	}
-	adminapi.Delete = func(c any, claudeInstanceIDs []string) (adminapi.DeleteResult, error) {
+	adminapi.Delete = func(c any, instanceIDs []string) (adminapi.DeleteResult, error) {
 		client, err := adminClient(c)
 		if err != nil {
 			// Results is never nil, as adminapi.DeleteResult documents (b.4nt).
 			return adminapi.DeleteResult{Results: map[string]string{}}, err
 		}
-		return client.deleteRows(claudeInstanceIDs)
+		return client.deleteRows(instanceIDs)
 	}
 }
 

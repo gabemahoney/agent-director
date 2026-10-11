@@ -56,15 +56,15 @@ func emitSendKeysCalled(params SendKeysParams, f sendKeysFacts, err error) {
 		outcome = errorName(err)
 	}
 	_ = trail.Emit(context.Background(), "ad.send_keys.called", map[string]any{
-		"claude_instance_id": params.ClaudeInstanceID,
-		"allow_pending":      params.AllowPending,
-		"row_state":          f.RowState,
-		"guard_evaluation":   f.Guard,
-		"outcome":            outcome,
-		"caller_process":     f.Caller.process,
-		"caller_pid":         f.Caller.pid,
-		"caller_hostname":    f.Caller.hostname,
-		"caller_user":        f.Caller.user,
-		"source":             "ad_send_keys",
+		"instance_id":      params.InstanceID,
+		"allow_pending":    params.AllowPending,
+		"row_state":        f.RowState,
+		"guard_evaluation": f.Guard,
+		"outcome":          outcome,
+		"caller_process":   f.Caller.process,
+		"caller_pid":       f.Caller.pid,
+		"caller_hostname":  f.Caller.hostname,
+		"caller_user":      f.Caller.user,
+		"source":           "ad_send_keys",
 	})
 }

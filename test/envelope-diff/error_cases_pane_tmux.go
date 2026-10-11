@@ -40,8 +40,8 @@ const (
 )
 
 // readPaneParams and readPaneArgv are the read-pane call on id for each runner.
-func readPaneParams(id string) map[string]any { return map[string]any{"claude_instance_id": id} }
-func readPaneArgv(id string) []string         { return []string{"read-pane", "--claude-instance-id", id} }
+func readPaneParams(id string) map[string]any { return map[string]any{"instance_id": id} }
+func readPaneArgv(id string) []string         { return []string{"read-pane", "--instance-id", id} }
 
 // leftoverSession is a session labelled by storeID for instanceID under
 // tmuxfix.OtherToken, with one pane.

@@ -51,13 +51,13 @@ func deleteRows(s deleteStore, ids []string) (adminapi.DeleteResult, error) {
 	return adminapi.DeleteResult{Results: results}, nil
 }
 
-// deleteRows runs deleteRows on c's store: the rows claudeInstanceIDs are
+// deleteRows runs deleteRows on c's store: the rows instanceIDs are
 // removed, bypassing all state guards, with per-row outcomes in Results. On a
 // closed Client it returns ErrClientClosed and Results as a non-nil empty map,
 // as adminapi.DeleteResult documents (b.4nt).
-func (c *Client) deleteRows(claudeInstanceIDs []string) (adminapi.DeleteResult, error) {
+func (c *Client) deleteRows(instanceIDs []string) (adminapi.DeleteResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return adminapi.DeleteResult{Results: map[string]string{}}, err
 	}
-	return deleteRows(c.st, claudeInstanceIDs)
+	return deleteRows(c.st, instanceIDs)
 }

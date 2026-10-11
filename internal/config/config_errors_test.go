@@ -281,6 +281,55 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 	}
 }
 
+// oldKeyText is Load's refusal of the old [defaults] key (SR-4.3): it names
+// the key that replaced it.
+const oldKeyText = "refused key [defaults] disable_askuserquestion is no longer accepted; use disable_ask_user"
+
+// TestLoadRefusesOldKeys is the SR-4.3 config refusal: the old [defaults] key
+// is refused, naming disable_ask_user, whatever the letter case of its table
+// and its own and however the file writes it, and is never read as the new
+// key. The refusal comes before the letter-case and range checks.
+func TestLoadRefusesOldKeys(t *testing.T) {
+	cases := []struct{ name, content string }{
+		{"table_true", "[defaults]\ndisable_askuserquestion = true\n"},
+		{"table_false", "[defaults]\ndisable_askuserquestion = false\n"},
+		{"table_upper", "[DEFAULTS]\ndisable_askuserquestion = true\n"},
+		{"table_mixed", "[Defaults]\ndisable_askuserquestion = true\n"},
+		{"key_upper", "[defaults]\nDISABLE_ASKUSERQUESTION = true\n"},
+		{"key_mixed", "[defaults]\nDisable_AskUserQuestion = true\n"},
+		{"table_and_key_upper", "[DEFAULTS]\nDISABLE_ASKUSERQUESTION = false\n"},
+		{"inline_table", "defaults = { disable_askuserquestion = true }\n"},
+		{"inline_table_beside_other_key", "defaults = { relay_mode = \"on\", disable_askuserquestion = true }\n"},
+		{"inline_table_upper", "Defaults = { DISABLE_ASKUSERQUESTION = false }\n"},
+		{"dotted_key", "defaults.disable_askuserquestion = true\n"},
+		{"dotted_key_upper", "DEFAULTS.DISABLE_ASKUSERQUESTION = true\n"},
+		{"dotted_key_mixed", "Defaults.Disable_AskUserQuestion = false\n"},
+		{"beside_other_defaults_keys", "[defaults]\nrelay_mode = \"on\"\ndisable_askuserquestion = true\ninject_help_hook = true\n"},
+		{"beside_other_tables", "[relay]\npoll_base_ms = 250\n\n[defaults]\ndisable_askuserquestion = true\n"},
+		{"both_old_and_new_keys", "[defaults]\ndisable_askuserquestion = true\ndisable_ask_user = true\n"},
+		{"both_new_then_old_key", "[defaults]\ndisable_ask_user = false\ndisable_askuserquestion = true\n"},
+		{"both_in_two_table_spellings", "[Defaults]\ndisable_ask_user = true\n\n[defaults]\ndisable_askuserquestion = true\n"},
+		{"old_key_in_two_spellings", "[defaults]\nDISABLE_ASKUSERQUESTION = true\ndisable_askuserquestion = false\n"},
+		{"beside_case_variant_keys", "[Store]\ndb_path = \"/upper.db\"\n\n[store]\ndb_path = \"/lower.db\"\n\n[defaults]\ndisable_askuserquestion = true\n"},
+		{"beside_refused_value", "[defaults]\ndisable_askuserquestion = true\nexpire_retention_days = -1\n"},
+		{"beside_refused_tmux_value", "[tmux]\nkill_exit_wait_ms = -1\n\n[defaults]\ndisable_askuserquestion = true\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := makeConfigFile(t, tc.content)
+
+			ce := loadConfigError(t, path)
+
+			if got := ce.Err.Error(); got != oldKeyText {
+				t.Errorf("description = %q\nwant          %q", got, oldKeyText)
+			}
+			if want := "config " + path + ": " + oldKeyText; ce.Error() != want {
+				t.Errorf("error = %q\nwant    %q", ce.Error(), want)
+			}
+		})
+	}
+}
+
 // TestTmuxRefusesNonInteger checks that a float, string or boolean value of
 // each key fails Load as malformed, never falling back to the default.
 func TestTmuxRefusesNonInteger(t *testing.T) {

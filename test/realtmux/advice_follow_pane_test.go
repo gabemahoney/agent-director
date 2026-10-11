@@ -135,11 +135,11 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyTextRealTmux(t *tes
 		{name: "text call timed out before reaching the pane", call: "text", how: "hang", advice: advSendKeysTextTimeout},
 		{name: "text call timed out after typing the text", call: "text", how: "deliver-hang", advice: advSendKeysTextTimeout},
 	}, func(t *testing.T, c *api.Client, id, text string) {
-		read, err := c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id})
+		read, err := c.ReadPane(api.ReadPaneParams{InstanceID: id})
 		if err != nil {
 			t.Fatalf("read-pane: %s; want the agent's pane", describe(err))
 		}
-		p := api.SendKeysParams{ClaudeInstanceID: id, Text: text}
+		p := api.SendKeysParams{InstanceID: id, Text: text}
 		if strings.Contains(read.Pane, text) {
 			p.Text = ""
 		}
@@ -161,7 +161,7 @@ func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmitsRealTmux(t *testing.
 		{name: "Enter timed out after submitting the text", call: "enter", how: "deliver-hang",
 			advice: advSendKeysEnterTimeout},
 	}, func(t *testing.T, c *api.Client, id, _ string) {
-		if _, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: id}); err != nil {
+		if _, err := c.SendKeys(api.SendKeysParams{InstanceID: id}); err != nil {
 			t.Fatalf("send-keys with empty text: %s; want Enter delivered", describe(err))
 		}
 	})
@@ -182,7 +182,7 @@ func advPaneFollowRealTmux(t *testing.T, cases []advPaneKeysCase, follow func(t 
 			text := paneMarker(t)
 			arm(tc.call, tc.how)
 
-			_, err := c.SendKeys(api.SendKeysParams{ClaudeInstanceID: r.InstanceID, Text: text})
+			_, err := c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: text})
 			advPaneAssertAdvice(t, err, tc.advice)
 
 			follow(t, c, r.InstanceID, text)
@@ -212,7 +212,7 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLaterRealTmux(t *testing.T) {
 			// so context.Canceled means C-u, /exit and Enter went through.
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			pause := func() error { _, err := c.Pause(ctx, api.PauseParams{ClaudeInstanceID: r.InstanceID}); return err }
+			pause := func() error { _, err := c.Pause(ctx, api.PauseParams{InstanceID: r.InstanceID}); return err }
 
 			advPaneAssertAdvice(t, pause(), tc.advice)
 

@@ -55,7 +55,7 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 		t.Fatalf("OpenOrInit(%q): %v", dbPath, err)
 	}
 	defer s.Close() //nolint:errcheck
-	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: sessionName, RelayMode: "off"}); err != nil {
+	if err := s.InsertPending(store.Spawn{InstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: sessionName, RelayMode: "off"}); err != nil {
 		t.Fatalf("InsertPending(%s): %v", id, err)
 	}
 	if err := seedAgentState(s, dbPath, id, state); err != nil {
@@ -177,7 +177,7 @@ func TestClientVerbsDelegate(t *testing.T) {
 		{"Spawn with no cwd", func() error { _, err := empty.Spawn(api.SpawnParams{}); return err }, spawn.ErrCwdMissing},
 		{"Get", func() error {
 			r, err := rows.Get("id-waiting")
-			return unless(r.ClaudeInstanceID == "id-waiting", err, "Get = %+v", r)
+			return unless(r.InstanceID == "id-waiting", err, "Get = %+v", r)
 		}, nil},
 		{"List on an empty store", func() error {
 			r, err := empty.List(api.ListParams{})
@@ -185,16 +185,16 @@ func TestClientVerbsDelegate(t *testing.T) {
 		}, nil},
 		{"List with an invalid label", func() error { _, err := empty.List(api.ListParams{Labels: []string{"noequalssign"}}); return err },
 			api.ErrListInvalidLabel},
-		{"SendKeys to an unknown id", func() error { _, err := empty.SendKeys(api.SendKeysParams{ClaudeInstanceID: "absent"}); return err },
+		{"SendKeys to an unknown id", func() error { _, err := empty.SendKeys(api.SendKeysParams{InstanceID: "absent"}); return err },
 			store.ErrSpawnNotFound},
-		{"ReadPane of an unknown id", func() error { _, err := empty.ReadPane(api.ReadPaneParams{ClaudeInstanceID: "absent"}); return err },
+		{"ReadPane of an unknown id", func() error { _, err := empty.ReadPane(api.ReadPaneParams{InstanceID: "absent"}); return err },
 			store.ErrSpawnNotFound},
-		{"Pause of an ended row", func() error { _, err := rows.Pause(ctx, api.PauseParams{ClaudeInstanceID: "id-ended"}); return err }, nil},
+		{"Pause of an ended row", func() error { _, err := rows.Pause(ctx, api.PauseParams{InstanceID: "id-ended"}); return err }, nil},
 		{"Decide on a relay-off row", func() error {
-			_, err := rows.Decide(api.DecideParams{ClaudeInstanceID: "id-perm", RequestToken: "00000000-0000-0000-0000-000000000001", Decision: "allow"})
+			_, err := rows.Decide(api.DecideParams{InstanceID: "id-perm", RequestToken: "00000000-0000-0000-0000-000000000001", Decision: "allow"})
 			return err
 		}, api.ErrRelayModeOff},
-		{"Resume of a live row", func() error { _, err := rows.Resume(api.ResumeParams{ClaudeInstanceID: "id-waiting"}); return err },
+		{"Resume of a live row", func() error { _, err := rows.Resume(api.ResumeParams{InstanceID: "id-waiting"}); return err },
 			api.ErrSpawnNotResumable},
 		{"FindMissing on an empty store", func() error {
 			r, err := empty.FindMissing(ctx)
@@ -233,7 +233,7 @@ func TestKillEndedRowHappy(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{State: state})
 			c, _ := e.client(t)
-			if res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID}); err != nil || res.KillSent {
+			if res, err := c.Kill(api.KillParams{InstanceID: r.ID}); err != nil || res.KillSent {
 				t.Fatalf("Kill(%s) = %+v, %v; want kill_sent false", state, res, err)
 			}
 			e.assertKillCalls(t)

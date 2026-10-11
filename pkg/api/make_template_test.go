@@ -62,7 +62,7 @@ func assertNoOrphanTempfile(t *testing.T, name string) {
 func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	home := withTempHome(t)
-	p := api.MakeTemplateParams{Name: "dev", CWD: "/var/data", RelayMode: "on", ClaudeArgs: []string{"--model", "opus"},
+	p := api.MakeTemplateParams{Name: "dev", CWD: "/var/data", RelayMode: "on", AgentArgs: []string{"--model", "opus"},
 		ExtraEnv: map[string]string{"ANTHROPIC_API_KEY": "sk-test"}, AgentDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
 		Permissions: &api.MakeTemplatePermissions{Allow: []string{"Bash(jq)", "Read(/etc)"}, Deny: []string{"Bash(rm)"}}}
 	res, err := api.MakeTemplate(p)
@@ -84,7 +84,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 			t.Errorf("TOML body missing %q:\n%s", want, body)
 		}
 	}
-	want := config.TemplateFile{CWD: p.CWD, RelayMode: p.RelayMode, ClaudeArgs: p.ClaudeArgs, ExtraEnv: p.ExtraEnv,
+	want := config.TemplateFile{CWD: p.CWD, RelayMode: p.RelayMode, AgentArgs: p.AgentArgs, ExtraEnv: p.ExtraEnv,
 		AgentDirectorLabels: p.AgentDirectorLabels, Permissions: &config.TemplatePermissions{Allow: p.Permissions.Allow, Deny: p.Permissions.Deny}}
 	if got, err := config.LoadTemplate("dev"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("LoadTemplate = %+v, %v; want %+v", got, err, want)

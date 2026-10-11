@@ -59,7 +59,7 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 		return ComposedLaunch{}, err
 	}
 	command := []string{claudeBinary, "--settings", settings}
-	command = append(command, r.ClaudeArgs...)
+	command = append(command, r.AgentArgs...)
 
 	return ComposedLaunch{
 		Create: CreateRequest{
@@ -67,18 +67,18 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			CWD:        r.CWD,
 			Env:        composeEnv(r),
 			Command:    command,
-			InstanceID: r.ClaudeInstanceID,
+			InstanceID: r.InstanceID,
 		},
 		Row: store.Spawn{
-			ClaudeInstanceID: r.ClaudeInstanceID,
-			ParentID:         ParentIDFromEnv(),
-			CWD:              r.CWD,
-			TmuxSessionName:  r.TmuxSessionName,
-			ClaudeArgs:       r.ClaudeArgs,
-			RelayMode:        r.RelayMode,
-			Labels:           r.AgentDirectorLabels,
-			ExtraEnv:         r.ExtraEnv,
-			NoPreTrust:       r.NoPreTrust,
+			InstanceID:      r.InstanceID,
+			ParentID:        ParentIDFromEnv(),
+			CWD:             r.CWD,
+			TmuxSessionName: r.TmuxSessionName,
+			AgentArgs:       r.AgentArgs,
+			RelayMode:       r.RelayMode,
+			Labels:          r.AgentDirectorLabels,
+			ExtraEnv:        r.ExtraEnv,
+			NoPreTrust:      r.NoPreTrust,
 			// Interim (schema v9): every launch is a Claude launch until the
 			// agent input resolves the row's agent. The one place the row's
 			// agent is set, for spawn's insert (insertPending) and reuse's

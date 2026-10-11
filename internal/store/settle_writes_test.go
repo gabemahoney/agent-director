@@ -144,7 +144,7 @@ func isTerminal(state string) bool { return state == store.StateEnded || state =
 func TestSettleInsertPending(t *testing.T) {
 	f := newV5Store(t)
 	from := time.Now().UnixMilli()
-	if err := f.s.InsertPending(store.Spawn{ClaudeInstanceID: "settle-insert", Agent: store.AgentClaude, CWD: "/tmp",
+	if err := f.s.InsertPending(store.Spawn{InstanceID: "settle-insert", Agent: store.AgentClaude, CWD: "/tmp",
 		TmuxSessionName: "ts-settle-insert", RelayMode: "off"}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}

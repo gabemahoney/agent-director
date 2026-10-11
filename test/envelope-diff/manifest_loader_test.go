@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoadManifestValid(t *testing.T) {
-	data := []byte(`{"spawn":[".claude_instance_id"]}`)
+	data := []byte(`{"spawn":[".instance_id"]}`)
 	m, err := loadNonDetManifestFromBytes(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -18,8 +18,8 @@ func TestLoadManifestValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Selectors(spawn): %v", err)
 	}
-	if len(sels) != 1 || sels[0] != ".claude_instance_id" {
-		t.Errorf("Selectors(spawn): got %v, want [.claude_instance_id]", sels)
+	if len(sels) != 1 || sels[0] != ".instance_id" {
+		t.Errorf("Selectors(spawn): got %v, want [.instance_id]", sels)
 	}
 }
 

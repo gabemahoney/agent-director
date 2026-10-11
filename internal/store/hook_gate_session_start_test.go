@@ -81,14 +81,14 @@ func TestHookGateSessionStartOneWrite(t *testing.T) {
 			}
 			after := hgColumns(t, f, id)
 			gotCols := map[string]any{
-				"state": after.State, "row_version": after.RowVersion, "claude_session_id": after.ClaudeSessionID,
+				"state": after.State, "row_version": after.RowVersion, "session_id": after.SessionID,
 				"jsonl_path": after.JSONLPath, "pid": after.PID, "proc_starttime": after.ProcStarttime,
 				"pane_starttime": after.PaneStarttime, "launch_started_at": after.LaunchStartedAt,
 				"ended_at": after.EndedAt, "liveness_unverified_since": after.LivenessUnverifiedSince,
 				"liveness_note": after.LivenessNote,
 			}
 			wantCols := map[string]any{
-				"state": store.StateWaiting, "row_version": before.RowVersion.(int64) + 1, "claude_session_id": "sess-new",
+				"state": store.StateWaiting, "row_version": before.RowVersion.(int64) + 1, "session_id": "sess-new",
 				"jsonl_path": hgHookPath, "pid": int64(p.pid), "proc_starttime": p.start,
 				"pane_starttime": apitest.LinuxProcStarttime, "launch_started_at": nil,
 				"ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
@@ -161,7 +161,7 @@ func TestHookGateSessionStartRotation(t *testing.T) {
 		oldPath = "/tmp/hg/old.jsonl"
 		life    = int64(3)
 	)
-	archived := []apitest.HistoryEntry{{ClaudeSessionID: "sess-old", JSONLPath: sql.NullString{String: oldPath, Valid: true}, LifeNumber: life}}
+	archived := []apitest.HistoryEntry{{SessionID: "sess-old", JSONLPath: sql.NullString{String: oldPath, Valid: true}, LifeNumber: life}}
 	cases := []struct {
 		name         string
 		hookSession  string
@@ -194,10 +194,10 @@ func TestHookGateSessionStartRotation(t *testing.T) {
 				t.Fatalf("SessionStart = %+v, changed %v, %v; want applied", got, changed, err)
 			}
 			after := hgColumns(t, f, id)
-			if after.State != store.StateWaiting || after.ClaudeSessionID != c.hookSession ||
+			if after.State != store.StateWaiting || after.SessionID != c.hookSession ||
 				after.RowVersion != before.RowVersion.(int64)+1 || after.PID != int64(apitest.TestPanePID) {
 				t.Errorf("state, session, version, pid = %v, %v, %v, %v; want waiting, %s, %v+1, %d",
-					after.State, after.ClaudeSessionID, after.RowVersion, after.PID, c.hookSession, before.RowVersion, apitest.TestPanePID)
+					after.State, after.SessionID, after.RowVersion, after.PID, c.hookSession, before.RowVersion, apitest.TestPanePID)
 			}
 			var h []apitest.HistoryEntry
 			for _, e := range hgHistory(t, f, id) {

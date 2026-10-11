@@ -103,8 +103,8 @@ type successCase struct {
 var successCases = append([]successCase{
 
 	// ── spawn ─────────────────────────────────────────────────────────────
-	// spawn mints a fresh claude_instance_id (excluded from diff via
-	// nondeterministic.json ".claude_instance_id") and launches a tmux
+	// spawn mints a fresh instance_id (excluded from diff via
+	// nondeterministic.json ".instance_id") and launches a tmux
 	// session via fake-tmux. An empty store is sufficient — spawn creates
 	// its own row. Each home gets the same .claude.json, so both sides
 	// report pre_trust "ok" (compared, not excluded).
@@ -136,10 +136,10 @@ var successCases = append([]successCase{
 			return filepath.Dir(dbPath), map[string]any{"id": "id-status-1"}
 		},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": ctx["id"]}
+			return map[string]any{"instance_id": ctx["id"]}
 		},
 		cliArgv: func(ctx map[string]any) []string {
-			return []string{"status", "--claude-instance-id", ctx["id"].(string)}
+			return []string{"status", "--instance-id", ctx["id"].(string)}
 		},
 	},
 
@@ -153,10 +153,10 @@ var successCases = append([]successCase{
 			return filepath.Dir(dbPath), map[string]any{"id": "id-get-1"}
 		},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": ctx["id"]}
+			return map[string]any{"instance_id": ctx["id"]}
 		},
 		cliArgv: func(ctx map[string]any) []string {
-			return []string{"get", "--claude-instance-id", ctx["id"].(string)}
+			return []string{"get", "--instance-id", ctx["id"].(string)}
 		},
 	},
 
@@ -171,13 +171,13 @@ var successCases = append([]successCase{
 		tmuxTable: writePaneRowTable,
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": ctx["id"],
-				"text":               ctx["text"],
+				"instance_id": ctx["id"],
+				"text":        ctx["text"],
 			}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"send-keys",
-				"--claude-instance-id", ctx["id"].(string),
+				"--instance-id", ctx["id"].(string),
 				"--text", ctx["text"].(string),
 			}
 		},
@@ -213,11 +213,11 @@ var successCases = append([]successCase{
 		tmuxTable: writePaneRowTable,
 		want:      map[string]any{"pane": readPaneText},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": ctx["id"]}
+			return map[string]any{"instance_id": ctx["id"]}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"read-pane",
-				"--claude-instance-id", ctx["id"].(string),
+				"--instance-id", ctx["id"].(string),
 			}
 		},
 	},
@@ -231,11 +231,11 @@ var successCases = append([]successCase{
 		seed: seedKillGone,
 		want: map[string]any{"kill_sent": false},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": ctx["id"]}
+			return map[string]any{"instance_id": ctx["id"]}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"kill",
-				"--claude-instance-id", ctx["id"].(string),
+				"--instance-id", ctx["id"].(string),
 			}
 		},
 	},
@@ -260,14 +260,14 @@ var successCases = append([]successCase{
 		},
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": ctx["id"],
-				"request_token":      storefix.TestRequestTokenA,
-				"decision":           "allow",
+				"instance_id":   ctx["id"],
+				"request_token": storefix.TestRequestTokenA,
+				"decision":      "allow",
 			}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"decide",
-				"--claude-instance-id", ctx["id"].(string),
+				"--instance-id", ctx["id"].(string),
 				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
@@ -297,7 +297,7 @@ var successCases = append([]successCase{
 
 	// ── resume ────────────────────────────────────────────────────────────
 	// resume needs:
-	//   1. An ended row with ClaudeSessionID set (so the JSONL Stat can run).
+	//   1. An ended row with SessionID set (so the JSONL Stat can run).
 	//   2. A JSONL transcript at HOME/.claude/projects/<slug(cwd)>/<sessID>.jsonl.
 	//
 	// extraSetup creates the JSONL inside homeDir after the test driver has
@@ -308,7 +308,7 @@ var successCases = append([]successCase{
 	// holder, and fake-tmux creates and labels the session on that socket.
 	//
 	// extraSetup also plants the same .claude.json in each home, so the
-	// result {claude_instance_id: "id-resume-1", pre_trust: "ok"} is fully
+	// result {instance_id: "id-resume-1", pre_trust: "ok"} is fully
 	// deterministic; nondeterministic.json lists no excluded fields for resume.
 	{
 		verb: "resume",
@@ -331,11 +331,11 @@ var successCases = append([]successCase{
 			}
 		},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": ctx["id"]}
+			return map[string]any{"instance_id": ctx["id"]}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"resume",
-				"--claude-instance-id", ctx["id"].(string),
+				"--instance-id", ctx["id"].(string),
 			}
 		},
 		extraSetup: func(t *testing.T, homeDir string, ctx map[string]any) {
@@ -435,11 +435,11 @@ var successCases = append([]successCase{
 			return filepath.Dir(dbPath), map[string]any{"id": "id-pause-1"}
 		},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": ctx["id"]}
+			return map[string]any{"instance_id": ctx["id"]}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"pause",
-				"--claude-instance-id", ctx["id"].(string),
+				"--instance-id", ctx["id"].(string),
 			}
 		},
 	},

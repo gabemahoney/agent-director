@@ -11,17 +11,22 @@ package config_test
 // (b.9e1). G3 (b.p8n): a key
 // set under names that differ only in letter case is refused, ending with
 // caseVariantAdvice; removing all but one of its names must make the file load
-// that name's value, and a spawn template's likewise (b.2u1).
+// that name's value, and a spawn template's likewise (b.2u1). G4 (SR-4.3): a
+// refused old [defaults] key's description says "use <new key>"; renaming the
+// key as it says must make the file load with the same value, and G5: a spawn
+// template's old claude_args likewise.
 
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // advPaneTail is the [tmux] refusal's closing advice (G2).
@@ -429,6 +434,103 @@ func TestAdviceFollow_G3_TemplateCaseVariantKeysSetEachOnce(t *testing.T) {
 				if got != e.value {
 					t.Errorf("%s = %s after the follow; want the kept %s", e.name(), got, e.value)
 				}
+			}
+		})
+	}
+}
+
+// advOldKeyRefusal matches an old-key refusal's advice: the old key's name and
+// the name that replaced it, "<old> is no longer accepted; use <new>".
+var advOldKeyRefusal = regexp.MustCompile(`(\S+) is no longer accepted; use (\S+)$`)
+
+// advOldKeyNames returns the old and the new key name desc gives.
+func advOldKeyNames(t *testing.T, desc string) (oldKey, newKey string) {
+	t.Helper()
+	m := advOldKeyRefusal.FindStringSubmatch(desc)
+	if m == nil {
+		t.Fatalf("description %q gives no old and new key name", desc)
+	}
+	return m[1], m[2]
+}
+
+// TestAdviceFollow_G4_OldDefaultsKeyRenamedLoadsSameValue: G4 (SR-4.3)
+// "refused key [defaults] disable_askuserquestion is no longer accepted; use
+// disable_ask_user". Each refused file is rewritten as the advice says, the
+// key renamed wherever and however the file writes it, and must then load
+// with the value it had under the old name.
+func TestAdviceFollow_G4_OldDefaultsKeyRenamedLoadsSameValue(t *testing.T) {
+	cases := []struct {
+		name, content string
+		want          bool
+	}{
+		{"table_true", "[defaults]\ndisable_askuserquestion = true\n", true},
+		{"table_false", "[defaults]\ndisable_askuserquestion = false\n", false},
+		{"table_and_key_upper", "[DEFAULTS]\nDISABLE_ASKUSERQUESTION = true\n", true},
+		{"key_mixed", "[defaults]\nDisable_AskUserQuestion = true\n", true},
+		{"inline_table", "defaults = { disable_askuserquestion = true }\n", true},
+		{"dotted_key", "defaults.disable_askuserquestion = true\n", true},
+		{"beside_other_keys", "[defaults]\nrelay_mode = \"on\"\ndisable_askuserquestion = true\n\n[relay]\ntimeout_seconds = 60\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			desc := loadConfigError(t, makeConfigFile(t, tc.content)).Err.Error()
+			oldKey, newKey := advOldKeyNames(t, desc)
+			renamed := regexp.MustCompile("(?i)"+regexp.QuoteMeta(oldKey)).ReplaceAllString(tc.content, newKey)
+
+			cfg, err := config.Load(makeConfigFile(t, renamed))
+
+			if err != nil {
+				t.Fatalf("after renaming %s to %s as %q says, Load: %v", oldKey, newKey, desc, err)
+			}
+			if cfg.Defaults.DisableAskUser != tc.want {
+				t.Errorf("disable_ask_user = %v after the rename; want the old key's %v", cfg.Defaults.DisableAskUser, tc.want)
+			}
+			if tc.name == "beside_other_keys" && (cfg.Defaults.RelayMode != "on" || cfg.Relay.TimeoutSeconds != 60) {
+				t.Errorf("the other keys changed in the rename: %+v, %+v", cfg.Defaults, cfg.Relay)
+			}
+		})
+	}
+}
+
+// TestAdviceFollow_G5_OldTemplateKeyRenamedLoadsSameValue: G5 (SR-4.3) "<name>:
+// claude_args is no longer accepted; use agent_args". Each refused template is
+// rewritten as the advice says, the key renamed, and must then load with the
+// value it had under the old name.
+func TestAdviceFollow_G5_OldTemplateKeyRenamedLoadsSameValue(t *testing.T) {
+	const value = `["--model", "opus"]`
+	want := []string{"--model", "opus"}
+	cases := []struct {
+		name   string
+		key    string // the old key as the file writes it
+		fields apitest.TemplateFields
+	}{
+		{"lower", "claude_args", apitest.TemplateFields{}},
+		{"upper", "CLAUDE_ARGS", apitest.TemplateFields{}},
+		{"mixed", "Claude_Args", apitest.TemplateFields{}},
+		{"beside_other_fields", "claude_args", apitest.TemplateFields{CWD: "/tmp", RelayMode: "on"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := templatesDir(t)
+			refused := tc.fields
+			refused.RawKeys = []string{tc.key + " = " + value}
+			writeTemplate(t, dir, "old", apitest.TemplateBody(refused))
+			_, err := config.LoadTemplate("old")
+			if !errors.Is(err, config.ErrTemplateMalformed) {
+				t.Fatalf("LoadTemplate = %v; want ErrTemplateMalformed", err)
+			}
+			oldKey, newKey := advOldKeyNames(t, err.Error())
+			renamed := tc.fields
+			renamed.RawKeys = []string{regexp.MustCompile("(?i)^"+regexp.QuoteMeta(oldKey)).ReplaceAllString(tc.key, newKey) + " = " + value}
+			writeTemplate(t, dir, "old", apitest.TemplateBody(renamed))
+
+			tf, loadErr := config.LoadTemplate("old")
+
+			if loadErr != nil {
+				t.Fatalf("after renaming %s to %s as %q says, LoadTemplate: %v", oldKey, newKey, err, loadErr)
+			}
+			if !slices.Equal(tf.AgentArgs, want) || tf.CWD != tc.fields.CWD || tf.RelayMode != tc.fields.RelayMode {
+				t.Errorf("LoadTemplate = %+v after the rename; want agent_args %v and the other fields kept", tf, want)
 			}
 		})
 	}

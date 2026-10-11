@@ -51,7 +51,7 @@ func ntOurs(r store.LiveSpawnIdentity, storeID string, panes ...tmuxfix.SeedPane
 
 // ntLabel is r's current label under storeID.
 func ntLabel(r store.LiveSpawnIdentity, storeID string) tmux.Label {
-	return tmuxfix.Valid(r.Identity.Token, r.ClaudeInstanceID, storeID)
+	return tmuxfix.Valid(r.Identity.Token, r.InstanceID, storeID)
 }
 
 // ntDuplicate is ntOurs plus a second session carrying r's current label: provenance_conflict.

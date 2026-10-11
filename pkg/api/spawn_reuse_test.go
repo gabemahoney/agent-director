@@ -43,7 +43,7 @@ func TestSpawnReuseInsertRace(t *testing.T) {
 		seeded = e.columns(t, id)
 	})
 
-	_, _, err := e.reuseWith(t, w, api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: true, CWD: t.TempDir(),
+	_, _, err := e.reuseWith(t, w, api.SpawnParams{InstanceID: id, ReuseFinished: true, CWD: t.TempDir(),
 		ExtraEnv: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()})
 
 	assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
@@ -128,7 +128,7 @@ func rchgParams(t *testing.T, r reuseRow, q reuseRequest) api.SpawnParams {
 func rchgHistory(history []apitest.HistoryEntry) []string {
 	keys := []string{}
 	for _, h := range history {
-		keys = append(keys, fmt.Sprintf("%s|%v|%d", h.ClaudeSessionID, h.JSONLPath, h.LifeNumber))
+		keys = append(keys, fmt.Sprintf("%s|%v|%d", h.SessionID, h.JSONLPath, h.LifeNumber))
 	}
 	slices.Sort(keys)
 	return keys
@@ -138,14 +138,14 @@ func rchgHistory(history []apitest.HistoryEntry) []string {
 // id as before's columns hold it: its entry, in the ending life with the
 // current path, replaces any entry of that id; no session id archives nothing.
 func rchgArchived(before writesSnapshot) []string {
-	sid, _ := before.cols.ClaudeSessionID.(string)
+	sid, _ := before.cols.SessionID.(string)
 	if sid == "" {
 		return rchgHistory(before.history)
 	}
 	path, _ := before.cols.JSONLPath.(string)
 	life, _ := before.cols.LifeNumber.(int64)
-	kept := slices.DeleteFunc(slices.Clone(before.history), func(h apitest.HistoryEntry) bool { return h.ClaudeSessionID == sid })
-	entry := apitest.HistoryEntry{ClaudeSessionID: sid, LifeNumber: life}
+	kept := slices.DeleteFunc(slices.Clone(before.history), func(h apitest.HistoryEntry) bool { return h.SessionID == sid })
+	entry := apitest.HistoryEntry{SessionID: sid, LifeNumber: life}
 	entry.JSONLPath.String, entry.JSONLPath.Valid = path, path != ""
 	return rchgHistory(append(kept, entry))
 }
@@ -167,13 +167,13 @@ func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, r
 	}
 	cwd, _ := filepath.EvalSymlinks(p.CWD)
 	if g.State != store.StatePending || g.CWD != cwd || g.TmuxSessionName != p.TmuxSessionName || g.RelayMode != p.RelayMode ||
-		!slices.Equal(g.ClaudeArgs, p.ClaudeArgs) || !reflect.DeepEqual(g.Labels, p.AgentDirectorLabels) {
+		!slices.Equal(g.AgentArgs, p.AgentArgs) || !reflect.DeepEqual(g.Labels, p.AgentDirectorLabels) {
 		t.Errorf("Get = {%s %q %q %q %q %v}; want pending with the request's cwd %q, name %q, relay %q, args %q, labels %v",
-			g.State, g.CWD, g.TmuxSessionName, g.RelayMode, g.ClaudeArgs, g.Labels, cwd, p.TmuxSessionName, p.RelayMode, p.ClaudeArgs, p.AgentDirectorLabels)
+			g.State, g.CWD, g.TmuxSessionName, g.RelayMode, g.AgentArgs, g.Labels, cwd, p.TmuxSessionName, p.RelayMode, p.AgentArgs, p.AgentDirectorLabels)
 	}
-	if g.ClaudeSessionID != "" || g.JSONLPath != "" || g.LivenessUnverifiedSince != nil || g.LivenessNote != nil || g.EndedAt != nil {
+	if g.SessionID != "" || g.JSONLPath != "" || g.LivenessUnverifiedSince != nil || g.LivenessNote != nil || g.EndedAt != nil {
 		t.Errorf("Get session %q, transcript %q, liveness %v %v, ended_at %v; want none of the old life",
-			g.ClaudeSessionID, g.JSONLPath, g.LivenessUnverifiedSince, g.LivenessNote, g.EndedAt)
+			g.SessionID, g.JSONLPath, g.LivenessUnverifiedSince, g.LivenessNote, g.EndedAt)
 	}
 	cols := e.columns(t, r.ID)
 	var env map[string]string
@@ -221,10 +221,10 @@ func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, r
 		t.Fatalf("%s records = %v; want 1, and no %s or %s", rutReused, recs, rutRestored, rutNameHeld)
 	}
 	var archived any
-	if sid, _ := run.before.cols.ClaudeSessionID.(string); sid != "" {
+	if sid, _ := run.before.cols.SessionID.(string); sid != "" {
 		archived = sid
 	}
-	assertTrailRecord(t, recs[0], rutReusedKeys, map[string]any{"claude_instance_id": r.ID, "prior_state": run.before.cols.State,
+	assertTrailRecord(t, recs[0], rutReusedKeys, map[string]any{"instance_id": r.ID, "prior_state": run.before.cols.State,
 		"archived_session_id": archived, "lookup_outcome": "gone", "source": "ad_spawn"})
 }
 
@@ -251,17 +251,17 @@ func (e *killEnv) rchgAssertLikeFresh(t *testing.T, id string, p api.SpawnParams
 	t.Helper()
 	c, _ := e.client(t)
 	fp := p
-	fp.ClaudeInstanceID, fp.TmuxSessionName, fp.ReuseFinished = "fresh-"+uuid.NewString()[:8], "fresh-"+uuid.NewString()[:8], false
+	fp.InstanceID, fp.TmuxSessionName, fp.ReuseFinished = "fresh-"+uuid.NewString()[:8], "fresh-"+uuid.NewString()[:8], false
 	fresh, err := c.Spawn(fp)
 	if err != nil {
 		t.Fatalf("fresh Spawn: %v", err)
 	}
-	if want := (api.SpawnResult{ClaudeInstanceID: id, PreTrust: fresh.PreTrust}); run.res != want ||
+	if want := (api.SpawnResult{InstanceID: id, PreTrust: fresh.PreTrust}); run.res != want ||
 		!slices.Equal(rchgJSONKeys(t, run.res), rchgJSONKeys(t, fresh)) {
 		t.Errorf("reuse result %+v; want %+v, a fresh spawn's fields", run.res, want)
 	}
 	reused, rerr := c.Get(id)
-	row, ferr := c.Get(fp.ClaudeInstanceID)
+	row, ferr := c.Get(fp.InstanceID)
 	if rerr != nil || ferr != nil || !slices.Equal(rchgJSONKeys(t, reused), rchgJSONKeys(t, row)) {
 		t.Errorf("get fields %q (%v); want a fresh spawn's %q (%v)", rchgJSONKeys(t, reused), rerr, rchgJSONKeys(t, row), ferr)
 	}

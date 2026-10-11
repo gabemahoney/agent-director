@@ -88,10 +88,7 @@ By default, the first call that opens the store creates it when it does not
 exist (parent directories, file and schema). With `createIfMissing: false`,
 such a call rejects with `ErrStoreOpen` (`database not initialized`) and
 creates none of it; an existing store opens as usual, and calls that open no
-store, such as `version`, are unaffected. `false` needs a CLI from this
-client's release or later: an older CLI, which the version floor still
-admits, rejects every call with `ErrUnknownVerb`, after creating a missing
-store.
+store, such as `version`, are unaffected.
 
 For `spawn`, `home` and `storePath` must name the store of the tmux server
 the spawn reaches. The agent's hooks open the store that
@@ -107,9 +104,13 @@ login and first-run setup; see
 
 ## Verb examples
 
+A call that carries an old name of a renamed key (on any verb) throws
+`ErrInvalidFlags` before the client starts any process; its description names
+the new key.
+
 ### spawn
 
-Launch a tracked Claude Code instance in a new tmux session.
+Launch a tracked agent in a new tmux session.
 
 ```sh
 agent-director spawn --cwd ~/my-project
@@ -117,7 +118,7 @@ agent-director spawn --cwd ~/my-project
 
 ```ts
 const result = await client.spawn({ cwd: "~/my-project" });
-console.log(result.claude_instance_id);
+console.log(result.instance_id);
 ```
 
 ### status
@@ -125,11 +126,11 @@ console.log(result.claude_instance_id);
 Get the current lifecycle state of a Spawn.
 
 ```sh
-agent-director status --claude-instance-id <id>
+agent-director status --instance-id <id>
 ```
 
 ```ts
-const result = await client.status({ claude_instance_id: "<id>" });
+const result = await client.status({ instance_id: "<id>" });
 console.log(result.state);
 ```
 
@@ -152,7 +153,7 @@ agent-director list --state waiting
 ```ts
 const result = await client.list({ state: ["waiting"] });
 for (const spawn of result.spawns) {
-  console.log(spawn.claude_instance_id, spawn.state);
+  console.log(spawn.instance_id, spawn.state);
 }
 ```
 
@@ -170,11 +171,11 @@ the pane" below). Pass it only for a pane a person or an LLM judged, never
 from an automatic flow.
 
 ```sh
-agent-director send-keys --claude-instance-id <id> --text "what is 2+2?"
+agent-director send-keys --instance-id <id> --text "what is 2+2?"
 ```
 
 ```ts
-await client.sendKeys({ claude_instance_id: "<id>", text: "what is 2+2?" });
+await client.sendKeys({ instance_id: "<id>", text: "what is 2+2?" });
 ```
 
 Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
@@ -186,7 +187,7 @@ only a session an earlier launch left behind is found, gets
 `ErrSpawnNotInteractive` and nothing is sent.
 
 A `pending` row whose `liveness_note` is `"unreported"` has a running agent
-that has not reported in since its launch: it may show a Claude Code startup
+that has not reported in since its launch: it may show an agent startup
 screen or sit idle at its prompt. Read it with `readPane` first and type with
 `allow_pending: true` only having looked; without the flag it is refused like
 any `pending` row. A caller that cannot judge the pane ends the launch with
@@ -199,7 +200,7 @@ a prompt:
 
 ```ts
 await client.sendKeys({
-  claude_instance_id: "<id>",
+  instance_id: "<id>",
   text: "",
   allow_pending: true,
 });
@@ -210,11 +211,11 @@ await client.sendKeys({
 Read the last N lines of the agent's own pane (default 25).
 
 ```sh
-agent-director read-pane --claude-instance-id <id> --n-lines 50
+agent-director read-pane --instance-id <id> --n-lines 50
 ```
 
 ```ts
-const result = await client.readPane({ claude_instance_id: "<id>", n_lines: 50 });
+const result = await client.readPane({ instance_id: "<id>", n_lines: 50 });
 console.log(result.pane, result.pane_sha256);
 ```
 
@@ -239,11 +240,11 @@ exited. `kill` never changes the row's state: `find-missing` marks the row once
 its agent process is gone.
 
 ```sh
-agent-director kill --claude-instance-id <id>
+agent-director kill --instance-id <id>
 ```
 
 ```ts
-const { kill_sent } = await client.kill({ claude_instance_id: "<id>" });
+const { kill_sent } = await client.kill({ instance_id: "<id>" });
 console.log(kill_sent);
 ```
 
@@ -261,19 +262,19 @@ Shut down a `waiting` Spawn: type `/exit` in its pane and wait up to
 live state throws `ErrSpawnNotPausable`.
 
 ```sh
-agent-director pause --claude-instance-id <id>
+agent-director pause --instance-id <id>
 ```
 
 ```ts
-await client.pause({ claude_instance_id: "<id>" });
+await client.pause({ instance_id: "<id>" });
 ```
 
 `pause` is held like a `sendKeys` without `request_token` and without
 `expect_pane_sha256`: on a Spawn with `relay_mode: "on"` it throws
 `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or `ErrDialogMaybeOpen`,
 with the same `errDetails`, typing nothing and starting no wait, whenever
-that `sendKeys` would. It takes no pane hash, so it stays held until Claude
-Code proves each request gone (after a subagent's denied request, until the
+that `sendKeys` would. It takes no pane hash, so it stays held until the
+agent's hooks prove each request gone (after a subagent's denied request, until the
 agent ends). To stop a held Spawn, `kill` it, or have a person or an LLM
 `readPane`, first close any fallen-back request (`sendKeys` with its
 `request_token`, or `recordPaneAnswer`: a pane hash gets a `sendKeys` past
@@ -303,12 +304,12 @@ agent's relay hook to confirm it, and resolves with the request's
 `delivery`.
 
 ```sh
-agent-director decide --claude-instance-id <id> --request-token <token> --decision allow --max-wait-ms 2000
+agent-director decide --instance-id <id> --request-token <token> --decision allow --max-wait-ms 2000
 ```
 
 ```ts
 const result = await client.decide({
-  claude_instance_id: "<id>",
+  instance_id: "<id>",
   request_token: "<token>",
   decision: "allow",
   max_wait_ms: 2000, // at most your deadline minus 1 s
@@ -320,7 +321,7 @@ if (result.delivery === "not_confirmed") {
 ```
 
 `"delivered"`: the relay hook confirmed the verdict before handing it to
-Claude Code. `"not_confirmed"`: poll `getPermission` until `delivery` reads
+the agent. `"not_confirmed"`: poll `getPermission` until `delivery` reads
 `"delivered"` or `"fallen_back"`, which it does by `confirm_by`. `decision`
 is the verdict recorded, not the outcome: read `delivery`. `max_wait_ms`
 bounds the whole call, its reads and its write, and has no default; without
@@ -344,8 +345,8 @@ do not know, read the recorded verdict from `decision` (`null` for a
 
 `proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, its
 tool ran; `"turn_end"`, the turn of the agent that asked ended after it was
-written; or `"agent_gone"`, the agent ended) say when and how Claude Code
-itself showed the request's dialog gone; `"delivered"` and a pane answer are
+written; or `"agent_gone"`, the agent ended) say when and how the agent's
+hooks showed the request's dialog gone; `"delivered"` and a pane answer are
 agent-director's own records, not proof. `get`'s `unproven_requests` lists
 every request not yet proven gone, each with `unproven_since`. A request
 that reads `"delivered"` or closed at the pane but stays unproven for a
@@ -358,10 +359,10 @@ pane. Read the pane, and having looked, send the one key that answers it,
 naming the request:
 
 ```ts
-const seen = await client.readPane({ claude_instance_id: "<id>" });
+const seen = await client.readPane({ instance_id: "<id>" });
 // having looked at seen.pane, the caller picks the key and the verdict it gives
 await client.sendKeys({
-  claude_instance_id: "<id>",
+  instance_id: "<id>",
   request_token: "<token>",
   as: "deny",
   key: "<key>",
@@ -405,7 +406,7 @@ pane answer to the request is still being sent; do nothing.
 
 After a permission request, a `sendKeys` without `request_token` and
 without `expect_pane_sha256` rejects with `ErrDialogMaybeOpen`, sending
-nothing, until Claude Code shows the request's dialog gone: after an
+nothing, until the agent's hooks show the request's dialog gone: after an
 allow, once its tool has run; after a deny, once the agent's turn ends. A
 request answered at the pane or recorded with `recordPaneAnswer` is held
 the same way. Keep the keys and retry later; if it is still held after
@@ -415,7 +416,7 @@ still applies):
 
 ```ts
 try {
-  await client.sendKeys({ claude_instance_id: "<id>", text: "<text>" });
+  await client.sendKeys({ instance_id: "<id>", text: "<text>" });
 } catch (e) {
   if (e instanceof ErrDialogMaybeOpen) {
     // errDetails is a DialogMaybeOpenDetails here: keep the keys, retry later.
@@ -503,7 +504,7 @@ Every error thrown by this package extends `AgentDirectorError`, so you can catc
 ```ts
 import { Client, ErrSpawnNotFound } from "agent-director";
 try {
-  await client.status({ claude_instance_id: "bogus" });
+  await client.status({ instance_id: "bogus" });
 } catch (e) {
   if (e instanceof ErrSpawnNotFound) {
     // recover
@@ -593,9 +594,9 @@ These 55 classes are generated one-to-one from the shared `err_name` catalog ([`
 | Error | When it fires |
 |---|---|
 | `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
-| `ErrSpawnDeniedFlag` | `claude_args` contains a flag the supervisor must own (`--settings`, `--resume`, `--continue`, `--print`, `--output-format`). |
-| `ErrReservedEnvKey` | From `spawn`: an `extra_env` key (a template's included) is reserved or is not a valid env-var name; nothing is written or launched, and the description says which. Reserved: an `AGENT_DIRECTOR_*` key, or a key that sets `HOME` (`HOME` itself, or one such as `HOME=/x`), with any value, an empty one included. An `extra_env` `HOME` would send the agent's hook events to another agent-director store; set an absolute `CLAUDE_CONFIG_DIR` to give the agent its own Claude Code config. Not a valid name: the key is empty, or contains `=` or a NUL character; give each variable its own name as the key and its value as the value (`{ CLAUDE_CONFIG_DIR: "/cfg" }`, not `{ "CLAUDE_CONFIG_DIR=/cfg": "" }`). This client refuses an invalid key in the call's `extra_env` itself, before it runs the CLI. From `makeTemplate`: the template's `extra_env` has such a key, reserved or not a valid name, refused by spawn's own check; no template is written or replaced, so none is saved that `spawn` would refuse (this client refuses an invalid key itself, as for `spawn`). From `resume`: the row's stored `extra_env` has a key that sets `HOME` or is not a valid name (a row spawned before spawn refused it); nothing is written or launched — spawn the same `claude_instance_id` again with `reuse_finished: true` and an `extra_env` without that key, which starts with no memory of the old conversation. |
-| `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `claude_instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
+| `ErrSpawnDeniedFlag` | `agent_args` contains a flag the supervisor must own (`--settings`, `--resume`, `--continue`, `--print`, `--output-format`). |
+| `ErrReservedEnvKey` | From `spawn`: an `extra_env` key (a template's included) is reserved or is not a valid env-var name; nothing is written or launched, and the description says which. Reserved: an `AGENT_DIRECTOR_*` key, or a key that sets `HOME` (`HOME` itself, or one such as `HOME=/x`), with any value, an empty one included. An `extra_env` `HOME` would send the agent's hook events to another agent-director store; set an absolute `CLAUDE_CONFIG_DIR` to give the agent its own Claude Code config. Not a valid name: the key is empty, or contains `=` or a NUL character; give each variable its own name as the key and its value as the value (`{ CLAUDE_CONFIG_DIR: "/cfg" }`, not `{ "CLAUDE_CONFIG_DIR=/cfg": "" }`). This client refuses an invalid key in the call's `extra_env` itself, before it runs the CLI. From `makeTemplate`: the template's `extra_env` has such a key, reserved or not a valid name, refused by spawn's own check; no template is written or replaced, so none is saved that `spawn` would refuse (this client refuses an invalid key itself, as for `spawn`). From `resume`: the row's stored `extra_env` has a key that sets `HOME` or is not a valid name (a row spawned before spawn refused it); nothing is written or launched — spawn the same `instance_id` again with `reuse_finished: true` and an `extra_env` without that key, which starts with no memory of the old conversation. |
+| `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
 **tmux session naming** (bad `tmux_session_name` — programmer error):
 
@@ -609,13 +610,13 @@ These 55 classes are generated one-to-one from the shared `err_name` catalog ([`
 
 | Error | When it fires |
 |---|---|
-| `ErrSpawnNotFound` | No spawn row matches the supplied `claude_instance_id`. |
+| `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
 | `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry the pause; the agent may still be running. |
-| `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. If that launch was abandoned or failed, `find-missing` marks the row `missing` once the pending grace period has passed; then a row with a `claude_session_id` (typically a resume's launch) can be resumed, and one without (typically a spawn's or reuse's launch), if `get` still shows no `claude_session_id`, is spawned again with `reuse_finished: true`, as the error says. An agent that reports in late records a `claude_session_id`, and its row, once `missing`, can be resumed instead. Also returned when the row changed after `resume` examined it; nothing is written. |
-| `ErrNoSessionId` | The spawn has no `claude_session_id` (killed before its first SessionStart, or a spawn's or reuse's launch that never reported in and that `find-missing` marked `missing`), so there is nothing to resume — spawn the same `claude_instance_id` again with `reuse_finished: true`, which starts with no memory of the old conversation. |
-| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — spawn the same `claude_instance_id` again with `reuse_finished: true`, which starts with no memory of the old conversation. |
+| `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. If that launch was abandoned or failed, `find-missing` marks the row `missing` once the pending grace period has passed; then a row with a `session_id` (typically a resume's launch) can be resumed, and one without (typically a spawn's or reuse's launch), if `get` still shows no `session_id`, is spawned again with `reuse_finished: true`, as the error says. An agent that reports in late records a `session_id`, and its row, once `missing`, can be resumed instead. Also returned when the row changed after `resume` examined it; nothing is written. |
+| `ErrNoSessionId` | The spawn has no `session_id` (killed before its first SessionStart, or a spawn's or reuse's launch that never reported in and that `find-missing` marked `missing`), so there is nothing to resume — spawn the same `instance_id` again with `reuse_finished: true`, which starts with no memory of the old conversation. |
+| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — spawn the same `instance_id` again with `reuse_finished: true`, which starts with no memory of the old conversation. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
 | `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
 
@@ -624,9 +625,9 @@ These 55 classes are generated one-to-one from the shared `err_name` catalog ([`
 | Error | Class | When it fires |
 |---|---|---|
 | `ErrTmuxNotAvailable` | ENVIRONMENT | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). `kill`, `resume`, `readPane`, `sendKeys` and `pause` return it too: tmux could not be run, the socket is not accessible to this user, or this is not the tmux server the agent was launched on. |
-| `ErrTmuxSessionCreate` | LAUNCH FAILURE | The session could not be created or labelled; the new row stays `pending`. After tmux answers "duplicate session", `spawn` returns it only when the session holding the requested name was gone by the re-lookup; the new row is then ended (the error says if it was not), and the error names the instance id (a minted one included) and the retry: spawn that `claude_instance_id` again with `reuse_finished: true` once the name is free (if the row was not ended, once `get` shows it `ended` or `missing`), since a plain `spawn` of the id collides with its row. From `resume`, the session could not be created or labelled, or after "duplicate session" no session held the name when it was looked up again; the row is restored to `ended` or `missing` (the error says if it was not). A name found held is never this error. |
-| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | tmux did not answer in time, or gave a reply agent-director does not recognise. From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`; then a `spawn` of an explicit `claude_instance_id` is retried with `reuse_finished: true`, since a plain `spawn` of the id collides with its finished row. When the launch did start, the row may instead stay `pending` with `liveness_note` `"unreported"`, because its agent runs: use that agent (`readPane`, then `sendKeys` with `allow_pending: true`; only a caller that looked should type), or end it with `kill` and the live-row sequence (see `kill`'s description) before retrying. From a plain `spawn` after "duplicate session": the re-lookup could not be read, or more than one session's name matches the requested name; the new row is ended (the error says if it was not) and the error names the retry with `reuse_finished: true`, as for `ErrTmuxSessionCreate`. From `resume`'s check before the launch, with nothing written: the row's own session or agent process appears to still be stopping or still starting, this id's own abandoned launch (a session of an earlier launch of this id that the row does not track) appears to still be starting, tmux's answer could not be read, or more than one session's name matches the row's session name; retry later. After "duplicate session" at the create, the same cases, and the row is restored; if it was not, the error says so and names the next step in place of "retry later": do not retry until `get` shows the row `ended` or `missing`, or, for a removed row, later a `spawn` of the id starts afresh. From `kill`: the lookup or the pane listing could not be read (nothing was done), or a kill was sent, the agent process could not be checked and the follow-up lookup could not be read (the kill may or may not have taken effect); retry later with backoff. From `readPane`, `sendKeys` and `pause`: tmux did not answer usably; after a timed-out send the keys (or `/exit`) may have been delivered. Where `sendKeys`' text may be typed, the error names the next step instead of "retry later", because the same call would type the text a second time: after a timed-out text call, `readPane` and, if the text is typed, `sendKeys` with empty `text`, otherwise the same `sendKeys`; after a failed or timed-out Enter, `sendKeys` with empty `text`, which submits it. A `pause` is retried later as it is: before typing `/exit` it clears the line the agent's cursor is on, so an `/exit` the failed `pause` left typed is not doubled. |
-| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | A tmux session conflict that needs a human. From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. From a plain `spawn` whose requested tmux session name is already held (tmux answered "duplicate session"): the holder is a session left over from an earlier life of this id, another row's session, a session of another agent-director store, or one with no valid instance id, or labels conflict; the new row is ended (the error says if it was not) and the error names the blocking session. Another row's or another store's session is another agent and is never ended; the holding session is never read or typed into. From `resume` of a finished row, before anything is written and with no session touched: a session holds the row's session name (another row's session, a session of another agent-director store, or one with no valid instance id), a session is left over from an earlier life of this id, the row's own old session (or its agent process still running with no session) is past the stopping window and the starting-session bound, this id's own abandoned launch is past the starting-session bound (agent-director ends such a launch only through its operator tool, so ending it is a human's decision; once a human has, this refused call, which wrote nothing, can be re-issued), or labels conflict; the error names the blocking session. After "duplicate session" at the create, the same cases, and the row is restored (the error says if it was not; then re-issue the call only once `get` shows the row `ended` or `missing`, or, for a removed row, later a `spawn` of the id starts afresh). None of these means the agent is dead. From `kill` on a live row: the session found is not this launch's session (it carries the label of an earlier launch with this row's own id), or labels conflict; no kill was sent. From `readPane`, `sendKeys` and `pause`: the agent's pane was not found, a session an earlier launch left behind is there (for `readPane`, more than one; for `sendKeys`, on a live row), or labels conflict; nothing was read or sent. See "Operator actions" in agent-director's docs/operator-actions.md. |
+| `ErrTmuxSessionCreate` | LAUNCH FAILURE | The session could not be created or labelled; the new row stays `pending`. After tmux answers "duplicate session", `spawn` returns it only when the session holding the requested name was gone by the re-lookup; the new row is then ended (the error says if it was not), and the error names the instance id (a minted one included) and the retry: spawn that `instance_id` again with `reuse_finished: true` once the name is free (if the row was not ended, once `get` shows it `ended` or `missing`), since a plain `spawn` of the id collides with its row. From `resume`, the session could not be created or labelled, or after "duplicate session" no session held the name when it was looked up again; the row is restored to `ended` or `missing` (the error says if it was not). A name found held is never this error. |
+| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | tmux did not answer in time, or gave a reply agent-director does not recognise. From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`; then a `spawn` of an explicit `instance_id` is retried with `reuse_finished: true`, since a plain `spawn` of the id collides with its finished row. When the launch did start, the row may instead stay `pending` with `liveness_note` `"unreported"`, because its agent runs: use that agent (`readPane`, then `sendKeys` with `allow_pending: true`; only a caller that looked should type), or end it with `kill` and the live-row sequence (see `kill`'s description) before retrying. From a plain `spawn` after "duplicate session": the re-lookup could not be read, or more than one session's name matches the requested name; the new row is ended (the error says if it was not) and the error names the retry with `reuse_finished: true`, as for `ErrTmuxSessionCreate`. From `resume`'s check before the launch, with nothing written: the row's own session or agent process appears to still be stopping or still starting, this id's own abandoned launch (a session of an earlier launch of this id that the row does not track) appears to still be starting, tmux's answer could not be read, or more than one session's name matches the row's session name; retry later. After "duplicate session" at the create, the same cases, and the row is restored; if it was not, the error says so and names the next step in place of "retry later": do not retry until `get` shows the row `ended` or `missing`, or, for a removed row, later a `spawn` of the id starts afresh. From `kill`: the lookup or the pane listing could not be read (nothing was done), or a kill was sent, the agent process could not be checked and the follow-up lookup could not be read (the kill may or may not have taken effect); retry later with backoff. From `readPane`, `sendKeys` and `pause`: tmux did not answer usably; after a timed-out send the keys (or `/exit`) may have been delivered. Where `sendKeys`' text may be typed, the error names the next step instead of "retry later", because the same call would type the text a second time: after a timed-out text call, `readPane` and, if the text is typed, `sendKeys` with empty `text`, otherwise the same `sendKeys`; after a failed or timed-out Enter, `sendKeys` with empty `text`, which submits it. A `pause` is retried later as it is: before typing `/exit` it clears the line the agent's cursor is on, so an `/exit` the failed `pause` left typed is not doubled. |
+| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | A tmux session conflict that needs a human. From `spawn` with an explicit `instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. From a plain `spawn` whose requested tmux session name is already held (tmux answered "duplicate session"): the holder is a session left over from an earlier life of this id, another row's session, a session of another agent-director store, or one with no valid instance id, or labels conflict; the new row is ended (the error says if it was not) and the error names the blocking session. Another row's or another store's session is another agent and is never ended; the holding session is never read or typed into. From `resume` of a finished row, before anything is written and with no session touched: a session holds the row's session name (another row's session, a session of another agent-director store, or one with no valid instance id), a session is left over from an earlier life of this id, the row's own old session (or its agent process still running with no session) is past the stopping window and the starting-session bound, this id's own abandoned launch is past the starting-session bound (agent-director ends such a launch only through its operator tool, so ending it is a human's decision; once a human has, this refused call, which wrote nothing, can be re-issued), or labels conflict; the error names the blocking session. After "duplicate session" at the create, the same cases, and the row is restored (the error says if it was not; then re-issue the call only once `get` shows the row `ended` or `missing`, or, for a removed row, later a `spawn` of the id starts afresh). None of these means the agent is dead. From `kill` on a live row: the session found is not this launch's session (it carries the label of an earlier launch with this row's own id), or labels conflict; no kill was sent. From `readPane`, `sendKeys` and `pause`: the agent's pane was not found, a session an earlier launch left behind is there (for `readPane`, more than one; for `sendKeys`, on a live row), or labels conflict; nothing was read or sent. See "Operator actions" in agent-director's docs/operator-actions.md. |
 | `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only: the agent process still runs after `kill`. A kill was sent and the agent process, or another process in a pane of the agent's session, still ran after the kill exit wait (`kill_exit_wait_ms`); or the process cannot be checked and its labelled session is still there; or no session or pane of this launch was found while the agent process runs, so no kill was sent. Retry `kill` later; never `delete` the row. |
 | `ErrTmuxSendKeys` | GONE | `sendKeys` and `pause`: the row's session or pane is not there. |
 | `ErrTmuxCaptureFailed` | GONE | `readPane`: the row's session or pane is not there. |
@@ -639,7 +640,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrSendKeysWhileRelayed` | `sendKeys` (plain or a pane answer) or `pause` on a spawn with `relay_mode=on`, in any live state, while a relay hook of the spawn may still answer its request (its process runs, or it cannot be checked and the request's `confirm_by` has not passed); nothing was sent. The message names that request. If it is undecided, the message says to answer it with `decide` (`… on request <request_token>; answer it with decide`). If its verdict is already recorded, the message says to retry later (`… the relayed permission verdict on request <request_token> is recorded and its relay hook may still be delivering it; retry send-keys later`, or `retry later` from `pause`); `decide` on it would throw `ErrAlreadyDecided`. Once that hook has ended, a plain retry can throw `ErrDialogMaybeOpen` until Claude Code proves the request gone. |
 | `ErrRelayFallenBack` | A request's relay hook is gone and acked no verdict, with no pane answer recorded through agent-director: no answer from the relay reached the agent. Thrown by `decide` on that request, within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process); no verdict was recorded, the caller's is kept as the request's `attempted_decision`. Thrown by a `sendKeys` without `request_token`, and by `pause`, while any request of the spawn is so; nothing was sent. `errDetails` is a `RelayFallenBackDetails`: the request's facts, the spawn's `state` and its other `open_requests`. Answer the request at the pane with `sendKeys` and its `request_token`, or close it with `recordPaneAnswer`. For a request recorded before this release, `decide` throws it once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `ErrNoOpenPermissionRequest`. |
-| `ErrDialogMaybeOpen` | A `sendKeys` without `request_token` and without `expect_pane_sha256`, or a `pause`, on a spawn with `relay_mode=on`, while a permission request of the spawn is not proven gone by Claude Code's hooks (its tool's PostToolUse, the main agent's end of turn after it, or the agent's end), whatever agent-director's records say of it (`"delivered"`, a pane answer, `recordPaneAnswer`); nothing was sent. `errDetails` is a `DialogMaybeOpenDetails`: the oldest such request with its facts and `unproven_since`, the spawn's `state` and its other `unproven_requests`. Retry later; if it is still held, have a person or an LLM look at the pane and send with its `pane_sha256`, never from an automatic flow. A subagent's denied request holds until the agent ends. `pause` takes no hash: to stop a held Spawn, see [pause](#pause). |
+| `ErrDialogMaybeOpen` | A `sendKeys` without `request_token` and without `expect_pane_sha256`, or a `pause`, on a spawn with `relay_mode=on`, while a permission request of the spawn is not proven gone by the agent's hooks (its tool's PostToolUse, the main agent's end of turn after it, or the agent's end), whatever agent-director's records say of it (`"delivered"`, a pane answer, `recordPaneAnswer`); nothing was sent. `errDetails` is a `DialogMaybeOpenDetails`: the oldest such request with its facts and `unproven_since`, the spawn's `state` and its other `unproven_requests`. Retry later; if it is still held, have a person or an LLM look at the pane and send with its `pane_sha256`, never from an automatic flow. A subagent's denied request holds until the agent ends. `pause` takes no hash: to stop a held Spawn, see [pause](#pause). |
 | `ErrPaneChanged` | `sendKeys` or `recordPaneAnswer` with `expect_pane_sha256`: the agent's pane no longer has that hash; nothing was sent or recorded. Read the pane again; `errDetails` (`PaneChangedDetails`) never carries the new hash. |
 | `ErrPaneAnswerInProgress` | A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` while another pane answer to the request is still being sent; nothing was sent or recorded. `errDetails` is a `PaneAnswerInProgressDetails`. Do nothing; a retry after that sender has ended needs a fresh hash. |
 | `ErrClaimTooSoon` | `recordPaneAnswer` before the request's relay hook has been gone 2 s, or while it may still answer the request; nothing was recorded. Retry at the `not_before` of its `errDetails` (`ClaimTooSoonDetails`; `null` only while the hook is seen running). |
@@ -658,14 +659,14 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrTemplateNameUnsafe` | A template name fails the safety check (path traversal, absolute path, hidden name, or trivial garbage). |
 | `ErrTemplateNotFound` | The named template `.toml` does not exist on disk. |
-| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, wrong types, bad enums, or one key set under names that differ only in letter case, such as `RELAY_MODE` and `relay_mode`). |
+| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, the old name of the `agent_args` key, wrong types, bad enums, or one key set under names that differ only in letter case, such as `RELAY_MODE` and `relay_mode`). |
 | `ErrTemplateExists` | `make-template` target already exists and `overwrite` is not `true`. |
 
 **misc**:
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap); `decide` was given a negative `max_wait_ms`; `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash); or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was changed, sent or recorded. |
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; a call carried an old name of a renamed key (thrown before any process starts, naming the new key); `spawn` was given an explicit `instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap); `decide` was given a negative `max_wait_ms`; `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash); or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was changed, sent or recorded. |
 
 **CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all four are in the "AD is sick" alert set):
 
@@ -682,7 +683,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrInternal` | The CLI failed in a way it has no more specific name for: for example the store could not be read or written, or a row's recorded tmux session name cannot be used. The description says what failed and, where it matters, whether anything was changed; read it before you retry. An unusable recorded session name needs a human (see "Operator actions" in agent-director's docs/operator-actions.md). It says nothing about whether an agent is alive. From a pane answer (`sendKeys` with `request_token`) whose key was sent but not recorded, its `errDetails` is a `PaneKeySentDetails` (`key_sent` `true`): read the pane before you send anything again. |
 | `ErrJSONMarshal` | The verb ran and succeeded, but the CLI could not write its JSON result, so the result is lost and whatever the call changes was changed (a `spawn` launched its agent). A bug in agent-director. Check with `get`, `status` or `list` before you repeat a call that changes something. |
-| `ErrUnknownVerb` | The binary does not know the verb this client called, so no verb ran: the binary is of a different version than this client, most often an older one that the version floor still admits. Version error — install the agent-director release that matches this client; do not retry. With `createIfMissing: false`, such a binary gives it for every call (it takes `--create-if-missing` for the verb), after creating the store if it was missing. |
+| `ErrUnknownVerb` | The binary does not know the verb this client called, so no verb ran: the binary is of a different version than this client, most often an older one that the version floor still admits. Version error — install the agent-director release that matches this client; do not retry. |
 | `ErrTrailWrite` | Only the CLI's internal `trail-emit` command gives it, when it cannot write its trail event. No method of this client runs `trail-emit`, so a call through this client does not get it. |
 
 ## Architecture

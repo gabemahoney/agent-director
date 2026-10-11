@@ -35,7 +35,7 @@ func assertDisagreeRecord(t *testing.T, rec map[string]any, r killRow, verb, sou
 		current = want.current
 	}
 	fields := map[string]any{
-		"claude_instance_id": r.ID, "verb": verb, "source": source, "reason": want.reason,
+		"instance_id": r.ID, "verb": verb, "source": source, "reason": want.reason,
 		"tmux_socket": r.Socket, "tmux_session_name": r.Name, "tmux_session_id": sessionID,
 		"current_session_name": current, "server": want.server, "verdict": want.verdict, "action": want.action,
 	}

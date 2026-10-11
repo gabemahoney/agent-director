@@ -19,9 +19,9 @@ import (
 // session never had a recorded transcript path (NULL in the column). Ordered
 // newest-first by callers.
 type SessionHistoryEntry struct {
-	ClaudeSessionID string
-	JSONLPath       string
-	RecordedAt      string
+	SessionID  string
+	JSONLPath  string
+	RecordedAt string
 }
 
 // ListSessionHistory returns the instance's archived sessions of the given
@@ -54,7 +54,7 @@ func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHist
 	out := make([]SessionHistoryEntry, 0)
 	for rows.Next() {
 		var e SessionHistoryEntry
-		if err := rows.Scan(&e.ClaudeSessionID, &e.JSONLPath, &e.RecordedAt); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.JSONLPath, &e.RecordedAt); err != nil {
 			return nil, fmt.Errorf("store: list session history scan: %w", err)
 		}
 		out = append(out, e)
@@ -154,10 +154,10 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 		return false, nil
 	}
 	_ = trail.Emit(context.Background(), "ad.session.jsonl_healed", map[string]any{
-		"claude_instance_id": instanceID,
-		"claude_session_id":  sessionID,
-		"jsonl_path":         jsonlPath,
-		"source":             "ad_spawn_store",
+		"instance_id": instanceID,
+		"session_id":  sessionID,
+		"jsonl_path":  jsonlPath,
+		"source":      "ad_spawn_store",
 	})
 	return true, nil
 }
@@ -191,7 +191,7 @@ func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 			pt           ProvisionalTranscript
 			extraEnvJSON string
 		)
-		if err := rows.Scan(&pt.ClaudeInstanceID, &pt.ClaudeSessionID, &pt.CWD, &extraEnvJSON); err != nil {
+		if err := rows.Scan(&pt.InstanceID, &pt.SessionID, &pt.CWD, &extraEnvJSON); err != nil {
 			return nil, fmt.Errorf("store: list provisional transcripts scan: %w", err)
 		}
 		env, derr := decodeExtraEnv(extraEnvJSON)
@@ -212,10 +212,10 @@ func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 // ExtraEnv["CLAUDE_CONFIG_DIR"] (empty when the key is absent), so find-missing
 // can recompose the transcript path under the correct config dir.
 type ProvisionalTranscript struct {
-	ClaudeInstanceID string
-	ClaudeSessionID  string
-	CWD              string
-	ConfigDir        string
+	InstanceID string
+	SessionID  string
+	CWD        string
+	ConfigDir  string
 }
 
 // joinPlaceholders joins pre-built "?" placeholder tokens with commas. Kept

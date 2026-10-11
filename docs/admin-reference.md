@@ -17,13 +17,13 @@ The global flags are agent-director's, parsed and applied the same way: give the
 
 ## kill-finished
 
-`agent-director-admin kill-finished --claude-instance-id <id>`
+`agent-director-admin kill-finished --instance-id <id>`
 
 End a finished row's (ended or missing) own old session, after a human has looked at it. It ends the session only if it reported in to the row: the row records the agent's process id and the session was created, in whole seconds, before the row finished. It ends the agent's pane and the row's labelled session, waits for the agent process (or, when the process cannot be checked, looks the session up once more) and succeeds once the agent process is gone. It also ends this id's own abandoned launch, which resume and spawn --reuse-finished refuse: when the row records a launch token but no tmux server or pane of that launch, the sessions carrying an earlier launch's label of the row's id in this store, once the youngest has run for at least the starting-session bound; such a launch never reports in, so its agent process is the process of the pane that launch created, never one the row records. The row's state and every other field stay unchanged, so the conversation stays resumable. With no session of the row's current launch found, it acts as kill does on a live row. A live row (pending included) is refused with ErrSpawnNotResumable, with no lookup; an unknown id is ErrSpawnNotFound. These refusals send no kill and change nothing: ErrInternal (unusable recorded tmux session name), ErrTmuxUnresponsive (still stopping or still starting: wait and run it again; or tmux did not answer usably), ErrTmuxSessionConflict (never reported in, or conflicting labels), ErrTmuxNotAvailable. ErrTmuxKillFailed means the agent process still runs: retry later. After a sent kill, ErrTmuxUnresponsive or ErrTmuxNotAvailable means the kill may or may not have taken effect: check again later. "A finished row's own old session" in agent-director's docs/operator-actions.md describes every case. Its ad.kill.called trail record carries include_finished true. Run it as the agents' user and in their tmux environment. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
 
 ### Flags
 
-- `--claude-instance-id <id>`: Id of the finished row. Required.
+- `--instance-id <id>`: Id of the finished row. Required.
 
 ### Output
 
@@ -31,13 +31,13 @@ End a finished row's (ended or missing) own old session, after a human has looke
 
 ## delete
 
-`agent-director-admin delete --claude-instance-id <id> [--claude-instance-id <id>...]`
+`agent-director-admin delete --instance-id <id> [--instance-id <id>...]`
 
 Remove rows by id, bypassing every guard: the human's repair tool for a row nothing else removes, such as a row whose recorded tmux session name cannot be used, which resume and reuse refuse and expire keeps. It also removes each row's permission requests and session history and clears it as the parent of any other row. It touches no tmux session and no transcript: on a live row the agent keeps running, untracked. Never remove a row after a kill that did not succeed. Each id is processed on its own; a failure on one never aborts the batch. Run it as the agents' user and in their tmux environment. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
 
 ### Flags
 
-- `--claude-instance-id <id>`: Id of a row to remove. Repeatable; at least one is required.
+- `--instance-id <id>`: Id of a row to remove. Repeatable; at least one is required.
 
 ### Output
 

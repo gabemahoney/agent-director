@@ -242,7 +242,7 @@ func TestFindMissingRepairsStaleCheckPermission(t *testing.T) {
 			if len(ticks) != 1 {
 				t.Fatalf("stale_check_permission ticks = %d; want 1", len(ticks))
 			}
-			want := map[string]any{"event": "ad.find_missing.tick", "claude_instance_id": r.ID, "source": "ad_find_missing",
+			want := map[string]any{"event": "ad.find_missing.tick", "instance_id": r.ID, "source": "ad_find_missing",
 				"prior_state": store.StateCheckPermission, "new_state": tc.want, "reconciliation_reason": "stale_check_permission"}
 			for k, v := range want {
 				assertAPITrailStr(t, ticks[0], k, v.(string))

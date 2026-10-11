@@ -243,7 +243,7 @@ func readColumns(t *testing.T, dbPath, id string) apitest.SpawnColumns {
 func rowIDs(t *testing.T, d mcp.Dispatcher) []string {
 	t.Helper()
 	var rows []struct {
-		ID string `json:"claude_instance_id"`
+		ID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(callToolText(t, d, "list", `{}`)["spawns"], &rows); err != nil {
 		t.Fatalf("parse list spawns: %v", err)

@@ -135,7 +135,7 @@ func (h *harness) startSample(caseID string, i int, l launch, mcpPath string) (a
 		// nothing positional may follow it.
 		args = append(args, "--mcp-config", mcpPath)
 	}
-	a, err = h.spawnAgent(caseID, spawnSpec{CWD: dir, ClaudeArgs: args, ExtraEnv: env})
+	a, err = h.spawnAgent(caseID, spawnSpec{CWD: dir, AgentArgs: args, ExtraEnv: env})
 	s.InstanceID = a.InstanceID
 	if err != nil {
 		var r *refusal

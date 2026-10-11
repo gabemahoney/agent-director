@@ -20,21 +20,21 @@ import (
 // id is ErrSpawnNotFound.
 func TestInsertPendingRoundTrip(t *testing.T) {
 	s, _ := openTempStore(t)
-	full := Spawn{ClaudeInstanceID: "11111111-aaaa-4bbb-8ccc-000000000001", Agent: AgentClaude, CWD: "/tmp/x", TmuxSessionName: "cd-x",
-		ClaudeArgs: []string{"--model", "opus"}, RelayMode: "off", Labels: map[string]string{"role": "researcher"},
+	full := Spawn{InstanceID: "11111111-aaaa-4bbb-8ccc-000000000001", Agent: AgentClaude, CWD: "/tmp/x", TmuxSessionName: "cd-x",
+		AgentArgs: []string{"--model", "opus"}, RelayMode: "off", Labels: map[string]string{"role": "researcher"},
 		ExtraEnv: map[string]string{"CLAUDE_CONFIG_DIR": "/home/u/.claude-alt", "EMPTY": ""}}
-	bare := Spawn{ClaudeInstanceID: "bare", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-bare", RelayMode: "on"}
+	bare := Spawn{InstanceID: "bare", Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-bare", RelayMode: "on"}
 	for _, sp := range []Spawn{full, bare} {
 		if err := s.InsertPending(sp); err != nil {
-			t.Fatalf("InsertPending(%s): %v", sp.ClaudeInstanceID, err)
+			t.Fatalf("InsertPending(%s): %v", sp.InstanceID, err)
 		}
 	}
-	got, err := s.GetSpawn(full.ClaudeInstanceID)
+	got, err := s.GetSpawn(full.InstanceID)
 	if err != nil {
 		t.Fatalf("GetSpawn: %v", err)
 	}
 	if got.State != StatePending || got.CWD != full.CWD || got.TmuxSessionName != full.TmuxSessionName ||
-		got.RelayMode != "off" || !reflect.DeepEqual(got.ClaudeArgs, full.ClaudeArgs) || !reflect.DeepEqual(got.Labels, full.Labels) ||
+		got.RelayMode != "off" || !reflect.DeepEqual(got.AgentArgs, full.AgentArgs) || !reflect.DeepEqual(got.Labels, full.Labels) ||
 		!reflect.DeepEqual(got.ExtraEnv, full.ExtraEnv) || got.StartedAt.IsZero() || got.EndedAt != nil ||
 		got.PID != 0 || got.ProcStarttime != "" || got.LivenessUnverifiedSince != "" || got.LivenessNote != "" {
 		t.Errorf("GetSpawn = %+v; want the inserted pending row", got)
@@ -60,7 +60,7 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 		t.Fatalf("ListSpawns = %d rows, %v; want 2", len(listed), err)
 	}
 	for _, l := range listed {
-		if g := mustGetSpawn(t, s, l.ClaudeInstanceID); !reflect.DeepEqual(l, g) {
+		if g := mustGetSpawn(t, s, l.InstanceID); !reflect.DeepEqual(l, g) {
 			t.Errorf("ListSpawns %+v differs from GetSpawn %+v", l, g)
 		}
 	}
@@ -68,7 +68,7 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 	if err := s.InsertPending(bare); err == nil {
 		t.Error("a second insert of the same id succeeded; want a collision")
 	}
-	if err := s.InsertPending(Spawn{ClaudeInstanceID: "orphan", Agent: AgentClaude, ParentID: "no-such-parent", CWD: "/tmp",
+	if err := s.InsertPending(Spawn{InstanceID: "orphan", Agent: AgentClaude, ParentID: "no-such-parent", CWD: "/tmp",
 		TmuxSessionName: "cd-o", RelayMode: "off"}); err == nil {
 		t.Error("an insert naming no parent row succeeded; want the foreign key refused")
 	}
@@ -88,7 +88,7 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 func TestHookTransitionTrailLine(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "trail-transitions"
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-tt", RelayMode: "off"}); err != nil {
+	if err := insertAgentRow(s, Spawn{InstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-tt", RelayMode: "off"}); err != nil {
 		t.Fatalf("insertAgentRow: %v", err)
 	}
 	steps := []struct {
@@ -190,7 +190,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 func TestRecordSessionStartIdentity(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "ss-identity"
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-ss", RelayMode: "off"}); err != nil {
+	if err := insertAgentRow(s, Spawn{InstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-ss", RelayMode: "off"}); err != nil {
 		t.Fatalf("insertAgentRow: %v", err)
 	}
 	pane := testPane()
@@ -198,7 +198,7 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 		if err := agentSessionStart(s, id, in[0], in[1], in[1] != ""); err != nil {
 			t.Fatalf("SessionStart(%q): %v", in[0], err)
 		}
-		if got := mustGetSpawn(t, s, id); got.State != StateWaiting || got.ClaudeSessionID != "session-abc" ||
+		if got := mustGetSpawn(t, s, id); got.State != StateWaiting || got.SessionID != "session-abc" ||
 			got.JSONLPath != "/x/abc.jsonl" || got.PID != pane.PanePID || got.ProcStarttime != pane.PaneStarttime {
 			t.Errorf("after SessionStart(%q) = %+v; want waiting, session-abc, /x/abc.jsonl, the pane process", in[0], got)
 		}
@@ -210,7 +210,7 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 func TestSetParentID(t *testing.T) {
 	s, _ := openTempStore(t)
 	for _, id := range []string{"parent-1", "child-1"} {
-		if err := s.InsertPending(Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
+		if err := s.InsertPending(Spawn{InstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
 		}
 	}

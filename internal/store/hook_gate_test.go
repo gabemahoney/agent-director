@@ -213,13 +213,13 @@ func hgAssertApplied(t *testing.T, before, after apitest.SpawnColumns, to string
 	got := map[string]any{
 		"state": after.State, "row_version": after.RowVersion, "launch_started_at": after.LaunchStartedAt,
 		"liveness_unverified_since": after.LivenessUnverifiedSince, "liveness_note": after.LivenessNote,
-		"claude_session_id": after.ClaudeSessionID, "jsonl_path": after.JSONLPath,
+		"session_id": after.SessionID, "jsonl_path": after.JSONLPath,
 		"pane_starttime": after.PaneStarttime, "pid": after.PID,
 	}
 	want := map[string]any{
 		"state": wantState, "row_version": before.RowVersion.(int64) + 1, "launch_started_at": wantLaunch,
 		"liveness_unverified_since": nil, "liveness_note": nil,
-		"claude_session_id": hgHookSession, "jsonl_path": hgHookPath,
+		"session_id": hgHookSession, "jsonl_path": hgHookPath,
 		"pane_starttime": before.PaneStarttime, "pid": before.PID,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -365,9 +365,9 @@ func TestHookGateSessionIDNotAGate(t *testing.T) {
 				t.Fatalf("Stop = %+v, %v; want applied", got, err)
 			}
 			after := hgColumns(t, f, id)
-			if after.State != store.StateWaiting || after.ClaudeSessionID != c.wantSession || after.JSONLPath != c.wantPath {
+			if after.State != store.StateWaiting || after.SessionID != c.wantSession || after.JSONLPath != c.wantPath {
 				t.Errorf("state, session, path = %v, %v, %v; want waiting, %v, %v",
-					after.State, after.ClaudeSessionID, after.JSONLPath, c.wantSession, c.wantPath)
+					after.State, after.SessionID, after.JSONLPath, c.wantSession, c.wantPath)
 			}
 		})
 	}

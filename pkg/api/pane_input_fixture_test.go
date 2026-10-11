@@ -90,7 +90,7 @@ func paneAgentExiting(t *testing.T, e *killEnv, r killRow, timeoutsReach bool, e
 			return
 		}
 		if exits++; exits == exitOn {
-			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.ClaudeSessionID); !a.Applied {
+			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.SessionID); !a.Applied {
 				t.Errorf("SessionEnd after /exit not applied: %s", a.Reason)
 			}
 		}

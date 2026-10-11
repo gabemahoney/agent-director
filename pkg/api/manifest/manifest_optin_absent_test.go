@@ -4,7 +4,7 @@ package manifest_test
 // manifest and its committed surface.json: no delete verb, and no string naming
 // kill's former finished-row opt-in, the off-PATH admin binary
 // agent-director-admin or its kill-finished verb, while kill keeps only its
-// claude_instance_id parameter and its kill_sent result.
+// instance_id parameter and its kill_sent result.
 
 import (
 	"fmt"
@@ -51,7 +51,7 @@ func manifestStrings() map[string]string {
 
 // TestManifestHasNoOperatorActions: the manifest has no delete verb and no
 // string (verb, parameter or result-field name, description, allowed value)
-// naming an operator action, while kill has only claude_instance_id and still
+// naming an operator action, while kill has only instance_id and still
 // returns kill_sent.
 func TestManifestHasNoOperatorActions(t *testing.T) {
 	strs := manifestStrings()
@@ -75,8 +75,8 @@ func TestManifestHasNoOperatorActions(t *testing.T) {
 	for _, p := range kill.Params {
 		params = append(params, p.Name)
 	}
-	if !reflect.DeepEqual(params, []string{"claude_instance_id"}) {
-		t.Errorf("SR-6.8: kill params = %v; want only claude_instance_id (the opt-in is not a manifest parameter)", params)
+	if !reflect.DeepEqual(params, []string{"instance_id"}) {
+		t.Errorf("SR-6.8: kill params = %v; want only instance_id (the opt-in is not a manifest parameter)", params)
 	}
 	if !hasField(kill.ResultFields, "kill_sent") {
 		t.Errorf("kill result fields lack kill_sent; the SR-6.8 absence check above would pass vacuously")

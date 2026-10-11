@@ -28,11 +28,11 @@ func TestAdviceFollow_E10_ReadPaneNegativeNLines(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
 			e.setPaneTexts(r.Socket)
-			_, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: -1})
+			_, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID, NLines: -1})
 			adviceAssertAdvice(t, err, api.ErrInvalidFlags, advice)
 			e.assertNoTmuxCall(t)
 
-			res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: f.nLines})
+			res, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID, NLines: f.nLines})
 			if err != nil {
 				t.Fatalf("read-pane with n_lines %d: %v", f.nLines, err)
 			}

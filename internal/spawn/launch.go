@@ -120,19 +120,19 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	out := CreateAndLabel(t, req)
 	recorded := false
 	if out.Kind == CreateLabelled {
-		recorded = RecordLaunchIdentity(s, pc, lg, r.ClaudeInstanceID, insertRowVersion, token, out.Reply)
+		recorded = RecordLaunchIdentity(s, pc, lg, r.InstanceID, insertRowVersion, token, out.Reply)
 	}
 	// "duplicate session" is handed to the caller's held-name path, whose end
 	// write is conditional on the insert's version 0: nothing is written
 	// before it, and that path ends the hold itself when its end write does
 	// not apply.
 	if !recorded && out.Kind != CreateDuplicate && row.LaunchOwner.PID > 0 {
-		ReleaseLaunchOwner(s, lg, r.ClaudeInstanceID, token)
+		ReleaseLaunchOwner(s, lg, r.InstanceID, token)
 	}
 	if err := plainSpawnCreateError(out, req, launchStart, minted); err != nil {
 		return "", "", err
 	}
-	return r.ClaudeInstanceID, preTrust, nil
+	return r.InstanceID, preTrust, nil
 }
 
 // insertRowVersion is the row_version the pending insert leaves, the version
@@ -192,7 +192,7 @@ func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger,
 func insertPending(s *store.Store, row store.Spawn) error {
 	if err := s.InsertPending(row); err != nil {
 		if errors.Is(err, store.ErrPrimaryKeyCollision) {
-			return rowExistsCollision(row.ClaudeInstanceID)
+			return rowExistsCollision(row.InstanceID)
 		}
 		return err
 	}

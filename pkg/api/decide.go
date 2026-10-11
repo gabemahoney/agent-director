@@ -97,9 +97,9 @@ type DecideStore interface {
 // compatibility but is currently discarded — the canonical
 // DecisionReasonOperator is persisted regardless of its value.
 type DecideParams struct {
-	// ClaudeInstanceID identifies the Spawn whose open permission request is
+	// InstanceID identifies the Spawn whose open permission request is
 	// being decided.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	InstanceID string `json:"instance_id"`
 	// RequestToken is the UUIDv4 token minted by runRelay for the specific
 	// permission request being decided. Required; empty string is rejected at
 	// the API layer (ErrMissingRequestToken) as well as at the CLI layer.
@@ -145,7 +145,7 @@ const decideAckWait = 1 * time.Second
 const decideAckPoll = 50 * time.Millisecond
 
 // Decide writes the orchestrator's allow/deny verdict on the open
-// permission_requests row identified by the (claude_instance_id,
+// permission_requests row identified by the (instance_id,
 // request_token) pair (SRD §6.2; b.146 rules 6, 15, 16 and decisions 1 A and
 // 9 B), with RelayView v (its clock, start-time reader, pid namespace and
 // relay window) and time.Sleep for its waits. Behavior:
@@ -223,7 +223,7 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 	}
 	if row.RelayMode != "on" {
 		return DecideResult{}, fmt.Errorf("%w: spawn %s relay_mode=%q",
-			ErrRelayModeOff, params.ClaudeInstanceID, row.RelayMode)
+			ErrRelayModeOff, params.InstanceID, row.RelayMode)
 	}
 	if finishedState(row.State) {
 		return DecideResult{}, c.finishedRowRefusal(row.State)
@@ -231,7 +231,7 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 
 	pr, verdict, err := readOneJudged(c.readRequest, c.j)
 	if errors.Is(err, sql.ErrNoRows) {
-		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
+		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.InstanceID)
 	}
 	if err != nil {
 		return DecideResult{}, err
@@ -245,7 +245,7 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 	if c.j.delivery(pr, verdict, c.j.now()).Delivery == DeliveryFallenBack {
 		return DecideResult{}, c.refuseFallenBack(row, pr, verdict)
 	}
-	written, err := s.DecideRelayRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision,
+	written, err := s.DecideRelayRequest(params.InstanceID, params.RequestToken, params.Decision,
 		c.dbReason(), store.WriterProcessDecide, time.Time{}, c.lockWait())
 	if err != nil {
 		return DecideResult{}, c.writeError(err)
@@ -284,26 +284,26 @@ func newDecideCall(s DecideStore, v RelayView, sleep func(time.Duration), p Deci
 // wrapping ErrStoreBusy.
 func (c *decideCall) readRequest() (PermissionRow, error) {
 	if c.bounded {
-		return c.s.GetPermissionRequestWithin(c.p.ClaudeInstanceID, c.p.RequestToken, c.lockWait())
+		return c.s.GetPermissionRequestWithin(c.p.InstanceID, c.p.RequestToken, c.lockWait())
 	}
-	return c.s.GetPermissionRequest(c.p.ClaudeInstanceID, c.p.RequestToken)
+	return c.s.GetPermissionRequest(c.p.InstanceID, c.p.RequestToken)
 }
 
 // getSpawn reads the call's Spawn, bounded as readRequest.
 func (c *decideCall) getSpawn() (Spawn, error) {
 	if c.bounded {
-		return c.s.GetSpawnWithin(c.p.ClaudeInstanceID, c.lockWait())
+		return c.s.GetSpawnWithin(c.p.InstanceID, c.lockWait())
 	}
-	return c.s.GetSpawn(c.p.ClaudeInstanceID)
+	return c.s.GetSpawn(c.p.InstanceID)
 }
 
 // readAllRequests reads every request of the call's Spawn, bounded as
 // readRequest.
 func (c *decideCall) readAllRequests() ([]PermissionRow, error) {
 	if c.bounded {
-		return c.s.PermissionRequestsForSpawnWithin(c.p.ClaudeInstanceID, c.lockWait())
+		return c.s.PermissionRequestsForSpawnWithin(c.p.InstanceID, c.lockWait())
 	}
-	return c.s.PermissionRequestsForSpawn(c.p.ClaudeInstanceID)
+	return c.s.PermissionRequestsForSpawn(c.p.InstanceID)
 }
 
 // dbReason is the decision_reason recorded with the verdict: the canonical
@@ -356,14 +356,14 @@ func (c *decideCall) refuseFallenBack(sp Spawn, pr PermissionRow, verdict hookVe
 	if pr.HookGoneAt.IsZero() {
 		goneAt = now
 	}
-	if err := c.s.RecordRefusedDecision(c.p.ClaudeInstanceID, c.p.RequestToken, c.p.Decision, now, goneAt, c.lockWait()); err == nil {
+	if err := c.s.RecordRefusedDecision(c.p.InstanceID, c.p.RequestToken, c.p.Decision, now, goneAt, c.lockWait()); err == nil {
 		stored := time.UnixMilli(now.UnixMilli()).UTC()
 		pr.AttemptedDecision, pr.AttemptedAt = c.p.Decision, stored
 		if pr.HookGoneAt.IsZero() {
 			pr.HookGoneAt = stored
 		}
 	}
-	return relayFallenBackError(c.p.ClaudeInstanceID, c.p.RequestToken, decideFallenBackWhat,
+	return relayFallenBackError(c.p.InstanceID, c.p.RequestToken, decideFallenBackWhat,
 		c.fallenBackDetails(sp, pr, verdict))
 }
 
@@ -395,7 +395,7 @@ func (c *decideCall) fallenBackDetails(sp Spawn, pr PermissionRow, verdict hookV
 // pane answer through send-keys begun meanwhile (pane_answer intent; b.146
 // step 2b) → ErrNoOpenPermissionRequest. Nothing was recorded.
 func (c *decideCall) notWritten() error {
-	id := c.p.ClaudeInstanceID
+	id := c.p.InstanceID
 	pr, err := c.readRequest()
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -442,7 +442,7 @@ func (c *decideCall) awaitAck(pr PermissionRow) DecideResult {
 	for {
 		verdict = c.j.hook(pr)
 		left := max(end.Sub(c.j.now()), 0)
-		if read, err := c.s.GetPermissionRequestWithin(c.p.ClaudeInstanceID, c.p.RequestToken, left); err == nil {
+		if read, err := c.s.GetPermissionRequestWithin(c.p.InstanceID, c.p.RequestToken, left); err == nil {
 			pr = read
 			if !pr.DeliveredAt.IsZero() {
 				break
@@ -471,7 +471,7 @@ func (c *decideCall) awaitAck(pr PermissionRow) DecideResult {
 // A refused one is named by refusePreV7.
 func (c *decideCall) decidePreV7(pr PermissionRow) (DecideResult, error) {
 	cutoff := RelayDeliverabilityCutoff(c.j.now(), c.j.view.Window)
-	written, err := c.s.DecideRelayRequest(c.p.ClaudeInstanceID, c.p.RequestToken, c.p.Decision,
+	written, err := c.s.DecideRelayRequest(c.p.InstanceID, c.p.RequestToken, c.p.Decision,
 		c.dbReason(), store.WriterProcessDecide, cutoff, c.lockWait())
 	if err != nil {
 		return DecideResult{}, c.writeError(err)
@@ -479,7 +479,7 @@ func (c *decideCall) decidePreV7(pr PermissionRow) (DecideResult, error) {
 	if !written {
 		return DecideResult{}, c.refusePreV7()
 	}
-	if read, err := c.s.GetPermissionRequestWithin(c.p.ClaudeInstanceID, c.p.RequestToken, c.lockWait()); err == nil {
+	if read, err := c.s.GetPermissionRequestWithin(c.p.InstanceID, c.p.RequestToken, c.lockWait()); err == nil {
 		pr = read
 	}
 	return DecideResult{RequestDelivery: c.j.delivery(pr, hookCantTell, c.j.now())}, nil
@@ -512,7 +512,7 @@ func (c *decideCall) refusePreV7() error {
 		if settled := relayHookSettledAt(pr.CreatedAt, window); now.Before(settled) {
 			if c.bounded && c.deadline.Before(settled) {
 				return fmt.Errorf("%w: %s request %s was recorded before this release and its relay hook may still answer it until %s, after the call's max_wait_ms bound; nothing was recorded",
-					store.ErrStoreBusy, c.p.ClaudeInstanceID, c.p.RequestToken, settled.UTC().Format(time.RFC3339))
+					store.ErrStoreBusy, c.p.InstanceID, c.p.RequestToken, settled.UTC().Format(time.RFC3339))
 			}
 			c.sleep(settled.Sub(now))
 			now = settled
@@ -520,7 +520,7 @@ func (c *decideCall) refusePreV7() error {
 		}
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, c.p.ClaudeInstanceID)
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, c.p.InstanceID)
 	}
 	if err != nil {
 		return err
@@ -563,7 +563,7 @@ func (c *decideCall) finishedRowRefusal(state string) error {
 	pr, err := c.readRequest()
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, c.p.ClaudeInstanceID)
+		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, c.p.InstanceID)
 	case err != nil:
 		return err
 	case pr.Decision != "" || pr.Closed() || pr.PaneAnswered():
@@ -578,7 +578,7 @@ func (c *decideCall) finishedRowRefusal(state string) error {
 // answered at the pane.
 func closedRequestError(params DecideParams, state string) error {
 	return fmt.Errorf("%w: %s request %s is closed: the spawn is %s, so nothing was recorded; do not answer it at the pane",
-		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID, params.RequestToken, state)
+		store.ErrNoOpenPermissionRequest, params.InstanceID, params.RequestToken, state)
 }
 
 // recordedRefusal is decide's refusal of pr, a request with a verdict
@@ -610,11 +610,11 @@ func recordedRefusal(params DecideParams, pr PermissionRow) error {
 	switch {
 	case pr.Closed() && pr.DeliveredAt.IsZero() && pr.DecisionReason != store.DecisionReasonFindMissing:
 		return fmt.Errorf("%w: %s request %s is closed: its spawn ended, or find-missing marked it missing, before the request's relay hook delivered a verdict, so nothing was recorded; do not answer it at the pane",
-			store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID, params.RequestToken)
+			store.ErrNoOpenPermissionRequest, params.InstanceID, params.RequestToken)
 	case pr.PaneAnswered():
-		return paneAnsweredError(params.ClaudeInstanceID, pr, "nothing was recorded")
+		return paneAnsweredError(params.InstanceID, pr, "nothing was recorded")
 	}
-	return alreadyDecidedError(params.ClaudeInstanceID, pr)
+	return alreadyDecidedError(params.InstanceID, pr)
 }
 
 // fallenBackRefusal names decide's refusal of pr, a request recorded before
@@ -633,7 +633,7 @@ func recordedRefusal(params DecideParams, pr PermissionRow) error {
 // bounded as decide's others.
 func (c *decideCall) fallenBackRefusal(pr PermissionRow) error {
 	params := c.p
-	id := params.ClaudeInstanceID
+	id := params.InstanceID
 	sp, err := c.getSpawn()
 	if errors.Is(err, store.ErrSpawnNotFound) {
 		return fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, id)
@@ -840,7 +840,7 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 		// path including ErrAlreadyDecided no-ops (SR-A-2.4). Fail-open per
 		// SR-A-3.2: a trail-emit failure is silently discarded.
 		_ = trail.Emit(context.Background(), "ad.decide.called", map[string]any{
-			"claude_instance_id":        params.ClaudeInstanceID,
+			"instance_id":               params.InstanceID,
 			"request_token":             params.RequestToken,
 			"submitted_decision":        params.Decision,
 			"submitted_decision_reason": params.Reason,

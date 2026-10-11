@@ -30,7 +30,7 @@ func withTemplates(t *testing.T, bodies map[string]string) {
 
 // TestResolveMergesTemplate pins SRD §7.1's merge: per-call scalars replace
 // the template's, maps merge with per-call winning, permission arrays
-// concatenate (nil per-call keeps the template's), per-call claude_args
+// concatenate (nil per-call keeps the template's), per-call agent_args
 // replace wholesale (nil keeps the template's), and ReuseFinished is per-call
 // only (SR-10.1). No template is a passthrough; a resolved value shares no
 // state with the template.
@@ -38,7 +38,7 @@ func TestResolveMergesTemplate(t *testing.T) {
 	withTemplates(t, map[string]string{"bare": `cwd = "/tmp"`, "base": `
 cwd = "/tmp"
 relay_mode = "off"
-claude_args = ["--model", "opus"]
+agent_args = ["--model", "opus"]
 
 [labels]
 project = "foo"
@@ -52,7 +52,7 @@ EXTRA = "kept"
 allow = ["A"]
 deny = ["X"]
 `})
-	pureTemplate := spawn.SpawnParams{Template: "base", CWD: "/tmp", RelayMode: "off", ClaudeArgs: []string{"--model", "opus"},
+	pureTemplate := spawn.SpawnParams{Template: "base", CWD: "/tmp", RelayMode: "off", AgentArgs: []string{"--model", "opus"},
 		AgentDirectorLabels: map[string]string{"project": "foo", "env": "dev"},
 		ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "from-template", "EXTRA": "kept"},
 		Permissions:         &spawn.Permissions{Allow: []string{"A"}, Deny: []string{"X"}}}
@@ -68,11 +68,11 @@ deny = ["X"]
 		{name: "template with no maps or permissions", p: spawn.SpawnParams{Template: "bare"},
 			want: spawn.SpawnParams{Template: "bare", CWD: "/tmp"}},
 		{name: "per-call values layered on the template",
-			p: spawn.SpawnParams{Template: "base", CWD: "/var/data", ClaudeArgs: []string{"--model", "sonnet"}, ReuseFinished: true,
+			p: spawn.SpawnParams{Template: "base", CWD: "/var/data", AgentArgs: []string{"--model", "sonnet"}, ReuseFinished: true,
 				AgentDirectorLabels: map[string]string{"owner": "alice", "project": "bar"},
 				ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "from-call", "NEW": "added"},
 				Permissions:         &spawn.Permissions{Allow: []string{"B"}, Ask: []string{"Q"}}},
-			want: spawn.SpawnParams{Template: "base", CWD: "/var/data", RelayMode: "off", ClaudeArgs: []string{"--model", "sonnet"},
+			want: spawn.SpawnParams{Template: "base", CWD: "/var/data", RelayMode: "off", AgentArgs: []string{"--model", "sonnet"},
 				ReuseFinished:       true,
 				AgentDirectorLabels: map[string]string{"project": "bar", "env": "dev", "owner": "alice"},
 				ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "from-call", "EXTRA": "kept", "NEW": "added"},
@@ -90,7 +90,7 @@ deny = ["X"]
 			if tc.name != "pure template" {
 				return
 			}
-			r.AgentDirectorLabels["project"], r.ClaudeArgs[1], r.Permissions.Allow[0] = "corrupted", "corrupted", "corrupted"
+			r.AgentDirectorLabels["project"], r.AgentArgs[1], r.Permissions.Allow[0] = "corrupted", "corrupted", "corrupted"
 			if again, err := spawn.Resolve(tc.p, config.Default()); err != nil || !reflect.DeepEqual(again.SpawnParams, tc.want) {
 				t.Errorf("Resolve after changing the first result = %+v, %v; want %+v", again.SpawnParams, err, tc.want)
 			}

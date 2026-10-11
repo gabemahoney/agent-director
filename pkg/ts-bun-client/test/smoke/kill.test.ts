@@ -16,13 +16,13 @@ test("kill: happy path — Gone row, no kill sent", async () => {
     const store = homeStore(homeDir);
     runHelper("seed-spawn", { store, state: "working", id: "smoke-kill-id", "create-store": true, socket: privateTmuxSocket(homeDir) });
     using client = await openClient(store);
-    expect(await client.kill({ claude_instance_id: "smoke-kill-id" })).toEqual({ kill_sent: false });
+    expect(await client.kill({ instance_id: "smoke-kill-id" })).toEqual({ kill_sent: false });
   });
 }, 10_000);
 
 test("kill: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.kill({ claude_instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+    await expect(client.kill({ instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
 }, 10_000);

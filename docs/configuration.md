@@ -7,7 +7,7 @@
 [defaults]
 relay_mode = "off"
 expire_retention_days = 31
-disable_askuserquestion = false
+disable_ask_user = false
 
 [relay]
 poll_base_ms = 100
@@ -49,9 +49,9 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 
 | Key | Range | Default | What it bounds |
 |---|---|---|---|
-| `[defaults] relay_mode` | `on`, `off` | `off` | Whether a spawn relays Claude's permission prompts to `decide`; `--relay-mode` overrides it per call. |
+| `[defaults] relay_mode` | `on`, `off` | `off` | Whether a spawn relays the agent's permission prompts to `decide`; `--relay-mode` overrides it per call. |
 | `[defaults] expire_retention_days` | 1 to 106751 | 31 | Days a finished row must have ended before `expire` (without `--older-than`) may delete it. |
-| `[defaults] disable_askuserquestion` | `true`, `false` | `false` | Whether every spawn denies Claude's AskUserQuestion tool. |
+| `[defaults] disable_ask_user` | `true`, `false` | `false` | Whether every spawn denies the agent its question-asking tool. See [permissions](permissions.md). |
 | `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether every spawn adds a help SessionStart hook; `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
@@ -68,8 +68,9 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 
 A negative, out-of-range, below-minimum or non-integer value is refused, never
 defaulted (the `[relay] poll_*` keys and `permission_request_cap` aside); a
-misspelt key is ignored. After editing, check the file with
-`agent-director list`. What a refusal stops:
+misspelt key is ignored. The old name of `[defaults] disable_ask_user` is
+refused with `ErrConfigMalformed`, which names `disable_ask_user`, not ignored.
+After editing, check the file with `agent-director list`. What a refusal stops:
 [`ErrConfigMalformed`](caller-contract.md).
 
 ## When a change takes effect

@@ -239,7 +239,7 @@ func TestResumeTranscript(t *testing.T) {
 			mark := trailMark(t)
 
 			_, err := api.Resume(s, e.env.rec, e.env.pc, e.env.cfg, e.env.storeID, e.env.clock.Now, e.env.lg,
-				api.ResumeParams{ClaudeInstanceID: e.id})
+				api.ResumeParams{InstanceID: e.id})
 
 			if tc.want != "" {
 				if err != nil {
@@ -250,12 +250,12 @@ func TestResumeTranscript(t *testing.T) {
 					len(c[0].Command) < 3 || c[0].Command[1] != "--resume" || c[0].Command[2] != tc.want {
 					t.Errorf("creates = %+v; want one on %s running claude --resume %s", c, e.env.socket, tc.want)
 				}
-				if c := e.env.columns(t, e.id); c.State != store.StatePending || c.ClaudeSessionID != before.ClaudeSessionID {
-					t.Errorf("row {state %v, session %v}; want pending, %v kept", c.State, c.ClaudeSessionID, before.ClaudeSessionID)
+				if c := e.env.columns(t, e.id); c.State != store.StatePending || c.SessionID != before.SessionID {
+					t.Errorf("row {state %v, session %v}; want pending, %v kept", c.State, c.SessionID, before.SessionID)
 				}
 				assertResumeEvents(t, mark, e.id, "ad.resume.moved_to_pending")
 				if l := pendTrail(t, "ad.resume.moved_to_pending", e.id); len(l) == 1 {
-					assertAPITrailStr(t, l[0], "claude_session_id", before.ClaudeSessionID.(string))
+					assertAPITrailStr(t, l[0], "session_id", before.SessionID.(string))
 				}
 				return
 			}

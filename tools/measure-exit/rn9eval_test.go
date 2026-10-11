@@ -322,7 +322,7 @@ func TestAnswerPermissions(t *testing.T) {
 			r := newRig(t, modeDry)
 			r.ex.reply = func(argv []string) (string, string, int) {
 				if argv[1] == "get" {
-					return `{"claude_instance_id":"id-1","permission_requests":[{"request_token":"req-1","tool_name":"` + tc.tool + `"}]}`, "", 0
+					return `{"instance_id":"id-1","permission_requests":[{"request_token":"req-1","tool_name":"` + tc.tool + `"}]}`, "", 0
 				}
 				return "", "", 0
 			}

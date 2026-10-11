@@ -31,7 +31,7 @@ var ErrCwdNotADirectory = errors.New("ErrCwdNotADirectory")
 // other than "on" / "off" / "" (empty falls back to the config default).
 var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 
-// ErrSpawnDeniedFlag is returned when claude_args contains a flag the
+// ErrSpawnDeniedFlag is returned when agent_args contains a flag the
 // supervisor must own (--settings, --resume, --continue, --print,
 // --output-format). The match handles both --flag VALUE and --flag=VALUE
 // forms; --setting-sources is deliberately not on this list (SRD §19 Q5).
@@ -71,7 +71,7 @@ var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 
 // ErrInstanceIdCollision is returned when the caller supplied an explicit
-// claude_instance_id that already has a row. Without the reuse opt-in
+// instance_id that already has a row. Without the reuse opt-in
 // (ReuseFinished) any existing row collides, finished or live: the
 // collision pre-check refuses it before anything is written, and SQLite's
 // PRIMARY KEY at INSERT refuses a row inserted after the pre-check's read,

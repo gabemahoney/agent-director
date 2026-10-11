@@ -77,8 +77,8 @@ var (
 
 // PauseParams is the typed parameter shape for the pause verb.
 type PauseParams struct {
-	// ClaudeInstanceID identifies the Spawn to pause gracefully.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID identifies the Spawn to pause gracefully.
+	InstanceID string `json:"instance_id"`
 }
 
 // PauseResult is the typed return shape — empty today. Reserved so
@@ -227,11 +227,11 @@ func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeout
 	// source list has no pause source, so pause writes the keys-sending
 	// source with verb pause and no call event of its own. Exported Pause is
 	// the path Client.Pause shares, so each reason is written once per call.
-	r.emitDisagree("pause", params.ClaudeInstanceID, r.caller)
+	r.emitDisagree("pause", params.InstanceID, r.caller)
 	if err != nil || !delivered {
 		return PauseResult{}, err
 	}
-	return PauseResult{}, waitEnded(ctx, s, timeoutSeconds, params.ClaudeInstanceID)
+	return PauseResult{}, waitEnded(ctx, s, timeoutSeconds, params.InstanceID)
 }
 
 // pauseRun is one Pause call's tmux phase: the keys verbs' shared phase
@@ -252,7 +252,7 @@ type pauseRun struct {
 // whether C-u, `/exit` and Enter went through, so the wait is due; a finished
 // row is (false, nil). Every refusal before the lookup makes no tmux call.
 func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, error) {
-	row, err := r.s.GetSpawn(params.ClaudeInstanceID)
+	row, err := r.s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return false, err
 	}
@@ -264,7 +264,7 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 		// on to the relay guard
 	default:
 		return false, fmt.Errorf("%w: spawn %s state=%s",
-			ErrSpawnNotPausable, params.ClaudeInstanceID, row.State)
+			ErrSpawnNotPausable, params.InstanceID, row.State)
 	}
 
 	// C-u, `/exit` and Enter are what a plain send-keys without a pane hash
@@ -280,12 +280,12 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
-		return false, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return false, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
-		return false, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return false, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	r.clear = t

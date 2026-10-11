@@ -169,7 +169,7 @@ func spawnReuse(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (SpawnResult,
 // never returns tmux.ErrTmuxSessionCreate. On proceed it returns what the
 // change and the launch need (reuseExamined).
 func reuseExamine(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (reuseExamined, error) {
-	id := r.ClaudeInstanceID
+	id := r.InstanceID
 	recorded := row.Snapshot.TmuxSessionName
 
 	if err := unusableNameError(recorded); err != nil {
@@ -206,16 +206,16 @@ func reuseExamine(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (reuseExami
 // never decoded (SR-10.3).
 func reuseSpawnOf(instanceID string, row store.ReuseRow) Spawn {
 	return Spawn{
-		ClaudeInstanceID: instanceID,
-		State:            row.State,
-		TmuxSessionName:  row.Snapshot.TmuxSessionName,
-		ClaudeSessionID:  row.Snapshot.ClaudeSessionID,
-		PID:              row.Snapshot.PID,
-		ProcStarttime:    row.Snapshot.ProcStarttime,
-		EndedAt:          row.EndedAt,
-		EndedAtText:      row.EndedAtText,
-		Snapshot:         row.Snapshot,
-		Identity:         row.Identity,
+		InstanceID:      instanceID,
+		State:           row.State,
+		TmuxSessionName: row.Snapshot.TmuxSessionName,
+		SessionID:       row.Snapshot.SessionID,
+		PID:             row.Snapshot.PID,
+		ProcStarttime:   row.Snapshot.ProcStarttime,
+		EndedAt:         row.EndedAt,
+		EndedAtText:     row.EndedAtText,
+		Snapshot:        row.Snapshot,
+		Identity:        row.Identity,
 	}
 }
 
@@ -271,7 +271,7 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     the prepared socket, the composed environment and command, the new
 //     token, the instance id and this store's id, so the label is five
 //     fields ending with it (SR-3.5). Once it returns, ad.spawn.reused is
-//     emitted (claude_instance_id, prior_state as examined,
+//     emitted (instance_id, prior_state as examined,
 //     archived_session_id null when nothing was archived, lookup_outcome the
 //     decision's verdict token, source ad_spawn), fail-open, before any
 //     restore.
@@ -300,7 +300,7 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //
 // Success does not say whether a reset happened (SR-10.7).
 func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (SpawnResult, error) {
-	id := r.ClaudeInstanceID
+	id := r.InstanceID
 	socket := ex.pre.Socket
 
 	token, err := spawn.NewLaunchToken()
@@ -338,11 +338,11 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	if err := d.launchOnto(ex, resetVersion, fresh.LaunchOwner).outcome(out, req); err != nil {
 		return SpawnResult{}, err
 	}
-	return SpawnResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil
+	return SpawnResult{InstanceID: id, PreTrust: string(preTrust)}, nil
 }
 
 // emitReused writes the one ad.spawn.reused record of an applied change
-// (SR-10.6), fail-open: claude_instance_id; prior_state, the state examined
+// (SR-10.6), fail-open: instance_id; prior_state, the state examined
 // before the reset; archived_session_id, the session id the reset archived,
 // null when it archived none (""); lookup_outcome, the old-row lookup's
 // verdict token as the decision kept it (never a literal); source ad_spawn.
@@ -352,7 +352,7 @@ func emitReused(instanceID string, ex reuseExamined, archivedSessionID string) {
 		archived = archivedSessionID
 	}
 	_ = trail.Emit(context.Background(), reuseReusedEvent, map[string]any{
-		"claude_instance_id":  instanceID,
+		"instance_id":         instanceID,
 		"prior_state":         ex.row.State,
 		"archived_session_id": archived,
 		"lookup_outcome":      ex.verdict,
@@ -384,7 +384,7 @@ func (d reuseDeps) launchOnto(ex reuseExamined, resetVersion int64, owner Launch
 		identity: d.rs,
 		release:  ownerReleaser(d.rs, owner),
 		restoreWrite: func() (CondResult, error) {
-			return d.rs.RestoreAfterFailedReuse(row.ClaudeInstanceID, resetVersion, ex.row.Life, d.now())
+			return d.rs.RestoreAfterFailedReuse(row.InstanceID, resetVersion, ex.row.Life, d.now())
 		},
 		row:             row,
 		disagreeWritten: ex.disagreeWritten,

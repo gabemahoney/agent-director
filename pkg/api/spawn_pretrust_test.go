@@ -61,10 +61,10 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 			}
 
 			res, err := env.c.Spawn(api.SpawnParams{
-				CWD:              cwd,
-				ClaudeInstanceID: "pretrust-" + uuid.NewString()[:8],
-				ExtraEnv:         c.extraEnv(),
-				NoPreTrust:       tc.noPreTrust,
+				CWD:        cwd,
+				InstanceID: "pretrust-" + uuid.NewString()[:8],
+				ExtraEnv:   c.extraEnv(),
+				NoPreTrust: tc.noPreTrust,
 			})
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
@@ -74,7 +74,7 @@ func TestSpawnRecordsNoPreTrust(t *testing.T) {
 			}
 			checkPreTrustJSON(t, res, tc.wantPreTrust)
 
-			row, err := apitest.ReadSpawnColumns(env.dbPath, res.ClaudeInstanceID)
+			row, err := apitest.ReadSpawnColumns(env.dbPath, res.InstanceID)
 			if err != nil {
 				t.Fatalf("ReadSpawnColumns: %v", err)
 			}

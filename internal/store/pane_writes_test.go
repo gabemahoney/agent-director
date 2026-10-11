@@ -139,7 +139,7 @@ func TestPaneWriteCheckRefuses(t *testing.T) {
 			before := requestDump(t, path)
 			var seen []string
 			ok, err := write(s, func(sp Spawn, rows []PermissionRow) error {
-				seen = append(seen, sp.ClaudeInstanceID)
+				seen = append(seen, sp.InstanceID)
 				for _, r := range rows {
 					seen = append(seen, r.RequestToken)
 				}

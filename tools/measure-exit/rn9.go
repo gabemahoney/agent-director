@@ -112,12 +112,12 @@ func (h *harness) recorderFile(caseID string) string {
 
 // startRN9Agent spawns one RN-9 agent in cwd with relay on (the harness
 // answers permission requests with decide), waits for it to report in and
-// identifies its pane process. claudeArgs go to claude after spawn's "--"
+// identifies its pane process. agentArgs go to claude after spawn's "--"
 // (an agent team lead's --debug-file). A refusal is returned as is (it
 // aborts the run); any other failure is a reason the scenario is
 // inconclusive.
-func (h *harness) startRN9Agent(caseID, cwd, file string, claudeArgs ...string) (*rn9Agent, error) {
-	a, err := h.spawnAgent(caseID, spawnSpec{CWD: cwd, RelayMode: "on", ClaudeArgs: claudeArgs})
+func (h *harness) startRN9Agent(caseID, cwd, file string, agentArgs ...string) (*rn9Agent, error) {
+	a, err := h.spawnAgent(caseID, spawnSpec{CWD: cwd, RelayMode: "on", AgentArgs: agentArgs})
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ func (d *rn9Agent) own(l recordLine) bool { return l.ParentPID == d.a.PID && l.A
 // send types text into the agent's prompt with agent-director send-keys.
 func (d *rn9Agent) send(text string) error {
 	_, err := d.h.inv.agentDirectorCall(d.caseID, actionDrive, "send-keys",
-		"--claude-instance-id", d.a.InstanceID, "--text", text)
+		"--instance-id", d.a.InstanceID, "--text", text)
 	return err
 }
 
@@ -199,7 +199,7 @@ func (d *rn9Agent) answerPermissions() error {
 		}
 		d.answered[p.RequestToken] = true
 		decision := permissionDecision(d.caseID, p.ToolName)
-		if _, err := d.h.inv.agentDirectorCall(d.caseID, actionDrive, "decide", "--claude-instance-id", d.a.InstanceID,
+		if _, err := d.h.inv.agentDirectorCall(d.caseID, actionDrive, "decide", "--instance-id", d.a.InstanceID,
 			"--request-token", p.RequestToken, "--decision", decision); err != nil {
 			return err
 		}
@@ -280,7 +280,7 @@ func (d *rn9Agent) reading(l recordLine) (sessionReading, error) {
 		if err != nil {
 			return r, err
 		}
-		r.RowID = row.ClaudeSessionID
+		r.RowID = row.SessionID
 		if r.RowID == r.PayloadID || !d.h.clock.Now().Before(deadline) {
 			return r, nil
 		}
@@ -439,7 +439,7 @@ func (h *harness) runResume(spec caseSpec) (rn9Scenario, error) {
 			return "", err
 		}
 		row, err := h.getRow(spec.id, first.a.InstanceID)
-		return row.ClaudeSessionID, err
+		return row.SessionID, err
 	}()
 	if endErr := first.end(); err == nil && endErr != nil {
 		err = endErr

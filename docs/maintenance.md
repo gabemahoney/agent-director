@@ -23,8 +23,8 @@ in stays `pending` with `liveness_note` `unreported`. Read the pane, then type
 only if you looked at it:
 
 ```sh
-agent-director read-pane --claude-instance-id <id>
-agent-director send-keys --claude-instance-id <id> --allow-pending --text "<answer>"
+agent-director read-pane --instance-id <id>
+agent-director send-keys --instance-id <id> --allow-pending --text "<answer>"
 ```
 
 A caller that cannot judge the pane follows the
@@ -62,7 +62,7 @@ steps in order from a startup script:
 
 ```sh
 agent-director find-missing                       # mark dead rows `missing`
-agent-director resume --claude-instance-id <id>   # relaunch with history
+agent-director resume --instance-id <id>   # relaunch with history
 ```
 
 `resume` acts on any finished row (`ended` or `missing`); `find-missing` first
@@ -71,5 +71,5 @@ makes a dead live row `missing`. Without a session id or transcript (see
 has no memory of the old conversation:
 
 ```sh
-agent-director spawn --cwd <dir> --claude-instance-id <id> --reuse-finished
+agent-director spawn --cwd <dir> --instance-id <id> --reuse-finished
 ```

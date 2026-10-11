@@ -16,7 +16,7 @@ func TrailEventsSince(t *testing.T, mark int, event, instanceID string) []map[st
 	t.Helper()
 	var out []map[string]any
 	for _, row := range readStoreTrailLines(t)[mark:] {
-		if row["event"] == event && row["claude_instance_id"] == instanceID {
+		if row["event"] == event && row["instance_id"] == instanceID {
 			out = append(out, row)
 		}
 	}

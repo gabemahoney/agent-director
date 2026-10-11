@@ -111,14 +111,14 @@ func secMoveHome(t *testing.T) {
 var securityVerbs = slices.Concat([]securityVerb{{
 	verb: "kill", event: "ad.kill.called", cases: securityKillCases,
 	call: func(_ *testing.T, c *api.Client, s *securityScene) (any, error) {
-		return c.Kill(api.KillParams{ClaudeInstanceID: s.subject})
+		return c.Kill(api.KillParams{InstanceID: s.subject})
 	},
 }, {
 	verb: "spawn", event: "ad.launch.name_held", launch: true, serial: securityMovesHome,
 	record: securityNameHeldRecord, cases: securitySpawnCases,
 	call: func(t *testing.T, c *api.Client, s *securityScene) (any, error) {
 		secMoveHome(t)
-		return c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: s.subject,
+		return c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: s.subject,
 			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
 	},
 }, {
@@ -380,7 +380,7 @@ func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []ma
 	for _, l := range lines {
 		b, _ := json.Marshal(l)
 		securityAbsent(t, "trail record", string(b), s)
-		if l["claude_instance_id"] != s.subject || slices.Contains(c.others, fmt.Sprint(l["event"])) {
+		if l["instance_id"] != s.subject || slices.Contains(c.others, fmt.Sprint(l["event"])) {
 			continue
 		}
 		switch ev := l["event"]; {

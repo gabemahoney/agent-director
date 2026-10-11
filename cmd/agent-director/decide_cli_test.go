@@ -49,7 +49,7 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 			storefix.SeedUndeliverablePermissionRequest(t, s, stateDB(home), id, token, 48*time.Hour)
 		}},
 		{outcome: "ErrInvalidFlags", argv: func(id, _ string) []string {
-			return []string{"decide", "--claude-instance-id", id, "--decision", "allow"}
+			return []string{"decide", "--instance-id", id, "--decision", "allow"}
 		}},
 	}
 	for _, tc := range cases {
@@ -110,7 +110,7 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 			if pid, _ := row["caller_pid"].(float64); pid == 0 {
 				t.Errorf("caller_pid = 0; want the subprocess pid")
 			}
-			for _, field := range []string{"claude_instance_id", "request_token", "submitted_decision", "submitted_decision_reason"} {
+			for _, field := range []string{"instance_id", "request_token", "submitted_decision", "submitted_decision_reason"} {
 				if _, present := row[field]; !present {
 					t.Errorf("required field %q missing", field)
 				}
@@ -158,5 +158,5 @@ func openDBForRead(t *testing.T, home string) *store.Store {
 
 // decideArgv is decide allow on id's request token.
 func decideArgv(id, token string) []string {
-	return []string{"decide", "--claude-instance-id", id, "--request-token", token, "--decision", "allow"}
+	return []string{"decide", "--instance-id", id, "--request-token", token, "--decision", "allow"}
 }

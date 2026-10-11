@@ -22,6 +22,6 @@ test("Client has no delete method, and still has kill (b.vqr)", () => {
 });
 
 test("kill argv never carries include_finished (b.vqr)", () => {
-  const argv = buildArgv(CLI, "kill", { claude_instance_id: "id-kill", include_finished: true });
-  expect(argv).toEqual([CLI, "kill", "--claude-instance-id", "id-kill"]);
+  const argv = buildArgv(CLI, "kill", { instance_id: "id-kill", include_finished: true });
+  expect(argv).toEqual([CLI, "kill", "--instance-id", "id-kill"]);
 });

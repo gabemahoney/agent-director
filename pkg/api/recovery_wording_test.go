@@ -24,7 +24,7 @@ const (
 var recoveryWordingSites = []string{
 	"pkg/api/errors.go", "pkg/api/resume.go", "pkg/api/spawn.go", "internal/store/spawns.go",
 	"internal/spawn/params.go", "internal/spawn/errors.go", "manifest kill Description",
-	"manifest spawn param claude_instance_id", mdAPIREADME, mdTSREADME,
+	"manifest spawn param instance_id", mdAPIREADME, mdTSREADME,
 }
 
 // TestRecoveryWordingScan: no manifest text, non-test Go source (the helper's

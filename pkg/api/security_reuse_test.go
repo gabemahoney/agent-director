@@ -43,7 +43,7 @@ func securityReuseCall(t *testing.T, c *api.Client, s *securityScene) (any, erro
 			s.forbid = append(s.forbid, sc.Token)
 		}
 	})
-	return c.Spawn(api.SpawnParams{ClaudeInstanceID: s.target.ID, ReuseFinished: true,
+	return c.Spawn(api.SpawnParams{InstanceID: s.target.ID, ReuseFinished: true,
 		TmuxSessionName: s.target.Name, CWD: t.TempDir()})
 }
 
@@ -68,8 +68,8 @@ var securityReuseLaunchCases = []securityCase{{
 	fields: map[string]any{"source": "ad_spawn", "prior_state": store.StateEnded},
 	check: func(t *testing.T, s *securityScene, res any) {
 		t.Helper()
-		if got := res.(api.SpawnResult); got.ClaudeInstanceID != s.target.ID {
-			t.Errorf("result id = %q; want %q", got.ClaudeInstanceID, s.target.ID)
+		if got := res.(api.SpawnResult); got.InstanceID != s.target.ID {
+			t.Errorf("result id = %q; want %q", got.InstanceID, s.target.ID)
 		}
 		if got := s.e.columns(t, s.target.ID).State; got != store.StatePending {
 			t.Errorf("row state = %v; want %s", got, store.StatePending)

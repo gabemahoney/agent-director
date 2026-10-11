@@ -10,8 +10,8 @@
  *   ".arr[0]"   — array element at index 0
  *   ".arr[*]"   — any array element (wildcard, selector form only)
  *
- * The leading dot is stripped before selector matching so ".claude_instance_id"
- * and "claude_instance_id" selectors both work.
+ * The leading dot is stripped before selector matching so ".instance_id"
+ * and "instance_id" selectors both work.
  */
 
 export interface DiffOpts {

@@ -50,7 +50,7 @@ func dgUnknownPane() fmRowOpt { return withPane(dgPanePID, fmStart) }
 
 // dgSession is row r's own session: id, stored name and r's current label, with panes (none: one new pane).
 func dgSession(r store.LiveSpawnIdentity, id, name string, panes ...tmuxfix.SeedPane) tmuxfix.SeedSession {
-	return tmuxfix.SeedSession{ID: id, Name: name, Label: tmuxfix.Valid(r.Identity.Token, r.ClaudeInstanceID, tmuxfix.StoreID),
+	return tmuxfix.SeedSession{ID: id, Name: name, Label: tmuxfix.Valid(r.Identity.Token, r.InstanceID, tmuxfix.StoreID),
 		Panes: panes}
 }
 
@@ -182,7 +182,7 @@ func dgSweep(t *testing.T, prefix string, c dgCase) dgRun {
 	run := dgRun{row: liveRow(dgID(prefix, c.name), c.opts...), lg: &recordingLogger{}}
 	run.st = dgStore(t, run.row)
 	if c.op != "" {
-		run.st.answers = map[string]map[string]fmAnswer{c.op: {run.row.ClaudeInstanceID: c.answer}}
+		run.st.answers = map[string]map[string]fmAnswer{c.op: {run.row.InstanceID: c.answer}}
 	}
 	run.res = mustSweep(t, run.st, dgChecker(c.procs), fmSweep{tmux: c.tmux(run.row), lg: run.lg})
 	return run
@@ -200,7 +200,7 @@ func dgRecords(t *testing.T, before int, id string, st *fakeFindMissingStore) []
 	}
 	var out []map[string]any
 	for i, l := range readAPITrailLines(t)[before:] {
-		if l["claude_instance_id"] != id {
+		if l["instance_id"] != id {
 			continue
 		}
 		if l["event"] != "ad.provenance.disagree" {
@@ -219,7 +219,7 @@ func dgRecords(t *testing.T, before int, id string, st *fakeFindMissingStore) []
 func assertDisagree(t *testing.T, recs []map[string]any, r store.LiveSpawnIdentity, want []dgWant) {
 	t.Helper()
 	if len(recs) != len(want) {
-		t.Fatalf("%s: ad.provenance.disagree records = %v; want %d (%+v)", r.ClaudeInstanceID, recs, len(want), want)
+		t.Fatalf("%s: ad.provenance.disagree records = %v; want %d (%+v)", r.InstanceID, recs, len(want), want)
 	}
 	null := func(s string) any {
 		if s == "" {
@@ -229,19 +229,19 @@ func assertDisagree(t *testing.T, recs []map[string]any, r store.LiveSpawnIdenti
 	}
 	for i, w := range want {
 		fields := map[string]any{
-			"claude_instance_id": r.ClaudeInstanceID, "verb": "find-missing", "source": "ad_find_missing",
+			"instance_id": r.InstanceID, "verb": "find-missing", "source": "ad_find_missing",
 			"reason": w.reason, "tmux_socket": apitest.TestSocket, "tmux_session_name": r.TmuxSessionName,
 			"tmux_session_id": null(w.sessionID), "current_session_name": null(w.current), "server": w.server,
 			"verdict": w.verdict, "action": w.action, "caller_pid": float64(os.Getpid()),
 		}
 		for k, v := range fields {
 			if got, ok := recs[i][k]; !ok || got != v {
-				t.Errorf("%s record %d [%q] = %v (present %t); want %v", r.ClaudeInstanceID, i, k, got, ok, v)
+				t.Errorf("%s record %d [%q] = %v (present %t); want %v", r.InstanceID, i, k, got, ok, v)
 			}
 		}
 		for k, v := range recs[i] {
 			if s, ok := v.(string); ok && (strings.Contains(s, r.Identity.Token) || strings.Contains(s, tmuxfix.StoreID)) {
-				t.Errorf("%s record %d [%q] = %q carries label content", r.ClaudeInstanceID, i, k, s)
+				t.Errorf("%s record %d [%q] = %q carries label content", r.InstanceID, i, k, s)
 			}
 		}
 	}
@@ -256,7 +256,7 @@ func TestFindMissingDisagreeReasons(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			before := trailLen(t)
 			run := dgSweep(t, "dg", c)
-			assertDisagree(t, dgRecords(t, before, run.row.ClaudeInstanceID, run.st), run.row, c.want)
+			assertDisagree(t, dgRecords(t, before, run.row.InstanceID, run.st), run.row, c.want)
 		})
 	}
 	t.Run("two rows sharing one lookup, two sweeps", func(t *testing.T) {
@@ -273,7 +273,7 @@ func TestFindMissingDisagreeReasons(t *testing.T) {
 			assertLookups(t, rec, sweep)
 			for i, r := range rows {
 				s := sessions[i]
-				assertDisagree(t, dgRecords(t, before, r.ClaudeInstanceID, st), r,
+				assertDisagree(t, dgRecords(t, before, r.InstanceID, st), r,
 					[]dgWant{{"name_changed", "match", "ours", s.ID, s.Name, "left_unverified"}})
 			}
 		}
@@ -297,7 +297,7 @@ func foRuns(t *testing.T, prefix string) []string {
 		for _, w := range run.st.calls {
 			writes = append(writes, fmt.Sprintf("%s/%s/%d/%+v", w.op, w.note, w.snap.RowVersion, w.identity))
 		}
-		lines = append(lines, fmt.Sprintf("%s ids=%v unverified=%v writes=%v logs=%d", run.row.ClaudeInstanceID,
+		lines = append(lines, fmt.Sprintf("%s ids=%v unverified=%v writes=%v logs=%d", run.row.InstanceID,
 			run.res.IDs, run.res.UnverifiedIDs, writes, len(run.lg.lines)))
 	}
 	return append(lines, hnFailOpenRuns(t, prefix)...)

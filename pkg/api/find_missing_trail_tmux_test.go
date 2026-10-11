@@ -209,7 +209,7 @@ func TestFindMissingMarkOrderTrail(t *testing.T) {
 			var ticks []map[string]any
 			var at []int // trail line index of each of id's ticks
 			for i, line := range readAPITrailLines(t) {
-				if i >= before && line["event"] == "ad.find_missing.tick" && line["claude_instance_id"] == id {
+				if i >= before && line["event"] == "ad.find_missing.tick" && line["instance_id"] == id {
 					ticks, at = append(ticks, line), append(at, i)
 				}
 			}

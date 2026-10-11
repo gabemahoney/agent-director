@@ -134,7 +134,7 @@ func TestHookExecFormSettings(t *testing.T) {
 			withStubHelpBin(t, tc.helpBin)
 			cfg := config.Default()
 			cfg.Defaults.InjectHelpHook = tc.injectHelp
-			got, err := synthesizeSettings(Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id-exec"}}, cfg)
+			got, err := synthesizeSettings(Resolved{SpawnParams: SpawnParams{InstanceID: "id-exec"}}, cfg)
 			if err != nil {
 				t.Fatalf("synthesizeSettings: %v", err)
 			}
@@ -153,13 +153,13 @@ func TestHookExecFormLaunchArgv(t *testing.T) {
 	}{
 		{name: "spawn", create: func(t *testing.T) ([]string, config.Config) {
 			e := newLaunchEnv(t)
-			e.r.ClaudeArgs = nil
+			e.r.AgentArgs = nil
 			e.mustLaunch()
 			return e.onlyCreate().Command, e.cfg
 		}},
 		{name: "resume relaunch", create: func(t *testing.T) ([]string, config.Config) {
 			e := newRelaunchEnv(t)
-			e.row.ClaudeArgs = nil
+			e.row.AgentArgs = nil
 			if out := e.relaunch("session-exec-1"); out.Kind != CreateLabelled {
 				t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 			}

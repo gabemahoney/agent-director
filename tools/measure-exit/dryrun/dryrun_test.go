@@ -58,7 +58,7 @@ type dryResults struct {
 		Attempted int    `json:"attempted"`
 		Completed int    `json:"completed"`
 		Samples   []struct {
-			InstanceID string `json:"claude_instance_id"`
+			InstanceID string `json:"instance_id"`
 		} `json:"samples"`
 	} `json:"cases"`
 	RN9 struct {

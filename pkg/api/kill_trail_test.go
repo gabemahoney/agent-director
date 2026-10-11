@@ -255,7 +255,7 @@ func ktrAssertCalled(t *testing.T, rec map[string]any, r killRow, want ktrCalled
 		}
 	}
 	fields := map[string]any{
-		"claude_instance_id": r.ID, "tmux_session_name": r.Name, "outcome": want.outcome,
+		"instance_id": r.ID, "tmux_session_name": r.Name, "outcome": want.outcome,
 		"lookup_outcome": want.lookup, "followup_outcome": want.followup, "process_check": want.check,
 		"kill_sent": want.killSent, "pane_killed": want.paneKilled, "agent_pid": agent,
 		"include_finished": optIn, "source": "ad_kill",

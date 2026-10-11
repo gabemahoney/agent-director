@@ -405,11 +405,11 @@ func TestPaneVerbsUnusableName(t *testing.T) {
 			var err error
 			if tc.verb == "read-pane" {
 				var res api.ReadPaneResult
-				if res, err = e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID}); res.Pane != "" {
+				if res, err = e.readPane(api.ReadPaneParams{InstanceID: r.ID}); res.Pane != "" {
 					t.Errorf("Pane = %q; want none", res.Pane)
 				}
 			} else { // the requests are stored at wall-clock time, so the guard is judged against it
-				_, err = e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1",
+				_, err = e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{InstanceID: r.ID, Text: "1",
 					AllowPending: tc.allow})
 			}
 
@@ -453,11 +453,11 @@ func TestPaneVerbsUnknownIDAndClosedClient(t *testing.T) {
 			var err error
 			switch verb {
 			case "kill":
-				_, err = c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
+				_, err = c.Kill(api.KillParams{InstanceID: r.ID})
 			case "read-pane":
-				_, err = c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
+				_, err = c.ReadPane(api.ReadPaneParams{InstanceID: r.ID})
 			case "send-keys":
-				_, err = c.SendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "hi"})
+				_, err = c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "hi"})
 			default:
 				_, err = c.Pause(context.Background(), pauseParams(r))
 			}

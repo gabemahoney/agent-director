@@ -70,7 +70,7 @@ func TestEmitLine(t *testing.T) {
 	w, path, _ := newTestWriter(t)
 	const ts = "2026-06-05T01:23:45.678Z"
 	if err := w.Emit(context.Background(), "ad.test", map[string]any{
-		"ts": ts, "claude_instance_id": "inst-1", "request_token": "tok-abc",
+		"ts": ts, "instance_id": "inst-1", "request_token": "tok-abc",
 		"tool_input": map[string]any{"secret": "value"}, "safe_field": "kept",
 	}); err != nil {
 		t.Fatalf("Emit: %v", err)
@@ -80,7 +80,7 @@ func TestEmitLine(t *testing.T) {
 		t.Fatalf("want 1 line; got %d", len(rows))
 	}
 	row := rows[0]
-	want := map[string]any{"ts": ts, "event": "ad.test", "claude_instance_id": "inst-1", "request_token": "tok-abc", "safe_field": "kept"}
+	want := map[string]any{"ts": ts, "event": "ad.test", "instance_id": "inst-1", "request_token": "tok-abc", "safe_field": "kept"}
 	for k, v := range want {
 		if row[k] != v {
 			t.Errorf("%s = %v; want %v at the top level", k, row[k], v)

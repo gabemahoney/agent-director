@@ -1,8 +1,8 @@
 /**
  * rc-stamp.test.ts — the build's version stamp as the client sees it: a dev
  * build stamps the sentinel byte-exact (SR-8.3a / SR-2.6), and a
- * release-candidate build (package version + "-rc.1") is accepted and ordered
- * between the floor and its release (AC-REL-03 / SR-21.5).
+ * release-candidate build ("-rc.1" on the upcoming release) is accepted and
+ * ordered between the floor and that release (AC-REL-03 / SR-21.5).
  */
 
 import { test, expect } from "bun:test";
@@ -15,7 +15,13 @@ import { PKG_VERSION, openClient } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
-const rc = `${PKG_VERSION}-rc.1`;
+// The upcoming release is the higher of package.json's version and the floor's
+// release (the floor minus its prerelease): package.json stays at the last
+// release until the release pipeline bumps it, so it can sit below the floor,
+// and an RC of it would then be refused by the floor.
+const floorRelease = MIN_BINARY_VERSION.replace(/-.*$/, "");
+const upcoming = compareVersions(PKG_VERSION, floorRelease) >= 0 ? PKG_VERSION : floorRelease;
+const rc = `${upcoming}-rc.1`;
 
 // `make release-binaries` artifact suffix for this host; null skips the build test.
 const releaseTarget = (() => {
@@ -60,5 +66,10 @@ test.skipIf(releaseTarget === null)(
 test("comparator orders the RC at or above MIN_BINARY_VERSION and below its release", () => {
   expect(parseVersion(rc).ok).toBe(true);
   expect(compareVersions(rc, MIN_BINARY_VERSION)).toBeGreaterThanOrEqual(0);
-  expect(compareVersions(rc, PKG_VERSION)).toBe(-1);
+  expect(compareVersions(rc, upcoming)).toBe(-1);
+});
+
+test("the upcoming release is never below package.json's version or the floor's release", () => {
+  expect(compareVersions(upcoming, PKG_VERSION)).toBeGreaterThanOrEqual(0);
+  expect(compareVersions(upcoming, floorRelease)).toBeGreaterThanOrEqual(0);
 });

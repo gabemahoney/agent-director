@@ -39,12 +39,12 @@ func newRelaunchEnv(t *testing.T) *relaunchEnv {
 	withStubExe(t, "/bin/agent-director")
 	return &relaunchEnv{t: t, socket: isolateTmux(t), rec: tmuxfix.NewRecorder(), cfg: config.Default(),
 		row: store.Spawn{
-			ClaudeInstanceID: "id-relaunch-1",
-			CWD:              "/tmp/relaunch-cwd",
-			TmuxSessionName:  "cd-relaunch-1",
-			RelayMode:        "off",
-			ClaudeArgs:       []string{"--model", "opus"},
-			Labels:           map[string]string{"role": "worker"},
+			InstanceID:      "id-relaunch-1",
+			CWD:             "/tmp/relaunch-cwd",
+			TmuxSessionName: "cd-relaunch-1",
+			RelayMode:       "off",
+			AgentArgs:       []string{"--model", "opus"},
+			Labels:          map[string]string{"role": "worker"},
 		}}
 }
 
@@ -73,7 +73,7 @@ func (e *relaunchEnv) onlyCreate() tmuxfix.SocketCall {
 // TestRelaunchEnvAndArgv (SR-10): the create's environment is exactly the
 // base keys, one variable per row label and the row's ExtraEnv verbatim (none
 // for a legacy '{}' column), and its argv is `claude --resume <session id>
-// --settings <json>` then the row's claude_args.
+// --settings <json>` then the row's agent_args.
 func TestRelaunchEnvAndArgv(t *testing.T) {
 	for _, extra := range []map[string]string{nil, {}, {"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt",
 		"ANTHROPIC_API_KEY": "sk-ant-test", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}} {
@@ -83,7 +83,7 @@ func TestRelaunchEnvAndArgv(t *testing.T) {
 			t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 		}
 		c := e.onlyCreate()
-		want := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": e.row.ClaudeInstanceID,
+		want := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": e.row.InstanceID,
 			"AGENT_DIRECTOR_RELAY_MODE": e.row.RelayMode, "AGENT_DIRECTOR_LABEL_ROLE": "worker"}
 		for k, v := range extra {
 			want[k] = v
@@ -92,8 +92,8 @@ func TestRelaunchEnvAndArgv(t *testing.T) {
 			t.Errorf("ExtraEnv=%v: relaunch env = %v; want exactly %v", extra, c.Envs, want)
 		}
 		if len(c.Command) < 5 || !reflect.DeepEqual(c.Command[:4], []string{"claude", "--resume", "session-uuid-1", "--settings"}) ||
-			!reflect.DeepEqual(c.Command[5:], e.row.ClaudeArgs) {
-			t.Errorf("create argv = %v; want claude --resume session-uuid-1 --settings <json> %v", c.Command, e.row.ClaudeArgs)
+			!reflect.DeepEqual(c.Command[5:], e.row.AgentArgs) {
+			t.Errorf("create argv = %v; want claude --resume session-uuid-1 --settings <json> %v", c.Command, e.row.AgentArgs)
 		}
 	}
 }
@@ -102,7 +102,7 @@ func TestRelaunchEnvAndArgv(t *testing.T) {
 // settings carry only the config's AskUserQuestion deny, no per-spawn overlay.
 func TestRelaunchLeavesPermissionsNil(t *testing.T) {
 	e := newRelaunchEnv(t)
-	e.cfg.Defaults.DisableAskUserQuestion = true
+	e.cfg.Defaults.DisableAskUser = true
 
 	e.relaunch("s1")
 	c := e.onlyCreate()
@@ -129,7 +129,7 @@ func TestRelaunchLabelledCreateOnPassedSocket(t *testing.T) {
 	if out.Kind != CreateLabelled {
 		t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 	}
-	c, id := e.onlyCreate(), e.row.ClaudeInstanceID
+	c, id := e.onlyCreate(), e.row.InstanceID
 	if c.Socket != e.socket || c.Target != e.row.TmuxSessionName || c.Cwd != e.row.CWD ||
 		c.Token != relaunchToken || c.InstanceID != id || c.StoreID != relaunchStoreID {
 		t.Errorf("create = %+v; want socket %q, name %q, cwd %q, label {%q %q %q}", c, e.socket, e.row.TmuxSessionName,

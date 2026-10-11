@@ -31,7 +31,7 @@ func expCandidateIDs(t *testing.T, f *v5Store, cutoff time.Time) []string {
 	}
 	var ids []string
 	for _, c := range cands {
-		ids = append(ids, c.ClaudeInstanceID)
+		ids = append(ids, c.InstanceID)
 	}
 	return ids
 }
@@ -100,7 +100,7 @@ func TestExpireCandidatesCarryTheRow(t *testing.T) {
 		{"non-ASCII name, no process or identity", "agent-é-名-\x7f", []apitest.SpawnOption{apitest.WithNoLaunchToken()},
 			store.ExpireCandidate{}},
 		{"malformed labels, args, env and launch start", "malformed", []apitest.SpawnOption{apitest.WithLaunchIdentity(fullIdentity()),
-			apitest.WithRawLabels(`{"team":`), apitest.WithRawClaudeArgs(`["--x"`), apitest.WithRawExtraEnv(`not an object`),
+			apitest.WithRawLabels(`{"team":`), apitest.WithRawAgentArgs(`["--x"`), apitest.WithRawExtraEnv(`not an object`),
 			apitest.WithRawLaunchStartedAt("soon")}, store.ExpireCandidate{Identity: fullIdentity()}},
 		{"malformed launch token", "bad-token", []apitest.SpawnOption{apitest.WithLaunchIdentity(badToken)},
 			store.ExpireCandidate{Identity: tokenless}},
@@ -110,10 +110,10 @@ func TestExpireCandidatesCarryTheRow(t *testing.T) {
 	for _, c := range cases {
 		id := f.seed(store.StateEnded, "sess-exp-carry", append(c.opts, apitest.WithTmuxSessionName(c.session), apitest.WithEndedAt(expOld))...)
 		w := c.want
-		w.ClaudeInstanceID, w.TmuxSessionName = id, c.session
+		w.InstanceID, w.TmuxSessionName = id, c.session
 		raw := f.rawColumns(id)
 		w.Snapshot = store.RowSnapshot{RowVersion: raw.RowVersion.(int64), StartedAt: raw.StartedAt.(string),
-			ClaudeSessionID: "sess-exp-carry", PID: w.PID, ProcStarttime: w.ProcStarttime, TmuxSessionName: c.session}
+			SessionID: "sess-exp-carry", PID: w.PID, ProcStarttime: w.ProcStarttime, TmuxSessionName: c.session}
 		want[id] = w
 	}
 	cands, err := f.s.ListExpireCandidates(expCutoff)
@@ -121,7 +121,7 @@ func TestExpireCandidatesCarryTheRow(t *testing.T) {
 		t.Fatalf("ListExpireCandidates = %d candidates, %v; want %d", len(cands), err, len(cases))
 	}
 	for _, c := range cands {
-		if w := want[c.ClaudeInstanceID]; !reflect.DeepEqual(c, w) {
+		if w := want[c.InstanceID]; !reflect.DeepEqual(c, w) {
 			t.Errorf("candidate:\n got %+v\nwant %+v", c, w)
 		}
 	}

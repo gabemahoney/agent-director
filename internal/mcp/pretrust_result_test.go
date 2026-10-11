@@ -118,8 +118,8 @@ func TestPreTrustMCPSpawnResult(t *testing.T) {
 			c.check(t, cwd, tc.trusted)
 			assertCreates(t, e.rec)
 			var id string
-			if err := json.Unmarshal(obj["claude_instance_id"], &id); err != nil || id == "" {
-				t.Fatalf("claude_instance_id = %s; want the new row's id", obj["claude_instance_id"])
+			if err := json.Unmarshal(obj["instance_id"], &id); err != nil || id == "" {
+				t.Fatalf("instance_id = %s; want the new row's id", obj["instance_id"])
 			}
 			if npt := fmt.Sprint(readColumns(t, e.storePath, id).NoPreTrust); npt != tc.wantNoPreTrst {
 				t.Errorf("row no_pre_trust = %v; want %s", npt, tc.wantNoPreTrst)
@@ -154,7 +154,7 @@ func TestPreTrustMCPResumeResult(t *testing.T) {
 				t.Fatalf("SeedSpawn(%s): %v", id, err)
 			}
 
-			obj := callToolText(t, e.d, "resume", `{"claude_instance_id":"`+id+`"}`)
+			obj := callToolText(t, e.d, "resume", `{"instance_id":"`+id+`"}`)
 
 			assertPreTrust(t, obj, tc.want)
 			c.check(t, cwd, tc.trusted)

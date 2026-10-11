@@ -117,15 +117,15 @@ func TestNoExecFormCLIHookPayloadIgnored(t *testing.T) {
 				t.Fatalf("trail = %v; want exactly one ad.hook.ignored (no ad.hook.fired)", lines)
 			}
 			want := map[string]any{
-				"claude_instance_id": tc.wantInstance,
-				"hook_event":         tc.wantEvent,
-				"reason":             store.HookReasonNoExecForm,
-				"parent_pid":         float64(pid),
-				"parent_command":     wantCommand,
-				"hook_session_id":    tc.wantHookSessn,
-				"row_session_id":     nil,
-				"row_pane_pid":       nil,
-				"source":             "ad_hook",
+				"instance_id":     tc.wantInstance,
+				"hook_event":      tc.wantEvent,
+				"reason":          store.HookReasonNoExecForm,
+				"parent_pid":      float64(pid),
+				"parent_command":  wantCommand,
+				"hook_session_id": tc.wantHookSessn,
+				"row_session_id":  nil,
+				"row_pane_pid":    nil,
+				"source":          "ad_hook",
 			}
 			for k, v := range want {
 				if got, present := lines[0][k]; !present || got != v {

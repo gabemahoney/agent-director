@@ -57,7 +57,7 @@ func noExecFormPayload(raw []byte) (event, transcriptPath string, ok bool) {
 
 // emitNoExecForm writes the one ad.hook.ignored no_exec_form record (SR-14)
 // with no store access, fail-open. Its fields come from ignoredFields, the
-// builder emitIgnored uses: claude_instance_id from the environment (null when
+// builder emitIgnored uses: instance_id from the environment (null when
 // absent or invalid, ResolveInstanceID), hook_event, reason, parent_pid
 // (hc.ParentPID; 0 when nil) and parent_command, hook_session_id (the
 // transcript_path basename, or null), and null row_session_id and

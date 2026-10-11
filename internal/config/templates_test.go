@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestValidateTemplateName accepts plain names and refuses empty, dot,
@@ -75,31 +76,105 @@ func TestLoadTemplate(t *testing.T) {
 }
 
 func TestLoadTemplateValidFileDecodes(t *testing.T) {
-	writeTemplate(t, templatesDir(t), "valid", `cwd = "/tmp"
-relay_mode = "off"
-claude_args = ["--model", "opus"]
+	dir := templatesDir(t)
+	writeTemplate(t, dir, "valid", apitest.TemplateBody(apitest.TemplateFields{
+		CWD:         "/tmp",
+		RelayMode:   "off",
+		AgentArgs:   []string{"--model", "opus"},
+		Labels:      map[string]string{"project": "foo"},
+		Permissions: &config.TemplatePermissions{Allow: []string{"Bash(jq)"}},
+	}))
 
-[labels]
-project = "foo"
-
-[permissions]
-allow = ["Bash(jq)"]
-`)
 	tf, err := config.LoadTemplate("valid")
+
 	if err != nil {
 		t.Fatalf("LoadTemplate: %v", err)
 	}
 	if tf.CWD != "/tmp" || tf.RelayMode != "off" {
 		t.Errorf("scalars: %+v", tf)
 	}
-	if len(tf.ClaudeArgs) != 2 || tf.ClaudeArgs[0] != "--model" {
-		t.Errorf("ClaudeArgs: %v", tf.ClaudeArgs)
+	if !slices.Equal(tf.AgentArgs, []string{"--model", "opus"}) {
+		t.Errorf("AgentArgs: %v", tf.AgentArgs)
 	}
 	if tf.AgentDirectorLabels["project"] != "foo" {
 		t.Errorf("Labels: %v", tf.AgentDirectorLabels)
 	}
 	if tf.Permissions == nil || tf.Permissions.Allow[0] != "Bash(jq)" {
 		t.Errorf("Permissions: %+v", tf.Permissions)
+	}
+}
+
+// oldTemplateKeyText is LoadTemplate's refusal of the old claude_args key
+// (SR-4.3) for template name: it names the key that replaced it.
+func oldTemplateKeyText(name string) string {
+	return config.ErrTemplateMalformed.Error() + ": " + name + ": claude_args is no longer accepted; use agent_args"
+}
+
+// TestLoadTemplateRefusesOldKeys is the SR-4.3 template refusal: claude_args,
+// in any letter case and beside any other keys, is ErrTemplateMalformed
+// naming agent_args, and is never read as the new key. The refusal comes at
+// the unknown-key check, before the relay_mode check.
+func TestLoadTemplateRefusesOldKeys(t *testing.T) {
+	args := []string{"--model", "opus"}
+	cases := []struct {
+		name   string
+		fields apitest.TemplateFields
+	}{
+		{"lower", apitest.TemplateFields{RawKeys: []string{`claude_args = ["--model", "opus"]`}}},
+		{"empty_list", apitest.TemplateFields{RawKeys: []string{`claude_args = []`}}},
+		{"upper", apitest.TemplateFields{RawKeys: []string{`CLAUDE_ARGS = ["--model", "opus"]`}}},
+		{"mixed", apitest.TemplateFields{RawKeys: []string{`Claude_Args = ["--model", "opus"]`}}},
+		{"capitalised", apitest.TemplateFields{RawKeys: []string{`Claude_args = ["--model", "opus"]`}}},
+		{"beside_valid_fields", apitest.TemplateFields{CWD: "/tmp", RelayMode: "on", Labels: map[string]string{"team": "x"},
+			RawKeys: []string{`claude_args = ["--model", "opus"]`}}},
+		{"both_old_and_new", apitest.TemplateFields{AgentArgs: args, RawKeys: []string{`claude_args = ["--model", "opus"]`}}},
+		{"both_new_then_old", apitest.TemplateFields{RawKeys: []string{`agent_args = ["--model", "opus"]`, `claude_args = ["--model", "opus"]`}}},
+		{"both_old_then_new", apitest.TemplateFields{RawKeys: []string{`claude_args = ["--model", "opus"]`, `agent_args = ["--model", "opus"]`}}},
+		{"both_upper_old_and_new", apitest.TemplateFields{AgentArgs: args, RawKeys: []string{`CLAUDE_ARGS = ["--model", "opus"]`}}},
+		{"old_key_in_two_spellings", apitest.TemplateFields{RawKeys: []string{`claude_args = ["--a"]`, `CLAUDE_ARGS = ["--b"]`}}},
+		{"beside_bad_relay_mode", apitest.TemplateFields{RelayMode: "bogus", RawKeys: []string{`claude_args = ["--model", "opus"]`}}},
+		{"beside_another_unknown_key", apitest.TemplateFields{RawKeys: []string{`mystery_field = "wat"`, `claude_args = ["--model", "opus"]`}}},
+		{"another_unknown_key_after", apitest.TemplateFields{RawKeys: []string{`claude_args = ["--model", "opus"]`, `mystery_field = "wat"`}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeTemplate(t, templatesDir(t), tc.name, apitest.TemplateBody(tc.fields))
+
+			_, err := config.LoadTemplate(tc.name)
+
+			if !errors.Is(err, config.ErrTemplateMalformed) || err.Error() != oldTemplateKeyText(tc.name) {
+				t.Fatalf("err = %v\nwant  %s", err, oldTemplateKeyText(tc.name))
+			}
+		})
+	}
+}
+
+// TestLoadTemplateLoadsAgentArgs: agent_args loads as the template's agent
+// arguments, in any letter case, alone or beside the other fields.
+func TestLoadTemplateLoadsAgentArgs(t *testing.T) {
+	args := []string{"--model", "opus", "--verbose"}
+	cases := []struct {
+		name   string
+		fields apitest.TemplateFields
+		want   config.TemplateFile
+	}{
+		{"alone", apitest.TemplateFields{AgentArgs: args}, config.TemplateFile{AgentArgs: args}},
+		{"single_arg", apitest.TemplateFields{AgentArgs: []string{"--x"}}, config.TemplateFile{AgentArgs: []string{"--x"}}},
+		{"upper_case_key", apitest.TemplateFields{RawKeys: []string{`AGENT_ARGS = ["--model", "opus", "--verbose"]`}},
+			config.TemplateFile{AgentArgs: args}},
+		{"beside_other_fields", apitest.TemplateFields{AgentArgs: args, CWD: "/tmp", RelayMode: "on"},
+			config.TemplateFile{AgentArgs: args, CWD: "/tmp", RelayMode: "on"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeTemplate(t, templatesDir(t), tc.name, apitest.TemplateBody(tc.fields))
+
+			tf, err := config.LoadTemplate(tc.name)
+
+			if err != nil || !reflect.DeepEqual(tf, tc.want) {
+				t.Fatalf("LoadTemplate = %+v, %v; want %+v", tf, err, tc.want)
+			}
+		})
 	}
 }
 

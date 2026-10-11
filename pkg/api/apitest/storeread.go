@@ -19,10 +19,10 @@ type SpawnColumns struct {
 	State                   any
 	CWD                     any
 	TmuxSessionName         any
-	ClaudeArgs              any // raw stored text
+	AgentArgs               any // raw stored text
 	RelayMode               any
 	JSONLPath               any
-	ClaudeSessionID         any
+	SessionID               any
 	Labels                  any // raw stored text
 	StartedAt               any // raw stored text
 	LastSeenAt              any // raw stored text
@@ -89,8 +89,8 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 	            WHERE instance_id = ?`
 	var c SpawnColumns
 	err = raw.QueryRow(q, instanceID).Scan(
-		&c.ParentID, &c.State, &c.CWD, &c.TmuxSessionName, &c.ClaudeArgs,
-		&c.RelayMode, &c.JSONLPath, &c.ClaudeSessionID, &c.Labels,
+		&c.ParentID, &c.State, &c.CWD, &c.TmuxSessionName, &c.AgentArgs,
+		&c.RelayMode, &c.JSONLPath, &c.SessionID, &c.Labels,
 		&c.StartedAt, &c.LastSeenAt, &c.EndedAt, &c.PID, &c.ProcStarttime,
 		&c.LivenessUnverifiedSince, &c.LivenessNote, &c.ExtraEnv,
 		&c.RowVersion, &c.LaunchStartedAt, &c.LifeNumber, &c.NoPreTrust,
@@ -112,10 +112,10 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 // HistoryEntry is one session_history entry as ReadSessionHistoryAllLives
 // returns it, from any life.
 type HistoryEntry struct {
-	ClaudeSessionID string
-	JSONLPath       sql.NullString // Valid false = NULL, distinct from ""
-	LifeNumber      int64          // the life the entry belongs to (SR-5.9)
-	RecordedAt      string         // recorded_at as stored text
+	SessionID  string
+	JSONLPath  sql.NullString // Valid false = NULL, distinct from ""
+	LifeNumber int64          // the life the entry belongs to (SR-5.9)
+	RecordedAt string         // recorded_at as stored text
 }
 
 // ReadSessionHistoryAllLives returns every session_history entry of
@@ -144,7 +144,7 @@ func ReadSessionHistoryAllLives(dbPath, instanceID string) ([]HistoryEntry, erro
 	out := make([]HistoryEntry, 0)
 	for rows.Next() {
 		var e HistoryEntry
-		if err := rows.Scan(&e.ClaudeSessionID, &e.JSONLPath, &e.LifeNumber, &e.RecordedAt); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.JSONLPath, &e.LifeNumber, &e.RecordedAt); err != nil {
 			return nil, fmt.Errorf("ReadSessionHistoryAllLives: scan: %w", err)
 		}
 		out = append(out, e)

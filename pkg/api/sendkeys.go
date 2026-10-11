@@ -80,8 +80,8 @@ var (
 // rule 8, decision 7 A). A pane answer needs As, Key and ExpectPaneSHA256,
 // takes no Text, and sends exactly one key with no Enter after it.
 type SendKeysParams struct {
-	// ClaudeInstanceID identifies the Spawn whose pane will receive the keys.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID identifies the Spawn whose pane will receive the keys.
+	InstanceID string `json:"instance_id"`
 	// Text is the string to deliver to the agent's own pane on a plain call.
 	// CR bytes (0x0D) are stripped before delivery; LF bytes (0x0A) are
 	// preserved as input newlines. A single Enter is appended to submit the
@@ -382,7 +382,7 @@ func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 	r := &sendKeysRun{s: s, t: t, env: env, j: newRelayJudge(env.Relay),
 		facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
 	err := r.run(params)
-	r.emitDisagree("send-keys", params.ClaudeInstanceID, r.facts.Caller)
+	r.emitDisagree("send-keys", params.InstanceID, r.facts.Caller)
 	return r.facts, SendKeysResult{}, err
 }
 
@@ -392,7 +392,7 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	if err != nil {
 		return err
 	}
-	row, err := r.s.GetSpawn(params.ClaudeInstanceID)
+	row, err := r.s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return err
 	}
@@ -412,12 +412,12 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
-		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
-		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	if plan.enter {
@@ -428,7 +428,7 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 	if row.State == store.StatePending {
 		r.leftover = func(leftovers []tmux.Session) error {
-			return pendingLeftoverError(row.ClaudeInstanceID, leftovers)
+			return pendingLeftoverError(row.InstanceID, leftovers)
 		}
 	}
 	err = r.send(plan, params)
@@ -477,7 +477,7 @@ func (r *sendKeysRun) paneMatches(paneID string, launch tmux.Launch, plan sendKe
 		return verr
 	}
 	if got != plan.hash {
-		return paneChangedError(r.row.ClaudeInstanceID, token, plan.nLines, string(nothingSent))
+		return paneChangedError(r.row.InstanceID, token, plan.nLines, string(nothingSent))
 	}
 	return nil
 }
@@ -525,7 +525,7 @@ func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) erro
 // its Spawn's requests) changes nothing and the call succeeds: the key was
 // sent.
 func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKeysPlan, params SendKeysParams) error {
-	id, token := r.row.ClaudeInstanceID, params.RequestToken
+	id, token := r.row.InstanceID, params.RequestToken
 	intent, written, err := r.s.RecordPaneIntent(id, token, params.As, r.env.self(), r.j.now, store.DefaultLockWait,
 		func(sp Spawn, rows []PermissionRow) error {
 			if err := sendKeysStateGuard(sp, params); err != nil {
@@ -615,13 +615,13 @@ func paneKeySentError(id, token string, err error, released bool) error {
 func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 	if params.AllowPending && row.State == store.StatePending {
 		if row.LaunchStartedAtMillis == 0 || row.Identity.Token == "" {
-			return pendingNoLaunchError(row.ClaudeInstanceID)
+			return pendingNoLaunchError(row.InstanceID)
 		}
 		return nil
 	}
 	if !isInteractiveState(row.State) {
 		return fmt.Errorf("%w: spawn %s state=%s",
-			ErrSpawnNotInteractive, params.ClaudeInstanceID, row.State)
+			ErrSpawnNotInteractive, params.InstanceID, row.State)
 	}
 	return nil
 }
@@ -665,7 +665,7 @@ func relayGuard(s relayGuardStore, j relayJudge, hold time.Duration, row Spawn, 
 		return sendKeysGuard{eval: guardNotApplicable}, nil
 	}
 	reqs, err := judgedRequests(func() ([]PermissionRow, error) {
-		return s.PermissionRequestsForSpawn(row.ClaudeInstanceID)
+		return s.PermissionRequestsForSpawn(row.InstanceID)
 	}, j, row)
 	if err != nil {
 		return sendKeysGuard{eval: guardError}, err

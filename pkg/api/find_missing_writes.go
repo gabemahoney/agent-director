@@ -60,7 +60,7 @@ type findMissingWrite struct {
 //     so the mark and the close are both written or neither is, and it
 //     writes each closed request's permission_orphan_closeout tick once the
 //     transaction commits;
-//  2. when it applied, exactly one ad.find_missing.tick: claude_instance_id,
+//  2. when it applied, exactly one ad.find_missing.tick: instance_id,
 //     prior_state (the state the mark replaced), new_state missing,
 //     reconciliation_reason reason and source ad_find_missing, plus every
 //     field of extra (Task 2 passes lookup_outcome, and tmux_session_name for
@@ -87,7 +87,7 @@ func markMissingSameLife(s FindMissingStore, id string, examined RowSnapshot, re
 	for k, v := range extra {
 		fields[k] = v
 	}
-	fields["claude_instance_id"] = id
+	fields["instance_id"] = id
 	fields["prior_state"] = prior
 	fields["new_state"] = "missing"
 	fields["reconciliation_reason"] = reason
@@ -180,7 +180,7 @@ func writeLivenessNote(s FindMissingStore, id string, examined RowSnapshot, read
 }
 
 // emitNoteTick writes the ad.find_missing.tick of a note write that applied,
-// from readNote to note, when noteTickReason says it ticks: claude_instance_id,
+// from readNote to note, when noteTickReason says it ticks: instance_id,
 // prior_state and new_state null, reconciliation_reason and source
 // ad_find_missing. Fail-open: a trail-write failure is discarded.
 func emitNoteTick(id, readNote, note string) {
@@ -189,7 +189,7 @@ func emitNoteTick(id, readNote, note string) {
 		return
 	}
 	_ = trail.Emit(context.Background(), findMissingTickEvent, map[string]any{
-		"claude_instance_id":    id,
+		"instance_id":           id,
 		"prior_state":           nil,
 		"new_state":             nil,
 		"reconciliation_reason": reason,

@@ -40,7 +40,7 @@ func TestSpawnStatus(t *testing.T) {
 		{"missing", store.StateMissing, nil, 0, false},
 		{"ended, stored launch start", store.StateEnded, apitest.WithLaunchStartedAt(launchMillis), launchMillis, false},
 		{"pending, malformed labels", store.StatePending, apitest.WithRawLabels("{not json"), startedAt.UnixMilli(), true},
-		{"pending, malformed claude_args", store.StatePending, apitest.WithRawClaudeArgs("[not json"), startedAt.UnixMilli(), true},
+		{"pending, malformed agent_args", store.StatePending, apitest.WithRawAgentArgs("[not json"), startedAt.UnixMilli(), true},
 		{"pending, malformed extra_env", store.StatePending, apitest.WithRawExtraEnv("{not json"), startedAt.UnixMilli(), true},
 	}
 	f := newV5Store(t)

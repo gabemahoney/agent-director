@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/oldnames"
 	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -75,19 +76,19 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		// even when empty (ErrTmuxSessionNameEmpty), while an absent or
 		// null one is not, as with the CLI's --tmux-session-name.
 		var raw struct {
-			CWD              string            `json:"cwd"`
-			Template         string            `json:"template"`
-			ClaudeInstanceID string            `json:"claude_instance_id"`
-			Label            []string          `json:"label"`
-			Allow            []string          `json:"allow"`
-			Deny             []string          `json:"deny"`
-			Ask              []string          `json:"ask"`
-			RelayMode        string            `json:"relay_mode"`
-			ExtraEnv         map[string]string `json:"extra_env"`
-			ClaudeArgs       []string          `json:"claude_args"`
-			NoPreTrust       bool              `json:"no_pre_trust"`
-			TmuxSessionName  *string           `json:"tmux_session_name"`
-			ReuseFinished    bool              `json:"reuse_finished"`
+			CWD             string            `json:"cwd"`
+			Template        string            `json:"template"`
+			InstanceID      string            `json:"instance_id"`
+			Label           []string          `json:"label"`
+			Allow           []string          `json:"allow"`
+			Deny            []string          `json:"deny"`
+			Ask             []string          `json:"ask"`
+			RelayMode       string            `json:"relay_mode"`
+			ExtraEnv        map[string]string `json:"extra_env"`
+			AgentArgs       []string          `json:"agent_args"`
+			NoPreTrust      bool              `json:"no_pre_trust"`
+			TmuxSessionName *string           `json:"tmux_session_name"`
+			ReuseFinished   bool              `json:"reuse_finished"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -99,10 +100,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		p := api.SpawnParams{
 			CWD:                 raw.CWD,
 			Template:            raw.Template,
-			ClaudeInstanceID:    raw.ClaudeInstanceID,
+			InstanceID:          raw.InstanceID,
 			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
-			ClaudeArgs:          raw.ClaudeArgs,
+			AgentArgs:           raw.AgentArgs,
 			RelayMode:           raw.RelayMode,
 			NoPreTrust:          raw.NoPreTrust,
 			ReuseFinished:       raw.ReuseFinished,
@@ -122,21 +123,21 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	case "status":
 		var p struct {
-			ClaudeInstanceID string `json:"claude_instance_id"`
+			InstanceID string `json:"instance_id"`
 		}
 		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
-		return d.client.Status(p.ClaudeInstanceID)
+		return d.client.Status(p.InstanceID)
 
 	case "get":
 		var p struct {
-			ClaudeInstanceID string `json:"claude_instance_id"`
+			InstanceID string `json:"instance_id"`
 		}
 		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
-		return d.client.Get(p.ClaudeInstanceID)
+		return d.client.Get(p.InstanceID)
 
 	case "send-keys":
 		var p api.SendKeysParams
@@ -197,16 +198,16 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	case "make-template":
 		var raw struct {
-			Name       string            `json:"name"`
-			CWD        string            `json:"cwd"`
-			RelayMode  string            `json:"relay_mode"`
-			ClaudeArgs []string          `json:"claude_args"`
-			ExtraEnv   map[string]string `json:"extra_env"`
-			Label      []string          `json:"label"`
-			Allow      []string          `json:"allow"`
-			Deny       []string          `json:"deny"`
-			Ask        []string          `json:"ask"`
-			Overwrite  bool              `json:"overwrite"`
+			Name      string            `json:"name"`
+			CWD       string            `json:"cwd"`
+			RelayMode string            `json:"relay_mode"`
+			AgentArgs []string          `json:"agent_args"`
+			ExtraEnv  map[string]string `json:"extra_env"`
+			Label     []string          `json:"label"`
+			Allow     []string          `json:"allow"`
+			Deny      []string          `json:"deny"`
+			Ask       []string          `json:"ask"`
+			Overwrite bool              `json:"overwrite"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -219,7 +220,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Name:                raw.Name,
 			CWD:                 raw.CWD,
 			RelayMode:           raw.RelayMode,
-			ClaudeArgs:          raw.ClaudeArgs,
+			AgentArgs:           raw.AgentArgs,
 			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
 			Overwrite:           raw.Overwrite,
@@ -292,8 +293,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 // dashed name. The refusal wraps api.ErrInvalidFlags (the CLI's error for a
 // flag that is not defined), names every unknown key as the caller sent it,
 // sorted, and lists v's valid param names in manifest order. It runs before
-// any decode, so nothing runs on a refusal. Arguments that are not a JSON
-// object are refused with ErrInvalidFlags too (paramDecodeError, b.ewa).
+// any decode, so nothing runs on a refusal. An old name this verb replaced
+// (internal/oldnames) is named with its new name in the refusal. Arguments
+// that are not a JSON object are refused with ErrInvalidFlags too
+// (paramDecodeError, b.ewa).
 func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(args, &keys); err != nil {
@@ -308,7 +311,13 @@ func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 	var unknown []string
 	for k := range keys {
 		if !known[k] {
-			unknown = append(unknown, strconv.Quote(k))
+			q := strconv.Quote(k)
+			// An old name (internal/oldnames' table) whose new name this verb
+			// takes is refused naming the new one (SR-4.3).
+			if e, ok := oldnames.Find(oldnames.MCP, k); ok && known[e.New] {
+				q += " (no longer accepted; use " + strconv.Quote(e.New) + ")"
+			}
+			unknown = append(unknown, q)
 		}
 	}
 	if len(unknown) == 0 {

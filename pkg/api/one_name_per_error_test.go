@@ -119,7 +119,7 @@ func oneNameSpawnRows() []oneNameRow {
 			}
 		}
 		t.Setenv("TMUX_TMPDIR", f)
-		_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: "one-" + uuid.NewString()[:8]})
+		_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: "one-" + uuid.NewString()[:8]})
 		return err
 	}}}
 }
@@ -137,7 +137,7 @@ func oneNameResumeRows() []oneNameRow {
 			e := newResumeEnv(t)
 			suffix := uuid.NewString()[:8]
 			r := e.seedRow(t, resumableSpec{ID: "legacy\x1b" + suffix, SessionID: "sess-ctl-" + suffix})
-			_, err := e.c.Resume(api.ResumeParams{ClaudeInstanceID: r.ID})
+			_, err := e.c.Resume(api.ResumeParams{InstanceID: r.ID})
 			return err
 		}},
 		{name: "resume/move to pending fails", run: func(t *testing.T) error {

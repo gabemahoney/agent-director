@@ -274,9 +274,9 @@ func TestHookGateCLIOwnPaneApplies(t *testing.T) {
 				t.Errorf("SessionStart stdout = %q; want empty", out)
 			}
 			sp := h.row(t, id)
-			if sp.State != store.StateWaiting || sp.ClaudeSessionID != "gate-own-uuid" || sp.JSONLPath != transcript {
+			if sp.State != store.StateWaiting || sp.SessionID != "gate-own-uuid" || sp.JSONLPath != transcript {
 				t.Errorf("after SessionStart: state=%q session=%q jsonl=%q; want waiting, gate-own-uuid, %q",
-					sp.State, sp.ClaudeSessionID, sp.JSONLPath, transcript)
+					sp.State, sp.SessionID, sp.JSONLPath, transcript)
 			}
 			if sp.PID != pid || sp.ProcStarttime != start {
 				t.Errorf("after SessionStart: pid=%d proc_starttime=%q; want %d, %q (the hook's parent)",
@@ -365,7 +365,7 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 
 			after := h.row(t, id)
 			if after.State != before.State || after.RowVersion != before.RowVersion ||
-				!after.LastSeenAt.Equal(before.LastSeenAt) || after.ClaudeSessionID != before.ClaudeSessionID ||
+				!after.LastSeenAt.Equal(before.LastSeenAt) || after.SessionID != before.SessionID ||
 				after.JSONLPath != before.JSONLPath || after.PID != before.PID ||
 				after.ProcStarttime != before.ProcStarttime || after.Identity != before.Identity {
 				t.Errorf("row changed by an ignored hook:\nbefore=%+v\nafter =%+v", before, after)
@@ -376,15 +376,15 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 				t.Fatalf("ad.hook.ignored lines = %d; want exactly 1: %v", len(ign), ign)
 			}
 			want := map[string]any{
-				"claude_instance_id": id,
-				"hook_event":         tc.event,
-				"reason":             store.HookReasonPIDMismatch,
-				"parent_pid":         float64(pid),
-				"parent_command":     wantCommand,
-				"hook_session_id":    tc.wantHookSessn,
-				"row_session_id":     nil,
-				"row_pane_pid":       float64(other),
-				"source":             "ad_hook",
+				"instance_id":     id,
+				"hook_event":      tc.event,
+				"reason":          store.HookReasonPIDMismatch,
+				"parent_pid":      float64(pid),
+				"parent_command":  wantCommand,
+				"hook_session_id": tc.wantHookSessn,
+				"row_session_id":  nil,
+				"row_pane_pid":    float64(other),
+				"source":          "ad_hook",
 			}
 			for k, v := range want {
 				got, present := ign[0][k]
@@ -401,12 +401,12 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 				t.Errorf("ad.hook.pane_is_grandparent lines = %d; want exactly 1: %v", len(events), events)
 			} else {
 				want := map[string]any{
-					"claude_instance_id": id,
-					"pane_pid":           float64(other),
-					"pane_command":       paneCommand,
-					"parent_pid":         float64(pid),
-					"parent_command":     wantCommand,
-					"source":             "ad_hook",
+					"instance_id":    id,
+					"pane_pid":       float64(other),
+					"pane_command":   paneCommand,
+					"parent_pid":     float64(pid),
+					"parent_command": wantCommand,
+					"source":         "ad_hook",
 				}
 				for k, v := range want {
 					if got, present := events[0][k]; !present || got != v {
@@ -647,7 +647,7 @@ func TestHookGateCLISessionStartGrace(t *testing.T) {
 
 			after := h.row(t, id)
 			if after.State != store.StatePending || after.RowVersion != before.RowVersion ||
-				after.Identity != before.Identity || after.ClaudeSessionID != before.ClaudeSessionID {
+				after.Identity != before.Identity || after.SessionID != before.SessionID {
 				t.Errorf("row changed by an ignored SessionStart:\nbefore=%+v\nafter =%+v", before, after)
 			}
 			ign := trailEvents(t, h.home, "ad.hook.ignored")

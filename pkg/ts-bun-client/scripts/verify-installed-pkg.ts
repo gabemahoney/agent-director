@@ -78,7 +78,7 @@ type ClientInstance = {
   version(p: Record<never, never>): Promise<unknown>;
   makeTemplate(p: { name: string; overwrite?: boolean; cwd?: string }): Promise<{ path: string }>;
   getPermission(p: { request_token: string }): Promise<unknown>;
-  decide(p: { claude_instance_id: string; decision: string; request_token?: string }): Promise<unknown>;
+  decide(p: { instance_id: string; decision: string; request_token?: string }): Promise<unknown>;
   close(): void;
 };
 
@@ -274,7 +274,7 @@ async function runFull(): Promise<void> {
     // store lookup and rejects the call since m61 E1).
     let dtErr: unknown;
     try {
-      await client.decide({ claude_instance_id: "00000000-0000-0000-0000-000000000001", decision: "allow" });
+      await client.decide({ instance_id: "00000000-0000-0000-0000-000000000001", decision: "allow" });
     } catch (e) {
       dtErr = e;
     }

@@ -82,7 +82,7 @@ func acDoc19Items() []acDocItem {
 				{"list the set, choose a binary by the schema refusal", []string{list,
 					"`ErrSchemaMismatch`", "use the binary that wrote it", "`ErrSchemaMigrationRequired`",
 					"use the previous binary", "`ErrConfigMalformed`"}, nil},
-				{"pause, else kill and the live-row sequence", []string{"agent-director pause --claude-instance-id <id>",
+				{"pause, else kill and the live-row sequence", []string{"agent-director pause --instance-id <id>",
 					"`waiting` row", "`agent-director kill`", "steps 1 to 5 of the live-row sequence", "(caller-contract.md)"}, nil},
 				{"hand the rest to the other items, then stop every serve", []string{"items above", "list the set again (step 2)",
 					"(step 1 of " + quoted(inspectBlockTitle) + ")",

@@ -138,7 +138,7 @@ func TestKillCeilingExitWaitSetting(t *testing.T) {
 				wantWait = tc.goneAt
 			}
 			start := e.clock.Now()
-			res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
+			res, err := c.Kill(api.KillParams{InstanceID: r.ID})
 			if *slept != wantWait {
 				t.Errorf("waited %v; want %v", *slept, wantWait)
 			}
@@ -255,9 +255,9 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 				var err error
 				switch pc.verb {
 				case "read-pane":
-					_, err = e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID}, sc.config...)
+					_, err = e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID}, sc.config...)
 				case "send-keys":
-					_, _, err = e.sendKeysClient(t, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "hello"}, sc.config...)
+					_, _, err = e.sendKeysClient(t, api.SendKeysParams{InstanceID: r.ID, Text: "hello"}, sc.config...)
 				default:
 					_, _, err = e.pauseClient(t, pauseParams(r), sc.config...)
 				}

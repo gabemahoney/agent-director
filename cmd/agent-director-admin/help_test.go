@@ -18,8 +18,8 @@ import (
 
 // Each verb's usage line, as help prints it.
 var usageLines = map[string]string{
-	"kill-finished": "agent-director-admin kill-finished --claude-instance-id <id>",
-	"delete":        "agent-director-admin delete --claude-instance-id <id> [--claude-instance-id <id>...]",
+	"kill-finished": "agent-director-admin kill-finished --instance-id <id>",
+	"delete":        "agent-director-admin delete --instance-id <id> [--instance-id <id>...]",
 	"help":          "agent-director-admin help",
 	"version":       "agent-director-admin version",
 }

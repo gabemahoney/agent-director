@@ -148,7 +148,7 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				return err
 			}
-			return agentHook(s, id, "SessionStart", sp.ClaudeSessionID+"-next")
+			return agentHook(s, id, "SessionStart", sp.SessionID+"-next")
 		},
 		observe: func(t *testing.T, _ *store.Store, dbPath, id string) any {
 			t.Helper()

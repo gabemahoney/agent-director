@@ -1,7 +1,7 @@
 # agent-director
 
 Supervise long-running Claude Code sessions ("Spawns") from a script,
-another Claude, or an MCP-capable LLM client. One Go binary, one SQLite
+another agent, or an MCP-capable LLM client. One Go binary, one SQLite
 file, and tmux.
 
 ## What you get
@@ -38,15 +38,15 @@ with Claude Code.
 ## First spawn
 
 ```sh
-id=$(agent-director spawn --cwd "$PWD" | jq -r '.claude_instance_id')
+id=$(agent-director spawn --cwd "$PWD" | jq -r '.instance_id')
 
 agent-director list --state waiting
 
-agent-director send-keys --claude-instance-id "$id" --text "what is 2+2?"
+agent-director send-keys --instance-id "$id" --text "what is 2+2?"
 
-agent-director read-pane --claude-instance-id "$id"
+agent-director read-pane --instance-id "$id"
 
-agent-director pause --claude-instance-id "$id"
+agent-director pause --instance-id "$id"
 ```
 
 The row is `pending` until the agent reports in, then `waiting`.

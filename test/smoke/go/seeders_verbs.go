@@ -19,9 +19,9 @@ func init() {
 		SeedID:   "smoke-spawn-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.Spawn(api.SpawnParams{
-				ClaudeInstanceID: id,
-				CWD:              "/tmp",
-				RelayMode:        "off",
+				InstanceID: id,
+				CWD:        "/tmp",
+				RelayMode:  "off",
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {
@@ -79,9 +79,9 @@ func init() {
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			// SeedCheckPermission seeds the open row using storefix.TestRequestTokenA.
 			return c.Decide(api.DecideParams{
-				ClaudeInstanceID: id,
-				RequestToken:     storefix.TestRequestTokenA,
-				Decision:         "allow",
+				InstanceID:   id,
+				RequestToken: storefix.TestRequestTokenA,
+				Decision:     "allow",
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {
@@ -89,8 +89,8 @@ func init() {
 			// before the store is even hit. Robust against the seeded
 			// row's state.
 			_, err := c.Decide(api.DecideParams{
-				ClaudeInstanceID: bogusID,
-				Decision:         "maybe",
+				InstanceID: bogusID,
+				Decision:   "maybe",
 			})
 			return err
 		},
@@ -124,10 +124,10 @@ func init() {
 		SeedKind: seedResumable,
 		SeedID:   "smoke-resume-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Resume(api.ResumeParams{ClaudeInstanceID: id})
+			return c.Resume(api.ResumeParams{InstanceID: id})
 		},
 		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.Resume(api.ResumeParams{ClaudeInstanceID: bogusID})
+			_, err := c.Resume(api.ResumeParams{InstanceID: bogusID})
 			return err
 		},
 		PreTrust: func(result any) string {
@@ -205,7 +205,7 @@ func init() {
 		},
 		LaunchStartedAt: func(result any, id string) *time.Time {
 			for _, r := range result.(api.ListResult).Spawns {
-				if r.ClaudeInstanceID == id {
+				if r.InstanceID == id {
 					return r.LaunchStartedAt
 				}
 			}

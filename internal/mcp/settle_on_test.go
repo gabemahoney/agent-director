@@ -69,7 +69,7 @@ func TestSettleListStateMCP(t *testing.T) {
 					params["limit"] = tc.limit
 				}
 				var got []struct {
-					ID string `json:"claude_instance_id"`
+					ID string `json:"instance_id"`
 				}
 				if err := json.Unmarshal(callToolText(t, d, "list", paramJSON(t, params))["spawns"], &got); err != nil {
 					t.Fatalf("parse list spawns: %v", err)

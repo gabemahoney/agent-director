@@ -14,14 +14,14 @@ import (
 func mcpVerbObject(t *testing.T, d mcp.Dispatcher, verb, id string) map[string]json.RawMessage {
 	t.Helper()
 	if verb != "list" {
-		return callToolText(t, d, verb, `{"claude_instance_id":"`+id+`"}`)
+		return callToolText(t, d, verb, `{"instance_id":"`+id+`"}`)
 	}
 	var rows []map[string]json.RawMessage
 	if err := json.Unmarshal(callToolText(t, d, "list", `{}`)["spawns"], &rows); err != nil {
 		t.Fatalf("parse list spawns: %v", err)
 	}
 	for _, row := range rows {
-		if string(row["claude_instance_id"]) == `"`+id+`"` {
+		if string(row["instance_id"]) == `"`+id+`"` {
 			return row
 		}
 	}

@@ -130,7 +130,7 @@ type ClassifyResult struct {
 
 	// SessionID is the basename-without-extension of transcript_path, for
 	// every event whose payload carries the path. It is recorded, never a
-	// gate (SR-22.9): SessionStart writes it to spawns.claude_session_id
+	// gate (SR-22.9): SessionStart writes it to spawns.session_id
 	// (SRD §8.3), an applied ordinary hook writes it when the row records no
 	// session id yet and the hook carries no AgentID, and ad.hook.ignored
 	// reports it as hook_session_id (SR-14).

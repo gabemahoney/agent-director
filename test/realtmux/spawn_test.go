@@ -72,7 +72,7 @@ func (f *spawnFix) storeID(t testing.TB) string {
 // spawn runs a spawn with instance id id ("" mints one), without pre-trust;
 // reuse sets the reuse opt-in (ReuseFinished).
 func (f *spawnFix) spawn(id string, reuse bool) (string, error) {
-	return f.spawnWith(api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse})
+	return f.spawnWith(api.SpawnParams{InstanceID: id, ReuseFinished: reuse})
 }
 
 // spawnWith runs a spawn of p without pre-trust, in f.CWD unless p names a
@@ -83,7 +83,7 @@ func (f *spawnFix) spawnWith(p api.SpawnParams) (string, error) {
 	}
 	p.NoPreTrust = true
 	res, err := f.API.Spawn(p)
-	return res.ClaudeInstanceID, err
+	return res.InstanceID, err
 }
 
 // readRow reads id's spawns row from the store file dbPath through the
@@ -118,7 +118,7 @@ func (f *spawnFix) mustSpawn(t *testing.T, id string) spawned {
 // mustLaunchWith.
 func (f *spawnFix) mustLaunch(t *testing.T, id string, reuse bool) spawned {
 	t.Helper()
-	return f.mustLaunchWith(t, api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse})
+	return f.mustLaunchWith(t, api.SpawnParams{InstanceID: id, ReuseFinished: reuse})
 }
 
 // mustLaunchWith spawns p (spawnWith) and finds the launch (launched),
@@ -129,10 +129,10 @@ func (f *spawnFix) mustLaunchWith(t *testing.T, p api.SpawnParams) spawned {
 	got, err := f.spawnWith(p)
 	after := time.Now().UnixMilli()
 	if err != nil {
-		t.Fatalf("spawn %q: %s", p.ClaudeInstanceID, describe(err))
+		t.Fatalf("spawn %q: %s", p.InstanceID, describe(err))
 	}
-	if p.ClaudeInstanceID != "" && got != p.ClaudeInstanceID {
-		t.Fatalf("spawn returned id %q, want %q", got, p.ClaudeInstanceID)
+	if p.InstanceID != "" && got != p.InstanceID {
+		t.Fatalf("spawn returned id %q, want %q", got, p.InstanceID)
 	}
 	s := f.launched(t, got)
 	s.Before, s.After = before, after
@@ -164,10 +164,10 @@ func (f *spawnFix) seedResumable(t *testing.T, cwd string, args []string) (id, s
 	id, sessionID = newInstanceID("resume"), newInstanceID("sess")
 	encoded, err := json.Marshal(args)
 	if err != nil {
-		t.Fatalf("encode claude args: %v", err)
+		t.Fatalf("encode agent args: %v", err)
 	}
 	if _, err := apitest.SeedSpawn(f.DBPath, id, store.StateEnded, cwd, "", sessionID, false,
-		apitest.WithRawClaudeArgs(string(encoded)), apitest.WithTmuxSocket(f.Socket), apitest.WithNoPreTrust(),
+		apitest.WithRawAgentArgs(string(encoded)), apitest.WithTmuxSocket(f.Socket), apitest.WithNoPreTrust(),
 		apitest.WithJsonlPath(apitest.SeedJsonl(t, cwd, sessionID))); err != nil {
 		t.Fatalf("SeedSpawn %s: %v", id, err)
 	}
@@ -337,7 +337,7 @@ func TestSpawnSocketDeniedIsTmuxNotAvailable(t *testing.T) {
 			}
 			switch {
 			case tc.wantRow && len(rows.Spawns) == 1:
-				row := readRow(t, f.DBPath, rows.Spawns[0].ClaudeInstanceID)
+				row := readRow(t, f.DBPath, rows.Spawns[0].InstanceID)
 				if row.State != "pending" || row.TmuxSocket != f.Socket || row.TmuxServerPID != nil || row.PaneID != nil {
 					t.Errorf("row: state %v, tmux_socket %v, server pid %v, pane %v; want pending on %s with no identity",
 						row.State, row.TmuxSocket, row.TmuxServerPID, row.PaneID, f.Socket)

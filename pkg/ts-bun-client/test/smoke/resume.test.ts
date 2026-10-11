@@ -1,7 +1,7 @@
 /**
  * Smoke test — resume verb
  *
- * Happy path: an ended row with a claude_session_id, its JSONL placeholder at
+ * Happy path: an ended row with a session_id, its JSONL placeholder at
  * ${HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl (Go's
  * spawn.JsonlPath; slug maps every non-[A-Za-z0-9-] rune to '-'), and a socket
  * under the temp HOME, where the fake tmux creates the session.
@@ -40,8 +40,8 @@ test.each([
     fs.writeFileSync(path.join(jsonlDir, `sess-${id}.jsonl`), "{}\n");
 
     using client = await openClient(store);
-    const result = await client.resume({ claude_instance_id: id });
-    expect(result.claude_instance_id).toBe(id);
+    const result = await client.resume({ instance_id: id });
+    expect(result.instance_id).toBe(id);
     expect(result.pre_trust).toBe(want);
     if (noPreTrust) expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
     else expect(trustEntry(claudeJson, cwd)).toBe(true);
@@ -51,6 +51,6 @@ test.each([
 test("resume: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.resume({ claude_instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+    await expect(client.resume({ instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
 }, 10_000);

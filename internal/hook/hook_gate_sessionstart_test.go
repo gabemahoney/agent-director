@@ -128,8 +128,8 @@ func ssgNotedBeforeReport(t *testing.T, id string) (*store.Store, string) {
 	if res, err := st.NoteUnreportedIfSameLife(id, mustGetSpawn(t, st, id).Snapshot); err != nil || res != store.CondApplied {
 		t.Fatalf("note %q unreported = %v, %v; want applied", id, res, err)
 	}
-	if sp := mustGetSpawn(t, st, id); sp.State != store.StatePending || sp.LivenessNote != "unreported" || sp.ClaudeSessionID != "" {
-		t.Fatalf("noted %q = state %q, note %q, session %q; want pending, unreported, none", id, sp.State, sp.LivenessNote, sp.ClaudeSessionID)
+	if sp := mustGetSpawn(t, st, id); sp.State != store.StatePending || sp.LivenessNote != "unreported" || sp.SessionID != "" {
+		t.Fatalf("noted %q = state %q, note %q, session %q; want pending, unreported, none", id, sp.State, sp.LivenessNote, sp.SessionID)
 	}
 	return st, dbPath
 }
@@ -187,7 +187,7 @@ func ssgHistory(t *testing.T, dbPath, id string) []ssgArchived {
 	}
 	var out []ssgArchived
 	for _, e := range entries {
-		out = append(out, ssgArchived{e.ClaudeSessionID, e.JSONLPath.String, e.LifeNumber})
+		out = append(out, ssgArchived{e.SessionID, e.JSONLPath.String, e.LifeNumber})
 	}
 	return out
 }
@@ -234,8 +234,8 @@ func TestSessionStartGateApplied(t *testing.T) {
 			if row.State != store.StateWaiting || row.EndedAt != nil {
 				t.Errorf("state/ended_at = %q/%v; want waiting/NULL (from %q)", row.State, row.EndedAt, prior.State)
 			}
-			if row.ClaudeSessionID != sessionID || row.JSONLPath != path {
-				t.Errorf("session/path = %q/%q; want the payload's %q/%q", row.ClaudeSessionID, row.JSONLPath, sessionID, path)
+			if row.SessionID != sessionID || row.JSONLPath != path {
+				t.Errorf("session/path = %q/%q; want the payload's %q/%q", row.SessionID, row.JSONLPath, sessionID, path)
 			}
 			if row.LivenessNote != "" || row.LivenessUnverifiedSince != "" {
 				t.Errorf("liveness note/since = %q/%q; want both cleared", row.LivenessNote, row.LivenessUnverifiedSince)
@@ -406,13 +406,13 @@ func TestSessionStartGateSnapshotRace(t *testing.T) {
 			wantVersion := prior.RowVersion + int64(bs.bumped)
 			if tc.applied {
 				wantVersion++
-				if row.State != store.StateWaiting || row.ClaudeSessionID != sessionID || row.PID != agent.PID {
-					t.Errorf("state/session/pid = %q/%q/%d; want waiting/%q/%d", row.State, row.ClaudeSessionID, row.PID, sessionID, agent.PID)
+				if row.State != store.StateWaiting || row.SessionID != sessionID || row.PID != agent.PID {
+					t.Errorf("state/session/pid = %q/%q/%d; want waiting/%q/%d", row.State, row.SessionID, row.PID, sessionID, agent.PID)
 				}
 			} else {
-				if row.State != store.StatePending || row.ClaudeSessionID != "" || row.PID != 0 || row.JSONLPath != "" {
+				if row.State != store.StatePending || row.SessionID != "" || row.PID != 0 || row.JSONLPath != "" {
 					t.Errorf("state/session/pid/path = %q/%q/%d/%q; want pending, nothing recorded",
-						row.State, row.ClaudeSessionID, row.PID, row.JSONLPath)
+						row.State, row.SessionID, row.PID, row.JSONLPath)
 				}
 				if !strings.Contains(logBuf.String(), id) {
 					t.Errorf("log = %q; want one line naming %q", logBuf.String(), id)

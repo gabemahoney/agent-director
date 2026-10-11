@@ -42,7 +42,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 	}{
 		{"Defaults.RelayMode", d.Defaults.RelayMode, "off"},
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
-		{"Defaults.DisableAskUserQuestion", d.Defaults.DisableAskUserQuestion, false},
+		{"Defaults.DisableAskUser", d.Defaults.DisableAskUser, false},
 		{"Defaults.InjectHelpHook", d.Defaults.InjectHelpHook, false},
 		{"Relay.PollBaseMs", d.Relay.PollBaseMs, 100},
 		{"Relay.PollJitterMs", d.Relay.PollJitterMs, 100},
@@ -94,6 +94,20 @@ func TestLoadKeepsDefaults(t *testing.T) {
 		{"empty table beside another spelling", makeConfigFile(t, "[Store]\n\n[store]\ndb_path = \"/x.db\"\n"),
 			func(c *config.Config) { c.Store.DbPath = "/x.db" }},
 		{"unknown key in two spellings ignored", makeConfigFile(t, "[foo]\nX = 1\nx = 2\n"), func(*config.Config) {}},
+		{"disable_ask_user true", makeConfigFile(t, "[defaults]\ndisable_ask_user = true\n"),
+			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
+		{"disable_ask_user false", makeConfigFile(t, "[defaults]\ndisable_ask_user = false\n"),
+			func(c *config.Config) { c.Defaults.DisableAskUser = false }},
+		{"disable_ask_user in another letter case", makeConfigFile(t, "[DEFAULTS]\nDISABLE_ASK_USER = true\n"),
+			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
+		{"disable_ask_user as an inline table", makeConfigFile(t, "defaults = { disable_ask_user = true }\n"),
+			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
+		{"disable_ask_user as a dotted key", makeConfigFile(t, "defaults.disable_ask_user = true\n"),
+			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
+		{"unrelated unknown [defaults] key ignored", makeConfigFile(t, "[defaults]\ndisable_something_else = true\nrelay_mode = \"on\"\n"),
+			func(c *config.Config) { c.Defaults.RelayMode = "on" }},
+		{"old key name outside [defaults] ignored as any unknown key", makeConfigFile(t, "[relay]\ndisable_askuserquestion = true\n"),
+			func(*config.Config) {}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

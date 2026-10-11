@@ -104,7 +104,7 @@ func TestPaneAnswerClosedWhileItsKeyGoesOut(t *testing.T) {
 					tc.decision, tc.reason, tc.closed)
 			}
 			for _, l := range readAPITrailLines(t) {
-				if l["event"] == "ad.row_mutation.committed" && l["claude_instance_id"] == p.r.ID && l["writer_process"] == store.WriterProcessSendKeys {
+				if l["event"] == "ad.row_mutation.committed" && l["instance_id"] == p.r.ID && l["writer_process"] == store.WriterProcessSendKeys {
 					t.Errorf("ad.row_mutation.committed by send_keys: %v; want none (sent wrote nothing)", l)
 				}
 			}

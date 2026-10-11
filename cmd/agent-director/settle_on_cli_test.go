@@ -45,7 +45,7 @@ func cliListIDs(t *testing.T, home string, args ...string) []string {
 	stdout, stderr, code := runCLIWithHome(t, home, append([]string{"list"}, args...)...)
 	var res struct {
 		Spawns []struct {
-			ID string `json:"claude_instance_id"`
+			ID string `json:"instance_id"`
 		} `json:"spawns"`
 	}
 	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {
@@ -96,7 +96,7 @@ func cliStatus(t *testing.T, home, id string) string {
 	t.Helper()
 	const statusBudget = 5 * time.Second // the TS client's 30 s call deadline, with room
 	start := time.Now()
-	stdout, stderr, code := runCLIWithHome(t, home, "status", "--claude-instance-id", id)
+	stdout, stderr, code := runCLIWithHome(t, home, "status", "--instance-id", id)
 	if took := time.Since(start); took > statusBudget {
 		t.Errorf("status took %v with settle_ms at its largest; want under %v (no read waits to settle)", took, statusBudget)
 	}

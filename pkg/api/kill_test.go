@@ -154,7 +154,7 @@ func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
 			c, logs := e.client(t)
 			trailed := len(killCalled(t, r.ID))
 
-			res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
+			res, err := c.Kill(api.KillParams{InstanceID: r.ID})
 			outcome := "ok"
 			if tc.want == "" {
 				if err != nil || !res.KillSent {
@@ -206,8 +206,8 @@ func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
 func killRaceRow(t *testing.T, e *killEnv) resumeRow {
 	t.Helper()
 	r := e.seedStarting(t, startingRow{state: store.StateMissing, endedAgo: defWindow, noPID: true, age: defWindow + defBound})
-	if c := e.columns(t, r.ID); c.PID != nil || c.ClaudeSessionID == nil || c.PanePID == nil {
-		t.Fatalf("precondition: pid %v, session id %v, pane pid %v; want NULL, set, set", c.PID, c.ClaudeSessionID, c.PanePID)
+	if c := e.columns(t, r.ID); c.PID != nil || c.SessionID == nil || c.PanePID == nil {
+		t.Fatalf("precondition: pid %v, session id %v, pane pid %v; want NULL, set, set", c.PID, c.SessionID, c.PanePID)
 	}
 	return r
 }
@@ -227,7 +227,7 @@ func TestKillIncludeFinishedSessionStartAfterLookupSendsNoKill(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	r := killRaceRow(t, e)
-	e.sessionStartAfter(t, tmux.CallLookup, r.killRow, r.Spawn.ClaudeSessionID)
+	e.sessionStartAfter(t, tmux.CallLookup, r.killRow, r.Spawn.SessionID)
 
 	res, err := e.killOptIn(r.ID)
 	assertOneName(t, err, "ErrTmuxSessionConflict")
@@ -254,7 +254,7 @@ func TestKillIncludeFinishedSessionStartBeforeReadRefusesLiveRow(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	r := killRaceRow(t, e)
-	if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", r.Spawn.ClaudeSessionID); !a.Applied {
+	if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", r.Spawn.SessionID); !a.Applied {
 		t.Fatalf("SessionStart from the agent = %+v; want applied", a)
 	}
 	started, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)

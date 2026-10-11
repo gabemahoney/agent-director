@@ -36,7 +36,7 @@ const xtrEnvSentinel = "xtr-env-sentinel-7f3a"
 
 // xtrKeptKeys are the exact keys of an ad.expire.kept record: its four fields
 // and the trail's event and ts.
-var xtrKeptKeys = []string{"claude_instance_id", "event", "reason", "source", "tmux_session_name", "ts"}
+var xtrKeptKeys = []string{"event", "instance_id", "reason", "source", "tmux_session_name", "ts"}
 
 // A row's outcome besides a kept reason: deleted, or removed by another
 // caller first (in neither list).
@@ -129,7 +129,7 @@ func (x *xtrWorld) run(t *testing.T, call func() (api.ExpireResult, error)) {
 
 	lines := readAPITrailLines(t)[mark:]
 	for _, l := range lines {
-		if !slices.ContainsFunc(x.rows, func(row *xtrRow) bool { return l["claude_instance_id"] == row.r.ID }) ||
+		if !slices.ContainsFunc(x.rows, func(row *xtrRow) bool { return l["instance_id"] == row.r.ID }) ||
 			(l["event"] != expireKeptEvent && (l["event"] != "ad.provenance.disagree" || l["verb"] != "expire")) {
 			t.Errorf("record %s; want only expire's records of the run's rows", ktrJSON(t, l))
 		}
@@ -163,7 +163,7 @@ func (x *xtrWorld) assertRowRecords(t *testing.T, lines []map[string]any, row *x
 	}
 	var disagrees []map[string]any
 	for _, l := range lines {
-		if l["claude_instance_id"] != r.ID {
+		if l["instance_id"] != r.ID {
 			continue
 		}
 		ktrAssertNoForeignContent(t, l, forbidden...)

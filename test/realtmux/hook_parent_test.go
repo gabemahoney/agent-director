@@ -130,7 +130,7 @@ func hookTrailRecords(t testing.TB, home, event, id string) []map[string]any {
 		if err := dec.Decode(&rec); err != nil {
 			t.Fatalf("trail line is not JSON: %v", err)
 		}
-		if rec["event"] == event && rec["claude_instance_id"] == id {
+		if rec["event"] == event && rec["instance_id"] == id {
 			out = append(out, rec)
 		}
 	}
@@ -274,9 +274,9 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 				// SR-22.9: an applied SessionStart sets waiting and records the
 				// payload's session id and pid/proc_starttime = the hook's parent.
 				if row.State != "waiting" || fmt.Sprint(row.PID) != strconv.Itoa(panePID) ||
-					fmt.Sprint(row.ProcStarttime) != fmt.Sprint(row.PaneStarttime) || row.ClaudeSessionID != fixture.SessionID {
-					t.Errorf("row: state %v, pid %v, proc_starttime %v, claude_session_id %v; want waiting, pid %d, proc_starttime = pane_starttime %v, session %s",
-						row.State, row.PID, row.ProcStarttime, row.ClaudeSessionID, panePID, row.PaneStarttime, fixture.SessionID)
+					fmt.Sprint(row.ProcStarttime) != fmt.Sprint(row.PaneStarttime) || row.SessionID != fixture.SessionID {
+					t.Errorf("row: state %v, pid %v, proc_starttime %v, session_id %v; want waiting, pid %d, proc_starttime = pane_starttime %v, session %s",
+						row.State, row.PID, row.ProcStarttime, row.SessionID, panePID, row.PaneStarttime, fixture.SessionID)
 				}
 				if len(ignored) != 0 || len(detected) != 0 {
 					t.Errorf("%d ad.hook.ignored and %d ad.hook.pane_is_grandparent records for an applied hook, want none",

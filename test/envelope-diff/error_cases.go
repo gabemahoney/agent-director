@@ -113,10 +113,10 @@ var errorCases = append(append(append(append(append([]errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": "nonexistent-id"}
+			return map[string]any{"instance_id": "nonexistent-id"}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"status", "--claude-instance-id", "nonexistent-id"}
+			return []string{"status", "--instance-id", "nonexistent-id"}
 		},
 	},
 
@@ -130,10 +130,10 @@ var errorCases = append(append(append(append(append([]errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": "nonexistent-id"}
+			return map[string]any{"instance_id": "nonexistent-id"}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"get", "--claude-instance-id", "nonexistent-id"}
+			return []string{"get", "--instance-id", "nonexistent-id"}
 		},
 	},
 
@@ -150,13 +150,13 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": "id-err-ni-1",
-				"text":               "hello",
+				"instance_id": "id-err-ni-1",
+				"text":        "hello",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"send-keys",
-				"--claude-instance-id", "id-err-ni-1",
+				"--instance-id", "id-err-ni-1",
 				"--text", "hello",
 			}
 		},
@@ -174,10 +174,10 @@ var errorCases = append(append(append(append(append([]errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": "nonexistent-id"}
+			return map[string]any{"instance_id": "nonexistent-id"}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"read-pane", "--claude-instance-id", "nonexistent-id"}
+			return []string{"read-pane", "--instance-id", "nonexistent-id"}
 		},
 	},
 
@@ -191,10 +191,10 @@ var errorCases = append(append(append(append(append([]errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": "nonexistent-id"}
+			return map[string]any{"instance_id": "nonexistent-id"}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"kill", "--claude-instance-id", "nonexistent-id"}
+			return []string{"kill", "--instance-id", "nonexistent-id"}
 		},
 	},
 
@@ -211,14 +211,14 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": "id-err-rmo-1",
-				"request_token":      storefix.TestRequestTokenA,
-				"decision":           "allow",
+				"instance_id":   "id-err-rmo-1",
+				"request_token": storefix.TestRequestTokenA,
+				"decision":      "allow",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
-				"--claude-instance-id", "id-err-rmo-1",
+				"--instance-id", "id-err-rmo-1",
 				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
@@ -238,14 +238,14 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": "id-err-nopr-1",
-				"request_token":      storefix.TestRequestTokenA,
-				"decision":           "allow",
+				"instance_id":   "id-err-nopr-1",
+				"request_token": storefix.TestRequestTokenA,
+				"decision":      "allow",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
-				"--claude-instance-id", "id-err-nopr-1",
+				"--instance-id", "id-err-nopr-1",
 				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
@@ -266,14 +266,14 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": "id-err-ad-1",
-				"request_token":      storefix.TestRequestTokenA,
-				"decision":           "deny",
+				"instance_id":   "id-err-ad-1",
+				"request_token": storefix.TestRequestTokenA,
+				"decision":      "deny",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
-				"--claude-instance-id", "id-err-ad-1",
+				"--instance-id", "id-err-ad-1",
 				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "deny",
 			}
@@ -295,14 +295,14 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
-				"claude_instance_id": "id-err-rfb-1",
-				"request_token":      storefix.TestRequestTokenA,
-				"decision":           "allow",
+				"instance_id":   "id-err-rfb-1",
+				"request_token": storefix.TestRequestTokenA,
+				"decision":      "allow",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
-				"--claude-instance-id", "id-err-rfb-1",
+				"--instance-id", "id-err-rfb-1",
 				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
@@ -362,10 +362,10 @@ var errorCases = append(append(append(append(append([]errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": "id-err-nr-1"}
+			return map[string]any{"instance_id": "id-err-nr-1"}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"resume", "--claude-instance-id", "id-err-nr-1"}
+			return []string{"resume", "--instance-id", "id-err-nr-1"}
 		},
 	},
 
@@ -428,10 +428,10 @@ var errorCases = append(append(append(append(append([]errorCase{
 			return filepath.Dir(dbPath), nil
 		},
 		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"claude_instance_id": "id-err-np-1"}
+			return map[string]any{"instance_id": "id-err-np-1"}
 		},
 		cliArgv: func(_ map[string]any) []string {
-			return []string{"pause", "--claude-instance-id", "id-err-np-1"}
+			return []string{"pause", "--instance-id", "id-err-np-1"}
 		},
 	},
 

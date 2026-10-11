@@ -212,7 +212,7 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 		return UpsertNoChange, applied, nil
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"prior_state":           priorState,
 		"new_state":             trailNew,
 		"triggering_event_name": triggeringEventName,
@@ -244,7 +244,7 @@ func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, 
 		return s.reportWorkingHeld(instanceID, gate, triggeringEventName)
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"prior_state":           priorState,
 		"new_state":             StateWorking,
 		"triggering_event_name": triggeringEventName,
@@ -352,7 +352,7 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 		c.emitDeny(instanceID, DecisionReasonEnded, WriterProcessHook)
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"prior_state":           prior,
 		"new_state":             StateEnded,
 		"triggering_event_name": triggeringEventName,
@@ -426,7 +426,7 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 		}
 		if moved {
 			_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-				"claude_instance_id":    instanceID,
+				"instance_id":           instanceID,
 				"prior_state":           from.state,
 				"new_state":             StateWaiting,
 				"triggering_event_name": triggeringEventName,
@@ -501,7 +501,7 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 		return UpsertError, HookApplied{}, err
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"prior_state":           r.state,
 		"new_state":             r.state,
 		"triggering_event_name": triggeringEventName,
@@ -642,7 +642,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 		return s.sessionStartNotApplied(instanceID, gate, errPrefix)
 	}
 
-	outgoing := gate.Examined.ClaudeSessionID
+	outgoing := gate.Examined.SessionID
 	archive := outgoing != "" && gate.SessionID != "" && outgoing != gate.SessionID
 	var archiveErr error
 	if archive {
@@ -657,7 +657,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 		event = "SessionStart"
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"prior_state":           prior.state,
 		"new_state":             StateWaiting,
 		"triggering_event_name": event,
@@ -667,17 +667,17 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	switch {
 	case archiveErr != nil:
 		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
-			"claude_instance_id": instanceID,
-			"claude_session_id":  outgoing,
-			"error":              archiveErr.Error(),
-			"source":             "ad_spawn_store",
+			"instance_id": instanceID,
+			"session_id":  outgoing,
+			"error":       archiveErr.Error(),
+			"source":      "ad_spawn_store",
 		})
 	case archive:
 		_ = trail.Emit(context.Background(), "ad.session.archived", map[string]any{
-			"claude_instance_id": instanceID,
-			"prior_session_id":   outgoing,
-			"new_session_id":     gate.SessionID,
-			"source":             "ad_spawn_store",
+			"instance_id":      instanceID,
+			"prior_session_id": outgoing,
+			"new_session_id":   gate.SessionID,
+			"source":           "ad_spawn_store",
 		})
 	}
 	return HookApplied{Applied: true}, false, nil

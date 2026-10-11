@@ -32,7 +32,7 @@ func TestCLIDialogHeldUntilAHookProvesItGone(t *testing.T) {
 	}
 	assertOneTimeoutDeny(t, h.home, id)
 
-	env := cliErrorEnvelope(t, h.home, "send-keys", "--claude-instance-id", id, "--text", "hi")
+	env := cliErrorEnvelope(t, h.home, "send-keys", "--instance-id", id, "--text", "hi")
 
 	var details map[string]any
 	if string(env["err_name"]) != `"ErrDialogMaybeOpen"` || json.Unmarshal(env["err_details"], &details) != nil {
@@ -63,7 +63,7 @@ func TestCLIDialogHeldUntilAHookProvesItGone(t *testing.T) {
 // assertUnproven fails unless get's unproven_requests for id are exactly tokens.
 func assertUnproven(t *testing.T, home, id string, tokens ...string) {
 	t.Helper()
-	reqs, ok := cliJSON(t, home, "get", "--claude-instance-id", id)["unproven_requests"].([]any)
+	reqs, ok := cliJSON(t, home, "get", "--instance-id", id)["unproven_requests"].([]any)
 	if !ok || len(reqs) != len(tokens) {
 		t.Fatalf("get unproven_requests = %v; want %v", reqs, tokens)
 	}

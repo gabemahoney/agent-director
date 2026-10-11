@@ -21,14 +21,14 @@ func init() {
 		SentText: smokeSentText,
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.SendKeys(api.SendKeysParams{
-				ClaudeInstanceID: id,
-				Text:             smokeSentText,
+				InstanceID: id,
+				Text:       smokeSentText,
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {
 			_, err := c.SendKeys(api.SendKeysParams{
-				ClaudeInstanceID: bogusID,
-				Text:             "hello",
+				InstanceID: bogusID,
+				Text:       "hello",
 			})
 			return err
 		},
@@ -41,13 +41,13 @@ func init() {
 		SeedID:   "smoke-read-pane-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.ReadPane(api.ReadPaneParams{
-				ClaudeInstanceID: id,
-				NLines:           5,
+				InstanceID: id,
+				NLines:     5,
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {
 			_, err := c.ReadPane(api.ReadPaneParams{
-				ClaudeInstanceID: bogusID,
+				InstanceID: bogusID,
 			})
 			return err
 		},
@@ -67,7 +67,7 @@ func init() {
 		SeedKind: seedFallenBack,
 		SeedID:   "smoke-record-pane-answer-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			read, err := c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id})
+			read, err := c.ReadPane(api.ReadPaneParams{InstanceID: id})
 			if err != nil {
 				return nil, err
 			}
@@ -87,10 +87,10 @@ func init() {
 		SeedKind: seedLiveSession,
 		SeedID:   "smoke-kill-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Kill(api.KillParams{ClaudeInstanceID: id})
+			return c.Kill(api.KillParams{InstanceID: id})
 		},
 		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.Kill(api.KillParams{ClaudeInstanceID: bogusID})
+			_, err := c.Kill(api.KillParams{InstanceID: bogusID})
 			return err
 		},
 		KillSent: func(result any) bool {
@@ -112,10 +112,10 @@ func init() {
 		SentText:         smokeExitText,
 		HappyCtxDeadline: 2 * time.Second,
 		Happy: func(c *api.Client, id string, ctx context.Context) (any, error) {
-			return c.Pause(ctx, api.PauseParams{ClaudeInstanceID: id})
+			return c.Pause(ctx, api.PauseParams{InstanceID: id})
 		},
 		Error: func(c *api.Client, ctx context.Context) error {
-			_, err := c.Pause(ctx, api.PauseParams{ClaudeInstanceID: bogusID})
+			_, err := c.Pause(ctx, api.PauseParams{InstanceID: bogusID})
 			return err
 		},
 	}

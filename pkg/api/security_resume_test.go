@@ -35,8 +35,8 @@ var securityResumeVerbs = []securityVerb{
 // seeded, under a fresh HOME (secMoveHome).
 func securityResumeCall(t *testing.T, c *api.Client, s *securityScene) (any, error) {
 	secMoveHome(t)
-	apitest.SeedJsonl(t, s.target.Spawn.CWD, s.target.Spawn.ClaudeSessionID)
-	return c.Resume(api.ResumeParams{ClaudeInstanceID: s.subject})
+	apitest.SeedJsonl(t, s.target.Spawn.CWD, s.target.Spawn.SessionID)
+	return c.Resume(api.ResumeParams{InstanceID: s.subject})
 }
 
 // securityResumeHeldCall resumes target (not a launch's fresh id) with its

@@ -119,11 +119,11 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 	}
 
 	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: id,
-		CWD:              cwd,
-		TmuxSessionName:  "ts-" + id,
-		RelayMode:        relayMode,
-		Agent:            store.AgentClaude,
+		InstanceID:      id,
+		CWD:             cwd,
+		TmuxSessionName: "ts-" + id,
+		RelayMode:       relayMode,
+		Agent:           store.AgentClaude,
 	}); err != nil {
 		return "", fmt.Errorf("SeedSpawn: InsertPending: %w", err)
 	}

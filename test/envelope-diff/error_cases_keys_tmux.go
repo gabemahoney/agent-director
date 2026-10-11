@@ -39,14 +39,14 @@ var keysVerbs = []keysVerb{
 
 // params and argv are v's call on id for each runner.
 func (v keysVerb) params(id string) map[string]any {
-	p := map[string]any{"claude_instance_id": id}
+	p := map[string]any{"instance_id": id}
 	for k, val := range v.args {
 		p[k] = val
 	}
 	return p
 }
 func (v keysVerb) argv(id string) []string {
-	a := []string{string(v.pane), "--claude-instance-id", id}
+	a := []string{string(v.pane), "--instance-id", id}
 	for k, val := range v.args {
 		a = append(a, "--"+k, val)
 	}

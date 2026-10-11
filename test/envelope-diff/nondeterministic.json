@@ -32,7 +32,7 @@
   "resume": [],
   "send-keys": [],
   "spawn": [
-    ".claude_instance_id"
+    ".instance_id"
   ],
   "status": [],
   "version": [

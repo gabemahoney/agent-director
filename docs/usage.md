@@ -38,12 +38,12 @@ The filter is exact-match, combines with `--state`, `--label`, `--parent`,
 `--cwd` and `--limit`, and returns live and ended rows, so one name can match
 several rows.
 
-## Drive a Spawn from another Claude
+## Drive a Spawn from another agent
 
 Install with `--register-mcp`. The verbs then appear as
 `mcp__agent-director__spawn`, `mcp__agent-director__send_keys`, etc.; `hook`,
 `serve` and `trail-emit` are CLI-only. Tool arguments use underscores
-(`--claude-instance-id` is `claude_instance_id`); the list is in
+(`--instance-id` is `instance_id`); the list is in
 `mcp-reference.md`.
 
 ## Watch a Spawn's state
@@ -55,7 +55,7 @@ change it sees, with no count of identical polls:
 ```sh
 last=""
 while sleep 1; do
-  state=$(agent-director status --claude-instance-id "$id" | jq -r .state)
+  state=$(agent-director status --instance-id "$id" | jq -r .state)
   if [ "$state" != "$last" ]; then
     last=$state
     case "$state" in waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;; esac
@@ -67,17 +67,17 @@ It never sees a turn shorter than the settle time.
 
 ## Intercept permission prompts
 
-With `--relay-mode=on`, a Claude permission prompt moves the row to
+With `--relay-mode=on`, an agent permission prompt moves the row to
 `check_permission` and waits for your `decide`:
 
 ```sh
 id=$(agent-director spawn --cwd "$PWD" --relay-mode=on \
-       | jq -r '.claude_instance_id')
+       | jq -r '.instance_id')
 
-token=$(agent-director get --claude-instance-id "$id" \
+token=$(agent-director get --instance-id "$id" \
           | jq -r '.permission_requests[0].request_token')
 # A caller that must answer within 3 s passes at most 2000 (its deadline minus 1 s).
-agent-director decide --claude-instance-id "$id" \
+agent-director decide --instance-id "$id" \
     --request-token "$token" \
     --decision allow --max-wait-ms 2000
 ```
@@ -169,11 +169,11 @@ it. Look at the pane, then send the one key that answers it, naming the
 request:
 
 ```sh
-pane=$(agent-director read-pane --claude-instance-id "$id")
+pane=$(agent-director read-pane --instance-id "$id")
 echo "$pane" | jq -r '.pane'
 hash=$(echo "$pane" | jq -r '.pane_sha256')
 
-agent-director send-keys --claude-instance-id "$id" \
+agent-director send-keys --instance-id "$id" \
     --request-token "$token" --as deny --key Escape \
     --expect-pane-sha256 "$hash"
 ```
@@ -212,7 +212,7 @@ empty, send `/exit` with that read's hash and poll `status` until the row
 is `ended`:
 
 ```sh
-agent-director send-keys --claude-instance-id "$id" --text /exit \
+agent-director send-keys --instance-id "$id" --text /exit \
     --expect-pane-sha256 "$hash"
 ```
 
@@ -237,6 +237,6 @@ agent-director spawn --template dev --label run=$(date +%s)
 it under the same id with its transcript, so the conversation carries on.
 
 ```sh
-agent-director pause --claude-instance-id "$id"
-agent-director resume --claude-instance-id "$id"
+agent-director pause --instance-id "$id"
+agent-director resume --instance-id "$id"
 ```

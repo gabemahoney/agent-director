@@ -225,7 +225,7 @@ func TestResumeLaunch(t *testing.T) {
 
 			res, err := e.resume(r.ID)
 
-			if err != nil || res.ClaudeInstanceID != r.ID {
+			if err != nil || res.InstanceID != r.ID {
 				t.Fatalf("Resume = %+v, %v; want %s launched", res, err, r.ID)
 			}
 			calls := []tmux.Call{tmux.CallLookup, tmux.CallCreate}
@@ -296,7 +296,7 @@ func TestResumeLaunch(t *testing.T) {
 			assertResumeEvents(t, mark, r.ID, "ad.resume.moved_to_pending")
 			if l := pendTrail(t, "ad.resume.moved_to_pending", r.ID); len(l) == 1 {
 				assertAPITrailStr(t, l[0], "prior_state", tc.state)
-				assertAPITrailStr(t, l[0], "claude_session_id", r.SessionID)
+				assertAPITrailStr(t, l[0], "session_id", r.SessionID)
 				assertAPITrailStr(t, l[0], "source", "ad_resume")
 			}
 			if strings.Contains(e.logs.String(), "WARN") {
@@ -556,8 +556,8 @@ func TestResumeRestore(t *testing.T) {
 
 			// The trail and the log.
 			if m := pendTrail(t, "ad.resume.moved_to_pending", r.ID); len(m) != 1 || m[0]["prior_state"] != tc.prior ||
-				m[0]["claude_session_id"] != r.SessionID || m[0]["source"] != "ad_resume" {
-				t.Errorf("ad.resume.moved_to_pending = %v; want prior_state %s, claude_session_id %s, source ad_resume", m, tc.prior, r.SessionID)
+				m[0]["session_id"] != r.SessionID || m[0]["source"] != "ad_resume" {
+				t.Errorf("ad.resume.moved_to_pending = %v; want prior_state %s, session_id %s, source ad_resume", m, tc.prior, r.SessionID)
 			}
 			var restoreErr any
 			if tc.failRestore {

@@ -30,7 +30,7 @@ func liveOwner(t *testing.T, f *v5Store, id string) store.LaunchOwner {
 		t.Fatalf("ListLiveSpawnIdentities: %v", err)
 	}
 	for _, it := range live {
-		if it.ClaudeInstanceID == id {
+		if it.InstanceID == id {
 			return it.LaunchOwner
 		}
 	}
@@ -47,13 +47,13 @@ func TestLaunchOwnerRecordedByEachLaunch(t *testing.T) {
 		begin func(t *testing.T, f *v5Store, owner store.LaunchOwner) string // the id it left pending
 	}{
 		{"spawn's insert", func(t *testing.T, f *v5Store, owner store.LaunchOwner) string {
-			sp := store.Spawn{ClaudeInstanceID: "lo-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-lo-insert", RelayMode: "off",
+			sp := store.Spawn{InstanceID: "lo-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-lo-insert", RelayMode: "off",
 				LaunchStartedAtMillis: launchStart, Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/ad-lo/sock"},
 				LaunchOwner: owner}
 			if err := f.s.InsertPending(sp); err != nil {
 				t.Fatalf("InsertPending: %v", err)
 			}
-			return sp.ClaudeInstanceID
+			return sp.InstanceID
 		}},
 		{"resume's move", func(t *testing.T, f *v5Store, owner store.LaunchOwner) string {
 			r := seedMoveRow(t, f, moveSpec{})
@@ -94,7 +94,7 @@ func TestLaunchOwnerRecordedByEachLaunch(t *testing.T) {
 func TestLaunchOwnerHoldEnds(t *testing.T) {
 	inserted := func(t *testing.T, f *v5Store) string {
 		t.Helper()
-		if err := f.s.InsertPending(store.Spawn{ClaudeInstanceID: "lo-row", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-lo-row",
+		if err := f.s.InsertPending(store.Spawn{InstanceID: "lo-row", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-lo-row",
 			RelayMode: "off", LaunchStartedAtMillis: launchStart, Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/ad-lo/sock"},
 			LaunchOwner: rvOwner}); err != nil {
 			t.Fatalf("InsertPending: %v", err)

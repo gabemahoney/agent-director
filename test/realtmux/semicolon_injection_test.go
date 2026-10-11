@@ -33,7 +33,7 @@ func argvClaude(t *testing.T) string {
 	return file
 }
 
-// injections are the tmux commands that follow "x;" in the claude args: each
+// injections are the tmux commands that follow "x;" in the agent args: each
 // would run on the caller's server if "x;" ended the create.
 var injections = []struct {
 	name string
@@ -97,15 +97,15 @@ func (f *injectionFix) assertAgentArgv(t *testing.T, s spawned, prefix, args []s
 	}
 }
 
-// TestSpawnClaudeArgsEndingInSemicolonRunNoTmuxCommand spawns with claude
+// TestSpawnAgentArgsEndingInSemicolonRunNoTmuxCommand spawns with agent
 // args "x;" then a tmux command: the create runs no second command and the
 // agent receives the args literally.
-func TestSpawnClaudeArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
+func TestSpawnAgentArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 	for _, tc := range injections {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newInjectionFix(t)
 			args := append([]string{"x;"}, tc.cmd(f.Marker)...)
-			id, err := f.spawnWith(api.SpawnParams{ClaudeArgs: args})
+			id, err := f.spawnWith(api.SpawnParams{AgentArgs: args})
 			f.assertNoSecondCommand(t)
 			if err != nil {
 				t.Fatalf("spawn: %s", describe(err))
@@ -115,16 +115,16 @@ func TestSpawnClaudeArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 	}
 }
 
-// TestResumeClaudeArgsEndingInSemicolonRunNoTmuxCommand resumes an ended row
-// whose stored claude args are "x;" then a tmux command: the relaunch runs no
+// TestResumeAgentArgsEndingInSemicolonRunNoTmuxCommand resumes an ended row
+// whose stored agent args are "x;" then a tmux command: the relaunch runs no
 // second command and the agent receives the args literally.
-func TestResumeClaudeArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
+func TestResumeAgentArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 	for _, tc := range injections {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newInjectionFix(t)
 			args := append([]string{"x;"}, tc.cmd(f.Marker)...)
 			id, sessionID := f.seedResumable(t, f.CWD, args)
-			_, err := f.API.Resume(api.ResumeParams{ClaudeInstanceID: id})
+			_, err := f.API.Resume(api.ResumeParams{InstanceID: id})
 			f.assertNoSecondCommand(t)
 			if err != nil {
 				t.Fatalf("resume: %s", describe(err))
@@ -156,7 +156,7 @@ func TestSpawnValuesEndingInSemicolonAreLiteral(t *testing.T) {
 			return api.SpawnParams{ExtraEnv: map[string]string{"AD_SEMI": "v;"}}
 		}},
 		{"instance id", func(*testing.T) api.SpawnParams {
-			return api.SpawnParams{ClaudeInstanceID: newInstanceID("semi") + ";"}
+			return api.SpawnParams{InstanceID: newInstanceID("semi") + ";"}
 		}},
 	}
 	for _, tc := range cases {

@@ -90,19 +90,19 @@ func TestMigratedV4HistoryGet(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Get(%s): %v", id, err)
 			}
-			if got.ClaudeSessionID != cur || got.TranscriptStatus != tc.wantStatus {
-				t.Errorf("claude_session_id, transcript_status = %q, %q; want %q, %q", got.ClaudeSessionID, got.TranscriptStatus, cur, tc.wantStatus)
+			if got.SessionID != cur || got.TranscriptStatus != tc.wantStatus {
+				t.Errorf("session_id, transcript_status = %q, %q; want %q, %q", got.SessionID, got.TranscriptStatus, cur, tc.wantStatus)
 			}
 			gotIDs := []string{}
 			for _, p := range got.PriorSessions {
-				gotIDs = append(gotIDs, p.ClaudeSessionID)
+				gotIDs = append(gotIDs, p.SessionID)
 			}
 			if strings.Join(gotIDs, ",") != strings.Join(tc.wantIDs, ",") || len(got.PriorSessions) != len(want) {
 				t.Fatalf("prior_sessions = %+v; want ids %v from pre-migration %+v", got.PriorSessions, tc.wantIDs, want)
 			}
 			for i, p := range got.PriorSessions {
 				w := want[i]
-				if recorded, err := time.Parse("2006-01-02 15:04:05", w.RecordedAt); p.ClaudeSessionID != w.SessionID ||
+				if recorded, err := time.Parse("2006-01-02 15:04:05", w.RecordedAt); p.SessionID != w.SessionID ||
 					p.JSONLPath != w.JSONLPath || err != nil || !recordedAt(p.RecordedAt).Equal(recorded) {
 					t.Errorf("prior_sessions[%d] = %+v; want pre-migration %+v", i, p, w)
 				}
@@ -218,7 +218,7 @@ func TestMigratedV4HistoryResume(t *testing.T) {
 			}
 			claudeJSON := seedHomeClaudeJSON(t, `{"numStartups": 3, "projects": {"/elsewhere": {"hasTrustDialogAccepted": false}}}`)
 
-			res, err := m.c.Resume(api.ResumeParams{ClaudeInstanceID: id})
+			res, err := m.c.Resume(api.ResumeParams{InstanceID: id})
 			launches := m.rec.SocketCallsOf(tmux.CallCreate)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) || !strings.Contains(err.Error(), tc.wantInMsg) || len(launches) != 0 {

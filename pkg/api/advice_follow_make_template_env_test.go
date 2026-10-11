@@ -63,7 +63,7 @@ func adviceFollowTemplateEnvKey(t *testing.T, env spawnEnv, cfg trustConfig, key
 		t.Fatalf("make-template with CLAUDE_CONFIG_DIR as its own key = %v; want it saved", err)
 	}
 	id := "adv-tplenv-" + uuid.NewString()[:8]
-	res, err := env.c.Spawn(api.SpawnParams{CWD: cwd, ClaudeInstanceID: id, Template: p.Name})
+	res, err := env.c.Spawn(api.SpawnParams{CWD: cwd, InstanceID: id, Template: p.Name})
 	advSpawnLaunched(t, env.dbPath, id, nil, res, err)
 	if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Envs["CLAUDE_CONFIG_DIR"] != cfg.dir {
 		t.Errorf("creates = %+v; want one, its session env CLAUDE_CONFIG_DIR %q", creates, cfg.dir)

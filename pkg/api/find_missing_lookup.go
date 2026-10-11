@@ -42,7 +42,7 @@ func (r *findMissingRun) lookupRow(it LiveSpawnIdentity, state tmux.ProcState) f
 	)
 	row.socket, row.res, ok = r.sockets.forRow(it.Identity.Socket)
 	if ok {
-		launch = rowLaunch(it.ClaudeInstanceID, it.Identity, r.s.StoreID(), row.socket)
+		launch = rowLaunch(it.InstanceID, it.Identity, r.s.StoreID(), row.socket)
 		row.res = r.sw.Lookup(launch, it.TmuxSessionName)
 	}
 	res := row.res
@@ -190,7 +190,7 @@ func (r *findMissingRun) lookupMarkRow(row findMissingRow, it LiveSpawnIdentity,
 func (r *findMissingRun) emitRowNameHeld(it LiveSpawnIdentity, row findMissingRow) {
 	rec := nameHeld{
 		Source:        nameHeldSourceFindMissing,
-		InstanceID:    it.ClaudeInstanceID,
+		InstanceID:    it.InstanceID,
 		Name:          it.TmuxSessionName,
 		Socket:        row.socket,
 		StoreID:       r.s.StoreID(),

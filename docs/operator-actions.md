@@ -9,7 +9,7 @@ full path, only with a human's explicit approval for that run.
 
 Run every command as the agents' user. Every tmux command names the row's socket
 with `-S '<socket>'`: the `tmux_socket` of
-`agent-director get --claude-instance-id <id>` (none: your tmux socket, by
+`agent-director get --instance-id <id>` (none: your tmux socket, by
 default `/tmp/tmux-<uid>/default`). Keep the quotes. Never remove a row after a
 `kill` that did not succeed.
 
@@ -56,7 +56,7 @@ launch's session of its id ("this id's own abandoned launch"), still runs. Look
 (steps 1 to 3), then end it:
 
 ```sh
-~/.agent-director/admin/agent-director-admin kill-finished --claude-instance-id <id>
+~/.agent-director/admin/agent-director-admin kill-finished --instance-id <id>
 ```
 
 | Answer | What to do |
@@ -65,7 +65,7 @@ launch's session of its id ("this id's own abandoned launch"), still runs. Look
 | `ErrTmuxKillFailed` | The agent still runs: retry later; never `delete` the row. No session of the current launch: see "An agent process that runs with no session or pane of its launch". |
 | `ErrTmuxUnresponsive` ("still stopping" or "still starting"), or `ErrTmuxNotAvailable` or `ErrTmuxUnresponsive` with `kill_sent` true | Wait, check, run it again. |
 | `ErrTmuxUnresponsive` before any kill | Retry later. |
-| `ErrSpawnNotResumable` ("the row is live") | `agent-director kill --claude-instance-id <id>`. |
+| `ErrSpawnNotResumable` ("the row is live") | `agent-director kill --instance-id <id>`. |
 | `ErrTmuxSessionConflict` ("never reported in") | End the session by hand (steps 1 to 5), then rerun. |
 | `ErrInternal` | See "A row whose recorded name cannot be used". |
 | `ErrTmuxSessionConflict` ("conflicting labels") | See "A stray `@ad_owner` value or a duplicate label". |
@@ -101,8 +101,8 @@ A human removes the row, in order:
    `control_char_session_name`, `rewritten_session_name`). Get its name:
 
    ```sh
-   jq -c 'select(.event == "ad.expire.kept" and .claude_instance_id == "<id>") | {reason, tmux_session_name}' ~/.agent-director/ad-trail.jsonl | tail -n 1
-   agent-director read-pane --claude-instance-id <id>
+   jq -c 'select(.event == "ad.expire.kept" and .instance_id == "<id>") | {reason, tmux_session_name}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+   agent-director read-pane --instance-id <id>
    ```
 
    Its `ErrInternal` quotes the exact recorded name with bytes escaped (`list`,
@@ -122,18 +122,18 @@ A human removes the row, in order:
 5. Remove the row, its permission requests and its session history:
 
    ```sh
-   ~/.agent-director/admin/agent-director-admin delete --claude-instance-id <id>
+   ~/.agent-director/admin/agent-director-admin delete --instance-id <id>
    ```
 
 ## A spawn refused as "left over from an earlier life"
 
 `ErrTmuxSessionConflict` ("left over from an earlier life") from a plain
 `spawn` (for `--reuse-finished`, see the leftover item): a session of this store
-carries the `--claude-instance-id` and no row exists, or holds the
+carries the `--instance-id` and no row exists, or holds the
 `--tmux-session-name`. The trail gives the details:
 
 ```sh
-jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+jq -c 'select(.event == "ad.launch.name_held" and .instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
 
 Inspect each session (steps 1 to 3), then:
@@ -162,7 +162,7 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
 1. Take the pid from the error or the trail (`agent_pid`, `survivor_pids`):
 
    ```sh
-   jq -c 'select(.event == "ad.kill.called" and .claude_instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+   jq -c 'select(.event == "ad.kill.called" and .instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
    ```
 
 2. Confirm it is the agent, a Claude Code process started at launch:
@@ -170,7 +170,7 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
 3. Look for its pane, on any other tmux server you know of too (steps 4b and 3);
    end the pane by id if not wanted. In no pane: recheck its start time, then
    `kill '<pid>'`. Do the same for a survivor.
-4. Run `agent-director kill --claude-instance-id <id>` again, or wait for
+4. Run `agent-director kill --instance-id <id>` again, or wait for
    `find-missing` to mark the row `missing`, then resume or respawn as the
    [caller contract](caller-contract.md) says.
 
@@ -222,7 +222,7 @@ binary changes. Never delete a row or edit `state.db`.
    `ErrSchemaMismatch` (store newer): use the binary that wrote it.
    `ErrSchemaMigrationRequired` (store older): use the previous binary.
    `ErrConfigMalformed`: fix the value it names.
-3. `agent-director pause --claude-instance-id <id>` each `waiting` row. For
+3. `agent-director pause --instance-id <id>` each `waiting` row. For
    every other live row, and any row `pause` refuses (a relay-on row held by
    a permission request, for example) or that does not end in time: `agent-director kill`, then steps 1 to 5 of the live-row sequence in
    the [caller contract](caller-contract.md).
@@ -264,7 +264,7 @@ Claude Code is too old for exec-form hooks. Upgrade `claude` to the minimum in
 row as the [caller contract](caller-contract.md) says.
 
 ```sh
-jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, claude_instance_id, hook_event, parent_command}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, instance_id, hook_event, parent_command}' ~/.agent-director/ad-trail.jsonl | tail -n 5
 ```
 
 ## A row stays `pending` and the trail shows `pid_mismatch`
@@ -273,8 +273,8 @@ Hooks are ignored when `claude` on PATH is a shim that runs Claude Code as a
 child, not by `exec` (the second query's `parent_command` is Claude Code).
 
 ```sh
-jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, claude_instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.agent-director/ad-trail.jsonl | tail -n 5
-jq -c 'select(.event == "ad.hook.pane_is_grandparent") | {ts, claude_instance_id, pane_command, parent_command, advice}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.pane_is_grandparent") | {ts, instance_id, pane_command, parent_command, advice}' ~/.agent-director/ad-trail.jsonl | tail -n 5
 ```
 
 Fix it per [Requirements](install.md#requirements), then end and relaunch each

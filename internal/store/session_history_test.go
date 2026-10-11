@@ -35,7 +35,7 @@ func (f *v5Store) historyIDs(t *testing.T, id string, life int64) []string {
 	}
 	ids := []string{}
 	for _, e := range h {
-		ids = append(ids, e.ClaudeSessionID)
+		ids = append(ids, e.SessionID)
 	}
 	return ids
 }
@@ -91,7 +91,7 @@ func TestSessionHistoryReArchiveAcrossLives(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("history = %+v; want one entry", got)
 			}
-			if e := got[0]; e.ClaudeSessionID != "X" || e.LifeNumber != 1 || e.JSONLPath.String != tc.wantPath ||
+			if e := got[0]; e.SessionID != "X" || e.LifeNumber != 1 || e.JSONLPath.String != tc.wantPath ||
 				e.JSONLPath.Valid != (tc.wantPath != "") || e.RecordedAt <= before {
 				t.Errorf("entry = %+v; want X in life 1 at %q, recorded after %q", e, tc.wantPath, before)
 			}
@@ -146,7 +146,7 @@ func TestProvisionalTranscriptHeal(t *testing.T) {
 		t.Errorf("jsonl_path after a reported-but-absent transcript = %v; want NULL", got)
 	}
 	listed, err := f.s.ListProvisionalTranscripts()
-	if err != nil || len(listed) != 1 || listed[0].ClaudeInstanceID != prov || listed[0].ClaudeSessionID != "session-1" ||
+	if err != nil || len(listed) != 1 || listed[0].InstanceID != prov || listed[0].SessionID != "session-1" ||
 		listed[0].ConfigDir != "/cfg" {
 		t.Fatalf("ListProvisionalTranscripts = %+v, %v; want only %s/session-1 with /cfg", listed, err, prov)
 	}

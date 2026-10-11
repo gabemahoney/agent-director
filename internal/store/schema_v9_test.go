@@ -52,25 +52,25 @@ func TestV9MigratedRowsRead(t *testing.T) {
 	f, s, _ := migrateV8Fixture(t)
 	for _, id := range f.ids {
 		sp := mustGetSpawn(t, s, id)
-		if sp.ClaudeInstanceID != id || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 {
+		if sp.InstanceID != id || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 {
 			t.Errorf("%s = id %q, agent %q, end report %d; want its id, claude and no end report", id,
-				sp.ClaudeInstanceID, sp.Agent, sp.EndReportedAtMillis)
+				sp.InstanceID, sp.Agent, sp.EndReportedAtMillis)
 		}
 	}
 	live := mustGetSpawn(t, s, v8LiveID)
-	if !slices.Equal(live.ClaudeArgs, []string{"--model", "opus"}) || live.ClaudeSessionID != "sess-live" {
-		t.Errorf("live row = args %v, session %q; want [--model opus] and sess-live", live.ClaudeArgs, live.ClaudeSessionID)
+	if !slices.Equal(live.AgentArgs, []string{"--model", "opus"}) || live.SessionID != "sess-live" {
+		t.Errorf("live row = args %v, session %q; want [--model opus] and sess-live", live.AgentArgs, live.SessionID)
 	}
 	if got := mustGetSpawn(t, s, v8UnsettledID).ParentID; got != v8LiveID {
 		t.Errorf("unsettled row's parent = %q; want %q (the renamed key still joins)", got, v8LiveID)
 	}
 	reused := mustGetSpawn(t, s, v8ReusedID)
 	entries, err := s.ListSessionHistory(v8ReusedID, reused.LifeNumber)
-	if err != nil || len(entries) != 1 || entries[0].ClaudeSessionID != "sess-r-2-prior" {
+	if err != nil || len(entries) != 1 || entries[0].SessionID != "sess-r-2-prior" {
 		t.Errorf("ListSessionHistory(reused, life %d) = %+v, %v; want sess-r-2-prior only", reused.LifeNumber, entries, err)
 	}
 	pr, err := s.GetPermissionRequest(v8RelayID, "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
-	if err != nil || pr.ClaudeInstanceID != v8RelayID || pr.ToolUseID != "toolu_01" {
+	if err != nil || pr.InstanceID != v8RelayID || pr.ToolUseID != "toolu_01" {
 		t.Errorf("open request = %+v, %v; want its row's id and toolu_01", pr, err)
 	}
 	if rows, err := s.PermissionRequestsForSpawn(v8RelayID); err != nil || len(rows) != 2 {
@@ -103,12 +103,12 @@ func TestV9MigratedRowResumes(t *testing.T) {
 	}
 	// What resume's move does not touch is the row's resume material: the
 	// session id, the args, the life and that life's archived sessions.
-	if got.ClaudeSessionID != "sess-r-2" || !slices.Equal(got.ClaudeArgs, []string{"--resume"}) || got.LifeNumber != before.LifeNumber {
+	if got.SessionID != "sess-r-2" || !slices.Equal(got.AgentArgs, []string{"--resume"}) || got.LifeNumber != before.LifeNumber {
 		t.Errorf("moved row = session %q, args %v, life %d; want sess-r-2, [--resume], life %d kept",
-			got.ClaudeSessionID, got.ClaudeArgs, got.LifeNumber, before.LifeNumber)
+			got.SessionID, got.AgentArgs, got.LifeNumber, before.LifeNumber)
 	}
 	entries, err := s.ListSessionHistory(v8ReusedID, got.LifeNumber)
-	if err != nil || len(entries) != 1 || entries[0].ClaudeSessionID != "sess-r-2-prior" {
+	if err != nil || len(entries) != 1 || entries[0].SessionID != "sess-r-2-prior" {
 		t.Errorf("ListSessionHistory(reused, life %d) after the move = %+v, %v; want sess-r-2-prior kept", got.LifeNumber, entries, err)
 	}
 

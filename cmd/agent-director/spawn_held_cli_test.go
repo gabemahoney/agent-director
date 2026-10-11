@@ -126,15 +126,15 @@ func TestSpawnCLIHeldNameEndedSticks(t *testing.T) {
 			t.Errorf("%s stdout = %q; want empty", hk.event, out)
 		}
 		sp := h.row(t, id)
-		if sp.State != store.StateEnded || sp.ClaudeSessionID != "" {
-			t.Errorf("after %s: state = %q, session = %q; want %s and none", hk.event, sp.State, sp.ClaudeSessionID, store.StateEnded)
+		if sp.State != store.StateEnded || sp.SessionID != "" {
+			t.Errorf("after %s: state = %q, session = %q; want %s and none", hk.event, sp.State, sp.SessionID, store.StateEnded)
 		}
 		ign := eventsOf(readTrailLines(t, h.home), "ad.hook.ignored")
 		if len(ign) != i+1 {
 			t.Fatalf("after %s: ad.hook.ignored lines = %d; want %d: %v", hk.event, len(ign), i+1, ign)
 		}
 		got := ign[i]
-		if got["claude_instance_id"] != id || got["hook_event"] != hk.event || got["reason"] != store.HookReasonNoPaneRecorded {
+		if got["instance_id"] != id || got["hook_event"] != hk.event || got["reason"] != store.HookReasonNoPaneRecorded {
 			t.Errorf("ad.hook.ignored = %v; want %s, %s, %s", got, id, hk.event, store.HookReasonNoPaneRecorded)
 		}
 	}

@@ -147,7 +147,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 		event = "PermissionRequest"
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"prior_state":           prior,
 		"new_state":             StateCheckPermission,
 		"triggering_event_name": event,
@@ -155,15 +155,15 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 		"source":                "ad_spawn_store",
 	})
 	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
-		"claude_instance_id": instanceID,
-		"request_token":      req.RequestToken,
-		"request_id":         requestID,
-		"tool_name":          req.ToolName,
-		"decision":           nil,
-		"decision_reason":    nil,
-		"writer_process":     WriterProcessHook,
-		"mutation_kind":      "insert",
-		"source":             "ad_store",
+		"instance_id":     instanceID,
+		"request_token":   req.RequestToken,
+		"request_id":      requestID,
+		"tool_name":       req.ToolName,
+		"decision":        nil,
+		"decision_reason": nil,
+		"writer_process":  WriterProcessHook,
+		"mutation_kind":   "insert",
+		"source":          "ad_store",
 	})
 	return UpsertInserted, HookApplied{Applied: true}, nil
 }

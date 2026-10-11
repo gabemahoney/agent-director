@@ -81,7 +81,7 @@ func TestMain(m *testing.M) {
 		// Self-diagnosing dump: the leak is almost always caused by another
 		// package racing a trail write into this window under `go test ./...`
 		// parallelism (this package's own HOME redirect is correct). The trail
-		// file's JSONL content carries `source`, `claude_instance_id`, event
+		// file's JSONL content carries `source`, `instance_id`, event
 		// names and timestamps that identify the writer, so dump every created
 		// or modified file to make future fires forensically self-explanatory.
 		dumpViolatingFiles(before, after)
@@ -94,7 +94,7 @@ func TestMain(m *testing.M) {
 // dumpViolatingFiles prints the full content of every file that was created or
 // modified between the before and after snapshots. This turns an intermittent
 // canary fire into a self-diagnosing report: the leaked trail JSONL lines carry
-// `source`, `claude_instance_id`, event names and timestamps that pin the write
+// `source`, `instance_id`, event names and timestamps that pin the write
 // back to the offending test/package. Output is bounded per file so a large
 // pre-existing store that merely got appended to does not flood the log.
 func dumpViolatingFiles(before, after agentDirSnap) {

@@ -28,7 +28,7 @@ type provenanceDisagree struct {
 	// Verb is the deciding verb ("kill"); Source its trail source ("ad_kill").
 	Verb   string
 	Source string
-	// InstanceID is the row's claude_instance_id.
+	// InstanceID is the row's instance_id.
 	InstanceID string
 	// Socket is the socket the verb's calls used (tmux_socket).
 	Socket string
@@ -63,7 +63,7 @@ type provenanceDisagree struct {
 // call carrying the fields of the observation that produced that reason
 // (findMissingRun.emitDisagree).
 //
-// Each record carries claude_instance_id, verb, reason, tmux_socket,
+// Each record carries instance_id, verb, reason, tmux_socket,
 // tmux_session_name (the recorded name), tmux_session_id (null when none),
 // current_session_name (on name_changed only, null otherwise), server
 // (match, restarted, differs or unknown), verdict, action, source and the
@@ -90,7 +90,7 @@ func emitProvenanceDisagree(d provenanceDisagree, reasons ...string) {
 			current = d.CurrentSessionName
 		}
 		_ = trail.Emit(context.Background(), "ad.provenance.disagree", map[string]any{
-			"claude_instance_id":   d.InstanceID,
+			"instance_id":          d.InstanceID,
 			"verb":                 d.Verb,
 			"reason":               reason,
 			"tmux_socket":          d.Socket,

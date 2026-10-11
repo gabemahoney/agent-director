@@ -39,13 +39,13 @@ func SeedListFixture(t *testing.T) (*store.Store, string) {
 	insert := func(id, parent, state, cwd string, labels map[string]string) {
 		t.Helper()
 		row := store.Spawn{
-			ClaudeInstanceID: id,
-			Agent:            store.AgentClaude,
-			ParentID:         parent,
-			CWD:              cwd,
-			TmuxSessionName:  "cd-" + id,
-			RelayMode:        "off",
-			Labels:           labels,
+			InstanceID:      id,
+			Agent:           store.AgentClaude,
+			ParentID:        parent,
+			CWD:             cwd,
+			TmuxSessionName: "cd-" + id,
+			RelayMode:       "off",
+			Labels:          labels,
 		}
 		if err := s.InsertPending(row); err != nil {
 			t.Fatalf("SeedListFixture: InsertPending %s: %v", id, err)
@@ -86,11 +86,11 @@ func SeedDeleteFixture(t *testing.T) (*store.Store, string) {
 		{"row-ended", store.StateEnded},
 	} {
 		row := store.Spawn{
-			ClaudeInstanceID: sp.id,
-			Agent:            store.AgentClaude,
-			CWD:              "/tmp",
-			TmuxSessionName:  "cd-" + sp.id,
-			RelayMode:        "off",
+			InstanceID:      sp.id,
+			Agent:           store.AgentClaude,
+			CWD:             "/tmp",
+			TmuxSessionName: "cd-" + sp.id,
+			RelayMode:       "off",
 		}
 		if err := s.InsertPending(row); err != nil {
 			t.Fatalf("SeedDeleteFixture: InsertPending %s: %v", sp.id, err)
@@ -114,11 +114,11 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 	storefix.RegisterStorePath(t, s, dbPath)
 
 	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: "id-d-1",
-		Agent:            store.AgentClaude,
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-d-1",
-		RelayMode:        relayMode,
+		InstanceID:      "id-d-1",
+		Agent:           store.AgentClaude,
+		CWD:             "/tmp",
+		TmuxSessionName: "cd-d-1",
+		RelayMode:       relayMode,
 	}); err != nil {
 		t.Fatalf("SeedDecideFixture: InsertPending: %v", err)
 	}
@@ -156,11 +156,11 @@ func SeedExpireFixture(t *testing.T) (*store.Store, string) {
 	insert := func(id, state, cwd string) {
 		t.Helper()
 		row := store.Spawn{
-			ClaudeInstanceID: id,
-			Agent:            store.AgentClaude,
-			CWD:              cwd,
-			TmuxSessionName:  "cd-" + id,
-			RelayMode:        "off",
+			InstanceID:      id,
+			Agent:           store.AgentClaude,
+			CWD:             cwd,
+			TmuxSessionName: "cd-" + id,
+			RelayMode:       "off",
 		}
 		if err := s.InsertPending(row); err != nil {
 			t.Fatalf("SeedExpireFixture: InsertPending %s: %v", id, err)
@@ -270,11 +270,11 @@ func OpenStoreWithRow(t *testing.T, id, sessionName, state, relayMode string) (*
 	storefix.RegisterStorePath(t, s, dbPath)
 
 	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: id,
-		Agent:            store.AgentClaude,
-		CWD:              "/tmp",
-		TmuxSessionName:  sessionName,
-		RelayMode:        relayMode,
+		InstanceID:      id,
+		Agent:           store.AgentClaude,
+		CWD:             "/tmp",
+		TmuxSessionName: sessionName,
+		RelayMode:       relayMode,
 	}); err != nil {
 		t.Fatalf("OpenStoreWithRow: InsertPending: %v", err)
 	}

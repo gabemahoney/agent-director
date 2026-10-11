@@ -158,15 +158,15 @@ const (
 //
 // The schema-v7 fields (b.146 step 2) follow. Zero values mean NULL.
 type PermissionRow struct {
-	RequestID        int64
-	ClaudeInstanceID string
-	RequestToken     string
-	ToolName         string
-	ToolInput        string
-	Decision         string
-	DecisionReason   string
-	DecidedAt        time.Time
-	CreatedAt        time.Time
+	RequestID      int64
+	InstanceID     string
+	RequestToken   string
+	ToolName       string
+	ToolInput      string
+	Decision       string
+	DecisionReason string
+	DecidedAt      time.Time
+	CreatedAt      time.Time
 
 	// Hook is the relay hook that recorded the request, as it read itself at
 	// its start (rule 14): hook_pid, hook_starttime, hook_pidns. It is zero
@@ -323,7 +323,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		deliveredAt, settledAt, hookGoneAt, attemptedAt, intentAt, closedAt sql.NullInt64
 		provenAt                                                            sql.NullInt64
 	)
-	err := sc.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
+	err := sc.Scan(&r.RequestID, &r.InstanceID, &r.ToolName, &r.ToolInput,
 		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt,
 		&r.Hook.PID, &r.Hook.Starttime, &r.Hook.PIDNamespace,
 		&r.ToolUseID, &r.AgentID,
@@ -465,15 +465,15 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGa
 	// A trail-emit failure must not fail the store call (SR-A-3.2).
 	requestID, _ := insRes.LastInsertId()
 	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
-		"claude_instance_id": instanceID,
-		"request_token":      requestToken,
-		"request_id":         requestID,
-		"tool_name":          toolName,
-		"decision":           nil,
-		"decision_reason":    nil,
-		"writer_process":     writerProcess,
-		"mutation_kind":      "insert",
-		"source":             "ad_store",
+		"instance_id":     instanceID,
+		"request_token":   requestToken,
+		"request_id":      requestID,
+		"tool_name":       toolName,
+		"decision":        nil,
+		"decision_reason": nil,
+		"writer_process":  writerProcess,
+		"mutation_kind":   "insert",
+		"source":          "ad_store",
 	})
 
 	return UpsertInserted, HookApplied{Applied: true}, nil
@@ -712,15 +712,15 @@ func emitDecisionCommitted(instanceID, requestToken string, requestID int64, too
 		decisionReasonField = reason
 	}
 	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
-		"claude_instance_id": instanceID,
-		"request_token":      requestToken,
-		"request_id":         requestID,
-		"tool_name":          toolName,
-		"decision":           decisionField,
-		"decision_reason":    decisionReasonField,
-		"writer_process":     writerProcess,
-		"mutation_kind":      "update",
-		"source":             "ad_store",
+		"instance_id":     instanceID,
+		"request_token":   requestToken,
+		"request_id":      requestID,
+		"tool_name":       toolName,
+		"decision":        decisionField,
+		"decision_reason": decisionReasonField,
+		"writer_process":  writerProcess,
+		"mutation_kind":   "update",
+		"source":          "ad_store",
 	})
 }
 

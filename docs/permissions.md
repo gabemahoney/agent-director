@@ -18,7 +18,7 @@ A `permissions` block has up to three string arrays:
   Denies override allows.
 - `ask` — patterns that prompt the operator for confirmation. Not
   used by orchestrator-driven Spawns in practice (set
-  `disable_askuserquestion = true` to silence the asks; see below).
+  `disable_ask_user = true` to silence the asks; see below).
 
 The pattern grammar is Claude Code's; bare tool names match every
 invocation of that tool (`AskUserQuestion` denies every AUQ — see the
@@ -56,13 +56,13 @@ Effective `deny` for the Spawn:
 A Spawn launched with `deny` `["Bash(npm publish)"]`
 (`--deny "Bash(npm publish)"` on the CLI) adds that single entry. The operator's pre-existing rules continue to apply.
 
-## `disable_askuserquestion` config
+## `disable_ask_user` config
 
 `config.toml`:
 
 ```toml
 [defaults]
-disable_askuserquestion = true
+disable_ask_user = true
 ```
 
 When true, every `spawn` call adds `"AskUserQuestion"` to the
@@ -72,7 +72,7 @@ of the AUQ tool" *and* removes the tool from the deferred-tool registry
 (the model never sees its schema). Confirmed in
 `reference/permissions-deny-tool-name-research.md`.
 
-Recommended for orchestrator-driven setups where every Claude should
+Recommended for orchestrator-driven setups where every agent should
 make its own decisions rather than prompting a human. The deny is
 additive — caller-supplied `deny` entries still concatenate, and the
 user / project tiers still apply.
@@ -131,7 +131,7 @@ hook fires, and its row stays `pending`.
 ## `--dangerously-skip-permissions`
 
 agent-director **does not strip** this flag. A caller passing
-`--dangerously-skip-permissions` through `claude_args` bypasses Claude
+`--dangerously-skip-permissions` through `agent_args` bypasses Claude
 Code's permission engine entirely — the per-Spawn `permissions` block
 becomes irrelevant for that Spawn. This is intentional per the PRD
 (the supervisor exposes the same trust boundary as the operator's own
@@ -192,7 +192,7 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
      its confirmation in one statement, then writes a deny envelope.
    - On a failure → see "Fail-closed boundary" below: a deny before the
      request is recorded, no answer after.
-4. The orchestrator calls `agent-director decide --claude-instance-id
+4. The orchestrator calls `agent-director decide --instance-id
    <id> --request-token <token> --decision allow|deny [--max-wait-ms N]`
    to record the verdict. The token comes from the Spawn's
    `permission_requests` in `get` or `list` output.
@@ -794,7 +794,7 @@ spawn, `kill` it, or have a person or an LLM do what `pause` would:
 3. Send `/exit` with that read's `pane_sha256`:
 
    ```sh
-   agent-director send-keys --claude-instance-id <id> --text /exit \
+   agent-director send-keys --instance-id <id> --text /exit \
        --expect-pane-sha256 <H>
    ```
 
@@ -915,7 +915,7 @@ caller's claim of what that key answered (`as`) without checking it.
 #### A pane answer through `send-keys`
 
 ```sh
-agent-director send-keys --claude-instance-id <id> --request-token <T> \
+agent-director send-keys --instance-id <id> --request-token <T> \
     --as allow|deny --key <K> --expect-pane-sha256 <H> [--n-lines N]
 ```
 

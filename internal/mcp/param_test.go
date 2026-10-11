@@ -49,7 +49,7 @@ func paramRequiredArgs(t *testing.T, e *mcpEnv, v manifest.VerbDef) map[string]a
 		switch p.Name {
 		case "cwd":
 			args[p.Name] = t.TempDir()
-		case "claude_instance_id":
+		case "instance_id":
 			args[p.Name] = paramRow
 		case "request_token":
 			args[p.Name] = paramToken
@@ -205,7 +205,7 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 		{"spawn", "no-pre-trust", true}, {"spawn", "tmux-session-name", "mcp-param-name"}, {"spawn", "reuse-finished", true},
 		{"list", "tmux-session-name", "mcp-param-name"},
 		{"kill", "include-finished", true}, {"kill", "include_finished", true}, {"kill", "IncludeFinished", true}, {"kill", "includefinished", true},
-		{"make-template", "template", "tpl"}, {"make-template", "claude_instance_id", "tpl-id"}, {"make-template", "tmux_session_name", "tpl-session"},
+		{"make-template", "template", "tpl"}, {"make-template", "instance_id", "tpl-id"}, {"make-template", "tmux_session_name", "tpl-session"},
 		{"make-template", "reuse_finished", true}, {"make-template", "reuse-finished", true},
 	} {
 		cases = append(cases, refusal{old.verb + ", " + old.key, old.verb, old.key, old.value})
@@ -232,6 +232,52 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 				t.Errorf("the refused call changed state:\n got %+v\nwant %+v", after, before)
 			}
 		})
+	}
+}
+
+// TestMCPParamOldKeyRefused: the old Claude-named keys are refused on every
+// tool, with ErrInvalidFlags naming the new key in the exact phrase
+// "(no longer accepted; use ...)" when that tool takes it (the valid-parameters
+// list alone does not count), and as any unknown key when it does not; nothing
+// runs: no row, tmux call or template (SR-4.3, P-34).
+func TestMCPParamOldKeyRefused(t *testing.T) {
+	for _, k := range []struct {
+		old, new string
+		value    any
+	}{
+		{"claude_instance_id", "instance_id", "mcp-old-id"}, {"claude_args", "agent_args", []string{"--model", "opus"}},
+	} {
+		takers := 0
+		for _, v := range exposedVerbs() {
+			takes := slices.ContainsFunc(v.Params, func(p manifest.ParamDef) bool { return p.Name == k.new })
+			if takes {
+				takers++
+			}
+			t.Run(k.old+"/"+v.Name, func(t *testing.T) {
+				e, _ := newReuseParamEnv(t)
+				args := paramRequiredArgs(t, e, v)
+				delete(args, k.new) // the caller sends the old key instead of the new one
+				args[k.old] = k.value
+				before := readParamState(t, e)
+				want := "ErrInvalidFlags: " + v.Name + ": unknown parameter " + strconv.Quote(k.old)
+				if takes {
+					want += " (no longer accepted; use " + strconv.Quote(k.new) + ")"
+				}
+				want += "; valid parameters: " + paramValidList(v)
+
+				data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(v.Name), paramJSON(t, args)))
+
+				if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+					t.Errorf("refusal = %s: %q\nwant ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
+				}
+				if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
+					t.Errorf("the refused call changed state:\n got %+v\nwant %+v", after, before)
+				}
+			})
+		}
+		if takers == 0 {
+			t.Errorf("no exposed verb takes %q; the old key %q is refused with nothing to name", k.new, k.old)
+		}
 	}
 }
 
@@ -323,7 +369,7 @@ func TestMCPParamToolsListNames(t *testing.T) {
 				tool.Name, props, required, ok, want, wantRequired)
 		}
 	}
-	const refused = "Per-invocation params (template, claude_instance_id, tmux_session_name, reuse_finished) are refused."
+	const refused = "Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused."
 	if desc := byName[mcp.ToolName("make-template")].Description; !strings.Contains(desc, refused) {
 		t.Errorf("make_template description %q lacks %q", desc, refused)
 	}
@@ -352,7 +398,7 @@ func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 				t.Fatalf("mkdir %s: %v", cwd, err)
 			}
 			id := "tsn-" + uuid.NewString()[:8]
-			args := spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id, "tmux_session_name": tc.value})
+			args := spawnArgs(t, cwd, c, map[string]any{"instance_id": id, "tmux_session_name": tc.value})
 
 			if tc.want == "" {
 				data := toolErrorData(t, callTool(t, e.d, "spawn", args))
@@ -387,7 +433,7 @@ func TestMCPParamListFilters(t *testing.T) {
 	seedFinished(t, e, "mcp-list-b1", store.StateEnded, apitest.WithTmuxSessionName("beta"))
 	seedFinished(t, e, "mcp-list-b2", store.StateWaiting, apitest.WithTmuxSessionName("beta"))
 	var rows []struct {
-		ID string `json:"claude_instance_id"`
+		ID string `json:"instance_id"`
 	}
 	obj := callToolText(t, e.d, "list", `{"tmux_session_name":"beta","state":["waiting"]}`)
 	if err := json.Unmarshal(obj["spawns"], &rows); err != nil || len(rows) != 1 || rows[0].ID != "mcp-list-b2" {
@@ -402,7 +448,7 @@ func TestMCPParamNegativeCountRefused(t *testing.T) {
 	seedFinished(t, e, "mcp-count-a", store.StateWaiting)
 	seedFinished(t, e, "mcp-count-b", store.StateWaiting)
 	for _, tc := range []struct{ tool, args, want string }{
-		{"read_pane", `{"claude_instance_id":"mcp-count-a","n_lines":-1}`, "n_lines = -1 is negative"},
+		{"read_pane", `{"instance_id":"mcp-count-a","n_lines":-1}`, "n_lines = -1 is negative"},
 		{"list", `{"limit":-1}`, "limit = -1 is negative"},
 	} {
 		data := toolErrorData(t, callTool(t, e.d, tc.tool, tc.args))

@@ -27,16 +27,16 @@ import (
 func advSpawnGetThenAct(t *testing.T, e *killEnv, p api.SpawnParams) (string, api.SpawnResult, error) {
 	t.Helper()
 	c, _ := e.client(t)
-	row, err := c.Get(p.ClaudeInstanceID)
+	row, err := c.Get(p.InstanceID)
 	switch {
 	case errors.Is(err, api.ErrSpawnNotFound):
 		p.ReuseFinished = false
 		res, err := c.Spawn(p)
 		return "", res, err
 	case err != nil:
-		t.Fatalf("Get(%s): %v", p.ClaudeInstanceID, err)
+		t.Fatalf("Get(%s): %v", p.InstanceID, err)
 	case row.State == store.StatePending:
-		adviceAwaitFinished(t, c, e.clock, p.ClaudeInstanceID, nil)
+		adviceAwaitFinished(t, c, e.clock, p.InstanceID, nil)
 	}
 	res, err := c.Spawn(p)
 	return row.State, res, err

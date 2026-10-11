@@ -532,7 +532,7 @@ func TestDecideReportsTheLiveHooksAck(t *testing.T) {
 
 	began := time.Now()
 	res, err := api.Decide(st, api.RelayView{Procs: pc, PIDNamespace: probe.SelfPIDNamespace, Now: time.Now, Window: 24 * time.Hour},
-		api.DecideParams{ClaudeInstanceID: id, RequestToken: token, Decision: "allow"})
+		api.DecideParams{InstanceID: id, RequestToken: token, Decision: "allow"})
 	took := time.Since(began)
 
 	if err != nil || res.Delivery != api.DeliveryDelivered || res.HookAlive == nil || !*res.HookAlive {

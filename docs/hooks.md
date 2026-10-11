@@ -47,7 +47,7 @@ note. A no-verb run checks stdin for this case:
 
 The `no_exec_form` record has the fields every `ad.hook.ignored` record
 has (see "The `ad.hook.ignored` reasons" below). Because it reads no
-row, its `claude_instance_id` comes from the environment (null when
+row, its `instance_id` comes from the environment (null when
 absent or invalid), and `row_session_id` and `row_pane_pid` are always
 null.
 
@@ -194,7 +194,7 @@ For a SessionStart refused with `pid_mismatch` while the row is
 `pending`, and for no other hook, the hook reads its parent's own parent
 pid once. When that is the row's pane process, it writes one
 `ad.hook.pane_is_grandparent` record after the `ad.hook.ignored` one, with
-`claude_instance_id`, `pane_pid`, `pane_command` (null when unreadable),
+`instance_id`, `pane_pid`, `pane_command` (null when unreadable),
 `parent_pid`, `parent_command`, `advice` (naming both causes) and
 `source` = `ad_hook`. Each such SessionStart (startup, `/clear`,
 compaction, resume) writes one. The row, stdout and exit stay those of
@@ -355,7 +355,7 @@ carries it and is the agent itself.
 | `subagent_event` | A SessionStart or SessionEnd whose payload carries a non-empty `agent_id`. |
 | `no_exec_form` | A no-verb run received a hook payload on stdin, from a Claude Code that does not run exec-form hooks. It is written with no store access. |
 
-Each record carries `claude_instance_id`, `hook_event`, `reason`,
+Each record carries `instance_id`, `hook_event`, `reason`,
 `parent_pid`, `parent_command`, `hook_session_id`, `row_session_id`,
 `row_pane_pid` and `source` = `ad_hook`. `hook_session_id` is the
 basename of the payload's `transcript_path` with its extension removed

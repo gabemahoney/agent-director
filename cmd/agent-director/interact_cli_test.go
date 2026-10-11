@@ -26,7 +26,7 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 	enter := []string{"Enter"}
 	for _, tc := range []struct {
 		name, state string
-		args        []string   // send-keys' flags after --claude-instance-id
+		args        []string   // send-keys' flags after --instance-id
 		sends       [][]string // each send-keys call's arguments after its -t target
 	}{
 		{"live row", store.StateWaiting, []string{"--text", "hello world"}, [][]string{typed("hello world"), enter}},
@@ -41,7 +41,7 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 			home, id, socket := seedRowOnSocket(t, tc.state)
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "")))
 
-			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"send-keys", "--claude-instance-id", id}, tc.args...)...)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"send-keys", "--instance-id", id}, tc.args...)...)
 
 			if code != 0 || stderr != "" || stdout != "{}\n" {
 				t.Fatalf("send-keys exit = %d, stdout = %q, stderr = %q; want 0, {} and empty", code, stdout, stderr)
@@ -89,7 +89,7 @@ func TestSendKeysCLIPaneAnswer(t *testing.T) {
 				t.Fatalf("seed a fallen-back request: %v", err)
 			}
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "Allow Bash? 1 yes, 2 no\n")))
-			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "read-pane", "--claude-instance-id", id)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "read-pane", "--instance-id", id)
 			var read struct {
 				PaneSHA256 string `json:"pane_sha256"`
 			}
@@ -101,7 +101,7 @@ func TestSendKeysCLIPaneAnswer(t *testing.T) {
 			}
 			mark := len(fakeTmuxInvocations(t, home))
 
-			stdout, stderr, code = runSpawnCLI(t, home, fakeDir, "send-keys", "--claude-instance-id", id, "--request-token", req.RequestToken,
+			stdout, stderr, code = runSpawnCLI(t, home, fakeDir, "send-keys", "--instance-id", id, "--request-token", req.RequestToken,
 				"--as", "allow", "--key", "1", "--expect-pane-sha256", read.PaneSHA256)
 
 			invs := fakeTmuxInvocations(t, home)[mark:]

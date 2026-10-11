@@ -91,7 +91,7 @@ func TestPauseGuards(t *testing.T) {
 				id = "absent"
 			}
 			before := e.columns(t, r.ID)
-			_, err := e.pause(api.PauseParams{ClaudeInstanceID: id})
+			_, err := e.pause(api.PauseParams{InstanceID: id})
 			if tc.want == "" && err != nil {
 				t.Fatalf("err = %v; want the no-op success", err)
 			} else if tc.want != "" {
@@ -144,7 +144,7 @@ func TestPauseWait(t *testing.T) {
 		state     string
 	}{
 		{"ended during the third sleep", 3, func(t *testing.T, e *killEnv, r killRow, _ context.CancelFunc) {
-			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.ClaudeSessionID); !a.Applied {
+			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.SessionID); !a.Applied {
 				t.Errorf("SessionEnd not applied: %s", a.Reason)
 			}
 		}, false, nil, store.StateEnded},
@@ -230,7 +230,7 @@ var ptrEntries = []ptrEntry{{"Pause", false}, {"Client.Pause", true}}
 // pauseTimeoutSeconds, Client.Pause the config default).
 func (en ptrEntry) pause(ctx context.Context, t *testing.T, e *killEnv, id string) error {
 	t.Helper()
-	p := api.PauseParams{ClaudeInstanceID: id}
+	p := api.PauseParams{InstanceID: id}
 	if en.client {
 		c, _ := e.client(t)
 		_, err := c.Pause(ctx, p)
@@ -269,7 +269,7 @@ func ptrUnusableSocket(t *testing.T, e *killEnv) killRow {
 func ptrAssertOnlyDisagrees(t *testing.T, mark int, id string, none bool) {
 	t.Helper()
 	for _, l := range readAPITrailLines(t)[mark:] {
-		if l["claude_instance_id"] != id || l["event"] == "ad.spawn.state_transition" {
+		if l["instance_id"] != id || l["event"] == "ad.spawn.state_transition" {
 			continue
 		}
 		if none || l["event"] != "ad.provenance.disagree" || l["verb"] != "pause" {

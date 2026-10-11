@@ -29,14 +29,14 @@ func assertUntouched(t *testing.T, r store.LiveSpawnIdentity, st *fakeFindMissin
 	t.Helper()
 	for _, pid := range pc.StartTimeCalls() {
 		if pid == r.PID || pid == r.Identity.PanePID {
-			t.Errorf("StartTime(%d) called for %s; want no reader call inside grace", pid, r.ClaudeInstanceID)
+			t.Errorf("StartTime(%d) called for %s; want no reader call inside grace", pid, r.InstanceID)
 		}
 	}
-	if ops := st.ops(r.ClaudeInstanceID); len(ops) != 0 {
-		t.Errorf("writes on %s = %v; want none inside grace", r.ClaudeInstanceID, ops)
+	if ops := st.ops(r.InstanceID); len(ops) != 0 {
+		t.Errorf("writes on %s = %v; want none inside grace", r.InstanceID, ops)
 	}
-	if slices.Contains(res.IDs, r.ClaudeInstanceID) || slices.Contains(res.UnverifiedIDs, r.ClaudeInstanceID) {
-		t.Errorf("%s in result lists (ids=%v unverified_ids=%v); want neither", r.ClaudeInstanceID, res.IDs, res.UnverifiedIDs)
+	if slices.Contains(res.IDs, r.InstanceID) || slices.Contains(res.UnverifiedIDs, r.InstanceID) {
+		t.Errorf("%s in result lists (ids=%v unverified_ids=%v); want neither", r.InstanceID, res.IDs, res.UnverifiedIDs)
 	}
 }
 

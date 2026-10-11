@@ -135,7 +135,7 @@ const sessionStartHookTimeoutSeconds = 600
 // writes nothing, so its parent process does not matter.
 //
 // The `permissions` block is included whenever the caller supplied any
-// non-empty allow/deny/ask array OR when cfg.Defaults.DisableAskUserQuestion
+// non-empty allow/deny/ask array OR when cfg.Defaults.DisableAskUser
 // is true (which prepends "AskUserQuestion" to deny). When omitted, Claude
 // Code's tier merge runs against the user/project settings only.
 func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
@@ -195,7 +195,7 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 
 	top := map[string]any{"hooks": hooks}
 
-	allow, deny, ask := mergePermissions(r.Permissions, cfg.Defaults.DisableAskUserQuestion)
+	allow, deny, ask := mergePermissions(r.Permissions, cfg.Defaults.DisableAskUser)
 	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {
 		perm := map[string]any{}
 		if len(allow) > 0 {
@@ -218,7 +218,7 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 }
 
 // mergePermissions assembles the final allow/deny/ask slices. When
-// disable_askuserquestion is on, "AskUserQuestion" is prepended to the
+// disable_ask_user is on, "AskUserQuestion" is prepended to the
 // deny list per SRD §11 (additive over user / project tiers, which Claude
 // Code merges itself).
 //

@@ -49,7 +49,7 @@ func linesAfter(t *testing.T, before int, event, id string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, row := range readTrailLines(t, trailFile())[before:] {
-		if row["event"] == event && row["claude_instance_id"] == id {
+		if row["event"] == event && row["instance_id"] == id {
 			out = append(out, row)
 		}
 	}
@@ -185,7 +185,7 @@ var errMoveNotApplied = errors.New("MoveToPending did not apply")
 // gateIgnoredKeys is ad.hook.ignored's key set: SR-14's fields, row_pane_pid
 // (decision A4) and the trail envelope's event and ts; no launcher_pid (b.zde).
 var gateIgnoredKeys = []string{
-	"claude_instance_id", "event", "hook_event", "hook_session_id", "parent_command",
+	"event", "hook_event", "hook_session_id", "instance_id", "parent_command",
 	"parent_pid", "reason", "row_pane_pid", "row_session_id", "source", "ts",
 }
 

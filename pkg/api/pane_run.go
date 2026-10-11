@@ -51,7 +51,7 @@ type paneRun struct {
 // launchFor is the lookup's view of the row with identity id (rowLaunch),
 // with this store's id and the row's socket.
 func (r *paneRun) launchFor(id LaunchIdentity) tmux.Launch {
-	return rowLaunch(r.row.ClaudeInstanceID, id, r.storeID, r.socket)
+	return rowLaunch(r.row.InstanceID, id, r.storeID, r.socket)
 }
 
 // ours finds the agent's pane in one pane listing (SR-3.7) on an Ours lookup
@@ -107,7 +107,7 @@ func (r *paneRun) goneError() error {
 // refusal is the pane refusal's inputs for this row with the session name
 // name, saying what the verb did not do.
 func (r *paneRun) refusal(name string) paneRefusal {
-	return paneRefusal{InstanceID: r.row.ClaudeInstanceID, Name: name, Nothing: r.nothing}
+	return paneRefusal{InstanceID: r.row.InstanceID, Name: name, Nothing: r.nothing}
 }
 
 // cantTellRefusal is the shared mapping's inputs for call on this row: the
@@ -117,7 +117,7 @@ func (r *paneRun) refusal(name string) paneRefusal {
 // refusals (refusal) say what the verb did not do.
 func (r *paneRun) cantTellRefusal(call tmux.Call) cantTellRefusal {
 	return cantTellRefusal{
-		InstanceID: r.row.ClaudeInstanceID,
+		InstanceID: r.row.InstanceID,
 		Context:    "tmux session " + strconv.Quote(r.row.TmuxSessionName),
 		Socket:     r.socket,
 		Call:       call,

@@ -143,10 +143,10 @@ var (
 	mxRecorded = func(r store.LiveSpawnIdentity) string { return r.TmuxSessionName }
 	mxRenamed  = func(r store.LiveSpawnIdentity) string { return "renamed-" + r.TmuxSessionName }
 	mxOwn      = func(r store.LiveSpawnIdentity) tmux.Label {
-		return tmuxfix.Valid(tmuxfix.Token, r.ClaudeInstanceID, tmuxfix.StoreID)
+		return tmuxfix.Valid(tmuxfix.Token, r.InstanceID, tmuxfix.StoreID)
 	}
 	mxOld = func(r store.LiveSpawnIdentity) tmux.Label {
-		return tmuxfix.Valid(tmuxfix.OtherToken, r.ClaudeInstanceID, tmuxfix.StoreID)
+		return tmuxfix.Valid(tmuxfix.OtherToken, r.InstanceID, tmuxfix.StoreID)
 	}
 	mxNoLabel  = func(store.LiveSpawnIdentity) tmux.Label { return tmux.Label{} }
 	mxOtherRow = func(store.LiveSpawnIdentity) tmux.Label {
@@ -254,7 +254,7 @@ func mxOursNoPaneCell(id string, k mxKind, lk mxLookup, v mxListing) mxCell {
 // held-name records, reader (never the process carrying the id, never an environment) and tmux calls.
 func runMxCell(t *testing.T, c mxCell) {
 	t.Helper()
-	id, w := c.row.ClaudeInstanceID, c.want
+	id, w := c.row.InstanceID, c.want
 	c.pc.Set(mxLeakPID, procfix.Alive(fmStart).WithEnv(map[string]string{probe.EnvKey: id}))
 	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{c.row}}
 	before := len(readAPITrailLines(t))

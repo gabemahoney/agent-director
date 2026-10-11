@@ -54,10 +54,10 @@ func TestV6MigrationKeepsV5Rows(t *testing.T) {
 		t.Fatalf("ListLiveSpawnIdentities = %d rows, %v; want the pending and waiting rows", len(live), err)
 	}
 	for _, it := range live {
-		sp := mustGetSpawn(t, s, it.ClaudeInstanceID)
+		sp := mustGetSpawn(t, s, it.InstanceID)
 		if it.LaunchOwner != (LaunchOwner{}) || it.Snapshot != sp.Snapshot || it.Identity != sp.Identity {
 			t.Errorf("%s live read = owner %+v, snapshot %+v, identity %+v; want no owner and GetSpawn's %+v, %+v",
-				it.ClaudeInstanceID, it.LaunchOwner, it.Snapshot, it.Identity, sp.Snapshot, sp.Identity)
+				it.InstanceID, it.LaunchOwner, it.Snapshot, it.Identity, sp.Snapshot, sp.Identity)
 		}
 	}
 }

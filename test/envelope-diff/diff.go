@@ -6,7 +6,7 @@
 // or whitespace.
 //
 // structuralDiff walks two normalized JSON trees and records mismatches as
-// diffEntry values with path-style notation (e.g. ".spawns[0].claude_instance_id").
+// diffEntry values with path-style notation (e.g. ".spawns[0].instance_id").
 // Callers supply an ignore list of selectors (see selectors.go) to suppress
 // non-deterministic fields such as generated IDs and timestamps.
 package envelope_diff
@@ -42,7 +42,7 @@ func normalize(b []byte) ([]byte, error) {
 // Client envelope (Got) at a specific JSON path.
 type diffEntry struct {
 	// Path is the dot-bracket JSON path of the differing node
-	// (e.g. ".spawns[0].claude_instance_id").
+	// (e.g. ".spawns[0].instance_id").
 	Path string
 
 	// Want is the value from the CLI envelope (the "expected" side).

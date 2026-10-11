@@ -46,7 +46,7 @@ func newUnreportedEnv(t *testing.T, lostReply bool) *unreportedEnv {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	e.s = s
-	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: e.id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + e.id, RelayMode: "off",
+	if err := s.InsertPending(store.Spawn{InstanceID: e.id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + e.id, RelayMode: "off",
 		LaunchStartedAtMillis: fmNow.Add(-fmGrace - time.Second).UnixMilli(),
 		Identity:              store.LaunchIdentity{Token: trailToken, Socket: apitest.TestSocket}}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
@@ -120,9 +120,9 @@ func TestFindMissingNotesLivePendingRowUnreported(t *testing.T) {
 				assertLists(t, res, nil, nil)
 				after := e.cols(t)
 				if after.State != store.StatePending || after.LivenessNote != "unreported" || after.LaunchStartedAt != before.LaunchStartedAt ||
-					after.ClaudeSessionID != nil || after.PID != nil {
+					after.SessionID != nil || after.PID != nil {
 					t.Errorf("row = state %v, note %v, launch start %v, session %v, pid %v; want pending, unreported, %v kept, NULL, NULL",
-						after.State, after.LivenessNote, after.LaunchStartedAt, after.ClaudeSessionID, after.PID, before.LaunchStartedAt)
+						after.State, after.LivenessNote, after.LaunchStartedAt, after.SessionID, after.PID, before.LaunchStartedAt)
 				}
 				assertTimestamp(t, "liveness_unverified_since", after.LivenessUnverifiedSince)
 				if after.PanePID != int64(e.panePID) {
@@ -152,9 +152,9 @@ func TestFindMissingNotesLivePendingRowUnreported(t *testing.T) {
 					t.Fatalf("late %s = %+v; want applied", hook.event, got)
 				}
 				late := e.cols(t)
-				if late.State != hook.state || late.ClaudeSessionID != sessionID || late.LivenessNote != nil || late.LivenessUnverifiedSince != nil {
+				if late.State != hook.state || late.SessionID != sessionID || late.LivenessNote != nil || late.LivenessUnverifiedSince != nil {
 					t.Errorf("after the late %s: state %v, session %v, note %v, since %v; want %s, %s, NULL, NULL", hook.event,
-						late.State, late.ClaudeSessionID, late.LivenessNote, late.LivenessUnverifiedSince, hook.state, sessionID)
+						late.State, late.SessionID, late.LivenessNote, late.LivenessUnverifiedSince, hook.state, sessionID)
 				}
 				if hook.event == "SessionStart" && (late.PID != int64(e.panePID) || late.ProcStarttime != fmStart) {
 					t.Errorf("SessionStart identity = pid %v, proc start %v; want %d, %s", late.PID, late.ProcStarttime, e.panePID, fmStart)

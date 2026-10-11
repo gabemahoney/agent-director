@@ -31,7 +31,7 @@ const paneIsGrandparentAdviceText = "The parent of this agent's hooks is a child
 // paneIsGrandparentKeys is ad.hook.pane_is_grandparent's key set, with the
 // trail envelope's event and ts.
 var paneIsGrandparentKeys = []string{
-	"advice", "claude_instance_id", "event", "pane_command", "pane_pid",
+	"advice", "event", "instance_id", "pane_command", "pane_pid",
 	"parent_command", "parent_pid", "source", "ts",
 }
 
@@ -161,7 +161,7 @@ func TestHookPaneIsGrandparent(t *testing.T) {
 			}
 			for _, line := range events {
 				assertPaneIsGrandparent(t, line, map[string]any{
-					"claude_instance_id": id, "pane_pid": float64(pane), "pane_command": wantCommand,
+					"instance_id": id, "pane_pid": float64(pane), "pane_command": wantCommand,
 					"parent_pid": float64(parent.PID), "parent_command": "claude",
 					"advice": paneIsGrandparentAdviceText, "source": "ad_hook",
 				})

@@ -99,7 +99,7 @@ func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
 		}
 	}
 	ticks := eventsOf(readTrailLines(t, home), "ad.find_missing.tick")
-	if len(ticks) != 1 || ticks[0]["claude_instance_id"] != killedID || ticks[0]["reconciliation_reason"] != "proc_absent" ||
+	if len(ticks) != 1 || ticks[0]["instance_id"] != killedID || ticks[0]["reconciliation_reason"] != "proc_absent" ||
 		ticks[0]["source"] != "ad_find_missing" {
 		t.Errorf("ticks = %v; want one proc_absent tick for %s from ad_find_missing", ticks, killedID)
 	}

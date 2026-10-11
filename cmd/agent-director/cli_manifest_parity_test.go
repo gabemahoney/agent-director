@@ -10,7 +10,8 @@ package main_test
 //
 // Every flag.FlagSet value must be a local variable defined from
 // flag.NewFlagSet with a constant name naming its verb, and used only as a
-// method receiver. Anything else whose flags the scan cannot attribute to a
+// method receiver or as the argument of a read-only helper
+// (flagSetReaderFuncs). Anything else whose flags the scan cannot attribute to a
 // verb fails it: a FlagSet passed, stored, returned, reassigned, embedded or
 // obtained from a helper or another package; a FlagSet method value; any
 // FlagSet method called on another receiver; flag.CommandLine and the flag
@@ -66,9 +67,18 @@ var flagSetReaders = map[string]bool{
 
 // nonFlagParams are the manifest params a CLI verb takes other than as a flag.
 var nonFlagParams = map[string][]string{
-	"spawn":      {"claude_args"}, // the argv after --
-	"trail-emit": {"sub_verb"},    // the first positional argument
-	"hook":       {"stdin"},       // the hook payload on stdin
+	"spawn":      {"agent_args"}, // the argv after --
+	"trail-emit": {"sub_verb"},   // the first positional argument
+	"hook":       {"stdin"},      // the hook payload on stdin
+}
+
+// flagSetReaderFuncs are the functions, by package path and name, that take a
+// FlagSet only to read it (Lookup): the old-flag refusal of both binaries
+// (SR-4.3). Passing a verb's FlagSet to one of them does not hide its flags
+// from the scan.
+var flagSetReaderFuncs = map[string]bool{
+	"main.flagErr": true,
+	"github.com/gabemahoney/agent-director/internal/oldnames.RefuseFlag": true,
 }
 
 // cliFlag is one flag registration found in the CLI's sources: the flag's
@@ -98,8 +108,8 @@ type cliScan struct {
 // the manifest have the same verbs (b.vqr).
 func TestCLIFlagsAreManifestParams(t *testing.T) {
 	s := scanCLISources(t)
-	if !slices.ContainsFunc(s.flags["kill"], func(f cliFlag) bool { return f.name == "claude-instance-id" }) {
-		t.Fatalf("the scan found no kill FlagSet registering claude-instance-id (found %v); the checks below would pass vacuously", s.flags)
+	if !slices.ContainsFunc(s.flags["kill"], func(f cliFlag) bool { return f.name == "instance-id" }) {
+		t.Fatalf("the scan found no kill FlagSet registering instance-id (found %v); the checks below would pass vacuously", s.flags)
 	}
 
 	// run() handles hook before dispatch. Verb aliases (--help, -h, --version,
@@ -326,6 +336,7 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 	}
 
 	receivers := map[ast.Expr]bool{}   // the X of every selector
+	readerArgs := map[ast.Expr]bool{}  // a FlagSet argument of a flagSetReaderFuncs call, which only reads it
 	methodRecvs := map[ast.Expr]bool{} // the X of every FlagSet method selector, which flagSetCall checks
 	for _, f := range files {
 		var stack []ast.Node
@@ -341,6 +352,10 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 			stack = append(stack, n)
 			switch n := n.(type) {
 			case *ast.CallExpr:
+				if fn := calleeFunc(info, n.Fun); fn != nil && fn.Pkg() != nil && len(n.Args) > 0 &&
+					flagSetReaderFuncs[fn.Pkg().Path()+"."+fn.Name()] {
+					readerArgs[ast.Unparen(n.Args[0])] = true
+				}
 				name := flagFunc(info, n.Fun)
 				if _, reg := flagRegistrars[name]; reg {
 					bad(n, "flag.%s registers on flag.CommandLine, which no verb owns", name)
@@ -387,7 +402,7 @@ func (s *cliScan) scanTyped(fset *token.FileSet, files []*ast.File, info *types.
 		if call, ok := e.(*ast.CallExpr); ok && flagFunc(info, call.Fun) == "NewFlagSet" {
 			continue // reported above when not bound
 		}
-		if methodRecvs[e] || (receivers[e] && tracked(e) != "") {
+		if methodRecvs[e] || (receivers[e] && tracked(e) != "") || readerArgs[e] {
 			continue
 		}
 		bad(e, "the FlagSet %s is passed, stored, returned or obtained other than as a local variable defined from flag.NewFlagSet and used as a receiver; its flags cannot be attributed to a verb", types.ExprString(e))
@@ -510,6 +525,25 @@ func flagFunc(info *types.Info, fun ast.Expr) string {
 		return ""
 	}
 	return fn.Name()
+}
+
+// calleeFunc returns the package-level function a call's fun names, or nil.
+func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {
+	var id *ast.Ident
+	switch f := ast.Unparen(fun).(type) {
+	case *ast.SelectorExpr:
+		id = f.Sel
+	case *ast.Ident:
+		id = f
+	}
+	if id == nil {
+		return nil
+	}
+	fn, _ := info.Uses[id].(*types.Func)
+	if fn == nil || fn.Type().(*types.Signature).Recv() != nil {
+		return nil
+	}
+	return fn
 }
 
 // isFlagSet reports whether t is flag.FlagSet or a pointer to it.

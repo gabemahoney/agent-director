@@ -144,13 +144,13 @@ func (p *paEnv) sendKeysRun(params api.SendKeysParams) verbRun[struct{}] {
 
 // plain is a plain send-keys of text on p's row.
 func (p *paEnv) plain(text string) api.SendKeysParams {
-	return api.SendKeysParams{ClaudeInstanceID: p.r.ID, Text: text}
+	return api.SendKeysParams{InstanceID: p.r.ID, Text: text}
 }
 
 // answer is a pane answer to request token claiming as with key, over the
 // pane p shows now.
 func (p *paEnv) answer(token, as, key string) api.SendKeysParams {
-	return api.SendKeysParams{ClaudeInstanceID: p.r.ID, RequestToken: token, As: as, Key: key, ExpectPaneSHA256: p.hash()}
+	return api.SendKeysParams{InstanceID: p.r.ID, RequestToken: token, As: as, Key: key, ExpectPaneSHA256: p.hash()}
 }
 
 // recordPaneAnswer runs the exported api.RecordPaneAnswer on p's store with

@@ -259,12 +259,12 @@ func restoreResultOf(res CondResult, rerr error, priorState string, v finishedLa
 // value). A restore that did not apply then ends the launch's hold on the
 // row, the launch with token (releaseOwner, b.kdf). It then emits the verb's
 // restore event (ad.resume.restored or ad.spawn.reuse_restored:
-// claude_instance_id, applied, launch_error named through errorName,
+// instance_id, applied, launch_error named through errorName,
 // restore_error, source), fail-open, and returns the restore's result too,
 // for a trail record that follows it (ad.launch.name_held after "duplicate
 // session").
 func (l finishedLaunch) restore(token string, launchErr func(restored restoreResult) error) (restoreResult, error) {
-	id := l.row.ClaudeInstanceID
+	id := l.row.InstanceID
 	res, rerr := l.restoreWrite()
 	if rerr != nil {
 		l.lg.Printf("WARN: %s: restoring instance %s to its prior state after a failed launch failed: %v", l.v.Verb, id, rerr)
@@ -280,11 +280,11 @@ func (l finishedLaunch) restore(token string, launchErr func(restored restoreRes
 		restoreError = rerr.Error()
 	}
 	_ = trail.Emit(context.Background(), l.v.RestoredEvent, map[string]any{
-		"claude_instance_id": id,
-		"applied":            rerr == nil && res == CondApplied,
-		"launch_error":       errorName(err),
-		"restore_error":      restoreError,
-		"source":             l.v.Source,
+		"instance_id":   id,
+		"applied":       rerr == nil && res == CondApplied,
+		"launch_error":  errorName(err),
+		"restore_error": restoreError,
+		"source":        l.v.Source,
 	})
 	return restored, err
 }
@@ -397,7 +397,7 @@ func (l finishedLaunch) heldName(req spawn.CreateRequest) error {
 // (spawn.ReleaseLaunchOwner), then logs one WARN line on l.lg.
 func (l finishedLaunch) releaseOwner(token string) {
 	if l.release != nil {
-		spawn.ReleaseLaunchOwner(l.release, l.lg, l.row.ClaudeInstanceID, token)
+		spawn.ReleaseLaunchOwner(l.release, l.lg, l.row.InstanceID, token)
 	}
 }
 
@@ -423,7 +423,7 @@ func emitFinishedRowDisagree(v finishedLaunchVerb, row Spawn, socket string, who
 	emitLookupDisagree(provenanceDisagree{
 		Verb:        v.Verb,
 		Source:      v.Source,
-		InstanceID:  row.ClaudeInstanceID,
+		InstanceID:  row.InstanceID,
 		Socket:      socket,
 		SessionName: row.TmuxSessionName,
 		Caller:      who,

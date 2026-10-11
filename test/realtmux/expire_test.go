@@ -57,7 +57,7 @@ func (f *killFix) expire(t testing.TB, bin string, recorded bool) expireRun {
 	return run
 }
 
-// trailRecords reads the trail in dir by event, then claude_instance_id.
+// trailRecords reads the trail in dir by event, then instance_id.
 func trailRecords(t testing.TB, dir string) map[string]map[string][]map[string]any {
 	t.Helper()
 	out := map[string]map[string][]map[string]any{}
@@ -76,7 +76,7 @@ func trailRecords(t testing.TB, dir string) map[string]map[string][]map[string]a
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			t.Fatalf("trail line is not JSON: %v", err)
 		}
-		ev, id := fmt.Sprint(rec["event"]), fmt.Sprint(rec["claude_instance_id"])
+		ev, id := fmt.Sprint(rec["event"]), fmt.Sprint(rec["instance_id"])
 		if out[ev] == nil {
 			out[ev] = map[string][]map[string]any{}
 		}
@@ -113,7 +113,7 @@ func (r expireRun) assertKept(t testing.TB, row apitest.SpawnColumns, id, reason
 	}
 	got := recs[0]
 	delete(got, "ts")
-	want := map[string]any{"event": "ad.expire.kept", "claude_instance_id": id, "reason": reason,
+	want := map[string]any{"event": "ad.expire.kept", "instance_id": id, "reason": reason,
 		"tmux_session_name": fmt.Sprint(row.TmuxSessionName), "source": "ad_expire"}
 	if !maps.Equal(got, want) {
 		t.Errorf("row %s ad.expire.kept = %v, want %v", id, got, want)

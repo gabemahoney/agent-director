@@ -222,7 +222,7 @@ func newResumeEnv(t *testing.T) *resumeEnv {
 // resume runs resume on id through the export_test seam with e's parts.
 func (e *resumeEnv) resume(id string) (api.ResumeResult, error) {
 	return api.Resume(e.store, e.rec, e.pc, e.cfg, e.storeID, e.clock.Now, e.lg,
-		api.ResumeParams{ClaudeInstanceID: id})
+		api.ResumeParams{InstanceID: id})
 }
 
 // moveStart is the launch start a resume called now records: now plus the lookup's Q.
@@ -314,7 +314,7 @@ func (e *resumeEnv) seedRow(t *testing.T, spec resumableSpec) resumableRow {
 		apitest.WithJsonlPath(r.JSONLPath),
 		apitest.WithLifeNumber(r.Life),
 		apitest.WithRawLabels(`{"project":"resume-fixture"}`),
-		apitest.WithRawClaudeArgs(`["--model","opus"]`),
+		apitest.WithRawAgentArgs(`["--model","opus"]`),
 		apitest.WithExtraEnv(map[string]string{"RESUME_FIXTURE": "on"}),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{
 			SessionID: r.HistorySessionID, JSONLPath: r.HistoryJSONLPath, Life: r.Life}),
@@ -380,7 +380,7 @@ func rstTrail(t *testing.T, id string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, l := range readAPITrailLines(t) {
-		if ev, _ := l["event"].(string); strings.HasPrefix(ev, "ad.resume.") && l["claude_instance_id"] == id {
+		if ev, _ := l["event"].(string); strings.HasPrefix(ev, "ad.resume.") && l["instance_id"] == id {
 			out = append(out, l)
 		}
 	}
@@ -409,7 +409,7 @@ func assertResumeEvents(t *testing.T, mark int, id string, want ...string) {
 	got := []string{}
 	for _, l := range readAPITrailLines(t)[mark:] {
 		ev, _ := l["event"].(string)
-		if l["claude_instance_id"] == id && (strings.HasPrefix(ev, "ad.resume.") || ev == "ad.launch.name_held") {
+		if l["instance_id"] == id && (strings.HasPrefix(ev, "ad.resume.") || ev == "ad.launch.name_held") {
 			got = append(got, ev)
 		}
 	}
@@ -445,7 +445,7 @@ func pendTrail(t *testing.T, event, id string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, l := range readAPITrailLines(t) {
-		if l["event"] == event && l["claude_instance_id"] == id {
+		if l["event"] == event && l["instance_id"] == id {
 			out = append(out, l)
 		}
 	}

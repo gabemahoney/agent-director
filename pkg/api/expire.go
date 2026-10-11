@@ -290,7 +290,7 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 	}
 	candidates = slices.Clone(candidates)
 	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].ClaudeInstanceID < candidates[j].ClaudeInstanceID
+		return candidates[i].InstanceID < candidates[j].InstanceID
 	})
 
 	r := &expireRun{s: s, pc: pc, sw: tmux.NewSweep(t, pc, now, sweepBudget), lg: lg}
@@ -300,9 +300,9 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 		row := r.judgeRow(cand)
 		switch {
 		case row.deleted:
-			deleted = append(deleted, cand.ClaudeInstanceID)
+			deleted = append(deleted, cand.InstanceID)
 		case row.reason != "":
-			kept = append(kept, cand.ClaudeInstanceID)
+			kept = append(kept, cand.InstanceID)
 		}
 		r.emitRow(cand, row)
 	}
@@ -381,7 +381,7 @@ func (r *expireRun) lookupRow(cand ExpireCandidate) expireRow {
 	)
 	row.socket, row.res, ok = r.sockets.forRow(cand.Identity.Socket)
 	if ok {
-		launch := rowLaunch(cand.ClaudeInstanceID, cand.Identity, r.s.StoreID(), row.socket)
+		launch := rowLaunch(cand.InstanceID, cand.Identity, r.s.StoreID(), row.socket)
 		row.res = r.sw.Lookup(launch, cand.TmuxSessionName)
 	}
 	if row.res.Skipped {
@@ -427,11 +427,11 @@ func expireKeptReason(res tmux.Result) string {
 // a store error is logged on lg with the instance id and the error only, and
 // keeps it store_error.
 func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
-	res, err := r.s.DeleteFinishedIfSameLife(cand.ClaudeInstanceID, cand.Snapshot)
+	res, err := r.s.DeleteFinishedIfSameLife(cand.InstanceID, cand.Snapshot)
 	switch {
 	case err != nil:
 		if r.lg != nil {
-			r.lg.Printf("expire: DeleteFinishedIfSameLife(%s): %v (continuing)", cand.ClaudeInstanceID, err)
+			r.lg.Printf("expire: DeleteFinishedIfSameLife(%s): %v (continuing)", cand.InstanceID, err)
 		}
 		row.reason = keptStoreError
 	case res == CondApplied:

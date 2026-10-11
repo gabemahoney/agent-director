@@ -112,7 +112,7 @@ export interface VerbSummary {
 }
 /**
  * A permission request's delivery state (b.146 rule 15):
- * - `"delivered"`: the request's relay hook acked a verdict before writing it to Claude Code.
+ * - `"delivered"`: the request's relay hook acked a verdict before writing it to the agent.
  * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
  * - `"fallen_back"`: no ack, and the relay hook is gone (or cannot be checked and `confirm_by`
  *   has passed): no answer from the relay reached the agent. While `pane_answer` is `"none"` or
@@ -128,14 +128,14 @@ export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
  * - `"sent"`: a pane answer's key was sent (`decision_reason` `"pane"`).
  * - `"outside"`: a caller recorded it answered outside agent-director (`recordPaneAnswer`,
  *   `decision_reason` `"pane_outside"`).
- * - `"tool_ran"`: Claude Code reported its tool ran (`decision` `"allow"`, `decision_reason`
+ * - `"tool_ran"`: the agent's hooks reported its tool ran (`decision` `"allow"`, `decision_reason`
  *   `"tool_ran"`).
  * `"sent"`, `"outside"` and `"tool_ran"` close the request; its `delivery` stays `"fallen_back"`.
  */
 export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
 /**
  * Mirrors pkg/api/relay_delivery.go::RequestDelivery — a permission request's delivery facts
- * (b.146 rule 15), with whether Claude Code proved its dialog gone (b.146 step 2c), on every
+ * (b.146 rule 15), with whether the agent's hooks proved its dialog gone (b.146 step 2c), on every
  * `get` / `list` permission request and `get`'s `unproven_requests`, on `getPermission` and on
  * `decide`'s result. Derived on every read. A recorded `decision` is not the outcome:
  * `delivery` is.
@@ -160,7 +160,7 @@ export interface RequestDelivery {
     attempted_decision: "allow" | "deny" | null;
     /** When that refused decide ran; null when none. */
     attempted_at: string | null;
-    /** The request's tool_use_id from Claude Code's hook input; null when none was given. */
+    /** The request's tool_use_id from the agent's hook input; null when none was given. */
     tool_use_id: string | null;
     /** How the request was answered at the pane; see {@link PaneAnswer}. */
     pane_answer: PaneAnswer;
@@ -170,7 +170,7 @@ export interface RequestDelivery {
      */
     pane_as: "allow" | "deny" | "unknown" | null;
     /**
-     * When Claude Code proved the request's permission dialog gone (b.146 step 2c); null until
+     * When the agent's hooks proved the request's permission dialog gone (b.146 step 2c); null until
      * then. agent-director's own records (`delivered`, a pane answer, `recordPaneAnswer`) are not
      * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`,
      * and a `pause`, reject with `ErrDialogMaybeOpen`.
@@ -188,7 +188,7 @@ export interface RequestDelivery {
     unproven_since: string | null;
 }
 /**
- * How Claude Code proved a permission request's dialog gone (b.146 step 2c):
+ * How the agent's hooks proved a permission request's dialog gone (b.146 step 2c):
  * - `"tool_ran"`: a PostToolUse or PostToolUseFailure carried its `tool_use_id`.
  * - `"turn_end"`: the turn of the agent that asked ended after it was written; the main agent's
  *   Stop or idle-prompt Notification proves a request with no agent_id (the main agent's, or one
@@ -208,7 +208,7 @@ export interface PermissionRequestInfo extends RequestDelivery {
     request_id: number;
     /** UUIDv4 token minted by runRelay for this request. Pass to the decide verb to target a specific row. */
     request_token: string;
-    /** Claude Code tool that triggered the permission request (e.g. "Bash"). */
+    /** Agent tool that triggered the permission request (e.g. "Bash"). */
     tool_name: string;
     /** Raw JSON string of the tool input as stored in the DB. NOT a nested object. */
     tool_input: string;
@@ -222,13 +222,13 @@ export interface PermissionRequestInfo extends RequestDelivery {
 /** Mirrors pkg/api/list.go::ListRow — one Spawn row returned by the list verb. */
 export interface ListRow {
     /** Stable Spawn id. */
-    claude_instance_id: string;
+    instance_id: string;
     /** Parent Spawn id (omitted when launched from a plain shell). */
     parent_id?: string;
     /**
      * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
      * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
-     * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
+     * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
      * prompt. A resumed pending row keeps its session id and history.
      *
      * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
@@ -280,7 +280,7 @@ export interface ListRow {
      * pending row noted `provenance_conflict`, which keeps it; omitted/null
      * while the row has no note. Or `unreported`, on a pending row past the
      * pending grace period: its agent is alive, but no hook has reported since
-     * its launch, so it may sit at a Claude Code startup screen or idle at its
+     * its launch, so it may sit at an agent startup screen or idle at its
      * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
      * with `allow_pending`; only a caller that looked should type. A later
      * sweep that finds the agent alive keeps the note; the agent's next hook
@@ -299,12 +299,12 @@ export interface ListRow {
 }
 /** Mirrors pkg/api.SpawnParams (json tags) — alias of internal/spawn.SpawnParams. */
 export interface SpawnParams {
-    /** Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required. */
+    /** Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required. */
     cwd: string;
     /** Named template under ~/.agent-director/templates/. */
     template?: string;
     /** Explicit instance id (UUID4 minted when absent). */
-    claude_instance_id?: string;
+    instance_id?: string;
     /** KEY=VALUE label pairs. */
     label?: string[];
     /** permissions.allow entries. */
@@ -327,8 +327,8 @@ export interface SpawnParams {
      * nothing is launched.
      */
     extra_env?: Record<string, string>;
-    /** Pass-through argv to `claude` after the supervisor's own flags. */
-    claude_args?: string[];
+    /** Pass-through argv to the agent's program after the supervisor's own flags. */
+    agent_args?: string[];
     /**
      * Skip pre-writing the folder-trust entry for `cwd` (into
      * `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets `CLAUDE_CONFIG_DIR`,
@@ -340,20 +340,20 @@ export interface SpawnParams {
     /** Explicit tmux session name. Auto-derived when absent. */
     tmux_session_name?: string;
     /**
-     * Reuse an explicit `claude_instance_id` whose row is `ended` or `missing`;
+     * Reuse an explicit `instance_id` whose row is `ended` or `missing`;
      * a live row, `pending` included, still collides. No effect without an
-     * explicit `claude_instance_id`; applies to this call only. Default false:
+     * explicit `instance_id`; applies to this call only. Default false:
      * any existing row with the id collides with `ErrInstanceIdCollision`.
      */
     reuse_finished?: boolean;
 }
 /**
  * Mirrors pkg/api/spawn.go::SpawnResult. The row is `pending` from its insert until
- * the agent reports in (Claude Code's SessionStart), then `waiting`.
+ * the agent reports in (its SessionStart hook), then `waiting`.
  */
 export interface SpawnResult {
     /** The id the new Spawn is tracked under. */
-    claude_instance_id: string;
+    instance_id: string;
     /**
      * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was
      * written. `"skipped"`: pre-trust was off for this launch because the caller passed
@@ -365,19 +365,19 @@ export interface SpawnResult {
      */
     pre_trust: "ok" | "skipped" | "failed";
 }
-/** Mirrors the `status` verb's `claude_instance_id` param (pkg/api.Client.Status arg). */
+/** Mirrors the `status` verb's `instance_id` param (pkg/api.Client.Status arg). */
 export interface StatusParams {
     /** Id of the Spawn to inspect. */
-    claude_instance_id: string;
+    instance_id: string;
 }
 /** Mirrors pkg/api/status.go::StatusResult */
 export interface StatusResult {
     /**
      * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
      * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
-     * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
+     * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
      * prompt. A resumed pending row keeps its session id and history; a caller tells it
-     * from a fresh one by its non-empty `claude_session_id`, shown by `get`.
+     * from a fresh one by its non-empty `session_id`, shown by `get`.
      *
      * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
      * off), this is the settled state: a state a hook wrote shows only once it has held for
@@ -394,21 +394,21 @@ export interface StatusResult {
      */
     launch_started_at?: string | null;
 }
-/** Mirrors the `get` verb's `claude_instance_id` param (pkg/api.Client.Get arg). */
+/** Mirrors the `get` verb's `instance_id` param (pkg/api.Client.Get arg). */
 export interface GetParams {
     /** Id of the Spawn to fetch. */
-    claude_instance_id: string;
+    instance_id: string;
 }
 /** Mirrors pkg/api/get.go::SpawnRow */
 export interface GetResult {
-    claude_instance_id: string;
+    instance_id: string;
     parent_id: string;
     /**
      * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
      * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
-     * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
+     * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
      * prompt. A resumed pending row keeps its session id and history; a non-empty
-     * `claude_session_id` tells it from a fresh one.
+     * `session_id` tells it from a fresh one.
      *
      * With `[state] settle_ms` set in the CLI's config.toml (whole milliseconds; 0 or unset is
      * off), this is the settled state: a state a hook wrote shows only once it has held for
@@ -422,10 +422,10 @@ export interface GetResult {
     tmux_session_name: string;
     /** The tmux socket the row's launch uses; omitted for a row from before this release. */
     tmux_socket?: string | null;
-    claude_args: string[];
+    agent_args: string[];
     relay_mode: string;
     jsonl_path: string;
-    claude_session_id: string;
+    session_id: string;
     labels: Record<string, string>;
     /** Row insert time (RFC3339). */
     started_at: string;
@@ -460,7 +460,7 @@ export interface GetResult {
      * pending row noted `provenance_conflict`, which keeps it; omitted/null
      * while the row has no note. Or `unreported`, on a pending row past the
      * pending grace period: its agent is alive, but no hook has reported since
-     * its launch, so it may sit at a Claude Code startup screen or idle at its
+     * its launch, so it may sit at an agent startup screen or idle at its
      * prompt. The row stays pending. To act on it: `readPane`, then `sendKeys`
      * with `allow_pending`; only a caller that looked should type. A later
      * sweep that finds the agent alive keeps the note; the agent's next hook
@@ -479,7 +479,7 @@ export interface GetResult {
      */
     permission_requests: PermissionRequestInfo[];
     /**
-     * Every permission request of the row that Claude Code has not proven gone (`proven_gone_at`
+     * Every permission request of the row that the agent's hooks have not proven gone (`proven_gone_at`
      * null), oldest first, in any live state but ended and missing (`[]` on those). Unlike
      * `permission_requests` it also lists requests agent-director's records read closed
      * (delivered, answered at the pane, or recorded answered outside it), each with
@@ -497,7 +497,7 @@ export interface GetResult {
  */
 export interface SendKeysParams {
     /** Id of the Spawn whose pane will receive the keys. */
-    claude_instance_id: string;
+    instance_id: string;
     /**
      * Text to deliver to the pane on a plain call. CR bytes stripped; LF preserved; Enter
      * appended unless `no_enter`. Empty or omitted text sends Enter only: it submits what is
@@ -544,7 +544,7 @@ export interface SendKeysResult {
 /** Mirrors pkg/api.ReadPaneParams (json tags). */
 export interface ReadPaneParams {
     /** Id of the Spawn whose pane will be captured. */
-    claude_instance_id: string;
+    instance_id: string;
     /** Trailing lines to return. Defaults to 25 when 0/omitted. A negative value is refused (ErrInvalidFlags). */
     n_lines?: number;
     /** When true return raw bytes (ANSI preserved); when false strip ANSI (default). */
@@ -570,7 +570,7 @@ export interface ReadPaneResult {
 /** Mirrors pkg/api.KillParams. */
 export interface KillParams {
     /** Id of the Spawn to kill. */
-    claude_instance_id: string;
+    instance_id: string;
 }
 /** Mirrors pkg/api/kill.go::KillResult (json tags). */
 export interface KillResult {
@@ -580,12 +580,12 @@ export interface KillResult {
 /** Mirrors pkg/api.DecideParams (json tags). */
 export interface DecideParams {
     /** Id of the Spawn whose open permission request is being decided. */
-    claude_instance_id: string;
+    instance_id: string;
     /** UUIDv4 token identifying the specific permission request to decide. Required by the Go backend (ErrMissingRequestToken returned when absent); optional here for backward-compatible call shape. */
     request_token?: string;
     /** Orchestrator verdict. */
     decision: "allow" | "deny";
-    /** Optional free-text message surfaced to Claude on deny. */
+    /** Optional free-text message surfaced to the agent on deny. */
     reason?: string;
     /**
      * Optional bound on the whole call, in milliseconds from its start (no default). Reached
@@ -619,7 +619,7 @@ export interface GetPermissionResult extends RequestDelivery {
     request_token: string;
     /** Autoincrement primary key of the permission_requests row. */
     request_id: number;
-    /** Claude Code tool that triggered the permission request (e.g. "Bash", "Write"). */
+    /** Agent tool that triggered the permission request (e.g. "Bash", "Write"). */
     tool_name: string;
     /** Raw JSON string of the tool's input as stored in the DB. NOT a nested object — callers parse it themselves. */
     tool_input: string;
@@ -694,7 +694,7 @@ export interface RelayFallenBackDetails extends PermissionRequestInfo {
 /**
  * Mirrors pkg/api.DialogMaybeOpenDetails — ErrDialogMaybeOpen's errDetails (from a plain
  * sendKeys without `expect_pane_sha256`, and from pause): the oldest request of the Spawn that
- * Claude Code has not proven gone (its fields and delivery facts: how agent-director's records
+ * the agent's hooks have not proven gone (its fields and delivery facts: how agent-director's records
  * say it closed, `delivery` and `pane_answer`, and since when, `unproven_since`), the Spawn's
  * state, and the Spawn's other requests not proven gone, oldest first.
  */
@@ -745,16 +745,16 @@ export interface PaneChangedDetails {
 /** Mirrors pkg/api.ResumeParams (json tags). */
 export interface ResumeParams {
     /** Id of the finished (ended or missing) row to resume. */
-    claude_instance_id: string;
+    instance_id: string;
 }
 /**
  * Mirrors pkg/api/resume.go::ResumeResult. Resume moved the row to `pending`, keeping
- * its session id and history, until the agent reports in (Claude Code's SessionStart),
+ * its session id and history, until the agent reports in (its SessionStart hook),
  * then `waiting`.
  */
 export interface ResumeResult {
     /** Same id that was passed in (resume preserves it). */
-    claude_instance_id: string;
+    instance_id: string;
     /**
      * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was
      * written. `"skipped"`: pre-trust was off for this launch because the row records that
@@ -860,8 +860,8 @@ export interface MakeTemplateParams {
     cwd?: string;
     /** Default relay mode: "on" | "off" | "" (inherit). */
     relay_mode?: string;
-    /** Default claude argv. Per-call `claude_args` replaces wholesale. */
-    claude_args?: string[];
+    /** Default agent argv. Per-call `agent_args` replaces wholesale. */
+    agent_args?: string[];
     /**
      * Env-var overrides to bake in. A key spawn would refuse is refused here with
      * `ErrReservedEnvKey` and nothing is written: `AGENT_DIRECTOR_*` keys, `HOME`
@@ -915,7 +915,7 @@ export interface ListResult {
 /** Mirrors pkg/api.PauseParams (json tags). */
 export interface PauseParams {
     /** Id of the Spawn to pause gracefully. */
-    claude_instance_id: string;
+    instance_id: string;
 }
 /** Mirrors pkg/api/pause.go::PauseResult (empty; reserved for future fields). */
 export interface PauseResult {

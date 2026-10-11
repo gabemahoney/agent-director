@@ -117,7 +117,7 @@ func TestSubagentLifecycleHookIgnored(t *testing.T) {
 			line := oneIgnored(t, before, id)
 			assertKeySet(t, "ad.hook.ignored", line, gateIgnoredKeys)
 			want := map[string]any{
-				"claude_instance_id": id, "hook_event": tc.event, "reason": store.HookReasonSubagentEvent,
+				"instance_id": id, "hook_event": tc.event, "reason": store.HookReasonSubagentEvent,
 				"parent_pid": float64(parent.PID), "parent_command": "claude", "hook_session_id": sessionID,
 				"row_session_id": tc.rowSession, "row_pane_pid": float64(ssgFreshPane.PanePID),
 				"source": "ad_hook",
@@ -169,8 +169,8 @@ func TestSubagentOrdinaryHookApplies(t *testing.T) {
 			if row.State != tc.wantState {
 				t.Errorf("state = %q; want %q (the hook applies)", row.State, tc.wantState)
 			}
-			if row.ClaudeSessionID != tc.wantSession || row.JSONLPath != tc.wantPath {
-				t.Errorf("session/path = %q/%q; want %q/%q", row.ClaudeSessionID, row.JSONLPath, tc.wantSession, tc.wantPath)
+			if row.SessionID != tc.wantSession || row.JSONLPath != tc.wantPath {
+				t.Errorf("session/path = %q/%q; want %q/%q", row.SessionID, row.JSONLPath, tc.wantSession, tc.wantPath)
 			}
 			assertNoIgnored(t, before, id)
 			assertStr(t, oneFired(t, before, id), "upsert_outcome", string(store.UpsertUpdated))

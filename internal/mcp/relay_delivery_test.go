@@ -123,7 +123,7 @@ func TestMCPPaneAnswerKeySent(t *testing.T) {
 	storefix.InjectWriteFailure(t, e.storePath, storefix.WriteFailPermissionDecision, id)
 	sum := sha256.Sum256([]byte(pane))
 
-	data := toolErrorData(t, callTool(t, e.d, "send-keys", paramJSON(t, map[string]any{"claude_instance_id": id,
+	data := toolErrorData(t, callTool(t, e.d, "send-keys", paramJSON(t, map[string]any{"instance_id": id,
 		"request_token": req.RequestToken, "as": "allow", "key": "1", "expect_pane_sha256": hex.EncodeToString(sum[:])})))
 
 	want := map[string]any{"key_sent": true, "request_token": req.RequestToken}
@@ -163,7 +163,7 @@ func TestMCPDialogMaybeOpen(t *testing.T) {
 	callToolText(t, e.d, "record-pane-answer", paramJSON(t, map[string]any{"request_token": req.RequestToken, "as": "unknown",
 		"expect_pane_sha256": hash}))
 
-	data := toolErrorData(t, callTool(t, e.d, "send-keys", paramJSON(t, map[string]any{"claude_instance_id": id, "text": "hi"})))
+	data := toolErrorData(t, callTool(t, e.d, "send-keys", paramJSON(t, map[string]any{"instance_id": id, "text": "hi"})))
 
 	details, _ := data.ErrDetails.(map[string]any)
 	if data.ErrName != "ErrDialogMaybeOpen" || details["request_token"] != req.RequestToken || details["pane_answer"] != "outside" ||
@@ -180,7 +180,7 @@ func TestMCPDialogMaybeOpen(t *testing.T) {
 	var row struct {
 		Unproven []map[string]json.RawMessage `json:"unproven_requests"`
 	}
-	got := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"claude_instance_id": id}))
+	got := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))
 	if err := json.Unmarshal(got["unproven_requests"], &row.Unproven); err != nil || len(row.Unproven) != 1 ||
 		string(row.Unproven[0]["request_token"]) != `"`+req.RequestToken+`"` {
 		t.Fatalf("get unproven_requests = %s (%v); want the one request", got["unproven_requests"], err)
@@ -191,7 +191,7 @@ func TestMCPDialogMaybeOpen(t *testing.T) {
 		t.Errorf("get-permission = unproven_since %s, proven_gone_at %s; want set, null", perm["unproven_since"], perm["proven_gone_at"])
 	}
 
-	callToolText(t, e.d, "send-keys", paramJSON(t, map[string]any{"claude_instance_id": id, "text": "hi", "expect_pane_sha256": hash}))
+	callToolText(t, e.d, "send-keys", paramJSON(t, map[string]any{"instance_id": id, "text": "hi", "expect_pane_sha256": hash}))
 	if sent := e.rec.SocketCallsOf(tmux.CallSendText); len(sent) != 1 || sent[0].Text != "hi" {
 		t.Errorf("text calls with the pane's hash = %+v; want hi typed", sent)
 	}
@@ -217,7 +217,7 @@ func TestMCPRelayDeliveryFacts(t *testing.T) {
 	tok := e.seedRelayRequest(t, id)
 
 	assertMCPDeliveryKeys(t, "get-permission", callToolText(t, e.d, "get-permission", paramJSON(t, map[string]any{"request_token": tok})))
-	got := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"claude_instance_id": id}))
+	got := callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))
 	body, _ := json.Marshal(got)
 	assertMCPDeliveryKeys(t, "get's request", onlyMCPRequest(t, "get", body))
 	var list struct {
@@ -228,7 +228,7 @@ func TestMCPRelayDeliveryFacts(t *testing.T) {
 		t.Fatalf("list spawns = %s (%v); want the one row", listed["spawns"], err)
 	}
 	assertMCPDeliveryKeys(t, "list's request", onlyMCPRequest(t, "list", list.Spawns[0]))
-	decided := callToolText(t, e.d, "decide", paramJSON(t, map[string]any{"claude_instance_id": id, "request_token": tok,
+	decided := callToolText(t, e.d, "decide", paramJSON(t, map[string]any{"instance_id": id, "request_token": tok,
 		"decision": "allow", "max_wait_ms": 2000}))
 	assertMCPDeliveryKeys(t, "decide", decided)
 	if string(decided["delivery"]) != `"not_confirmed"` {
@@ -237,13 +237,13 @@ func TestMCPRelayDeliveryFacts(t *testing.T) {
 
 	const busyID = "mcp-relay-busy"
 	busyTok := e.seedRelayRequest(t, busyID)
-	if data := toolErrorData(t, callTool(t, e.d, "decide", paramJSON(t, map[string]any{"claude_instance_id": busyID,
+	if data := toolErrorData(t, callTool(t, e.d, "decide", paramJSON(t, map[string]any{"instance_id": busyID,
 		"request_token": busyTok, "decision": "allow", "max_wait_ms": -1}))); data.ErrName != "ErrInvalidFlags" {
 		t.Errorf("decide max_wait_ms -1 err_name = %q; want ErrInvalidFlags", data.ErrName)
 	}
 	release := apitest.HoldWriteLock(t, e.storePath, time.Minute)
 	start := time.Now()
-	data := toolErrorData(t, callTool(t, e.d, "decide", paramJSON(t, map[string]any{"claude_instance_id": busyID,
+	data := toolErrorData(t, callTool(t, e.d, "decide", paramJSON(t, map[string]any{"instance_id": busyID,
 		"request_token": busyTok, "decision": "allow", "max_wait_ms": 200})))
 	took := time.Since(start)
 	release()

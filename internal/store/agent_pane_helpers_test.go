@@ -37,7 +37,7 @@ func insertAgentRow(s *Store, sp Spawn) error {
 	if err := s.InsertPending(sp); err != nil {
 		return err
 	}
-	return recordAgentPane(s, sp.ClaudeInstanceID)
+	return recordAgentPane(s, sp.InstanceID)
 }
 
 // recordAgentPane records the test pane on id's pending row at the row's

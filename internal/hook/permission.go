@@ -129,7 +129,7 @@ type RelayStore interface {
 // "deny", "timeout".
 func emitResume(ctx context.Context, instanceID, requestToken, verdict string, createdAt time.Time) {
 	_ = trail.Emit(ctx, "ad.resume.observed", map[string]any{
-		"claude_instance_id":       instanceID,
+		"instance_id":              instanceID,
 		"request_token":            requestToken,
 		"verdict":                  verdict,
 		"elapsed_ms_from_row_open": time.Since(createdAt).Milliseconds(),
@@ -293,13 +293,13 @@ func runRelay(ctx context.Context, stdout io.Writer, hs HookStore, hc HandleConf
 	// AD process and the sub-verb wrapper is unnecessary overhead.
 	// Fail-open per SRD §3.2: emit error must not block the relay attempt.
 	_ = trail.Emit(ctx, "ad.relay_attempt.completed", map[string]any{
-		"claude_instance_id": instanceID,
-		"request_token":      requestToken,
-		"target_endpoint":    "db_poll",
-		"outcome":            "db_relay_active",
-		"bytes_sent":         0,
-		"bytes_received":     0,
-		"source":             "relay_hook",
+		"instance_id":     instanceID,
+		"request_token":   requestToken,
+		"target_endpoint": "db_poll",
+		"outcome":         "db_relay_active",
+		"bytes_sent":      0,
+		"bytes_received":  0,
+		"source":          "relay_hook",
 	})
 
 	r := &relayRun{ctx: ctx, stdout: stdout, st: st, hc: hc, clock: clock, logger: logger,

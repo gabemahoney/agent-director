@@ -46,7 +46,7 @@ func kcKill(t *testing.T, e *killEnv, r killRow, pc api.ProcChecker) kcRun {
 	e.sleep = func(d time.Duration) { run.sleeps = append(run.sleeps, d); prev(d) }
 	start := e.clock.Now()
 	run.res, run.err = api.Kill(e.store, e.rec, pc, e.cfg.EffectiveStartingSession(), e.cfg.EffectiveStoppingWindow(),
-		e.cfg.EffectiveKillExitWait(), e.clock.Now, e.sleep, api.KillParams{ClaudeInstanceID: r.ID})
+		e.cfg.EffectiveKillExitWait(), e.clock.Now, e.sleep, api.KillParams{InstanceID: r.ID})
 	run.elapsed = e.clock.Now().Sub(start)
 	e.assertRowUnchanged(t, r.ID, run.before)
 	return run

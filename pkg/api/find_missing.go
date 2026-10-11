@@ -405,7 +405,7 @@ func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc 
 	}
 	identities = slices.Clone(identities)
 	sort.SliceStable(identities, func(i, j int) bool {
-		return identities[i].ClaudeInstanceID < identities[j].ClaudeInstanceID
+		return identities[i].InstanceID < identities[j].InstanceID
 	})
 	sweepNow := now()
 	r := &findMissingRun{s: s, t: t, pc: pc, sw: tmux.NewSweep(t, pc, now, sweepBudget), lg: lg}
@@ -426,9 +426,9 @@ func FindMissing(ctx context.Context, s FindMissingStore, t FindMissingTmux, pc 
 		switch {
 		case !row.write.Listed:
 		case row.marked:
-			missing = append(missing, it.ClaudeInstanceID)
+			missing = append(missing, it.InstanceID)
 		default:
-			unverified = append(unverified, it.ClaudeInstanceID)
+			unverified = append(unverified, it.InstanceID)
 		}
 		r.emitDisagree(it, row)
 	}
@@ -546,7 +546,7 @@ func (r *findMissingRun) aliveRow(row findMissingRow, it LiveSpawnIdentity, guar
 // unreportedRow completes row with the guarded unreported note of a live
 // pending row (writeUnreportedNote), guarded on guard.
 func (r *findMissingRun) unreportedRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
-	row.write = writeUnreportedNote(r.s, it.ClaudeInstanceID, guard, it.LivenessNote, r.lg)
+	row.write = writeUnreportedNote(r.s, it.InstanceID, guard, it.LivenessNote, r.lg)
 	row.action = findMissingActionUnreported
 	return row
 }
@@ -554,7 +554,7 @@ func (r *findMissingRun) unreportedRow(row findMissingRow, it LiveSpawnIdentity,
 // clearRow completes row for a row whose agent process was found alive: the
 // guarded clear of a note it carries (clearLivenessNote), guarded on guard.
 func (r *findMissingRun) clearRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
-	row.write = clearLivenessNote(r.s, it.ClaudeInstanceID, guard, it.LivenessNote, r.lg)
+	row.write = clearLivenessNote(r.s, it.InstanceID, guard, it.LivenessNote, r.lg)
 	row.action = findMissingActionLeftLive
 	return row
 }
@@ -562,7 +562,7 @@ func (r *findMissingRun) clearRow(row findMissingRow, it LiveSpawnIdentity, guar
 // markRow completes row with the guarded mark (markMissingSameLife), guarded
 // on guard, with tick reason reason and the tick's extra fields.
 func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, reason string, extra map[string]any) findMissingRow {
-	row.write = markMissingSameLife(r.s, it.ClaudeInstanceID, guard, reason, extra, r.lg)
+	row.write = markMissingSameLife(r.s, it.InstanceID, guard, reason, extra, r.lg)
 	row.marked = true
 	row.action = findMissingActionMarked
 	return row
@@ -571,7 +571,7 @@ func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard
 // noteRow completes row with the note write (writeLivenessNote), guarded on
 // guard: the row is left live and unverified with note.
 func (r *findMissingRun) noteRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, note string) findMissingRow {
-	row.write = writeLivenessNote(r.s, it.ClaudeInstanceID, guard, it.LivenessNote, note, r.lg)
+	row.write = writeLivenessNote(r.s, it.InstanceID, guard, it.LivenessNote, note, r.lg)
 	row.action = findMissingActionUnverified
 	return row
 }
@@ -618,7 +618,7 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 		emitProvenanceDisagree(provenanceDisagree{
 			Verb:               "find-missing",
 			Source:             findMissingTickSource,
-			InstanceID:         it.ClaudeInstanceID,
+			InstanceID:         it.InstanceID,
 			Socket:             socket,
 			SessionName:        it.TmuxSessionName,
 			SessionID:          from.Session.ID,
@@ -653,9 +653,9 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 			cerr error
 		)
 		if spawn.ConfigDirUsable(pt.ConfigDir) {
-			path, cerr = spawn.JsonlPathIn(pt.ConfigDir, pt.CWD, pt.ClaudeSessionID)
+			path, cerr = spawn.JsonlPathIn(pt.ConfigDir, pt.CWD, pt.SessionID)
 		} else {
-			path, cerr = spawn.JsonlPath(pt.CWD, pt.ClaudeSessionID)
+			path, cerr = spawn.JsonlPath(pt.CWD, pt.SessionID)
 		}
 		if cerr != nil {
 			continue
@@ -664,8 +664,8 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 			// Still not written — leave the row provisional.
 			continue
 		}
-		if _, herr := s.HealJsonlPath(pt.ClaudeInstanceID, pt.ClaudeSessionID, path); herr != nil && lg != nil {
-			lg.Printf("find-missing: HealJsonlPath(%s): %v (continuing)", pt.ClaudeInstanceID, herr)
+		if _, herr := s.HealJsonlPath(pt.InstanceID, pt.SessionID, path); herr != nil && lg != nil {
+			lg.Printf("find-missing: HealJsonlPath(%s): %v (continuing)", pt.InstanceID, herr)
 		}
 	}
 }

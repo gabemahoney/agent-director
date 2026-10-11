@@ -164,7 +164,7 @@ func hookIgnoredAfter(t *testing.T, before int, id string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, row := range readTrailLines(t, trailFile())[before:] {
-		if row["event"] == "ad.hook.ignored" && row["claude_instance_id"] == id {
+		if row["event"] == "ad.hook.ignored" && row["instance_id"] == id {
 			out = append(out, row)
 		}
 	}

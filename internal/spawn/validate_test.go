@@ -35,9 +35,9 @@ func TestValidateOrder(t *testing.T) {
 		{"relative cwd is not absolute", SpawnParams{CWD: "./relative"}, ErrCwdNotAPath, ""},
 		{"absolute cwd that does not exist", SpawnParams{CWD: "/this/does/not/exist/anywhere"}, ErrCwdNotFound, ""},
 		{"cwd is a regular file", SpawnParams{CWD: file}, ErrCwdNotADirectory, ""},
-		{"invalid relay_mode after valid cwd", SpawnParams{CWD: cwdGood, RelayMode: "bogus", ClaudeArgs: []string{"--print"}},
+		{"invalid relay_mode after valid cwd", SpawnParams{CWD: cwdGood, RelayMode: "bogus", AgentArgs: []string{"--print"}},
 			ErrRelayModeInvalid, ""},
-		{"denied flag outranks reserved env key", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{"--print"},
+		{"denied flag outranks reserved env key", SpawnParams{CWD: cwdGood, AgentArgs: []string{"--print"},
 			ExtraEnv: map[string]string{"AGENT_DIRECTOR_FOO": "bar"}}, ErrSpawnDeniedFlag, ""},
 		{"reserved env key outranks the session name", SpawnParams{CWD: cwdGood, ExtraEnv: map[string]string{"AGENT_DIRECTOR_FOO": "bar"},
 			TmuxSessionName: "bad:name", TmuxSessionNameSupplied: true}, ErrReservedEnvKey, `ErrReservedEnvKey: "AGENT_DIRECTOR_FOO"`},
@@ -57,18 +57,18 @@ func TestValidateOrder(t *testing.T) {
 			ExtraEnv: map[string]string{"": "x", "HOME": "/x"}}, ErrReservedEnvKey, `"HOME" ` + setsHome},
 		{"AGENT_DIRECTOR_ outranks a smaller malformed key (b.vpb)", SpawnParams{CWD: cwdGood,
 			ExtraEnv: map[string]string{"A=B": "", "AGENT_DIRECTOR_FOO": "bar"}}, ErrReservedEnvKey, `ErrReservedEnvKey: "AGENT_DIRECTOR_FOO"`},
-		{"denied flag outranks a malformed key (b.vpb)", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{"--print"},
+		{"denied flag outranks a malformed key (b.vpb)", SpawnParams{CWD: cwdGood, AgentArgs: []string{"--print"},
 			ExtraEnv: map[string]string{"": "x"}}, ErrSpawnDeniedFlag, ""},
 		{"malformed key outranks the session name (b.vpb)", SpawnParams{CWD: cwdGood, ExtraEnv: map[string]string{"A=B": ""},
 			TmuxSessionName: "bad:name", TmuxSessionNameSupplied: true}, ErrReservedEnvKey, `"A=B" ` + malformed},
-		{"--setting-sources", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{"--setting-sources", "project,local"}}, nil, ""},
-		{"--setting-sources=", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{"--setting-sources=project,local"}}, nil, ""},
+		{"--setting-sources", SpawnParams{CWD: cwdGood, AgentArgs: []string{"--setting-sources", "project,local"}}, nil, ""},
+		{"--setting-sources=", SpawnParams{CWD: cwdGood, AgentArgs: []string{"--setting-sources=project,local"}}, nil, ""},
 		{"happy path", SpawnParams{CWD: cwdGood}, nil, ""},
 	}
 	for _, flag := range []string{"--settings", "--resume", "--continue", "--print", "--output-format"} {
 		cases = append(cases,
-			validateCase{"denied " + flag, SpawnParams{CWD: cwdGood, ClaudeArgs: []string{flag, "value"}}, ErrSpawnDeniedFlag, ""},
-			validateCase{"denied " + flag + "=", SpawnParams{CWD: cwdGood, ClaudeArgs: []string{flag + "=value"}}, ErrSpawnDeniedFlag, ""})
+			validateCase{"denied " + flag, SpawnParams{CWD: cwdGood, AgentArgs: []string{flag, "value"}}, ErrSpawnDeniedFlag, ""},
+			validateCase{"denied " + flag + "=", SpawnParams{CWD: cwdGood, AgentArgs: []string{flag + "=value"}}, ErrSpawnDeniedFlag, ""})
 	}
 	for _, home := range []string{"/abs/home", "rel", ""} { // b.nas: HOME is reserved whatever its value
 		cases = append(cases, validateCase{fmt.Sprintf("HOME=%q is reserved", home), SpawnParams{CWD: cwdGood,
@@ -190,7 +190,7 @@ func TestValidateCanonicalizesCwd(t *testing.T) {
 			t.Errorf("Validate(%q): CWD = %q, %v; want %q", in, r.CWD, err, want)
 		}
 	}
-	r := Resolved{SpawnParams: SpawnParams{CWD: "/this/does/not/exist", ClaudeArgs: []string{"--settings={}"}}}
+	r := Resolved{SpawnParams: SpawnParams{CWD: "/this/does/not/exist", AgentArgs: []string{"--settings={}"}}}
 	if err := Validate(&r); err == nil || r.CWD != "/this/does/not/exist" {
 		t.Errorf("failed Validate: err %v, CWD %q; want an error and the CWD as given", err, r.CWD)
 	}

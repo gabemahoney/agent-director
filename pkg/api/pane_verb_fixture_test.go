@@ -184,7 +184,7 @@ const skaText = "run the tests\nthen report"
 
 // skaParams is send-keys on r with skaText.
 func skaParams(r killRow) api.SendKeysParams {
-	return api.SendKeysParams{ClaudeInstanceID: r.ID, Text: skaText}
+	return api.SendKeysParams{InstanceID: r.ID, Text: skaText}
 }
 
 // rppLines is the n_lines the shared tables read with (not the default), with ANSI on.
@@ -216,7 +216,7 @@ func readPaneVerb() paneVerb {
 	return paneVerb{name: "read-pane", verb: apitest.PaneReadPane, gone: "ErrTmuxCaptureFailed",
 		run: func(t *testing.T, e *killEnv, r killRow) (string, error) {
 			e.setPaneTexts(r.Socket)
-			res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: rppLines, ANSI: true})
+			res, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID, NLines: rppLines, ANSI: true})
 			return res.Pane, err
 		},
 		acted: func(t *testing.T, e *killEnv, r killRow, pane, out string, err error) {
@@ -718,7 +718,7 @@ func trailMark(t *testing.T) int {
 func assertNoTrailSince(t *testing.T, mark int, id string) {
 	t.Helper()
 	for _, l := range readAPITrailLines(t)[mark:] {
-		if l["claude_instance_id"] == id {
+		if l["instance_id"] == id {
 			t.Errorf("trail record %v for %s; want none", l["event"], id)
 		}
 	}
@@ -768,7 +768,7 @@ func fastPausePolls(t *testing.T) {
 }
 
 // pauseParams is pause on r.
-func pauseParams(r killRow) api.PauseParams { return api.PauseParams{ClaudeInstanceID: r.ID} }
+func pauseParams(r killRow) api.PauseParams { return api.PauseParams{InstanceID: r.ID} }
 
 // pause runs the exported api.Pause with a background context, e.store,
 // e.rec, e.pc (its server and pane checks), the relay guard judged as
@@ -796,7 +796,7 @@ func (e *killEnv) pauseClient(t *testing.T, p api.PauseParams, settings ...apite
 }
 
 // endAsAgent ends r's row as its own agent (a SessionEnd through
-// apitest.ApplyAgentHook, the row's claude_session_id; SR-22.9) and reports
+// apitest.ApplyAgentHook, the row's session_id; SR-22.9) and reports
 // whether it applied, and why not. The row must record its pane by then.
 func (e *killEnv) endAsAgent(t *testing.T, r killRow) (bool, string) {
 	t.Helper()
@@ -804,7 +804,7 @@ func (e *killEnv) endAsAgent(t *testing.T, r killRow) (bool, string) {
 	if err != nil {
 		return false, err.Error()
 	}
-	a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", row.ClaudeSessionID)
+	a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", row.SessionID)
 	return a.Applied, a.Reason
 }
 

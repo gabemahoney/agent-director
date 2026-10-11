@@ -53,9 +53,9 @@ func (w *world) reply(argv []string) (string, string, int) {
 			return "", "spawn failed", w.spawnCode
 		}
 		w.spawns++
-		return fmt.Sprintf(`{"claude_instance_id":%q,"pre_trust":%q}`, w.id(), w.preTrust), "", 0
+		return fmt.Sprintf(`{"instance_id":%q,"pre_trust":%q}`, w.id(), w.preTrust), "", 0
 	case argv[0] == "agent-director" && argv[1] == "get":
-		row := map[string]any{"claude_instance_id": w.id(), "state": w.state, "tmux_socket": w.socket, "tmux_session_name": "ad-s", "ended_at": w.endedAt}
+		row := map[string]any{"instance_id": w.id(), "state": w.state, "tmux_socket": w.socket, "tmux_session_name": "ad-s", "ended_at": w.endedAt}
 		b, _ := json.Marshal(row)
 		return string(b), "", 0
 	case strings.Contains(joined, "list-sessions -F #{session_id}\t#{@ad_owner}"):
@@ -76,10 +76,10 @@ func (w *world) reply(argv []string) (string, string, int) {
 }
 
 func TestSpawnAgent(t *testing.T) {
-	t.Run("labels, extra env and claude args", func(t *testing.T) {
+	t.Run("labels, extra env and agent args", func(t *testing.T) {
 		r := newRig(t, modeDry)
 		newWorld(r)
-		a, err := r.h.spawnAgent("rn6.idle", spawnSpec{CWD: "/w/0", ClaudeArgs: []string{"prompt", "--mcp-config", "/m.json"},
+		a, err := r.h.spawnAgent("rn6.idle", spawnSpec{CWD: "/w/0", AgentArgs: []string{"prompt", "--mcp-config", "/m.json"},
 			ExtraEnv: map[string]string{sessionEndBudgetEnv: "3000"}})
 		if err != nil || a.InstanceID != "id-1" || a.Socket != privateSocket(r.h.iso.TmuxTmpdir) {
 			t.Fatalf("agent %+v, %v", a, err)
@@ -169,7 +169,7 @@ func TestMeasureEndedToGone(t *testing.T) {
 			w := newWorld(r)
 			w.spawns, w.state, w.endedAt, w.listedFor = 1, stateEnded, tc.endedAt, 2
 			writeFile(t, filepath.Join(r.h.iso.Home, ".agent-director", "ad-trail.jsonl"),
-				`{"event":"ad.hook.ignored","claude_instance_id":"id-1","reason":"no_exec_form"}`+"\n")
+				`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"no_exec_form"}`+"\n")
 			s := sample{Case: "rn2.pause"}
 			r.h.measureEndedToGone("rn2.pause", agentRef{InstanceID: "id-1", Socket: w.socket, TmuxSessionID: "$1"}, &s, tc.triggerErr)
 			if s.Outcome != tc.outcome || !strings.Contains(s.Reason, tc.reason) || s.Polls != 3 {

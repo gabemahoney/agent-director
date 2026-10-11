@@ -53,7 +53,7 @@ type reuseRowSpec struct {
 	EndedAt     reuseEndedAt  // default endedAged
 	NoSessionID bool          // no session id or transcript; with agentNotRecorded, neither pid nor session id
 	NoPreTrust  bool          // the old life's pre-trust opt-out (no_pre_trust 1)
-	Malformed   bool          // malformed labels, claude_args and extra_env text (seeded raw)
+	Malformed   bool          // malformed labels, agent_args and extra_env text (seeded raw)
 	Bare        bool          // no parent, history or permission requests
 	Child       bool          // also a finished child row whose parent_id is the row's id
 	Opts        []apitest.SpawnOption
@@ -94,7 +94,7 @@ func (e *killEnv) seedReusable(t *testing.T, a agentState, spec reuseRowSpec) re
 	}
 	opts := []apitest.SpawnOption{apitest.WithLifeNumber(reuseLife),
 		apitest.WithLivenessUnverifiedSince(reuseUnverifiedSince), apitest.WithLivenessNote(reuseLivenessNote),
-		apitest.WithRawLabels(reuseRawLabels), apitest.WithRawClaudeArgs(reuseRawArgs)}
+		apitest.WithRawLabels(reuseRawLabels), apitest.WithRawAgentArgs(reuseRawArgs)}
 	switch spec.EndedAt {
 	case endedNull:
 		opts = append(opts, apitest.WithNoEndedAt())
@@ -122,7 +122,7 @@ func (e *killEnv) seedReusable(t *testing.T, a agentState, spec reuseRowSpec) re
 	}
 	seed := e.seedRow
 	if spec.Malformed {
-		opts = append(opts, apitest.WithRawLabels(`{"team":`), apitest.WithRawClaudeArgs(`["--model",`),
+		opts = append(opts, apitest.WithRawLabels(`{"team":`), apitest.WithRawAgentArgs(`["--model",`),
 			apitest.WithRawExtraEnv(`not an object`))
 	}
 	if spec.Malformed || spec.EndedAt == endedUnparseable {
@@ -185,8 +185,8 @@ type reuseRequest struct {
 // (setenvIfChanged: with no parent, as TestMain leaves it, nothing is set).
 func reuseParams(t *testing.T, r reuseRow, q reuseRequest) api.SpawnParams {
 	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", q.Parent)
-	p := api.SpawnParams{ClaudeInstanceID: r.ID, ReuseFinished: true, TmuxSessionName: q.Name, CWD: q.CWD,
-		ClaudeArgs: q.Args, AgentDirectorLabels: q.Labels, NoPreTrust: q.NoPreTrust, ExtraEnv: r.Trust.extraEnv()}
+	p := api.SpawnParams{InstanceID: r.ID, ReuseFinished: true, TmuxSessionName: q.Name, CWD: q.CWD,
+		AgentArgs: q.Args, AgentDirectorLabels: q.Labels, NoPreTrust: q.NoPreTrust, ExtraEnv: r.Trust.extraEnv()}
 	if p.TmuxSessionName == "" {
 		p.TmuxSessionName = r.Name
 	}
@@ -421,7 +421,7 @@ func (e *killEnv) plainSpawnHeld(t *testing.T, k holderKind, late bool) (reuseRo
 	})
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	c, _ := e.client(t)
-	_, err := c.Spawn(api.SpawnParams{ClaudeInstanceID: r.ID, TmuxSessionName: r.Name, TmuxSessionNameSupplied: true,
+	_, err := c.Spawn(api.SpawnParams{InstanceID: r.ID, TmuxSessionName: r.Name, TmuxSessionNameSupplied: true,
 		CWD: r.CWD, ExtraEnv: r.Trust.extraEnv()})
 	if len(placed) == 0 {
 		t.Fatalf("no holder of %q was placed on %s", r.Name, r.Socket)

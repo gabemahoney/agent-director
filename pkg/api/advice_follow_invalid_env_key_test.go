@@ -41,7 +41,7 @@ func TestAdviceFollow_A15_InvalidEnvKeyNameTheVariable(t *testing.T) {
 	}
 	id := "adv-envkey-" + uuid.NewString()[:8]
 	bad := "CLAUDE_CONFIG_DIR=" + cfg.dir
-	p := api.SpawnParams{CWD: cwd, ClaudeInstanceID: id, ExtraEnv: map[string]string{bad: "", "TEAM": "core"}}
+	p := api.SpawnParams{CWD: cwd, InstanceID: id, ExtraEnv: map[string]string{bad: "", "TEAM": "core"}}
 
 	_, err = env.c.Spawn(p)
 

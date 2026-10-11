@@ -29,7 +29,7 @@ test("send-keys: happy path — sends the text, then Enter, to the row's pane by
 
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      expect(await client.sendKeys({ claude_instance_id: id, text: "hello smoke" })).toEqual({});
+      expect(await client.sendKeys({ instance_id: id, text: "hello smoke" })).toEqual({});
     });
     expect(paneSends(logPath)).toEqual([
       ["send-keys", "-t", paneId, "-l", "--", "hello smoke"],
@@ -57,8 +57,8 @@ test("send-keys: error — a pane answer whose sent write fails after its key �
 
     const err = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      const { pane_sha256 } = await client.readPane({ claude_instance_id: id });
-      return (await rejection(client.sendKeys({ claude_instance_id: id, request_token: token, as: "allow", key: "1",
+      const { pane_sha256 } = await client.readPane({ instance_id: id });
+      return (await rejection(client.sendKeys({ instance_id: id, request_token: token, as: "allow", key: "1",
         expect_pane_sha256: pane_sha256 }))) as AgentDirectorError;
     });
 
@@ -79,12 +79,12 @@ test("send-keys: error — a request not proven gone → ErrDialogMaybeOpen with
 
     const got = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      const { pane_sha256 } = await client.readPane({ claude_instance_id: id });
+      const { pane_sha256 } = await client.readPane({ instance_id: id });
       await client.recordPaneAnswer({ request_token: token, as: "unknown", expect_pane_sha256: pane_sha256 });
-      const err = (await rejection(client.sendKeys({ claude_instance_id: id, text: "hi" }))) as AgentDirectorError;
-      const row = await client.get({ claude_instance_id: id });
+      const err = (await rejection(client.sendKeys({ instance_id: id, text: "hi" }))) as AgentDirectorError;
+      const row = await client.get({ instance_id: id });
       const perm = await client.getPermission({ request_token: token });
-      const passed = await client.sendKeys({ claude_instance_id: id, text: "hi", expect_pane_sha256: pane_sha256 });
+      const passed = await client.sendKeys({ instance_id: id, text: "hi", expect_pane_sha256: pane_sha256 });
       return { err, row, perm, passed };
     });
 
@@ -106,6 +106,6 @@ test("send-keys: error — a request not proven gone → ErrDialogMaybeOpen with
 test("send-keys: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.sendKeys({ claude_instance_id: "smoke-bogus-id", text: "hello" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+    await expect(client.sendKeys({ instance_id: "smoke-bogus-id", text: "hello" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
 }, 10_000);

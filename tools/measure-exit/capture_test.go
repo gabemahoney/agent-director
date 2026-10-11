@@ -67,7 +67,7 @@ func screenRig(t *testing.T, screen func(elapsed time.Duration) (string, int)) (
 			out, code := screen(r.clk.Now().Sub(clockStart))
 			return out, "capture failed", code
 		}
-		return `{"claude_instance_id":"id-1"}`, "", 0
+		return `{"instance_id":"id-1"}`, "", 0
 	}
 	sock := privateSocket(r.h.iso.TmuxTmpdir)
 	return r, &rn9Agent{h: r.h, caseID: rn9TeamSplitPaneID, a: agentRef{InstanceID: "id-1", Socket: sock, PaneID: "%1"}, answered: map[string]bool{}}
@@ -273,7 +273,7 @@ func (w *teamWorld) record(events ...string) {
 func (w *teamWorld) reply(argv []string) (string, string, int) {
 	switch {
 	case argv[0] == "agent-director" && argv[1] == "get":
-		return fmt.Sprintf(`{"claude_instance_id":"id-1","state":"waiting","tmux_socket":%q,"claude_session_id":"sess-lead"}`, w.socket), "", 0
+		return fmt.Sprintf(`{"instance_id":"id-1","state":"waiting","tmux_socket":%q,"session_id":"sess-lead"}`, w.socket), "", 0
 	case argv[0] == "agent-director" && argv[1] == "send-keys":
 		if w.accept {
 			w.record("UserPromptSubmit", "Stop")

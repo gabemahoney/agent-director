@@ -27,7 +27,7 @@ The synthesized payload contains:
 - **`permissions`** (optional) — `allow` / `deny` / `ask` arrays
   populated from the spawn's `allow` / `deny` / `ask` params
   (`--allow` / `--deny` / `--ask` on the CLI) plus the
-  `disable_askuserquestion` config flag. See `permissions.md`.
+  `disable_ask_user` config flag. See `permissions.md`.
 
 agent-director never writes hooks or permissions to disk on behalf of a
 Spawn. The synthesized JSON exists only for the lifetime of the tmux
@@ -104,7 +104,7 @@ Spawns reaches the next Spawn without any agent-director restart.
 ## Clean-slate Spawns
 
 To suppress the user (and optionally project) tiers, pass
-`--setting-sources` *through* `claude_args`:
+`--setting-sources` *through* `agent_args`:
 
 ```
 agent-director spawn --cwd /tmp -- --setting-sources project,local
@@ -148,7 +148,7 @@ recording — see `hooks.md` for the caveat and mitigations.
 
 ## Templates and per-call merge
 
-A agent-director **template** is a TOML file at
+An agent-director **template** is a TOML file at
 `~/.agent-director/templates/<name>.toml` that bakes a default
 spawn-parameter set. A spawn's `template` param (`--template <name>` on
 the CLI) layers the per-call params on top per a fixed merge contract (SRD §7.1).
@@ -165,10 +165,13 @@ synthesizes for each spawn.
 | Scalar (`cwd`, `relay_mode`) | Per-call non-empty REPLACES; per-call empty falls back to template. |
 | Map (`extra_env`, `labels`) | Top-level merge. Template keys survive; per-call keys win on collision. |
 | Permissions arrays (`permissions.allow` / `deny` / `ask`) | CONCAT. Template entries first, per-call appended. This mirrors how Claude Code itself merges its `permissions` block across settings tiers. |
-| `claude_args` | Per-call non-nil REPLACES the template's slice wholesale. Per-call nil falls back to the template. Explicit empty (`[]`) replaces with empty. |
+| `agent_args` | Per-call non-nil REPLACES the template's slice wholesale. Per-call nil falls back to the template. Explicit empty (`[]`) replaces with empty. |
 
 Omitting per-call permissions inherits the template's entries
 unchanged.
+
+A template that sets the arguments key under its old name is refused with
+`ErrTemplateMalformed`, which names `agent_args`; the key is not ignored.
 
 `spawn` validates the merged `extra_env`: an `AGENT_DIRECTOR_*` key,
 `HOME` with any value, or a key that is not a valid env-var name (empty,
@@ -186,10 +189,10 @@ absolute `CLAUDE_CONFIG_DIR` under `[extra_env]` instead of `HOME`.
 A template MUST NOT bake any of:
 
 - `template` (recursion would be ill-defined)
-- `claude_instance_id` (must be per-invocation for uniqueness)
+- `instance_id` (must be per-invocation for uniqueness)
 - `tmux_session_name` (derived from the id + cwd)
 - `reuse_finished` (applies to one `spawn` call only, and only with an
-  explicit `claude_instance_id`)
+  explicit `instance_id`)
 
 `make-template` refuses them with `ErrInvalidFlags`: on the CLI as
 undefined flags, over MCP as unknown parameters. A hand-edited template
@@ -211,7 +214,7 @@ spelling (`RELAY_MODE` alone) loads. Keys under `[extra_env]` and
 # ~/.agent-director/templates/dev.toml
 cwd        = "/home/me/repos/widget"
 relay_mode = "off"
-claude_args = ["--model", "opus"]
+agent_args = ["--model", "opus"]
 
 [labels]
 project = "widget"
@@ -230,7 +233,7 @@ Resulting per-spawn merge:
 
 - `cwd`            → `/home/me/repos/widget` (template)
 - `relay_mode`     → `off` (template)
-- `claude_args`    → `["--model", "opus"]` (template; no per-call replacement)
+- `agent_args`     → `["--model", "opus"]` (template; no per-call replacement)
 - `labels` → `{project=widget, env=dev, other=bar}` (merged)
 - `permissions.allow` → `["Bash(npm test)", "Bash(npm run lint)", "Bash(jq)"]` (concat)
 - `permissions.deny`  → `["Bash(rm)"]` (template only)

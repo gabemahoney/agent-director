@@ -11,7 +11,7 @@
 //     row). This indirection keeps the seeder files free of internal/store
 //     imports (only stdlib + pkg/api + manifest + internal/testsupport/*
 //     are allowed per the import-graph guard).
-//   - SeedID: the claude_instance_id the seeded row will carry. The Happy
+//   - SeedID: the instance_id the seeded row will carry. The Happy
 //     closure references the same id when calling the verb method.
 //   - Happy: invokes the verb method on the supplied Client in its happy
 //     path. Returns the result struct and any error; the driver feeds the
@@ -66,7 +66,7 @@ const (
 	// relay_mode=on and an open permission_requests row. Used by decide.
 	seedCheckPermission
 
-	// seedResumable seeds a spawn in StateEnded with claude_session_id
+	// seedResumable seeds a spawn in StateEnded with session_id
 	// populated AND writes a JSONL placeholder on disk so the resume
 	// verb's os.Stat pre-flight passes. HOME must be redirected first
 	// (the smoke TestMain does this).
@@ -149,7 +149,7 @@ type seederSpec struct {
 	// constructing the Client.
 	SeedKind seedKind
 
-	// SeedID is the claude_instance_id the seeded row uses. Happy
+	// SeedID is the instance_id the seeded row uses. Happy
 	// references this same id when calling the verb method.
 	SeedID string
 
@@ -219,7 +219,7 @@ type seederSpec struct {
 // manifest.Lookup (mustVerb) next to the verb name string.
 var seeders = map[string]seederSpec{}
 
-// bogusID is the claude_instance_id used in error-path Happy/Error closures
+// bogusID is the instance_id used in error-path Happy/Error closures
 // — chosen to be very unlikely to collide with any seeded row.
 const bogusID = "smoke-bogus-id-does-not-exist"
 

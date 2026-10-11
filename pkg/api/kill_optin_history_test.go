@@ -38,7 +38,7 @@ func kohSpawn(t *testing.T, e *killEnv) string {
 	id := "koh-" + uuid.NewString()[:8]
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	c, _ := e.client(t)
-	if _, err := c.Spawn(api.SpawnParams{ClaudeInstanceID: id, CWD: t.TempDir(),
+	if _, err := c.Spawn(api.SpawnParams{InstanceID: id, CWD: t.TempDir(),
 		ExtraEnv: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()}); err != nil {
 		t.Fatalf("Spawn(%s): %v", id, err)
 	}
@@ -49,11 +49,11 @@ func kohSpawn(t *testing.T, e *killEnv) string {
 func kohOwnSession(t *testing.T, e *killEnv, row api.Spawn) tmuxfix.SeedSession {
 	t.Helper()
 	for _, s := range e.rec.Sessions(row.Identity.Socket) {
-		if s.Label == tmuxfix.Valid(row.Identity.Token, row.ClaudeInstanceID, e.storeID) {
+		if s.Label == tmuxfix.Valid(row.Identity.Token, row.InstanceID, e.storeID) {
 			return s
 		}
 	}
-	t.Fatalf("no session of %s carries its current label", row.ClaudeInstanceID)
+	t.Fatalf("no session of %s carries its current label", row.InstanceID)
 	return tmuxfix.SeedSession{}
 }
 
@@ -69,7 +69,7 @@ func kohAdvanceTo(e *killEnv, at time.Time) {
 func kohPastBoth(t *testing.T, e *killEnv, row api.Spawn, created int64) {
 	t.Helper()
 	if row.EndedAt == nil {
-		t.Fatalf("row %s has no ended_at", row.ClaudeInstanceID)
+		t.Fatalf("row %s has no ended_at", row.InstanceID)
 	}
 	kohAdvanceTo(e, row.EndedAt.Add(e.cfg.EffectiveStoppingWindow()))
 	kohAdvanceTo(e, time.Unix(created, 0).Add(e.cfg.EffectiveStartingSession()))
@@ -147,9 +147,9 @@ func kohResumed(t *testing.T, e *killEnv) string {
 	if _, err := e.resume(id); err != nil {
 		t.Fatalf("Resume(%s): %v", id, err)
 	}
-	if row := rlfRow(t, e, id); row.State != store.StatePending || row.PID != 0 || row.ClaudeSessionID != sid {
+	if row := rlfRow(t, e, id); row.State != store.StatePending || row.PID != 0 || row.SessionID != sid {
 		t.Fatalf("after the resume: state %s, pid %d, session %q; want pending, none, %s", row.State, row.PID,
-			row.ClaudeSessionID, sid)
+			row.SessionID, sid)
 	}
 	return id
 }

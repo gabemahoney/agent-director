@@ -40,7 +40,7 @@ func TestAdviceFollow_A14_ReservedHomeSetConfigDir(t *testing.T) {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
 	id := "adv-home-" + uuid.NewString()[:8]
-	p := api.SpawnParams{CWD: cwd, ClaudeInstanceID: id, ExtraEnv: map[string]string{"HOME": cfg.dir, "TEAM": "core"}}
+	p := api.SpawnParams{CWD: cwd, InstanceID: id, ExtraEnv: map[string]string{"HOME": cfg.dir, "TEAM": "core"}}
 
 	_, err = env.c.Spawn(p)
 

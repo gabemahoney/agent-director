@@ -41,7 +41,7 @@ func readSurfaceRows() []readSurfaceRow {
 	ended := "/srv/rs/rs-ended/"
 	return []readSurfaceRow{
 		{id: "rs-pending", state: store.StatePending, opts: []SpawnOption{
-			WithRawLabels(`{"role":"worker","team":"alpha"}`), WithRawClaudeArgs(`["--model","opus"]`),
+			WithRawLabels(`{"role":"worker","team":"alpha"}`), WithRawAgentArgs(`["--model","opus"]`),
 			WithLivenessUnverifiedSince("2026-01-02 03:04:35"), WithLivenessNote("unreported")}},
 		{id: "rs-waiting", state: store.StateWaiting, sessionID: "sess-rs-waiting"},
 		{id: "rs-working", state: store.StateWorking, relayMode: "on"},

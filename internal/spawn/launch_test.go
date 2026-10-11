@@ -52,10 +52,10 @@ func newLaunchEnv(t *testing.T) *launchEnv {
 	e.s = s
 	e.r = Resolved{SpawnParams: SpawnParams{
 		CWD:                 t.TempDir(),
-		ClaudeInstanceID:    "id-launch-1",
+		InstanceID:          "id-launch-1",
 		TmuxSessionName:     "cd-launch-1",
 		RelayMode:           "off",
-		ClaudeArgs:          []string{"--model", "opus"},
+		AgentArgs:           []string{"--model", "opus"},
 		AgentDirectorLabels: map[string]string{"role": "worker"},
 	}}
 	return e
@@ -137,9 +137,9 @@ func TestLaunchInsertsPendingAndCreatesSession(t *testing.T) {
 		t.Errorf("row = {state %q, cwd %q, name %q}; want pending, %q, bot-claude-status",
 			row.State, row.CWD, row.TmuxSessionName, e.r.CWD)
 	}
-	if !reflect.DeepEqual(row.ClaudeArgs, []string{"--model", "opus"}) || !reflect.DeepEqual(row.Labels, e.r.AgentDirectorLabels) ||
+	if !reflect.DeepEqual(row.AgentArgs, []string{"--model", "opus"}) || !reflect.DeepEqual(row.Labels, e.r.AgentDirectorLabels) ||
 		!reflect.DeepEqual(row.ExtraEnv, e.r.ExtraEnv) {
-		t.Errorf("row args/labels/extra env = %v / %v / %v", row.ClaudeArgs, row.Labels, row.ExtraEnv)
+		t.Errorf("row args/labels/extra env = %v / %v / %v", row.AgentArgs, row.Labels, row.ExtraEnv)
 	}
 
 	c := e.onlyCreate()
@@ -275,7 +275,7 @@ func TestLaunchParentID(t *testing.T) {
 // seedParent inserts a parent row so a child's parent_id FK is satisfied.
 func seedParent(t *testing.T, s *store.Store, id string) {
 	t.Helper()
-	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
+	if err := s.InsertPending(store.Spawn{InstanceID: id, Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
 		t.Fatalf("seed parent: %v", err)
 	}
 }

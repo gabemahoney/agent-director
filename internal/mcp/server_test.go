@@ -86,8 +86,8 @@ func TestToolsListMatchesManifest(t *testing.T) {
 // JSON-RPC -32000 whose data carries the catalog err_name of a wrapped
 // sentinel, or ErrInternal for an unregistered error.
 func TestToolsCallFraming(t *testing.T) {
-	d := &fakeDispatcher{result: map[string]any{"claude_instance_id": "id-y"}}
-	if obj := callToolText(t, d, "spawn", `{"cwd":"/tmp"}`); string(obj["claude_instance_id"]) != `"id-y"` {
+	d := &fakeDispatcher{result: map[string]any{"instance_id": "id-y"}}
+	if obj := callToolText(t, d, "spawn", `{"cwd":"/tmp"}`); string(obj["instance_id"]) != `"id-y"` {
 		t.Errorf("result = %v; want the dispatcher's JSON", obj)
 	}
 	if len(d.calls) != 1 || d.calls[0].name != "spawn" || string(d.calls[0].args) != `{"cwd":"/tmp"}` {
@@ -122,7 +122,7 @@ func TestDeleteToolCallIsUnknownTool(t *testing.T) {
 	const id = "id-vqr-delete"
 	seedFinished(t, e, id, store.StateEnded)
 
-	ref, resp := callTool(t, e.d, "no_such_tool", `{}`), callTool(t, e.d, "delete", `{"claude_instance_id":["`+id+`"]}`)
+	ref, resp := callTool(t, e.d, "no_such_tool", `{}`), callTool(t, e.d, "delete", `{"instance_id":["`+id+`"]}`)
 
 	refData, data := toolErrorData(t, ref), toolErrorData(t, resp)
 	if refData.ErrName != "ErrUnknownTool" {

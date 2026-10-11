@@ -104,7 +104,7 @@ func listIDs(t *testing.T, c *api.Client) []string {
 	}
 	ids := make([]string, 0, len(res.Spawns))
 	for _, r := range res.Spawns {
-		ids = append(ids, r.ClaudeInstanceID)
+		ids = append(ids, r.InstanceID)
 	}
 	return ids
 }
@@ -223,10 +223,10 @@ func TestSpawnRejectsControlCharacterInstanceID(t *testing.T) {
 			p.TmuxSessionName, p.TmuxSessionNameSupplied = "bad:name", true
 		}},
 		{"before a live row with the same id", marker + "\tx", func(t *testing.T, env spawnEnv, p *api.SpawnParams) {
-			if _, err := apitest.SeedSpawn(env.dbPath, p.ClaudeInstanceID, store.StateWaiting, "", "", "", false); err != nil {
+			if _, err := apitest.SeedSpawn(env.dbPath, p.InstanceID, store.StateWaiting, "", "", "", false); err != nil {
 				t.Fatalf("SeedSpawn: %v", err)
 			}
-			if ids := listIDs(t, env.c); len(ids) != 1 || ids[0] != p.ClaudeInstanceID {
+			if ids := listIDs(t, env.c); len(ids) != 1 || ids[0] != p.InstanceID {
 				t.Errorf("List ids = %q; want the control-character row listed", ids)
 			}
 		}},
@@ -234,7 +234,7 @@ func TestSpawnRejectsControlCharacterInstanceID(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
-			p := api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id}
+			p := api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id}
 			if tc.setup != nil {
 				tc.setup(t, env, &p)
 			}
@@ -278,17 +278,17 @@ func TestSpawnAcceptsEmptyAndPrintableInstanceID(t *testing.T) {
 			if tc.reuse {
 				other, before = seedFinishedRow(t, env.dbPath, store.StateEnded)
 			}
-			res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id, ReuseFinished: tc.reuse})
+			res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id, ReuseFinished: tc.reuse})
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
-			got := res.ClaudeInstanceID
+			got := res.InstanceID
 			if tc.id == "" {
 				if _, perr := uuid.Parse(got); perr != nil {
 					t.Errorf("minted id %q is not a UUID: %v", got, perr)
 				}
 			} else if got != tc.id {
-				t.Errorf("ClaudeInstanceID = %q; want %q", got, tc.id)
+				t.Errorf("InstanceID = %q; want %q", got, tc.id)
 			}
 			if n := len(env.rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
 				t.Errorf("create calls = %d; want 1", n)
@@ -329,7 +329,7 @@ func TestSpawnPreCheckReadFailureIsErrInternal(t *testing.T) {
 				t.Fatalf("write .claude.json: %v", err)
 			}
 			_, err := api.SpawnWithCollisionReader(env.c, failingCollisionReader{err: readErr},
-				api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: "precheck-" + uuid.NewString()[:8]})
+				api.SpawnParams{CWD: t.TempDir(), InstanceID: "precheck-" + uuid.NewString()[:8]})
 			assertOneName(t, err, "ErrInternal")
 			_, desc := errnames.Classify(err)
 			apitest.AssertDescription(t, desc, apitest.DescPreCheckRead())
@@ -366,7 +366,7 @@ func TestSpawnExistingRowCollides(t *testing.T) {
 			e.rec.SeedSessions(e.socket, e.leftover("old-life", "", id, 0))
 			trust, cwd, mark := seedTrustConfig(t, t.TempDir(), trustLacksEntry), t.TempDir(), trailLen(t)
 
-			_, err := e.c.Spawn(api.SpawnParams{CWD: cwd, ClaudeInstanceID: id, ReuseFinished: tc.reuse,
+			_, err := e.c.Spawn(api.SpawnParams{CWD: cwd, InstanceID: id, ReuseFinished: tc.reuse,
 				ExtraEnv: trust.extraEnv()})
 
 			assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
@@ -384,10 +384,34 @@ func TestSpawnExistingRowCollides(t *testing.T) {
 				t.Errorf("socket directory %s: Lstat err = %v; want it not created", filepath.Dir(e.socket), serr)
 			}
 			for _, l := range readAPITrailLines(t)[mark:] {
-				if l["claude_instance_id"] == id {
+				if l["instance_id"] == id {
 					t.Errorf("trail record %v; want none for %s", l, id)
 				}
 			}
 		})
+	}
+}
+
+// TestSpawnRefusesTemplateWithOldClaudeArgsKey: a spawn naming a template that
+// still holds claude_args is ErrTemplateMalformed naming agent_args, with no row
+// written and no tmux call (SR-4.5).
+func TestSpawnRefusesTemplateWithOldClaudeArgsKey(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
+	env := newSpawnEnv(t)
+	body := apitest.TemplateBody(apitest.TemplateFields{CWD: t.TempDir(), RawKeys: []string{`claude_args = ["--model", "opus"]`}})
+	if _, err := apitest.SeedTemplate(filepath.Join(env.home, ".agent-director", "templates"), "old-key", body); err != nil {
+		t.Fatalf("SeedTemplate: %v", err)
+	}
+	rows := listIDs(t, env.c)
+
+	_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), Template: "old-key"})
+
+	assertOneName(t, err, "ErrTemplateMalformed")
+	if want := "ErrTemplateMalformed: old-key: claude_args is no longer accepted; use agent_args"; errText(err) != want {
+		t.Errorf("err = %q; want %q", err, want)
+	}
+	assertNoTmuxCalls(t, env.rec)
+	if ids := listIDs(t, env.c); !reflect.DeepEqual(ids, rows) {
+		t.Errorf("List ids = %q; want unchanged %q", ids, rows)
 	}
 }

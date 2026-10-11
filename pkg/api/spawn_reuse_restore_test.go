@@ -45,7 +45,7 @@ func rrAssertRestored(t *testing.T, e *killEnv, r reuseRow, want apitest.SpawnCo
 	path, _ := want.JSONLPath.(string)
 	var archived []apitest.HistoryEntry
 	rest := slices.DeleteFunc(rrHistory(t, e, r.ID), func(h apitest.HistoryEntry) bool {
-		if h.ClaudeSessionID == r.Spawn.ClaudeSessionID {
+		if h.SessionID == r.Spawn.SessionID {
 			archived = append(archived, h)
 			return true
 		}
@@ -54,7 +54,7 @@ func rrAssertRestored(t *testing.T, e *killEnv, r reuseRow, want apitest.SpawnCo
 	if len(archived) != 1 || archived[0].LifeNumber != reuseLife || archived[0].JSONLPath.String != path ||
 		!reflect.DeepEqual(rest, before) {
 		t.Errorf("history: archived %+v, others %+v; want one entry of %s at life %d (%q), others unchanged %+v",
-			archived, rest, r.Spawn.ClaudeSessionID, reuseLife, path, before)
+			archived, rest, r.Spawn.SessionID, reuseLife, path, before)
 	}
 	if perms, err := e.st.PermissionRequestsForSpawn(r.ID); err != nil || len(perms) != 0 {
 		t.Errorf("permission requests = %+v (%v); want the reset's deletion kept", perms, err)
@@ -307,7 +307,7 @@ func TestSpawnReuseHooksBeforeRestoreIgnored(t *testing.T) {
 	ignored := store.HookApplied{Reason: store.HookReasonNoPaneRecorded}
 	run := e.rrcReuse(t, r, func() {
 		reset := e.columns(t, r.ID)
-		for _, sid := range []string{r.Spawn.ClaudeSessionID, "sess-other-" + uuid.NewString()[:8]} {
+		for _, sid := range []string{r.Spawn.SessionID, "sess-other-" + uuid.NewString()[:8]} {
 			for _, ev := range []string{"Stop", "SessionEnd", "PermissionRequest", "SessionStart"} {
 				if got := apitest.ApplyAgentHook(t, e.dbPath, r.ID, ev, sid,
 					apitest.HookTranscript(r.JSONLPath, true)); got != ignored {

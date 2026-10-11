@@ -202,8 +202,8 @@ func TestHookGateOrdinaryEventAppliesFromAgent(t *testing.T) {
 					t.Errorf("RowVersion = %d; want %d (one applied write)", row.RowVersion, prior.RowVersion+1)
 				}
 				// SR-22.9: an applied ordinary hook on a row with no session id records the payload's.
-				if want := payloadSessionID(t, payload); row.ClaudeSessionID != want {
-					t.Errorf("ClaudeSessionID = %q; want %q", row.ClaudeSessionID, want)
+				if want := payloadSessionID(t, payload); row.SessionID != want {
+					t.Errorf("SessionID = %q; want %q", row.SessionID, want)
 				}
 				if row.Identity.PaneStarttime != agent.Start {
 					t.Errorf("pane_starttime = %q; want %q (NULL recorded from the parent)", row.Identity.PaneStarttime, agent.Start)
@@ -381,8 +381,8 @@ func TestHookGateSessionIDRecordedNotGate(t *testing.T) {
 			if row.State != store.StateWaiting {
 				t.Errorf("State = %q; want waiting (applied whatever the session id)", row.State)
 			}
-			if want := tc.wantID(hookSession); row.ClaudeSessionID != want {
-				t.Errorf("ClaudeSessionID = %q; want %q", row.ClaudeSessionID, want)
+			if want := tc.wantID(hookSession); row.SessionID != want {
+				t.Errorf("SessionID = %q; want %q", row.SessionID, want)
 			}
 			if want := tc.wantPath(transcript); row.JSONLPath != want {
 				t.Errorf("JSONLPath = %q; want %q", row.JSONLPath, want)

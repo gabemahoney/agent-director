@@ -19,7 +19,7 @@ test("pause: happy path — no-op for already-terminal spawn", async () => {
   await withTempHome(async (homeDir) => {
     runHelper("seed-spawn", { store: homeStore(homeDir), state: "ended", id: "smoke-pause-id", "create-store": true });
     using client = await openClient(homeStore(homeDir));
-    expect(await client.pause({ claude_instance_id: "smoke-pause-id" })).toEqual({});
+    expect(await client.pause({ instance_id: "smoke-pause-id" })).toEqual({});
   });
 }, 10_000);
 
@@ -27,7 +27,7 @@ test("pause: error — working spawn is not pausable → ErrSpawnNotPausable", a
   await withTempHome(async (homeDir) => {
     runHelper("seed-spawn", { store: homeStore(homeDir), state: "working", id: "smoke-pause-err-id", "create-store": true });
     using client = await openClient(homeStore(homeDir));
-    await expect(client.pause({ claude_instance_id: "smoke-pause-err-id" })).rejects.toBeInstanceOf(ErrSpawnNotPausable);
+    await expect(client.pause({ instance_id: "smoke-pause-err-id" })).rejects.toBeInstanceOf(ErrSpawnNotPausable);
   });
 }, 10_000);
 
@@ -40,11 +40,11 @@ test("pause: error — held as a plain sendKeys: ErrRelayFallenBack, then ErrDia
 
     const got = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      const fallenBack = (await rejection(client.pause({ claude_instance_id: id }))) as AgentDirectorError;
-      const { pane_sha256 } = await client.readPane({ claude_instance_id: id });
+      const fallenBack = (await rejection(client.pause({ instance_id: id }))) as AgentDirectorError;
+      const { pane_sha256 } = await client.readPane({ instance_id: id });
       await client.recordPaneAnswer({ request_token: token, as: "unknown", expect_pane_sha256: pane_sha256 });
-      const held = (await rejection(client.pause({ claude_instance_id: id }))) as AgentDirectorError;
-      const passed = await client.sendKeys({ claude_instance_id: id, text: "/exit", expect_pane_sha256: pane_sha256 });
+      const held = (await rejection(client.pause({ instance_id: id }))) as AgentDirectorError;
+      const passed = await client.sendKeys({ instance_id: id, text: "/exit", expect_pane_sha256: pane_sha256 });
       return { fallenBack, held, passed };
     });
 

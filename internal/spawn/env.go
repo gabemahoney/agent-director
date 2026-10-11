@@ -27,7 +27,7 @@ import "strings"
 // not specify a tiebreak. Callers should not rely on order.
 func composeEnv(r Resolved) map[string]string {
 	out := make(map[string]string, 2+len(r.AgentDirectorLabels)+len(r.ExtraEnv))
-	out["AGENT_DIRECTOR_INSTANCE_ID"] = r.ClaudeInstanceID
+	out["AGENT_DIRECTOR_INSTANCE_ID"] = r.InstanceID
 	out["AGENT_DIRECTOR_RELAY_MODE"] = r.RelayMode
 	for k, v := range r.AgentDirectorLabels {
 		out["AGENT_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v

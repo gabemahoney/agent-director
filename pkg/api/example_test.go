@@ -48,12 +48,12 @@ func exampleClient() (*api.Client, *store.Store, string, *tmuxfix.Recorder, func
 // Panics on any store error (example-function contract). labels may be nil.
 func seedRow(s *store.Store, path, id, state string, labels map[string]string) {
 	sp := store.Spawn{
-		ClaudeInstanceID: id,
-		Agent:            store.AgentClaude,
-		CWD:              "/tmp",
-		TmuxSessionName:  "sess-" + id,
-		RelayMode:        "off",
-		Labels:           labels,
+		InstanceID:      id,
+		Agent:           store.AgentClaude,
+		CWD:             "/tmp",
+		TmuxSessionName: "sess-" + id,
+		RelayMode:       "off",
+		Labels:          labels,
 	}
 	if err := s.InsertPending(sp); err != nil {
 		panic("seedRow: InsertPending " + id + ": " + err.Error())
@@ -82,16 +82,16 @@ func (exampleTB) Fatalf(format string, args ...any) { panic(fmt.Sprintf(format, 
 // test failure — update both the example body and the README together.
 
 // ExampleClient_Spawn demonstrates launching a tracked Claude Code instance.
-// SpawnParams.ClaudeInstanceID is seeded to a fixed value so the output is
+// SpawnParams.InstanceID is seeded to a fixed value so the output is
 // deterministic. In production usage omit it and the library mints a UUID4.
 func ExampleClient_Spawn() {
 	c, _, _, _, cleanup := exampleClient()
 	defer cleanup()
 	// README:start ExampleClient_Spawn
 	result, err := c.Spawn(api.SpawnParams{
-		CWD:              "/tmp",
-		RelayMode:        "on",
-		ClaudeInstanceID: "claude_example",
+		CWD:        "/tmp",
+		RelayMode:  "on",
+		InstanceID: "claude_example",
 		AgentDirectorLabels: map[string]string{
 			"project": "widget",
 		},
@@ -99,7 +99,7 @@ func ExampleClient_Spawn() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(result.ClaudeInstanceID)
+	fmt.Println(result.InstanceID)
 	// README:end
 
 	// Output:
@@ -146,7 +146,7 @@ func ExampleClient_List() {
 		log.Fatal(err)
 	}
 	for _, row := range res.Spawns {
-		fmt.Println(row.ClaudeInstanceID, row.State)
+		fmt.Println(row.InstanceID, row.State)
 	}
 	// README:end
 
@@ -169,8 +169,8 @@ func ExampleClient_SendKeys() {
 	rec.SeedRowSession(exampleTB{}, path, "claude_2026-05-22T18-23-15")
 	// README:start ExampleClient_SendKeys
 	_, err := c.SendKeys(api.SendKeysParams{
-		ClaudeInstanceID: "claude_2026-05-22T18-23-15",
-		Text:             "what is 2+2?",
+		InstanceID: "claude_2026-05-22T18-23-15",
+		Text:       "what is 2+2?",
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -210,7 +210,7 @@ func ExampleClient_Kill() {
 	rec.SeedRowSession(exampleTB{}, path, "claude_2026-05-22T18-23-15")
 	// README:start ExampleClient_Kill
 	res, err := c.Kill(api.KillParams{
-		ClaudeInstanceID: "claude_2026-05-22T18-23-15",
+		InstanceID: "claude_2026-05-22T18-23-15",
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -9,7 +9,7 @@ import (
 // resume read, the session to resume, and the launch's socket, token and
 // store id.
 //
-// SessionID is the claude_session_id the `claude --resume <session id>` argv
+// SessionID is the session_id the `claude --resume <session id>` argv
 // element names: the row's own, or an earlier session of the visible history
 // whose transcript resume recovered. Socket is the launch's socket
 // (ResolveRowLaunchSocket), Token the new launch token (NewLaunchToken) and
@@ -29,7 +29,7 @@ type RelaunchInput struct {
 // Relaunch runs: the row's recorded session name verbatim ($ and \ names
 // included), its cwd, the environment, and the argv
 //
-//	claude --resume <session id> --settings <inline-json> [row claude_args]
+//	claude --resume <session id> --settings <inline-json> [row agent_args]
 //
 // on in.Socket, labelled with in.Token, the row's instance id and in.StoreID.
 //
@@ -49,11 +49,11 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error)
 	// intentionally nil: it isn't stored on the row, so a resume can't carry
 	// it over (matches SRD §8.1's contract).
 	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID:    in.Row.ClaudeInstanceID,
+		InstanceID:          in.Row.InstanceID,
 		CWD:                 in.Row.CWD,
 		TmuxSessionName:     in.Row.TmuxSessionName,
 		RelayMode:           in.Row.RelayMode,
-		ClaudeArgs:          in.Row.ClaudeArgs,
+		AgentArgs:           in.Row.AgentArgs,
 		AgentDirectorLabels: in.Row.Labels,
 		ExtraEnv:            in.Row.ExtraEnv,
 	}}
@@ -65,7 +65,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error)
 	}
 
 	command := []string{claudeBinary, "--resume", in.SessionID, "--settings", settings}
-	command = append(command, r.ClaudeArgs...)
+	command = append(command, r.AgentArgs...)
 
 	return CreateRequest{
 		Socket:     in.Socket,
@@ -74,7 +74,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error)
 		Env:        envs,
 		Command:    command,
 		Token:      in.Token,
-		InstanceID: r.ClaudeInstanceID,
+		InstanceID: r.InstanceID,
 		StoreID:    in.StoreID,
 	}, nil
 }

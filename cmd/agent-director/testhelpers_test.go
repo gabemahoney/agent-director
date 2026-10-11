@@ -397,7 +397,7 @@ func launchIdentity(t *testing.T, home, id string) (token, socket, storeID strin
 // the verb fails.
 func statusOf(t *testing.T, home, fakeDir, id string) string {
 	t.Helper()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "status", "--claude-instance-id", id)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "status", "--instance-id", id)
 	if code != 0 {
 		return parseEnvelope(t, lastJSONLine(stderr)).ErrName
 	}
@@ -420,7 +420,7 @@ func listIDs(t *testing.T, home, fakeDir string, args ...string) []string {
 	}
 	var res struct {
 		Spawns []struct {
-			ClaudeInstanceID string `json:"claude_instance_id"`
+			InstanceID string `json:"instance_id"`
 		} `json:"spawns"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
@@ -428,7 +428,7 @@ func listIDs(t *testing.T, home, fakeDir string, args ...string) []string {
 	}
 	ids := []string{}
 	for _, sp := range res.Spawns {
-		ids = append(ids, sp.ClaudeInstanceID)
+		ids = append(ids, sp.InstanceID)
 	}
 	sort.Strings(ids)
 	return ids

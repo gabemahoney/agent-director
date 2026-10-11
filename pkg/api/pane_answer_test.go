@@ -51,7 +51,7 @@ func TestReadPaneSHA256AndSendKeysHashCheck(t *testing.T) {
 	e.rec.SetCapture(r.Socket, pane, "\x1b[1mfirst\x1b[0m line\n")
 	read := func(ansi bool, n int) api.ReadPaneResult {
 		t.Helper()
-		res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, ANSI: ansi, NLines: n})
+		res, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID, ANSI: ansi, NLines: n})
 		if err != nil {
 			t.Fatalf("read-pane (ansi %v, n_lines %d): %v", ansi, n, err)
 		}
@@ -63,7 +63,7 @@ func TestReadPaneSHA256AndSendKeysHashCheck(t *testing.T) {
 	}
 	send := func(hash string, n int) verbRun[struct{}] {
 		return runVerb(e, func() (struct{}, error) {
-			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "go", ExpectPaneSHA256: hash, NLines: n})
+			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "go", ExpectPaneSHA256: hash, NLines: n})
 			return struct{}{}, err
 		})
 	}
@@ -129,7 +129,7 @@ func TestSendKeysNoEnterAndKey(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
 			p := tc.p
-			p.ClaudeInstanceID = r.ID
+			p.InstanceID = r.ID
 
 			if _, err := e.sendKeys(p); err != nil {
 				t.Fatalf("SendKeys: %v", err)
@@ -179,7 +179,7 @@ func TestSendKeysShapeRefusedBeforeAnything(t *testing.T) {
 			p := newPAEnv(t)
 			before := p.request(t, tok)
 			params := tc
-			params.ClaudeInstanceID = p.r.ID
+			params.InstanceID = p.r.ID
 
 			err := p.sendKeys(params)
 
@@ -234,7 +234,7 @@ func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 			}
 			var committed []map[string]any
 			for _, l := range readAPITrailLines(t) {
-				if l["event"] == "ad.row_mutation.committed" && l["claude_instance_id"] == p.r.ID && l["mutation_kind"] == "update" {
+				if l["event"] == "ad.row_mutation.committed" && l["instance_id"] == p.r.ID && l["mutation_kind"] == "update" {
 					committed = append(committed, l)
 				}
 			}

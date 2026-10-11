@@ -80,10 +80,11 @@ acceptable alternative when you want to confirm store access as well.
 
 ### Spawn
 
-Launch a tracked Claude Code instance inside a new tmux session.
-`Spawn` returns immediately with the `claude_instance_id`; the row is
-`pending` from its insert until the agent reports in (Claude Code's
-`SessionStart`), then `waiting`. Use `Status` or `Get` to observe progress.
+Launch a tracked agent inside a new tmux session.
+`Spawn` returns immediately with the `instance_id`; the row is
+`pending` from its insert until the agent reports in (its
+`SessionStart` hook), then `waiting`. Use `Status` or `Get` to observe
+progress.
 
 ```bash
 # CLI: spawn in current directory, tagged for later filtering
@@ -95,9 +96,9 @@ agent-director spawn \
 
 ```go
 result, err := c.Spawn(api.SpawnParams{
-    CWD:              "/tmp",
-    RelayMode:        "on",
-    ClaudeInstanceID: "claude_example",
+    CWD:        "/tmp",
+    RelayMode:  "on",
+    InstanceID: "claude_example",
     AgentDirectorLabels: map[string]string{
         "project": "widget",
     },
@@ -105,10 +106,10 @@ result, err := c.Spawn(api.SpawnParams{
 if err != nil {
     log.Fatal(err)
 }
-fmt.Println(result.ClaudeInstanceID)
+fmt.Println(result.InstanceID)
 ```
 
-Returns `SpawnResult` (`.ClaudeInstanceID`, `.PreTrust`). `.PreTrust` is
+Returns `SpawnResult` (`.InstanceID`, `.PreTrust`). `.PreTrust` is
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did (a
 failed pre-trust never fails the spawn; see the `SpawnResult.PreTrust`
 godoc). Most-likely sentinel errors:
@@ -116,7 +117,7 @@ godoc). Most-likely sentinel errors:
 `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
 session-creating call timed out, here or in `Resume`: the row stays
 `pending`; do not retry until `Get` shows it `ended` or `missing`; then
-`Spawn` an explicit `ClaudeInstanceID` again with `ReuseFinished`, since
+`Spawn` an explicit `InstanceID` again with `ReuseFinished`, since
 without it the spawn collides with the id's finished row. When the launch
 did start, the row may instead stay `pending` with `LivenessNote`
 `unreported`, because its agent runs: use that agent (`ReadPane`, then
@@ -152,14 +153,14 @@ Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
 `missing`.
 `pending` means a launch (spawn, reuse or resume) is in progress and the
-agent has not reported in yet (Claude Code's `SessionStart`); it may be
+agent has not reported in yet (its `SessionStart` hook); it may be
 loading or waiting at a startup prompt. A resumed `pending` row keeps its
 session id and history; a caller tells it from a fresh one by its non-empty
-`claude_session_id`, shown by `Get`.
+`session_id`, shown by `Get`.
 
 ```bash
 agent-director status \
-  --claude-instance-id claude_2026-05-22T18-23-15
+  --instance-id claude_2026-05-22T18-23-15
 ```
 
 ```go
@@ -207,7 +208,7 @@ if err != nil {
     log.Fatal(err)
 }
 for _, row := range res.Spawns {
-    fmt.Println(row.ClaudeInstanceID, row.State)
+    fmt.Println(row.InstanceID, row.State)
 }
 ```
 
@@ -225,7 +226,7 @@ read: `ErrListInvalidLabel` (label not in `key=value` form) and
 Send text into the agent's own pane. CR bytes (`\r`, `0x0D`) are
 stripped automatically before delivery to prevent premature buffer
 submission; LF bytes (`\n`, `0x0A`) are preserved as composed newlines
-in Claude's input box. A single Enter is appended to submit the buffer
+in the agent's input box. A single Enter is appended to submit the buffer
 unless `NoEnter`; an empty `Text` sends that Enter only, submitting what
 is already typed. `Key` sends one key alone instead (a named key `Escape`,
 `Enter`, `Up`, `Down`, `Tab`, or one character), with no Enter. With
@@ -238,14 +239,14 @@ stripping — the behavior is unconditional by design (SRD §4.3).
 
 ```bash
 agent-director send-keys \
-  --claude-instance-id claude_2026-05-22T18-23-15 \
+  --instance-id claude_2026-05-22T18-23-15 \
   --text "what is 2+2?"
 ```
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
-    ClaudeInstanceID: "claude_2026-05-22T18-23-15",
-    Text:             "what is 2+2?",
+    InstanceID: "claude_2026-05-22T18-23-15",
+    Text:       "what is 2+2?",
 })
 if err != nil {
     log.Fatal(err)
@@ -374,9 +375,9 @@ judgement.
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
-    ClaudeInstanceID: "claude_2026-05-22T18-23-15",
-    Text:             "",       // press Enter to dismiss the prompt
-    AllowPending:     true,
+    InstanceID:   "claude_2026-05-22T18-23-15",
+    Text:         "",       // press Enter to dismiss the prompt
+    AllowPending: true,
 })
 if err != nil {
     log.Fatal(err)
@@ -393,11 +394,11 @@ Capture the last N lines of the agent's own pane. Default 25 lines
 
 ```bash
 agent-director read-pane \
-  --claude-instance-id claude_2026-05-22T18-23-15 \
+  --instance-id claude_2026-05-22T18-23-15 \
   --n-lines 50
 ```
 
-Call `c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id, NLines: 50})`.
+Call `c.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 50})`.
 Returns `ReadPaneResult` (`.Pane` string, and `.PaneSHA256`, the SHA-256 in
 lowercase hex of exactly the bytes of `.Pane`, which `SendKeys` and
 `RecordPaneAnswer` take back as `ExpectPaneSHA256` with the same `NLines`;
@@ -453,12 +454,12 @@ row's state: `find-missing` marks the row once its agent process is gone.
 
 ```bash
 agent-director kill \
-  --claude-instance-id claude_2026-05-22T18-23-15
+  --instance-id claude_2026-05-22T18-23-15
 ```
 
 ```go
 res, err := c.Kill(api.KillParams{
-    ClaudeInstanceID: "claude_2026-05-22T18-23-15",
+    InstanceID: "claude_2026-05-22T18-23-15",
 })
 if err != nil {
     log.Fatal(err)
@@ -490,7 +491,7 @@ get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` while the server exits;
 the caller waits and checks again.
 
 ```go
-_, err := c.Kill(api.KillParams{ClaudeInstanceID: id})
+_, err := c.Kill(api.KillParams{InstanceID: id})
 switch {
 case err == nil:
     // the agent process is gone
@@ -644,8 +645,8 @@ to inspect them — never compare error strings.
 
 ```go
 res, err := c.SendKeys(api.SendKeysParams{
-    ClaudeInstanceID: id,
-    Text:             "hello",
+    InstanceID: id,
+    Text:       "hello",
 })
 if errors.Is(err, api.ErrSpawnNotInteractive) {
     // Spawn not yet ready — wait for state == "waiting"
@@ -666,7 +667,7 @@ Common sentinels across verbs:
 
 | Sentinel | Meaning |
 |---|---|
-| `ErrSpawnNotFound` | No row for the given `claude_instance_id` |
+| `ErrSpawnNotFound` | No row for the given `instance_id` |
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |

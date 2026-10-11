@@ -54,22 +54,22 @@ func main() {
 	_, _ = c.Get("absent-id")
 
 	// Kill — will return ErrSpawnNotFound.
-	_, _ = c.Kill(api.KillParams{ClaudeInstanceID: "absent-id"})
+	_, _ = c.Kill(api.KillParams{InstanceID: "absent-id"})
 
 	// SendKeys — will return ErrSpawnNotFound.
-	_, _ = c.SendKeys(api.SendKeysParams{ClaudeInstanceID: "absent-id"})
+	_, _ = c.SendKeys(api.SendKeysParams{InstanceID: "absent-id"})
 
 	// ReadPane — will return ErrSpawnNotFound.
-	_, _ = c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: "absent-id"})
+	_, _ = c.ReadPane(api.ReadPaneParams{InstanceID: "absent-id"})
 
 	// Pause — will return ErrSpawnNotFound.
-	_, _ = c.Pause(context.Background(), api.PauseParams{ClaudeInstanceID: "absent-id"})
+	_, _ = c.Pause(context.Background(), api.PauseParams{InstanceID: "absent-id"})
 
 	// Resume — will return ErrSpawnNotFound.
-	_, _ = c.Resume(api.ResumeParams{ClaudeInstanceID: "absent-id"})
+	_, _ = c.Resume(api.ResumeParams{InstanceID: "absent-id"})
 
 	// Decide — will return ErrInvalidDecision (decision="" is invalid).
-	_, _ = c.Decide(api.DecideParams{ClaudeInstanceID: "absent-id"})
+	_, _ = c.Decide(api.DecideParams{InstanceID: "absent-id"})
 
 	// Expire — zero retentionDays overrides via nil olderThan means use default.
 	_, _ = c.Expire(nil)

@@ -31,7 +31,7 @@ func securityReadPaneCall(_ *testing.T, c *api.Client, s *securityScene) (any, e
 			s.e.rec.SetCapture(s.target.Socket, p.ID, "SECRET="+securitySecret+"\n"+paneText(s.target.Socket, p.ID))
 		}
 	}
-	return c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: s.subject})
+	return c.ReadPane(api.ReadPaneParams{InstanceID: s.subject})
 }
 
 // rpSecReads checks that the call changed no tmux state and captured only the

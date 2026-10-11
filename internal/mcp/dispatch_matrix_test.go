@@ -17,7 +17,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
-// matrixID is the sentinel claude_instance_id used across every verb
+// matrixID is the sentinel instance_id used across every verb
 // case. Tests seed a row at this id and pass the same id in the JSON
 // args. If a future refactor drops a `json:"..."` tag on the
 // dispatcher's params struct, the id field decodes to empty (Go's
@@ -54,19 +54,19 @@ func matrixCases() map[string]matrixCase {
 		// effect. The round-trip signal here is the cwd field — a
 		// dropped json tag would leave CWD empty and surface
 		// ErrCwdMissing instead.
-		"spawn": {args: `{"cwd":"/this/path/does/not/exist","claude_instance_id":"` + matrixID + `"}`},
+		"spawn": {args: `{"cwd":"/this/path/does/not/exist","instance_id":"` + matrixID + `"}`},
 
-		"status":    {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"get":       {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"send-keys": {args: `{"claude_instance_id":"` + matrixID + `","text":"hi"}`, setup: seedEnded("off")},
-		"read-pane": {args: `{"claude_instance_id":"` + matrixID + `","n_lines":1,"ansi":false}`, setup: seedEnded("off")},
-		"kill":      {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"pause":     {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"resume":    {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"status":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"get":       {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"send-keys": {args: `{"instance_id":"` + matrixID + `","text":"hi"}`, setup: seedEnded("off")},
+		"read-pane": {args: `{"instance_id":"` + matrixID + `","n_lines":1,"ansi":false}`, setup: seedEnded("off")},
+		"kill":      {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"pause":     {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"resume":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 
 		// decide: relay_mode must be "on" so the row passes the
 		// ErrRelayModeOff check after the id lookup succeeds.
-		"decide": {args: `{"claude_instance_id":"` + matrixID + `","decision":"allow","reason":"ok"}`, setup: seedEnded("on")},
+		"decide": {args: `{"instance_id":"` + matrixID + `","decision":"allow","reason":"ok"}`, setup: seedEnded("on")},
 
 		// get-permission: token-only lookup. A random UUIDv4 against an
 		// empty store returns ErrPermissionRequestNotFound — that's the
@@ -102,7 +102,7 @@ func matrixCases() map[string]matrixCase {
 // the dispatcher's snake_case JSON → typed-struct decode is intact. The
 // bug this guards against: a json tag missing from a dispatcher params
 // struct silently leaves the field at the zero value, so a verb sees
-// empty `claude_instance_id` and returns ErrSpawnNotFound for every
+// empty `instance_id` and returns ErrSpawnNotFound for every
 // call. Pre-fix, the existing tests caught only the spawn verb; this
 // matrix extends the regression net to every exposed verb.
 //
@@ -175,13 +175,13 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 				t.Fatalf("dispatcher has no case for MCP-exposed verb %q (tool %q): %v", v.Name, mcp.ToolName(v.Name), err)
 			}
 
-			// Round-trip proof for verbs taking claude_instance_id: the
+			// Round-trip proof for verbs taking instance_id: the
 			// store was seeded at matrixID, so a healthy decode finds
 			// the row. A dropped json tag silently leaves the id empty
 			// and the lookup returns ErrSpawnNotFound — that's the
 			// regression signal.
 			if tc.setup != nil && errors.Is(err, store.ErrSpawnNotFound) {
-				t.Fatalf("dispatcher returned ErrSpawnNotFound after a seeded row at id=%q — claude_instance_id did not round-trip from JSON to the dispatcher's typed params struct (check the verb's params struct still carries the json:\"claude_instance_id\" tag): %v", matrixID, err)
+				t.Fatalf("dispatcher returned ErrSpawnNotFound after a seeded row at id=%q — instance_id did not round-trip from JSON to the dispatcher's typed params struct (check the verb's params struct still carries the json:\"instance_id\" tag): %v", matrixID, err)
 			}
 
 			// Spawn round-trip is via cwd, not the seeded id: a healthy
@@ -266,11 +266,11 @@ func TestNoMigrationTriggerTool(t *testing.T) {
 func seedMatrixSpawn(t *testing.T, s *store.Store, id, state, relayMode string) {
 	t.Helper()
 	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: id,
-		Agent:            store.AgentClaude,
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-test-" + id,
-		RelayMode:        relayMode,
+		InstanceID:      id,
+		Agent:           store.AgentClaude,
+		CWD:             "/tmp",
+		TmuxSessionName: "cd-test-" + id,
+		RelayMode:       relayMode,
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}

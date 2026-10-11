@@ -47,10 +47,10 @@ func TestKillIncludeFinishedReportedIn(t *testing.T) {
 				row.state = state
 				kftOurs(t, row, tc.want, defBound, defWindow, func(e *killEnv, r resumeRow) (api.KillResult, error) {
 					cols := e.columns(t, r.ID)
-					sid, _ := cols.ClaudeSessionID.(string)
+					sid, _ := cols.SessionID.(string)
 					if row.noEndedAt != (cols.EndedAt == nil) || row.noPID != (cols.PID == nil) || row.noSessionID != (sid == "") {
-						t.Fatalf("precondition: ended_at %v, pid %v, claude_session_id %v; want %+v",
-							cols.EndedAt, cols.PID, cols.ClaudeSessionID, row)
+						t.Fatalf("precondition: ended_at %v, pid %v, session_id %v; want %+v",
+							cols.EndedAt, cols.PID, cols.SessionID, row)
 					}
 					return e.killOptIn(r.ID)
 				})

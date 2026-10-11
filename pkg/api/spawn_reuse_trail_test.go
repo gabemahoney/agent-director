@@ -37,8 +37,8 @@ const (
 
 // The full key sets of reuse's two events: SR-14's fields plus the envelope's.
 var (
-	rutReusedKeys   = []string{"event", "ts", "claude_instance_id", "prior_state", "archived_session_id", "lookup_outcome", "source"}
-	rutRestoredKeys = []string{"event", "ts", "claude_instance_id", "applied", "launch_error", "restore_error", "source"}
+	rutReusedKeys   = []string{"event", "ts", "instance_id", "prior_state", "archived_session_id", "lookup_outcome", "source"}
+	rutRestoredKeys = []string{"event", "ts", "instance_id", "applied", "launch_error", "restore_error", "source"}
 )
 
 // rutAssertOrder fails unless id's reuse events (reused, reuse_restored,
@@ -48,7 +48,7 @@ func rutAssertOrder(t *testing.T, mark int, id string, want ...string) {
 	var got []string
 	for _, l := range readAPITrailLines(t)[mark:] {
 		ev, _ := l["event"].(string)
-		if l["claude_instance_id"] == id && (ev == rutReused || ev == rutRestored || ev == rutNameHeld) {
+		if l["instance_id"] == id && (ev == rutReused || ev == rutRestored || ev == rutNameHeld) {
 			got = append(got, ev)
 		}
 	}
@@ -82,7 +82,7 @@ func rutAssertRestored(t *testing.T, mark int, id string, applied bool, launchEr
 	if s := rutRestoreError(logs, id); s != "" {
 		restoreErr = s
 	}
-	assertTrailRecord(t, recs[0], rutRestoredKeys, map[string]any{"claude_instance_id": id, "applied": applied,
+	assertTrailRecord(t, recs[0], rutRestoredKeys, map[string]any{"instance_id": id, "applied": applied,
 		"launch_error": launchErr, "restore_error": restoreErr, "source": "ad_spawn"})
 }
 
@@ -131,7 +131,7 @@ func failOpenReuseRuns(t *testing.T, working bool) []string {
 		res, logs, err := e.reuseWith(t, &hookedReuseStore{st: e.st}, reuseParams(t, r, reuseRequest{Name: rutRequested}))
 		c := e.columns(t, r.ID)
 		l := fmt.Sprintf("reuse %s id=%s pre_trust=%s err=%v warn=%t state=%v ended_at=%v row_version=%v life=%v launch_started_at=%v parent=%v socket=%v",
-			run.name, res.ClaudeInstanceID, res.PreTrust, err, rutRestoreError(logs, r.ID) != "", c.State, c.EndedAt, c.RowVersion,
+			run.name, res.InstanceID, res.PreTrust, err, rutRestoreError(logs, r.ID) != "", c.State, c.EndedAt, c.RowVersion,
 			c.LifeNumber, c.LaunchStartedAt, c.ParentID, c.TmuxSocket)
 		lines = append(lines, strings.NewReplacer(r.ID, "<id>", r.Socket, "<socket>", r.CWD, "<cwd>",
 			r.Trust.dir, "<trust>", r.ParentID, "<parent>").Replace(l))

@@ -83,8 +83,8 @@ func TestSessionStartIdentityCapture(t *testing.T) {
 		agent := agentParent(t, st, id)
 		handleFrom(t, st, id, agent, sessionStart(""))
 		row := mustGetSpawn(t, st, id)
-		if row.JSONLPath != transcript || row.ClaudeSessionID != session {
-			t.Errorf("jsonl_path/session = %q/%q; want %q/%q preserved", row.JSONLPath, row.ClaudeSessionID, transcript, session)
+		if row.JSONLPath != transcript || row.SessionID != session {
+			t.Errorf("jsonl_path/session = %q/%q; want %q/%q preserved", row.JSONLPath, row.SessionID, transcript, session)
 		}
 		assertIdentity(t, row, agent)
 	})
@@ -115,8 +115,8 @@ func TestSessionStartIdentityCapture(t *testing.T) {
 		agent := agentParent(t, st, id)
 		handleFrom(t, st, id, agent, sessionStart(path))
 		row := mustGetSpawn(t, st, id)
-		if row.JSONLPath != "" || row.ClaudeSessionID != "sess-idle" {
-			t.Errorf("before the transcript: jsonl_path/session = %q/%q; want NULL/sess-idle", row.JSONLPath, row.ClaudeSessionID)
+		if row.JSONLPath != "" || row.SessionID != "sess-idle" {
+			t.Errorf("before the transcript: jsonl_path/session = %q/%q; want NULL/sess-idle", row.JSONLPath, row.SessionID)
 		}
 		assertIdentity(t, row, agent)
 		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {

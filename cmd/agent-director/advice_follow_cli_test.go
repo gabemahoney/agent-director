@@ -153,17 +153,17 @@ func TestAdviceFollow_H3_FlagIsRequired(t *testing.T) {
 		want  string   // exact message
 		value string   // value a caller passes with the named flag
 	}{
-		{"status", []string{"status"}, "--claude-instance-id is required", id},
-		{"send-keys", []string{"send-keys", "--text", "hi"}, "--claude-instance-id is required", id},
-		{"read-pane", []string{"read-pane"}, "--claude-instance-id is required", id},
+		{"status", []string{"status"}, "--instance-id is required", id},
+		{"send-keys", []string{"send-keys", "--text", "hi"}, "--instance-id is required", id},
+		{"read-pane", []string{"read-pane"}, "--instance-id is required", id},
 		{"make-template", []string{"make-template"}, "--name is required", "advcli-template"},
-		{"pause", []string{"pause"}, "--claude-instance-id is required", id},
-		{"decide id", []string{"decide", "--request-token", token, "--decision", "allow"}, "--claude-instance-id is required", id},
-		{"decide token", []string{"decide", "--claude-instance-id", id, "--decision", "deny"}, "--request-token is required", token},
-		{"decide decision", []string{"decide", "--claude-instance-id", id, "--request-token", token}, "--decision is required (allow|deny)", ""},
-		{"resume", []string{"resume"}, "--claude-instance-id is required", id},
-		{"kill", []string{"kill"}, "--claude-instance-id is required", id},
-		{"get", []string{"get"}, "--claude-instance-id is required", id},
+		{"pause", []string{"pause"}, "--instance-id is required", id},
+		{"decide id", []string{"decide", "--request-token", token, "--decision", "allow"}, "--instance-id is required", id},
+		{"decide token", []string{"decide", "--instance-id", id, "--decision", "deny"}, "--request-token is required", token},
+		{"decide decision", []string{"decide", "--instance-id", id, "--request-token", token}, "--decision is required (allow|deny)", ""},
+		{"resume", []string{"resume"}, "--instance-id is required", id},
+		{"kill", []string{"kill"}, "--instance-id is required", id},
+		{"get", []string{"get"}, "--instance-id is required", id},
 		{"get-permission", []string{"get-permission"}, "--request-token is required", token},
 		{"trail-emit token", append(relay, "--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", id), "--token is required", token},
 		{"trail-emit endpoint", append(relay, "--token", token, "--outcome", "200", "--instance-id", id), "--endpoint is required", "http://127.0.0.1:9/r"},
@@ -412,7 +412,7 @@ func TestAdviceFollow_I4_CLILiteralReuseSpelling(t *testing.T) {
 	writeHolders(t, socket) // the holder exits: the name is free
 	flag := advCLIQuoted(t, env.ErrDescription, "the reuse opt-in reuse_finished (", " on the CLI)")
 
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--claude-instance-id", id, "--cwd", t.TempDir(),
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--instance-id", id, "--cwd", t.TempDir(),
 		"--tmux-session-name", heldName, "--no-pre-trust", flag)
 	if code != 0 {
 		t.Fatalf("spawn %s: exit=%d stdout=%q stderr=%q; want the reuse to launch", flag, code, stdout, stderr)

@@ -44,7 +44,7 @@ func reportedAt(t *testing.T, f *v5Store, id string, settleMs, nowMs int64) stri
 			t.Fatalf("ListSpawns: %v", err)
 		}
 		for _, row := range rows {
-			if row.ClaudeInstanceID == id {
+			if row.InstanceID == id {
 				return row.ReportedState, true
 			}
 		}

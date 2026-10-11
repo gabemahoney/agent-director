@@ -114,17 +114,17 @@ var _ ResumeTmux = TmuxClient(nil)
 
 // ResumeParams is the typed parameter shape for the resume verb.
 type ResumeParams struct {
-	// ClaudeInstanceID identifies the finished (ended or missing) row to resume.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID identifies the finished (ended or missing) row to resume.
+	InstanceID string `json:"instance_id"`
 }
 
 // ResumeResult is the typed return shape: the id and what the launch's
 // pre-trust did (pre_trust). The id field is the same id the caller passed
 // in; resume preserves the instance id (SRD §8.1).
 type ResumeResult struct {
-	// ClaudeInstanceID is the id of the resumed row — identical to the
-	// value passed in ResumeParams.ClaudeInstanceID.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID is the id of the resumed row — identical to the
+	// value passed in ResumeParams.InstanceID.
+	InstanceID string `json:"instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
 	// of three values (SR-22.6):
 	//   - "ok": the folder-trust entry was written.
@@ -185,7 +185,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 		identity: identity,
 		release:  ownerReleaser(d.s, owner),
 		restoreWrite: func() (CondResult, error) {
-			return d.s.RestoreAfterFailedResume(row.ClaudeInstanceID, movedVersion, resumePriorOf(row))
+			return d.s.RestoreAfterFailedResume(row.InstanceID, movedVersion, resumePriorOf(row))
 		},
 		row:             row,
 		disagreeWritten: disagreeWritten,
@@ -216,7 +216,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     missing guard 3 refuses, that once find-missing marks it missing, if
 //     get still shows no session id, the step is a spawn of the id with the
 //     reuse opt-in.
-//  3. `claude_session_id` must be populated → otherwise
+//  3. `session_id` must be populated → otherwise
 //     ErrNoSessionId. A Spawn killed before its first SessionStart
 //     hook fired has no rotated session id to point --resume at, nor does
 //     a spawn's or reuse's launch that never reported in and that
@@ -294,7 +294,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity()}
 
-	row, err := s.GetSpawn(params.ClaudeInstanceID)
+	row, err := s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return ResumeResult{}, err
 	}
@@ -304,19 +304,19 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 	if row.State != store.StateEnded && row.State != store.StateMissing {
 		return ResumeResult{}, fmt.Errorf("%w: spawn %s state=%s",
-			ErrSpawnNotResumable, params.ClaudeInstanceID, row.State)
+			ErrSpawnNotResumable, params.InstanceID, row.State)
 	}
 
-	if row.ClaudeSessionID == "" {
-		return ResumeResult{}, fmt.Errorf("%w: spawn %s has no claude_session_id",
-			ErrNoSessionId, params.ClaudeInstanceID)
+	if row.SessionID == "" {
+		return ResumeResult{}, fmt.Errorf("%w: spawn %s has no session_id",
+			ErrNoSessionId, params.InstanceID)
 	}
 
 	if key, ok := spawn.ReservedHomeKey(row.ExtraEnv); ok {
-		return ResumeResult{}, homeInExtraEnvError(row.ClaudeInstanceID, key)
+		return ResumeResult{}, homeInExtraEnvError(row.InstanceID, key)
 	}
 	if key, ok := spawn.InvalidEnvKey(row.ExtraEnv); ok {
-		return ResumeResult{}, invalidEnvKeyError(row.ClaudeInstanceID, key)
+		return ResumeResult{}, invalidEnvKeyError(row.InstanceID, key)
 	}
 
 	// Resolve the transcript path against a strict precedence (bug b.1ba):
@@ -330,7 +330,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	if persisted := row.JSONLPath; persisted != "" {
 		if _, err := os.Stat(persisted); err == nil {
 			// Persisted path exists — it wins outright.
-			return resumeAfterJsonl(d, row, row.ClaudeSessionID)
+			return resumeAfterJsonl(d, row, row.SessionID)
 		} else {
 			attempts = append(attempts, jsonlAttempt{
 				source: "persisted", path: persisted, statErr: err,
@@ -356,15 +356,15 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	var fallback string
 	var ferr error
 	if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
-		fallback, ferr = spawn.JsonlPathIn(dir, row.CWD, row.ClaudeSessionID)
+		fallback, ferr = spawn.JsonlPathIn(dir, row.CWD, row.SessionID)
 	} else {
-		fallback, ferr = spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+		fallback, ferr = spawn.JsonlPath(row.CWD, row.SessionID)
 	}
 	if ferr != nil {
 		return ResumeResult{}, fmt.Errorf("resume: resolve jsonl: %w", ferr)
 	}
 	if _, err := os.Stat(fallback); err == nil {
-		return resumeAfterJsonl(d, row, row.ClaudeSessionID)
+		return resumeAfterJsonl(d, row, row.SessionID)
 	} else {
 		attempts = append(attempts, jsonlAttempt{
 			source: "fallback", path: fallback, statErr: err,
@@ -383,7 +383,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	// a session-id change: it points the relaunch at the recovered archived
 	// session id (resumeAfterJsonl's sessionID, which spawn.ComposeRelaunch
 	// puts in the argv), so `claude --resume` reattaches to the recovered
-	// transcript. The row's claude_session_id is not rewritten here (the move
+	// transcript. The row's session_id is not rewritten here (the move
 	// keeps it); it updates later, when the resumed process's SessionStart
 	// hook fires.
 	//
@@ -394,7 +394,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	// id before advancing to the next, older entry. Without this, a newer entry
 	// whose recorded path has rotted would be skipped outright and an older
 	// entry could win, silently reattaching resume to older history.
-	lifeHistory, herr := s.ListSessionHistory(params.ClaudeInstanceID, row.LifeNumber)
+	lifeHistory, herr := s.ListSessionHistory(params.InstanceID, row.LifeNumber)
 	if herr != nil {
 		return ResumeResult{}, fmt.Errorf("resume: list session history: %w", herr)
 	}
@@ -404,7 +404,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		// it stats; on any stat failure fall through to the recomputed path.
 		if h.JSONLPath != "" {
 			if _, err := os.Stat(h.JSONLPath); err == nil {
-				return resumeAfterJsonl(d, row, h.ClaudeSessionID)
+				return resumeAfterJsonl(d, row, h.SessionID)
 			} else {
 				attempts = append(attempts, jsonlAttempt{
 					source: "history", path: h.JSONLPath, statErr: err,
@@ -418,9 +418,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		var recomputed string
 		var cerr error
 		if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
-			recomputed, cerr = spawn.JsonlPathIn(dir, row.CWD, h.ClaudeSessionID)
+			recomputed, cerr = spawn.JsonlPathIn(dir, row.CWD, h.SessionID)
 		} else {
-			recomputed, cerr = spawn.JsonlPath(row.CWD, h.ClaudeSessionID)
+			recomputed, cerr = spawn.JsonlPath(row.CWD, h.SessionID)
 		}
 		if cerr != nil {
 			// Record the recomposition failure as an attempt so the
@@ -437,7 +437,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 			continue
 		}
 		if _, err := os.Stat(recomputed); err == nil {
-			return resumeAfterJsonl(d, row, h.ClaudeSessionID)
+			return resumeAfterJsonl(d, row, h.SessionID)
 		} else {
 			attempts = append(attempts, jsonlAttempt{
 				source: "history", path: recomputed, statErr: err,
@@ -455,7 +455,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	if row.JSONLPath == "" && len(history) == 0 {
 		return ResumeResult{}, fmt.Errorf(
 			"%w: spawn %s session %s has produced no transcript on disk (tried %s)",
-			ErrJsonlNeverWritten, params.ClaudeInstanceID, row.ClaudeSessionID,
+			ErrJsonlNeverWritten, params.InstanceID, row.SessionID,
 			formatJsonlAttempts(attempts))
 	}
 
@@ -595,12 +595,12 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     then the launch error.
 //
 // On success the row stays pending until the resumed agent's first
-// SessionStart hook moves it and rotates its claude_session_id.
+// SessionStart hook moves it and rotates its session_id.
 func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, error) {
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
 		return ResumeResult{}, fmt.Errorf("resume: %w", err)
 	}
-	id := row.ClaudeInstanceID
+	id := row.InstanceID
 	if hasControlChar(id) {
 		return ResumeResult{}, errors.New(`resume: the instance id contains a control character, so its session cannot be labelled; removing the row is a human's decision, see "Operator actions" in agent-director's docs/operator-actions.md; no tmux call was made and nothing was written`)
 	}
@@ -650,15 +650,15 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 
 	out := spawn.Relaunch(d.t, req)
 	_ = trail.Emit(context.Background(), "ad.resume.moved_to_pending", map[string]any{
-		"claude_instance_id": id,
-		"prior_state":        row.State,
-		"claude_session_id":  row.ClaudeSessionID,
-		"source":             nameHeldSourceResume,
+		"instance_id": id,
+		"prior_state": row.State,
+		"session_id":  row.SessionID,
+		"source":      nameHeldSourceResume,
 	})
 	if err := d.launchOnto(row, pre.Reasons, movedVersion, owner).outcome(out, req); err != nil {
 		return ResumeResult{}, err
 	}
-	return ResumeResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil
+	return ResumeResult{InstanceID: id, PreTrust: string(preTrust)}, nil
 }
 
 // resumePriorOf returns what the move to pending clears, from the row as
@@ -705,13 +705,13 @@ func resumeMoveError(id string, res CondResult, err error) error {
 // snapshot, or a re-read that fails otherwise, gives nil, and the Leftover
 // refusal stands. Nothing was written either way.
 func resumeLostRace(s ResumeStore, row Spawn) error {
-	again, err := s.GetSpawn(row.ClaudeInstanceID)
+	again, err := s.GetSpawn(row.InstanceID)
 	found := true
 	if errors.Is(err, ErrSpawnNotFound) {
 		found, err = false, nil
 	}
 	if res := leftoverLostRace(row.Snapshot, again.Snapshot, found, err); res != 0 {
-		return resumeMoveError(row.ClaudeInstanceID, res, nil)
+		return resumeMoveError(row.InstanceID, res, nil)
 	}
 	return nil
 }
@@ -742,16 +742,16 @@ func launchInProgressError(row Spawn) error {
 		began = "a launch of this row began at " + at.Format(time.RFC3339Nano)
 	}
 	next := ""
-	if row.ClaudeSessionID == "" {
+	if row.SessionID == "" {
 		next = "; " + launchInProgressNoSessionStep
 	}
 	return fmt.Errorf("%w: spawn %s is pending: %s and its agent has not reported in; resume applies only to an ended or missing row; if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start%s; nothing was written",
-		ErrSpawnNotResumable, row.ClaudeInstanceID, began, next)
+		ErrSpawnNotResumable, row.InstanceID, began, next)
 }
 
 // Resume relaunches a finished (ended/missing) row by launching
 // `claude --resume` in a fresh tmux session pointed at the same JSONL
-// transcript. The claude_instance_id is preserved; the result returns it and
+// transcript. The instance_id is preserved; the result returns it and
 // pre_trust (what the launch's pre-trust did: ok, skipped or failed). A
 // finished row is not proof that its agent is dead: missing is the sweep's
 // judgement on the evidence available to it, not proof that the agent has
@@ -820,7 +820,7 @@ func launchInProgressError(row Spawn) error {
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the
 // parent id (the caller's AGENT_DIRECTOR_INSTANCE_ID). The row stays pending
-// until the agent reports in (Claude Code's SessionStart), then becomes
+// until the agent reports in (its SessionStart hook), then becomes
 // waiting. If the launch fails other than by timing out, Resume restores the
 // row to its prior ended or missing state; if the restore cannot be applied,
 // the error says so. The session-creating call is bounded by the create
@@ -855,7 +855,7 @@ func launchInProgressError(row Spawn) error {
 //     session id, as its description says. Nothing was written. Also a lost race: the row changed after resume examined it
 //     (found by the move, or by the one re-read after the pre-launch check
 //     found a left-over session), and nothing was written.
-//   - [ErrNoSessionId]: claude_session_id is empty — the Spawn was killed
+//   - [ErrNoSessionId]: session_id is empty — the Spawn was killed
 //     before its first SessionStart hook, or a spawn's or reuse's launch
 //     never reported in and find-missing marked its pending row missing (the
 //     launch-in-progress refusal above names this recourse). Recourse: spawn

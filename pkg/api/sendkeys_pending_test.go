@@ -29,7 +29,7 @@ var skpKinds = []pendingKind{pendingFresh, pendingReused}
 
 // skpSend runs send-keys with allow_pending on id.
 func skpSend(e *killEnv, id string) error {
-	_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: id, Text: skpText, AllowPending: true})
+	_, err := e.sendKeys(api.SendKeysParams{InstanceID: id, Text: skpText, AllowPending: true})
 	return err
 }
 
@@ -94,7 +94,7 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 					r := tc.seed(t, e, k)
 					e.setPaneTexts(r.Socket)
 					want := paneText(r.Socket, pane(t, r, tc.lostReply))
-					if res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID}); err != nil || res.Pane != want {
+					if res, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID}); err != nil || res.Pane != want {
 						t.Errorf("ReadPane = %q, %v; want %q", res.Pane, err, want)
 					}
 					if got := e.columns(t, r.ID).State; got != store.StatePending {
@@ -315,7 +315,7 @@ func TestSendKeysNotedUnreportedRow(t *testing.T) {
 				apitest.WithLivenessUnverifiedSince("2026-10-09 10:00:00")))
 			cols := e.columns(t, r.ID)
 
-			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: skpText, AllowPending: allow})
+			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: allow})
 
 			if allow {
 				if err != nil {
@@ -345,7 +345,7 @@ func TestSendKeysPendingReuseWithoutAllowPending(t *testing.T) {
 			r := e.seedPending(t, pendingReused, tc.shape)
 			cols := e.columns(t, r.ID)
 
-			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: skpText})
+			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText})
 
 			assertOneName(t, err, "ErrSpawnNotInteractive")
 			e.assertNoTmuxCall(t)

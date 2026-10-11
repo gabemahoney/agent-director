@@ -68,7 +68,7 @@ func clientReported(t *testing.T, c *api.Client, id string) (api.StatusResult, a
 		var res api.ListResult
 		timed("List", func() (err error) { res, err = c.List(api.ListParams{State: states}); return err })
 		for _, r := range res.Spawns {
-			if r.ClaudeInstanceID == id {
+			if r.InstanceID == id {
 				return r, true
 			}
 		}
@@ -187,7 +187,7 @@ func TestClientSettledReadsKeepRawExtras(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	for _, r := range res.Spawns {
-		ids = append(ids, r.ClaudeInstanceID)
+		ids = append(ids, r.InstanceID)
 	}
 	if !slices.Equal(ids, []string{asking}) {
 		t.Errorf("list --state waiting = %v; want only the row reading waiting [%s]", ids, asking)

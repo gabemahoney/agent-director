@@ -39,7 +39,7 @@ const rn2ResolutionNote = "RN-2 times run from the stored ended_at (whole second
 type sample struct {
 	Case       string  `json:"case"`
 	Index      int     `json:"index"`
-	InstanceID string  `json:"claude_instance_id,omitempty"`
+	InstanceID string  `json:"instance_id,omitempty"`
 	Outcome    outcome `json:"outcome"`
 	// Millis is the measured time, set only when Outcome is completed.
 	Millis *int64 `json:"elapsed_ms,omitempty"`

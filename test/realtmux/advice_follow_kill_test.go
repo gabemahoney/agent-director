@@ -35,7 +35,7 @@ func TestAdviceFollow_C7_RepeatedKillWhileServerExits(t *testing.T) {
 	r := f.liveRow(t, killRowSpec{}) // the server's only session
 	c := f.open(t, 0, "")
 	defer c.Close() //nolint:errcheck
-	kill := func() (api.KillResult, error) { return c.Kill(api.KillParams{ClaudeInstanceID: r.InstanceID}) }
+	kill := func() (api.KillResult, error) { return c.Kill(api.KillParams{InstanceID: r.InstanceID}) }
 	if res, err := kill(); err != nil || !res.KillSent {
 		t.Fatalf("first kill = %+v, %s; want success with kill_sent true", res, describe(err))
 	}

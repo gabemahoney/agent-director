@@ -65,7 +65,7 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 
 // ErrNoSessionId is returned by the resume verb when the row's
-// claude_session_id column is empty — typically because the Spawn
+// session_id column is empty — typically because the Spawn
 // was killed before its first SessionStart hook fired, or because a spawn's
 // or reuse's launch never reported in and find-missing marked its pending
 // row missing (resume's launch-in-progress refusal of that pending row,
@@ -97,7 +97,7 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 
 // ErrJsonlNeverWritten is returned by the resume verb when the row carries a
-// claude_session_id but no transcript has EVER been written for it — the
+// session_id but no transcript has EVER been written for it — the
 // persisted jsonl_path is NULL (the SessionStart hook found no file on disk),
 // the CLAUDE_CONFIG_DIR-aware fallback path also does not exist, and the
 // row's visible history is empty, so there is nothing to fall back on. It is

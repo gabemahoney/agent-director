@@ -49,8 +49,8 @@ const DefaultReadPaneLines = 25
 // (SRD §12 explicitly leaves the bound to the caller); a negative NLines is
 // refused with ErrInvalidFlags.
 type ReadPaneParams struct {
-	// ClaudeInstanceID identifies the Spawn whose pane will be captured.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID identifies the Spawn whose pane will be captured.
+	InstanceID string `json:"instance_id"`
 	// NLines is the number of trailing pane lines to return. 0 falls back to
 	// [DefaultReadPaneLines] (25). There is no upper cap. A negative value is
 	// refused with [ErrInvalidFlags].
@@ -153,16 +153,16 @@ func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPanePa
 		return ReadPaneResult{}, fmt.Errorf("%w: n_lines = %d is negative; pass 0 (or omit it) for the default of %d lines, or a positive number of lines",
 			ErrInvalidFlags, params.NLines, DefaultReadPaneLines)
 	}
-	row, err := s.GetSpawn(params.ClaudeInstanceID)
+	row, err := s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return ReadPaneResult{}, err
 	}
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
-		return ReadPaneResult{}, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return ReadPaneResult{}, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
-		return ReadPaneResult{}, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return ReadPaneResult{}, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	r := &readPaneRun{paneRun{
 		t: t, pc: pc, row: row, storeID: s.StoreID(), socket: socket,

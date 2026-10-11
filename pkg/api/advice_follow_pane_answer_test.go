@@ -126,7 +126,7 @@ func TestAdviceFollow_E11_PaneChangedReadPaneAgain(t *testing.T) {
 			}
 			p.assertNothingSent(t)
 
-			res, err := p.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: p.r.ID})
+			res, err := p.readPaneClient(t, api.ReadPaneParams{InstanceID: p.r.ID})
 			if err != nil {
 				t.Fatalf("read-pane again: %v", err)
 			}
@@ -160,7 +160,7 @@ func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 	p.sks = p.store
 	p.setPane("the dialog answered\n")
 	p.now = p.now.Add(2 * time.Second) // the intent recorded hook_gone_at
-	res, err := p.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: p.r.ID})
+	res, err := p.readPaneClient(t, api.ReadPaneParams{InstanceID: p.r.ID})
 	if err != nil {
 		t.Fatalf("read-pane: %v", err)
 	}
@@ -209,13 +209,13 @@ func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 			}
 			readHash := func() string {
 				t.Helper()
-				res, err := p.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: p.r.ID})
+				res, err := p.readPaneClient(t, api.ReadPaneParams{InstanceID: p.r.ID})
 				if err != nil {
 					t.Fatalf("read-pane: %v", err)
 				}
 				return res.PaneSHA256
 			}
-			if err := p.sendKeys(api.SendKeysParams{ClaudeInstanceID: p.r.ID, Text: "1", ExpectPaneSHA256: readHash()}); err != nil {
+			if err := p.sendKeys(api.SendKeysParams{InstanceID: p.r.ID, Text: "1", ExpectPaneSHA256: readHash()}); err != nil {
 				t.Fatalf("send-keys answering the dialog with the pane's hash: %v; want it typed", err)
 			}
 			p.setPane("the dialog answered, the agent's prompt\n")
@@ -230,7 +230,7 @@ func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 			p.rec.Reset()
 			p.endAfterEnter(t, p.r)
 
-			if err := p.sendKeys(api.SendKeysParams{ClaudeInstanceID: p.r.ID, Text: exitText, ExpectPaneSHA256: hash}); err != nil {
+			if err := p.sendKeys(api.SendKeysParams{InstanceID: p.r.ID, Text: exitText, ExpectPaneSHA256: hash}); err != nil {
 				t.Fatalf("send-keys /exit with the pane's hash: %v; want it typed", err)
 			}
 

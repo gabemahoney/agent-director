@@ -45,7 +45,7 @@ func preTrustField(skippedWhy string) apitest.DescCase {
 // classes (SR-18.1); missing is not proof of death (SR-18.2, AC-DOC-02: the
 // full sentence, or the short form, decision-0930e); make-template naming
 // spawn's per-call params by their manifest names, flag beside (b.c4u);
-// spawn's permission arrays and claude_args texts read right on every surface,
+// spawn's permission arrays and agent_args texts read right on every surface,
 // with no CLI-only spelling (b.ia3); and each integer count param stating that
 // a negative value is refused (b.c4n).
 func manifestTextCases() []textCase {
@@ -64,8 +64,8 @@ func manifestTextCases() []textCase {
 			"a reuse's archive of the previous session", "or its change failed", "a busy store included")},
 		{verb: "spawn", param: "tmux_session_name", c: apitest.DescSpawnSessionNameParam()},
 		{verb: "spawn", param: "tmux_session_name", c: tokens("rejects dollar and backslash", `'$'`, `'\'`)},
-		{verb: "spawn", param: "claude_instance_id", c: tokens("rejects control characters", "control character", "ErrInvalidFlags")},
-		{verb: "spawn", param: "claude_instance_id", c: apitest.DescInstanceIDCollision(apitest.CollisionSite{})},
+		{verb: "spawn", param: "instance_id", c: tokens("rejects control characters", "control character", "ErrInvalidFlags")},
+		{verb: "spawn", param: "instance_id", c: apitest.DescInstanceIDCollision(apitest.CollisionSite{})},
 		{verb: "spawn", param: "no_pre_trust", c: tokens("recorded for the life", "recorded on the row for its life",
 			"every resume of that life follows it")},
 		{verb: "spawn", param: "reuse_finished", c: apitest.DescReuseFinishedParam()},
@@ -84,10 +84,10 @@ func manifestTextCases() []textCase {
 		{verb: "make-template", param: "relay_mode", c: tokens("per-call spelling", "Per-call relay_mode (--relay-mode on the CLI) overrides.")},
 		{verb: "make-template", param: "extra_env", c: tokens("per-call spelling",
 			"Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision.")},
-		{verb: "make-template", param: "claude_args", c: apitest.DescCase{Name: "per-call spelling",
-			Require: []string{"Per-call claude_args (on the CLI, spawn's arguments after --) REPLACES"}, Forbid: []string{"--claude-args"}}},
-		{verb: "spawn", param: "claude_args", c: tokens("after the supervisor's flags", "after the supervisor's own flags")},
-		{verb: "get", field: "claude_args", c: apitest.DescCase{Name: "after the supervisor's flags",
+		{verb: "make-template", param: "agent_args", c: apitest.DescCase{Name: "per-call spelling",
+			Require: []string{"Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES"}, Forbid: []string{"--agent-args", "--claude-args"}}},
+		{verb: "spawn", param: "agent_args", c: tokens("after the supervisor's flags", "after the supervisor's own flags")},
+		{verb: "get", field: "agent_args", c: apitest.DescCase{Name: "after the supervisor's flags",
 			Require: []string{"after the supervisor's own flags"}, Forbid: []string{"--settings"}}},
 	}
 	for _, p := range []string{"allow", "deny", "ask"} {
@@ -95,7 +95,7 @@ func manifestTextCases() []textCase {
 			Require: []string{"permissions." + p + " entries, one per array element (on the CLI, a repeatable flag)"}, Forbid: []string{"Repeated"}}})
 	}
 	for _, verb := range []string{"spawn", "resume"} {
-		cases = append(cases, textCase{verb: verb, c: tokens("names pre_trust", "Returns the claude_instance_id and pre_trust", "ok, skipped or failed")})
+		cases = append(cases, textCase{verb: verb, c: tokens("names pre_trust", "Returns the instance_id and pre_trust", "ok, skipped or failed")})
 	}
 	for _, s := range []struct{ verb, field string }{{"status", "state"}, {"get", "state"}, {"list", "spawns"}} {
 		cases = append(cases, textCase{verb: s.verb, field: s.field, c: apitest.DescMissingNotProof()})
@@ -126,6 +126,63 @@ func TestManifestTextCases(t *testing.T) {
 			}
 			apitest.AssertAgentTextCase(t, site, text, tc.c)
 		})
+	}
+}
+
+// claudeOnlyPhrases is Appendix A's list of Claude-only wording, and the old
+// Claude-named spellings, that no manifest text may carry (SR-4.4, SR-4.2):
+// each verb, param and result field says "the agent", or names its agent where
+// only one does something. The old names are refused, never described.
+var claudeOnlyPhrases = []string{
+	"Launch a tracked Claude Code agent",
+	"(Claude Code's SessionStart)",
+	"Claude Code tool that triggered the permission request",
+	"Pass-through argv to `claude`",
+	"via `claude --resume`",
+	"Claude Code session UUID, extracted from SessionStart hook's transcript_path",
+	"Bake default Claude argv",
+	"Claude Code hook payload",
+	"claude_instance_id. Required.",
+	"claude_instance_id", "claude_args", "claude_session_id",
+	"--claude-instance-id", "--claude-args",
+}
+
+// TestManifestTextsHaveNoClaudeOnlyPhrases runs claudeOnlyPhrases as MustNot
+// over every verb, param and result-field text, the hook's and trail-emit's
+// included (SR-4.4).
+func TestManifestTextsHaveNoClaudeOnlyPhrases(t *testing.T) {
+	c := apitest.DescCase{Name: "no Claude-only wording", MustNot: claudeOnlyPhrases}
+	for _, name := range []string{"hook", "trail-emit"} {
+		verbOf(t, name) // a missing verb would let the loop below pass vacuously for it
+	}
+	for _, v := range manifest.Verbs {
+		apitest.AssertAgentTextCase(t, v.Name+" description", v.Description, c)
+		for _, p := range v.Params {
+			apitest.AssertAgentTextCase(t, v.Name+" param "+p.Name, p.Description, c)
+		}
+		for _, f := range v.ResultFields {
+			apitest.AssertAgentTextCase(t, v.Name+" result field "+f.Name, f.Description, c)
+		}
+	}
+}
+
+// recordingTB records that a check failed, instead of failing the test.
+type recordingTB struct {
+	testing.TB
+	failed bool
+}
+
+func (r *recordingTB) Helper()               {}
+func (r *recordingTB) Errorf(string, ...any) { r.failed = true }
+
+// TestClaudeOnlyPhrasesMatch keeps the check above from passing vacuously: the
+// phrase list flags a text that carries one of its phrases.
+func TestClaudeOnlyPhrasesMatch(t *testing.T) {
+	probe := &recordingTB{}
+	apitest.AssertAgentTextCase(probe, "probe", "Launch a tracked Claude Code agent in a new tmux session.",
+		apitest.DescCase{Name: "probe", MustNot: claudeOnlyPhrases})
+	if !probe.failed {
+		t.Error("claudeOnlyPhrases did not flag \"Launch a tracked Claude Code agent\"; the MustNot check would pass vacuously")
 	}
 }
 

@@ -79,7 +79,7 @@ type ignoredHook struct {
 }
 
 // ignoredFields builds ad.hook.ignored's SR-14 field set for h with the row
-// fields null: claude_instance_id (null when h has none), hook_event, reason,
+// fields null: instance_id (null when h has none), hook_event, reason,
 // parent_pid, parent_command (read now, through pp; null when unreadable or pp
 // is nil), hook_session_id (null when the payload gives none), row_session_id
 // and row_pane_pid (null here; emitIgnored fills them from its row read) and
@@ -87,18 +87,18 @@ type ignoredHook struct {
 // use, so the two records cannot drift. It reads no store.
 func ignoredFields(pp ParentProc, h ignoredHook) map[string]any {
 	fields := map[string]any{
-		"claude_instance_id": nil,
-		"hook_event":         h.event,
-		"reason":             h.reason,
-		"parent_pid":         h.parent.pid,
-		"parent_command":     nil,
-		"hook_session_id":    nil,
-		"row_session_id":     nil,
-		"row_pane_pid":       nil,
-		"source":             "ad_hook",
+		"instance_id":     nil,
+		"hook_event":      h.event,
+		"reason":          h.reason,
+		"parent_pid":      h.parent.pid,
+		"parent_command":  nil,
+		"hook_session_id": nil,
+		"row_session_id":  nil,
+		"row_pane_pid":    nil,
+		"source":          "ad_hook",
 	}
 	if h.instanceID != "" {
-		fields["claude_instance_id"] = h.instanceID
+		fields["instance_id"] = h.instanceID
 	}
 	if pp != nil {
 		if name, ok := pp.CommandName(h.parent.pid); ok && name != "" {
@@ -131,8 +131,8 @@ func emitIgnored(ctx context.Context, rr ignoredRowReader, pp ParentProc, h igno
 	}
 	fields := ignoredFields(pp, h)
 	if err == nil {
-		if sp.ClaudeSessionID != "" {
-			fields["row_session_id"] = sp.ClaudeSessionID
+		if sp.SessionID != "" {
+			fields["row_session_id"] = sp.SessionID
 		}
 		if sp.Identity.PanePID > 0 {
 			fields["row_pane_pid"] = sp.Identity.PanePID
@@ -186,20 +186,20 @@ const paneIsGrandparentAdvice = "The parent of this agent's hooks is a child of 
 // hook; the advice names both. It keeps no record of having warned:
 // SessionStart fires once per launch and again on /clear, compact and resume,
 // and each such refused SessionStart writes one. Its fields:
-// claude_instance_id, pane_pid, pane_command (read now, through pp; null when
+// instance_id, pane_pid, pane_command (read now, through pp; null when
 // unreadable), parent_pid and parent_command (ad.hook.ignored's values),
 // advice (paneIsGrandparentAdvice) and source ad_hook. It reads no store.
 // Fail-open: a trail-write failure changes nothing; the gate's decision, the
 // row and the hook's exit are those of any ignored hook.
 func emitPaneIsGrandparent(ctx context.Context, pp ParentProc, h ignoredHook, panePID int, parentCommand any) {
 	fields := map[string]any{
-		"claude_instance_id": h.instanceID,
-		"pane_pid":           panePID,
-		"pane_command":       nil,
-		"parent_pid":         h.parent.pid,
-		"parent_command":     parentCommand,
-		"advice":             paneIsGrandparentAdvice,
-		"source":             "ad_hook",
+		"instance_id":    h.instanceID,
+		"pane_pid":       panePID,
+		"pane_command":   nil,
+		"parent_pid":     h.parent.pid,
+		"parent_command": parentCommand,
+		"advice":         paneIsGrandparentAdvice,
+		"source":         "ad_hook",
 	}
 	if name, ok := pp.CommandName(panePID); ok && name != "" {
 		fields["pane_command"] = name

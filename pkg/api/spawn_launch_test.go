@@ -58,7 +58,7 @@ func mustSpawn(t *testing.T, env spawnEnv, p api.SpawnParams) string {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	return res.ClaudeInstanceID
+	return res.InstanceID
 }
 
 // spawnRow reads id's row raw, and returns it with its launch token and this store's id.
@@ -142,7 +142,7 @@ func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
 				}
 			})
 			wantStart := env.clock.Now().UnixMilli()
-			id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id})
+			id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id})
 			row, tok, storeID := spawnRow(t, env, id)
 
 			calls := env.rec.SocketCalls()
@@ -168,9 +168,9 @@ func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
 				t.Errorf("identity columns = %#v; want %#v", got, want)
 			}
 			if row.State != store.StatePending || row.RowVersion != int64(1) || row.LaunchStartedAt != wantStart ||
-				row.TmuxSocket != env.socket || !spawnTokenRE.MatchString(tok) || row.ClaudeSessionID != nil {
+				row.TmuxSocket != env.socket || !spawnTokenRE.MatchString(tok) || row.SessionID != nil {
 				t.Errorf("row {state %v, row_version %v, launch_started_at %v, socket %v, token %q, session %v}; want {pending, 1, %d, %s, 16 hex, NULL}",
-					row.State, row.RowVersion, row.LaunchStartedAt, row.TmuxSocket, tok, row.ClaudeSessionID, wantStart, env.socket)
+					row.State, row.RowVersion, row.LaunchStartedAt, row.TmuxSocket, tok, row.SessionID, wantStart, env.socket)
 			}
 			if tc.hook && (hooked != (store.HookApplied{Reason: store.HookReasonNoPaneRecorded}) || env.logs.Len() != 0) {
 				t.Errorf("SessionStart before the identity write = %+v, client log %q; want ignored, %s, and no log",
@@ -248,8 +248,8 @@ func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
 	env := newSpawnEnv(t)
 	id := "identfail-" + uuid.NewString()[:8]
 	storefix.InjectWriteFailure(t, env.dbPath, storefix.WriteFailLaunchIdentity, id)
-	res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
-	if err != nil || res.ClaudeInstanceID != id {
+	res, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: id})
+	if err != nil || res.InstanceID != id {
 		t.Fatalf("Spawn = %+v, %v; want %s, nil", res, err, id)
 	}
 	row, tok, storeID := spawnRow(t, env, id)
@@ -364,7 +364,7 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 			}
 			mark := trailLen(t)
 
-			res, err, returned := spawnReturned(e.c, api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
+			res, err, returned := spawnReturned(e.c, api.SpawnParams{CWD: t.TempDir(), InstanceID: id})
 
 			if got := callKinds(e.rec); !reflect.DeepEqual(got, calls) {
 				t.Fatalf("tmux calls = %q; want %q (no label by id, no kill)", got, calls)
@@ -378,7 +378,7 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 				}
 			case tc.unresponsive:
 				assertOneName(t, err, "ErrTmuxUnresponsive")
-			case err != nil || res.ClaudeInstanceID != id:
+			case err != nil || res.InstanceID != id:
 				t.Fatalf("Spawn = (%+v, %v); want success for %s", res, err, id)
 			}
 			cols, cerr := apitest.ReadSpawnColumns(e.dbPath, id)
@@ -439,7 +439,7 @@ func TestSpawnLaunchBoundCeiling(t *testing.T) {
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailLabel}, tmux.CallCreate).
 				Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallSetLabel, tmux.CallKillSession)
 
-			_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: tc.id,
+			_, err := e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: tc.id,
 				TmuxSessionName: name, TmuxSessionNameSupplied: true})
 			if !errors.Is(err, api.ErrTmuxSessionCreate) {
 				t.Fatalf("Spawn err = %v; want ErrTmuxSessionCreate", err)

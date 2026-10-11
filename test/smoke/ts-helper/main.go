@@ -111,9 +111,9 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		storePath   = fs.String("store", "", "path to SQLite store file (required)")
 		state       = fs.String("state", "waiting", "spawn state (waiting|working|ended|check_permission|…)")
 		cwd         = fs.String("cwd", "/tmp", "working directory for the spawn row")
-		id          = fs.String("id", "", "claude_instance_id (UUID); auto-generated if empty")
+		id          = fs.String("id", "", "instance_id (UUID); auto-generated if empty")
 		relayMode   = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
-		sessionID   = fs.String("session-id", "", "claude_session_id; non-empty enables resume pre-flight")
+		sessionID   = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
 		createStore = fs.Bool("create-store", false, "create the store if it does not exist")
 		socket      = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
 		noPreTrust  = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
@@ -153,7 +153,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := printResult(stdout, map[string]string{
-		"claude_instance_id": instanceID,
+		"instance_id": instanceID,
 	}); err != nil {
 		printError(stderr, err)
 		return 1
@@ -169,8 +169,8 @@ func cmdSeedParentChild(args []string, stdout, stderr io.Writer) int {
 
 	var (
 		storePath = fs.String("store", "", "path to SQLite store file (required)")
-		parentID  = fs.String("parent-id", "", "claude_instance_id of the parent spawn (required)")
-		childID   = fs.String("child-id", "", "claude_instance_id of the child spawn (required)")
+		parentID  = fs.String("parent-id", "", "instance_id of the parent spawn (required)")
+		childID   = fs.String("child-id", "", "instance_id of the child spawn (required)")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -214,7 +214,7 @@ func cmdSeedPermissionRequest(args []string, stdout, stderr io.Writer) int {
 
 	var (
 		storePath  = fs.String("store", "", "path to SQLite store file (required)")
-		spawnID    = fs.String("spawn-id", "", "claude_instance_id of an existing spawn (required)")
+		spawnID    = fs.String("spawn-id", "", "instance_id of an existing spawn (required)")
 		toolName   = fs.String("tool", "", "tool name for the permission request (required)")
 		createdAgo = fs.Int("created-ago-seconds", 0, "backdate the request's created_at this many seconds (0: now); "+
 			"past the relay window it has fallen back (b.146)")
@@ -344,7 +344,7 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 // observability aid rather than a full JSON Schema document.
 var resultSchemas = map[string]map[string]string{
 	"seed-spawn": {
-		"claude_instance_id": "string",
+		"instance_id": "string",
 	},
 	"seed-parent-child": {
 		"parent_id": "string",
@@ -371,7 +371,7 @@ var resultSchemas = map[string]map[string]string{
 		"settled": "object",
 	},
 	"set-settle": {
-		"claude_instance_id": "string",
+		"instance_id": "string",
 	},
 }
 

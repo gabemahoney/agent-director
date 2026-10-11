@@ -104,7 +104,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 		{"plain spawn whose launch failed", func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
 			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
 			id := uuid.NewString()
-			if _, err := e.c.Spawn(api.SpawnParams{ClaudeInstanceID: id, CWD: t.TempDir()}); !errors.Is(err, api.ErrTmuxSessionCreate) {
+			if _, err := e.c.Spawn(api.SpawnParams{InstanceID: id, CWD: t.TempDir()}); !errors.Is(err, api.ErrTmuxSessionCreate) {
 				t.Fatalf("Spawn = %v; want ErrTmuxSessionCreate", err)
 			}
 			start, _ := e.columns(t, id).LaunchStartedAt.(int64)
@@ -127,7 +127,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 			if got.before.State != store.StatePending {
 				t.Fatalf("row before the refusal is %v; want pending", got.before.State)
 			}
-			sid, _ := got.before.ClaudeSessionID.(string)
+			sid, _ := got.before.SessionID.(string)
 			p := apitest.LaunchInProgress{InstanceID: id, NoSessionID: sid == ""}
 			if wantStart != 0 {
 				p.LaunchStart = time.UnixMilli(wantStart).UTC()
@@ -184,7 +184,7 @@ func TestResumeLoserRowDeletedBeforeReRead(t *testing.T) {
 	r.Trust.check(t, r.CWD, false, "after the refused resume")
 	for _, l := range readAPITrailLines(t)[before.mark:] {
 		if ev, _ := l["event"].(string); strings.HasPrefix(ev, "ad.resume.") {
-			t.Errorf("trail record %s for %v; want no ad.resume.* line", ev, l["claude_instance_id"])
+			t.Errorf("trail record %s for %v; want no ad.resume.* line", ev, l["instance_id"])
 		}
 	}
 	if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ID); !errors.Is(err, store.ErrSpawnNotFound) {
@@ -223,9 +223,9 @@ func TestResumeAgainAfterResumedAgentEnds(t *testing.T) {
 	endedAt, err := time.Parse(heldStoreLayout, raw)
 	pid, _ := ended.PID.(int64)
 	start, _ := ended.ProcStarttime.(string)
-	if ended.State != store.StateEnded || err != nil || pid <= 0 || start == "" || ended.ClaudeSessionID != newSess {
+	if ended.State != store.StateEnded || err != nil || pid <= 0 || start == "" || ended.SessionID != newSess {
 		t.Fatalf("after SessionEnd: {state %v, ended_at %#v (%v), pid %#v, start %#v, session %#v}; want ended with ended_at, the agent and session %s recorded",
-			ended.State, ended.EndedAt, err, ended.PID, ended.ProcStarttime, ended.ClaudeSessionID, newSess)
+			ended.State, ended.EndedAt, err, ended.PID, ended.ProcStarttime, ended.SessionID, newSess)
 	}
 	// The pre-trust entry the first resume wrote goes, so the snapshot's
 	// trust check pins that a refusal writes none.
@@ -287,7 +287,7 @@ func TestResumeAgainAfterResumedAgentEnds(t *testing.T) {
 		t.Fatalf("ad.resume.moved_to_pending lines = %d; want 2", len(lines))
 	}
 	assertAPITrailStr(t, lines[1], "prior_state", store.StateEnded)
-	assertAPITrailStr(t, lines[1], "claude_session_id", newSess)
+	assertAPITrailStr(t, lines[1], "session_id", newSess)
 	if recs := resumeDisagrees(t, r.ID); len(recs) != 0 {
 		t.Errorf("ad.provenance.disagree records = %v; want none (own session and server as recorded)", recs)
 	}

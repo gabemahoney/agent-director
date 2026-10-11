@@ -127,7 +127,7 @@ func rlfAssertListed(t *testing.T, got api.SpawnRow, status string, want ...getW
 	}
 	var have, need []string
 	for _, p := range got.PriorSessions {
-		have = append(have, p.ClaudeSessionID+" "+p.JSONLPath)
+		have = append(have, p.SessionID+" "+p.JSONLPath)
 	}
 	for _, w := range want {
 		need = append(need, w.id+" "+w.path)
@@ -175,7 +175,7 @@ func rlfResumed(t *testing.T, e *killEnv, id string) string {
 // session or transcript of r0, the row as seeded before its first reuse.
 func rlfAssertEarlierUnused(t *testing.T, e *killEnv, r0 reuseRow, text string) {
 	t.Helper()
-	earlier := []string{r0.Spawn.ClaudeSessionID, r0.JSONLPath}
+	earlier := []string{r0.Spawn.SessionID, r0.JSONLPath}
 	for _, h := range r0.History {
 		earlier = append(earlier, h.SessionID, h.JSONLPath)
 	}
@@ -200,7 +200,7 @@ func rlfAssertStored(t *testing.T, e *killEnv, id, sid string, life int64) {
 	}
 	var lives []int64
 	for _, h := range all {
-		if h.ClaudeSessionID == sid {
+		if h.SessionID == sid {
 			lives = append(lives, h.LifeNumber)
 		}
 	}
@@ -256,7 +256,7 @@ func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
 			rlfAssertListed(t, rlfGet(t, e, r.ID), tc.wantStatus)
 			msg := rlfResumeRefused(t, e, r.ID, tc.wantErr)
 			rlfAssertEarlierUnused(t, e, r0, msg)
-			rlfAssertStored(t, e, r.ID, r0.Spawn.ClaudeSessionID, reuseLife)
+			rlfAssertStored(t, e, r.ID, r0.Spawn.SessionID, reuseLife)
 			for _, h := range r0.History {
 				rlfAssertStored(t, e, r.ID, h.SessionID, h.Life)
 			}

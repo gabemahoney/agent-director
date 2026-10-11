@@ -31,7 +31,7 @@ func tokenPane(r store.LiveSpawnIdentity, id string, pid, w int) tmuxfix.SeedPan
 // recorded name with panes (none: one pane with no @ad_pane).
 func lostReplyRec(r store.LiveSpawnIdentity, panes ...tmuxfix.SeedPane) *tmuxfix.Recorder {
 	return tmuxfix.NewRecorder().StartServer(r.Identity.Socket, fmServer).SeedSessions(r.Identity.Socket, tmuxfix.SeedSession{
-		Name: r.TmuxSessionName, Label: tmuxfix.Valid(r.Identity.Token, r.ClaudeInstanceID, tmuxfix.StoreID), Panes: panes})
+		Name: r.TmuxSessionName, Label: tmuxfix.Valid(r.Identity.Token, r.InstanceID, tmuxfix.StoreID), Panes: panes})
 }
 
 // adoptChecker reads fmServer's process alive with its start time and fmAdoptPID as pane.

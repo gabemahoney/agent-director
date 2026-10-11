@@ -92,7 +92,7 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 		// nil→[] explicitly so callers never see `null` on the wire). For
 		// scalar kinds (string, int, bool, pointer) the zero value is
 		// acceptable as the "empty form" — strings like `parent_id` /
-		// `jsonl_path` / `claude_session_id` are documented as routinely
+		// `jsonl_path` / `session_id` are documented as routinely
 		// empty when the relevant field has not yet been populated.
 		if fd.AllowEmpty {
 			k := fv.Kind()

@@ -34,11 +34,11 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 	return s
 }
 
-// emptyGetJSON is the row every Get failure encodes: claude_args, labels,
+// emptyGetJSON is the row every Get failure encodes: agent_args, labels,
 // permission_requests, unproven_requests and prior_sessions empty, never null,
 // every other field zero (b.4nt).
-const emptyGetJSON = `{"claude_instance_id":"","parent_id":"","state":"","cwd":"","tmux_session_name":"",` +
-	`"claude_args":[],"relay_mode":"","jsonl_path":"","claude_session_id":"","labels":{},` +
+const emptyGetJSON = `{"instance_id":"","parent_id":"","state":"","cwd":"","tmux_session_name":"",` +
+	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +
 	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z",` +
 	`"permission_requests":[],"unproven_requests":[],"transcript_status":"","prior_sessions":[]}`
 
@@ -143,7 +143,7 @@ type recordingGetStore struct {
 }
 
 func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
-	if r.spawn.ClaudeInstanceID == id {
+	if r.spawn.InstanceID == id {
 		return r.spawn, nil
 	}
 	return store.Spawn{}, store.ErrSpawnNotFound
@@ -186,7 +186,7 @@ func TestGetReadsAndErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &recordingGetStore{spawn: store.Spawn{ClaudeInstanceID: "id-g", State: tc.state, LifeNumber: 3},
+			f := &recordingGetStore{spawn: store.Spawn{InstanceID: "id-g", State: tc.state, LifeNumber: 3},
 				permErr: tc.permErr, historyErr: tc.historyErr}
 			got, err := api.Get(f, api.RelayView{}, tc.id)
 			if !errors.Is(err, tc.want) || (err == nil && len(got.PermissionRequests) != 0) {
@@ -235,7 +235,7 @@ func TestLivenessFieldsGetAndList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%s): %v", r.id, err)
 		}
-		i := slices.IndexFunc(list.Spawns, func(l api.ListRow) bool { return l.ClaudeInstanceID == r.id })
+		i := slices.IndexFunc(list.Spawns, func(l api.ListRow) bool { return l.InstanceID == r.id })
 		if i < 0 {
 			t.Fatalf("List has no row %s", r.id)
 		}

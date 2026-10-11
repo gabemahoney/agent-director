@@ -12,7 +12,7 @@ import (
 
 // CollisionChecker is the narrow store surface ApplyDefaults needs: the one
 // pre-check read, which returns the state of the row with the given
-// claude_instance_id, exists false when there is no row, and an error only
+// instance_id, exists false when there is no row, and an error only
 // when the store cannot be read. So the one read tells no row, a live row
 // and a finished row apart (SR-9.3). A live state (see store.IsLiveState)
 // becomes ErrInstanceIdCollision, and so does a finished row unless the
@@ -74,14 +74,14 @@ func PreCheckReadError(err error) error {
 // whether to pass Launch minted (IDMinted).
 //
 // Behavior:
-//   - ClaudeInstanceID ← UUID4 if absent (IDMinted). UUID4 from
+//   - InstanceID ← UUID4 if absent (IDMinted). UUID4 from
 //     github.com/google/uuid reads crypto/rand under the hood (not
 //     math/rand). An empty id never consults the store.
 //   - TmuxSessionName ← <sanitize(basename(cwd))>-<id[:8]>. The sanitizer
 //     replaces every char outside [A-Za-z0-9_-] with `-`; an empty or
 //     all-dashes result collapses to the literal `root`.
 //   - RelayMode ← cfg.Defaults.RelayMode if the caller left it empty.
-//   - Caller-supplied ClaudeInstanceID triggers one pre-check read of the
+//   - Caller-supplied InstanceID triggers one pre-check read of the
 //     row's state. A live row (`pending` included) returns
 //     ErrInstanceIdCollision, and so does a finished row unless the caller
 //     opted in to reuse (ReuseFinished). A failed read returns
@@ -97,7 +97,7 @@ func ApplyDefaults(r *Resolved, cfg config.Config, checker CollisionChecker) (ID
 		return 0, err
 	}
 	if r.TmuxSessionName == "" {
-		r.TmuxSessionName = composeSessionName(r.CWD, r.ClaudeInstanceID)
+		r.TmuxSessionName = composeSessionName(r.CWD, r.InstanceID)
 	}
 	if r.RelayMode == "" {
 		r.RelayMode = cfg.Defaults.RelayMode
@@ -111,23 +111,23 @@ func ApplyDefaults(r *Resolved, cfg config.Config, checker CollisionChecker) (ID
 // Launch's socket resolution, settings synthesis or pre-trust (b.hjs); the
 // insert's PRIMARY KEY is left only a row inserted after this read.
 func preCheckID(r *Resolved, checker CollisionChecker) (IDCheck, error) {
-	if r.ClaudeInstanceID == "" {
-		r.ClaudeInstanceID = uuid.NewString()
+	if r.InstanceID == "" {
+		r.InstanceID = uuid.NewString()
 		return IDMinted, nil
 	}
 	if checker == nil {
 		return IDNotChecked, nil
 	}
-	state, exists, err := checker.SpawnState(r.ClaudeInstanceID)
+	state, exists, err := checker.SpawnState(r.InstanceID)
 	switch {
 	case err != nil:
 		return 0, PreCheckReadError(err)
 	case !exists:
 		return IDNoRow, nil
 	case store.IsLiveState(state):
-		return 0, fmt.Errorf("%w: %s already live", ErrInstanceIdCollision, r.ClaudeInstanceID)
+		return 0, fmt.Errorf("%w: %s already live", ErrInstanceIdCollision, r.InstanceID)
 	case !r.ReuseFinished:
-		return 0, rowExistsCollision(r.ClaudeInstanceID)
+		return 0, rowExistsCollision(r.InstanceID)
 	}
 	return IDFinishedRow, nil
 }

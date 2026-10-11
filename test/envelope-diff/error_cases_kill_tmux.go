@@ -73,8 +73,8 @@ func seedKillRow(t *testing.T, id, socket string, panePID int, paneStart string)
 }
 
 // killParams and killArgv are the kill call on id for each runner.
-func killParams(id string) map[string]any { return map[string]any{"claude_instance_id": id} }
-func killArgv(id string) []string         { return []string{"kill", "--claude-instance-id", id} }
+func killParams(id string) map[string]any { return map[string]any{"instance_id": id} }
+func killArgv(id string) []string         { return []string{"kill", "--instance-id", id} }
 
 // killTmuxErrorCases are appended to errorCases.
 var killTmuxErrorCases = []errorCase{

@@ -18,7 +18,7 @@ const (
 	// resumeHeldID is the ended row whose recorded name is held on its
 	// socket by a session with no valid label.
 	resumeHeldID = "id-err-rsc-1"
-	// resumeHeldSessID is the row's claude session id, whose transcript
+	// resumeHeldSessID is the row's agent session id, whose transcript
 	// the seed writes.
 	resumeHeldSessID = "session-uuid-err-rsc-1"
 	// resumeHeldName, resumeHeldSessionID and resumeHeldCreated describe
@@ -32,8 +32,8 @@ const (
 )
 
 // resumeParams and resumeArgv are the resume call on id for each runner.
-func resumeParams(id string) map[string]any { return map[string]any{"claude_instance_id": id} }
-func resumeArgv(id string) []string         { return []string{"resume", "--claude-instance-id", id} }
+func resumeParams(id string) map[string]any { return map[string]any{"instance_id": id} }
+func resumeArgv(id string) []string         { return []string{"resume", "--instance-id", id} }
 
 // resumeTmuxErrorCases are appended to errorCases.
 var resumeTmuxErrorCases = []errorCase{

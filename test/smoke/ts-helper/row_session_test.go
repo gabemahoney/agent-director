@@ -79,7 +79,7 @@ func readPane(t *testing.T, dbPath, id string) (api.ReadPaneResult, error) {
 		t.Fatalf("api.New: %v", err)
 	}
 	defer client.Close() //nolint:errcheck
-	return client.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id})
+	return client.ReadPane(api.ReadPaneParams{InstanceID: id})
 }
 
 // TestSeedRowSession: the table written holds the row's own session, so the

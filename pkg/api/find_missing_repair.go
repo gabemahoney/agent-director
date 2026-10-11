@@ -69,24 +69,24 @@ func RepairCheckPermission(s CheckPermissionRepairStore, v RelayView, lg FindMis
 		if it.State != store.StateCheckPermission {
 			continue
 		}
-		reqs, err := s.PermissionRequestsForSpawn(it.ClaudeInstanceID)
+		reqs, err := s.PermissionRequestsForSpawn(it.InstanceID)
 		if err != nil {
-			logFindMissing(lg, "PermissionRequestsForSpawn", it.ClaudeInstanceID, err)
+			logFindMissing(lg, "PermissionRequestsForSpawn", it.InstanceID, err)
 			continue
 		}
 		if mayHaveLiveHook(j, reqs) {
 			continue
 		}
-		newState, res, err := s.RepairCheckPermissionIfSameLife(it.ClaudeInstanceID, it.Snapshot)
+		newState, res, err := s.RepairCheckPermissionIfSameLife(it.InstanceID, it.Snapshot)
 		if err != nil {
-			logFindMissing(lg, "RepairCheckPermissionIfSameLife", it.ClaudeInstanceID, err)
+			logFindMissing(lg, "RepairCheckPermissionIfSameLife", it.InstanceID, err)
 			continue
 		}
 		if res != CondApplied {
 			continue
 		}
 		_ = trail.Emit(context.Background(), findMissingTickEvent, map[string]any{
-			"claude_instance_id":    it.ClaudeInstanceID,
+			"instance_id":           it.InstanceID,
 			"prior_state":           store.StateCheckPermission,
 			"new_state":             newState,
 			"reconciliation_reason": reasonStaleCheckPermission,

@@ -48,7 +48,7 @@ func TestClientSendKeysRelayGuardUsesConfiguredWindow(t *testing.T) {
 			}
 			api.SetClockForTest(c, time.Now) // the request's age is on the wall clock
 
-			_, err = c.SendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
+			_, err = c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1"})
 
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("SendKeys err = %v; want %v", err, tc.want)

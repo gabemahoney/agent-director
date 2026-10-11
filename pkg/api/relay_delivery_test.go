@@ -157,7 +157,7 @@ func TestDeliveryRule14Table(t *testing.T) {
 			t.Parallel()
 			e := newRelayEnv(t, tc.hook)
 			if tc.acked { // decide's verdict, acked by the live hook, which then exits
-				if _, err := api.Decide(e.s, e.view(), api.DecideParams{ClaudeInstanceID: e.id, RequestToken: storefix.TestRequestTokenA,
+				if _, err := api.Decide(e.s, e.view(), api.DecideParams{InstanceID: e.id, RequestToken: storefix.TestRequestTokenA,
 					Decision: "allow", MaxWaitMs: ptr(int64(0))}); err != nil {
 					t.Fatalf("decide: %v", err)
 				}
@@ -223,7 +223,7 @@ func (g getPermissionReadsTwice) GetPermissionRequestByToken(token string) (stor
 func TestReaderJudgesTheHookBeforeItsRecord(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, relayEnvHook)
-	if _, err := api.DecideWithSleep(e.s, e.view(), func(time.Duration) {}, api.DecideParams{ClaudeInstanceID: e.id,
+	if _, err := api.DecideWithSleep(e.s, e.view(), func(time.Duration) {}, api.DecideParams{InstanceID: e.id,
 		RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(0))}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}

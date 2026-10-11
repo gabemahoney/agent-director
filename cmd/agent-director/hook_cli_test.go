@@ -84,13 +84,13 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	pid := os.Getpid()
 	start, _, _ := probe.NewProcChecker().StartTime(pid)
 	cols := rowColumns(t, home, id)
-	got := []any{cols.State, cols.ClaudeSessionID, fmt.Sprint(cols.PID), cols.ProcStarttime, cols.JSONLPath}
+	got := []any{cols.State, cols.SessionID, fmt.Sprint(cols.PID), cols.ProcStarttime, cols.JSONLPath}
 	want := []any{store.StateWaiting, "session-e2e-uuid", strconv.Itoa(pid), start, transcript}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("state, session id, pid, proc_starttime, jsonl_path = %v; want %v", got, want)
 	}
 	row := assertOneHookFired(t, home)
-	if row["claude_instance_id"] != id || row["event_name"] != "SessionStart" || row["session_id"] != "session-e2e-uuid" {
+	if row["instance_id"] != id || row["event_name"] != "SessionStart" || row["session_id"] != "session-e2e-uuid" {
 		t.Errorf("ad.hook.fired = %v; want %s's SessionStart with its session id", row, id)
 	}
 }
@@ -137,7 +137,7 @@ func TestHookCLIOpensTheVerbsStore(t *testing.T) {
 			stdout, stderr, code = mustRun(t, cliOpts{dir: cwd, env: homeEnv(home, nil)}, "list")
 			var res struct {
 				Spawns []struct {
-					ID    string `json:"claude_instance_id"`
+					ID    string `json:"instance_id"`
 					State string `json:"state"`
 				} `json:"spawns"`
 			}
@@ -148,7 +148,7 @@ func TestHookCLIOpensTheVerbsStore(t *testing.T) {
 				t.Errorf("list = %+v; want only %s, moved to %s by the hook", res.Spawns, id, store.StateWaiting)
 			}
 			assertHomeTree(t, cwd)
-			if row := assertOneHookFired(t, home); row["claude_instance_id"] != id {
+			if row := assertOneHookFired(t, home); row["instance_id"] != id {
 				t.Errorf("ad.hook.fired = %v; want %s's", row, id)
 			}
 		})
@@ -210,8 +210,8 @@ func TestHookCLIFailOpen(t *testing.T) {
 		if code != 0 || stdout != "" {
 			t.Fatalf("hook exit = %d, stdout = %q; want 0 and empty (stderr=%q)", code, stdout, stderr)
 		}
-		if row := assertOneHookFired(t, home); row["claude_instance_id"] != nil {
-			t.Errorf("claude_instance_id = %v; want null on the early-exit path", row["claude_instance_id"])
+		if row := assertOneHookFired(t, home); row["instance_id"] != nil {
+			t.Errorf("instance_id = %v; want null on the early-exit path", row["instance_id"])
 		}
 	})
 	t.Run("trail unwritable", func(t *testing.T) {

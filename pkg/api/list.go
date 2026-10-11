@@ -56,14 +56,14 @@ type ListParams struct {
 // §12 list shape promises so future store-internal additions don't
 // leak silently.
 type ListRow struct {
-	// ClaudeInstanceID is the stable id of the Spawn.
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	// InstanceID is the stable id of the Spawn.
+	InstanceID string `json:"instance_id"`
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
 	ParentID string `json:"parent_id,omitempty"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
 	// ask_user, check_permission, ended, missing. pending means a launch
 	// (spawn, reuse or resume) is in progress and the agent has not reported
-	// in yet (Claude Code's SessionStart); it may be loading or waiting at a
+	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history.
 	State string `json:"state"`
 	// CWD is the canonicalized working directory the Spawn was started in.
@@ -199,7 +199,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 			reported = r.ReportedState
 		}
 		row := ListRow{
-			ClaudeInstanceID:        r.ClaudeInstanceID,
+			InstanceID:              r.InstanceID,
 			ParentID:                r.ParentID,
 			State:                   reported,
 			CWD:                     r.CWD,
@@ -215,7 +215,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 			PermissionRequests:      []PermissionRequestInfo{},
 		}
 		if r.State == store.StateCheckPermission {
-			infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, r.ClaudeInstanceID)
+			infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, r.InstanceID)
 			if err != nil {
 				return ListResult{Spawns: []ListRow{}}, err
 			}

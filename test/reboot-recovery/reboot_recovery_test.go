@@ -193,7 +193,7 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 		cmd.Env = env
 		return cmd.Run() != nil
 	})
-	stdout, stderr, code = runCLI(t, binaryAbs, env, "resume", "--claude-instance-id", targetID)
+	stdout, stderr, code = runCLI(t, binaryAbs, env, "resume", "--instance-id", targetID)
 	if code != 0 {
 		t.Fatalf("resume exit=%d; stdout=%s stderr=%s", code, stdout, stderr)
 	}
@@ -363,7 +363,7 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 		cmd.Env = env
 		return cmd.Run() != nil
 	})
-	stdout, stderr, code = runCLI(t, binaryAbs, env, "resume", "--claude-instance-id", targetID)
+	stdout, stderr, code = runCLI(t, binaryAbs, env, "resume", "--instance-id", targetID)
 	if code != 0 {
 		t.Fatalf("resume (NULLed jsonl_path) exit=%d; stdout=%s stderr=%s", code, stdout, stderr)
 	}

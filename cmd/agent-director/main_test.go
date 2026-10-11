@@ -106,7 +106,7 @@ func TestUnknownVerbWritesErrorEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
-	for _, argv := range [][]string{{"bogusverb"}, {"delete", "--claude-instance-id", id}, {"migrate"}} {
+	for _, argv := range [][]string{{"bogusverb"}, {"delete", "--instance-id", id}, {"migrate"}} {
 		t.Run(argv[0], func(t *testing.T) {
 			stdout, stderr, code := runCLIWithHome(t, home, argv...)
 			if env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrUnknownVerb"); env.ErrDescription == "" {

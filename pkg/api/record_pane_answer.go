@@ -143,13 +143,13 @@ func RecordPaneAnswer(s RecordPaneAnswerStore, t ReadPaneTmux, env RecordPaneAns
 	if err != nil {
 		return RecordPaneAnswerResult{}, err
 	}
-	row, err := s.GetSpawn(pr.ClaudeInstanceID)
+	row, err := s.GetSpawn(pr.InstanceID)
 	if err != nil {
 		return RecordPaneAnswerResult{}, err
 	}
 	j := newRelayJudge(env.Relay)
 	reqs, err := judgedRequests(func() ([]PermissionRow, error) {
-		return s.PermissionRequestsForSpawn(row.ClaudeInstanceID)
+		return s.PermissionRequestsForSpawn(row.InstanceID)
 	}, j, row)
 	if err != nil {
 		return RecordPaneAnswerResult{}, err
@@ -162,11 +162,11 @@ func RecordPaneAnswer(s RecordPaneAnswerStore, t ReadPaneTmux, env RecordPaneAns
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
-		return RecordPaneAnswerResult{}, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return RecordPaneAnswerResult{}, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
-		return RecordPaneAnswerResult{}, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+		return RecordPaneAnswerResult{}, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	r := &recordPaneRun{paneRun{
 		t: t, pc: env.Relay.Procs, row: row, storeID: s.StoreID(), socket: socket,
@@ -177,7 +177,7 @@ func RecordPaneAnswer(s RecordPaneAnswerStore, t ReadPaneTmux, env RecordPaneAns
 		return RecordPaneAnswerResult{}, err
 	}
 
-	written, err := s.RecordPaneOutside(row.ClaudeInstanceID, params.RequestToken, params.As, store.DefaultLockWait,
+	written, err := s.RecordPaneOutside(row.InstanceID, params.RequestToken, params.As, store.DefaultLockWait,
 		func(sp Spawn, rows []PermissionRow) error {
 			if err := lockedRequests(j, sp, rows).claimRefusal(params.RequestToken, env.IntentHold); err != nil {
 				return err
@@ -189,7 +189,7 @@ func RecordPaneAnswer(s RecordPaneAnswerStore, t ReadPaneTmux, env RecordPaneAns
 	}
 	if !written {
 		return RecordPaneAnswerResult{}, fmt.Errorf("%w: %s request %s no longer awaits an answer; %s",
-			store.ErrNoOpenPermissionRequest, row.ClaudeInstanceID, params.RequestToken, nothingRecorded)
+			store.ErrNoOpenPermissionRequest, row.InstanceID, params.RequestToken, nothingRecorded)
 	}
 	res := RecordPaneAnswerResult{
 		RequestToken:   params.RequestToken,
@@ -239,7 +239,7 @@ func checkRecordPaneAnswerParams(p RecordPaneAnswerParams) (string, error) {
 // paneClaimMinAge, or confirm_by plus paneClaimMinAge when that is earlier
 // and the hook is judged by time).
 func (r spawnRequests) claimRefusal(token string, hold time.Duration) error {
-	id := r.sp.ClaudeInstanceID
+	id := r.sp.InstanceID
 	what := string(nothingRecorded)
 	pr, ok := r.find(token)
 	if !ok {
@@ -375,7 +375,7 @@ func (r *recordPaneRun) paneMatches(t ReadPaneTmux, paneID string, launch tmux.L
 		return verr
 	}
 	if got != hash {
-		return paneChangedError(r.row.ClaudeInstanceID, token, nLines, string(nothingRecorded))
+		return paneChangedError(r.row.InstanceID, token, nLines, string(nothingRecorded))
 	}
 	return nil
 }

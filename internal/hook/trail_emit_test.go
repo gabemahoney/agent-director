@@ -174,7 +174,7 @@ func TestTrailEmitHookFired(t *testing.T) {
 			}
 
 			row := hookFiredAt(t, before)
-			for key, want := range map[string]string{"source": "ad_hook", "claude_instance_id": c.id, "event_name": c.event,
+			for key, want := range map[string]string{"source": "ad_hook", "instance_id": c.id, "event_name": c.event,
 				"relay_mode": c.relay, "upsert_outcome": c.outcome, "session_id": c.sessID} {
 				assertStr(t, row, key, want)
 			}

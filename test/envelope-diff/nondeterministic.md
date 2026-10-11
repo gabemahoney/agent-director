@@ -24,7 +24,7 @@ Is the value read from the fixture DB (written at fixture-creation time)?
 │         frozen — both CLI and pkg/api.Client read the same value.
 └── No  → generated at invocation time. Classify further:
     ├── UUID / per-call ID?
-    │     → non-deterministic. (e.g. spawn's claude_instance_id,
+    │     → non-deterministic. (e.g. spawn's instance_id,
     │       tmux_session_name, tmux_pid)
     ├── Timestamp set to time.Now() at call time?
     │     → non-deterministic.
@@ -56,11 +56,11 @@ When a verb fails, the harness compares the error envelope fields as follows:
 
 **Example 1 — non-deterministic field (`spawn`)**
 
-`spawn` returns `claude_instance_id`, generated as a UUID at call time. The CLI's spawn invocation produces UUID A; the Client's spawn invocation produces UUID B. The fixture DB has no row for either value — it is generated, not read. Decision: **non-deterministic**. Selector: `.claude_instance_id`.
+`spawn` returns `instance_id`, generated as a UUID at call time. The CLI's spawn invocation produces UUID A; the Client's spawn invocation produces UUID B. The fixture DB has no row for either value — it is generated, not read. Decision: **non-deterministic**. Selector: `.instance_id`.
 
 **Example 2 — fully deterministic verb (`status`)**
 
-`status` reads a spawn row from the DB by `claude_instance_id`. Both CLI and Client open the same fixture DB copy, read the same row, and return identical values for `state`, `cwd`, `started_at`, and all other fields. No value is generated at call time. Decision: **deterministic** — empty selector list `[]`.
+`status` reads a spawn row from the DB by `instance_id`. Both CLI and Client open the same fixture DB copy, read the same row, and return identical values for `state`, `cwd`, `started_at`, and all other fields. No value is generated at call time. Decision: **deterministic** — empty selector list `[]`.
 
 ## Per-verb summary
 
@@ -68,7 +68,7 @@ Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs who
 
 | Verb | Non-deterministic selectors | Reason |
 |---|---|---|
-| `spawn` | `.claude_instance_id` | UUID generated per call |
+| `spawn` | `.instance_id` | UUID generated per call |
 | `version` | `.version`, `.commit` | CLI stamped with -ldflags; `pkg/api.Version()` returns package default |
 | `decide` | `.attempted_at`, `.hook_gone_at`, `.unproven_since` | the request's delivery facts (b.146 rule 15): `attempted_at` and `hook_gone_at` are written at call time (a refused decide's attempt, a reader that finds the request fallen back), so a run that sets one sets it to its own clock; `delivery`, `confirm_by` and `hook_alive` derive from the fixture row and are diffed. `unproven_since` (b.146 step 2c): the fixture's request is recorded before schema v7, so once decide records its verdict the request reads closed, not proven gone, since its `decided_at`, the whole-second `CURRENT_TIMESTAMP` each run's decide writes on its own store copy; two runs that straddle a second differ. Both envelopes must still carry it non-null (`wantNonNull`, `success_cases.go`) |
 | `expire` | `.ids` | which rows are selected depends on the call-time cutoff (now minus the window); `count`, `kept` and `kept_ids` are diffed; both cases in `success_expire.go` pin `kept` and `kept_ids` through `want`, and `TestEnvelopeDiff_Success/expire/kept` pins `ids` as well |

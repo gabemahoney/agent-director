@@ -9,7 +9,7 @@ import "time"
 type RowSnapshot struct {
 	RowVersion      int64
 	StartedAt       string // started_at as stored text
-	ClaudeSessionID string // "" = NULL
+	SessionID       string // "" = NULL
 	PID             int    // 0 = NULL
 	ProcStarttime   string // "" = NULL
 	TmuxSessionName string
@@ -35,7 +35,7 @@ const snapshotMatchSQL = `COALESCE(row_version, 0) = ?
 // snapshotMatchArgs returns the bound arguments for snapshotMatchSQL, in its
 // placeholder order.
 func snapshotMatchArgs(s RowSnapshot) []any {
-	return []any{s.RowVersion, s.StartedAt, s.ClaudeSessionID, s.PID, s.ProcStarttime, s.TmuxSessionName}
+	return []any{s.RowVersion, s.StartedAt, s.SessionID, s.PID, s.ProcStarttime, s.TmuxSessionName}
 }
 
 // CondResult reports the outcome of a conditional write (SR-5.3): a write
@@ -160,7 +160,7 @@ type lifeScan struct {
 func (l *lifeScan) dest() []any {
 	return []any{
 		&l.snap.RowVersion, &l.snap.StartedAt,
-		&l.snap.ClaudeSessionID, &l.snap.PID,
+		&l.snap.SessionID, &l.snap.PID,
 		&l.snap.ProcStarttime, &l.snap.TmuxSessionName,
 		&l.launchToken, &l.id.Socket, &l.id.ServerPID,
 		&l.id.ServerStart, &l.id.ServerStarttime,

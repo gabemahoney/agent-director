@@ -9,7 +9,7 @@ import (
 // per label and ExtraEnv verbatim, the same map on every composition.
 func TestComposeEnv(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID:    "id-abc",
+		InstanceID:          "id-abc",
 		RelayMode:           "on",
 		AgentDirectorLabels: map[string]string{"my-key": "v1", "another.k": "v2", "alreadyOK": "v3", "123numeric": "v4"},
 		ExtraEnv:            map[string]string{"ANTHROPIC_API_KEY": "sk-ant-test", "FOO": "bar"},

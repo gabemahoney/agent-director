@@ -152,7 +152,7 @@ func expireDisagreesSince(t *testing.T, mark int, id string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, l := range trailSince(t, mark, "ad.provenance.disagree") {
-		if l["verb"] == "expire" && l["claude_instance_id"] == id {
+		if l["verb"] == "expire" && l["instance_id"] == id {
 			out = append(out, l)
 		}
 	}
@@ -185,7 +185,7 @@ func assertExpired(t *testing.T, res api.ExpireResult, mark int, want map[string
 	}
 	got := map[string]string{}
 	for _, l := range expireKeptSince(t, mark) {
-		id, _ := l["claude_instance_id"].(string)
+		id, _ := l["instance_id"].(string)
 		if prev, dup := got[id]; dup {
 			t.Errorf("row %s: ad.expire.kept %v and %v; want one record", id, prev, l["reason"])
 		}

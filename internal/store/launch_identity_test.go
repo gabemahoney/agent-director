@@ -122,7 +122,7 @@ func TestRecordLaunchIdentityOutcomes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newV5Store(t)
-			if err := f.s.InsertPending(store.Spawn{ClaudeInstanceID: "li-row", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-li-row",
+			if err := f.s.InsertPending(store.Spawn{InstanceID: "li-row", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-li-row",
 				RelayMode: "off", LaunchStartedAtMillis: launchStart, Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/ad-li/sock"}}); err != nil {
 				t.Fatalf("InsertPending: %v", err)
 			}

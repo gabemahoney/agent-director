@@ -84,11 +84,11 @@ func (r preLaunchRow) holderName() string {
 func preLaunchRowOf(row Spawn, name, socket string) preLaunchRow {
 	return preLaunchRow{
 		startingSessionRow: startingSessionRow{
-			InstanceID:              row.ClaudeInstanceID,
+			InstanceID:              row.InstanceID,
 			Name:                    name,
 			EndedAt:                 row.EndedAt,
 			RecordsPID:              row.PID > 0,
-			RecordsSessionID:        row.ClaudeSessionID != "",
+			RecordsSessionID:        row.SessionID != "",
 			NoLaunchSessionRecorded: recordsNoLaunchSession(row.Identity),
 		},
 		Socket: socket,

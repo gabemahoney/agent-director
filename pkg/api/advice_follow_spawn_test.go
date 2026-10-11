@@ -32,7 +32,7 @@ const advSpawnHeldName = "adv-held"
 // requesting name unless it is "".
 func advSpawnParams(t *testing.T, id, name string) api.SpawnParams {
 	t.Helper()
-	p := api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id}
+	p := api.SpawnParams{CWD: t.TempDir(), InstanceID: id}
 	if name != "" {
 		p.TmuxSessionName, p.TmuxSessionNameSupplied = name, true
 	}
@@ -57,7 +57,7 @@ func advSpawnRelookupTimesOut(e heldEnv) {
 // row is pending, in life wantLife when that is not nil.
 func advSpawnLaunched(t *testing.T, dbPath, id string, wantLife any, res api.SpawnResult, err error) {
 	t.Helper()
-	if err != nil || res.ClaudeInstanceID != id {
+	if err != nil || res.InstanceID != id {
 		t.Fatalf("spawn = %+v, %v; want %s launched", res, err, id)
 	}
 	cols, err := apitest.ReadSpawnColumns(dbPath, id)
@@ -133,7 +133,7 @@ func TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished(t *testing.T) {
 			adviceAssertManifest(t, "spawn", "", "do not retry until get shows the row ended or missing, since a retry without an explicit id "+
 				"would start a second agent; then retry an explicit id with the reuse opt-in")
 			adviceAssertGoDoc(t, "spawn.go", "Spawn", "do not retry until get shows the row ended or missing, since a retried spawn without an "+
-				"explicit id would start a second agent. Then retry an explicit ClaudeInstanceID with ReuseFinished")
+				"explicit id would start a second agent. Then retry an explicit InstanceID with ReuseFinished")
 			id := e.rec.SocketCallsOf(tmux.CallCreate)[0].InstanceID
 			adviceAwaitFinished(t, e.c, e.clock, id, nil)
 			if tc.id != "" {
@@ -143,10 +143,10 @@ func TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished(t *testing.T) {
 
 			res, err := e.c.Spawn(p)
 
-			if err == nil && res.ClaudeInstanceID == id {
+			if err == nil && res.InstanceID == id {
 				t.Errorf("retry's id = %s; want a newly minted one", id)
 			}
-			advSpawnLaunched(t, e.dbPath, res.ClaudeInstanceID, nil, res, err)
+			advSpawnLaunched(t, e.dbPath, res.InstanceID, nil, res, err)
 		})
 	}
 }
@@ -365,7 +365,7 @@ func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
 
 			if id == "" {
 				id = e.rec.SocketCallsOf(tmux.CallCreate)[0].InstanceID
-				p.ClaudeInstanceID = id // "a retry with this id": the minted id the description names
+				p.InstanceID = id // "a retry with this id": the minted id the description names
 			}
 			want := `tmux: new-session failed: instance ` + id + `: tmux session "` + advSpawnHeldName +
 				`": tmux session creation failed: duplicate session; ` + advice

@@ -192,7 +192,7 @@ func rpvAssertDisagreeFirst(t *testing.T, mark int, id string) {
 	t.Helper()
 	resumeSeen := ""
 	for _, l := range readAPITrailLines(t)[mark:] {
-		if l["claude_instance_id"] != id {
+		if l["instance_id"] != id {
 			continue
 		}
 		ev, _ := l["event"].(string)
@@ -236,7 +236,7 @@ func rpvFailOpenRuns(t *testing.T, prefix string) []string {
 	line := func(e *killEnv, tag string, r resumeRow, res api.ResumeResult, err error) {
 		c := e.columns(t, r.ID)
 		l := fmt.Sprintf("%s id=%s pre_trust=%s err=%v state=%v ended_at=%v row_version=%v launch_started_at=%v parent=%v socket=%v",
-			tag, res.ClaudeInstanceID, res.PreTrust, err, c.State, c.EndedAt, c.RowVersion, c.LaunchStartedAt, c.ParentID, c.TmuxSocket)
+			tag, res.InstanceID, res.PreTrust, err, c.State, c.EndedAt, c.RowVersion, c.LaunchStartedAt, c.ParentID, c.TmuxSocket)
 		lines = append(lines, strings.NewReplacer(r.Socket, "<socket>", r.CWD, "<cwd>").Replace(l))
 	}
 	for _, tc := range rpvCases() {

@@ -101,7 +101,7 @@ func TestGlobalFlagTmuxCommandReachesServeMCPTools(t *testing.T) {
 	t.Cleanup(srv.kill)
 	srv.initialize(t)
 
-	text := srv.callToolOK(t, "read-pane", fmt.Sprintf(`{"claude_instance_id":%q}`, id))
+	text := srv.callToolOK(t, "read-pane", fmt.Sprintf(`{"instance_id":%q}`, id))
 	srv.stop(t)
 
 	var res map[string]string

@@ -78,13 +78,13 @@ var fpLives = []struct {
 }{
 	{name: "working", snap: func(*store.RowSnapshot) {}},
 	{name: "pending resumed launch", opts: []fmRowOpt{withLaunch(store.StatePending, fpPastGrace)},
-		snap: func(s *store.RowSnapshot) { s.RowVersion, s.ClaudeSessionID = 9, "sess-fp-resumed" }},
+		snap: func(s *store.RowSnapshot) { s.RowVersion, s.SessionID = 9, "sess-fp-resumed" }},
 }
 
 // fpAssertOutcome fails unless the sweep result res and the writes st recorded show outcome for row r.
 func fpAssertOutcome(t *testing.T, st *fakeFindMissingStore, res api.FindMissingResult, r store.LiveSpawnIdentity, outcome fpOutcome) {
 	t.Helper()
-	id := r.ClaudeInstanceID
+	id := r.InstanceID
 	var wantOps, ids, unver []string
 	switch outcome {
 	case fpMarked:
@@ -112,7 +112,7 @@ func fpAssertOutcome(t *testing.T, st *fakeFindMissingStore, res api.FindMissing
 func fpAssertNoDisagree(t *testing.T, mark int, id string) {
 	t.Helper()
 	for _, rec := range trailSince(t, mark, "ad.provenance.disagree") {
-		if rec["claude_instance_id"] == id {
+		if rec["instance_id"] == id {
 			t.Errorf("ad.provenance.disagree record for %s = %v; want none (pid_mismatch is retired)", id, rec)
 		}
 	}
@@ -152,7 +152,7 @@ func TestFindMissingProcessSelectionVerdict(t *testing.T) {
 					if got := pc.StartTimeCalls(); !slices.Equal(got, []int{sel.selected}) {
 						t.Errorf("StartTime calls = %v; want [%d] (the selected process only)", got, sel.selected)
 					}
-					fpAssertNoDisagree(t, mark, r.ClaudeInstanceID)
+					fpAssertNoDisagree(t, mark, r.InstanceID)
 				})
 			}
 		}

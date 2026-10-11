@@ -20,13 +20,13 @@ test("read-pane: happy path — returns the row's pane text from its fake-tmux s
     runHelper("seed-spawn", { store, state: "working", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
     runHelper("seed-row-session", { store, id, capture });
     using client = await openClient(store);
-    expect((await client.readPane({ claude_instance_id: id, n_lines: 5 })).pane).toBe(capture);
+    expect((await client.readPane({ instance_id: id, n_lines: 5 })).pane).toBe(capture);
   });
 }, 10_000);
 
 test("read-pane: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.readPane({ claude_instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+    await expect(client.readPane({ instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
 }, 10_000);

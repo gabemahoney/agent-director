@@ -114,7 +114,7 @@ func TestRunLogRecordsArgvNeverEnvironment(t *testing.T) {
 	r.h.inv.log = newRunLog(r.log, r.h.inv.scr)
 	r.h.inv.env = []string{"ANTHROPIC_API_KEY=" + key, "MX_ENV_ONLY=env-only-sentinel-value"}
 	r.ex.reply = func([]string) (string, string, int) { return "", "failed with " + key, 1 }
-	_, err := r.h.inv.agentDirectorCall("rn6.idle", actionRead, "get", "--claude-instance-id", "id-"+key)
+	_, err := r.h.inv.agentDirectorCall("rn6.idle", actionRead, "get", "--instance-id", "id-"+key)
 	if err == nil {
 		t.Fatal("want the call's non-zero exit as an error")
 	}
@@ -123,7 +123,7 @@ func TestRunLogRecordsArgvNeverEnvironment(t *testing.T) {
 	if err := json.Unmarshal([]byte(logged), &entry); err != nil {
 		t.Fatalf("run log line %q: %v", logged, err)
 	}
-	wantArgv := []string{"agent-director", "get", "--claude-instance-id", "id-<redacted>"}
+	wantArgv := []string{"agent-director", "get", "--instance-id", "id-<redacted>"}
 	if entry.Case != "rn6.idle" || entry.Kind != actionRead || entry.ExitCode != 1 || !reflect.DeepEqual(entry.Argv, wantArgv) {
 		t.Errorf("run log entry %+v", entry)
 	}
@@ -138,9 +138,9 @@ func TestWaitStateNotReadyNamesTrailReasons(t *testing.T) {
 	r := newRig(t, modeDry)
 	r.ex.reply = func([]string) (string, string, int) { return `{"state":"spawning"}`, "", 0 }
 	writeFile(t, filepath.Join(r.h.iso.Home, ".agent-director", "ad-trail.jsonl"), strings.Join([]string{
-		`{"event":"ad.hook.ignored","claude_instance_id":"id-1","reason":"no_exec_form"}`,
-		`{"event":"ad.hook.ignored","claude_instance_id":"id-2","reason":"pid_mismatch"}`,
-		`{"event":"ad.hook.ignored","claude_instance_id":"id-1","reason":"no_exec_form"}`,
+		`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"no_exec_form"}`,
+		`{"event":"ad.hook.ignored","instance_id":"id-2","reason":"pid_mismatch"}`,
+		`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"no_exec_form"}`,
 		`not json`,
 	}, "\n")+"\n")
 	_, err := r.h.waitState("rn6.idle", "id-1", stateWaiting)

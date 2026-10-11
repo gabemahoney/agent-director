@@ -20,7 +20,7 @@ import (
 type rowVersionCase struct {
 	name    string
 	state   string                                    // seeded state
-	session string                                    // seeded claude_session_id; "" for none
+	session string                                    // seeded session_id; "" for none
 	opts    []apitest.SpawnOption                     // seed options beyond rowVersionSeed
 	setup   func(t *testing.T, f *v5Store, id string) // optional, runs before the first read
 	write   func(t *testing.T, f *v5Store, id string) // the write under test; checks its own return
@@ -607,7 +607,7 @@ func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
-			sp := store.Spawn{ClaudeInstanceID: "rv-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
+			sp := store.Spawn{InstanceID: "rv-insert", Agent: store.AgentClaude, CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
 				RelayMode: "off", LaunchStartedAtMillis: tc.ms, NoPreTrust: tc.noPreTrust, Identity: tc.lid}
 			if err := f.s.InsertPending(sp); err != nil {
 				t.Fatalf("InsertPending: %v", err)

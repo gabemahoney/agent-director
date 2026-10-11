@@ -57,12 +57,12 @@ func TestAdminGlobalFlagsOpenMainCLIStore(t *testing.T) {
 			if err != nil {
 				t.Fatalf("seed a row in the store agent-director created: %v", err)
 			}
-			get := withFlags(flags, false, "get", "--claude-instance-id", id)
+			get := withFlags(flags, false, "get", "--instance-id", id)
 			if _, stderr, code := runMain(t, home, get...); code != 0 {
 				t.Fatalf("agent-director %q: exit = %d, stderr = %q; want the seeded row", get, code, stderr)
 			}
 
-			stdout, stderr, code := runAdmin(t, home, withFlags(flags, tc.after, "delete", "--claude-instance-id", id)...)
+			stdout, stderr, code := runAdmin(t, home, withFlags(flags, tc.after, "delete", "--instance-id", id)...)
 
 			if code != 0 || stderr != "" {
 				t.Fatalf("delete exit = %d, stderr = %q; want 0 and empty", code, stderr)
@@ -88,7 +88,7 @@ func TestAdminGlobalFlagsOpenMainCLIStore(t *testing.T) {
 func TestAdminHomeTildeWithoutHOMERefused(t *testing.T) {
 	cwd := t.TempDir()
 
-	stdout, stderr, code := runBinIn(t, adminPath, cwd, fakeTmuxEnv(t, t.TempDir()), "--home", "~", "delete", "--claude-instance-id", "x")
+	stdout, stderr, code := runBinIn(t, adminPath, cwd, fakeTmuxEnv(t, t.TempDir()), "--home", "~", "delete", "--instance-id", "x")
 
 	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
 	if want := `--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`; env.ErrDescription != want {
@@ -110,7 +110,7 @@ func TestAdminCreateIfMissing(t *testing.T) {
 		t.Run(tc.value, func(t *testing.T) {
 			home := t.TempDir()
 
-			stdout, stderr, code := runAdmin(t, home, "--create-if-missing", tc.value, "delete", "--claude-instance-id", "x")
+			stdout, stderr, code := runAdmin(t, home, "--create-if-missing", tc.value, "delete", "--instance-id", "x")
 
 			env := assertOnlyEnvelope(t, stdout, stderr, code, tc.wantErr)
 			if !strings.Contains(env.ErrDescription, tc.wantDesc) {
@@ -133,7 +133,7 @@ func TestAdminTmuxCommandFlag(t *testing.T) {
 	}
 
 	stdout, stderr, code := runAdmin(t, r.home,
-		withFlags([]string{"--tmux-command", tmuxCmd}, true, "kill-finished", "--claude-instance-id", r.id)...)
+		withFlags([]string{"--tmux-command", tmuxCmd}, true, "kill-finished", "--instance-id", r.id)...)
 
 	if code != 0 || stderr != "" {
 		t.Fatalf("kill-finished exit = %d, stderr = %q; want 0 and empty", code, stderr)

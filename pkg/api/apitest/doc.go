@@ -36,7 +36,7 @@
 //     (a row from before the release: no token, socket or identity, the same
 //     as WithLaunchIdentity(store.LaunchIdentity{})), WithNoPane (a live row
 //     with no pane identity that keeps its token and socket), WithRawLabels,
-//     WithRawClaudeArgs, WithRawExtraEnv, and WithSessionHistory (one archived
+//     WithRawAgentArgs, WithRawExtraEnv, and WithSessionHistory (one archived
 //     session_history entry per use, a SessionHistorySeed: session id,
 //     transcript path or NULL, the life it belongs to and an optional
 //     recorded_at). SeedSpawn's doc comment states the

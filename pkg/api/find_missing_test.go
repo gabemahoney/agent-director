@@ -115,7 +115,7 @@ func (f *fakeFindMissingStore) MarkMissingIfSameLife(id string, examined store.R
 		return "", res, err
 	}
 	for _, r := range f.rows {
-		if r.ClaudeInstanceID == id && r.State != "" {
+		if r.InstanceID == id && r.State != "" {
 			return r.State, res, nil
 		}
 	}
@@ -152,7 +152,7 @@ func (f *fakeFindMissingStore) StoreID() string { return tmuxfix.StoreID }
 // readSnap is the snapshot the live-row read returned for id.
 func (f *fakeFindMissingStore) readSnap(id string) store.RowSnapshot {
 	for _, r := range f.rows {
-		if r.ClaudeInstanceID == id {
+		if r.InstanceID == id {
 			return r.Snapshot
 		}
 	}
@@ -377,7 +377,7 @@ var fmServer = tmuxfix.Server{PID: 7001, Start: fmNow.Add(-time.Hour).Unix(), Pr
 func fmOurs(rows ...store.LiveSpawnIdentity) *tmuxfix.Recorder {
 	rec := tmuxfix.NewRecorder().StartServer(apitest.TestSocket, fmServer)
 	for _, r := range rows {
-		s := tmuxfix.SeedSession{Name: r.TmuxSessionName, Label: tmuxfix.Valid(r.Identity.Token, r.ClaudeInstanceID, tmuxfix.StoreID)}
+		s := tmuxfix.SeedSession{Name: r.TmuxSessionName, Label: tmuxfix.Valid(r.Identity.Token, r.InstanceID, tmuxfix.StoreID)}
 		if r.Identity.PaneID == "" {
 			s.Panes = []tmuxfix.SeedPane{{AdPane: r.Identity.Token}}
 		}
@@ -398,7 +398,7 @@ type fmRowOpt func(*store.LiveSpawnIdentity)
 // liveRow builds a working row with a launch token on apitest.TestSocket and no process or server identity or
 // note; its Snapshot is filled from the row after opts.
 func liveRow(id string, opts ...fmRowOpt) store.LiveSpawnIdentity {
-	r := store.LiveSpawnIdentity{ClaudeInstanceID: id, State: store.StateWorking, TmuxSessionName: "cd-" + id,
+	r := store.LiveSpawnIdentity{InstanceID: id, State: store.StateWorking, TmuxSessionName: "cd-" + id,
 		Identity: store.LaunchIdentity{Token: tmuxfix.Token, Socket: apitest.TestSocket}}
 	for _, o := range opts {
 		o(&r)

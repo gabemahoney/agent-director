@@ -188,7 +188,7 @@ func adviceConflictReadPane(t *testing.T, e *killEnv, r killRow) (func() error, 
 	var got api.ReadPaneResult
 	return func() (err error) {
 			e.setPaneTexts(r.Socket)
-			got, err = e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+			got, err = e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
 			return err
 		}, func(t *testing.T) {
 			pane := r.Spawn.Identity.PaneID

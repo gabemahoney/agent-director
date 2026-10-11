@@ -67,7 +67,7 @@ type nameHeld struct {
 	// Launch is the launch kind (nameHeldLaunchSpawn, ...); "" writes null
 	// (find-missing's sweep, which launches nothing).
 	Launch string
-	// InstanceID is the launch's claude_instance_id.
+	// InstanceID is the launch's instance_id.
 	InstanceID string
 	// Name is the requested tmux session name, written as a plain JSON
 	// string.
@@ -158,26 +158,26 @@ func emitNameHeld(r nameHeld) {
 		}
 	}
 	fields := map[string]any{
-		"source":             r.Source,
-		"claude_instance_id": r.InstanceID,
-		"launch":             launch,
-		"tmux_session_name":  r.Name,
-		"tmux_socket":        r.Socket,
-		"tmux_session_id":    sessionID,
-		"session_created":    created,
-		"store_id":           r.StoreID,
-		"carries_this_id":    carries,
-		"current_launch":     current,
-		"lookup_outcome":     r.LookupOutcome,
-		"outcome":            outcome,
-		"row_result":         rowResult,
-		"store_error":        storeError,
-		"attach_command":     attach,
-		"end_command":        end,
-		"caller_process":     r.Caller.process,
-		"caller_pid":         r.Caller.pid,
-		"caller_hostname":    r.Caller.hostname,
-		"caller_user":        r.Caller.user,
+		"source":            r.Source,
+		"instance_id":       r.InstanceID,
+		"launch":            launch,
+		"tmux_session_name": r.Name,
+		"tmux_socket":       r.Socket,
+		"tmux_session_id":   sessionID,
+		"session_created":   created,
+		"store_id":          r.StoreID,
+		"carries_this_id":   carries,
+		"current_launch":    current,
+		"lookup_outcome":    r.LookupOutcome,
+		"outcome":           outcome,
+		"row_result":        rowResult,
+		"store_error":       storeError,
+		"attach_command":    attach,
+		"end_command":       end,
+		"caller_process":    r.Caller.process,
+		"caller_pid":        r.Caller.pid,
+		"caller_hostname":   r.Caller.hostname,
+		"caller_user":       r.Caller.user,
 	}
 	if r.LeftoverCount > 0 {
 		fields["leftover_count"] = r.LeftoverCount

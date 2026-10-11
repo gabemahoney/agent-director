@@ -31,8 +31,8 @@ import (
 func TestSpawnReuseMCPCollisionMatchesGoClient(t *testing.T) {
 	const id = "mcp-reuse-collision-row"
 	for name, extra := range map[string]map[string]any{
-		"absent": {"claude_instance_id": id},
-		"false":  {"claude_instance_id": id, "reuse_finished": false},
+		"absent": {"instance_id": id},
+		"false":  {"instance_id": id, "reuse_finished": false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
@@ -42,7 +42,7 @@ func TestSpawnReuseMCPCollisionMatchesGoClient(t *testing.T) {
 			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, extra))
 			data := toolErrorData(t, resp)
 
-			goErr := goClientSpawn(t, e.storePath, api.SpawnParams{CWD: cwd, ExtraEnv: c.env(), ClaudeInstanceID: id})
+			goErr := goClientSpawn(t, e.storePath, api.SpawnParams{CWD: cwd, ExtraEnv: c.env(), InstanceID: id})
 			if !errors.Is(goErr, spawn.ErrInstanceIdCollision) {
 				t.Fatalf("Go client Spawn err = %v; want ErrInstanceIdCollision", goErr)
 			}

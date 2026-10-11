@@ -316,7 +316,7 @@ func docConfigKeys() []struct {
 	}{
 		{"defaults.relay_mode", c.Defaults.RelayMode, "", false},
 		{"defaults.expire_retention_days", itoa(int64(c.Defaults.ExpireRetentionDays)), rng(int64(config.MaxExpireRetentionDays)), false},
-		{"defaults.disable_askuserquestion", b(c.Defaults.DisableAskUserQuestion), "", false},
+		{"defaults.disable_ask_user", b(c.Defaults.DisableAskUser), "", false},
 		{"defaults.inject_help_hook", b(c.Defaults.InjectHelpHook), "", true},
 		{"relay.poll_base_ms", itoa(int64(c.Relay.PollBaseMs)), "", false},
 		{"relay.poll_jitter_ms", itoa(int64(c.Relay.PollJitterMs)), "", false},

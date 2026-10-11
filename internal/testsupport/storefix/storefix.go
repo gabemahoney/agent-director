@@ -54,12 +54,12 @@ func OpenTempStore(t *testing.T) (*store.Store, string) {
 // default fields can mutate the struct before handing it to a seeder.
 func defaultSpawn(id string) store.Spawn {
 	return store.Spawn{
-		ClaudeInstanceID: id,
-		Agent:            store.AgentClaude,
-		State:            store.StatePending,
-		CWD:              "/tmp",
-		TmuxSessionName:  "sess-" + id,
-		RelayMode:        "off",
+		InstanceID:      id,
+		Agent:           store.AgentClaude,
+		State:           store.StatePending,
+		CWD:             "/tmp",
+		TmuxSessionName: "sess-" + id,
+		RelayMode:       "off",
 	}
 }
 

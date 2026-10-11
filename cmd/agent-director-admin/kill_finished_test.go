@@ -31,7 +31,7 @@ func assertOneKillCalled(t *testing.T, home, id string, sent bool) {
 	if len(recs) != 1 {
 		t.Fatalf("ad.kill.called records = %v; want exactly one", recs)
 	}
-	want := map[string]any{"claude_instance_id": id, "include_finished": true, "kill_sent": sent,
+	want := map[string]any{"instance_id": id, "include_finished": true, "kill_sent": sent,
 		"caller_process": "agent-director-admin"}
 	for k, v := range want {
 		if recs[0][k] != v {
@@ -46,7 +46,7 @@ func assertOneKillCalled(t *testing.T, home, id string, sent bool) {
 func TestKillFinishedReportedInSession(t *testing.T) {
 	r := seedFinishedWithSession(t)
 
-	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--claude-instance-id", r.id)
+	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--instance-id", r.id)
 
 	if code != 0 || stderr != "" {
 		t.Fatalf("kill-finished exit = %d, stderr = %q; want 0 and empty", code, stderr)
@@ -68,7 +68,7 @@ func TestKillFinishedReportedInSession(t *testing.T) {
 	assertRowUnchanged(t, r.home, r.id, r.before)
 	assertOneKillCalled(t, r.home, r.id, true)
 
-	stdout, stderr, code = runMain(t, r.home, "get", "--claude-instance-id", r.id)
+	stdout, stderr, code = runMain(t, r.home, "get", "--instance-id", r.id)
 	var got struct {
 		State string `json:"state"`
 	}
@@ -87,7 +87,7 @@ func TestKillFinishedRefusesLiveRow(t *testing.T) {
 			ownSession(t, home, id, socket, time.Now())
 			before := rowColumns(t, home, id)
 
-			stdout, stderr, code := runAdmin(t, home, "kill-finished", "--claude-instance-id", id)
+			stdout, stderr, code := runAdmin(t, home, "kill-finished", "--instance-id", id)
 
 			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotResumable")
 			if m := optInRe.FindString(stderr); m != "" {
@@ -101,7 +101,7 @@ func TestKillFinishedRefusesLiveRow(t *testing.T) {
 			if !strings.Contains(env.ErrDescription, advice) {
 				t.Errorf("description %q lacks the advice %q", env.ErrDescription, advice)
 			}
-			stdout, stderr, code = runMain(t, home, "kill", "--claude-instance-id", id)
+			stdout, stderr, code = runMain(t, home, "kill", "--instance-id", id)
 			if code != 0 || stderr != "" {
 				t.Fatalf("agent-director kill: exit = %d, stderr = %q; want 0 and empty", code, stderr)
 			}
@@ -130,7 +130,7 @@ func TestAdviceFollow_C9_AdminStillStoppingRetryLater(t *testing.T) {
 	// not wait out the window in real time.
 	r := seedFinishedWithSession(t, apitest.WithEndedAt(time.Now().Truncate(time.Second)))
 
-	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--claude-instance-id", r.id)
+	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--instance-id", r.id)
 
 	env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrTmuxUnresponsive")
 	for _, want := range []string{"appears to still be stopping", "nothing was done; retry later"} {

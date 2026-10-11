@@ -41,7 +41,7 @@ const (
 
 // ptKeys is an ad.launch.name_held record's full key set for plain spawn's
 // held-name path: SR-14's fields plus the envelope's event and ts.
-var ptKeys = []string{"event", "ts", "source", "claude_instance_id", "launch", "tmux_session_name",
+var ptKeys = []string{"event", "ts", "source", "instance_id", "launch", "tmux_session_name",
 	"tmux_socket", "tmux_session_id", "session_created", "store_id", "carries_this_id", "current_launch",
 	"lookup_outcome", "outcome", "row_result", "store_error", "attach_command", "end_command",
 	"caller_process", "caller_pid", "caller_hostname", "caller_user"}
@@ -120,7 +120,7 @@ func (e heldEnv) spawnHeld(t *testing.T, id, name string, onScan func()) heldRun
 		run.createdAt = e.clock.Now()
 		run.sessionsAtCreate = e.rec.Sessions(e.socket)
 	})
-	_, run.err = e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id,
+	_, run.err = e.c.Spawn(api.SpawnParams{CWD: t.TempDir(), InstanceID: id,
 		TmuxSessionName: name, TmuxSessionNameSupplied: true})
 	return run
 }
@@ -168,7 +168,7 @@ func ptRecords(t *testing.T, mark int, event, id string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, r := range trailSince(t, mark, event) {
-		if r["claude_instance_id"] == id {
+		if r["instance_id"] == id {
 			out = append(out, r)
 		}
 	}
@@ -233,7 +233,7 @@ type ptWant struct {
 func nameHeldFields(launch, id, name, socket, storeID string, holder *tmuxfix.SeedSession, lookup, outcome, rowResult string,
 	storeError, carries, current any) map[string]any {
 	q := func(s string) string { return "'" + s + "'" }
-	want := map[string]any{"source": "ad_spawn", "claude_instance_id": id, "launch": launch, "tmux_session_name": name,
+	want := map[string]any{"source": "ad_spawn", "instance_id": id, "launch": launch, "tmux_session_name": name,
 		"tmux_socket": socket, "store_id": storeID, "lookup_outcome": lookup, "outcome": outcome, "row_result": rowResult,
 		"store_error": storeError, "carries_this_id": carries, "current_launch": current,
 		"tmux_session_id": nil, "session_created": nil, "attach_command": nil, "end_command": nil}
@@ -376,9 +376,9 @@ func TestSpawnHeldTrailPerOutcome(t *testing.T) {
 		{name: "another versioned write", atCreate: func(t *testing.T, e heldEnv, id string) {
 			apitest.SeedSessionID(t, e.dbPath, id, uuid.NewString())
 		}, check: func(t *testing.T, _ heldEnv, cols apitest.SpawnColumns, _ time.Time) {
-			if cols.State != store.StatePending || cols.RowVersion != int64(1) || cols.ClaudeSessionID == nil {
+			if cols.State != store.StatePending || cols.RowVersion != int64(1) || cols.SessionID == nil {
 				t.Errorf("after the competing write: state %v, row_version %v, session %v; want pending, 1, set",
-					cols.State, cols.RowVersion, cols.ClaudeSessionID)
+					cols.State, cols.RowVersion, cols.SessionID)
 			}
 		}, row: apitest.HeldRowLeftAsIs, rowResult: "left_changed"},
 		{name: "deleted and inserted again", atCreate: func(t *testing.T, e heldEnv, id string) {

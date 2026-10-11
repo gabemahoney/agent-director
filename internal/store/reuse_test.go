@@ -67,7 +67,7 @@ func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 		apitest.WithProcStarttime(apitest.LinuxProcStarttime), apitest.WithLivenessUnverifiedSince("2026-09-28 10:00:00"),
 		apitest.WithLivenessNote("reuse-test note"), apitest.WithLaunchIdentity(reuseIdentity()),
 		apitest.WithLaunchStartedAt(1767225600999), apitest.WithLifeNumber(reuseLife), apitest.WithTmuxSessionName("reuse-ts"),
-		apitest.WithRawLabels(`{"team":  "a", "b":"2"}`), apitest.WithRawClaudeArgs(`["--model",   "opus"]`),
+		apitest.WithRawLabels(`{"team":  "a", "b":"2"}`), apitest.WithRawAgentArgs(`["--model",   "opus"]`),
 		apitest.WithRawExtraEnv(`{"K":  "v"}`), apitest.WithEndedAt("2026-09-29T01:02:03.5Z"), apitest.WithJsonlPath(reuseJsonl),
 		apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(reuseEndReported),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-reuse-old", JSONLPath: "/tmp/ad-reuse-test/old.jsonl",
@@ -120,7 +120,7 @@ func (f *v5Store) reuseRequests(t *testing.T, id string) []store.PermissionRow {
 func reuseFresh(parentID string, noPreTrust bool) store.Spawn {
 	return store.Spawn{
 		Agent: store.AgentClaude, ParentID: parentID, CWD: "/tmp/ad-reuse-test/new", TmuxSessionName: "reuse-ts-new",
-		ClaudeArgs: []string{"--model", "sonnet"}, RelayMode: "on",
+		AgentArgs: []string{"--model", "sonnet"}, RelayMode: "on",
 		Labels: map[string]string{"team": "z"}, ExtraEnv: map[string]string{"NEW": "1"},
 		StartedAt:             time.Date(2026, 10, 1, 14, 34, 56, 700_000_000, time.FixedZone("UTC+2", 2*3600)),
 		LaunchStartedAtMillis: 1790000000456, NoPreTrust: noPreTrust,
@@ -139,7 +139,7 @@ func (f *v5Store) reuseReset(r reuseRow, fresh store.Spawn) (store.CondResult, s
 // and parsed only when it parses), snapshot and identity against GetSpawn's,
 // on a row GetSpawn cannot decode too; an unknown id is not found, no error.
 func TestReuseReadForReuse(t *testing.T) {
-	malformed := []apitest.SpawnOption{apitest.WithRawLabels(`{bad`), apitest.WithRawClaudeArgs(`[1,`),
+	malformed := []apitest.SpawnOption{apitest.WithRawLabels(`{bad`), apitest.WithRawAgentArgs(`[1,`),
 		apitest.WithRawExtraEnv(`nope`), apitest.WithEndedAt("yesterday-ish")}
 	cases := []struct {
 		name, wantState, wantText string
@@ -236,9 +236,9 @@ func TestReuseResetApplied(t *testing.T) {
 			got := map[string]any{"row_version": a.RowVersion, "state": a.State, "life_number": a.LifeNumber,
 				"no_pre_trust": a.NoPreTrust, "started_at": a.StartedAt, "last_seen_at": a.LastSeenAt,
 				"launch_started_at": a.LaunchStartedAt, "cwd": a.CWD, "tmux_session_name": a.TmuxSessionName,
-				"agent_args": a.ClaudeArgs, "relay_mode": a.RelayMode, "labels": a.Labels, "extra_env": a.ExtraEnv,
+				"agent_args": a.AgentArgs, "relay_mode": a.RelayMode, "labels": a.Labels, "extra_env": a.ExtraEnv,
 				"parent_id": a.ParentID, "launch_token": a.LaunchToken, "tmux_socket": a.TmuxSocket,
-				"session_id": a.ClaudeSessionID, "jsonl_path": a.JSONLPath, "pid": a.PID, "proc_starttime": a.ProcStarttime,
+				"session_id": a.SessionID, "jsonl_path": a.JSONLPath, "pid": a.PID, "proc_starttime": a.ProcStarttime,
 				"ended_at": a.EndedAt, "liveness_unverified_since": a.LivenessUnverifiedSince, "liveness_note": a.LivenessNote,
 				"agent": a.Agent, "end_reported_at": a.EndReportedAt}
 			for col, g := range identityColumns(a) {
@@ -283,7 +283,7 @@ func TestReuseResetApplied(t *testing.T) {
 func splitHistory(h []apitest.HistoryEntry, sessionID string) (cur, others []apitest.HistoryEntry) {
 	others = []apitest.HistoryEntry{}
 	for _, e := range h {
-		if e.ClaudeSessionID == sessionID {
+		if e.SessionID == sessionID {
 			cur = append(cur, e)
 		} else {
 			others = append(others, e)

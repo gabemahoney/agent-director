@@ -76,7 +76,7 @@ func TestPreTrustResultCLISpawn(t *testing.T) {
 					t.Errorf("%s = %q; want projects[%q].hasTrustDialogAccepted true", path, got, cwd)
 				}
 			}
-			id, _ := res["claude_instance_id"].(string)
+			id, _ := res["instance_id"].(string)
 			wantNPT := int64(0)
 			if tc.optOut {
 				wantNPT = 1

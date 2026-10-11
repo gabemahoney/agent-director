@@ -42,7 +42,9 @@ var apiTrail struct {
 // Returns nil when the file does not exist yet. A last line not yet ended by
 // its newline (a write in flight in a parallel test) is left for a later read.
 // A file removed, replaced or truncated after a read fails the test: the
-// cached lines and every caller's mark would no longer match it.
+// cached lines and every caller's mark would no longer match it. A record
+// carrying claude_instance_id or claude_session_id fails it too: records
+// written now use only instance_id and session_id.
 func readAPITrailLines(t *testing.T) []map[string]any {
 	t.Helper()
 	apiTrail.mu.Lock()
@@ -79,6 +81,11 @@ func readAPITrailLines(t *testing.T) []map[string]any {
 		var m map[string]any
 		if err := json.Unmarshal(line, &m); err != nil {
 			t.Fatalf("readAPITrailLines: unmarshal %q: %v", line, err)
+		}
+		for _, old := range []string{"claude_instance_id", "claude_session_id"} {
+			if _, ok := m[old]; ok {
+				t.Fatalf("readAPITrailLines: a trail record written now carries %q (records use instance_id and session_id): %s", old, line)
+			}
 		}
 		apiTrail.lines = append(apiTrail.lines, m)
 		apiTrail.off += int64(len(line) + 1)

@@ -21,14 +21,14 @@
     },
     {
       "name": "spawn",
-      "description": "Launch a tracked Claude Code agent in a new tmux session. Returns the claude_instance_id and pre_trust (ok, skipped or failed) without waiting for the agent; the row is pending from its insert until the agent reports in, then waiting. Creating its labelled session is bounded by the create timeout; on a timeout spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in. A session of this store labelled with an explicit id that has no row, left over from an earlier life, refuses the spawn with ErrTmuxSessionConflict; nothing is written. If the session name is already held, spawn ends its new row at once (unless the error says otherwise) and returns ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate (LAUNCH FAILURE) if the holder vanished first, ErrTmuxNotAvailable (ENVIRONMENT) or ErrTmuxUnresponsive if tmux could not be run or read. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's or another agent-director store's session is another agent and must not be ended; a leftover of an earlier life or a session with no valid instance id is a human's to end (see docs/operator-actions.md); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI). ErrInternal, nothing created or changed: the collision pre-check could not read the store (which says nothing about whether the id is in use), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). To end a live row (pending included) and relaunch its id, follow the live-row sequence in kill's description.",
+      "description": "Launch a tracked agent in a new tmux session. Returns the instance_id and pre_trust (ok, skipped or failed) without waiting for the agent; the row is pending from its insert until the agent reports in, then waiting. Creating its labelled session is bounded by the create timeout; on a timeout spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in. A session of this store labelled with an explicit id that has no row, left over from an earlier life, refuses the spawn with ErrTmuxSessionConflict; nothing is written. If the session name is already held, spawn ends its new row at once (unless the error says otherwise) and returns ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate (LAUNCH FAILURE) if the holder vanished first, ErrTmuxNotAvailable (ENVIRONMENT) or ErrTmuxUnresponsive if tmux could not be run or read. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's or another agent-director store's session is another agent and must not be ended; a leftover of an earlier life or a session with no valid instance id is a human's to end (see docs/operator-actions.md); then, if refused for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI). ErrInternal, nothing created or changed: the collision pre-check could not read the store (which says nothing about whether the id is in use), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). To end a live row (pending included) and relaunch its id, follow the live-row sequence in kill's description.",
       "callable": true,
       "handle_free": false,
       "params": [
         {
           "name": "cwd",
           "type": "string",
-          "description": "Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required.",
+          "description": "Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required.",
           "required": true,
           "nullable": false,
           "allow_empty": false,
@@ -37,14 +37,14 @@
         {
           "name": "template",
           "type": "string",
-          "description": "Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).",
+          "description": "Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).",
           "required": false,
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null
         },
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. An explicit id that already has a row returns ErrInstanceIdCollision: without the reuse opt-in any existing row collides, in any state; with it, only a live row (pending included) or a row that changed or was removed after this spawn examined it.",
           "required": false,
@@ -111,9 +111,9 @@
           "allowed_values": null
         },
         {
-          "name": "claude_args",
+          "name": "agent_args",
           "type": "[]string",
-          "description": "Pass-through argv to `claude` after the supervisor's own flags, one argument per array element (on the CLI, the arguments after --). Denied: --settings, --resume, --continue, --print, --output-format.",
+          "description": "Pass-through argv to the agent program after the supervisor's own flags, one argument per array element (on the CLI, the arguments after --). Denied: --settings, --resume, --continue, --print, --output-format.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -140,7 +140,7 @@
         {
           "name": "reuse_finished",
           "type": "bool",
-          "description": "Opt in to reusing an explicit claude_instance_id whose row is finished (ended or missing): the id starts again on that row. A live row (pending included) still collides with ErrInstanceIdCollision, as does a row that changed or was removed after this spawn examined it; nothing is changed then. No effect without an explicit claude_instance_id (a minted id cannot collide). Applies to this call only; no template or config setting carries it. The default (off) is unchanged: any existing row with the id collides. A successful spawn does not say whether it created a fresh row or reset a finished one. A reused id starts with no memory of its earlier lives: resume and get never use or show an earlier life's history, so the earlier conversation cannot be resumed through agent-director after a reuse. Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until find-missing marks it missing, which happens only after the pending grace period (60 s by default). Feature detection: read the version of the binary that serves the caller: on the CLI the version verb; over MCP the version tool, which reports the running serve process's version until that process restarts; in the TypeScript client binaryVersion (from Client.create() or resolveSystemBinary()), never version(), which is the npm package's version. A release candidate X.Y.Z-rc.N counts as X.Y.Z. A build without a release stamp reports 0.0.0-dev (a make build) or dev (a plain go build); a caller cannot compare it and relies on the older-binary behaviour: an older binary returns ErrInvalidFlags on the CLI and in the TypeScript client, and over MCP silently ignores the parameter, so a finished row gives ErrInstanceIdCollision. Over MCP, a serve process from before the rename (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0 and knows this parameter only as reuse-finished) silently ignores reuse_finished, so a finished row gives ErrInstanceIdCollision. Use it as the same user and in the same tmux environment as the agents. So kill's success on a finished row is not verification of exit; on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id.",
+          "description": "Opt in to reusing an explicit instance_id whose row is finished (ended or missing): the id starts again on that row. A live row (pending included) still collides with ErrInstanceIdCollision, as does a row that changed or was removed after this spawn examined it; nothing is changed then. No effect without an explicit instance_id (a minted id cannot collide). Applies to this call only; no template or config setting carries it. The default (off) is unchanged: any existing row with the id collides. A successful spawn does not say whether it created a fresh row or reset a finished one. A reused id starts with no memory of its earlier lives: resume and get never use or show an earlier life's history, so the earlier conversation cannot be resumed through agent-director after a reuse. Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until find-missing marks it missing, which happens only after the pending grace period (60 s by default). Feature detection: read the version of the binary that serves the caller: on the CLI the version verb; over MCP the version tool, which reports the running serve process's version until that process restarts; in the TypeScript client binaryVersion (from Client.create() or resolveSystemBinary()), never version(), which is the npm package's version. A release candidate X.Y.Z-rc.N counts as X.Y.Z. A build without a release stamp reports 0.0.0-dev (a make build) or dev (a plain go build); a caller cannot compare it and relies on the older-binary behaviour: an older binary returns ErrInvalidFlags on the CLI and in the TypeScript client, and over MCP silently ignores the parameter, so a finished row gives ErrInstanceIdCollision. Over MCP, a serve process from before the rename (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0 and knows this parameter only as reuse-finished) silently ignores reuse_finished, so a finished row gives ErrInstanceIdCollision. Use it as the same user and in the same tmux environment as the agents. So kill's success on a finished row is not verification of exit; on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -149,7 +149,7 @@
       ],
       "result_fields": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "The id (caller-supplied or freshly-minted UUID4) the row is tracked under.",
           "nullable": false,
@@ -193,12 +193,12 @@
     },
     {
       "name": "status",
-      "description": "Return a row's state (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or at a startup prompt. A resumed pending row keeps its session id and history.",
+      "description": "Return a row's state (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or at a startup prompt. A resumed pending row keeps its session id and history.",
       "callable": true,
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the Spawn to inspect.",
           "required": true,
@@ -211,7 +211,7 @@
         {
           "name": "state",
           "type": "string",
-          "description": "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet.",
+          "description": "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -244,7 +244,7 @@
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the Spawn to fetch.",
           "required": true,
@@ -255,7 +255,7 @@
       ],
       "result_fields": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Stable id of the Spawn.",
           "nullable": false,
@@ -273,7 +273,7 @@
         {
           "name": "state",
           "type": "string",
-          "description": "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet.",
+          "description": "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -311,9 +311,9 @@
           "allowed_values": null
         },
         {
-          "name": "claude_args",
+          "name": "agent_args",
           "type": "[]string",
-          "description": "Verbatim argv passed through to claude after the supervisor's own flags.",
+          "description": "Verbatim argv passed through to the agent program after the supervisor's own flags.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -332,15 +332,15 @@
         {
           "name": "jsonl_path",
           "type": "string",
-          "description": "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.",
+          "description": "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + session_id.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
         },
         {
-          "name": "claude_session_id",
+          "name": "session_id",
           "type": "string",
-          "description": "Claude Code session UUID, extracted from SessionStart hook's transcript_path.",
+          "description": "Agent session UUID, extracted from SessionStart hook's transcript_path.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -396,7 +396,7 @@
         {
           "name": "liveness_note",
           "type": "string?",
-          "description": "Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at a Claude Code startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.",
+          "description": "Reason token of the latest sweep that left this live row unverified (its agent process could not be checked and tmux did not settle it), for example process_not_seen_session_present, process_not_seen_tmux_unchecked, probe_eacces, tmux_server_changed or provenance_conflict; overwritten when the reason changes. Cleared to NULL together with liveness_unverified_since when a sweep finds the agent process alive, except on a pending row it notes unreported and a pending row noted provenance_conflict, which keeps it; null/omitted while the row has no note. Or unreported, on a pending row past the pending grace period: its agent is alive, but no hook has reported since its launch, so it may sit at an agent startup screen or idle at its prompt. The row stays pending. To act on it: read-pane, then send-keys with allow_pending (--allow-pending on the CLI); only a caller that looked should type. A later sweep that finds the agent alive keeps the note; the agent's next hook clears it. unreported never replaces provenance_conflict.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -404,7 +404,7 @@
         {
           "name": "permission_requests",
           "type": "[]object",
-          "description": "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set a row can also read any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock.",
+          "description": "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set a row can also read any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — the agent's tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -412,7 +412,7 @@
         {
           "name": "unproven_requests",
           "type": "[]object",
-          "description": "Every permission request of the row that Claude Code has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those: the agent is gone). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array. It follows the row's live state: with [state] settle_ms set, a row can read ended or missing with requests here for up to settle_ms.",
+          "description": "Every permission request of the row that the agent has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those: the agent is gone). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array. It follows the row's live state: with [state] settle_ms set, a row can read ended or missing with requests here for up to settle_ms.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -420,7 +420,7 @@
         {
           "name": "transcript_status",
           "type": "string",
-          "description": "Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no claude_session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. A reuse starts a new life with no history; a failed reuse's restore returns the pre-reuse life.",
+          "description": "Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and prior_sessions is empty — nothing was ever written in the current life), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — the current life has history under a different session id), or 'no_session' (no session_id yet). Session history belongs to a life; 'never_written' and 'rotated' are decided on the same entries prior_sessions lists. A reuse starts a new life with no history; a failed reuse's restore returns the pre-reuse life.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -433,7 +433,7 @@
         {
           "name": "prior_sessions",
           "type": "[]object",
-          "description": "Archived prior sessions of the current life, newest first, excluding the row's current session id — the queryable link back to sessions orphaned by a rotation (b.v2c). Session history belongs to a life: after a reuse, which starts a new life, no earlier life's session appears; a failed reuse's restore returns the pre-reuse life's. Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).",
+          "description": "Archived prior sessions of the current life, newest first, excluding the row's current session id — the queryable link back to sessions orphaned by a rotation (b.v2c). Session history belongs to a life: after a reuse, which starts a new life, no earlier life's session appears; a failed reuse's restore returns the pre-reuse life's. Always a non-null array ([] when empty). Each element: session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -450,7 +450,7 @@
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the live Spawn to drive.",
           "required": true,
@@ -515,7 +515,7 @@
         {
           "name": "request_token",
           "type": "string",
-          "description": "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). Under the store's lock it checks the pane's hash and records pane_answer intent (with its own process as sender) before sending the key, then records pane_answer sent, decision as and decision_reason pane. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any request of the Spawn has fallen back with no pane answer recorded, then, without expect_pane_sha256, with ErrDialogMaybeOpen (with err_details) while any request of the Spawn is not proven gone by Claude Code (get's unproven_requests), whatever agent-director's records say of it.",
+          "description": "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). Under the store's lock it checks the pane's hash and records pane_answer intent (with its own process as sender) before sending the key, then records pane_answer sent, decision as and decision_reason pane. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any request of the Spawn has fallen back with no pane answer recorded, then, without expect_pane_sha256, with ErrDialogMaybeOpen (with err_details) while any request of the Spawn is not proven gone by the agent (get's unproven_requests), whatever agent-director's records say of it.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -561,7 +561,7 @@
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the Spawn to read.",
           "required": true,
@@ -631,7 +631,7 @@
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the Spawn to kill.",
           "required": true,
@@ -665,7 +665,7 @@
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the Spawn sitting on the PermissionRequest.",
           "required": true,
@@ -717,7 +717,7 @@
         {
           "name": "delivery",
           "type": "string",
-          "description": "delivered: the relay hook acked the verdict before writing it to Claude Code. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.",
+          "description": "delivered: the relay hook acked the verdict before writing it to the agent. not_confirmed: no ack within decide's wait of at most 1 s (or by the max_wait_ms bound); ask get-permission, at the latest at confirm_by, by when it is delivered or fallen_back. decide never returns fallen_back: such a request is refused with ErrRelayFallenBack, or ErrAlreadyDecided once answered at the pane.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -771,7 +771,7 @@
         {
           "name": "tool_use_id",
           "type": "string?",
-          "description": "The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).",
+          "description": "The permission request's tool_use_id from the agent's hook input; null when none was given (a request recorded before this release included).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -779,7 +779,7 @@
         {
           "name": "pane_answer",
           "type": "string",
-          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
+          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -805,7 +805,7 @@
         {
           "name": "proven_gone_at",
           "type": "timestamp?",
-          "description": "When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
+          "description": "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -880,7 +880,7 @@
         {
           "name": "tool_name",
           "type": "string",
-          "description": "Claude Code tool that triggered the permission request (e.g. \"Bash\", \"Write\").",
+          "description": "The agent's tool that triggered the permission request (e.g. \"Bash\", \"Write\").",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null
@@ -939,7 +939,7 @@
         {
           "name": "delivery",
           "type": "string",
-          "description": "delivered: the relay hook acked a verdict before writing it to Claude Code. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request is open and only an answer at the pane, or record-pane-answer, closes it; with sent, outside or tool_ran it is closed. Derived on every read; a request recorded before this release falls back by its relay window, as before.",
+          "description": "delivered: the relay hook acked a verdict before writing it to the agent. not_confirmed: no ack yet and the hook may still run; it ends by confirm_by. fallen_back: no ack, and the hook is gone (or cannot be checked and confirm_by has passed): no answer from the relay reached the agent. While pane_answer is none or intent the request is open and only an answer at the pane, or record-pane-answer, closes it; with sent, outside or tool_ran it is closed. Derived on every read; a request recorded before this release falls back by its relay window, as before.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -994,7 +994,7 @@
         {
           "name": "tool_use_id",
           "type": "string?",
-          "description": "The permission request's tool_use_id from Claude Code's hook input; null when none was given (a request recorded before this release included).",
+          "description": "The permission request's tool_use_id from the agent's hook input; null when none was given (a request recorded before this release included).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -1002,7 +1002,7 @@
         {
           "name": "pane_answer",
           "type": "string",
-          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: Claude Code reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
+          "description": "How the request was answered at the pane. none: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered it). intent: a pane answer through send-keys was started and whether its key was typed is unknown. sent: its key was sent (decision_reason pane). outside: a caller recorded it answered outside agent-director (record-pane-answer, decision_reason pane_outside). tool_ran: the agent reported its tool ran (decision allow, decision_reason tool_ran). A request with sent, outside or tool_ran is closed and stays delivery fallen_back.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": [
@@ -1028,7 +1028,7 @@
         {
           "name": "proven_gone_at",
           "type": "timestamp?",
-          "description": "When Claude Code proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
+          "description": "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -1067,7 +1067,7 @@
         {
           "name": "request_token",
           "type": "string",
-          "description": "Token of the permission request answered outside agent-director (as get, get-permission or ErrRelayFallenBack's err_details name it). Accepted only while it has fallen back (its relay hook gone, no verdict acked, no pane answer completed) and no pane answer through send-keys on it is still being sent (else ErrPaneAnswerInProgress); acked or answered at the pane: ErrAlreadyDecided; closed with its spawn: ErrNoOpenPermissionRequest. Its relay hook must have been gone at least 2 s, from the request's hook_gone_at (written now when it has none), or from its confirm_by when earlier and the hook is judged by time (it cannot be checked, or the request was recorded before this release): Claude Code draws a dialog only after the hook ends, so a pane read sooner may not show it yet; else ErrClaimTooSoon with err_details.not_before (null only while the hook is seen running). Once recorded, plain send-keys is no longer refused with ErrRelayFallenBack on its account; without expect_pane_sha256 it is still refused with ErrDialogMaybeOpen until Claude Code proves the request gone (its proven_gone_at).",
+          "description": "Token of the permission request answered outside agent-director (as get, get-permission or ErrRelayFallenBack's err_details name it). Accepted only while it has fallen back (its relay hook gone, no verdict acked, no pane answer completed) and no pane answer through send-keys on it is still being sent (else ErrPaneAnswerInProgress); acked or answered at the pane: ErrAlreadyDecided; closed with its spawn: ErrNoOpenPermissionRequest. Its relay hook must have been gone at least 2 s, from the request's hook_gone_at (written now when it has none), or from its confirm_by when earlier and the hook is judged by time (it cannot be checked, or the request was recorded before this release): Claude Code draws a dialog only after the hook ends, so a pane read sooner may not show it yet; else ErrClaimTooSoon with err_details.not_before (null only while the hook is seen running). Once recorded, plain send-keys is no longer refused with ErrRelayFallenBack on its account; without expect_pane_sha256 it is still refused with ErrDialogMaybeOpen until the agent proves the request gone (its proven_gone_at).",
           "required": true,
           "nullable": false,
           "allow_empty": false,
@@ -1172,12 +1172,12 @@
     },
     {
       "name": "resume",
-      "description": "Relaunch a finished (ended/missing) row via `claude --resume`. `missing` is not proof of exit (see find-missing). Same id and JSONL transcript, fresh tmux session. Before its launch, resume runs spawn's best-effort pre-trust for the row's cwd, unless the spawn that began the row's life turned it off with no_pre_trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before creating the session, resume moves the row to pending, keeping its session id and history, and writes parent_id from the caller's AGENT_DIRECTOR_INSTANCE_ID; the row stays pending until the agent reports in, then waiting. If the launch fails without timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row's prior ended or missing state; if it cannot, the error says so. Creating the session is bounded by the create timeout; on a timeout resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. A refusal before the move writes nothing; resume can be re-issued. A session in the way (holding the name, left over, or this row's own) is never touched: ErrTmuxSessionConflict (CONFLICT, until a human looks; see docs/operator-actions.md), or ErrTmuxUnresponsive while it appears to still be stopping or starting. A name held at the create is refused likewise, after the restore. A pending row (a launch in progress, a resumed one included) is refused with ErrSpawnNotResumable. A row whose instance id contains a control character (its session cannot be labelled) or whose recorded name is unusable (see kill) is refused with ErrInternal and no tmux call. If the store cannot record the launch, resume returns ErrInternal and launches nothing.",
+      "description": "Relaunch a finished (ended/missing) row by resuming its agent session. `missing` is not proof of exit (see find-missing). Same id and JSONL transcript, fresh tmux session. Before its launch, resume runs spawn's best-effort pre-trust for the row's cwd, unless the spawn that began the row's life turned it off with no_pre_trust; a pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Before creating the session, resume moves the row to pending, keeping its session id and history, and writes parent_id from the caller's AGENT_DIRECTOR_INSTANCE_ID; the row stays pending until the agent reports in, then waiting. If the launch fails without timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row's prior ended or missing state; if it cannot, the error says so. Creating the session is bounded by the create timeout; on a timeout resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. A refusal before the move writes nothing; resume can be re-issued. A session in the way (holding the name, left over, or this row's own) is never touched: ErrTmuxSessionConflict (CONFLICT, until a human looks; see docs/operator-actions.md), or ErrTmuxUnresponsive while it appears to still be stopping or starting. A name held at the create is refused likewise, after the restore. A pending row (a launch in progress, a resumed one included) is refused with ErrSpawnNotResumable. A row whose instance id contains a control character (its session cannot be labelled) or whose recorded name is unusable (see kill) is refused with ErrInternal and no tmux call. If the store cannot record the launch, resume returns ErrInternal and launches nothing.",
       "callable": true,
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the finished (ended or missing) row to resume.",
           "required": true,
@@ -1188,7 +1188,7 @@
       ],
       "result_fields": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "The same id passed in (resume keeps the instance id).",
           "nullable": false,
@@ -1319,7 +1319,7 @@
     },
     {
       "name": "make-template",
-      "description": "Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invocation params (template, claude_instance_id, tmux_session_name, reuse_finished) are refused.",
+      "description": "Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1355,9 +1355,9 @@
           ]
         },
         {
-          "name": "claude_args",
+          "name": "agent_args",
           "type": "[]string",
-          "description": "Bake default Claude argv. Per-call claude_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat).",
+          "description": "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat).",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -1500,7 +1500,7 @@
         {
           "name": "spawns",
           "type": "[]Spawn",
-          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. It follows the row's live state: with [state] settle_ms set, a row whose agent has reported in can read pending without it for up to settle_ms. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set a row can also read any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock.",
+          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. It follows the row's live state: with [state] settle_ms set, a row whose agent has reported in can read pending without it for up to settle_ms. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet. Each row also carries permission_requests, as get's: Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set a row can also read any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — the agent's tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -1518,7 +1518,7 @@
       "handle_free": false,
       "params": [
         {
-          "name": "claude_instance_id",
+          "name": "instance_id",
           "type": "string",
           "description": "Id of the Spawn to pause.",
           "required": true,
@@ -1653,7 +1653,7 @@
         {
           "name": "instance_id",
           "type": "string",
-          "description": "claude_instance_id. Required.",
+          "description": "instance_id. Required.",
           "required": true,
           "nullable": false,
           "allow_empty": false,
@@ -1675,7 +1675,7 @@
         {
           "name": "stdin",
           "type": "json",
-          "description": "Claude Code hook payload (hook_event_name, transcript_path, tool_name, reason, ...).",
+          "description": "Agent hook payload (hook_event_name, transcript_path, tool_name, reason, ...).",
           "required": true,
           "nullable": false,
           "allow_empty": false,

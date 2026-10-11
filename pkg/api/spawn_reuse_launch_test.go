@@ -68,9 +68,9 @@ func rlAssertNewLife(t *testing.T, r reuseRow, cols apitest.SpawnColumns, tok st
 		t.Errorf("create token %q; want a new 16-hex token (old %q)", tok, r.Token)
 	}
 	if cols.State != store.StatePending || cols.LifeNumber != reuseLife+1 || cols.LaunchToken != tok ||
-		cols.LaunchStartedAt != launchStart.UnixMilli() || cols.ClaudeSessionID != nil || cols.PID != nil || cols.EndedAt != nil {
+		cols.LaunchStartedAt != launchStart.UnixMilli() || cols.SessionID != nil || cols.PID != nil || cols.EndedAt != nil {
 		t.Errorf("row {state %v, life %v, token %v, launch start %v, session %v, pid %v, ended_at %v}; want pending, %d, %s, %d, all NULL",
-			cols.State, cols.LifeNumber, cols.LaunchToken, cols.LaunchStartedAt, cols.ClaudeSessionID, cols.PID, cols.EndedAt,
+			cols.State, cols.LifeNumber, cols.LaunchToken, cols.LaunchStartedAt, cols.SessionID, cols.PID, cols.EndedAt,
 			reuseLife+1, tok, launchStart.UnixMilli())
 	}
 }
@@ -368,7 +368,7 @@ func TestSpawnReuseCreateMatchesPlainSpawn(t *testing.T) {
 	q := reuseRequest{Name: "parity-" + uuid.NewString()[:8], Args: []string{"--model", "sonnet"},
 		Env: map[string]string{"PARITY_VAR": "on"}, Labels: map[string]string{"team": "parity"}}
 	plain := reuseParams(t, r, q)
-	plain.ReuseFinished, plain.ClaudeInstanceID = false, "plain-"+uuid.NewString()[:8]
+	plain.ReuseFinished, plain.InstanceID = false, "plain-"+uuid.NewString()[:8]
 	if _, err := c.Spawn(plain); err != nil {
 		t.Fatalf("plain spawn: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestSpawnReuseCreateMatchesPlainSpawn(t *testing.T) {
 		}
 		return out
 	}
-	if got, want := normalised(creates[1], r.ID), normalised(creates[0], plain.ClaudeInstanceID); !slices.Equal(got, want) {
+	if got, want := normalised(creates[1], r.ID), normalised(creates[0], plain.InstanceID); !slices.Equal(got, want) {
 		t.Errorf("reuse's create argv\n  %q\nwant the plain spawn's\n  %q", got, want)
 	}
 }

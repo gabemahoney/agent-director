@@ -51,7 +51,7 @@ func assertGetHistory(t *testing.T, got api.SpawnRow, wantStatus string, want []
 	}
 	for i, w := range want {
 		p := got.PriorSessions[i]
-		if p.ClaudeSessionID != w.id || p.JSONLPath != w.path || p.RecordedAt == "" {
+		if p.SessionID != w.id || p.JSONLPath != w.path || p.RecordedAt == "" {
 			t.Errorf("PriorSessions[%d] = %+v; want (%q, %q) with a recorded_at", i, p, w.id, w.path)
 		}
 		if !w.at.IsZero() {
@@ -160,8 +160,8 @@ func TestGetHistoryHookRotationWithinLife(t *testing.T) {
 		t.Fatalf("SessionStart = %+v; want applied", got)
 	}
 	got, err := api.Get(s, api.RelayView{}, id)
-	if err != nil || got.ClaudeSessionID != "s-new" {
-		t.Fatalf("Get = %q, %v; want ClaudeSessionID s-new", got.ClaudeSessionID, err)
+	if err != nil || got.SessionID != "s-new" {
+		t.Fatalf("Get = %q, %v; want SessionID s-new", got.SessionID, err)
 	}
 	assertGetHistory(t, got, "rotated", []getWantPrior{{id: "s-old", path: "/h/s-old.jsonl"}, {"s-older", "/h/s-older.jsonl", getHistAt(1)}})
 	all, err := apitest.ReadSessionHistoryAllLives(dbPath, id)
@@ -170,7 +170,7 @@ func TestGetHistoryHookRotationWithinLife(t *testing.T) {
 	}
 	for _, e := range all {
 		if e.LifeNumber != life {
-			t.Errorf("stored entry %q in life %d; want %d (the row's life)", e.ClaudeSessionID, e.LifeNumber, life)
+			t.Errorf("stored entry %q in life %d; want %d (the row's life)", e.SessionID, e.LifeNumber, life)
 		}
 	}
 }

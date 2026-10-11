@@ -27,7 +27,7 @@ test("record-pane-answer: happy path — closes a fallen-back request, typing no
 
     const result = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      const { pane_sha256 } = await client.readPane({ claude_instance_id: id });
+      const { pane_sha256 } = await client.readPane({ instance_id: id });
       return await client.recordPaneAnswer({ request_token: token, as: "unknown", expect_pane_sha256: pane_sha256 });
     });
 

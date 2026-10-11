@@ -103,7 +103,7 @@ func TestResumeCwdFormatSequencesAreLiteral(t *testing.T) {
 			f := newSpawnFix(t)
 			cwd, marker := formatCwd(t, tc.dir)
 			id, _ := f.seedResumable(t, cwd, []string{})
-			if _, err := f.API.Resume(api.ResumeParams{ClaudeInstanceID: id}); err != nil {
+			if _, err := f.API.Resume(api.ResumeParams{InstanceID: id}); err != nil {
 				t.Fatalf("resume: %s", describe(err))
 			}
 			assertStartedIn(t, f.launched(t, id), cwd, marker, strings.Contains(tc.dir, "MARKER"))

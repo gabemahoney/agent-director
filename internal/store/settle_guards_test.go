@@ -52,7 +52,7 @@ func TestSettleGuardReadsAreRaw(t *testing.T) {
 	}
 	var liveIDs []string
 	for _, l := range lives {
-		liveIDs = append(liveIDs, l.ClaudeInstanceID)
+		liveIDs = append(liveIDs, l.InstanceID)
 	}
 	if !slices.Equal(liveIDs, []string{live}) {
 		t.Errorf("find-missing's live rows = %v; want the raw live row only [%s]", liveIDs, live)

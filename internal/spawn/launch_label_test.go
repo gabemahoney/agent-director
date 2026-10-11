@@ -41,7 +41,7 @@ func TestLaunchRecordsLaunchStartTokenAndSocket(t *testing.T) {
 	e := newLaunchEnv(t)
 	var tokens []string
 	for i, id := range []string{"id-first", "id-second"} {
-		e.r.ClaudeInstanceID, e.r.TmuxSessionName = id, "cd-"+id
+		e.r.InstanceID, e.r.TmuxSessionName = id, "cd-"+id
 		wantStart := e.clock.Now().UnixMilli()
 		e.mustLaunch()
 		row := e.row(id)
@@ -93,7 +93,7 @@ func TestLaunchRefusesUnusableSocketDir(t *testing.T) {
 	if !errors.Is(err, tmux.ErrTmuxNotAvailable) || errors.Is(err, tmux.ErrTmuxSessionCreate) || errors.Is(err, tmux.ErrTmuxUnresponsive) {
 		t.Fatalf("Launch err = %v; want ErrTmuxNotAvailable and no other tmux sentinel", err)
 	}
-	if _, gerr := e.s.GetSpawn(e.r.ClaudeInstanceID); !errors.Is(gerr, store.ErrSpawnNotFound) {
+	if _, gerr := e.s.GetSpawn(e.r.InstanceID); !errors.Is(gerr, store.ErrSpawnNotFound) {
 		t.Errorf("GetSpawn err = %v; want ErrSpawnNotFound (no row)", gerr)
 	}
 	if n, m := len(e.rec.Calls()), len(e.rec.SocketCalls()); n+m != 0 {

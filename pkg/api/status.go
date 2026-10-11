@@ -19,10 +19,10 @@ type StatusResult struct {
 	// State is the current lifecycle state of the Spawn. One of:
 	// pending, waiting, working, ask_user, check_permission, ended, missing.
 	// pending means a launch (spawn, reuse or resume) is in progress and the
-	// agent has not reported in yet (Claude Code's SessionStart); it may be
+	// agent has not reported in yet (its SessionStart hook); it may be
 	// loading or waiting at a startup prompt. A resumed pending row keeps its
 	// session id and history; a caller tells it from a fresh one by its
-	// non-empty claude_session_id, shown by [Client.Get].
+	// non-empty session_id, shown by [Client.Get].
 	State string `json:"state"`
 	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
 	// with millisecond precision. Present only on a pending row; nil (and
@@ -44,7 +44,7 @@ type settledStatusReader interface {
 	SpawnStatusSettled(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, err error)
 }
 
-// Status returns the current state column for the given claude_instance_id,
+// Status returns the current state column for the given instance_id,
 // with launch_started_at on a pending row when s provides the narrow read.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
 // the canonical err_name envelope. It reads with no settle time; the Client
@@ -91,15 +91,15 @@ func statusSettled(s StatusStore, settle store.SettleRead, instanceID string) (S
 // CLI: agent-director status
 //
 // Errors:
-//   - [ErrSpawnNotFound]: no row exists for claudeInstanceID.
+//   - [ErrSpawnNotFound]: no row exists for instanceID.
 //
 // Nondeterminism: none with no settle time; with one, the state depends on
 // the clock.
-func (c *Client) Status(claudeInstanceID string) (StatusResult, error) {
+func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
 	}
-	return statusSettled(c.st, c.settleRead(), claudeInstanceID)
+	return statusSettled(c.st, c.settleRead(), instanceID)
 }
 
 // Compile-time assertion that *store.Store provides the optional narrow read

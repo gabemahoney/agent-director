@@ -110,7 +110,7 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				})
 			}
 
-			data := toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id})))
+			data := toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"instance_id": id})))
 
 			if data.ErrName != tc.wantErr {
 				t.Fatalf("err_name = %q (%s); want %s", data.ErrName, data.ErrDescription, tc.wantErr)
@@ -130,7 +130,7 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				t.Fatalf("KillSessionID(%s): %v", holder, err)
 			}
 
-			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id, key: true}))
+			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"instance_id": id, key: true}))
 
 			if resp == nil || resp.Error != nil {
 				got := "no response"
@@ -177,7 +177,7 @@ func TestAdviceFollow_I5_MCPLiteralListSessionName(t *testing.T) {
 	e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{ID: "$4", Name: name})
 	seedFinished(t, e, "i5-other", store.StateEnded, apitest.WithTmuxSessionName(name+"-other"))
 
-	data := toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id})))
+	data := toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"instance_id": id})))
 
 	if data.ErrName != "ErrTmuxSessionConflict" {
 		t.Fatalf("err_name = %q (%s); want ErrTmuxSessionConflict", data.ErrName, data.ErrDescription)
@@ -192,7 +192,7 @@ func TestAdviceFollow_I5_MCPLiteralListSessionName(t *testing.T) {
 		t.Fatalf("list %s = %s; want the rows using that session name", args, resp.Error.Message)
 	}
 	var rows []struct {
-		ID string `json:"claude_instance_id"`
+		ID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(callToolText(t, e.d, "list", args)["spawns"], &rows); err != nil {
 		t.Fatalf("parse list spawns: %v", err)

@@ -33,7 +33,7 @@ func (e *relayEnv) decideWith(t *testing.T, s api.DecideStore, decision string, 
 		}
 		slept += d
 		e.now = e.now.Add(d)
-	}, api.DecideParams{ClaudeInstanceID: e.id, RequestToken: storefix.TestRequestTokenA, Decision: decision, MaxWaitMs: maxWaitMs})
+	}, api.DecideParams{InstanceID: e.id, RequestToken: storefix.TestRequestTokenA, Decision: decision, MaxWaitMs: maxWaitMs})
 	return res, slept, err
 }
 
@@ -218,7 +218,7 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 				}
 
 				start := time.Now()
-				res, err := api.DecideWithSleep(s, view, sleep, api.DecideParams{ClaudeInstanceID: e.id,
+				res, err := api.DecideWithSleep(s, view, sleep, api.DecideParams{InstanceID: e.id,
 					RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(bound))})
 				took := time.Since(start)
 				if release != nil {
@@ -251,7 +251,7 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 		var slept time.Duration
 		start := time.Now()
 		_, err := api.DecideWithSleep(s, api.RelayView{Now: time.Now, Window: time.Hour}, func(d time.Duration) { slept += d },
-			api.DecideParams{ClaudeInstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(100))})
+			api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(100))})
 		took := time.Since(start)
 
 		assertOneSentinel(t, err, api.ErrStoreBusy)

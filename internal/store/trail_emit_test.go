@@ -84,7 +84,7 @@ func assertSpawnStateTransitionFields(t *testing.T, row map[string]any, instance
 		t.Errorf("[ts] = %v; want an RFC3339Nano timestamp", row["ts"])
 	}
 	for key, want := range map[string]string{"event": "ad.spawn.state_transition", "source": "ad_spawn_store",
-		"claude_instance_id": instanceID, "prior_state": priorState, "new_state": newState, "triggering_event_name": trigger} {
+		"instance_id": instanceID, "prior_state": priorState, "new_state": newState, "triggering_event_name": trigger} {
 		assertTrailStr(t, row, key, want)
 	}
 	if v, ok := row["soft_refresh"].(bool); !ok || v != softRefresh {
@@ -144,7 +144,7 @@ func TestRowMutationEmit(t *testing.T) {
 				t.Errorf("[ts] = %v; want an SR-A-7.9 timestamp", row["ts"])
 			}
 			for key, want := range map[string]string{"source": "ad_store", "writer_process": tc.writer,
-				"mutation_kind": tc.kind, "claude_instance_id": relayID, "request_token": tokenA, "tool_name": "Bash"} {
+				"mutation_kind": tc.kind, "instance_id": relayID, "request_token": tokenA, "tool_name": "Bash"} {
 				assertTrailStr(t, row, key, want)
 			}
 			if tc.kind == "insert" {
@@ -188,7 +188,7 @@ const (
 // find-missing's mark. It returns the row as resume or reuse examines it.
 func trailSeedFinished(t *testing.T, s *Store, id, state string) Spawn {
 	t.Helper()
-	if err := insertAgentRow(s, Spawn{ClaudeInstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-trail-" + id, RelayMode: "off"}); err != nil {
+	if err := insertAgentRow(s, Spawn{InstanceID: id, Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-trail-" + id, RelayMode: "off"}); err != nil {
 		t.Fatalf("insertAgentRow(%s): %v", id, err)
 	}
 	if state == StateEnded {
@@ -217,7 +217,7 @@ func mustGetSpawn(t *testing.T, s *Store, id string) Spawn {
 // trailMove applies resume's move to pending on examined; it must apply.
 func trailMove(t *testing.T, s *Store, examined Spawn) int64 {
 	t.Helper()
-	res, v, err := s.MoveToPending(examined.ClaudeInstanceID, examined.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{})
+	res, v, err := s.MoveToPending(examined.InstanceID, examined.Snapshot, trailMoveStart, trailResumeToken, "/tmp/trail-sock", "", LaunchOwner{})
 	if err != nil || res != CondApplied {
 		t.Fatalf("MoveToPending = %v, %v; want CondApplied", res, err)
 	}
@@ -276,7 +276,7 @@ func TestTrailResumeAndReuseWritesEmitNoStateTransition(t *testing.T) {
 					}
 				}
 				for _, row := range readStoreTrailLines(t)[mark:] {
-					if row["claude_instance_id"] == id {
+					if row["instance_id"] == id {
 						t.Errorf("%s emitted %v naming the row; want no line", write, row["event"])
 					}
 				}
@@ -318,7 +318,7 @@ func TestTrailHookAfterResumeMoveOrReuseReset(t *testing.T) {
 			return trailMove(t, s, examined), trailResumeToken
 		},
 		"reuse reset": func(t *testing.T, s *Store, examined Spawn) (int64, string) {
-			_, v := trailReset(t, s, examined.ClaudeInstanceID)
+			_, v := trailReset(t, s, examined.InstanceID)
 			return v, trailReuseToken
 		},
 	}

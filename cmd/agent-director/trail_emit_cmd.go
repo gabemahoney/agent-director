@@ -49,9 +49,9 @@ func trailEmitRelayAttemptHandler(args []string) error {
 	fs.StringVar(&outcomeStr, "outcome", "", "3-digit HTTP status code (100-599) or named class: connection_refused, timeout, dns_failure (required)")
 	fs.Var(newDecimalInt(&bytesSent, 0), "bytes-sent", "bytes sent (a negative value is refused)")
 	fs.Var(newDecimalInt(&bytesReceived, 0), "bytes-received", "bytes received (a negative value is refused)")
-	fs.StringVar(&instanceID, "instance-id", "", "claude_instance_id (required)")
+	fs.StringVar(&instanceID, "instance-id", "", "instance_id (required)")
 	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
 	}
 
 	// Required-flag guard — no emit until all flags pass.
@@ -82,13 +82,13 @@ func trailEmitRelayAttemptHandler(args []string) error {
 	}
 
 	fields := map[string]any{
-		"claude_instance_id": instanceID,
-		"request_token":      token,
-		"target_endpoint":    endpoint,
-		"outcome":            outcome, // int or string per spec
-		"bytes_sent":         bytesSent,
-		"bytes_received":     bytesReceived,
-		"source":             "relay_hook", // SR-A-1.4
+		"instance_id":     instanceID,
+		"request_token":   token,
+		"target_endpoint": endpoint,
+		"outcome":         outcome, // int or string per spec
+		"bytes_sent":      bytesSent,
+		"bytes_received":  bytesReceived,
+		"source":          "relay_hook", // SR-A-1.4
 	}
 	if emitErr := trail.Emit(context.Background(), "ad.relay_attempt.completed", fields); emitErr != nil {
 		return writeApiErrorAndDispatch("ErrTrailWrite", emitErr.Error())

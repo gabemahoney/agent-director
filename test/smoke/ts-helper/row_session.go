@@ -40,7 +40,7 @@ func cmdSeedRowSession(args []string, stdout, stderr io.Writer) int {
 
 	var (
 		storePath = fs.String("store", "", "path to SQLite store file (required)")
-		id        = fs.String("id", "", "claude_instance_id of an existing spawn (required)")
+		id        = fs.String("id", "", "instance_id of an existing spawn (required)")
 		capture   = fs.String("capture", "", "text capture-pane prints for the row's pane; empty uses the fake's default")
 		tablesDir = fs.String("tables-dir", os.Getenv(faketmuxfix.EnvTables),
 			"directory of the fake's tables (FAKE_TMUX_TABLES); defaults to $"+faketmuxfix.EnvTables+", else the table beside the socket")

@@ -15,7 +15,7 @@ import (
 // following the COALESCE scan convention (spawns.go). Its fields grow
 // additively (SR-16.1).
 type LiveSpawnIdentity struct {
-	ClaudeInstanceID string
+	InstanceID string
 	// State is the row's stored state: one of the live states, pending
 	// included.
 	State string
@@ -92,7 +92,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 			launchStartedAt any
 			life            lifeScan
 		)
-		dest := append([]any{&it.ClaudeInstanceID, &it.State, &launchStartedAt, &it.LivenessNote}, life.dest()...)
+		dest := append([]any{&it.InstanceID, &it.State, &launchStartedAt, &it.LivenessNote}, life.dest()...)
 		dest = append(dest, launchOwnerDest(&it.LaunchOwner)...)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("store: list live identities scan: %w", err)
@@ -116,7 +116,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 // trail-emit failure must not fail the store call (SR-A-3.2).
 func emitOrphanCloseoutTick(instanceID, requestToken string) {
 	_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
-		"claude_instance_id":    instanceID,
+		"instance_id":           instanceID,
 		"request_token":         requestToken,
 		"prior_state":           nil,
 		"new_state":             nil,

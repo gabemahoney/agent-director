@@ -177,7 +177,7 @@ func TestAssertResultMatchesManifest_MissingField(t *testing.T) {
 	vd := manifest.VerbDef{
 		Name: "test-verb",
 		ResultFields: []manifest.FieldDef{
-			{Name: "claude_instance_id", Type: "string", Nullable: false},
+			{Name: "instance_id", Type: "string", Nullable: false},
 		},
 	}
 
@@ -193,10 +193,10 @@ func TestAssertResultMatchesManifest_MissingField(t *testing.T) {
 
 	t.Run("struct with matching json tag passes", func(t *testing.T) {
 		type result struct {
-			ClaudeInstanceID string `json:"claude_instance_id"`
+			InstanceID string `json:"instance_id"`
 		}
 		ct := newCapturingT(t)
-		AssertResultMatchesManifest(ct, vd, result{ClaudeInstanceID: "abc"})
+		AssertResultMatchesManifest(ct, vd, result{InstanceID: "abc"})
 		assertNoErrors(t, ct, "matching json tag")
 	})
 }

@@ -33,7 +33,7 @@ func TestTrailEmitRelayAttemptCLI(t *testing.T) {
 			if len(ra) != 1 {
 				t.Fatalf("ad.relay_attempt.completed lines = %v; want exactly one", ra)
 			}
-			want := map[string]any{"outcome": tc.wantOutcome, "source": "relay_hook", "claude_instance_id": "inst-test-1",
+			want := map[string]any{"outcome": tc.wantOutcome, "source": "relay_hook", "instance_id": "inst-test-1",
 				"request_token": "tok-abc", "target_endpoint": "http://localhost:9999/relay",
 				"bytes_sent": tc.wantBytes, "bytes_received": tc.wantBytes}
 			for k, v := range want {

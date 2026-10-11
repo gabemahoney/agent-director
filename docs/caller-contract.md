@@ -30,7 +30,7 @@ error:
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
   session to a human; never end it yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not retry
-  until `get` shows `ended` or `missing`, then `spawn --claude-instance-id`
+  until `get` shows `ended` or `missing`, then `spawn --instance-id`
   with `--reuse-finished`. A row noted `unreported` has a running agent: use it
   or end it first (see [Maintenance](maintenance.md)).
 - `ErrConfigMalformed` (a config value is refused): store-backed verbs fail,
@@ -46,7 +46,7 @@ error:
 
 To end a live row (`pending` included) and relaunch its id:
 
-1. `agent-director kill --claude-instance-id <id>`; on an error follow its
+1. `agent-director kill --instance-id <id>`; on an error follow its
    class.
 2. A `pending` row: wait until its `launch_started_at` (in `status`) plus
    `pending_grace_seconds` (ask the operator for the value in force, see
@@ -58,9 +58,9 @@ To end a live row (`pending` included) and relaunch its id:
 5. Still live: stop and escalate to a human.
 6. Once `ended` or `missing`:
    - with a session id, to get the conversation back:
-     `agent-director resume --claude-instance-id <id>`
+     `agent-director resume --instance-id <id>`
    - otherwise, a reuse (the old conversation is unreachable for good):
-     `agent-director spawn --claude-instance-id <id> --reuse-finished --cwd <dir>`
+     `agent-director spawn --instance-id <id> --reuse-finished --cwd <dir>`
 
    A caller whose ids agent-director mints spawns fresh instead.
 

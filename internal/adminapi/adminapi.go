@@ -46,15 +46,15 @@ type DeleteResult struct {
 // ErrSpawnNotResumable with no lookup. Its one ad.kill.called trail record
 // carries include_finished true. A c of any other type is an error and
 // nothing runs. Set by pkg/api's init.
-var KillFinished func(c any, claudeInstanceID string) (KillResult, error)
+var KillFinished func(c any, instanceID string) (KillResult, error)
 
-// Delete removes the rows claudeInstanceIDs from the store of the client c,
+// Delete removes the rows instanceIDs from the store of the client c,
 // which must be a *api.Client from api.New, bypassing every state guard. Each
 // id is processed on its own; a failure on one never aborts the batch, and
 // the error is nil whenever the batch ran. It touches no tmux session and no
 // transcript. A c of any other type is an error and nothing runs. Set by
 // pkg/api's init.
-var Delete func(c any, claudeInstanceIDs []string) (DeleteResult, error)
+var Delete func(c any, instanceIDs []string) (DeleteResult, error)
 
 // Verb is one agent-director-admin verb, as its help and
 // docs/admin-reference.md describe it.
@@ -88,7 +88,7 @@ const (
 	// sameUserText is the rule every store-backed verb follows.
 	sameUserText = "Run it as the agents' user and in their tmux environment."
 	// idFlagName is the instance-id flag both store-backed verbs take.
-	idFlagName = "--claude-instance-id <id>"
+	idFlagName = "--instance-id <id>"
 )
 
 // GlobalFlagsText introduces GlobalFlags in help and docs/admin-reference.md.

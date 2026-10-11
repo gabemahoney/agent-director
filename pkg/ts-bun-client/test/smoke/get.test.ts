@@ -23,13 +23,13 @@ const RFC3339_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 async function seedAndGet(homeDir: string, id: string, flags: Record<string, string | true>): Promise<GetResult> {
   runHelper("seed-spawn", { store: homeStore(homeDir), id, "create-store": true, ...flags });
   using client = await openClient(homeStore(homeDir));
-  return await client.get({ claude_instance_id: id });
+  return await client.get({ instance_id: id });
 }
 
 test("get: happy path — returns full spawn row fields", async () => {
   await withTempHome(async (homeDir) => {
     const result = await seedAndGet(homeDir, "smoke-get-id", { state: "working" });
-    expect(result).toMatchObject({ claude_instance_id: "smoke-get-id", state: "working" });
+    expect(result).toMatchObject({ instance_id: "smoke-get-id", state: "working" });
     for (const field of ["cwd", "tmux_session_name", "relay_mode", "started_at", "last_seen_at"] as const) {
       expect(typeof result[field]).toBe("string");
     }
@@ -56,7 +56,7 @@ test("get: row with a recorded socket shows that exact tmux_socket (AC-LKP-22)",
 test("get: row from before the release has no tmux_socket key (AC-LKP-22)", async () => {
   await withTempHome(async (homeDir) => {
     const result = await seedAndGet(homeDir, "smoke-get-no-socket-id", { state: "ended", "no-launch-identity": true });
-    expect(result.claude_instance_id).toBe("smoke-get-no-socket-id");
+    expect(result.instance_id).toBe("smoke-get-no-socket-id");
     expect(Object.keys(result)).not.toContain("tmux_socket");
   });
 }, 10_000);
@@ -67,7 +67,7 @@ test("get: a check_permission row carries its open requests with their delivery 
     runHelper("seed-spawn", { store, state: "check_permission", id: "smoke-get-cp-id", "relay-mode": "on", "create-store": true });
     const token = runHelper("seed-permission-request", { store, "spawn-id": "smoke-get-cp-id", tool: "Bash" })["request_token"];
     using client = await openClient(store);
-    const result = await client.get({ claude_instance_id: "smoke-get-cp-id" });
+    const result = await client.get({ instance_id: "smoke-get-cp-id" });
     expect(result.permission_requests).toHaveLength(1);
     expect(result.permission_requests[0]).toMatchObject({ request_token: token, tool_name: "Bash", decision: null,
       decision_reason: null, delivery: "not_confirmed", hook_alive: null, hook_gone_at: null, attempted_decision: null,
@@ -79,6 +79,6 @@ test("get: a check_permission row carries its open requests with their delivery 
 test("get: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
-    await expect(client.get({ claude_instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+    await expect(client.get({ instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
 }, 10_000);

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,7 +102,7 @@ func TestAdviceFollow_I1_ToolsCallNameRequired(t *testing.T) {
 	params["name"] = "list"
 	var list api.ListResult
 	advCLIResult(t, advCLICall(t, d, params), &list)
-	if len(list.Spawns) != 1 || list.Spawns[0].ClaudeInstanceID != "advcli-listed" {
+	if len(list.Spawns) != 1 || list.Spawns[0].InstanceID != "advcli-listed" {
 		t.Errorf("list = %+v; want the one seeded row", list.Spawns)
 	}
 }
@@ -117,7 +118,7 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 		{
 			tool: "spawn", verb: "spawn",
 			args: func(t *testing.T) map[string]any {
-				return map[string]any{"cwd": t.TempDir(), "claude_instance_id": "advcli-labelled"}
+				return map[string]any{"cwd": t.TempDir(), "instance_id": "advcli-labelled"}
 			},
 			check: func(t *testing.T, client *api.Client, resp *mcp.Response) {
 				var res api.SpawnResult
@@ -205,4 +206,102 @@ func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
 			}
 		})
 	}
+}
+
+// advUseName is the name an old-key refusal tells the caller to use: the
+// quoted name after "(no longer accepted; use ".
+func advUseName(t *testing.T, advice string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(advice, "(no longer accepted; use ")
+	end := strings.Index(rest, ")")
+	if !ok || end < 0 {
+		t.Fatalf("advice %q names no key after %q", advice, "(no longer accepted; use ")
+	}
+	name, err := strconv.Unquote(rest[:end])
+	if err != nil {
+		t.Fatalf("advice %q: the name to use is not quoted: %v", advice, err)
+	}
+	return name
+}
+
+// advOldKeyFollow sends tool the arguments with the old key, requires the
+// refusal to name a new key, then re-sends the arguments with the key renamed
+// as the text says and returns that call's response.
+func advOldKeyFollow(t *testing.T, d mcp.Dispatcher, tool, old string, args map[string]any) *mcp.Response {
+	t.Helper()
+	data := toolErrorData(t, callTool(t, d, tool, paramJSON(t, args)))
+	if data.ErrName != "ErrInvalidFlags" || !strings.Contains(data.ErrDescription, `unknown parameter "`+old+`" (no longer accepted; use "`) {
+		t.Fatalf("refusal = %s: %q; want ErrInvalidFlags naming the key to use for %q", data.ErrName, data.ErrDescription, old)
+	}
+	args[advUseName(t, data.ErrDescription)] = args[old]
+	delete(args, old)
+	return callTool(t, d, tool, paramJSON(t, args))
+}
+
+// TestAdviceFollow_I7_OldInstanceIDKeyUseInstanceID: I7 "unknown parameter
+// "claude_instance_id" (no longer accepted; use "instance_id")", the name
+// copied literally into the arguments in place of the old key: spawn launches
+// the row under that id, get and status answer for the seeded row.
+func TestAdviceFollow_I7_OldInstanceIDKeyUseInstanceID(t *testing.T) {
+	for _, tool := range []string{"spawn", "get", "status"} {
+		t.Run(tool, func(t *testing.T) {
+			d, client := advCLIServer(t, "i7-row")
+			id, args := "i7-row", map[string]any{}
+			if tool == "spawn" {
+				id, args["cwd"] = "i7-new", t.TempDir()
+			}
+			args["claude_instance_id"] = id
+
+			resp := advOldKeyFollow(t, d, tool, "claude_instance_id", args)
+
+			if _, err := client.Get(id); err != nil {
+				t.Errorf("row %s after the followed %s: %v", id, tool, err)
+			}
+			if resp.Error != nil {
+				t.Fatalf("followed %s refused: %+v", tool, resp.Error)
+			}
+			if tool == "get" {
+				if got := string(toolResult(t, resp)["instance_id"]); got != `"`+id+`"` {
+					t.Errorf("get instance_id = %s; want %q", got, id)
+				}
+			}
+		})
+	}
+}
+
+// TestAdviceFollow_I8_OldArgsKeyUseAgentArgs: I8 "unknown parameter
+// "claude_args" (no longer accepted; use "agent_args")", the name copied
+// literally into the arguments in place of the old key: spawn stores the args
+// on its row, make_template writes them to the template.
+func TestAdviceFollow_I8_OldArgsKeyUseAgentArgs(t *testing.T) {
+	agentArgs := []string{"--model", "opus"}
+	t.Run("spawn", func(t *testing.T) {
+		d, client := advCLIServer(t)
+		args := map[string]any{"cwd": t.TempDir(), "instance_id": "i8-new", "claude_args": agentArgs}
+
+		advCLIResult(t, advOldKeyFollow(t, d, "spawn", "claude_args", args), &api.SpawnResult{})
+
+		row, err := client.Get("i8-new")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if !slices.Equal(row.AgentArgs, agentArgs) {
+			t.Errorf("row agent_args = %q; want %q", row.AgentArgs, agentArgs)
+		}
+	})
+	t.Run("make_template", func(t *testing.T) {
+		d, _ := advCLIServer(t)
+		args := map[string]any{"name": "i8-tpl", "claude_args": agentArgs}
+
+		var res api.MakeTemplateResult
+		advCLIResult(t, advOldKeyFollow(t, d, "make_template", "claude_args", args), &res)
+
+		body, err := os.ReadFile(res.Path)
+		if err != nil {
+			t.Fatalf("read template: %v", err)
+		}
+		if !strings.Contains(string(body), "agent_args") || !strings.Contains(string(body), "opus") {
+			t.Errorf("template %q lacks agent_args = the sent args", body)
+		}
+	})
 }

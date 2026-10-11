@@ -215,7 +215,7 @@ func TestPlainSendKeysRelayFallenBackDetails(t *testing.T) {
 		t.Fatalf("outside D = %v, %v", ok, err)
 	}
 	decidedAt := p.now
-	if _, err := api.Decide(p.st, p.view(), api.DecideParams{ClaudeInstanceID: p.r.ID, RequestToken: tokA, Decision: "allow"}); err == nil {
+	if _, err := api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: tokA, Decision: "allow"}); err == nil {
 		t.Fatal("decide on A = nil; want ErrRelayFallenBack")
 	}
 	p.now = p.now.Add(time.Minute)

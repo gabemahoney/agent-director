@@ -20,7 +20,7 @@ import (
 // server); any capture must be of r.Session's token pane, and a result its text.
 func readPaneCallTableInvoke(t *testing.T, e *killEnv, r killRow) (bool, error) {
 	e.setPaneTexts(r.Socket)
-	res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+	res, err := e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID})
 	captured := len(e.rec.SocketCallsOf(tmux.CallCapture)) > 0
 	if captured {
 		e.assertCaptured(t, labelledPane(t, r.Session, r.Session.Label.Token), api.DefaultReadPaneLines, false)

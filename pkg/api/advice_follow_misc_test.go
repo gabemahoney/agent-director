@@ -30,7 +30,7 @@ func TestAdviceFollow_F2_ListLabelKeyValueForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list --label team=alpha: %v", err)
 	}
-	if len(res.Spawns) != 1 || res.Spawns[0].ClaudeInstanceID != r.ID {
+	if len(res.Spawns) != 1 || res.Spawns[0].InstanceID != r.ID {
 		t.Errorf("list --label team=alpha = %+v; want only %s", res.Spawns, r.ID)
 	}
 }
@@ -42,7 +42,7 @@ func TestAdviceFollow_F3_DecideRequestTokenRequired(t *testing.T) {
 	e := newKillEnv(t)
 	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
 	now := time.Now()
-	params := api.DecideParams{ClaudeInstanceID: r.ID, Decision: "allow"}
+	params := api.DecideParams{InstanceID: r.ID, Decision: "allow"}
 
 	_, err := api.Decide(e.st, api.RelayView{Window: relayGuardWindow, Now: func() time.Time { return now }}, params)
 	adviceAssertAdvice(t, err, api.ErrMissingRequestToken, "request_token is required")

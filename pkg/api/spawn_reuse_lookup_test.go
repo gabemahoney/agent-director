@@ -300,7 +300,7 @@ func TestSpawnReuseLookupLeftoverLostRace(t *testing.T) {
 					r.Trust.check(t, "", false, "after the lost race")
 					for _, l := range readAPITrailLines(t)[before.mark:] {
 						if l["event"] != "ad.provenance.disagree" {
-							t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["claude_instance_id"])
+							t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["instance_id"])
 						}
 					}
 				})
@@ -566,8 +566,8 @@ func TestSpawnReuseStartingCases(t *testing.T) {
 			if tc.row.spec.EndedAt == endedNull && cols.EndedAt != nil || tc.row.agent == agentNotRecorded && cols.PID != nil {
 				t.Fatalf("precondition: ended_at %v, pid %v; want NULL", cols.EndedAt, cols.PID)
 			}
-			if sid, _ := cols.ClaudeSessionID.(string); tc.row.spec.NoSessionID && sid != "" {
-				t.Fatalf("precondition: claude_session_id = %v; want NULL", cols.ClaudeSessionID)
+			if sid, _ := cols.SessionID.(string); tc.row.spec.NoSessionID && sid != "" {
+				t.Fatalf("precondition: session_id = %v; want NULL", cols.SessionID)
 			}
 			reuseStarting(t, e, r, tc.row, tc.want, cmp.Or(tc.bound, defBound), cmp.Or(tc.window, defWindow), tc.settings...)
 		})

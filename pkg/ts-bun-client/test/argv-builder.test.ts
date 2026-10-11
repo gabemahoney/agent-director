@@ -12,7 +12,7 @@ import { ErrReservedEnvKey } from "../src/errors.js";
 import { thrownBy } from "./internal/helper.js";
 
 const CLI = "/usr/local/bin/agent-director";
-const ID = ["--claude-instance-id", "id-1"];
+const ID = ["--instance-id", "id-1"];
 
 test.each([
   ["version", "version", {}, ["version"]],
@@ -26,9 +26,9 @@ test.each([
   ["list: negative limit passed through", "list", { limit: -1 }, ["list", "--limit", "-1"]],
   ["spawn: cwd only", "spawn", { cwd: "/ws" }, ["spawn", "--cwd", "/ws"]],
   ["spawn: every option", "spawn", {
-    cwd: "/ws", template: "default", claude_instance_id: "id-1", tmux_session_name: "s", relay_mode: "on",
+    cwd: "/ws", template: "default", instance_id: "id-1", tmux_session_name: "s", relay_mode: "on",
     no_pre_trust: true, reuse_finished: true, label: ["env=prod", "team=be"], extra_env: { FOO: "bar", CLAUDE_CONFIG_DIR: "/cfg" },
-    allow: ["Read"], deny: ["Bash"], ask: ["Edit"], claude_args: ["--model", "x"],
+    allow: ["Read"], deny: ["Bash"], ask: ["Edit"], agent_args: ["--model", "x"],
   }, ["spawn", "--cwd", "/ws", "--template", "default", ...ID, "--tmux-session-name", "s", "--relay-mode", "on",
     "--no-pre-trust", "--reuse-finished", "--label", "env=prod", "--label", "team=be",
     "--extra-env", "FOO=bar", "--extra-env", "CLAUDE_CONFIG_DIR=/cfg",
@@ -38,42 +38,42 @@ test.each([
   // b.vpb: only an empty key or one holding "=" or NUL is refused; a value may hold "=".
   ["spawn: odd but valid extra_env names pass unchanged", "spawn", { cwd: "/ws", extra_env: { "my-var": "a=b", "1ST": "" } },
     ["spawn", "--cwd", "/ws", "--extra-env", "my-var=a=b", "--extra-env", "1ST="]],
-  ["status", "status", { claude_instance_id: "id-1" }, ["status", ...ID]],
-  ["get", "get", { claude_instance_id: "id-1" }, ["get", ...ID]],
-  ["kill", "kill", { claude_instance_id: "id-1" }, ["kill", ...ID]],
-  ["resume", "resume", { claude_instance_id: "id-1" }, ["resume", ...ID]],
-  ["pause", "pause", { claude_instance_id: "id-1" }, ["pause", ...ID]],
-  ["send-keys", "send-keys", { claude_instance_id: "id-1", text: "hello world", allow_pending: false },
+  ["status", "status", { instance_id: "id-1" }, ["status", ...ID]],
+  ["get", "get", { instance_id: "id-1" }, ["get", ...ID]],
+  ["kill", "kill", { instance_id: "id-1" }, ["kill", ...ID]],
+  ["resume", "resume", { instance_id: "id-1" }, ["resume", ...ID]],
+  ["pause", "pause", { instance_id: "id-1" }, ["pause", ...ID]],
+  ["send-keys", "send-keys", { instance_id: "id-1", text: "hello world", allow_pending: false },
     ["send-keys", ...ID, "--text", "hello world"]],
   // b.9o4: empty text is the Enter-only send, also on a pending row.
-  ["send-keys: empty text, allow_pending", "send-keys", { claude_instance_id: "id-1", text: "", allow_pending: true },
+  ["send-keys: empty text, allow_pending", "send-keys", { instance_id: "id-1", text: "", allow_pending: true },
     ["send-keys", ...ID, "--text", "", "--allow-pending"]],
   // b.146 rule 8: plain no_enter, key and hash; text omitted sends no --text.
   ["send-keys: no_enter, hash and n_lines", "send-keys", {
-    claude_instance_id: "id-1", text: "hi", no_enter: true, expect_pane_sha256: "ab", n_lines: 7,
+    instance_id: "id-1", text: "hi", no_enter: true, expect_pane_sha256: "ab", n_lines: 7,
   }, ["send-keys", ...ID, "--text", "hi", "--no-enter", "--expect-pane-sha256", "ab", "--n-lines", "7"]],
-  ["send-keys: a key, no text", "send-keys", { claude_instance_id: "id-1", key: "Escape", no_enter: false },
+  ["send-keys: a key, no text", "send-keys", { instance_id: "id-1", key: "Escape", no_enter: false },
     ["send-keys", ...ID, "--key", "Escape"]],
   ["send-keys: a pane answer", "send-keys", {
-    claude_instance_id: "id-1", request_token: "tok", as: "deny", key: "2", expect_pane_sha256: "ab",
+    instance_id: "id-1", request_token: "tok", as: "deny", key: "2", expect_pane_sha256: "ab",
   }, ["send-keys", ...ID, "--key", "2", "--expect-pane-sha256", "ab", "--request-token", "tok", "--as", "deny"]],
   ["record-pane-answer", "record-pane-answer", { request_token: "tok", as: "unknown", expect_pane_sha256: "ab" },
     ["record-pane-answer", "--request-token", "tok", "--as", "unknown", "--expect-pane-sha256", "ab"]],
   ["record-pane-answer: n_lines", "record-pane-answer", { request_token: "tok", as: "allow", expect_pane_sha256: "ab", n_lines: 30 },
     ["record-pane-answer", "--request-token", "tok", "--as", "allow", "--expect-pane-sha256", "ab", "--n-lines", "30"]],
-  ["read-pane: all options", "read-pane", { claude_instance_id: "id-1", n_lines: 50, ansi: true, allow_pending: true },
+  ["read-pane: all options", "read-pane", { instance_id: "id-1", n_lines: 50, ansi: true, allow_pending: true },
     ["read-pane", ...ID, "--n-lines", "50", "--ansi", "--allow-pending"]],
-  ["read-pane: false booleans omitted", "read-pane", { claude_instance_id: "id-1", ansi: false, allow_pending: false },
+  ["read-pane: false booleans omitted", "read-pane", { instance_id: "id-1", ansi: false, allow_pending: false },
     ["read-pane", ...ID]],
   // b.c4n: 0 is the CLI's default of 25 and is omitted; a negative goes through for the CLI to refuse.
-  ["read-pane: n_lines 0 omitted", "read-pane", { claude_instance_id: "id-1", n_lines: 0 }, ["read-pane", ...ID]],
-  ["read-pane: negative n_lines passed through", "read-pane", { claude_instance_id: "id-1", n_lines: -3 },
+  ["read-pane: n_lines 0 omitted", "read-pane", { instance_id: "id-1", n_lines: 0 }, ["read-pane", ...ID]],
+  ["read-pane: negative n_lines passed through", "read-pane", { instance_id: "id-1", n_lines: -3 },
     ["read-pane", ...ID, "--n-lines", "-3"]],
-  ["decide: token and reason", "decide", { claude_instance_id: "id-1", decision: "allow", request_token: "tok", reason: "safe" },
+  ["decide: token and reason", "decide", { instance_id: "id-1", decision: "allow", request_token: "tok", reason: "safe" },
     ["decide", ...ID, "--decision", "allow", "--request-token", "tok", "--reason", "safe"]],
-  ["decide: no token or reason", "decide", { claude_instance_id: "id-1", decision: "deny" },
+  ["decide: no token or reason", "decide", { instance_id: "id-1", decision: "deny" },
     ["decide", ...ID, "--decision", "deny"]],
-  ["decide: max_wait_ms (b.146 decision 9 B), 0 included", "decide", { claude_instance_id: "id-1", decision: "allow", request_token: "tok", max_wait_ms: 0 },
+  ["decide: max_wait_ms (b.146 decision 9 B), 0 included", "decide", { instance_id: "id-1", decision: "allow", request_token: "tok", max_wait_ms: 0 },
     ["decide", ...ID, "--decision", "allow", "--request-token", "tok", "--max-wait-ms", "0"]],
   ["get-permission", "get-permission", { request_token: "tok" }, ["get-permission", "--request-token", "tok"]],
   ["find-missing", "find-missing", {}, ["find-missing"]],
@@ -82,9 +82,9 @@ test.each([
   ["make-template: name only", "make-template", { name: "tpl" }, ["make-template", "--name", "tpl"]],
   ["make-template: every option", "make-template", {
     name: "tpl", cwd: "/p", relay_mode: "on", overwrite: true, label: ["a=b"], extra_env: { K: "V" },
-    allow: ["Read"], deny: ["Bash"], ask: ["Edit"], claude_args: ["--x", "y"],
+    allow: ["Read"], deny: ["Bash"], ask: ["Edit"], agent_args: ["--x", "y"],
   }, ["make-template", "--name", "tpl", "--cwd", "/p", "--relay-mode", "on", "--overwrite", "--label", "a=b",
-    "--extra-env", "K=V", "--allow", "Read", "--deny", "Bash", "--ask", "Edit", "--claude-args", "--x", "--claude-args", "y"]],
+    "--extra-env", "K=V", "--allow", "Read", "--deny", "Bash", "--ask", "Edit", "--agent-args", "--x", "--agent-args", "y"]],
   // reuse_finished is spawn-only; the CLI rejects it on make-template.
   ["make-template: untyped reuse_finished dropped", "make-template", { name: "tpl", reuse_finished: true },
     ["make-template", "--name", "tpl"]],
@@ -129,5 +129,5 @@ test.each([
   [{ createIfMissing: undefined }, []],
   [{ createIfMissing: false, storePath: "/tmp/foo.db" }, ["--store-path", "/tmp/foo.db", "--create-if-missing", "false"]],
 ])("global options %p → %p before the verb (b.32k, b.78b)", (globals, flags) => {
-  expect(buildArgv(CLI, "status", { claude_instance_id: "id-1" }, globals)).toEqual([CLI, ...flags, "status", ...ID]);
+  expect(buildArgv(CLI, "status", { instance_id: "id-1" }, globals)).toEqual([CLI, ...flags, "status", ...ID]);
 });

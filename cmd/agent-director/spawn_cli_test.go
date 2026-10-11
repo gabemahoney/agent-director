@@ -21,7 +21,7 @@ import (
 
 // spawnResult mirrors api.SpawnResult for the CLI tests.
 type spawnResult struct {
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	InstanceID string `json:"instance_id"`
 }
 
 // spawnOK runs spawn under home with args, requires exit 0 and returns the
@@ -30,16 +30,16 @@ func spawnOK(t *testing.T, home, fakeDir string, args ...string) string {
 	t.Helper()
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"spawn"}, args...)...)
 	var res spawnResult
-	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil || res.ClaudeInstanceID == "" {
+	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil || res.InstanceID == "" {
 		t.Fatalf("spawn %q: exit = %d, stdout = %q; want 0 and an id (stderr=%s)", args, code, stdout, stderr)
 	}
-	return res.ClaudeInstanceID
+	return res.InstanceID
 }
 
 // getRow runs `get` for id and returns its JSON object.
 func getRow(t *testing.T, home, fakeDir, id string) map[string]any {
 	t.Helper()
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "get", "--claude-instance-id", id)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "get", "--instance-id", id)
 	var row map[string]any
 	if code != 0 || json.Unmarshal([]byte(stdout), &row) != nil {
 		t.Fatalf("get %s: exit = %d, stdout = %q (stderr=%q)", id, code, stdout, stderr)
@@ -61,8 +61,8 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 	row := getRow(t, home, fakeDir, id)
 	labels, _ := row["labels"].(map[string]any)
 	if row["state"] != "pending" || row["relay_mode"] != "off" || row["tmux_session_name"] != name ||
-		labels["role"] != "worker" || jsonOf(t, row["claude_args"]) != `["--model","opus"]` {
-		t.Errorf("get = %v; want pending, relay off, %s, label role=worker, claude_args [--model opus]", row, name)
+		labels["role"] != "worker" || jsonOf(t, row["agent_args"]) != `["--model","opus"]` {
+		t.Errorf("get = %v; want pending, relay off, %s, label role=worker, agent_args [--model opus]", row, name)
 	}
 
 	socket := spawnSocket(t, home)
@@ -119,10 +119,10 @@ func TestSpawnCLITmuxSessionNameSupplied(t *testing.T) {
 	}
 }
 
-// TestSpawnCLITemplateClaudeArgs: with --template and no args after --, the
-// template's claude_args reach the create (b.qjk: they were wiped); args after
+// TestSpawnCLITemplateAgentArgs: with --template and no args after --, the
+// template's agent_args reach the create (b.qjk: they were wiped); args after
 // -- replace them wholesale.
-func TestSpawnCLITemplateClaudeArgs(t *testing.T) {
+func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	for _, tc := range []struct {
 		name       string
@@ -134,7 +134,7 @@ func TestSpawnCLITemplateClaudeArgs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			if _, err := apitest.SeedTemplate(filepath.Join(directorDir(home), "templates"), "tpl", `claude_args = ["--foo"]`+"\n"); err != nil {
+			if _, err := apitest.SeedTemplate(filepath.Join(directorDir(home), "templates"), "tpl", apitest.TemplateBody(apitest.TemplateFields{AgentArgs: []string{"--foo"}})); err != nil {
 				t.Fatalf("SeedTemplate: %v", err)
 			}
 			id := spawnOK(t, home, fakeDir, append([]string{"--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
@@ -143,8 +143,8 @@ func TestSpawnCLITemplateClaudeArgs(t *testing.T) {
 			if !slices.Contains(argv, tc.want) || (tc.gone != "" && slices.Contains(argv, tc.gone)) {
 				t.Errorf("create argv = %q; want %s and not %q", argv, tc.want, tc.gone)
 			}
-			if got := jsonOf(t, getRow(t, home, fakeDir, id)["claude_args"]); got != `["`+tc.want+`"]` {
-				t.Errorf("get.claude_args = %s; want [%s]", got, tc.want)
+			if got := jsonOf(t, getRow(t, home, fakeDir, id)["agent_args"]); got != `["`+tc.want+`"]` {
+				t.Errorf("get.agent_args = %s; want [%s]", got, tc.want)
 			}
 		})
 	}
@@ -165,7 +165,7 @@ func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: uuid.NewString(), Life: 1}))
 			before := rowColumns(t, home, id)
 
-			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--claude-instance-id", id, tc.flag)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", t.TempDir(), "--instance-id", id, tc.flag)
 
 			if !tc.reuse {
 				assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInstanceIdCollision")

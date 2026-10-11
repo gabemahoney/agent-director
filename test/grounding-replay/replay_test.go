@@ -256,12 +256,12 @@ func TestGroundingReplayScenario(t *testing.T) {
 	st, dbPath := storefix.OpenTempStore(t)
 
 	sp := store.Spawn{
-		ClaudeInstanceID: testInstanceID,
-		Agent:            store.AgentClaude,
-		CWD:              "/tmp/grounding-replay",
-		TmuxSessionName:  "gr-replay-session",
-		RelayMode:        "on",
-		Identity:         store.LaunchIdentity{Token: replayLaunchToken},
+		InstanceID:      testInstanceID,
+		Agent:           store.AgentClaude,
+		CWD:             "/tmp/grounding-replay",
+		TmuxSessionName: "gr-replay-session",
+		RelayMode:       "on",
+		Identity:        store.LaunchIdentity{Token: replayLaunchToken},
 	}
 	if err := st.InsertPending(sp); err != nil {
 		t.Fatalf("InsertPending: %v", err)
@@ -343,7 +343,7 @@ func TestGroundingReplayScenario(t *testing.T) {
 		all := readTrailLines(t, trailPath())
 		for _, row := range all[before:] {
 			if row["event"] == "ad.relay_attempt.completed" &&
-				fmt.Sprintf("%v", row["claude_instance_id"]) == testInstanceID {
+				fmt.Sprintf("%v", row["instance_id"]) == testInstanceID {
 				if tok, ok := row["request_token"].(string); ok && tok != "" {
 					requestToken = tok
 					break
@@ -380,9 +380,9 @@ func TestGroundingReplayScenario(t *testing.T) {
 	defer client.Close() //nolint:errcheck
 
 	if _, err := client.Decide(api.DecideParams{
-		ClaudeInstanceID: testInstanceID,
-		RequestToken:     requestToken,
-		Decision:         "allow",
+		InstanceID:   testInstanceID,
+		RequestToken: requestToken,
+		Decision:     "allow",
 	}); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -419,16 +419,16 @@ func TestGroundingReplayScenario(t *testing.T) {
 	})
 
 	// ── §11 Q2: spawn state history ────────────────────────────────────────
-	// Query: ad.spawn.state_transition WHERE claude_instance_id=X
+	// Query: ad.spawn.state_transition WHERE instance_id=X
 	// Derivable answer: time-ordered transitions including at least one no-op
 	t.Run("Q2_spawn_state_history", func(t *testing.T) {
 		lines := filterLines(myLines, map[string]string{
-			"event":             "ad.spawn.state_transition",
-			"claude_instance_id": testInstanceID,
+			"event":       "ad.spawn.state_transition",
+			"instance_id": testInstanceID,
 		})
 		if len(lines) < 2 {
 			t.Fatalf("§11 Q2: want >= 2 ad.spawn.state_transition lines; got %d\n"+
-				"Query: grep '\"event\":\"ad.spawn.state_transition\"' | jq -c 'select(.claude_instance_id==\"%s\")'",
+				"Query: grep '\"event\":\"ad.spawn.state_transition\"' | jq -c 'select(.instance_id==\"%s\")'",
 				len(lines), testInstanceID)
 		}
 		// Assert time order (ISO-8601 UTC strings sort lexicographically).
@@ -496,14 +496,14 @@ func TestGroundingReplayScenario(t *testing.T) {
 	})
 
 	// ── §11 Q5: find-missing during open window ─────────────────────────────
-	// Query: ad.find_missing.tick WHERE claude_instance_id=X (or request_token=X)
+	// Query: ad.find_missing.tick WHERE instance_id=X (or request_token=X)
 	// Derivable answer: empty result — no find-missing tick touched this instance.
 	// "No spurious events, but the query returns cleanly" is the correct answer.
 	t.Run("Q5_find_missing_open_window", func(t *testing.T) {
 		// Q5a: by instance id
 		byID := filterLines(myLines, map[string]string{
-			"event":             "ad.find_missing.tick",
-			"claude_instance_id": testInstanceID,
+			"event":       "ad.find_missing.tick",
+			"instance_id": testInstanceID,
 		})
 		// Q5b: by request_token (permission_orphan_closeout ticks carry the token)
 		byTok := filterLines(myLines, map[string]string{
@@ -582,31 +582,31 @@ func TestGroundingReplayScenario(t *testing.T) {
 
 		cscbLines := []map[string]any{
 			{
-				"ts":                  fmtTS(relayTime.Add(100 * time.Millisecond)),
-				"event":               "cscb.relay.received",
-				"claude_instance_id":  testInstanceID,
-				"request_token":       requestToken,
-				"channel":             "C0B1ZJJLJ9M",
-				"source":              "cscb_relay",
+				"ts":            fmtTS(relayTime.Add(100 * time.Millisecond)),
+				"event":         "cscb.relay.received",
+				"instance_id":   testInstanceID,
+				"request_token": requestToken,
+				"channel":       "C0B1ZJJLJ9M",
+				"source":        "cscb_relay",
 			},
 			{
-				"ts":                  fmtTS(relayTime.Add(500 * time.Millisecond)),
-				"event":               "cscb.slack.posted",
-				"claude_instance_id":  testInstanceID,
-				"request_token":       requestToken,
-				"channel":             "C0B1ZJJLJ9M",
-				"message_ts":          "1717531843.501000",
-				"source":              "cscb_slack",
+				"ts":            fmtTS(relayTime.Add(500 * time.Millisecond)),
+				"event":         "cscb.slack.posted",
+				"instance_id":   testInstanceID,
+				"request_token": requestToken,
+				"channel":       "C0B1ZJJLJ9M",
+				"message_ts":    "1717531843.501000",
+				"source":        "cscb_slack",
 			},
 			{
-				"ts":                  fmtTS(relayTime.Add(1 * time.Second)),
-				"event":               "cscb.operator.click",
-				"claude_instance_id":  testInstanceID,
-				"request_token":       requestToken,
-				"channel":             "C0B1ZJJLJ9M",
-				"message_ts":          "1717531843.501000",
-				"verdict":             "allow",
-				"source":              "cscb_click",
+				"ts":            fmtTS(relayTime.Add(1 * time.Second)),
+				"event":         "cscb.operator.click",
+				"instance_id":   testInstanceID,
+				"request_token": requestToken,
+				"channel":       "C0B1ZJJLJ9M",
+				"message_ts":    "1717531843.501000",
+				"verdict":       "allow",
+				"source":        "cscb_click",
 			},
 		}
 

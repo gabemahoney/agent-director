@@ -72,7 +72,7 @@ func readTrailHooks(path string, instances map[string]bool) ([]trailHook, error)
 	for sc.Scan() {
 		var ev struct {
 			Event         string  `json:"event"`
-			ID            *string `json:"claude_instance_id"`
+			ID            *string `json:"instance_id"`
 			EventName     *string `json:"event_name"`
 			HookEvent     *string `json:"hook_event"`
 			SessionID     *string `json:"session_id"`
@@ -160,7 +160,7 @@ func isHandledEvent(event string) bool {
 // isLifecycle is SessionStart or SessionEnd.
 func isLifecycle(event string) bool { return event == "SessionStart" || event == "SessionEnd" }
 
-// sessionReading is the row's claude_session_id read with get after one of
+// sessionReading is the row's session_id read with get after one of
 // the agent's own SessionStarts.
 type sessionReading struct {
 	Seq       int    `json:"seq"`

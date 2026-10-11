@@ -57,7 +57,7 @@ func TestApplyDefaultsPreCheckOutcomes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: tc.id, ReuseFinished: tc.reuse}}
+			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", InstanceID: tc.id, ReuseFinished: tc.reuse}}
 			var checker CollisionChecker
 			if tc.checker != nil {
 				checker = tc.checker
@@ -70,11 +70,11 @@ func TestApplyDefaultsPreCheckOutcomes(t *testing.T) {
 			} else if err != nil || got != tc.want {
 				t.Fatalf("ApplyDefaults = (%v, %v); want (%v, nil)", got, err, tc.want)
 			}
-			if tc.id != "" && r.ClaudeInstanceID != tc.id {
-				t.Fatalf("explicit id overwritten: %q", r.ClaudeInstanceID)
+			if tc.id != "" && r.InstanceID != tc.id {
+				t.Fatalf("explicit id overwritten: %q", r.InstanceID)
 			}
-			if tc.id == "" && !uuid4.MatchString(r.ClaudeInstanceID) {
-				t.Fatalf("minted ClaudeInstanceID = %q; not a UUID4", r.ClaudeInstanceID)
+			if tc.id == "" && !uuid4.MatchString(r.InstanceID) {
+				t.Fatalf("minted InstanceID = %q; not a UUID4", r.InstanceID)
 			}
 			if tc.checker != nil && len(tc.checker.lookups) != tc.wantReads {
 				t.Fatalf("lookups = %v; want %d read(s)", tc.checker.lookups, tc.wantReads)
@@ -103,7 +103,7 @@ func TestApplyDefaultsPreCheckReadError(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			const id = "22222222-2222-4222-8222-222222222222"
-			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: id}}
+			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", InstanceID: id}}
 			checker := &fakeChecker{state: "waiting", exists: true, err: tc.storeErr}
 			_, err := ApplyDefaults(&r, config.Default(), checker)
 			if err == nil {
@@ -170,7 +170,7 @@ func TestApplyDefaultsNameAndRelayMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := Resolved{SpawnParams: SpawnParams{CWD: tc.cwd, ClaudeInstanceID: tc.id, RelayMode: tc.relay,
+			r := Resolved{SpawnParams: SpawnParams{CWD: tc.cwd, InstanceID: tc.id, RelayMode: tc.relay,
 				TmuxSessionName: tc.tmuxName, TmuxSessionNameSupplied: tc.tmuxName != ""}}
 			cfg := config.Default()
 			cfg.Defaults.RelayMode = "on"

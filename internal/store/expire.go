@@ -27,7 +27,7 @@ func finishedStateGuardArgs() []any {
 // row a hand edit made malformed is judged like any other (SR-5.5). Zero
 // values mean NULL.
 type ExpireCandidate struct {
-	ClaudeInstanceID string
+	InstanceID string
 	// TmuxSessionName is the recorded session name.
 	TmuxSessionName string
 	// PID and ProcStarttime are the SessionStart identity, the agent process
@@ -87,7 +87,7 @@ func (s *Store) ListExpireCandidates(cutoff time.Time) ([]ExpireCandidate, error
 			c    ExpireCandidate
 			life lifeScan
 		)
-		dest := append([]any{&c.ClaudeInstanceID}, life.dest()...)
+		dest := append([]any{&c.InstanceID}, life.dest()...)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("store: list expire candidates scan: %w", err)
 		}

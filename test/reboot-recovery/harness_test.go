@@ -45,9 +45,9 @@ const (
 
 // stubSessionIDPrefix is the token the stub prepends to the injected
 // AGENT_DIRECTOR_INSTANCE_ID to mint the session id on a FRESH spawn. Because
-// the hook derives claude_session_id from the transcript-path basename
+// the hook derives session_id from the transcript-path basename
 // (classify: basename-without-.jsonl), choosing the basename here IS choosing
-// the persisted claude_session_id — which resume then hands back verbatim via
+// the persisted session_id — which resume then hands back verbatim via
 // `--resume <sid>`. The test derives the expected transcript path independently
 // from this same rule (see stubSessionID / spawn.JsonlPathIn), so the assertion
 // is non-circular: the stub composes the path from env+argv, the test composes
@@ -76,7 +76,7 @@ func stubSessionID(instanceID string) string { return stubSessionIDPrefix + inst
 //
 // This matches Go's spawn.JsonlPathIn(cfg, cwd, sid) byte-for-byte. On a fresh
 // spawn the basename is $sid, so the SessionStart hook persists
-// claude_session_id = $sid; resume hands that same $sid back via `--resume`, so
+// session_id = $sid; resume hands that same $sid back via `--resume`, so
 // the continuation lands in the SAME derived file — without any literal path
 // crossing the stub/test boundary.
 //
@@ -90,7 +90,7 @@ func stubSessionID(instanceID string) string { return stubSessionIDPrefix + inst
 //     proc_starttime as the row's SessionStart identity (the stub is the
 //     hook's parent and the row's recorded pane process, SR-22.9) — the agent
 //     process whose start time find-missing judges — and persists jsonl_path +
-//     claude_session_id.
+//     session_id.
 //   - The stub appends a line to the derived JSONL on every start (a pre-kill
 //     marker on the fresh spawn, a continuation marker on --resume) BEFORE it
 //     fires SessionStart — matching real Claude, which writes the transcript on
@@ -138,7 +138,7 @@ for a in "$@"; do
 done
 
 # Fresh spawn: mint the session id from the injected instance id. The hook
-# derives claude_session_id from this path's basename, so this IS the sid resume
+# derives session_id from this path's basename, so this IS the sid resume
 # will hand back via --resume.
 if [ -z "$sid" ]; then
   sid='` + stubSessionIDPrefix + `'"$AGENT_DIRECTOR_INSTANCE_ID"
@@ -177,7 +177,7 @@ while [ ! -e "$GO" ] && [ "$i" -lt 1200 ]; do
 done
 
 # Fire SessionStart so the hook persists identity (pid+starttime) + jsonl_path
-# + claude_session_id (basename of this path). A pipeline, so the hook's parent
+# + session_id (basename of this path). A pipeline, so the hook's parent
 # is this stub, the recorded pane process.
 printf '%s' '{"hook_event_name":"SessionStart","transcript_path":"'"$JSONL"'"}' \
   | "$BINARY" hook >/dev/null 2>&1 || true
@@ -250,7 +250,7 @@ func runCLI(t *testing.T, binaryAbs string, env []string, args ...string) (strin
 
 // spawnResult mirrors api.SpawnResult.
 type spawnResult struct {
-	ClaudeInstanceID string `json:"claude_instance_id"`
+	InstanceID string `json:"instance_id"`
 }
 
 // findMissingResult mirrors api.FindMissingResult.
@@ -274,16 +274,16 @@ func mustSpawn(t *testing.T, binaryAbs string, env []string, args ...string) str
 	if err := json.Unmarshal([]byte(lastJSONLine(stdout)), &res); err != nil {
 		t.Fatalf("parse spawn stdout %q: %v", stdout, err)
 	}
-	if res.ClaudeInstanceID == "" {
-		t.Fatalf("spawn returned empty claude_instance_id: %q", stdout)
+	if res.InstanceID == "" {
+		t.Fatalf("spawn returned empty instance_id: %q", stdout)
 	}
-	return res.ClaudeInstanceID
+	return res.InstanceID
 }
 
 // getRow fetches a spawn row as a generic map via `get`.
 func getRow(t *testing.T, binaryAbs string, env []string, id string) map[string]any {
 	t.Helper()
-	stdout, stderr, code := runCLI(t, binaryAbs, env, "get", "--claude-instance-id", id)
+	stdout, stderr, code := runCLI(t, binaryAbs, env, "get", "--instance-id", id)
 	if code != 0 {
 		t.Fatalf("get %s exit=%d stderr=%s", id, code, stderr)
 	}

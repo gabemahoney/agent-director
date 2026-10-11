@@ -42,7 +42,7 @@ test("5 parallel spawn() calls on one Client execute serially in submission orde
         })
       )
     );
-    for (const r of results) expect(r.claude_instance_id.length).toBeGreaterThan(0);
+    for (const r of results) expect(r.instance_id.length).toBeGreaterThan(0);
     expect(resolved).toEqual([...Array(N).keys()]);
 
     // The store holds one row per seq label, started_at non-decreasing by seq.

@@ -199,7 +199,7 @@ func TestInsertRelayRequestOneTransaction(t *testing.T) {
 						after.State, after.RowVersion, after.IdleSince, len(reqs), before.RowVersion, before.IdleSince)
 				}
 				for _, row := range readStoreTrailLines(t)[mark:] {
-					if row["claude_instance_id"] == relayID {
+					if row["instance_id"] == relayID {
 						t.Errorf("a write that did not commit emitted %v; want no trail line", row["event"])
 					}
 				}

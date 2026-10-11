@@ -105,22 +105,22 @@ func IsLiveState(state string) bool {
 }
 
 // Spawn mirrors a row of the `spawns` table for callers outside this
-// package. ClaudeArgs and Labels are presented as their materialized Go
+// package. AgentArgs and Labels are presented as their materialized Go
 // shapes; the JSON encoding stays inside the package.
 type Spawn struct {
-	ClaudeInstanceID string
-	ParentID         string
-	State            string
-	CWD              string
-	TmuxSessionName  string
-	ClaudeArgs       []string
-	RelayMode        string
-	JSONLPath        string
-	ClaudeSessionID  string
-	Labels           map[string]string
-	StartedAt        time.Time
-	LastSeenAt       time.Time
-	EndedAt          *time.Time
+	InstanceID      string
+	ParentID        string
+	State           string
+	CWD             string
+	TmuxSessionName string
+	AgentArgs       []string
+	RelayMode       string
+	JSONLPath       string
+	SessionID       string
+	Labels          map[string]string
+	StartedAt       time.Time
+	LastSeenAt      time.Time
+	EndedAt         *time.Time
 
 	// ExtraEnv holds the spawn's captured extra environment (schema v3,
 	// extra_env column). Decoded like Labels: empty-string / '{}' / a
@@ -249,7 +249,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
 	}
-	argsJSON, err := encodeArgs(sp.ClaudeArgs)
+	argsJSON, err := encodeArgs(sp.AgentArgs)
 	if err != nil {
 		return fmt.Errorf("store: encode agent_args: %w", err)
 	}
@@ -284,7 +284,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust = 1
 	}
 	args := []any{
-		sp.ClaudeInstanceID, parent, StatePending,
+		sp.InstanceID, parent, StatePending,
 		sp.CWD, sp.TmuxSessionName,
 		argsJSON, sp.RelayMode, labelsJSON, extraEnvJSON,
 		positiveInt64Arg(sp.LaunchStartedAtMillis),
@@ -299,7 +299,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		if errors.As(err, &serr) {
 			switch serr.Code() {
 			case sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3.SQLITE_CONSTRAINT_UNIQUE:
-				return fmt.Errorf("%w: %s", ErrPrimaryKeyCollision, sp.ClaudeInstanceID)
+				return fmt.Errorf("%w: %s", ErrPrimaryKeyCollision, sp.InstanceID)
 			}
 		}
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -435,9 +435,9 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		life            lifeScan
 	)
 	dest := append([]any{
-		&sp.ClaudeInstanceID, &sp.ParentID, &sp.State, &sp.CWD,
+		&sp.InstanceID, &sp.ParentID, &sp.State, &sp.CWD,
 		&sp.TmuxSessionName, &argsJSON, &sp.RelayMode,
-		&sp.JSONLPath, &sp.ClaudeSessionID,
+		&sp.JSONLPath, &sp.SessionID,
 		&labelsJSON, &sp.StartedAt, &sp.LastSeenAt, &endedAt,
 		&sp.PID, &sp.ProcStarttime, &sp.LivenessUnverifiedSince,
 		&sp.LivenessNote, &extraEnvJSON,
@@ -460,7 +460,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		t := endedAt.Time
 		sp.EndedAt = &t
 	}
-	if sp.ClaudeArgs, err = decodeArgs(argsJSON); err != nil {
+	if sp.AgentArgs, err = decodeArgs(argsJSON); err != nil {
 		return Spawn{}, fmt.Errorf("%s agent_args: %w", errs.decode, err)
 	}
 	if sp.Labels, err = decodeLabels(labelsJSON); err != nil {

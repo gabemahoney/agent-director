@@ -41,7 +41,7 @@ func TestLaunchPathsUseConfiguredLockWait(t *testing.T) {
 			advKillServer(t, e)
 			trust, cwd := seedTrustConfig(t, t.TempDir(), trustLacksEntry), t.TempDir()
 			ptwHoldLock(t, trust)
-			res, err := c.Spawn(api.SpawnParams{ClaudeInstanceID: "ptw-" + uuid.NewString()[:8], CWD: cwd,
+			res, err := c.Spawn(api.SpawnParams{InstanceID: "ptw-" + uuid.NewString()[:8], CWD: cwd,
 				ExtraEnv: trust.extraEnv()})
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
@@ -60,7 +60,7 @@ func TestLaunchPathsUseConfiguredLockWait(t *testing.T) {
 		{"resume", func(t *testing.T, e *killEnv, c *api.Client) (string, trustConfig, string) {
 			r := e.seedResumable(t, time.Hour, agentGone)
 			ptwHoldLock(t, r.Trust)
-			res, err := c.Resume(api.ResumeParams{ClaudeInstanceID: r.ID})
+			res, err := c.Resume(api.ResumeParams{InstanceID: r.ID})
 			if err != nil {
 				t.Fatalf("Resume: %v", err)
 			}

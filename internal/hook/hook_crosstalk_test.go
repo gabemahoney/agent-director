@@ -53,10 +53,10 @@ func newWorkingAgent(t *testing.T, id string) crossTalkRig {
 	r.applied(t, crossTalkHook{fixture: "session-start-startup.json", session: ctAgentSession})
 	r.applied(t, crossTalkHook{fixture: "user-prompt-submit.json", session: ctAgentSession})
 	row := mustGetSpawn(t, st, id)
-	if row.State != store.StateWorking || row.ClaudeSessionID != ctAgentSession ||
+	if row.State != store.StateWorking || row.SessionID != ctAgentSession ||
 		row.Identity.PaneStarttime != r.agent.Start {
 		t.Fatalf("precondition: state=%q session=%q pane_starttime=%q; want working/%q/%q",
-			row.State, row.ClaudeSessionID, row.Identity.PaneStarttime, ctAgentSession, r.agent.Start)
+			row.State, row.SessionID, row.Identity.PaneStarttime, ctAgentSession, r.agent.Start)
 	}
 	return r
 }
@@ -177,7 +177,7 @@ func (r crossTalkRig) ignored(t *testing.T, from hookParent, h crossTalkHook) {
 	assertStr(t, got, "reason", store.HookReasonPIDMismatch)
 	assertStr(t, got, "parent_command", from.Name)
 	assertStr(t, got, "hook_session_id", h.session)
-	assertStr(t, got, "row_session_id", row.ClaudeSessionID)
+	assertStr(t, got, "row_session_id", row.SessionID)
 	assertStr(t, got, "source", "ad_hook")
 	if got["parent_pid"] != float64(from.PID) {
 		t.Errorf("parent_pid = %v; want %d", got["parent_pid"], from.PID)
@@ -237,9 +237,9 @@ func TestCrossTalkEndedSticks(t *testing.T) {
 	}
 
 	row := mustGetSpawn(t, r.st, r.id)
-	if row.State != store.StateEnded || row.EndedAtText != ended.EndedAtText || row.ClaudeSessionID != ctAgentSession {
+	if row.State != store.StateEnded || row.EndedAtText != ended.EndedAtText || row.SessionID != ctAgentSession {
 		t.Errorf("after the leftover: state=%q ended_at=%q session=%q; want ended/%q/%q",
-			row.State, row.EndedAtText, row.ClaudeSessionID, ended.EndedAtText, ctAgentSession)
+			row.State, row.EndedAtText, row.SessionID, ended.EndedAtText, ctAgentSession)
 	}
 }
 
@@ -282,8 +282,8 @@ func TestCrossTalkNestedAndTeammateThenOwnClearAndResume(t *testing.T) {
 				t.Run(f, func(t *testing.T) { r.ignored(t, other, h) })
 			}
 			row := mustGetSpawn(t, r.st, r.id)
-			if row.State != store.StateWorking || row.ClaudeSessionID != ctAgentSession {
-				t.Fatalf("after the %s: state=%q session=%q; want working/%q", tc.name, row.State, row.ClaudeSessionID, ctAgentSession)
+			if row.State != store.StateWorking || row.SessionID != ctAgentSession {
+				t.Fatalf("after the %s: state=%q session=%q; want working/%q", tc.name, row.State, row.SessionID, ctAgentSession)
 			}
 
 			r.applied(t, crossTalkHook{fixture: "session-end-clear.json", session: ctAgentSession})
@@ -304,15 +304,15 @@ func (r crossTalkRig) assertOwnSessionStart(t *testing.T, fixture, session, repl
 	t.Helper()
 	row := mustGetSpawn(t, r.st, r.id)
 	wantPath := filepath.Join(r.transcr, session+".jsonl")
-	if row.State != store.StateWaiting || row.ClaudeSessionID != session || row.JSONLPath != wantPath {
-		t.Errorf("%s: state=%q session=%q jsonl=%q; want waiting/%q/%q", fixture, row.State, row.ClaudeSessionID, row.JSONLPath, session, wantPath)
+	if row.State != store.StateWaiting || row.SessionID != session || row.JSONLPath != wantPath {
+		t.Errorf("%s: state=%q session=%q jsonl=%q; want waiting/%q/%q", fixture, row.State, row.SessionID, row.JSONLPath, session, wantPath)
 	}
 	if row.PID != r.agent.PID || row.ProcStarttime != r.agent.Start {
 		t.Errorf("%s: pid/proc_starttime = %d/%q; want the agent %d/%q", fixture, row.PID, row.ProcStarttime, r.agent.PID, r.agent.Start)
 	}
 	_, hist := r.columns(t)
 	for _, e := range hist {
-		if e.ClaudeSessionID == replaced {
+		if e.SessionID == replaced {
 			return
 		}
 	}

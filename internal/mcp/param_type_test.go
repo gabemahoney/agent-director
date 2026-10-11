@@ -2,7 +2,7 @@ package mcp_test
 
 // param_type_test.go pins b.pti: every MCP tool param's manifest Type, its
 // tools/list schema and the MCP decode agree, so a caller sending the declared
-// shape is not refused for its shape; spawn's relay_mode, label, claude_args
+// shape is not refused for its shape; spawn's relay_mode, label, agent_args
 // and extra_env in those shapes reach the launch. (TestManifestSpawnTemplateParamsOneType
 // pins spawn's and make-template's shared params to one Type.)
 
@@ -84,7 +84,7 @@ func TestMCPParamTypesAgree(t *testing.T) {
 }
 
 // TestMCPSpawnDeclaredShapesReachLaunch: an MCP spawn sending relay_mode,
-// label, claude_args and extra_env in their declared shapes launches with
+// label, agent_args and extra_env in their declared shapes launches with
 // them: the labels and variables on the session env (CLAUDE_CONFIG_DIR
 // steering pre-trust), the args after claude's own, and all four on the row
 // (b.pti, b.c4u).
@@ -99,8 +99,8 @@ func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 	env["MCP_SHAPE_ENV"] = "set"
 	args := []string{"--model", "opus"}
 
-	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "claude_instance_id": id, "relay_mode": "on",
-		"label": []string{"role=worker", "team=core"}, "claude_args": args, "extra_env": env}))
+	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "instance_id": id, "relay_mode": "on",
+		"label": []string{"role=worker", "team=core"}, "agent_args": args, "extra_env": env}))
 
 	assertPreTrust(t, obj, "ok")
 	c.check(t, cwd, true)
@@ -115,24 +115,24 @@ func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
 		}
 	}
 	if cmd := creates[0].Command; len(cmd) < len(args) || !slices.Equal(cmd[len(cmd)-len(args):], args) {
-		t.Errorf("command = %q; want it to end with claude_args %q", cmd, args)
+		t.Errorf("command = %q; want it to end with agent_args %q", cmd, args)
 	}
 	type stored struct {
-		Labels     map[string]string
-		ClaudeArgs []string
-		ExtraEnv   map[string]string
+		Labels    map[string]string
+		AgentArgs []string
+		ExtraEnv  map[string]string
 	}
 	var row stored
 	cols := readColumns(t, e.storePath, id)
 	for _, col := range []struct{ raw, into any }{
-		{cols.Labels, &row.Labels}, {cols.ClaudeArgs, &row.ClaudeArgs}, {cols.ExtraEnv, &row.ExtraEnv},
+		{cols.Labels, &row.Labels}, {cols.AgentArgs, &row.AgentArgs}, {cols.ExtraEnv, &row.ExtraEnv},
 	} {
 		if s, _ := col.raw.(string); json.Unmarshal([]byte(s), col.into) != nil {
 			t.Errorf("row column %v is not JSON", col.raw)
 		}
 	}
 	if want := (stored{map[string]string{"role": "worker", "team": "core"}, args, env}); !reflect.DeepEqual(row, want) {
-		t.Errorf("row labels, claude_args, extra_env = %+v; want %+v", row, want)
+		t.Errorf("row labels, agent_args, extra_env = %+v; want %+v", row, want)
 	}
 	if cols.RelayMode != "on" {
 		t.Errorf("row relay_mode = %v; want on (the default is off)", cols.RelayMode)
