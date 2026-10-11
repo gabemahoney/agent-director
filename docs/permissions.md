@@ -125,7 +125,7 @@ env -u TMUX HOME=/path/to/alt-home TMUX_TMPDIR=/path/to/alt-tmux agent-director 
 The spawn starts a new server whose `HOME` is the alternate one, so the
 agent's hooks use the alternate store, and the agent's row lives in that
 second store. Put that Spawn's config in
-`/path/to/alt-home/.agent-director/config.toml`. Run every later call on
+`/path/to/alt-home/.config/agent-director/config.toml`. Run every later call on
 that store the same way. Manage that store's agents only with that
 store's own agent-director (see
 [A session of another agent-director store](operator-actions.md#a-session-of-another-agent-director-store)).
@@ -284,7 +284,7 @@ the agent while `decide` and `get-permission` report that it did not. SRD
 The relay window (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**,
 long enough for human-paced approval flows — a human's approval that arrives
 after a meeting or overnight still lands inside the window. Operators who want a
-tighter bound can override it in `~/.agent-director/config.toml`:
+tighter bound can override it in `~/.config/agent-director/config.toml`:
 
 ```toml
 [relay]

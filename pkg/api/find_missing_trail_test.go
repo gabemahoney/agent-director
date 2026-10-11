@@ -21,7 +21,7 @@ var apiTSRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$
 
 // apiTrailFilePath returns the trail file path used by the singleton in api tests.
 func apiTrailFilePath() string {
-	return filepath.Join(apiTrailDir, ".agent-director", "ad-trail.jsonl")
+	return filepath.Join(adConfigDir(apiTrailDir), "ad-trail.jsonl")
 }
 
 // apiTrail is the api trail file parsed so far: the file only ever grows in

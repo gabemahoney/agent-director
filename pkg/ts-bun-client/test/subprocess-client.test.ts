@@ -50,10 +50,10 @@ test("a fixture that SIGINTs itself → ErrConsumerSignal carrying the signal", 
   expect((err as ErrConsumerSignal).signal).toBe("SIGINT");
 }, 15_000);
 
-test("b.6o1: version() reports the package version over the CLI's stamp; commit passes through", async () => {
+test("b.6o1: version() reports the package version over the CLI's stamp; commit and config_dir pass through", async () => {
   await withProcessEnv({ SLEEP_MS: "0" }, async () => {
-    // The fixture answers {"version":"fixture-1.0.0","commit":"aabbccddeeff"}.
-    expect(await (await makeClient("sleep-and-respond.js")).version({})).toEqual({ version: PKG_VERSION, commit: "aabbccddeeff" });
+    // The fixture answers {"version":"fixture-1.0.0","commit":"aabbccddeeff","config_dir":"~/.config/agent-director"}.
+    expect(await (await makeClient("sleep-and-respond.js")).version({})).toEqual({ version: PKG_VERSION, commit: "aabbccddeeff", config_dir: "~/.config/agent-director" });
   });
 }, 10_000);
 

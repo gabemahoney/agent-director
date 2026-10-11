@@ -52,9 +52,9 @@ func TmuxBool(k config.TmuxKey, v bool) TmuxSetting {
 // setting of the same key replaces an earlier one. It creates the parent
 // directories (0o700) and writes the file owner-only (0o600), replacing any
 // existing file. path is the test's choice, e.g. a throwaway HOME's
-// .agent-director/config.toml for CLI tests or a file under t.TempDir(); it
-// must never be the real ~/.agent-director. An I/O or encoding error fails
-// the test through t.
+// .config/agent-director/config.toml for CLI tests or a file under t.TempDir();
+// it must never be the real ~/.config/agent-director. An I/O or encoding error
+// fails the test through t.
 //
 // It is the only way pkg/api, CLI and MCP tests write [tmux] timing settings
 // (SR-20.2, SR-20.3). Outside internal/config and its own tests, no test

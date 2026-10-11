@@ -24,7 +24,7 @@ cp /path/to/agent-director-binary /usr/local/bin/agent-director
 chmod +x /usr/local/bin/agent-director
 
 # Confirm the standard install path is absent.
-test ! -e $HOME/.agent-director/bin/agent-director
+test ! -e $HOME/.config/agent-director/bin/agent-director
 
 # Install the library.
 mkdir -p /work && cd /work

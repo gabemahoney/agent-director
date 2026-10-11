@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -18,7 +19,7 @@ import (
 
 // defaultConfigPath is the canonical TOML config location, matching the
 // path the CLI uses. A leading "~/" is tilde-expanded at construction time.
-const defaultConfigPath = "~/.agent-director/config.toml"
+const defaultConfigPath = layout.DisplayConfigPath
 
 // TmuxClient is the client-level tmux injection point (Options.TmuxClient;
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
@@ -176,6 +177,11 @@ func (c *Client) settleRead() store.SettleRead {
 //     install. Never delete state.db. See docs/architecture.md
 //     "ErrSchemaMismatch recovery".
 //
+//   - [ErrOldLayout]: returned when the default store is about to be opened
+//     (no StorePath, no [store] db_path in the config file), none exists
+//     there and the old directory is present. Nothing is created. Run the
+//     this release's install.sh, which moves the old directory.
+//
 //   - [ErrSchemaMigrationRequired]: returned when the database is older than
 //     the schema version this binary understands and no valid administrator
 //     authorization was presented. The store never auto-migrates on open; the
@@ -188,6 +194,7 @@ func (c *Client) settleRead() store.SettleRead {
 //	if errors.Is(err, api.ErrStoreNotInitialized)     { /* ... */ }
 //	if errors.Is(err, api.ErrSchemaMismatch)          { /* ... */ }
 //	if errors.Is(err, api.ErrSchemaMigrationRequired) { /* ... */ }
+//	if errors.Is(err, api.ErrOldLayout)               { /* ... */ }
 //
 // # Lifecycle guarantee
 //
@@ -216,6 +223,15 @@ func New(opts Options) (*Client, error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("api: load config: %w", err)
+	}
+
+	// Step 2b — the old-layout refusal: about to open the default store (no
+	// opts.StorePath, no [store] db_path set in the file) with no store
+	// there and the old directory present. Nothing has been created yet.
+	if opts.StorePath == "" && !cfg.Store.DbPathSet {
+		if err := store.CheckOldLayout(); err != nil {
+			return nil, fmt.Errorf("api: open store: %w", err)
+		}
 	}
 
 	// Step 3 — resolve StorePath via three-tier precedence.

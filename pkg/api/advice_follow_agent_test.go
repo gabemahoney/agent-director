@@ -202,7 +202,7 @@ func TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs(t *testing.
 			_, refused := api.MakeTemplate(p)
 
 			adviceAssertAdvice(t, refused, api.ErrTemplateAgentMissing, mtAgentMissingTxt)
-			if entries := readDirFiles(t, filepath.Join(home, ".agent-director", "templates")); entries != nil {
+			if entries := readDirFiles(t, filepath.Join(adConfigDir(home), "templates")); entries != nil {
 				t.Errorf("templates dir holds %v after the refusal; want none created", entries)
 			}
 			fix.fix(&p)
@@ -278,7 +278,7 @@ func TestAdviceFollow_A22_MakeTemplatePermissionsUnsupportedDropTheLists(t *test
 			_, refused := api.MakeTemplate(p)
 
 			adviceAssertAdvice(t, refused, api.ErrPermissionsUnsupported, permissionsText)
-			if entries := readDirFiles(t, filepath.Join(home, ".agent-director", "templates")); entries != nil {
+			if entries := readDirFiles(t, filepath.Join(adConfigDir(home), "templates")); entries != nil {
 				t.Errorf("templates dir holds %v after the refusal; want none created", entries)
 			}
 			p.Permissions = nil

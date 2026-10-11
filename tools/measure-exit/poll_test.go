@@ -137,14 +137,18 @@ func TestRunLogRecordsArgvNeverEnvironment(t *testing.T) {
 func TestWaitStateNotReadyNamesTrailReasons(t *testing.T) {
 	r := newRig(t, modeDry)
 	r.ex.reply = func([]string) (string, string, int) { return `{"state":"spawning"}`, "", 0 }
-	writeFile(t, filepath.Join(r.h.iso.Home, ".agent-director", "ad-trail.jsonl"), strings.Join([]string{
+	// The harness reads the run's own trail where the binary writes it, under
+	// .config/agent-director; a trail in the old directory is not the run's.
+	writeFile(t, filepath.Join(r.h.iso.Home, ".agent-director", "ad-trail.jsonl"),
+		`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"old_directory_only"}`+"\n")
+	writeFile(t, filepath.Join(r.h.iso.Home, ".config", "agent-director", "ad-trail.jsonl"), strings.Join([]string{
 		`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"no_exec_form"}`,
 		`{"event":"ad.hook.ignored","instance_id":"id-2","reason":"pid_mismatch"}`,
 		`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"no_exec_form"}`,
 		`not json`,
 	}, "\n")+"\n")
 	_, err := r.h.waitState("rn6.idle", "id-1", stateWaiting)
-	if !errors.Is(err, errNotReady) || !strings.Contains(err.Error(), "ignored hooks: no_exec_form") || strings.Contains(err.Error(), "pid_mismatch") {
+	if !errors.Is(err, errNotReady) || !strings.Contains(err.Error(), "ignored hooks: no_exec_form") || strings.Contains(err.Error(), "pid_mismatch") || strings.Contains(err.Error(), "old_directory_only") {
 		t.Fatalf("got %v", err)
 	}
 	if got := r.clk.Now().Sub(clockStart); got != r.h.cfg.readyTimeout {

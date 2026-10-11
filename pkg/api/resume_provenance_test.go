@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -293,14 +292,14 @@ func TestResumeTrailFailOpen(t *testing.T) {
 	}
 }
 
-// TestResumeTrailFailOpenChild runs the resumes with a 0500 .agent-director and prints their lines.
+// TestResumeTrailFailOpenChild runs the resumes with a 0500 .config/agent-director and prints their lines.
 func TestResumeTrailFailOpenChild(t *testing.T) {
 	t.Parallel()
 	prefix := os.Getenv(rpvChildEnv)
 	if prefix == "" {
 		t.Skip("run only as TestResumeTrailFailOpen's child")
 	}
-	adDir := filepath.Join(apiTrailDir, ".agent-director")
+	adDir := adConfigDir(apiTrailDir)
 	if err := os.MkdirAll(adDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

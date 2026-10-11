@@ -50,10 +50,10 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Relay.PermissionRequestCap", d.Relay.PermissionRequestCap, 1000},
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
 		{"PreTrust.LockWaitSeconds", d.PreTrust.LockWaitSeconds, 12},
-		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
+		{"Store.DbPath", d.Store.DbPath, "~/.config/agent-director/state.db"},
 		{"Store.BusyTimeoutMs", d.Store.BusyTimeoutMs, 10000},
 		{"State.SettleMs", d.State.SettleMs, 0}, // b.3ie: off by default
-		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
+		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.config/agent-director/errors.log"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {
@@ -81,7 +81,7 @@ func TestLoadKeepsDefaults(t *testing.T) {
 		{"unknown key ignored", makeConfigFile(t, "unknown_top_level_key = 42\n\n[relay]\npoll_base_ms = 150\n"),
 			func(c *config.Config) { c.Relay.PollBaseMs = 150 }},
 		{"table in another letter case", makeConfigFile(t, "[Store]\ndb_path = \"/x.db\"\n"),
-			func(c *config.Config) { c.Store.DbPath = "/x.db" }},
+			func(c *config.Config) { c.Store.DbPath, c.Store.DbPathSet = "/x.db", true }},
 		// install.sh's busy_timeout_ms reader refuses this spelling, which the decoder reads (b.c7f).
 		{"busy_timeout_ms in another letter case", makeConfigFile(t, "[STORE]\nBUSY_TIMEOUT_MS = 2500\n"),
 			func(c *config.Config) { c.Store.BusyTimeoutMs = 2500 }},
@@ -92,7 +92,7 @@ func TestLoadKeepsDefaults(t *testing.T) {
 		{"two table spellings setting other keys", makeConfigFile(t, "[Defaults]\nrelay_mode = \"on\"\n\n[defaults]\ninject_help_hook = true\n"),
 			func(c *config.Config) { c.Defaults.RelayMode, c.Defaults.InjectHelpHook = "on", true }},
 		{"empty table beside another spelling", makeConfigFile(t, "[Store]\n\n[store]\ndb_path = \"/x.db\"\n"),
-			func(c *config.Config) { c.Store.DbPath = "/x.db" }},
+			func(c *config.Config) { c.Store.DbPath, c.Store.DbPathSet = "/x.db", true }},
 		{"unknown key in two spellings ignored", makeConfigFile(t, "[foo]\nX = 1\nx = 2\n"), func(*config.Config) {}},
 		{"disable_ask_user true", makeConfigFile(t, "[defaults]\ndisable_ask_user = true\n"),
 			func(c *config.Config) { c.Defaults.DisableAskUser = true }},
@@ -131,8 +131,8 @@ func TestLoadKeepsDefaults(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 			want := config.Default()
-			want.Store.DbPath = filepath.Join(home, ".agent-director/state.db")
-			want.Log.ErrorLogPath = filepath.Join(home, ".agent-director/errors.log")
+			want.Store.DbPath = filepath.Join(home, ".config/agent-director/state.db")
+			want.Log.ErrorLogPath = filepath.Join(home, ".config/agent-director/errors.log")
 			tc.edit(&want)
 			if cfg != want {
 				t.Errorf("Load:\n got %+v\nwant %+v", cfg, want)
@@ -142,14 +142,14 @@ func TestLoadKeepsDefaults(t *testing.T) {
 }
 
 // TestLoadResolvesPathFields: "~/" expands against HOME, a relative path
-// resolves under <HOME>/.agent-director, an absolute path and a "$HOME"
+// resolves under <HOME>/.config/agent-director, an absolute path and a "$HOME"
 // literal are kept as written.
 func TestLoadResolvesPathFields(t *testing.T) {
 	home := homeDir(t)
 	abs := filepath.Join(t.TempDir(), "absolute.db")
 	cases := []struct{ db, log, wantDB, wantLog string }{
 		{"~/foo.db", "~/bar.log", filepath.Join(home, "foo.db"), filepath.Join(home, "bar.log")},
-		{"foo.db", "logs/errors.log", filepath.Join(home, ".agent-director", "foo.db"), filepath.Join(home, ".agent-director", "logs", "errors.log")},
+		{"foo.db", "logs/errors.log", filepath.Join(home, ".config", "agent-director", "foo.db"), filepath.Join(home, ".config", "agent-director", "logs", "errors.log")},
 		{abs, abs + ".log", abs, abs + ".log"},
 	}
 	for _, tc := range cases {
@@ -179,7 +179,7 @@ func TestEffectiveDbPath(t *testing.T) {
 	}{
 		{"set", "/abs/x.db", home, false, "/abs/x.db", false},
 		{"set without HOME", "~/x.db", "", true, "~/x.db", false},
-		{"empty", "", home, false, filepath.Join(home, ".agent-director", "state.db"), false},
+		{"empty", "", home, false, filepath.Join(home, ".config", "agent-director", "state.db"), false},
 		{"empty with HOME empty", "", "", false, "", true},
 		{"empty with HOME unset", "", "", true, "", true},
 	} {
@@ -193,6 +193,79 @@ func TestEffectiveDbPath(t *testing.T) {
 			got, err := config.Store{DbPath: tc.dbPath}.EffectiveDbPath()
 			if got != tc.want || (err != nil) != tc.wantErr || (err != nil && !strings.HasPrefix(err.Error(), "expand tilde: ")) {
 				t.Errorf("EffectiveDbPath(%q) = %q, %v; want %q and an expand tilde error: %t", tc.dbPath, got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestDefaultsIgnoreXDGConfigHome: the default directory is <HOME>/.config/agent-director
+// from $HOME alone, so XDG_CONFIG_HOME, set elsewhere, changes no default and no
+// relative join (SR-11.7).
+func TestDefaultsIgnoreXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "agent-director")
+	for _, xdg := range []string{"", filepath.Join(t.TempDir(), "xdg")} {
+		t.Run("XDG_CONFIG_HOME="+xdg, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+
+			missing, err := config.Load(filepath.Join(t.TempDir(), "absent.toml"))
+			if err != nil {
+				t.Fatalf("Load of a missing file: %v", err)
+			}
+			relative, err := config.Load(makeConfigFile(t, "[store]\ndb_path = \"foo.db\"\n[log]\nerror_log_path = \"logs/e.log\"\n"))
+			if err != nil {
+				t.Fatalf("Load of relative paths: %v", err)
+			}
+			effective, err := config.Store{}.EffectiveDbPath()
+			if err != nil {
+				t.Fatalf("EffectiveDbPath: %v", err)
+			}
+			for _, tc := range []struct{ name, got, want string }{
+				{"Load default db_path", missing.Store.DbPath, filepath.Join(dir, "state.db")},
+				{"Load default error_log_path", missing.Log.ErrorLogPath, filepath.Join(dir, "errors.log")},
+				{"relative db_path", relative.Store.DbPath, filepath.Join(dir, "foo.db")},
+				{"relative error_log_path", relative.Log.ErrorLogPath, filepath.Join(dir, "logs", "e.log")},
+				{"EffectiveDbPath of empty", effective, filepath.Join(dir, "state.db")},
+				{"TemplatesDir", config.TemplatesDir(), filepath.Join(dir, "templates")},
+			} {
+				if tc.got != tc.want {
+					t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadRecordsWhetherDbPathIsSet: Store.DbPathSet is true exactly when the file
+// sets [store] db_path (any value, the default's spelling and "" included, in
+// any letter case), and false for a missing file, a file without the key, one
+// that sets only other [store] keys, and a malformed one. The old-layout refusal
+// reads it to skip the check for a configured store.
+func TestLoadRecordsWhetherDbPathIsSet(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"missing file", filepath.Join(t.TempDir(), "absent.toml"), false},
+		{"empty file", makeConfigFile(t, ""), false},
+		{"other table only", makeConfigFile(t, "[relay]\npoll_base_ms = 250\n"), false},
+		{"other [store] key only", makeConfigFile(t, "[store]\nbusy_timeout_ms = 2500\n"), false},
+		{"absolute path", makeConfigFile(t, "[store]\ndb_path = \"/x.db\"\n"), true},
+		{"relative path", makeConfigFile(t, "[store]\ndb_path = \"x.db\"\n"), true},
+		{"the default's own text", makeConfigFile(t, "[store]\ndb_path = \"~/.config/agent-director/state.db\"\n"), true},
+		{"empty string", makeConfigFile(t, "[store]\ndb_path = \"\"\n"), true},
+		{"table and key in another letter case", makeConfigFile(t, "[STORE]\nDB_PATH = \"/x.db\"\n"), true},
+		{"malformed file", makeConfigFile(t, "[store\ndb_path = \"/x.db\"\n"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, _ := config.Load(tc.path)
+
+			if cfg.Store.DbPathSet != tc.want {
+				t.Errorf("Store.DbPathSet = %t, want %t", cfg.Store.DbPathSet, tc.want)
 			}
 		})
 	}

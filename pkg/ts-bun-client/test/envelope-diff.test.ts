@@ -7,8 +7,8 @@
  * nondeterministic.json ignore-paths.
  *
  * Architecture:
- *   CLI side  — HOME=homeA → opens homeA/.agent-director/state.db
- *   TS side   — storePath = homeB/.agent-director/state.db (direct path)
+ *   CLI side  — HOME=homeA → opens homeA/.config/agent-director/state.db
+ *   TS side   — storePath = homeB/.config/agent-director/state.db (direct path)
  *   Both stores are byte-identical copies of the same seed — timestamps match.
  *   Both sides use fake-tmux so spawn/send-keys/read-pane/kill/resume don't
  *   touch a real tmux session. Fake-tmux answers lookups from its session
@@ -65,11 +65,11 @@ function cliEnv(homeDir: string): NodeJS.ProcessEnv {
 interface StoreSetup {
   /** Temp HOME directory for the CLI subprocess. */
   homeA: string;
-  /** Path to CLI's store file: homeA/.agent-director/state.db */
+  /** Path to CLI's store file: homeA/.config/agent-director/state.db */
   storeA: string;
   /** Temp HOME directory (not used for CLI). */
   homeB: string;
-  /** Path to TS Client's store file: homeB/.agent-director/state.db */
+  /** Path to TS Client's store file: homeB/.config/agent-director/state.db */
   storeB: string;
   /** Remove both temp directories. */
   cleanup: () => void;
@@ -90,8 +90,8 @@ function prepareStores(seedFn: (storePath: string) => void): StoreSetup {
 
   const homeA = fs.mkdtempSync(path.join(os.tmpdir(), "ed-ha-"));
   const homeB = fs.mkdtempSync(path.join(os.tmpdir(), "ed-hb-"));
-  const adA = path.join(homeA, ".agent-director");
-  const adB = path.join(homeB, ".agent-director");
+  const adA = path.join(homeA, ".config", "agent-director");
+  const adB = path.join(homeB, ".config", "agent-director");
   fs.mkdirSync(adA, { recursive: true });
   fs.mkdirSync(adB, { recursive: true });
   const storeA = path.join(adA, "state.db");
@@ -1259,7 +1259,7 @@ describe("expire", () => {
         expect(ts).toEqual(want);
         // The CLI run (HOME=homeA) trails one ad.expire.kept, reason ours.
         const kept = fs
-          .readFileSync(path.join(homeA, ".agent-director", "ad-trail.jsonl"), "utf8")
+          .readFileSync(path.join(homeA, ".config", "agent-director", "ad-trail.jsonl"), "utf8")
           .split("\n")
           .filter((line) => line !== "")
           .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1306,7 +1306,7 @@ describe("make-template", () => {
         expect(cli.exitCode).toBe(0);
 
         // home: homeB puts the Client's template under
-        // homeB/.agent-director/templates, which cleanup() removes.
+        // homeB/.config/agent-director/templates, which cleanup() removes.
         using client = await Client.create({
           storePath: storeB,
           home: homeB,
@@ -1319,7 +1319,7 @@ describe("make-template", () => {
           ignorePaths: loadIgnorePathsForVerb("make-template"),
         });
         // The Client wrote under homeB, not the developer's real HOME.
-        expect(fs.existsSync(path.join(homeB, ".agent-director", "templates", `${templateName}.toml`))).toBe(true);
+        expect(fs.existsSync(path.join(homeB, ".config", "agent-director", "templates", `${templateName}.toml`))).toBe(true);
       } finally {
         cleanup();
       }

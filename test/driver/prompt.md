@@ -35,12 +35,12 @@ followed by one t2 case body.
   driver Claude would consume API credit and loop.
 - Do not modify the testplan files. They are mounted read-only.
 - The DB-reset fixture (`/opt/driver/db-reset.sh`) runs *before* you start.
-  You inherit a clean `~/.agent-director/state.db`. If a case asks for an
+  You inherit a clean `~/.config/agent-director/state.db`. If a case asks for an
   empty DB as a precondition, that is already true.
 - Every direct read or write of a store goes through `/opt/driver/sql.sh`,
   never a bare `sqlite3`. It is the `sqlite3` shell with a busy timeout and
   takes the same arguments (`/opt/driver/sql.sh -readonly
-  ~/.agent-director/state.db "SELECT ..."`). A bare `sqlite3` can fail at
+  ~/.config/agent-director/state.db "SELECT ..."`). A bare `sqlite3` can fail at
   once with "database is locked" when it opens the store while an
   agent-director process is starting or exiting. When a case says to read
   or seed rows "with `sqlite3`", run `/opt/driver/sql.sh`.

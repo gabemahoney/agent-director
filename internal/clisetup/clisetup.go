@@ -14,12 +14,13 @@ import (
 	"os"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/store"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // ConfigPath is the canonical TOML config location.
-const ConfigPath = "~/.agent-director/config.toml"
+const ConfigPath = layout.DisplayConfigPath
 
 // The err_names an OpenError carries.
 const (
@@ -27,22 +28,26 @@ const (
 	errStoreOpen               = "ErrStoreOpen"
 	errSchemaMismatch          = "ErrSchemaMismatch"
 	errSchemaMigrationRequired = "ErrSchemaMigrationRequired"
+	errOldLayout               = "ErrOldLayout"
 )
 
-// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch and
-// ErrSchemaMigrationRequired are the sentinels pkg/api/errnames.Catalog pairs
-// with the err_names of the same names (b.vma, b.cm7); errors.Is matches an
-// OpenError with the one its Name names (OpenError.Is). The two schema
-// sentinels are the store's own, store.ErrSchemaMismatch and
-// store.ErrSchemaMigrationRequired (pkg/api re-exports them under the same
-// names), so errnames.Classify gives a schema refusal the same name whether it
-// comes as an OpenError or straight from pkg/api.New (b.x8s). The store
-// returns them only when it opens, so no verb error wraps them.
+// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch,
+// ErrSchemaMigrationRequired and ErrOldLayout are the sentinels
+// pkg/api/errnames.Catalog pairs with the err_names of the same names (b.vma,
+// b.cm7); errors.Is matches an OpenError with the one its Name names
+// (OpenError.Is). The two schema sentinels and ErrOldLayout are the store's
+// own, store.ErrSchemaMismatch, store.ErrSchemaMigrationRequired and
+// store.ErrOldLayout (pkg/api re-exports them under the same names), so
+// errnames.Classify gives a schema refusal the same name whether it comes as an
+// OpenError or straight from pkg/api.New (b.x8s). The store returns them only
+// when it opens (ErrOldLayout, when the open is about to begin), so no verb
+// error wraps them.
 var (
 	ErrConfigMalformed         = errors.New(errConfigMalformed)
 	ErrStoreOpen               = errors.New(errStoreOpen)
 	ErrSchemaMismatch          = store.ErrSchemaMismatch
 	ErrSchemaMigrationRequired = store.ErrSchemaMigrationRequired
+	ErrOldLayout               = store.ErrOldLayout
 )
 
 // ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite are the sentinels
@@ -90,13 +95,14 @@ func (e *OpenError) Error() string { return e.Err.Error() }
 func (e *OpenError) Unwrap() error { return e.Err }
 
 // Is reports whether target is the sentinel of e's Name: ErrConfigMalformed,
-// ErrStoreOpen, ErrSchemaMismatch or ErrSchemaMigrationRequired. errors.Is
-// goes on to the cause when it is not.
+// ErrStoreOpen, ErrSchemaMismatch, ErrSchemaMigrationRequired or
+// ErrOldLayout. errors.Is goes on to the cause when it is not.
 func (e *OpenError) Is(target error) bool {
 	return (target == ErrConfigMalformed && e.Name == errConfigMalformed) ||
 		(target == ErrStoreOpen && e.Name == errStoreOpen) ||
 		(target == ErrSchemaMismatch && e.Name == errSchemaMismatch) ||
-		(target == ErrSchemaMigrationRequired && e.Name == errSchemaMigrationRequired)
+		(target == ErrSchemaMigrationRequired && e.Name == errSchemaMigrationRequired) ||
+		(target == ErrOldLayout && e.Name == errOldLayout)
 }
 
 // APIOptions returns the pkg/api.Options every Client the command-line
@@ -123,7 +129,8 @@ func APIOptions(o Overrides) pkgapi.Options {
 
 // NewOpenError returns the *OpenError of err, a non-nil error from
 // pkg/api.New: named ErrSchemaMismatch or ErrSchemaMigrationRequired when the
-// store's schema refused the open, and ErrStoreOpen otherwise. Open names its
+// store's schema refused the open, ErrOldLayout when only the old directory
+// is present, and ErrStoreOpen otherwise. Open names its
 // pkg/api.New failure with it, and agent-director serve the failure of its MCP
 // Client's pkg/api.New, so every Client a command binary opens names a failed
 // open alike (b.uii).
@@ -134,6 +141,8 @@ func NewOpenError(err error) *OpenError {
 		name = errSchemaMismatch
 	case errors.Is(err, store.ErrSchemaMigrationRequired):
 		name = errSchemaMigrationRequired
+	case errors.Is(err, store.ErrOldLayout):
+		name = errOldLayout
 	}
 	return &OpenError{Name: name, Err: err}
 }
@@ -143,7 +152,8 @@ func NewOpenError(err error) *OpenError {
 // it. On failure the error is an *OpenError: ErrConfigMalformed when the
 // config cannot be loaded, and otherwise NewOpenError's name for the
 // pkg/api.New failure (ErrSchemaMismatch or ErrSchemaMigrationRequired when
-// the store's schema refuses the open, ErrStoreOpen otherwise).
+// the store's schema refuses the open, ErrOldLayout when only the old
+// directory is present, ErrStoreOpen otherwise).
 //
 // Design pins:
 //   - Pin 1 (CreateIfMissing=true by default): the CLI is the one place that
@@ -164,6 +174,11 @@ func NewOpenError(err error) *OpenError {
 //     the logger BEFORE calling pkg/api.New, which also loads config
 //     internally. The duplicate load is intentional — the alternative would
 //     require a circular bootstrap.
+//   - Pin 4 (old-layout check first): about to open the default store (no
+//     o.StorePath, and no [store] db_path set in the config file), with no
+//     store there and the old directory present, Open returns ErrOldLayout
+//     before NewRecoveryLogger, which would create errors.log: a refused run
+//     creates nothing.
 //   - Pin H6 (no Client.Config() accessor): cfg is returned directly so the
 //     serve verb can pass it to its MCP logger without a pkg/api accessor
 //     that would leak internal/config.Config into the library's public
@@ -172,6 +187,11 @@ func Open(o Overrides) (*pkgapi.Client, config.Config, error) {
 	cfg, err := config.Load(ConfigPath)
 	if err != nil {
 		return nil, config.Config{}, &OpenError{Name: errConfigMalformed, Err: err}
+	}
+	if o.StorePath == "" && !cfg.Store.DbPathSet {
+		if err := store.CheckOldLayout(); err != nil {
+			return nil, config.Config{}, NewOpenError(err)
+		}
 	}
 	apiOpts := APIOptions(o)
 	apiOpts.Logger = NewRecoveryLogger(cfg) // Pin 3

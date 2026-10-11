@@ -42,7 +42,7 @@ func newKillFix(t *testing.T) *killFix {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	unsetEnv(t, "CLAUDE_CONFIG_DIR")
-	db := filepath.Join(home, ".agent-director", "state.db")
+	db := filepath.Join(home, ".config", "agent-director", "state.db")
 	if _, err := apitest.InitStore(db); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}

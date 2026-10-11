@@ -18,9 +18,9 @@ curl -fsSL https://bun.sh/install | bash
 export PATH="$HOME/.bun/bin:$PATH"
 
 # Drop the binary at the standard install path, then strip the exec bit.
-mkdir -p $HOME/.agent-director/bin
-cp /path/to/agent-director-binary $HOME/.agent-director/bin/agent-director
-chmod 0644 $HOME/.agent-director/bin/agent-director
+mkdir -p $HOME/.config/agent-director/bin
+cp /path/to/agent-director-binary $HOME/.config/agent-director/bin/agent-director
+chmod 0644 $HOME/.config/agent-director/bin/agent-director
 
 # Install the library.
 mkdir -p /work && cd /work

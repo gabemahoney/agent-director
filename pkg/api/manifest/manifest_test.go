@@ -460,7 +460,7 @@ type shape struct {
 // reuse_finished (SR-10.1, AC-REUSE-13); get's nullable ended_at, additive
 // liveness fields (SR-8.3) and tmux_socket (SR-3.3, SR-16.1, AC-LKP-22);
 // launch_started_at (SR-22.2); pre_trust's value set (SR-22.6, AC-SPN-08,
-// AC-CAT-04); kill's kill_sent (SR-6.6) and expire's counts and ids (SR-12.4),
+// AC-CAT-04); version's config_dir (SR-11.7); kill's kill_sent (SR-6.6) and expire's counts and ids (SR-12.4),
 // the only result fields of their verbs, expire with no error names. Each is
 // described. status and list carry no tmux_socket (list's spawns text does not
 // name it), and make-template takes no reuse param.
@@ -484,6 +484,7 @@ func TestFieldShapes(t *testing.T) {
 		{"get", "", "launch_started_at", shape{"timestamp?", true, false, nil}},
 		{"spawn", "", "pre_trust", shape{"string", false, false, preTrust}},
 		{"resume", "", "pre_trust", shape{"string", false, false, preTrust}},
+		{"version", "", "config_dir", shape{"string", false, false, nil}},
 		{"kill", "", "kill_sent", shape{"bool", false, false, nil}},
 		{"expire", "", "count", shape{"int", false, true, nil}},
 		{"expire", "", "ids", shape{"[]string", false, true, nil}},
@@ -668,6 +669,37 @@ func TestNoVerbListsErrInternal(t *testing.T) {
 	for _, v := range manifest.Verbs {
 		if slices.Contains(v.ErrorNames, "ErrInternal") {
 			t.Errorf("%s.ErrorNames lists ErrInternal; SR-1.7 keeps it off every verb's error list", v.Name)
+		}
+	}
+}
+
+// TestVersionReportsConfigDir pins SR-11.7's capability field: version's result
+// fields are version, commit and config_dir, in that order, and both the verb's
+// description and config_dir's name the field and the directory it reports.
+func TestVersionReportsConfigDir(t *testing.T) {
+	v := verbOf(t, "version")
+	var got []string
+	for _, f := range v.ResultFields {
+		got = append(got, f.Name)
+	}
+	if want := []string{"version", "commit", "config_dir"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("version result fields = %v; want %v", got, want)
+	}
+	if !strings.Contains(v.Description, "config_dir") {
+		t.Errorf("version description %q does not name config_dir", v.Description)
+	}
+	if text := siteText(t, "version", "", "config_dir"); !strings.Contains(text, "~/.config/agent-director") {
+		t.Errorf("version config_dir description %q does not name ~/.config/agent-director", text)
+	}
+}
+
+// TestNoVerbListsErrOldLayout: ErrOldLayout is named by the store open, like
+// the schema refusals, before any verb runs, so no verb's error names list it
+// (SR-1.6, P-88). TestSurfaceJSONMirrorsManifest carries that to surface.json.
+func TestNoVerbListsErrOldLayout(t *testing.T) {
+	for _, v := range manifest.Verbs {
+		if slices.Contains(v.ErrorNames, "ErrOldLayout") {
+			t.Errorf("%s.ErrorNames lists ErrOldLayout; the open names it, no verb does", v.Name)
 		}
 	}
 }

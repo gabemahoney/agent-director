@@ -72,3 +72,14 @@ func TestDockerfileNativeCheck(t *testing.T) {
 		})
 	}
 }
+
+// The measurement image's build fails when its tester home already holds
+// either agent-director directory, the old one or the one it moved to.
+func TestDockerfileHomeHoldsNeitherAgentDirectoryDir(t *testing.T) {
+	df := readFile(t, "Dockerfile")
+	for _, rel := range []string{".agent-director", ".config/agent-director"} {
+		if !strings.Contains(df, "test ! -e /home/tester/"+rel) {
+			t.Errorf("the Dockerfile does not check that /home/tester/%s is absent", rel)
+		}
+	}
+}

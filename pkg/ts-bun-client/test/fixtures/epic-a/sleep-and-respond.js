@@ -13,4 +13,4 @@ if (process.argv[2] === "version") {
 }
 const ms = parseInt(process.env.SLEEP_MS ?? "5000", 10);
 await new Promise((resolve) => setTimeout(resolve, ms));
-process.stdout.write('{"version":"fixture-1.0.0","commit":"aabbccddeeff"}\n');
+process.stdout.write('{"version":"fixture-1.0.0","commit":"aabbccddeeff","config_dir":"~/.config/agent-director"}\n');

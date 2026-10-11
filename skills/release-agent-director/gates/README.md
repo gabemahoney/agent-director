@@ -151,8 +151,9 @@ gates in the order defined for that phase. For each gate:
 >   under its own scratch `HOME` (`mktemp -d`), with `GOCACHE`, `GOMODCACHE`,
 >   `GOPATH`, and `BUN_INSTALL_CACHE_DIR` pinned to their real locations first
 >   so the caches are still shared. This keeps each gate's `$HOME`-resolved
->   writes (e.g. `~/.agent-director/ad-trail.jsonl`, templates) out of the real
->   home that `coverage.go-root`'s smoke canary watches via `user.Current()`.
+>   writes (e.g. `~/.config/agent-director/ad-trail.jsonl`, templates) out of the real
+>   home that `coverage.go-root`'s smoke canary watches (both `~/.agent-director` and
+>   `~/.config/agent-director`) via `user.Current()`.
 > - The tree-write lock (`.tree-write.lock` at the repo root) keeps writes
 >   inside the tree from racing the `coverage.docker-epic-*` children, which
 >   collect the repo root as their docker build context. Tree writers hold it

@@ -53,6 +53,30 @@ func withStubHelpBin(t *testing.T, path string) {
 	t.Cleanup(func() { helpHookBinPath = saved })
 }
 
+// TestHelpHookBinPathUnderConfigDir pins the unstubbed help-hook binary path:
+// under a given $HOME it is <HOME>/.config/agent-director/bin/agent-director,
+// both from helpHookBinPath itself and in the SessionStart help entry the
+// settings carry. It sets $HOME, so it is serial.
+func TestHelpHookBinPathUnderConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	want := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
+
+	got, err := helpHookBinPath()
+	if err != nil || got != want {
+		t.Fatalf("helpHookBinPath() = %q, %v; want %q", got, err, want)
+	}
+
+	withStubExe(t, "/opt/ad/bin/agent-director")
+	cfg := config.Default()
+	cfg.Defaults.InjectHelpHook = true
+	settings, err := synthesizeSettings(Resolved{SpawnParams: SpawnParams{InstanceID: "id-help"}}, cfg)
+	if err != nil {
+		t.Fatalf("synthesizeSettings: %v", err)
+	}
+	assertExecFormSettings(t, settings, "/opt/ad/bin/agent-director", want+" help", cfg)
+}
+
 // settingsShape is the part of the synthesized settings the permission tests read.
 type settingsShape struct {
 	Hooks       map[string]any `json:"hooks"`

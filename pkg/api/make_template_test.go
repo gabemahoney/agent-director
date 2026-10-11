@@ -59,7 +59,7 @@ func assertNoOrphanTempfile(t *testing.T, name string) {
 }
 
 // TestMakeTemplateWritesReadableTOML pins SRD §10.1: the template lands at
-// ~/.agent-director/templates/<name>.toml, mode 0600 in a 0700 dir, as plain
+// ~/.config/agent-director/templates/<name>.toml, mode 0600 in a 0700 dir, as plain
 // TOML that config.LoadTemplate reads back field for field.
 func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
@@ -71,7 +71,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MakeTemplate: %v", err)
 	}
-	dir := filepath.Join(home, ".agent-director", "templates")
+	dir := filepath.Join(adConfigDir(home), "templates")
 	if res.Path != filepath.Join(dir, "dev.toml") {
 		t.Errorf("Path = %q; want %q", res.Path, filepath.Join(dir, "dev.toml"))
 	}
@@ -152,7 +152,7 @@ func TestMakeTemplateRefusesSpawnRefusedEnvKey(t *testing.T) {
 					t.Errorf("existing template = %q, %v; want it untouched", body, err)
 				}
 				assertNoOrphanTempfile(t, "refused")
-			} else if _, err := os.Stat(filepath.Join(env.home, ".agent-director", "templates")); !errors.Is(err, os.ErrNotExist) {
+			} else if _, err := os.Stat(filepath.Join(adConfigDir(env.home), "templates")); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("templates dir: %v; want none created", err)
 			}
 			if _, spawnErr := env.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), ExtraEnv: extra}); errText(err) != errText(spawnErr) {

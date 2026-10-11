@@ -43,11 +43,11 @@ func findRepoRoot() (string, error) {
 // test-owned directory and returns:
 //
 //   - homeDir: the directory to use as HOME for CLI subprocess tests; the
-//     CLI resolves its store at homeDir/.agent-director/state.db.
-//   - dbPath: absolute path to the copied state.db file (homeDir/.agent-director/state.db).
+//     CLI resolves its store at homeDir/.config/agent-director/state.db.
+//   - dbPath: absolute path to the copied state.db file (homeDir/.config/agent-director/state.db).
 //
 // srcDir is expected to be a directory whose contents will be copied verbatim
-// into homeDir/.agent-director/. A minimal srcDir contains a single state.db
+// into homeDir/.config/agent-director/. A minimal srcDir contains a single state.db
 // file; additional fixture files (e.g. WAL shards) are also copied.
 //
 // The copy is isolated per test: mutations to the copy never affect srcDir.
@@ -55,9 +55,9 @@ func findRepoRoot() (string, error) {
 func copyFixtureStore(t *testing.T, srcDir string) (homeDir, dbPath string) {
 	t.Helper()
 	homeDir = t.TempDir()
-	adDir := filepath.Join(homeDir, ".agent-director")
+	adDir := filepath.Join(homeDir, ".config", "agent-director")
 	if err := os.MkdirAll(adDir, 0o700); err != nil {
-		t.Fatalf("copyFixtureStore: mkdir .agent-director: %v", err)
+		t.Fatalf("copyFixtureStore: mkdir .config/agent-director: %v", err)
 	}
 	if err := copyDir(adDir, srcDir); err != nil {
 		t.Fatalf("copyFixtureStore: copy %s → %s: %v", srcDir, adDir, err)

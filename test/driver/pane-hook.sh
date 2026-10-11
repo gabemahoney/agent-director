@@ -38,7 +38,7 @@
 #   --timeout <secs>   bound on the wait (default 20).
 #
 # The pane and socket come from one read-only SELECT of the row's pane_id
-# and tmux_socket in $PANE_HOOK_DB (default $HOME/.agent-director/state.db),
+# and tmux_socket in $PANE_HOOK_DB (default $HOME/.config/agent-director/state.db),
 # run through sql.sh beside this file (sqlite3 with a busy timeout, b.ai5).
 # A payload of "-" is read from stdin.
 #
@@ -120,7 +120,7 @@ fi
 id="$1"
 payload="$2"
 
-db="${PANE_HOOK_DB:-$HOME/.agent-director/state.db}"
+db="${PANE_HOOK_DB:-$HOME/.config/agent-director/state.db}"
 [[ -r "$db" ]] || die 3 "no store at $db"
 
 # Read-only lookup of the row's pane and socket; the id's quotes are doubled

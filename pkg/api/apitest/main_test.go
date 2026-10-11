@@ -15,14 +15,14 @@ import (
 // singleton that pins its file path from $HOME on the FIRST Emit and never
 // re-resolves it; the individual tests here use per-test temp stores but do NOT
 // redirect $HOME, so absent this redirect the singleton would pin — and this
-// package would append to — the real ~/.agent-director/ad-trail.jsonl.
+// package would append to — the real ~/.config/agent-director/ad-trail.jsonl.
 //
 // That un-redirected write is exactly what the test/smoke/go canary guards
 // against, and it tripped that canary intermittently when `go test ./...` ran
 // apitest and smoke in parallel and the write landed inside the canary's
 // before/after snapshot window. Pinning $HOME to a temp dir here — before
 // m.Run() — makes the singleton resolve under a throwaway dir, so this package
-// can never touch the real ~/.agent-director.
+// can never touch the real ~/.config/agent-director.
 func TestMain(m *testing.M) {
 	tmpHome, err := os.MkdirTemp("", "apitest-home-*")
 	if err != nil {

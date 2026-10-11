@@ -4,9 +4,9 @@
 # Runs inside the agent-director-test harness image (mounted at
 # /opt/install-mode). Each scenario invokes the bundled install.sh
 # under a per-scenario sandbox $HOME, then asserts the canonical
-# ~/.agent-director/bin/agent-director ends up at literal mode 0755
+# ~/.config/agent-director/bin/agent-director ends up at literal mode 0755
 # via `stat -c %a`, and the operator tool
-# ~/.agent-director/admin/agent-director-admin at 0755 in a 0700
+# ~/.config/agent-director/admin/agent-director-admin at 0755 in a 0700
 # directory (b.vqr). install.sh finds the admin binary through its
 # in-repo fallback, the image's /opt/bin/agent-director-admin. Every
 # install that should succeed must also exit 0 with no "Permission
@@ -81,14 +81,14 @@ run_install() {
 # canonical_mode <home>: the installed agent-director's literal mode bits,
 # or "missing".
 canonical_mode() {
-    stat -c '%a' "$1/.agent-director/bin/agent-director" 2>/dev/null || echo missing
+    stat -c '%a' "$1/.config/agent-director/bin/agent-director" 2>/dev/null || echo missing
 }
 
 # admin_modes <home>: "<dir mode>/<binary mode>" of the installed
 # agent-director-admin, or "not-installed" when it is missing or is not
 # the image's admin binary.
 admin_modes() {
-    local a="$1/.agent-director/admin/agent-director-admin"
+    local a="$1/.config/agent-director/admin/agent-director-admin"
     if ! cmp -s "$a" "$ADMIN_SOURCE"; then
         echo "not-installed"
         return
@@ -145,15 +145,15 @@ run_install "keep-prior-older-build" "$H" 022 --binary "$OLD_PARENT/agent-direct
 run_install "keep-prior-upgrade" "$H" 022 --binary "$SOURCE_BINARY" --keep-prior
 report "keep-prior-canonical" "$(canonical_mode "$H")" "755"
 report "keep-prior-admin" "$(admin_modes "$H")" "700/755"
-if [[ -f "$H/.agent-director/bin/agent-director.prior" ]]; then
-    mp=$(stat -c '%a' "$H/.agent-director/bin/agent-director.prior")
+if [[ -f "$H/.config/agent-director/bin/agent-director.prior" ]]; then
+    mp=$(stat -c '%a' "$H/.config/agent-director/bin/agent-director.prior")
     report "keep-prior-snapshot" "$mp" "755"
 else
     fail=$((fail+1))
     echo "  FAIL  keep-prior-snapshot                missing .prior"
 fi
-if [[ -f "$H/.agent-director/admin/agent-director-admin.prior" ]]; then
-    mp=$(stat -c '%a' "$H/.agent-director/admin/agent-director-admin.prior")
+if [[ -f "$H/.config/agent-director/admin/agent-director-admin.prior" ]]; then
+    mp=$(stat -c '%a' "$H/.config/agent-director/admin/agent-director-admin.prior")
     report "keep-prior-admin-snapshot" "$mp" "755"
 else
     fail=$((fail+1))
@@ -183,7 +183,7 @@ else
     printf '  FAIL  %-40s exit=%s  want=3\n' "0644-source-refused" "$rc"
 fi
 # Canonical must NOT exist after a refused install (no partial write).
-if [[ -e "$H/.agent-director/bin/agent-director" || -e "$H/.agent-director/admin/agent-director-admin" ]]; then
+if [[ -e "$H/.config/agent-director/bin/agent-director" || -e "$H/.config/agent-director/admin/agent-director-admin" ]]; then
     fail=$((fail+1))
     echo "  FAIL  0644-source-no-partial-write    canonical or admin binary exists after exit 3"
 else

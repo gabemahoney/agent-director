@@ -39,8 +39,17 @@ error:
   the value it names. An unknown argument or wrong-typed value returns
   `ErrInvalidFlags` and does nothing; `make-template` on an existing name
   without `--overwrite` returns `ErrTemplateExists`.
+- `ErrOldLayout` (this host still has the old directory and no store in the
+  current one): every store-opening verb fails, `serve` does not start, hooks
+  record nothing and exit 0, relayed permission requests are denied, and
+  `trail-emit` returns `ErrTrailWrite`. Nothing was written. Take no action,
+  alert once, never read it as "dead"; a human runs this release's `install.sh`
+  (see [Operator actions](operator-actions.md#a-verb-refuses-with-erroldlayout);
+  [Upgrade](install.md#upgrade)).
 - Detect features by the binary's version (`agent-director version`, MCP
-  `version`, TypeScript `binaryVersion`); `X.Y.Z-rc.N` counts as `X.Y.Z`.
+  `version`, TypeScript `binaryVersion`); `X.Y.Z-rc.N` counts as `X.Y.Z`. The
+  `version` result's `config_dir` names the directory the binary keeps its
+  files in.
 - A TypeScript call that outlasts `callTimeoutMs` (30 s by default) returns
   `ErrCallTimeout` while the verb may still complete: check the row first.
 

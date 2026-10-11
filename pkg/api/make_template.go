@@ -84,11 +84,11 @@ type MakeTemplatePermissions struct {
 // want to inspect the result.
 type MakeTemplateResult struct {
 	// Path is the absolute path of the written template TOML file.
-	// Nondeterministic: reflects ~/.agent-director/templates/ on the host.
+	// Nondeterministic: reflects ~/.config/agent-director/templates/ on the host.
 	Path string `json:"path"`
 }
 
-// MakeTemplate writes a new template to ~/.agent-director/templates/.
+// MakeTemplate writes a new template to ~/.config/agent-director/templates/.
 // Behavior (SRD §10):
 //
 //   - Name safety: validated via config.ValidateTemplateName.
@@ -245,7 +245,7 @@ func validateTemplateRelayMode(m string) error {
 }
 
 // MakeTemplate writes a reusable spawn preset to
-// ~/.agent-director/templates/<name>.toml. The file is created exclusively
+// ~/.config/agent-director/templates/<name>.toml. The file is created exclusively
 // (O_EXCL); overwriting an existing template returns [ErrTemplateExists].
 // Use the template name with SpawnParams.Template to apply it at spawn time.
 //
@@ -279,7 +279,7 @@ func validateTemplateRelayMode(m string) error {
 //     would refuse; nothing is written or replaced.
 //
 // Nondeterminism: .path — the absolute path reflects the host's templates
-// directory (~/.agent-director/templates/) and varies across environments.
+// directory (~/.config/agent-director/templates/) and varies across environments.
 func (c *Client) MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return MakeTemplateResult{}, err

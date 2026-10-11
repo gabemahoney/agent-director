@@ -4,7 +4,7 @@
 // =================================
 // debian:bookworm-slim ships /tmp as mode 3777 — the setgid bit is set. A
 // `mkdir` under such a setgid parent inherits the setgid bit, so
-// `~/.agent-director` was created as mode 2700 rather than 700. install.sh
+// `~/.config/agent-director` was created as mode 2700 rather than 700. install.sh
 // then ran `chmod 0700` on the install root, but a FOUR-digit chmod mode does
 // NOT clear an already-set setgid bit (coreutils 9.1) — the directory stayed
 // 2700. The docker-epics child epic-12-install asserts the install root has
@@ -145,7 +145,7 @@ func statMode(t *testing.T, path string) os.FileMode {
 
 // TestInstallRootClearsInheritedSetgid runs the real install.sh install-root
 // creation block with HOME under a genuinely setgid parent and asserts the
-// resulting ~/.agent-director is mode exactly 700 with no setgid bit (b.29h).
+// resulting ~/.config/agent-director is mode exactly 700 with no setgid bit (b.29h).
 func TestInstallRootClearsInheritedSetgid(t *testing.T) {
 	root := repoRoot(t)
 	block := extractCreateRootBlock(t, root)
@@ -154,7 +154,7 @@ func TestInstallRootClearsInheritedSetgid(t *testing.T) {
 	// Reproduce install.sh's own derivation of the install paths from HOME
 	// (install.sh:55-56), then run the extracted production block verbatim.
 	harness := "set -euo pipefail\n" +
-		`DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"` + "\n" +
+		`DEFAULT_INSTALL_ROOT="${HOME}/.config/agent-director"` + "\n" +
 		`DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"` + "\n" +
 		block + "\n"
 
@@ -164,9 +164,13 @@ func TestInstallRootClearsInheritedSetgid(t *testing.T) {
 		t.Fatalf("running install-root block failed: %v\n%s", err, out)
 	}
 
-	installRoot := filepath.Join(home, ".agent-director")
+	configDir := filepath.Join(home, ".config")
+	installRoot := filepath.Join(home, ".config", "agent-director")
 	binDir := filepath.Join(installRoot, "bin")
 
+	// ~/.config did not exist, so install.sh made it, and at 700 with no inherited
+	// setgid bit, as it does the install root (b.9r1).
+	assertPerm(t, configDir, 0o700)
 	// The install root must be exactly 700: rwx for owner, nothing else, and
 	// crucially NO setgid bit inherited from the setgid parent.
 	assertPerm(t, installRoot, 0o700)

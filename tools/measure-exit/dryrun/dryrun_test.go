@@ -245,8 +245,19 @@ func TestDryRun(t *testing.T) {
 		if len(sockets) != 1 || sockets[0] != iso.RecordedSocket {
 			t.Errorf("identifiers file sockets %q, want only results.json's %q", sockets, iso.RecordedSocket)
 		}
-		if _, err := os.Stat(filepath.Join(u.HomeDir, ".agent-director")); err == nil {
-			t.Errorf("%s/.agent-director exists after the dry run", u.HomeDir)
+		// The passwd home holds neither agent-director directory after the run.
+		for _, rel := range []string{".agent-director", filepath.Join(".config", "agent-director")} {
+			if _, err := os.Stat(filepath.Join(u.HomeDir, rel)); err == nil {
+				t.Errorf("%s/%s exists after the dry run", u.HomeDir, rel)
+			}
+		}
+		// The run's own agent-director files, in its isolated home, follow the
+		// binary to the new directory and never touch the old one.
+		if fi, err := os.Stat(filepath.Join(iso.Home, ".config", "agent-director")); err != nil || !fi.IsDir() {
+			t.Errorf("the run's isolated home has no .config/agent-director: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(iso.Home, ".agent-director")); err == nil {
+			t.Errorf("the run's isolated home %s gained a .agent-director", iso.Home)
 		}
 		if defaultSocketPresent(tmuxTmpdir) != socketBefore {
 			t.Errorf("the default tmux socket changed (present before: %t)", socketBefore)

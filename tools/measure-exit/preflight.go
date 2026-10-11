@@ -105,7 +105,7 @@ type versionReader interface {
 }
 
 // checkEnvironment runs the checks that need no file system change: the
-// container marker, TMUX, $HOME, both homes free of .agent-director, the
+// container marker, TMUX, $HOME, both homes free of .agent-director and .config/agent-director, the
 // sample floor when sampled is true (an RN-6 or RN-2 case is selected) and,
 // in real mode, the gateway-only environment, the layer files, for
 // credentials and env settings that leave the gateway (checkLayerFiles; it
@@ -196,19 +196,26 @@ func checkLocalLayer(c config, cases []caseSpec) error {
 	return nil
 }
 
-// checkNoStore refuses when home already holds a .agent-director: the run's
-// store must be created fresh by this run, never be one that existed.
+// storeDirRels are the two directories agent-director has kept its files in,
+// relative to a home: the old one and the one it moved to.
+var storeDirRels = []string{".agent-director", filepath.Join(".config", "agent-director")}
+
+// checkNoStore refuses when home already holds either agent-director
+// directory, .agent-director or .config/agent-director: the run's store must
+// be created fresh by this run, never be one that existed.
 func checkNoStore(home string) error {
-	p := filepath.Join(home, ".agent-director")
-	_, err := os.Lstat(p)
-	switch {
-	case err == nil:
-		return refuse(ruleHomeHasStore, "%s exists: the run's home must start with no agent-director store", p)
-	case errors.Is(err, fs.ErrNotExist):
-		return nil
-	default:
-		return refuse(ruleHomeHasStore, "cannot check %s: %v", p, err)
+	for _, rel := range storeDirRels {
+		p := filepath.Join(home, rel)
+		_, err := os.Lstat(p)
+		switch {
+		case err == nil:
+			return refuse(ruleHomeHasStore, "%s exists: the run's home must start with no agent-director store", p)
+		case errors.Is(err, fs.ErrNotExist):
+		default:
+			return refuse(ruleHomeHasStore, "cannot check %s: %v", p, err)
+		}
 	}
+	return nil
 }
 
 // makePrivateTmuxDir creates the run's private TMUX_TMPDIR under base (mode

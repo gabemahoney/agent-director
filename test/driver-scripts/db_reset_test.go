@@ -28,7 +28,7 @@ func dbResetUnderTest(t *testing.T) string {
 func TestDBResetRefusesOutsideTheHarness(t *testing.T) {
 	script := dbResetUnderTest(t)
 	const wantStderr = "db-reset: refusing to run outside the Docker test harness container (AGENT_DIRECTOR_TEST_HARNESS=1 unset; test/Dockerfile sets it).\n" +
-		"db-reset: it ends every tmux server of its user and deletes ~/.agent-director/state.db, so it runs only there. Nothing was changed. Run the harness with: make test-docker EPIC=<slug>\n"
+		"db-reset: it ends every tmux server of its user and deletes ~/.config/agent-director/state.db, so it runs only there. Nothing was changed. Run the harness with: make test-docker EPIC=<slug>\n"
 	for _, tc := range []struct {
 		name   string
 		marker []string // env(1) assignments after -u AGENT_DIRECTOR_TEST_HARNESS
@@ -40,8 +40,8 @@ func TestDBResetRefusesOutsideTheHarness(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, bin := t.TempDir(), t.TempDir()
-			store := filepath.Join(home, ".agent-director")
-			if err := os.Mkdir(store, 0o700); err != nil {
+			store := filepath.Join(home, ".config", "agent-director")
+			if err := os.MkdirAll(store, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			seeded := map[string]string{}

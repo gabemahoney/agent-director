@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { Client } from "agent-director";
 
 const HOME = process.env.HOME;
-const STORE = path.join(HOME, ".agent-director", "state.db");
+const STORE = path.join(HOME, ".config", "agent-director", "state.db");
 const STORE_PATH_VALUE = "/tmp/override.db";
 const PROBE_VALUE = "magic-probe-value";
 

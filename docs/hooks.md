@@ -382,6 +382,11 @@ it does not apply:
   is refused, never resolved against another home such as the passwd
   entry, and no trail record is written. A relayed PermissionRequest
   still gets its deny envelope (see below).
+- This host still has the old directory and no store in
+  `~/.config/agent-director` (`ErrOldLayout`) → exit 0, one line on stderr,
+  and nothing written or created, no log file or trail record. A relayed
+  PermissionRequest still gets its deny envelope. A human fixes it: see
+  [A verb refuses with `ErrOldLayout`](operator-actions.md#a-verb-refuses-with-erroldlayout).
 - DB write failure → exit 0, log entry.
 - Unknown event name → exit 0, soft refresh, log entry.
 - Hook from a process other than the row's recorded pane process, or for
@@ -402,7 +407,7 @@ it does not apply:
   `no_exec_form`.
 - Hook for an id with no row → exit 0, nothing written.
 
-All log entries land in `~/.agent-director/errors.log` (configurable
+All log entries land in `~/.config/agent-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`), or on stderr when that
 file cannot be opened. A missed state update is
 annoying but never breaks a Claude session.

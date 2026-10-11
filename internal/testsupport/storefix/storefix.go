@@ -1,7 +1,7 @@
 // Package storefix provides reusable test helpers for the store layer.
 // It is an internal test-support package; nothing in the production code
 // graph imports it. Tests in pkg/api and test/smoke/go import it to get
-// deterministic, isolated SQLite stores without touching ~/.agent-director.
+// deterministic, isolated SQLite stores without touching ~/.config/agent-director.
 package storefix
 
 import (
@@ -36,7 +36,7 @@ const (
 // The store is always created via OpenOrInit, so the schema is applied on
 // first call, and registered (RegisterStorePath) for the seeders that take
 // only the handle. Helpers use t.TempDir() exclusively and never touch
-// ~/.agent-director.
+// ~/.config/agent-director.
 func OpenTempStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
@@ -267,18 +267,6 @@ func SeedRelayRequest(t *testing.T, s *store.Store, instanceID string, req store
 	}); err != nil {
 		t.Fatalf("storefix.SeedRelayRequest(%q): %v", instanceID, err)
 	}
-}
-
-// SeedAgentDirectorDir creates homeDir's .agent-director/templates directory
-// (mode 0700) and returns it, for a test that needs it before make-template,
-// which otherwise creates it itself.
-func SeedAgentDirectorDir(t *testing.T, homeDir string) string {
-	t.Helper()
-	tmplDir := filepath.Join(homeDir, ".agent-director", "templates")
-	if err := os.MkdirAll(tmplDir, 0o700); err != nil {
-		t.Fatalf("storefix.SeedAgentDirectorDir: MkdirAll(%q): %v", tmplDir, err)
-	}
-	return tmplDir
 }
 
 // WriteFailureKind names one kind of store write InjectWriteFailure makes

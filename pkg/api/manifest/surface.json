@@ -37,7 +37,7 @@
         {
           "name": "template",
           "type": "string",
-          "description": "Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).",
+          "description": "Optional named template under ~/.config/agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -1348,7 +1348,7 @@
     },
     {
       "name": "make-template",
-      "description": "Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
+      "description": "Save a spawn preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1606,7 +1606,7 @@
     },
     {
       "name": "version",
-      "description": "Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.",
+      "description": "Print the version stamp as JSON ({version, commit, config_dir}). CLI aliases: --version, -v.",
       "callable": true,
       "handle_free": true,
       "params": [],
@@ -1623,6 +1623,14 @@
           "name": "commit",
           "type": "string",
           "description": "Full git SHA the binary was built from. \"unknown\" for unstamped builds.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "config_dir",
+          "type": "string",
+          "description": "Directory the binary keeps agent-director's files in: \"~/.config/agent-director\", unexpanded, for every HOME.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null

@@ -17,17 +17,17 @@ import (
 // TestDispatch calls dispatch(...) in-process, which drives apitest seed
 // helpers (SeedSpawn → ApplyHookTransition with triggering_event_name
 // "test_seed", SeedParentChild, SeedPermissionRequest). Those open a store
-// and emit trail events. trail.Emit resolves <$HOME>/.agent-director/
+// and emit trail events. trail.Emit resolves <$HOME>/.config/agent-director/
 // ad-trail.jsonl through a process-wide sync.Once that pins its path on the
 // FIRST Emit and never re-resolves it — and the --store flag only controls
 // the SQLite db path, not the env-based trail path. Without a HOME redirect
-// here the trail lands in the real ~/.agent-director, which the release
+// here the trail lands in the real ~/.config/agent-director, which the release
 // trail-leak canary catches under `go test ./... -race -count=1` (b.93m).
 // Setting $HOME via os.Setenv BEFORE m.Run() (a per-test t.Setenv would latch
 // too late) is the sole reliable trail-isolation mechanism.
 //
 // It also enforces the sandbox guard: these tests open the store and can
-// rewrite the real ~/.agent-director on the host (b.8dr).
+// rewrite the real ~/.config/agent-director on the host (b.8dr).
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmpHome, err := os.MkdirTemp("", "ts-helper-home-*")

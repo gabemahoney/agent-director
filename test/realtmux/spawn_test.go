@@ -45,12 +45,12 @@ func newSpawnFix(t *testing.T) *spawnFix {
 		t.Fatalf("write stand-in claude: %v", err)
 	}
 	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfgPath := filepath.Join(home, ".agent-director", "config.toml")
+	cfgPath := filepath.Join(home, ".config", "agent-director", "config.toml")
 	apitest.WriteTmuxConfig(t, cfgPath,
 		apitest.TmuxInt(config.TmuxQueryTimeoutMs, clientTimeouts.Query.Milliseconds()),
 		apitest.TmuxInt(config.TmuxActionTimeoutMs, clientTimeouts.Action.Milliseconds()),
 		apitest.TmuxInt(config.TmuxCreateTimeoutMs, clientTimeouts.Create.Milliseconds()))
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	dbPath := filepath.Join(home, ".config", "agent-director", "state.db")
 	c, err := api.New(api.Options{StorePath: dbPath, ConfigPath: cfgPath, CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)

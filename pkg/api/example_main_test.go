@@ -12,9 +12,12 @@ import (
 
 // apiTrailDir is the temp HOME for this test binary. Set by TestMain before
 // any test function runs so the trail singleton writes to a known location
-// (apiTrailDir/.agent-director/ad-trail.jsonl). Trail tests
+// (apiTrailDir/.config/agent-director/ad-trail.jsonl). Trail tests
 // (find_missing_trail_test.go) read this to locate the trail file.
 var apiTrailDir string
+
+// adConfigDir is agent-director's directory under home: .config/agent-director.
+func adConfigDir(home string) string { return filepath.Join(home, ".config", "agent-director") }
 
 // apiTmuxTmpdir is this test binary's TMUX_TMPDIR, set by TestMain before any
 // test runs, with its per-user socket directory made (mode 0700): the base a
@@ -32,7 +35,7 @@ var apiTmuxTmpdir string
 //     and the trail resolver) land under the temp dir rather than the real
 //     home directory. This HOME redirection is now the SOLE trail-isolation
 //     mechanism: the trail singleton lands at
-//     apiTrailDir/.agent-director/ad-trail.jsonl.
+//     apiTrailDir/.config/agent-director/ad-trail.jsonl.
 //   - Clears AGENT_DIRECTOR_INSTANCE_ID so test spawns are created as roots
 //     (NULL parent_id) and don't hit FK failures from a real UUID pointing
 //     at a non-existent row in the test database.
@@ -47,10 +50,10 @@ var apiTmuxTmpdir string
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	// ── Redirect $HOME and pin the trail singleton ───────────────────────────
-	// The trail writer resolves ~/.agent-director/ad-trail.jsonl from HOME via
+	// The trail writer resolves ~/.config/agent-director/ad-trail.jsonl from HOME via
 	// os.UserHomeDir() and uses sync.Once to capture the path on first Emit. By
 	// setting HOME before m.Run() we ensure the singleton lands at
-	// tmpHome/.agent-director/ad-trail.jsonl regardless of the developer's
+	// tmpHome/.config/agent-director/ad-trail.jsonl regardless of the developer's
 	// shell env. Trail-reading helpers in find_missing_trail_test.go use
 	// apiTrailDir to locate the file.
 	tmpHome, err := os.MkdirTemp("", "pkg-api-home-*")

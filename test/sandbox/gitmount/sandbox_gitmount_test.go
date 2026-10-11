@@ -53,9 +53,10 @@
 // on the real Makefile.
 //
 // This test only runs `git` and `make`; it never builds or execs the
-// agent-director binary and never touches ~/.agent-director, so it needs no
-// sandboxguard TestMain. It still runs under `make test-sandbox` (go test
-// ./...); git, make and build-essential are present in the sandbox image.
+// agent-director binary and never touches ~/.agent-director or
+// ~/.config/agent-director, so it needs no sandboxguard TestMain. It still runs
+// under `make test-sandbox` (go test ./...); git, make and build-essential are
+// present in the sandbox image.
 package sandboxgitmount_test
 
 import (

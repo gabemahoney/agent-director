@@ -26,7 +26,7 @@ const envFreshInitHelper = "AD_STORE_TEST_FRESH_INIT_HELPER"
 // concurrent-fresh-init test fork the same binary as N subprocesses.
 //
 // For non-helper runs, TestMain also redirects HOME to a temp dir so the
-// trail singleton writes under <home>/.agent-director/ rather than the real
+// trail singleton writes under <home>/.config/agent-director/ rather than the real
 // user home. Because trail.Default() is a process-level once.Do singleton
 // whose path is locked in on first use, HOME must be set here (via os.Setenv,
 // before m.Run) — a per-test t.Setenv would apply too late to retarget it.
@@ -49,10 +49,10 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("HOME", home); err != nil {
 		panic("TestMain: Setenv HOME: " + err.Error())
 	}
-	// Trail resolves its directory as <home>/.agent-director/; create it up
-	// front so the singleton's first append succeeds and the trail helpers
-	// read from the same place.
-	storeTrailDir = filepath.Join(home, ".agent-director")
+	// Trail resolves its directory as <home>/.config/agent-director/; create
+	// it up front so the singleton's first append succeeds and the trail
+	// helpers read from the same place.
+	storeTrailDir = filepath.Join(home, ".config", "agent-director")
 	if err := os.MkdirAll(storeTrailDir, 0o755); err != nil {
 		panic("TestMain: MkdirAll: " + err.Error())
 	}

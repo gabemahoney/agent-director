@@ -22,7 +22,7 @@
 #
 #  3. The sandbox-guard bypass (BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS) has
 #     not leaked into .github/workflows/pre-release-verify-mac.yml, whose
-#     self-hosted macOS runner may hold a real ~/.agent-director (b.175).
+#     self-hosted macOS runner may hold a real ~/.agent-director or ~/.config/agent-director (b.175).
 #     Enforced by `make check-sandbox-bypass`.
 
 name: doc-drift
@@ -46,7 +46,7 @@ jobs:
       # unless BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS is set (the Makefile's
       # _require-sandbox guard, b.8yq), so each step that runs one sets it.
       # This runner is a GitHub-HOSTED, ephemeral ubuntu-latest VM: there is no
-      # real ~/.agent-director on it and nothing to protect, so we bypass the
+      # real ~/.agent-director or ~/.config/agent-director on it and nothing to protect, so we bypass the
       # container requirement instead of paying for it.
       #
       # Per b.175 this variable must be set ONLY at the job/step level of the
@@ -113,7 +113,7 @@ jobs:
         run: make nondet-coverage
       # b.175: the sandbox-guard bypass is safe only on ephemeral
       # GitHub-hosted runners. pre-release-verify-mac.yml runs on
-      # [self-hosted, macOS, ARM64], which may hold a real ~/.agent-director,
+      # [self-hosted, macOS, ARM64], which may hold a real ~/.agent-director or ~/.config/agent-director,
       # so the bypass string must never appear there. This gate fails the PR
       # if it leaks in.
       - name: Check sandbox bypass absent from the self-hosted workflow

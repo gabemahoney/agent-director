@@ -91,7 +91,7 @@ func readParamState(t *testing.T, e *mcpEnv) paramState {
 	}
 	s.ids = rowIDs(t, e.d) // list writes no trail line
 	slices.Sort(s.ids)
-	entries, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".agent-director", "templates"))
+	entries, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "templates"))
 	for _, en := range entries {
 		s.templates = append(s.templates, en.Name())
 	}

@@ -212,8 +212,8 @@ func SeedErrListInvalidLabel(t *testing.T) (*store.Store, string) {
 // SeedErrTemplateExists returns (srcDir, templateName). It creates a valid
 // empty store at srcDir/state.db AND creates srcDir/templates/<name>.toml
 // with a minimal valid TOML body. When copyFixtureStore copies srcDir into
-// homeDir/.agent-director/, the template file lands at
-// homeDir/.agent-director/templates/<name>.toml so that make-template with
+// homeDir/.config/agent-director/, the template file lands at
+// homeDir/.config/agent-director/templates/<name>.toml so that make-template with
 // that name triggers ErrTemplateExists.
 //
 // Note on usage: ErrTemplateExists's err_description embeds the full absolute
@@ -228,7 +228,7 @@ func SeedErrTemplateExists(t *testing.T) (srcDir, templateName string) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	SeedStore(t, dbPath)
 	// Create the pre-existing template inside srcDir so copyFixtureStore
-	// propagates it to homeDir/.agent-director/templates/.
+	// propagates it to homeDir/.config/agent-director/templates/.
 	const name = "err-tmpl"
 	templDir := filepath.Join(filepath.Dir(dbPath), "templates")
 	if err := os.MkdirAll(templDir, 0o700); err != nil {

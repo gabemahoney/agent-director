@@ -32,8 +32,8 @@ func loadConfigError(t *testing.T, path string) *config.ConfigError {
 		t.Errorf("ConfigError should wrap the underlying error, got nil")
 	}
 	home := homeDir(t)
-	wantDB := filepath.Join(home, ".agent-director/state.db")
-	wantLog := filepath.Join(home, ".agent-director/errors.log")
+	wantDB := filepath.Join(home, ".config/agent-director/state.db")
+	wantLog := filepath.Join(home, ".config/agent-director/errors.log")
 	if cfg.Store.DbPath != wantDB || cfg.Log.ErrorLogPath != wantLog {
 		t.Errorf("path fields not resolved on error: %+v", cfg)
 	}

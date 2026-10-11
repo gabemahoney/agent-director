@@ -4,7 +4,7 @@ Human-only procedures. Automated callers (programs, scripts, agents, MCP
 clients) must not perform them.
 
 `kill-finished` and `delete` are verbs of `agent-director-admin`
-(`~/.agent-director/admin/agent-director-admin`, never on PATH). Run it by that
+(`~/.config/agent-director/admin/agent-director-admin`, never on PATH). Run it by that
 full path, only with a human's explicit approval for that run.
 
 Run every command as the agents' user. Every tmux command names the row's socket
@@ -22,7 +22,7 @@ to your `[store] busy_timeout_ms` ([Configuration](configuration.md)); with
 another `db_path`, use that file:
 
 ```sh
-sqlite3 -readonly -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
+sqlite3 -readonly -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.config/agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
 ```
 
 ## Inspect and end a session by hand
@@ -56,7 +56,7 @@ launch's session of its id ("this id's own abandoned launch"), still runs. Look
 (steps 1 to 3), then end it:
 
 ```sh
-~/.agent-director/admin/agent-director-admin kill-finished --instance-id <id>
+~/.config/agent-director/admin/agent-director-admin kill-finished --instance-id <id>
 ```
 
 | Answer | What to do |
@@ -101,7 +101,7 @@ A human removes the row, in order:
    `control_char_session_name`, `rewritten_session_name`). Get its name:
 
    ```sh
-   jq -c 'select(.event == "ad.expire.kept" and .instance_id == "<id>") | {reason, tmux_session_name}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+   jq -c 'select(.event == "ad.expire.kept" and .instance_id == "<id>") | {reason, tmux_session_name}' ~/.config/agent-director/ad-trail.jsonl | tail -n 1
    agent-director read-pane --instance-id <id>
    ```
 
@@ -122,7 +122,7 @@ A human removes the row, in order:
 5. Remove the row, its permission requests and its session history:
 
    ```sh
-   ~/.agent-director/admin/agent-director-admin delete --instance-id <id>
+   ~/.config/agent-director/admin/agent-director-admin delete --instance-id <id>
    ```
 
 ## A spawn refused as "left over from an earlier life"
@@ -133,7 +133,7 @@ carries the `--instance-id` and no row exists, or holds the
 `--tmux-session-name`. The trail gives the details:
 
 ```sh
-jq -c 'select(.event == "ad.launch.name_held" and .instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+jq -c 'select(.event == "ad.launch.name_held" and .instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.config/agent-director/ad-trail.jsonl | tail -n 1
 ```
 
 Inspect each session (steps 1 to 3), then:
@@ -163,7 +163,7 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
 1. Take the pid from the error or the trail (`agent_pid`, `survivor_pids`):
 
    ```sh
-   jq -c 'select(.event == "ad.kill.called" and .instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+   jq -c 'select(.event == "ad.kill.called" and .instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.config/agent-director/ad-trail.jsonl | tail -n 1
    ```
 
 2. Confirm it is the agent, a Claude Code process started at launch:
@@ -265,7 +265,7 @@ Claude Code is too old for exec-form hooks. Upgrade `claude` to the minimum in
 row as the [caller contract](caller-contract.md) says.
 
 ```sh
-jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, instance_id, hook_event, parent_command}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, instance_id, hook_event, parent_command}' ~/.config/agent-director/ad-trail.jsonl | tail -n 5
 ```
 
 ## A row stays `pending` and the trail shows `pid_mismatch`
@@ -274,8 +274,8 @@ Hooks are ignored when `claude` on PATH is a shim that runs Claude Code as a
 child, not by `exec` (the second query's `parent_command` is Claude Code).
 
 ```sh
-jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.agent-director/ad-trail.jsonl | tail -n 5
-jq -c 'select(.event == "ad.hook.pane_is_grandparent") | {ts, instance_id, pane_command, parent_command, advice}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.config/agent-director/ad-trail.jsonl | tail -n 5
+jq -c 'select(.event == "ad.hook.pane_is_grandparent") | {ts, instance_id, pane_command, parent_command, advice}' ~/.config/agent-director/ad-trail.jsonl | tail -n 5
 ```
 
 Fix it per [Requirements](install.md#requirements), then end and relaunch each
@@ -298,3 +298,31 @@ it (shown for `-g`; repeat both commands with `-s` and `-gw`):
 tmux -u -S '<socket>' show-options -g -v @ad_owner
 tmux -u -S '<socket>' set-option -g -u @ad_owner
 ```
+
+## A verb refuses with `ErrOldLayout`
+
+Every verb that opens the store (the CLI, `agent-director-admin`, `serve` and
+the Go and TypeScript clients) returns `ErrOldLayout` when all of these hold: it
+is about to open the default store (no `--store-path` or `StorePath`, and no
+`[store] db_path` in `config.toml`), no store exists in
+`~/.config/agent-director`, and `~/.agent-director` exists. The refusal creates
+nothing. Meanwhile each hook records nothing and exits 0 (a relayed permission
+request is denied), and `trail-emit` returns `ErrTrailWrite`. Callers take no
+action; see the [caller contract](caller-contract.md).
+
+Check:
+
+```sh
+ls -ld ~/.agent-director ~/.config/agent-director
+agent-director version
+```
+
+The old directory is there and the new one is missing, or has no `state.db`;
+`config_dir` in the `version` result is the directory this binary uses. A
+symbolic link at `~/.agent-director` that points to `~/.config/agent-director`
+is not the old directory.
+
+Fix: run this release's `install.sh` as the agents' user, by any install
+path in [Upgrade](install.md#upgrade). It is the only supported way to bring the old
+directory forward. Do not create `~/.config/agent-director` or copy files into
+it by hand.

@@ -124,6 +124,7 @@ var packageOf = map[string]string{
 	"ErrStoreOpen":               "clisetup",
 	"ErrSchemaMismatch":          "clisetup",
 	"ErrSchemaMigrationRequired": "clisetup",
+	"ErrOldLayout":               "clisetup",
 	// internal/clisetup (b.cm7): written by the command binaries themselves,
 	// outside any verb handler.
 	"ErrUnknownVerb": "clisetup",

@@ -16,7 +16,7 @@ var mcpTrailPath string
 // stores, b.8dr) and, before m.Run, points $HOME at a fresh temp dir and pins
 // the trail singleton there: trail.Emit resolves its file once, on the first
 // call, so a per-test t.Setenv("HOME") is too late and the first emitting test
-// would otherwise pin it to the real ~/.agent-director (b.93m).
+// would otherwise pin it to the real ~/.config/agent-director (b.93m).
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmpHome, err := os.MkdirTemp("", "mcp-home-*")
@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 		panic("TestMain: Setenv HOME: " + err.Error())
 	}
 	trail.Default()
-	mcpTrailPath = filepath.Join(tmpHome, ".agent-director", "ad-trail.jsonl")
+	mcpTrailPath = filepath.Join(tmpHome, ".config", "agent-director", "ad-trail.jsonl")
 	code := m.Run()
 	_ = os.RemoveAll(tmpHome)
 	os.Exit(code)

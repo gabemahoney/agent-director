@@ -313,7 +313,13 @@ func TestHookGateIgnoredFailOpenWhenTrailUnwritable(t *testing.T) {
 		return
 	}
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, ".agent-director"), nil, 0o600); err != nil {
+	// A regular file where AD's directory belongs: the trail cannot create its
+	// directory. No ~/.agent-director exists, so this is an unwritable trail,
+	// not the old-layout check.
+	if err := os.Mkdir(filepath.Join(home, ".config"), 0o700); err != nil {
+		t.Fatalf("create ~/.config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "agent-director"), nil, 0o600); err != nil {
 		t.Fatalf("block trail directory: %v", err)
 	}
 	t.Setenv("HOME", home)

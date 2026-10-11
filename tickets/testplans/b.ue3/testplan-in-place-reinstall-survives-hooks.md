@@ -5,6 +5,14 @@ Claude session and capture its hook commands; re-run `install.sh`
 to overwrite the binary at the same path; assert the hook commands'
 paths still point at a callable binary (SR-1.8 + SR-8.8).
 
+The standard install path is `~/.config/agent-director/bin/agent-director`.
+Moving AD's directory from its old home-directory location to
+`~/.config/agent-director` breaks this hook-path contract exactly once: agents
+started before the move carry hook commands naming the old path, which the
+move leaves uncallable.
+Every other re-install keeps the contract, and this testplan covers only
+that case: the install and the re-install both happen at the new path.
+
 ## Container image
 
 `ubuntu:22.04` with `bun`, `tmux` (or fake-tmux), and `curl`.
@@ -28,7 +36,7 @@ curl -fsSL https://github.com/<org>/agent-director/releases/latest/download/inst
 apt-get update && apt-get install -y tmux
 
 # Capture the AD binary's stamp + sha-256 before the upgrade.
-BIN=$HOME/.agent-director/bin/agent-director
+BIN=$HOME/.config/agent-director/bin/agent-director
 ORIGINAL_SHA=$(sha256sum $BIN | cut -d' ' -f1)
 ```
 
@@ -44,7 +52,7 @@ cd /tmp/spawn-work
 # (the harness can use the fake-tmux stub from
 # test/fake-tmux/main.go for this purpose).
 export FAKE_TMUX_LOG=/tmp/fake-tmux.log
-$HOME/.agent-director/bin/agent-director spawn --cwd /tmp/spawn-work \
+$HOME/.config/agent-director/bin/agent-director spawn --cwd /tmp/spawn-work \
   > /tmp/spawn-stdout 2> /tmp/spawn-stderr || {
     echo "FAIL: spawn exited non-zero"
     cat /tmp/spawn-stderr
@@ -65,11 +73,11 @@ fi
 # Step 2: simulate `install.sh` re-run by overwriting the binary at
 # the same path.  In production the operator runs install.sh; here we
 # write a fresh copy with potentially different bytes.
-cp $HOME/.agent-director/bin/agent-director /tmp/upgraded
+cp $HOME/.config/agent-director/bin/agent-director /tmp/upgraded
 # (In a real run, install.sh would fetch a newer binary; for the
 # testplan we just rewrite the file.)
-cat /tmp/upgraded > $HOME/.agent-director/bin/agent-director
-chmod +x $HOME/.agent-director/bin/agent-director
+cat /tmp/upgraded > $HOME/.config/agent-director/bin/agent-director
+chmod +x $HOME/.config/agent-director/bin/agent-director
 
 # Step 3: the captured hook path must STILL be callable.
 if ! "$HOOK_PATH" --version >/dev/null 2>&1 \
@@ -86,5 +94,5 @@ echo "PASS hook_path=$HOOK_PATH"
 - Exit code 0.
 - Stdout: `PASS hook_path=<resolved-absolute-path>`.
 - The captured hook command path is an absolute path pointing at
-  `$HOME/.agent-director/bin/agent-director` (the standard install
+  `$HOME/.config/agent-director/bin/agent-director` (the standard install
   path) and remains callable after the in-place reinstall.

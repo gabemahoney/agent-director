@@ -10,7 +10,7 @@
 #      every session on it whatever its name, then wait for the processes of
 #      their panes to exit (killing any still running after a 5 s grace).
 #      See below.
-#   2. Remove ~/.agent-director/state.db and its WAL/SHM siblings if present.
+#   2. Remove ~/.config/agent-director/state.db and its WAL/SHM siblings if present.
 #   3. Re-create the DB by calling `agent-director list`, which exercises
 #      setupStore() in cmd/agent-director/main.go and rebuilds the schema.
 #      (`help`/`version`/no-args are DB-free verbs as of b.93m Part D and no
@@ -24,18 +24,18 @@ set -euo pipefail
 
 # 0. The harness container only (b.8yq). On a host this script would end every
 # tmux server the user runs, orchestrator sessions included, and delete the
-# real ~/.agent-director/state.db. AGENT_DIRECTOR_TEST_HARNESS=1 is set by the
+# real ~/.config/agent-director/state.db. AGENT_DIRECTOR_TEST_HARNESS=1 is set by the
 # harness image (test/Dockerfile), so every run of it has it, run-testplan.sh
 # and the cases it runs included; the sandbox container does not set it. Like
 # AGENT_DIRECTOR_TEST_SANDBOX it is an accident-prevention gate, not a
 # security boundary.
 if [[ "${AGENT_DIRECTOR_TEST_HARNESS:-}" != 1 ]]; then
     echo "db-reset: refusing to run outside the Docker test harness container (AGENT_DIRECTOR_TEST_HARNESS=1 unset; test/Dockerfile sets it)." >&2
-    echo "db-reset: it ends every tmux server of its user and deletes ~/.agent-director/state.db, so it runs only there. Nothing was changed. Run the harness with: make test-docker EPIC=<slug>" >&2
+    echo "db-reset: it ends every tmux server of its user and deletes ~/.config/agent-director/state.db, so it runs only there. Nothing was changed. Run the harness with: make test-docker EPIC=<slug>" >&2
     exit 2
 fi
 
-CD_DIR="${HOME}/.agent-director"
+CD_DIR="${HOME}/.config/agent-director"
 STATE_DB="${CD_DIR}/state.db"
 
 # 1. End the tmux servers (b.8yq). This used to kill only sessions named

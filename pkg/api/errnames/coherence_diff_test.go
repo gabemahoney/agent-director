@@ -94,6 +94,7 @@ func computeCoherenceDiff(
 	//                         any verb runs, so no verb lists them (b.vma).
 	//   • "ErrSchemaMismatch", "ErrSchemaMigrationRequired" — the same, for the
 	//                         store's schema refusals (b.cm7).
+	//   • "ErrOldLayout"   — the same, for the store's old-layout refusal (SR-1.6).
 	//   • "ErrUnknownVerb", "ErrJSONMarshal", "ErrTrailWrite" — the command
 	//                         binaries write them outside any verb handler, so
 	//                         no callable verb lists them (b.cm7).
@@ -104,6 +105,7 @@ func computeCoherenceDiff(
 		"ErrStoreOpen":               {},
 		"ErrSchemaMismatch":          {},
 		"ErrSchemaMigrationRequired": {},
+		"ErrOldLayout":               {},
 		"ErrUnknownVerb":             {},
 		"ErrJSONMarshal":             {},
 		"ErrTrailWrite":              {},
@@ -269,11 +271,11 @@ func TestDiffExclusionErrInvalidFlags(t *testing.T) {
 }
 
 // TestDiffExclusionCLISetupNames — the clisetup names are catalogued but listed
-// by no verb (clisetup.Open names the first four, b.vma and b.cm7; the binaries
-// write the last three outside any verb handler, b.cm7): check 3 skips them.
+// by no verb (clisetup.Open names the first five, b.vma, b.cm7 and SR-1.6; the
+// binaries write the last three outside any verb handler, b.cm7): check 3 skips them.
 func TestDiffExclusionCLISetupNames(t *testing.T) {
 	names := []string{"ErrConfigMalformed", "ErrStoreOpen", "ErrSchemaMismatch", "ErrSchemaMigrationRequired",
-		"ErrUnknownVerb", "ErrJSONMarshal", "ErrTrailWrite"}
+		"ErrOldLayout", "ErrUnknownVerb", "ErrJSONMarshal", "ErrTrailWrite"}
 	if findings := computeCoherenceDiff(nil, names, nil, nil); len(findings) != 0 {
 		t.Errorf("want 0 findings for the clisetup-name exclusions, got %d: %v", len(findings), findings)
 	}

@@ -40,7 +40,7 @@ func TestEnvelopeErrNamesCatalogued(t *testing.T) {
 	floor := map[string][]string{
 		"cmd/agent-director":       {"ErrInvalidFlags", "ErrJSONMarshal", "ErrStoreOpen", "ErrTrailWrite", "ErrUnknownVerb"},
 		"cmd/agent-director-admin": {"ErrInvalidFlags", "ErrJSONMarshal", "ErrStoreOpen", "ErrUnknownVerb"},
-		"internal/clisetup":        {"ErrConfigMalformed", "ErrSchemaMigrationRequired", "ErrSchemaMismatch", "ErrStoreOpen"},
+		"internal/clisetup":        {"ErrConfigMalformed", "ErrOldLayout", "ErrSchemaMigrationRequired", "ErrSchemaMismatch", "ErrStoreOpen"},
 		"internal/mcp":             {"ErrUnknownTool"},
 	}
 	found := make(map[[2]string]bool, len(sites))

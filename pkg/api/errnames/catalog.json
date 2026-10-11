@@ -280,6 +280,11 @@
     "description": ""
   },
   {
+    "name": "ErrOldLayout",
+    "package": "clisetup",
+    "description": ""
+  },
+  {
     "name": "ErrUnknownVerb",
     "package": "clisetup",
     "description": ""

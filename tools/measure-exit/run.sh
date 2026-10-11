@@ -27,7 +27,7 @@
 #
 # Mounts: each staged settings copy read-only at the path Claude Code (or the
 # driver) reads it, and one writable results directory. Never the host home,
-# ~/.agent-director, ~/.claude, ~/.claude.json, a tmux socket directory, /tmp
+# ~/.agent-director, ~/.config/agent-director, ~/.claude, ~/.claude.json, a tmux socket directory, /tmp
 # or the engine socket. The staging directory (copies of the operator's
 # layers) is removed afterwards; the results directory is kept and printed.
 #
@@ -245,7 +245,7 @@ fi
 [[ "$results_root" == /* ]] || die 2 "--results-root must be an absolute path"
 case "$results_root/" in
     "$REPO_ROOT"/*) die 2 "--results-root must lie outside the worktree ($REPO_ROOT)" ;;
-    "$HOME/.agent-director/"* | "$HOME/.claude"*) die 2 "--results-root must lie outside ~/.agent-director and ~/.claude*" ;;
+    "$HOME/.agent-director/"* | "$HOME/.config/agent-director/"* | "$HOME/.claude"*) die 2 "--results-root must lie outside ~/.agent-director, ~/.config/agent-director and ~/.claude*" ;;
 esac
 if [[ -z "$run_id" ]]; then
     run_id="mx-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"

@@ -16,6 +16,8 @@ import (
 
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver registered as "sqlite"
+
+	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
 // ErrSchemaMismatch is returned by Open/OpenOrInit when the SQLite
@@ -36,6 +38,34 @@ var ErrSchemaMismatch = errors.New("store: schema version mismatch")
 // environment variable — it is a dead end that routes the operator to their
 // administrator (SR-1.4).
 var ErrSchemaMigrationRequired = errors.New("store: schema migration required")
+
+// ErrOldLayout is returned, by CheckOldLayout, to a verb or the hook about to
+// open the default store when no store exists there and the old directory, the
+// one agent-director used before ~/.config/agent-director, is present. Nothing
+// was opened or created. The description says what was refused and to run this
+// release's install.sh, which moves the old directory. Callers use errors.Is
+// to detect it.
+var ErrOldLayout = errors.New("store: this host still has the old agent-director directory and no store in ~/.config/agent-director; run this release's install.sh to move it")
+
+// CheckOldLayout returns an error wrapping ErrOldLayout when the old
+// directory is present (internal/layout's presence rule) and no store exists
+// at the default path in ~/.config/agent-director. It examines names only and
+// creates nothing. With HOME unset, empty or not absolute it returns nil: the
+// open that follows refuses that case as it always did.
+//
+// The caller applies it only when it is about to open the default store: no
+// --store-path or Options.StorePath, and no [store] db_path set in the config
+// file (config.Store.DbPathSet), and before anything that can create a file.
+func CheckOldLayout() error {
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return nil
+	}
+	if layout.OldPresent(home) && !layout.StoreExists(home) {
+		return ErrOldLayout
+	}
+	return nil
+}
 
 // ErrStoreNotInitialized is returned by Open when the database file does not
 // exist. It signals that the caller should either run OpenOrInit (which
@@ -293,7 +323,7 @@ func resolvePath(path string) (string, error) {
 // an error wrapping errNoHome, so Open and OpenOrInit open and create nothing.
 // It deliberately does not fall back to another home source such as the
 // passwd entry: an empty HOME is usually deliberate isolation (test
-// sandboxes, CI), and the passwd home holds the real ~/.agent-director (the
+// sandboxes, CI), and the passwd home holds the real AD directory (the
 // b.8dr incident class, b.4uz). pkg/api refuses the same case and the trail
 // writes nothing in it (b.iin). Any other form of path is returned unchanged.
 func expandTilde(path string) (string, error) {

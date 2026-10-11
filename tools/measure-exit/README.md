@@ -42,7 +42,7 @@ no API call.
   host.
 - **Docker only.** Agents run only inside a throwaway container with its own
   HOME, its own store and a private tmux server: a private `TMUX_TMPDIR`,
-  with `TMUX` unset. Nothing touches the host's `~/.agent-director`,
+  with `TMUX` unset. Nothing touches the host's `~/.agent-director`, `~/.config/agent-director`,
   `~/.claude.json` or tmux server. Besides spawning its own agents, the
   harness makes only the measured exits and pane kills, the RN-9 drive's
   sends to its own agents, and read-only calls (`get`, tmux `list-*` and

@@ -14,7 +14,7 @@ export interface Logger {
  *
  * All fields are optional. When omitted, the bundled CLI binary's own
  * three-tier default resolution applies (config.toml value, then the CLI's
- * hardcoded fallback such as `~/.agent-director/state.db`). The TS Client
+ * hardcoded fallback such as `~/.config/agent-director/state.db`). The TS Client
  * does NOT provide a fallback; it forwards user input verbatim to keep the
  * CLI as the single source of truth for default resolution. See bug b.32k.
  *
@@ -40,8 +40,8 @@ export interface ClientOptions {
      *
      * When omitted, the CLI's three-tier default resolution applies:
      *   1. CLI flag (this field, when set) → 2. cfg.Store.DbPath in
-     *   ~/.agent-director/config.toml → 3. hardcoded fallback
-     *   ~/.agent-director/state.db.
+     *   ~/.config/agent-director/config.toml → 3. hardcoded fallback
+     *   ~/.config/agent-director/state.db.
      *
      * The TS Client no longer provides a fallback (b.32k).
      */
@@ -303,7 +303,7 @@ export interface ListRow {
 export interface SpawnParams {
     /** Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required. */
     cwd: string;
-    /** Named template under ~/.agent-director/templates/. */
+    /** Named template under ~/.config/agent-director/templates/. */
     template?: string;
     /**
      * The agent to launch: `"claude"` (Claude Code) or `"codex"` (Codex); case-sensitive,
@@ -957,4 +957,6 @@ export interface VersionResult {
     version: string;
     /** CLI binary's full git SHA. "unknown" for unstamped builds. */
     commit: string;
+    /** Directory the CLI binary keeps agent-director's files in: "~/.config/agent-director", unexpanded, for every HOME. */
+    config_dir: string;
 }

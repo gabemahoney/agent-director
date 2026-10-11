@@ -99,7 +99,7 @@ func configRefusals() []configRefusal {
 		{
 			// One spelling names the seeded store, so a hook that read it would apply.
 			name:        "db_path_under_two_letter_cases",
-			raw:         "[Store]\ndb_path = \"~/.agent-director/state.db\"\n\n[store]\ndb_path = \"~/other.db\"\n",
+			raw:         "[Store]\ndb_path = \"~/.config/agent-director/state.db\"\n\n[store]\ndb_path = \"~/other.db\"\n",
 			caseVariant: []string{"[Store] db_path", "[store] db_path"},
 		},
 	}

@@ -32,7 +32,7 @@ const golden = (name: string): unknown => JSON.parse(fs.readFileSync(path.join(f
 
 /** Writes homeDir's config.toml with the settle time. */
 function writeSettleConfig(homeDir: string): void {
-  fs.writeFileSync(path.join(homeDir, ".agent-director", "config.toml"), `[state]\nsettle_ms = ${SETTLE_MS}\n`);
+  fs.writeFileSync(path.join(homeDir, ".config", "agent-director", "config.toml"), `[state]\nsettle_ms = ${SETTLE_MS}\n`);
 }
 
 /** Runs one case's verb on client. */

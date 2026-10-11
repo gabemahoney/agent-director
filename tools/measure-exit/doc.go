@@ -11,7 +11,7 @@
 //     mode) or the repo's Docker sandbox (dry mode). It never runs on a host:
 //     the isolation preflight refuses without the container marker;
 //   - guard.sh, the host-state guard, which only reads the host's real
-//     ~/.agent-director files (checksums in quiet-host mode, appended trail
+//     ~/.agent-director and ~/.config/agent-director files (checksums in quiet-host mode, appended trail
 //     bytes in busy-host mode) and never runs an agent-director artifact;
 //   - run.sh, the host runner (shell only, print-only unless --run), and
 //     Dockerfile, the measurement image built FROM the test image with Claude
@@ -37,7 +37,7 @@
 //
 // Before anything else, run's preflight (preflight.go) checks the container
 // marker, that TMUX is unset, that neither $HOME nor the passwd-entry home
-// holds a .agent-director, the per-case sample floor and (in real mode) the
+// holds a .agent-director or .config/agent-director, the per-case sample floor and (in real mode) the
 // Claude Code version floor (2.1.280), plus the gateway's ANTHROPIC_AUTH_TOKEN
 // and ANTHROPIC_MODEL (the runner's pinned model) in real mode, which
 // refuses ANTHROPIC_API_KEY, the

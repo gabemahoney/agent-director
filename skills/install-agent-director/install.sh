@@ -6,8 +6,8 @@
 # it; an operator can also run it directly from a checked-out tree.
 #
 # It installs two binaries from the same build: agent-director at
-# ~/.agent-director/bin/agent-director, and the operator tool
-# agent-director-admin at ~/.agent-director/admin/agent-director-admin
+# ~/.config/agent-director/bin/agent-director, and the operator tool
+# agent-director-admin at ~/.config/agent-director/admin/agent-director-admin
 # (directory mode 0700), which is never put on PATH under any option
 # (b.vqr). It refuses to install when the two binaries' version stamps
 # (version and commit) differ, or carry no commit stamp (a plain
@@ -19,7 +19,7 @@
 #                         the script sits in; `command -v agent-director`.
 #   agent-director-admin  --admin-binary; bin/agent-director-admin of
 #                         that checkout; the installed
-#                         ~/.agent-director/admin/agent-director-admin.
+#                         ~/.config/agent-director/admin/agent-director-admin.
 #                         Never PATH.
 # So a re-run from the installed skill, outside any checkout and with
 # no flags, reinstalls the agent-director on PATH with the installed
@@ -38,7 +38,7 @@
 #                        Defaults to bin/agent-director-admin of the
 #                        checkout the script sits in (`make build`
 #                        builds both binaries), then to the installed
-#                        ~/.agent-director/admin/agent-director-admin.
+#                        ~/.config/agent-director/admin/agent-director-admin.
 #                        Mutually exclusive with --from-release.
 #   --from-release [tag] Download pre-built agent-director and
 #                        agent-director-admin binaries for this host's
@@ -113,8 +113,8 @@
 #      symlinked config.toml install.sh cannot resolve or write through,
 #      as for settings.json under exit 4 (all refused in pre-flight,
 #      before anything on disk changes). state.db here is
-#      the store database agent-director opens: ~/.agent-director/state.db,
-#      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
+#      the store database agent-director opens: ~/.config/agent-director/state.db,
+#      or wherever [store] db_path in ~/.config/agent-director/config.toml puts it.
 #      Every exit 5 ends with one line on stderr, its last, naming the
 #      cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the
 #      text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed
@@ -150,14 +150,14 @@ set -euo pipefail
 # group and other bits stay
 # as the operator set them, and a umask that leaves the owner's bits alone
 # is unchanged. The agent-director runs below inherit it, so the files they
-# create in ~/.agent-director are usable by their owner too (b.7j2).
+# create in ~/.config/agent-director are usable by their owner too (b.7j2).
 umask u=rwx
 
 # --------------------------------------------------------------------
 # Defaults + flag parsing
 # --------------------------------------------------------------------
 
-readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
+readonly DEFAULT_INSTALL_ROOT="${HOME}/.config/agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 # The operator tool's own directory, never on PATH (b.vqr).
 readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
@@ -356,7 +356,7 @@ done
 # Store database: [store] db_path (b.2io)
 #
 # agent-director opens the store at [store] db_path in
-# ~/.agent-director/config.toml when that is set (pkg/api
+# ~/.config/agent-director/config.toml when that is set (pkg/api
 # resolveStorePath), and looks for the migration sentinel beside it
 # (internal/store sentinelPath). The schema-migration steps below must
 # read, authorize and verify that same database, so install.sh reads
@@ -397,9 +397,9 @@ done
 #
 # The value resolves exactly as Go resolves it (internal/config
 # resolvePathField, pkg/api resolveStorePath): empty or unset gives
-# ~/.agent-director/state.db, a leading ~/ is joined onto $HOME, an
+# ~/.config/agent-director/state.db, a leading ~/ is joined onto $HOME, an
 # absolute path is used unchanged, and anything else (~, ~user/x, ./x,
-# ../x) is joined onto ~/.agent-director. Every join is cleaned as Go's
+# ../x) is joined onto ~/.config/agent-director. Every join is cleaned as Go's
 # filepath.Join cleans it (ad_clean_path); an absolute path is not.
 # $VAR stays literal.
 #
@@ -747,10 +747,10 @@ ad_store_db_path() (
     fi
 
     case "$value" in
-        "")    resolved="$(ad_clean_path "${home}/.agent-director/state.db")" ;;
+        "")    resolved="$(ad_clean_path "${home}/.config/agent-director/state.db")" ;;
         "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
         /*)    resolved="$value" ;;
-        *)     resolved="$(ad_clean_path "${home}/.agent-director/${value}")" ;;
+        *)     resolved="$(ad_clean_path "${home}/.config/agent-director/${value}")" ;;
     esac
     printf '%s\n' "$resolved"
 )
@@ -763,7 +763,7 @@ fi
 # Messages name the store "state.db" when it is the default one, as
 # before, and by its path when [store] db_path moves it.
 state_db_name="state.db"
-if [[ "$state_db" != "$(ad_clean_path "${HOME}/.agent-director/state.db")" ]]; then
+if [[ "$state_db" != "$(ad_clean_path "${HOME}/.config/agent-director/state.db")" ]]; then
     state_db_name="$state_db"
 fi
 
@@ -771,7 +771,7 @@ fi
 # Store busy timeout: [store] busy_timeout_ms (b.c7f)
 #
 # Every agent-director connection to the store waits up to [store]
-# busy_timeout_ms in ~/.agent-director/config.toml for a lock another
+# busy_timeout_ms in ~/.config/agent-director/config.toml for a lock another
 # connection holds (SQLite's busy timeout; internal/config
 # Store.EffectiveBusyTimeoutMs). install.sh's sqlite3 reads of the store's
 # user_version (ad_user_version) wait the same time, and so does the check
@@ -976,7 +976,7 @@ fi
 # Symlinked settings.json and config.toml pre-check (b.nw5)
 #
 # With hooks on, the merges below write through a symlinked
-# ~/.claude/settings.json or ~/.agent-director/config.toml to the file
+# ~/.claude/settings.json or ~/.config/agent-director/config.toml to the file
 # its chain of links resolves to, keeping the link
 # (ad_replace_keeping_mode). The write puts a .new beside that file and
 # moves it over the file, so it fails, late (after the binaries are
@@ -1637,6 +1637,14 @@ echo "  version-check: agent-director-admin stamp matches ($main_stamp)"
 # Create install root + bin dir
 # --------------------------------------------------------------------
 
+# ~/.config is the directory the install root lives under (always under HOME;
+# XDG_CONFIG_HOME is never read); make it (mode 0700) only when it is missing,
+# and leave an existing one's mode alone.
+config_base="$(dirname "$DEFAULT_INSTALL_ROOT")"
+if [[ ! -d "$config_base" ]]; then
+    mkdir -p "$config_base"
+    chmod 00700 "$config_base"
+fi
 mkdir -p "$DEFAULT_INSTALL_ROOT"
 # Five-digit mode required to clear inherited setuid/setgid on a directory:
 # GNU coreutils clears a dir's setuid/setgid bits only when the numeric mode
@@ -1741,7 +1749,7 @@ fi
 #
 # The operator tool agent-director-admin goes into its own directory
 # (mode 0700, five digits to clear an inherited setgid bit as above),
-# never ~/.agent-director/bin/ and never on PATH: no option creates a
+# never ~/.config/agent-director/bin/ and never on PATH: no option creates a
 # symlink for it. Its path is printed once, at the end.
 # --------------------------------------------------------------------
 
@@ -1787,7 +1795,7 @@ fi
 # admin action, so it is the legitimate writer of that sentinel.
 #
 # state.db is the store database agent-director opens, $state_db:
-# ~/.agent-director/state.db, or wherever [store] db_path puts it (read in
+# ~/.config/agent-director/state.db, or wherever [store] db_path puts it (read in
 # pre-flight, b.2io). Its sentinel is a sibling of that database
 # (ad_sentinel_path), wherever it is. Messages call it $state_db_name:
 # "state.db" for the default, otherwise its path.
@@ -2131,7 +2139,7 @@ fi
 # The open succeeded, so a missing state.db means install.sh and
 # agent-director disagree on where the store is, or it was removed since:
 # needs a human (ErrSchemaVerifyFailed). agent-director opens its store at
-# [store] db_path in $HOME/.agent-director/config.toml (pkg/api
+# [store] db_path in $HOME/.config/agent-director/config.toml (pkg/api
 # resolveStorePath; its --store-path and --home flags aside, which
 # install.sh never passes), and no AGENT_DIRECTOR_* variable moves it.
 # install.sh read that file in pre-flight (ad_store_db_path), so the two
@@ -2151,7 +2159,7 @@ if [[ ! -f "$state_db" ]]; then
     echo "  The store open (agent-director list) succeeded, yet there is no store" >&2
     echo "  at the state.db path above, where install.sh expected it. agent-director" >&2
     echo "  opens its store at [store] db_path in the config file above" >&2
-    echo "  (~/.agent-director/state.db when unset), and install.sh read that file" >&2
+    echo "  (~/.config/agent-director/state.db when unset), and install.sh read that file" >&2
     echo "  before the open. So either db_path changed since and agent-director" >&2
     echo "  opened a store somewhere else, or something removed or moved the store" >&2
     echo "  after the open." >&2

@@ -108,6 +108,13 @@ func TestRequireRefusesWhenNeitherVariableIsSet(t *testing.T) {
 			t.Errorf("refusal message missing %q; stderr:\n%s", want, stderr)
 		}
 	}
+	// The refusal names both directories a host may hold: the old one and the
+	// one agent-director moved to.
+	for _, dir := range []string{"~/.agent-director", "~/.config/agent-director"} {
+		if strings.Count(stderr, dir) < 2 {
+			t.Errorf("refusal message names %s fewer than twice (the rewrite and the CI-only warning); stderr:\n%s", dir, stderr)
+		}
+	}
 	// The bypass must be described as CI-only, not as a host escape hatch.
 	if !strings.Contains(stderr, "Do NOT set "+BypassEnvVar) {
 		t.Errorf("refusal message does not warn against setting %s here; stderr:\n%s", BypassEnvVar, stderr)

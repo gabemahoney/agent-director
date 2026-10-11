@@ -14,7 +14,7 @@ import * as path from "node:path";
 import * as AD from "agent-director";
 
 const HOME = process.env.HOME;
-const STORE = path.join(HOME, ".agent-director", "state.db");
+const STORE = path.join(HOME, ".config", "agent-director", "state.db");
 const CATALOG_PATH =
   process.env.CATALOG_PATH ?? "/work/source/pkg/api/errnames/catalog.json";
 

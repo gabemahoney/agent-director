@@ -60,9 +60,9 @@ test(
       // A consumer in a sandboxed HOME, whose discovery finds the dev CLI at the standard install path.
       writeFileSync(join(consumerDir, "package.json"), JSON.stringify({ name: "ad-rvc-consumer", version: "0.0.1", type: "module" }));
       await run(["bun", "add", `file:${join(stagePkg, tgz!)}`], consumerDir, { HOME: home });
-      mkdirSync(join(home, ".agent-director", "bin"), { recursive: true });
-      cpSync(process.env.CLI_PATH!, join(home, ".agent-director", "bin", "agent-director"));
-      chmodSync(join(home, ".agent-director", "bin", "agent-director"), 0o755);
+      mkdirSync(join(home, ".config", "agent-director", "bin"), { recursive: true });
+      cpSync(process.env.CLI_PATH!, join(home, ".config", "agent-director", "bin", "agent-director"));
+      chmodSync(join(home, ".config", "agent-director", "bin", "agent-director"), 0o755);
       const store = JSON.stringify(join(consumerDir, "state.db"));
       writeFileSync(
         join(consumerDir, "consumer.ts"),

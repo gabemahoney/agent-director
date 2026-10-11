@@ -12,13 +12,13 @@ import (
 )
 
 // withTemplates seeds templates, by name, under a temp $HOME's
-// .agent-director/templates/ for the duration of a test.
+// .config/agent-director/templates/ for the duration of a test.
 func withTemplates(t *testing.T, templates map[string]apitest.TemplateFields) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for name, fields := range templates {
-		if _, err := apitest.SeedTemplate(filepath.Join(home, ".agent-director", "templates"), name, apitest.TemplateBody(fields)); err != nil {
+		if _, err := apitest.SeedTemplate(filepath.Join(home, ".config", "agent-director", "templates"), name, apitest.TemplateBody(fields)); err != nil {
 			t.Fatalf("SeedTemplate(%s): %v", name, err)
 		}
 	}

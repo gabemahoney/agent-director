@@ -405,7 +405,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (60 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (61 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -556,6 +556,13 @@ export class ErrStoreOpen extends AgentDirectorError {}
 export class ErrSchemaMismatch extends AgentDirectorError {}
 /** Mirrors ErrSchemaMigrationRequired (package: clisetup) */
 export class ErrSchemaMigrationRequired extends AgentDirectorError {}
+/**
+ * Mirrors ErrOldLayout (package: clisetup): the call would open the default store, no store exists
+ * there and the old directory (the one agent-director used before it moved to the standard config
+ * location) is present. Nothing was opened or created. Run this release's install.sh, which moves
+ * the old directory; see the {@link https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade | Upgrade section of docs/install.md}.
+ */
+export class ErrOldLayout extends AgentDirectorError {}
 /** Mirrors ErrUnknownVerb (package: clisetup) */
 export class ErrUnknownVerb extends AgentDirectorError {}
 /** Mirrors ErrJSONMarshal (package: clisetup) */
@@ -648,6 +655,7 @@ const ERROR_TABLE = {
   ErrStoreOpen,
   ErrSchemaMismatch,
   ErrSchemaMigrationRequired,
+  ErrOldLayout,
   ErrUnknownVerb,
   ErrJSONMarshal,
   ErrTrailWrite,

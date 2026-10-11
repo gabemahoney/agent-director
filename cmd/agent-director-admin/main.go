@@ -2,7 +2,7 @@
 // runs the two operator-only actions that the agent-facing agent-director
 // CLI, its MCP tools and the Go and TypeScript client libraries do not offer:
 // kill-finished (kill's finished-row opt-in) and delete. install.sh installs
-// it at ~/.agent-director/admin/agent-director-admin and never on PATH.
+// it at ~/.config/agent-director/admin/agent-director-admin and never on PATH.
 //
 // Like cmd/agent-director it is a thin shim: it parses and applies
 // agent-director's global flags (--store-path, --home, --tmux-command,

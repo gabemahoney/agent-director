@@ -25,7 +25,7 @@ export const PKG_VERSION = (
 
 /** The store path a test uses under its temp HOME. */
 export function homeStore(home: string): string {
-  return path.join(home, ".agent-director", "state.db");
+  return path.join(home, ".config", "agent-director", "state.db");
 }
 
 /**

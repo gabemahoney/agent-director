@@ -14,7 +14,7 @@ import { writeFileSync } from "node:fs";
 import { Client, ErrConsumerSignal } from "agent-director";
 
 const HOME = process.env.HOME;
-const STORE = path.join(HOME, ".agent-director", "state.db");
+const STORE = path.join(HOME, ".config", "agent-director", "state.db");
 const MODE_FILE = "/tmp/sub-cov-sg-mode";
 
 function fail(msg) {

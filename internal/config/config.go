@@ -4,7 +4,7 @@
 // Load() returns Default() when the file is absent, and a typed
 // *ConfigError wrapping the parse error when the file is malformed.
 // Path fields support leading "~/" expansion and relative-path resolution
-// against "~/.agent-director/". Shell variables like $HOME are preserved
+// against "~/.config/agent-director/". Shell variables like $HOME are preserved
 // literally.
 //
 // The [tmux] table (type Tmux, tmux.go) holds the nine timing settings of
@@ -50,6 +50,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/oldnames"
 )
 
@@ -293,6 +294,12 @@ type Store struct {
 	// DefaultDbPath. Read it only through EffectiveDbPath, which gives the
 	// default for "".
 	DbPath string `toml:"db_path"`
+	// DbPathSet is true when the config file itself sets [store] db_path
+	// (to any value, the default and "" included), false for a missing
+	// file or key. It is never read from the file. The old-layout refusal
+	// (store.ErrOldLayout) applies only to the default store, so only when
+	// it is false.
+	DbPathSet bool `toml:"-"`
 	// BusyTimeoutMs is how long a store connection waits for a lock another
 	// connection holds before its statement fails (SQLite's busy timeout),
 	// in whole milliseconds: the file's value when the key is set (0
@@ -408,7 +415,7 @@ func (s State) refusals() []string {
 // DefaultDbPath is the default of [store] db_path. It is the value Default()
 // seeds into Store.DbPath AND the fallback EffectiveDbPath returns for an
 // empty db_path, so the two never drift.
-const DefaultDbPath = "~/.agent-director/state.db"
+const DefaultDbPath = layout.DisplayStorePath
 
 // EffectiveDbPath returns the store database every opener uses: the verbs
 // (pkg/api.New, tiers 2 and 3 of its StorePath precedence) and the hook
@@ -525,7 +532,7 @@ func Default() Config {
 			SettleMs: DefaultStateSettleMs,
 		},
 		Log: Log{
-			ErrorLogPath: "~/.agent-director/errors.log",
+			ErrorLogPath: layout.DisplayErrorLogPath,
 		},
 		Tmux: Tmux{
 			StartingSessionSeconds: DefaultStartingSessionSeconds,
@@ -603,7 +610,7 @@ func (e *ConfigError) Unwrap() error {
 // Path fields (Store.DbPath, Log.ErrorLogPath) are post-processed:
 //   - A leading "~/" is expanded to the current user's home directory.
 //   - A relative path (neither absolute nor "~/"-prefixed) is resolved
-//     against "~/.agent-director/", since the hook handler runs in
+//     against "~/.config/agent-director/", since the hook handler runs in
 //     Claude's CWD rather than the director's own directory.
 //   - "$VAR" patterns are left literal — no shell expansion.
 func Load(path string) (Config, error) {
@@ -635,6 +642,7 @@ func Load(path string) (Config, error) {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
 		cfg.Tmux = resolveUnsetTmux(cfg.Tmux, meta)
+		cfg.Store.DbPathSet = isDefined(meta, "store", "db_path")
 	case errors.Is(err, os.ErrNotExist):
 		// fall through with cfg = Default(); path resolution still applies so
 		// callers always get fully-resolved paths regardless of file presence.
@@ -862,7 +870,7 @@ func nameList(names []string) string {
 // field in cfg. Called unconditionally so Default()'s "~/" placeholders are
 // always expanded before reaching callers.
 func resolvePaths(cfg Config, home string) Config {
-	base := filepath.Join(home, ".agent-director")
+	base := layout.Dir(home)
 	cfg.Store.DbPath = resolvePathField(cfg.Store.DbPath, home, base)
 	cfg.Log.ErrorLogPath = resolvePathField(cfg.Log.ErrorLogPath, home, base)
 	// A [launch] value is already checked (launchRefusal): an absolute path

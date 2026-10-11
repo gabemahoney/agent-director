@@ -12,7 +12,7 @@ import (
 // CLI and the stub's hook wrote under the test's isolated HOME.
 func trailRecords(t *testing.T, home, event, instanceID string) []map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, ".agent-director", "ad-trail.jsonl"))
+	data, err := os.ReadFile(filepath.Join(home, ".config", "agent-director", "ad-trail.jsonl"))
 	if os.IsNotExist(err) {
 		return nil
 	}

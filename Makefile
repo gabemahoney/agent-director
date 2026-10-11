@@ -183,7 +183,7 @@ nondet-coverage: _require-sandbox
 # (BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS) never appears in
 # .github/workflows/pre-release-verify-mac.yml. That job runs on
 # [self-hosted, macOS, ARM64] — a persistent machine that plausibly holds a
-# real ~/.agent-director — so the bypass would disable the guard exactly where
+# real ~/.agent-director or ~/.config/agent-director — so the bypass would disable the guard exactly where
 # it is still needed (b.175). Without a store-presence probe, workflow-authoring
 # discipline is the only thing protecting that runner; this target makes the
 # discipline enforceable. Wired into the doc-drift CI gate.
@@ -196,7 +196,7 @@ check-sandbox-bypass:
 	if grep -n 'BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS' "$$f"; then \
 		echo "ERROR: BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS must never appear in $$f." >&2; \
 		echo "       That job runs on a self-hosted macOS runner which may hold a real" >&2; \
-		echo "       ~/.agent-director; bypassing the sandbox guard there risks wiping it (b.175)." >&2; \
+		echo "       ~/.agent-director or ~/.config/agent-director; bypassing the sandbox guard there risks wiping it (b.175)." >&2; \
 		exit 1; \
 	fi; \
 	echo "[check-sandbox-bypass] OK — bypass absent from $$f"
@@ -278,9 +278,9 @@ list-test-docker-epics:
 # test-docker-install-mode runs the b.r3j install-mode regression suite
 # inside the harness container. Each scenario invokes install.sh under a
 # per-scenario sandbox $HOME (and umask/--keep-prior variations) and
-# asserts the canonical ~/.agent-director/bin/agent-director lands at
+# asserts the canonical ~/.config/agent-director/bin/agent-director lands at
 # literal mode 0755 via `stat -c %a` — not just `-x` — and
-# ~/.agent-director/admin/agent-director-admin at 0755 in a 0700
+# ~/.config/agent-director/admin/agent-director-admin at 0755 in a 0700
 # directory. Each install that should succeed must also exit 0 with no
 # "Permission denied" on its stderr (b.7j2). Also pins install.sh's
 # defensive exit 3 on a 0644 source.
@@ -300,8 +300,9 @@ test-docker-install-mode: test-image
 # Sandboxed execution (b.nh2 — isolation for the b.8dr incident)
 #
 # Every executed artifact — the full test suite, one-off builds, `go generate`,
-# bun scripts, ad-hoc binary runs — runs inside a container whose HOME has NO
-# .agent-director. This is the ONLY boundary that holds: a host-side $HOME
+# bun scripts, ad-hoc binary runs — runs inside a container whose HOME has
+# NEITHER ~/.agent-director NOR ~/.config/agent-director (a host may hold
+# either). This is the ONLY boundary that holds: a host-side $HOME
 # redirect does not stop a test that skips the redirect, an absolute path to
 # the real store, or a child binary started with the host's environment from
 # opening (and, on a schema-bumping branch, silently auto-migrating) the real
@@ -413,12 +414,12 @@ _SANDBOX_GIT_MOUNT := $(if $(filter-out $(CURDIR)/.git,$(GIT_COMMON_DIR)),-v "$(
 #   ~/.cache/go-build→ …/.cache/go-build    host Go build cache (speed)
 #   ~/.bun           → …/.bun               host bun cache (speed)
 # The cache mount targets resolve to the container user's HOME, which the image
-# sets to a directory containing no .agent-director.
+# sets to a directory containing neither ~/.agent-director nor ~/.config/agent-director.
 _SANDBOX_HOME := /home/sandbox
 # AGENT_DIRECTOR_TEST_SANDBOX=1 marks the container environment. The test
 # suites' TestMain guards and the bun preload refuse to run without it, so a
 # host-side `go test`/`bun test` fails fast instead of touching the real
-# ~/.agent-director (b.nh2 / absorbed b.4v7). It is an accident-prevention gate,
+# ~/.agent-director or ~/.config/agent-director (b.nh2 / absorbed b.4v7). It is an accident-prevention gate,
 # not a security boundary. Shared here so every sandbox target sets it.
 _SANDBOX_RUN = $(_SANDBOX_ENV) $(CONTAINER_ENGINE) run --rm \
 		$(_SANDBOX_NET) \
@@ -485,7 +486,7 @@ _sandbox-build: _sandbox-preflight
 #     (_SANDBOX_RUN sets it), e.g. make sandbox CMD="make generate";
 #   - with BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS set, the CI bypass that
 #     sandboxguard.Require() also honours, for a runner with no real
-#     ~/.agent-director to damage (b.175). The doc-drift workflow sets it on
+#     ~/.agent-director or ~/.config/agent-director to damage (b.175). The doc-drift workflow sets it on
 #     each step that runs one of these targets directly (make generate,
 #     check-doccomments, err-coherence, surface-json, errnames-json and
 #     nondet-coverage) on its GitHub-hosted runner.

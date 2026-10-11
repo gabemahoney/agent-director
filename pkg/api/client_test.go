@@ -30,12 +30,12 @@ func writeConfig(t *testing.T, path, content string) {
 }
 
 // TestNewDefaultPaths pins api.New under HOME: with no store at
-// ~/.agent-director/state.db it is ErrStoreNotInitialized and creates nothing
-// (H1) unless CreateIfMissing; an existing store opens; "~/" paths expand
-// against $HOME; concurrent Closes all return nil (SR-1.2).
+// ~/.config/agent-director/state.db it is ErrStoreNotInitialized and creates
+// nothing (H1) unless CreateIfMissing; an existing store opens; "~/" paths
+// expand against $HOME; concurrent Closes all return nil (SR-1.2).
 func TestNewDefaultPaths(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
-	def := filepath.Join(".agent-director", "state.db")
+	def := filepath.Join(".config", "agent-director", "state.db")
 	cases := []struct {
 		name    string
 		seed    string // the store seeded under HOME first; "" none
@@ -78,6 +78,40 @@ func TestNewDefaultPaths(t *testing.T) {
 			wg.Wait()
 		})
 	}
+}
+
+// TestNewDefaultConfigPath pins the default ConfigPath: an empty one reads
+// <HOME>/.config/agent-director/config.toml (its [store] db_path names the
+// store opened, the default store is never created), and with HOME unset the
+// default config path is refused, while explicit paths still open.
+func TestNewDefaultConfigPath(t *testing.T) {
+	// Serial: it sets HOME with t.Setenv.
+	t.Run("read from the new directory", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		apitest.SeedStore(t, filepath.Join(home, "named.db"))
+		writeConfig(t, filepath.Join(adConfigDir(home), "config.toml"), "[store]\ndb_path = \"~/named.db\"\n")
+		c, err := api.New(api.Options{})
+		if err != nil {
+			t.Fatalf("New with the default ConfigPath: %v", err)
+		}
+		_ = c.Close()
+		if _, err := os.Stat(filepath.Join(adConfigDir(home), "state.db")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("default store: stat %v; want none (the config named another)", err)
+		}
+	})
+	t.Run("HOME unset", func(t *testing.T) {
+		unsetenvIfSet(t, "HOME")
+		if c, err := api.New(api.Options{CreateIfMissing: true}); err == nil || c != nil || errors.Is(err, api.ErrOldLayout) {
+			t.Errorf("New with no HOME and the default ConfigPath = %v, %v; want a refusal other than ErrOldLayout", c, err)
+		}
+		dir := t.TempDir()
+		c, err := api.New(api.Options{ConfigPath: filepath.Join(dir, "none.toml"), StorePath: filepath.Join(dir, "s.db"), CreateIfMissing: true})
+		if err != nil {
+			t.Fatalf("New with no HOME and explicit paths: %v", err)
+		}
+		_ = c.Close()
+	})
 }
 
 // TestExpandTildeHonorsHOMEEnv is the b.6k1 regression: expandTilde resolves

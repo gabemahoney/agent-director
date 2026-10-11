@@ -30,7 +30,7 @@ type migrationAuthorization struct {
 }
 
 // sentinelPath derives the authorization sentinel path as a sibling of the
-// resolved DB path. Never hard-coded to ~/.agent-director so it works under
+// resolved DB path. Never hard-coded to ~/.config/agent-director so it works under
 // custom store paths (SR-2.2).
 func sentinelPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), sentinelFilename)

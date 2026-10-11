@@ -168,7 +168,7 @@ func TestMeasureEndedToGone(t *testing.T) {
 			r := newRig(t, modeDry)
 			w := newWorld(r)
 			w.spawns, w.state, w.endedAt, w.listedFor = 1, stateEnded, tc.endedAt, 2
-			writeFile(t, filepath.Join(r.h.iso.Home, ".agent-director", "ad-trail.jsonl"),
+			writeFile(t, filepath.Join(r.h.iso.Home, ".config", "agent-director", "ad-trail.jsonl"),
 				`{"event":"ad.hook.ignored","instance_id":"id-1","reason":"no_exec_form"}`+"\n")
 			s := sample{Case: "rn2.pause"}
 			r.h.measureEndedToGone("rn2.pause", agentRef{InstanceID: "id-1", Socket: w.socket, TmuxSessionID: "$1"}, &s, tc.triggerErr)

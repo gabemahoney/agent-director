@@ -22,7 +22,7 @@ import (
 // has hung up) or a fatal stdio error.
 //
 // Config is loaded ONCE at startup; in-flight edits to
-// ~/.agent-director/config.toml do not take effect until the next
+// ~/.config/agent-director/config.toml do not take effect until the next
 // `serve` invocation. SRD §3.3 makes this explicit so operators
 // don't have to wonder why a tweak to relay.timeout_seconds didn't
 // stick. The same holds for the [tmux] table: the MCP dispatcher's Client
@@ -53,7 +53,8 @@ import (
 // newClient opens the MCP Client: pkg/api.New in production (handlers()); a
 // test passes a stand-in to reach the failure path. A failed open is named
 // by clisetup.NewOpenError, as setupClient's Open names its own: a schema
-// refusal is ErrSchemaMismatch or ErrSchemaMigrationRequired, anything else
+// refusal is ErrSchemaMismatch or ErrSchemaMigrationRequired, an old-layout
+// refusal ErrOldLayout, anything else
 // ErrStoreOpen (b.uii).
 //
 // Pin H6: cfg is threaded in directly from run() via setupClient() so

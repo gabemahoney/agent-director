@@ -54,6 +54,9 @@
 //	    // DB is older than this binary; migration must be performed by an
 //	    // administrator via the agent-director install process
 //	}
+//	if errors.Is(err, api.ErrOldLayout) {
+//	    // only the old directory is present; run this release's install.sh
+//	}
 //
 // # Verb reference
 //

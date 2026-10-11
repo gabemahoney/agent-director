@@ -30,7 +30,9 @@ var dbFreeShapes = []struct {
 
 // TestDBFreeVerbsProduceNoStore: each DB-free shape, bare or with a global
 // flag (parsed and stripped), exits 0 with a JSON envelope and empty stderr,
-// and creates nothing under HOME or at the flag's target.
+// and creates nothing under HOME or at the flag's target. Each runs under a
+// fresh HOME and under one holding only the old ~/.agent-director, where it
+// still succeeds and leaves every path and byte as it was (SR-11.7).
 func TestDBFreeVerbsProduceNoStore(t *testing.T) {
 	type shape struct {
 		name string
@@ -53,16 +55,31 @@ func TestDBFreeVerbsProduceNoStore(t *testing.T) {
 		}},
 	)
 	for _, s := range shapes {
-		t.Run(s.name, func(t *testing.T) {
-			home, dir := t.TempDir(), t.TempDir()
-			stdout, stderr, code := runCLIWithHome(t, home, s.argv(dir)...)
-			var payload map[string]any
-			if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &payload) != nil {
-				t.Fatalf("exit=%d stderr=%q stdout=%.200q; want 0, empty stderr and a JSON envelope", code, stderr, stdout)
+		for _, oldHome := range []bool{false, true} {
+			name := s.name
+			if oldHome {
+				name += "/old layout"
 			}
-			assertHomeTree(t, home)
-			assertHomeTree(t, dir)
-		})
+			t.Run(name, func(t *testing.T) {
+				home, dir := t.TempDir(), t.TempDir()
+				var old oldLayout
+				if oldHome {
+					old = newOldLayout(t)
+					home = old.home
+				}
+				stdout, stderr, code := runCLIWithHome(t, home, s.argv(dir)...)
+				var payload map[string]any
+				if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &payload) != nil {
+					t.Fatalf("exit=%d stderr=%q stdout=%.200q; want 0, empty stderr and a JSON envelope", code, stderr, stdout)
+				}
+				if oldHome {
+					old.assertUntouched(t)
+				} else {
+					assertHomeTree(t, home)
+				}
+				assertHomeTree(t, dir)
+			})
+		}
 	}
 }
 

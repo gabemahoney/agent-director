@@ -26,16 +26,18 @@ import (
 //     paths land under the temp dir, not the real home directory.
 //
 //  2. Load-bearing canary: records the state of the REAL ~/.agent-director
-//     (via user.Current().HomeDir, which reads /etc/passwd on Linux and is
-//     unaffected by the $HOME redirect) before and after the run. Any new
-//     file or modification under that directory fails the suite. This catches
-//     any code path that uses user.Current() to bypass the $HOME redirect.
+//     and ~/.config/agent-director (via user.Current().HomeDir, which reads
+//     /etc/passwd on Linux and is unaffected by the $HOME redirect) before and
+//     after the run; a host may hold either. Any new file or modification
+//     under either directory fails the suite. This catches any code path that
+//     uses user.Current() to bypass the $HOME redirect.
 //
 //  3. Clears AGENT_DIRECTOR_INSTANCE_ID so no inherited parent ID causes FK
 //     violations against the fresh smoke-test stores.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
-	// ── Step 1: locate real ~/.agent-director via user.Current() ──────────────
+	// ── Step 1: locate the real ~/.agent-director and ~/.config/agent-director
+	// via user.Current() ───────────────────────────────────────────────────
 	// user.Current().HomeDir reads /etc/passwd (or equivalent) on Linux and
 	// is NOT affected by the $HOME env var, so this gives the real home even
 	// after we redirect $HOME below.
@@ -44,10 +46,16 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "TestMain: user.Current: %v\n", err)
 		os.Exit(2)
 	}
-	realAgentDir := filepath.Join(u.HomeDir, ".agent-director")
+	realAgentDirs := []string{
+		filepath.Join(u.HomeDir, ".agent-director"),
+		filepath.Join(u.HomeDir, ".config", "agent-director"),
+	}
 
-	// ── Step 2: snapshot real ~/.agent-director BEFORE any test runs ──────────
-	before := snapshotAgentDir(realAgentDir)
+	// ── Step 2: snapshot both real directories BEFORE any test runs ───────────
+	before := make([]agentDirSnap, len(realAgentDirs))
+	for i, dir := range realAgentDirs {
+		before[i] = snapshotAgentDir(dir)
+	}
 
 	// ── Step 3: redirect $HOME (defense-in-depth) ─────────────────────────────
 	tmpHome, err := os.MkdirTemp("", "smoke-home-*")
@@ -71,10 +79,16 @@ func TestMain(m *testing.M) {
 	// ── Step 5: clean up the fake home ────────────────────────────────────────
 	_ = os.RemoveAll(tmpHome)
 
-	// ── Step 6: canary — assert real ~/.agent-director is unchanged ───────────
-	after := snapshotAgentDir(realAgentDir)
-	if msgs := agentDirViolations(before, after); len(msgs) > 0 {
-		fmt.Fprintln(os.Stderr, "FAIL: a test wrote to the real ~/.agent-director:")
+	// ── Step 6: canary — assert neither real directory changed ────────────────
+	failed := false
+	for i, dir := range realAgentDirs {
+		after := snapshotAgentDir(dir)
+		msgs := agentDirViolations(dir, before[i], after)
+		if len(msgs) == 0 {
+			continue
+		}
+		failed = true
+		fmt.Fprintf(os.Stderr, "FAIL: a test wrote to the real %s:\n", dir)
 		for _, msg := range msgs {
 			fmt.Fprintln(os.Stderr, "  "+msg)
 		}
@@ -84,7 +98,9 @@ func TestMain(m *testing.M) {
 		// file's JSONL content carries `source`, `instance_id`, event
 		// names and timestamps that identify the writer, so dump every created
 		// or modified file to make future fires forensically self-explanatory.
-		dumpViolatingFiles(before, after)
+		dumpViolatingFiles(before[i], after)
+	}
+	if failed {
 		os.Exit(1)
 	}
 
@@ -136,7 +152,7 @@ type fileSnap struct {
 }
 
 // agentDirSnap is a map from absolute path to fileSnap for every file under
-// ~/.agent-director. A nil value means the directory did not exist at
+// one watched directory (~/.agent-director or ~/.config/agent-director). A nil value means the directory did not exist at
 // snapshot time.
 type agentDirSnap map[string]fileSnap
 
@@ -176,15 +192,16 @@ func snapshotAgentDir(root string) agentDirSnap {
 
 // agentDirViolations returns a non-empty slice of human-readable violation
 // messages if any new files appeared or existing files were modified under
-// ~/.agent-director between the before and after snapshots.
+// dir (one of the two watched directories) between the before and after
+// snapshots.
 //
 // Deletions are not considered violations — we only guard against writes.
-func agentDirViolations(before, after agentDirSnap) []string {
+func agentDirViolations(dir string, before, after agentDirSnap) []string {
 	if before == nil && after == nil {
 		return nil
 	}
 	if before == nil && after != nil {
-		msgs := []string{"~/.agent-director was created during the test run"}
+		msgs := []string{dir + " was created during the test run"}
 		for path := range after {
 			msgs = append(msgs, "  created: "+path)
 		}

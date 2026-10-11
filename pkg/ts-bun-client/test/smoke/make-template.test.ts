@@ -30,7 +30,7 @@ test("make-template: error — agent_args with no agent → ErrTemplateAgentMiss
     const name = `smoke-template-noagent-${Date.now()}`;
     using client = await openClient(homeStore(homeDir));
     await expect(client.makeTemplate({ name, agent_args: ["--model", "opus"] })).rejects.toBeInstanceOf(ErrTemplateAgentMissing);
-    expect(fs.existsSync(path.join(homeDir, ".agent-director", "templates", `${name}.toml`))).toBe(false);
+    expect(fs.existsSync(path.join(homeDir, ".config", "agent-director", "templates", `${name}.toml`))).toBe(false);
   });
 }, 10_000);
 

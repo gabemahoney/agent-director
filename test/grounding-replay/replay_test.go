@@ -19,7 +19,7 @@
 //
 // Hermetic: no network, no tmux, no shared state between runs. Each test
 // invocation writes to its own isolated HOME temp dir; the trail lands in
-// <home>/.agent-director/.
+// <home>/.config/agent-director/.
 //
 // Trail singleton note: trail.Emit uses a process-level sync.Once whose path
 // is locked in on the first call. TestMain fixes HOME before m.Run() so every
@@ -51,13 +51,13 @@ import (
 
 // replayHomeDir is the isolated HOME for the whole test binary. Set by
 // TestMain before any test runs so the trail singleton (rooted at
-// $HOME/.agent-director) captures it.
+// $HOME/.config/agent-director) captures it.
 var replayHomeDir string
 
 // TestMain fixes HOME to an isolated temp dir before any test function runs.
 // The trail singleton (sync.Once) is initialised on the first trail.Emit call
 // — TestMain ensures HOME is set (via os.Setenv, process-wide) AFTER which the
-// singleton resolves $HOME/.agent-director/ad-trail.jsonl. Per-test t.Setenv
+// singleton resolves $HOME/.config/agent-director/ad-trail.jsonl. Per-test t.Setenv
 // would be too late: the once.Do latches the path on first Emit.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
@@ -85,8 +85,10 @@ func TestMain(m *testing.M) {
 // ── trail helpers ─────────────────────────────────────────────────────────────
 
 // trailPath returns the JSONL file path used by the singleton, derived from the
-// HOME redirect: <home>/.agent-director/ad-trail.jsonl.
-func trailPath() string { return filepath.Join(replayHomeDir, ".agent-director", "ad-trail.jsonl") }
+// HOME redirect: <home>/.config/agent-director/ad-trail.jsonl.
+func trailPath() string {
+	return filepath.Join(replayHomeDir, ".config", "agent-director", "ad-trail.jsonl")
+}
 
 // readTrailLines reads every JSONL line from path into []map[string]any.
 // Returns nil when the file does not exist.

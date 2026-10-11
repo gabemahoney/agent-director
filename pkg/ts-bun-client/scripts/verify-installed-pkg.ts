@@ -18,7 +18,7 @@
  *   AD_VERIFY_AGAINST=<path>   Dev-only: load Client from this index.ts path
  *                              instead of the installed "agent-director" package.
  *   AD_CLI_PATH=<path>         Pass as _cliPath to Client.create, skipping
- *                              system-install discovery ($HOME/.agent-director/
+ *                              system-install discovery ($HOME/.config/agent-director/
  *                              bin, then PATH; see src/internal/discovery.ts).
  *                              The Makefile pre-release targets
  *                              verify-installed-pkg-full and

@@ -25,14 +25,15 @@ import { underTreeWriteLock } from "./internal/treeWriteLock.js";
 
 // ── Sandbox guard (b.nh2 / absorbed b.4v7) ─────────────────────────────────
 // These tests build and exec the agent-director binary, which can open (and,
-// on a schema-bumping branch, migrate) the real ~/.agent-director on the host
+// on a schema-bumping branch, migrate) the real ~/.agent-director or
+// ~/.config/agent-director on the host (a host may hold either)
 // (b.8dr). The `make test-sandbox` targets run inside a container whose HOME
-// has no .agent-director and set AGENT_DIRECTOR_TEST_SANDBOX=1. Refuse to run —
+// has neither directory and set AGENT_DIRECTOR_TEST_SANDBOX=1. Refuse to run —
 // before any build spawns below — if that marker is absent. Accident-prevention
 // gate, not a security boundary.
 if (!process.env.AGENT_DIRECTOR_TEST_SANDBOX) {
   console.error(
-    "refusing to run: bun test must run via `make test-sandbox` (see the run-tests skill) — it can rewrite the real ~/.agent-director otherwise"
+    "refusing to run: bun test must run via `make test-sandbox` (see the run-tests skill) — it can rewrite the real ~/.agent-director or ~/.config/agent-director otherwise"
   );
   process.exit(1);
 }

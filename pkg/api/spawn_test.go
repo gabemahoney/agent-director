@@ -213,7 +213,7 @@ func TestSpawnRejectsControlCharacterInstanceID(t *testing.T) {
 			p.Template = "no-such-template"
 		}},
 		{"before a malformed template", marker + "\tx", func(t *testing.T, env spawnEnv, p *api.SpawnParams) {
-			if _, err := apitest.SeedTemplate(filepath.Join(env.home, ".agent-director", "templates"), "broken",
+			if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(env.home), "templates"), "broken",
 				"not = [valid toml"); err != nil {
 				t.Fatalf("SeedTemplate: %v", err)
 			}
@@ -399,7 +399,7 @@ func TestSpawnRefusesTemplateWithOldClaudeArgsKey(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	env := newSpawnEnv(t)
 	body := apitest.TemplateBody(apitest.TemplateFields{CWD: t.TempDir(), RawKeys: []string{`claude_args = ["--model", "opus"]`}})
-	if _, err := apitest.SeedTemplate(filepath.Join(env.home, ".agent-director", "templates"), "old-key", body); err != nil {
+	if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(env.home), "templates"), "old-key", body); err != nil {
 		t.Fatalf("SeedTemplate: %v", err)
 	}
 	rows := listIDs(t, env.c)

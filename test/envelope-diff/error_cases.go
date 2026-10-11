@@ -7,7 +7,7 @@
 //   - errName: one of verb.ErrorNames — the expected err_name in both envelopes.
 //   - seed:    seeds a fresh store (and optional ancillary filesystem state)
 //     in a temp dir; returns srcDir (the directory whose contents
-//     copyFixtureStore copies into homeDir/.agent-director/) and a
+//     copyFixtureStore copies into homeDir/.config/agent-director/) and a
 //     ctx map with any dynamic values the params / cliArgv callbacks
 //     need.
 //   - params:  builds the params map[string]any for runClient.
@@ -52,7 +52,7 @@ type errorCase struct {
 	// seed builds a fixture store (and any ancillary filesystem state) in a
 	// fresh temp dir and returns:
 	//   srcDir: the directory whose contents copyFixtureStore copies into
-	//           homeDir/.agent-director/.
+	//           homeDir/.config/agent-director/.
 	//   ctx:    a map of dynamic values consumed by params / cliArgv.
 	seed func(t *testing.T) (srcDir string, ctx map[string]any)
 
@@ -487,7 +487,7 @@ var errorCases = append(append(append(append(append([]errorCase{
 	// ── make-template / ErrTemplateExists ────────────────────────────────
 	// NOTE: ErrTemplateExists is intentionally absent from this table.
 	// Its err_description embeds the absolute path of the pre-existing file
-	// (e.g. "/tmp/TestXxx/002/.agent-director/templates/err-tmpl.toml"),
+	// (e.g. "/tmp/TestXxx/002/.config/agent-director/templates/err-tmpl.toml"),
 	// which differs between the CLI copy (homeDir1) and the Client copy
 	// (homeDir2). Since Linux paths contain no ':', the prefix-match policy
 	// cannot sidestep the homeDir-specific mismatch. ErrTemplateNameUnsafe

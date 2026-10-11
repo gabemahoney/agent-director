@@ -25,6 +25,7 @@ import {
   ErrAgentArgsMismatch,
   ErrAgentInvalid,
   ErrAgentMissing,
+  ErrOldLayout,
   ErrPermissionsUnsupported,
   ErrTemplateAgentMissing,
 } from "../src/index.js";
@@ -54,18 +55,20 @@ test("every catalog err_name maps to its own subclass in errorFromEnvelope and t
   }
 });
 
-// SR-1.6: each agent error is a public class, built by both factories from its err_name.
+// SR-1.6: each agent error, and ErrOldLayout, is a public class, built by both factories from its err_name.
 test.each([
   ["ErrAgentMissing", ErrAgentMissing, "spawn"],
   ["ErrAgentInvalid", ErrAgentInvalid, "spawn"],
   ["ErrAgentArgsMismatch", ErrAgentArgsMismatch, "spawn"],
   ["ErrPermissionsUnsupported", ErrPermissionsUnsupported, "spawn"],
   ["ErrTemplateAgentMissing", ErrTemplateAgentMissing, "make-template"],
+  ["ErrOldLayout", ErrOldLayout, "list"],
 ] as const)("%s: the exported class is what both factories build from its err_name", (name, Class, verb) => {
   const thrown = thrownBy(() => throwFromEnvelope(verb, { err_name: name, err_description: "d" }));
   for (const err of [errorFromEnvelope(verb, name, "d"), thrown]) {
     expect(err).toBeInstanceOf(Class);
     expect((err as AgentDirectorError).verb).toBe(verb);
+    expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
   }
 });
 
@@ -110,7 +113,7 @@ test.each([
 });
 
 const locs: CheckedLocation[] = [
-  { kind: "standard-install-path", detail: "/h/.agent-director/bin/agent-director" },
+  { kind: "standard-install-path", detail: "/h/.config/agent-director/bin/agent-director" },
   { kind: "path-lookup", detail: "/usr/bin" },
 ];
 const cause = new Error("ENOENT: no such file or directory");
@@ -129,7 +132,7 @@ const TS_ONLY: Array<[string, AgentDirectorError, Record<string, unknown>, strin
   ["ErrUnknownErrorName", new ErrUnknownErrorName("ErrTotallyBogus", envelope),
     { verb: "", unknownName: "ErrTotallyBogus", envelope }, ["ErrTotallyBogus"]],
   ["ErrSystemInstallNotFound", new ErrSystemInstallNotFound(locs), { verb: "", checkedLocations: locs },
-    ["standard install path (/h/.agent-director/bin/agent-director)", "PATH lookup (PATH=/usr/bin)"]],
+    ["standard install path (/h/.config/agent-director/bin/agent-director)", "PATH lookup (PATH=/usr/bin)"]],
   ["ErrSystemInstallTooOld", new ErrSystemInstallTooOld("0.6.3", "0.7.0", "/usr/bin/agent-director"),
     { actualVersion: "0.6.3", requiredVersion: "0.7.0", binaryPath: "/usr/bin/agent-director" },
     ["0.6.3", "0.7.0", "/usr/bin/agent-director"]],

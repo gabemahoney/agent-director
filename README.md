@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 ```
 
 This installs `agent-director` on your PATH and creates
-`~/.agent-director/`. Add `--register-mcp` to also register the MCP server
+`~/.config/agent-director/`. Add `--register-mcp` to also register the MCP server
 with Claude Code.
 
 ## First spawn

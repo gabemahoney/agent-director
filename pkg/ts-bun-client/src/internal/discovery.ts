@@ -2,7 +2,8 @@
  * discovery.ts — system-install discovery pipeline (b.ue3 / SR-1).
  *
  * Implements the two-step lookup defined in SR-1.1:
- *   1. Standard install path: $HOME/.agent-director/bin/agent-director.
+ *   1. Standard install path: $HOME/.config/agent-director/bin/agent-director
+ *      ($HOME only; XDG_CONFIG_HOME is never read).
  *      Skipped (no candidate manufactured) when HOME is unset/empty/non-absolute.
  *   2. PATH lookup for "agent-director", first match.
  *
@@ -23,7 +24,7 @@ import {
   type CheckedLocation,
 } from "../errors.js";
 
-const STANDARD_INSTALL_PATH_RELATIVE = ".agent-director/bin/agent-director";
+const STANDARD_INSTALL_PATH_RELATIVE = ".config/agent-director/bin/agent-director";
 const CLI_BINARY_NAME = "agent-director";
 
 /** Result of a successful candidate validation. */

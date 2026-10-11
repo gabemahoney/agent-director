@@ -4,8 +4,8 @@
 # no credential, no network call, no real Claude Code, no operator.
 #
 #   1. builds the v-next agent-director and the driver into a throwaway dir;
-#   2. makes a fixture home holding a stand-in .agent-director/state.db and
-#      ad-trail.jsonl, and takes guard.sh snapshots of it (quiet-host and
+#   2. makes a fixture home holding a stand-in state.db and ad-trail.jsonl in
+#      both .agent-director and .config/agent-director, and takes guard.sh snapshots of it (quiet-host and
 #      busy-host modes, --home override);
 #   3. runs the driver in dry mode with the stub claude first on PATH, a
 #      throwaway HOME and a private TMUX_TMPDIR: every RN-6 and RN-2 case
@@ -43,7 +43,8 @@
 #      ANTHROPIC_API_KEY forward, a -cases list other than the mode's ids or
 #      an npm version listing off the host network; it must refuse another
 #      mode's case in --cases and a staged layer that carries credentials;
-#   7. checks the sandbox user's own home has no .agent-director and the
+#   7. checks the sandbox user's own home has neither .agent-director nor
+#      .config/agent-director and the
 #      default tmux socket is as it was.
 #
 # Usage: dryrun.sh [--out DIR] [--keep]
@@ -113,9 +114,11 @@ ok "built agent-director and measure-exit into $bin"
 
 # ---- 2. fixture home and guard snapshots -----------------------------------------
 fixture="$tmp/fixture-home"
-mkdir -p "$fixture/.agent-director"
-printf 'stand-in state.db (dry run)\n' >"$fixture/.agent-director/state.db"
-printf '{"event":"stand-in","ts":"2026-10-01T00:00:00.000Z"}\n' >"$fixture/.agent-director/ad-trail.jsonl"
+for d in .agent-director .config/agent-director; do
+    mkdir -p "$fixture/$d"
+    printf 'stand-in state.db (dry run)\n' >"$fixture/$d/state.db"
+    printf '{"event":"stand-in","ts":"2026-10-01T00:00:00.000Z"}\n' >"$fixture/$d/ad-trail.jsonl"
+done
 "$GUARD" snapshot --state "$tmp/guard-quiet.state" --home "$fixture" --settle 1 || fail "guard quiet-host snapshot"
 "$GUARD" snapshot --state "$tmp/guard-busy.state" --home "$fixture" --busy-host || fail "guard busy-host snapshot"
 
@@ -444,7 +447,7 @@ for m in measure rn9 probe; do
     done
     while read -r src; do
         case "$src" in
-            "$HOME" | "$HOME/" | "$HOME/.agent-director"* | "$HOME/.claude"* | /tmp | /tmp/ | /tmp/tmux-* | /run/* | /var/run/*)
+            "$HOME" | "$HOME/" | "$HOME/.agent-director"* | "$HOME/.config/agent-director"* | "$HOME/.claude"* | /tmp | /tmp/ | /tmp/tmux-* | /run/* | /var/run/*)
                 fail "runner print-only ($m) mounts a forbidden path: $src" ;;
         esac
     done < <(grep -oE -- '-v [^ ]+' <<<"$printed" | sed -e 's/^-v //' -e 's/:.*//')
@@ -493,6 +496,7 @@ grep -qF 'MX_DRY_SECRET_TOKEN' <<<"$("$RUNNER" measure --results-root "$tmp/resu
 
 # ---- 7. the sandbox user's own home and tmux ---------------------------------------------------
 [[ ! -e "$passwd_home/.agent-director" ]] || fail "$passwd_home/.agent-director exists after the dry run"
+[[ ! -e "$passwd_home/.config/agent-director" ]] || fail "$passwd_home/.config/agent-director exists after the dry run"
 socket_after=absent
 [[ -S "$default_socket" ]] && socket_after=present
 [[ "$socket_before" == "$socket_after" ]] || fail "the default tmux socket changed: $socket_before -> $socket_after"

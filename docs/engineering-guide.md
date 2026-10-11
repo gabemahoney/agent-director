@@ -210,18 +210,23 @@ numeric ceiling (SR-6.9). Size is recorded in the release notes only.
 
 The b.8dr incident: running `bun test` on the b.aaj branch (schema v3
 migration code) auto-migrated the production `~/.agent-director/state.db`
+(agent-director's directory then; it is `~/.config/agent-director` now, and a
+host that has not yet moved still has the old one, so every guard below covers
+both)
 from v2 to v3, breaking all consumers of the installed v0.7.8 binary.
 Host-side `$HOME` redirection is not a reliable boundary: a test that does
 not redirect it, an absolute path to the real store, a child binary started
 with the host's environment, or a home lookup that reads `/etc/passwd`
 instead of `$HOME` (a spawn cwd's `~` resolves that way, SRD §7.2) all still
 reach real host state. The store also chmods the DB 0600 on every open,
-preventing file-permission workarounds. A container whose HOME has no
-`.agent-director` is the only isolation boundary that holds.
+preventing file-permission workarounds. A container whose HOME has neither
+`.config/agent-director` nor the old `.agent-director` is the only isolation
+boundary that holds.
 
 **The isolation invariant.** All agent-director state — both the store
-(`state.db`) and the trail (`ad-trail.jsonl`) — lives at `~/.agent-director`,
-resolved from the invocation's effective home. The persistent
+(`state.db`) and the trail (`ad-trail.jsonl`) — lives at
+`~/.config/agent-director`, resolved from the invocation's effective home
+(`$HOME` only; `XDG_CONFIG_HOME` is never read). The persistent
 environment-variable relocation switch is gone: no env var and no config key
 relocates that path; state always resolves from the effective home (via
 `$HOME` / `os.UserHomeDir`) or an explicit `--store-path`. The per-invocation
@@ -229,7 +234,7 @@ global flags `--home` and `--store-path` are request-scoped targeting — they
 point one invocation at a different home or store, not a persistent
 relocation mechanism, and the trail follows the effective home. Isolation is
 therefore not something you configure via redirection; it is achieved solely
-by the sandbox, a container whose HOME has no `.agent-director`. Inside that boundary tests
+by the sandbox, a container whose HOME has neither directory. Inside that boundary tests
 isolate individual cases by redirecting `$HOME` to a temp directory; that
 `$HOME` redirection is never the outer boundary (it does not stop the paths
 above), only per-test hygiene within the container.
@@ -241,7 +246,8 @@ Editing source on the host is always fine — nothing runs. The danger is
 one-off `./bin/agent-director …`, not `go generate`, not a bun script.
 Every executed artifact can open the store. Run all of it through
 `make test-sandbox` / `make sandbox-shell` / `make sandbox CMD="…"`, which
-put the process inside a container whose HOME has no `.agent-director`.
+put the process inside a container whose HOME has neither `.config/agent-director`
+nor `.agent-director`.
 
 ### When sandbox execution is mandatory
 
@@ -265,7 +271,8 @@ container. `TestMain` in the state/exec-touching Go packages and the bun
 preload (`pkg/ts-bun-client/test/setup.ts`) check that marker and **refuse to
 run without it** — a stray host-side `go test`/`bun test` fails immediately
 with a message pointing here, before it can touch the real
-`~/.agent-director`. The Go check is `sandboxguard.Require()` from
+`~/.config/agent-director` (or the old `~/.agent-director`; the refusal names
+both). The Go check is `sandboxguard.Require()` from
 `internal/testsupport/sandboxguard`, called at the top of `TestMain`.
 
 This is an accident-prevention gate for humans and agents alike, **not a
@@ -277,7 +284,8 @@ has a second, explicit way through: `sandboxguard.Require()` also proceeds when
 `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is set (`sandboxguard.BypassEnvVar`).
 Absence of *both* variables still refuses — the gate is fail-closed, and the
 refusal message names both escape hatches. The bypass exists for one situation
-only: a runner that has **no real `~/.agent-director` to damage**, where
+only: a runner that has **no real `~/.config/agent-director` or old
+`~/.agent-director` to damage**, where
 containerizing the run protects nothing. An ephemeral GitHub-hosted runner is
 that situation; a development host never is. On a host with a store, use
 `make test-sandbox` — setting the bypass there reintroduces b.8dr. The bypass is
@@ -317,7 +325,7 @@ there. It must **never** be set:
   apply to every workflow, including the self-hosted one; or
 - anywhere in `.github/workflows/pre-release-verify-mac.yml`, which runs on
   `[self-hosted, macOS, ARM64]` — a persistent machine that plausibly holds a
-  real `~/.agent-director`.
+  real `~/.config/agent-director` or old `~/.agent-director`.
 
 Because there is no store-presence probe, workflow-authoring discipline is the
 only thing protecting that self-hosted runner, so it is enforced mechanically:
@@ -420,17 +428,18 @@ uid mapping still vary by host).
 
 ### Known caveats
 
-The sandbox removes the ambient system install (a clean HOME with no
-`~/.agent-director`) and shares one `/work` mount across the parallel test
-run. A caveat to be aware of:
+The sandbox removes the ambient system install (a clean HOME with neither
+`~/.config/agent-director` nor the old `~/.agent-director`) and shares one
+`/work` mount across the parallel test run. A caveat to be aware of:
 
 - **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
   between serialized spawns); on this fast host it occasionally measures
   ~4 ms and flakes.
 
 The `test/smoke/go` canary — which snapshots the real container HOME's
-`~/.agent-director` before and after the smoke package's `m.Run()` and fails
-if any file appears — is a true regression guard and must stay quiet on a
+`~/.config/agent-director` and old `~/.agent-director` before and after the
+smoke package's `m.Run()` and fails if any file appears or changes in either
+— is a true regression guard and must stay quiet on a
 clean tree. It previously fired *intermittently* under `go test ./...`, and
 that was a real defect, not expected behaviour: `trail.Default()` is a
 process-wide `sync.Once` singleton that pins its file path from `$HOME` on the
@@ -454,7 +463,7 @@ modification: mount the checkout at `/work` and the Go module cache at
 `/go/pkg/mod`. The hosted-runner test workflows (`go-smoke.yml`,
 `integration.yml`) do not do this today — they run `go test` directly on the
 ephemeral runner and set `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` instead,
-because a runner with no `~/.agent-director` has nothing for the container to
+because a runner with neither `~/.config/agent-director` nor `~/.agent-director` has nothing for the container to
 protect (see §10).
 
 The **docker leg** of the harness is exercised on the DGXC/k8s pod this repo

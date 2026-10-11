@@ -46,7 +46,7 @@ func TestMain(m *testing.M) {
 
 // trailFile returns the trail file path used by the singleton.
 func trailFile() string {
-	return filepath.Join(trailTestHome, ".agent-director", "ad-trail.jsonl")
+	return filepath.Join(trailTestHome, ".config", "agent-director", "ad-trail.jsonl")
 }
 
 // readTrailLines parses every JSONL line from path; nil when it does not exist yet.

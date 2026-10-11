@@ -9,9 +9,9 @@ import (
 
 // TestMain refuses to run this package's tests outside the sandbox container.
 // The envelope-diff tests build and exec the agent-director binary, which can
-// open (and, on a schema-bumping branch, migrate) the real ~/.agent-director on
-// the host (b.8dr). See sandboxguard for the rationale; run via
-// `make test-sandbox`.
+// open (and, on a schema-bumping branch, migrate) the real
+// ~/.config/agent-director (or the pre-move ~/.agent-director) on the host
+// (b.8dr). See sandboxguard for the rationale; run via `make test-sandbox`.
 //
 // It also redirects $HOME to a fresh temp dir before any test runs. Several
 // subtests drive verbs in-process (runClient → c.Decide / c.FindMissing),
@@ -20,12 +20,12 @@ import (
 // FIRST Emit and never re-resolves it. The per-subtest t.Setenv("HOME", …) in
 // success_cases_test.go / error_cases_test.go only isolates whichever subtest
 // happens to emit first; any earlier in-process Emit would pin the singleton
-// to the real ~/.agent-director. Redirecting $HOME here — before m.Run() —
-// guarantees the singleton can only ever resolve under a temp dir, so this
-// package never writes to the real ~/.agent-director. (This is what the
-// test/smoke/go canary guards against, and why an un-redirected Emit here
-// tripped it intermittently when `go test ./...` ran the two packages in
-// parallel.)
+// to the real ~/.config/agent-director. Redirecting $HOME here — before
+// m.Run() — guarantees the singleton can only ever resolve under a temp dir,
+// so this package never writes to the real ~/.config/agent-director or
+// ~/.agent-director. (This is what the test/smoke/go canary guards against,
+// and why an un-redirected Emit here tripped it intermittently when
+// `go test ./...` ran the two packages in parallel.)
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmpHome, err := os.MkdirTemp("", "envelope-diff-home-*")

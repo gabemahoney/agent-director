@@ -122,8 +122,24 @@ func TestPreflightRules(t *testing.T) {
 		}, ""},
 		{"TMUX set, even empty", modeDry, stubCC, func(p *pfSetup) { p.vars["TMUX"] = "" }, ruleTmuxUnset},
 		{"HOME relative", modeDry, stubCC, func(p *pfSetup) { p.vars["HOME"] = "home" }, ruleHomeSet},
-		{"store under HOME", modeDry, stubCC, func(p *pfSetup) { mkStore(t, p.home) }, ruleHomeHasStore},
-		{"store under the passwd home", modeDry, stubCC, func(p *pfSetup) { mkStore(t, p.passwd) }, ruleHomeHasStore},
+		{"old store under HOME", modeDry, stubCC, func(p *pfSetup) { mkStore(t, p.home, oldStoreRel) }, ruleHomeHasStore},
+		{"new store under HOME", modeDry, stubCC, func(p *pfSetup) { mkStore(t, p.home, newStoreRel) }, ruleHomeHasStore},
+		{"both stores under HOME", modeDry, stubCC, func(p *pfSetup) {
+			mkStore(t, p.home, oldStoreRel)
+			mkStore(t, p.home, newStoreRel)
+		}, ruleHomeHasStore},
+		{"old store under the passwd home", modeDry, stubCC, func(p *pfSetup) { mkStore(t, p.passwd, oldStoreRel) }, ruleHomeHasStore},
+		{"new store under the passwd home", modeDry, stubCC, func(p *pfSetup) { mkStore(t, p.passwd, newStoreRel) }, ruleHomeHasStore},
+		{"both stores under the passwd home", modeDry, stubCC, func(p *pfSetup) {
+			mkStore(t, p.passwd, oldStoreRel)
+			mkStore(t, p.passwd, newStoreRel)
+		}, ruleHomeHasStore},
+		{"real with the new store under HOME", modeReal, realCC, func(p *pfSetup) { mkStore(t, p.home, newStoreRel) }, ruleHomeHasStore},
+		{"neither store, only an unrelated .config under HOME", modeDry, stubCC, func(p *pfSetup) {
+			if err := os.MkdirAll(filepath.Join(p.home, ".config", "other-tool"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
 		{"real with 19 samples", modeReal, realCC, func(p *pfSetup) { p.cfg.samples = 19 }, ruleSampleFloor},
 		{"real with 20 samples", modeReal, realCC, nil, ""},
 		{"dry with 2 samples", modeDry, stubCC, nil, ""},
@@ -201,11 +217,37 @@ func TestPreflightRules(t *testing.T) {
 	}
 }
 
-// mkStore creates home/.agent-director.
-func mkStore(t *testing.T, home string) {
+// The two directories agent-director has kept its files in, relative to a home:
+// the old one and the one it moved to (b.ssz).
+const (
+	oldStoreRel = ".agent-director"
+	newStoreRel = ".config/agent-director"
+)
+
+// mkStore creates home/<rel> (oldStoreRel or newStoreRel), parents included.
+func mkStore(t *testing.T, home, rel string) {
 	t.Helper()
-	if err := os.Mkdir(filepath.Join(home, ".agent-director"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, rel), 0o700); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A refusal names the directory it found, so an operator sees which of the two
+// a home holds.
+func TestPreflightHomeHasStoreNamesTheDirectoryFound(t *testing.T) {
+	for _, rel := range []string{oldStoreRel, newStoreRel} {
+		for _, which := range []string{"HOME", "passwd home"} {
+			t.Run(rel+" under "+which, func(t *testing.T) {
+				p := newPF(t, modeDry)
+				home := map[string]string{"HOME": p.home, "passwd home": p.passwd}[which]
+				mkStore(t, home, rel)
+				_, err := p.run(t, "2.1.285 (measure-exit dry-run stub)")
+				assertRefused(t, err, ruleHomeHasStore)
+				if want := filepath.Join(home, rel); !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal %q does not name %s", err, want)
+				}
+			})
+		}
 	}
 }
 

@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # guard.sh — the measure-exit host-state guard (Epic 21). It proves a
 # measurement run left the host's real agent-director store alone. It only
-# READS two files under <home>/.agent-director: state.db and ad-trail.jsonl.
-# It never opens them with sqlite, never locks, copies or writes anything
+# READS two files under each of the two directories agent-director has kept its
+# files in, <home>/.agent-director and <home>/.config/agent-director (a host may
+# hold either): state.db and ad-trail.jsonl. It never opens them with sqlite, never locks, copies or writes anything
 # under the home, and never runs agent-director, tmux or any Go artifact.
 #
 # Two modes, chosen at snapshot time and recorded in the state file:
 #
-#   quiet-host (default): SHA-256 of state.db and ad-trail.jsonl before and
-#     after; verify prints both side by side and fails on any change,
+#   quiet-host (default): SHA-256 of state.db and ad-trail.jsonl in each
+#     directory before and after; verify prints both side by side and fails on any change,
 #     creation or deletion. The snapshot takes two readings --settle seconds
 #     apart and refuses to start if they already differ (the host is busy).
 #
@@ -16,7 +17,8 @@
 #     writing the store. The snapshot records the trail's size and identity;
 #     verify scans ONLY the bytes appended since then for the run's
 #     identifiers (its store id, instance ids, private socket, run id; from
-#     the driver's harness-ids.txt and --id) and fails on any hit. state.db is
+#     the driver's harness-ids.txt and --id) and fails on any hit. This is done
+#     for each directory's trail. state.db is
 #     reported "not checked on a busy host": a live WAL database is never
 #     opened, not even read-only. A trail that shrank or was replaced (a new
 #     inode) since the snapshot cannot be proven clean and fails. One case it
@@ -29,8 +31,9 @@
 #
 # The home is the invoking user's passwd-entry home: the host's real store
 # lives under it, and a redirected $HOME cannot move it (b.8dr). --home
-# overrides it for dry runs and tests only, and the output says so. The state file must lie outside
-# <home>/.agent-director; snapshot refuses an existing one.
+# overrides it for dry runs and tests only, and the output says so. The state
+# file must lie outside both <home>/.agent-director and
+# <home>/.config/agent-director; snapshot refuses an existing one.
 #
 # Exit status: 0 pass; 1 the guard failed (a change, or an identifier found);
 # 2 bad usage or an unreadable file; 3 snapshot refused (host not quiet).
@@ -40,6 +43,9 @@ set -euo pipefail
 readonly DB_NAME=state.db
 readonly TRAIL_NAME=ad-trail.jsonl
 readonly WAL_NAME=state.db-wal
+# The two directories the guard watches, relative to the home: the old one and
+# the one agent-director moved to. A host may hold either.
+readonly STORE_RELS=(.agent-director .config/agent-director)
 readonly DEFAULT_SETTLE=3
 # Shortest identifier verify accepts: a short value would match unrelated
 # trail bytes.
@@ -95,13 +101,17 @@ file_identity() {
     stat -c %d:%i "$1" 2>/dev/null || stat -f %d:%i "$1"
 }
 
-# wal_note reports, for information only, whether state.db-wal exists.
+# wal_note reports, for information only, whether state.db-wal exists in each
+# watched directory.
 wal_note() {
-    if [[ -e "$1/$WAL_NAME" ]]; then
-        printf 'info: %s present (agent-director has written this store recently)\n' "$1/$WAL_NAME"
-    else
-        printf 'info: %s absent\n' "$1/$WAL_NAME"
-    fi
+    local d
+    for d in "${store_dirs[@]}"; do
+        if [[ -e "$d/$WAL_NAME" ]]; then
+            printf 'info: %s present (agent-director has written this store recently)\n' "$d/$WAL_NAME"
+        else
+            printf 'info: %s absent\n' "$d/$WAL_NAME"
+        fi
+    done
 }
 
 # state_get prints key's value from the state file.
@@ -126,73 +136,107 @@ resolve_home() {
         home="$(passwd_home)"
         home_label="passwd entry of uid $(id -u)"
     fi
+    local rel
+    store_dirs=()
+    watched=()
+    for rel in "${STORE_RELS[@]}"; do
+        store_dirs+=("$home/$rel")
+        watched+=("$home/$rel/$DB_NAME" "$home/$rel/$TRAIL_NAME")
+    done
 }
 
-# check_state_path refuses a state file inside the store directory.
+# rel_of prints a watched path relative to the home, the key the state file
+# records it under.
+rel_of() {
+    printf '%s\n' "${1#"$home"/}"
+}
+
+# check_state_path refuses a state file inside either watched directory.
 check_state_path() {
-    local dir store_real="$store_dir"
+    local dir store_real rel d
     dir="$(cd "$(dirname -- "$state")" 2>/dev/null && pwd -P)" \
         || die 2 "the state file's directory $(dirname -- "$state") does not exist"
-    if [[ -d "$home" ]]; then
-        store_real="$(cd "$home" && pwd -P)/.agent-director"
-    fi
-    case "$dir/" in
-        "$store_real"/* | "$store_dir"/*) die 2 "the state file must not lie under $store_dir" ;;
-    esac
+    for d in "${store_dirs[@]}"; do
+        store_real="$d"
+        if [[ -d "$home" ]]; then
+            rel="${d#"$home"/}"
+            store_real="$(cd "$home" && pwd -P)/$rel"
+        fi
+        case "$dir/" in
+            "$store_real"/* | "$d"/*) die 2 "the state file must not lie under $d" ;;
+        esac
+    done
 }
 
 snapshot_quiet() {
-    local db1 tr1 db2 tr2
+    local f i changed=0 sums1=() sums2=()
     printf 'warning: any agent-director activity on this host during the run makes verify fail; keep the host quiet\n'
-    db1="$(checksum "$store_dir/$DB_NAME")"
-    tr1="$(checksum "$store_dir/$TRAIL_NAME")"
+    for f in "${watched[@]}"; do
+        sums1+=("$(checksum "$f")")
+    done
     sleep "$settle"
-    db2="$(checksum "$store_dir/$DB_NAME")"
-    tr2="$(checksum "$store_dir/$TRAIL_NAME")"
-    if [[ "$db1" != "$db2" || "$tr1" != "$tr2" ]]; then
-        [[ "$db1" == "$db2" ]] || printf 'changed: %s\n' "$store_dir/$DB_NAME" >&2
-        [[ "$tr1" == "$tr2" ]] || printf 'changed: %s\n' "$store_dir/$TRAIL_NAME" >&2
+    for f in "${watched[@]}"; do
+        sums2+=("$(checksum "$f")")
+    done
+    for i in "${!watched[@]}"; do
+        if [[ "${sums1[$i]}" != "${sums2[$i]}" ]]; then
+            printf 'changed: %s\n' "${watched[$i]}" >&2
+            changed=1
+        fi
+    done
+    if [[ "$changed" -ne 0 ]]; then
         die 3 "REFUSED: the host is not quiet (the store changed within ${settle}s before the run). Stop the host's agent-director activity, or use busy-host mode (snapshot --busy-host)."
     fi
     {
         printf 'mode=quiet\nhome=%s\n' "$home"
-        printf '%s=%s\n%s=%s\n' "$DB_NAME" "$db1" "$TRAIL_NAME" "$tr1"
+        for i in "${!watched[@]}"; do
+            printf '%s=%s\n' "$(rel_of "${watched[$i]}")" "${sums1[$i]}"
+        done
     } >"$state"
-    printf 'snapshot (quiet-host): %s %s\n' "$DB_NAME" "$db1"
-    printf 'snapshot (quiet-host): %s %s\n' "$TRAIL_NAME" "$tr1"
+    for i in "${!watched[@]}"; do
+        printf 'snapshot (quiet-host): %s %s\n' "$(rel_of "${watched[$i]}")" "${sums1[$i]}"
+    done
 }
 
 snapshot_busy() {
-    local trail="$store_dir/$TRAIL_NAME" size=absent ident=absent
-    if [[ -e "$trail" ]]; then
-        [[ -f "$trail" && -r "$trail" ]] || die 2 "$trail is not a readable regular file"
-        size="$(file_size "$trail")"
-        ident="$(file_identity "$trail")"
-    fi
-    printf 'mode=busy\nhome=%s\ntrail_size=%s\ntrail_identity=%s\n' "$home" "$size" "$ident" >"$state"
-    if [[ "$size" == absent ]]; then
-        printf 'snapshot (busy-host): %s absent\n' "$TRAIL_NAME"
-    else
-        printf 'snapshot (busy-host): %s size %s bytes\n' "$TRAIL_NAME" "$size"
-    fi
+    local d trail rel size ident
+    printf 'mode=busy\nhome=%s\n' "$home" >"$state"
+    for d in "${store_dirs[@]}"; do
+        trail="$d/$TRAIL_NAME"
+        rel="$(rel_of "$trail")"
+        size=absent
+        ident=absent
+        if [[ -e "$trail" ]]; then
+            [[ -f "$trail" && -r "$trail" ]] || die 2 "$trail is not a readable regular file"
+            size="$(file_size "$trail")"
+            ident="$(file_identity "$trail")"
+        fi
+        printf '%s.size=%s\n%s.identity=%s\n' "$rel" "$size" "$rel" "$ident" >>"$state"
+        if [[ "$size" == absent ]]; then
+            printf 'snapshot (busy-host): %s absent\n' "$rel"
+        else
+            printf 'snapshot (busy-host): %s size %s bytes\n' "$rel" "$size"
+        fi
+    done
     printf 'snapshot (busy-host): %s not checked on a busy host (a live database is never opened)\n' "$DB_NAME"
 }
 
 verify_quiet() {
-    local failed=0 name before after
-    for name in "$DB_NAME" "$TRAIL_NAME"; do
-        before="$(state_get "$name")"
-        after="$(checksum "$store_dir/$name")"
-        printf '%-16s before %s\n%-16s after  %s\n' "$name" "$before" "$name" "$after"
+    local failed=0 f rel before after
+    for f in "${watched[@]}"; do
+        rel="$(rel_of "$f")"
+        before="$(state_get "$rel")"
+        after="$(checksum "$f")"
+        printf '%-34s before %s\n%-34s after  %s\n' "$rel" "$before" "$rel" "$after"
         if [[ "$before" != "$after" ]]; then
-            printf 'GUARD FAILED: %s changed during the run (before %s, after %s)\n' "$store_dir/$name" "$before" "$after" >&2
+            printf 'GUARD FAILED: %s changed during the run (before %s, after %s)\n' "$f" "$before" "$after" >&2
             failed=1
         fi
     done
     if [[ "$failed" -ne 0 ]]; then
         exit 1
     fi
-    printf 'guard passed: both files identical before and after\n'
+    printf 'guard passed: every watched file identical before and after\n'
 }
 
 # load_ids fills the ids array from --ids-file files ("<kind> <value>" or
@@ -235,39 +279,52 @@ scan_appended() {
     return 0
 }
 
-verify_busy() {
-    local trail="$store_dir/$TRAIL_NAME" before ident size now_ident
-    load_ids
-    before="$(state_get trail_size)"
-    ident="$(state_get trail_identity)"
-    printf '%s not checked on a busy host (a live database is never opened)\n' "$DB_NAME"
+# verify_busy_trail judges one directory's trail against the snapshot:
+# returns 0 when nothing of the run is in its appended bytes, 1 otherwise
+# (having printed why).
+verify_busy_trail() {
+    local trail="$1" rel="$2" before ident size now_ident
+    before="$(state_get "$rel.size")"
+    ident="$(state_get "$rel.identity")"
     if [[ ! -e "$trail" ]]; then
         if [[ "$before" == absent ]]; then
-            printf '%s absent before and after: nothing appended\nguard passed (busy-host)\n' "$TRAIL_NAME"
+            printf '%s absent before and after: nothing appended\n' "$rel"
             return 0
         fi
         printf 'GUARD FAILED: %s was deleted or rotated during the run; the bytes written after the snapshot cannot be scanned\n' "$trail" >&2
-        exit 1
+        return 1
     fi
     [[ -f "$trail" && -r "$trail" ]] || die 2 "$trail is not a readable regular file"
     size="$(file_size "$trail")"
     now_ident="$(file_identity "$trail")"
     if [[ "$before" == absent ]]; then
-        printf '%s created during the run: scanning all %s bytes\n' "$TRAIL_NAME" "$size"
-        scan_appended "$trail" 0 "$size" || exit 1
-        printf 'guard passed (busy-host): %s ids, none found\n' "${#ids[@]}"
+        printf '%s created during the run: scanning all %s bytes\n' "$rel" "$size"
+        scan_appended "$trail" 0 "$size" || return 1
         return 0
     fi
     if [[ "$now_ident" != "$ident" || "$size" -lt "$before" ]]; then
         printf 'GUARD FAILED: %s was truncated or rotated during the run (size %s -> %s, identity %s -> %s); bytes written to it after the snapshot cannot be proven clean\n' \
             "$trail" "$before" "$size" "$ident" "$now_ident" >&2
         scan_appended "$trail" 0 "$size" || true
-        exit 1
+        return 1
     fi
     printf '%s size before %s, after %s: scanning %s appended bytes for %s ids\n' \
-        "$TRAIL_NAME" "$before" "$size" "$((size - before))" "${#ids[@]}"
-    scan_appended "$trail" "$before" "$size" || exit 1
-    printf 'guard passed (busy-host): none of the run'"'"'s identifiers in the appended bytes\n'
+        "$rel" "$before" "$size" "$((size - before))" "${#ids[@]}"
+    scan_appended "$trail" "$before" "$size" || return 1
+    return 0
+}
+
+verify_busy() {
+    local d failed=0
+    load_ids
+    printf '%s not checked on a busy host (a live database is never opened)\n' "$DB_NAME"
+    for d in "${store_dirs[@]}"; do
+        verify_busy_trail "$d/$TRAIL_NAME" "$(rel_of "$d/$TRAIL_NAME")" || failed=1
+    done
+    if [[ "$failed" -ne 0 ]]; then
+        exit 1
+    fi
+    printf 'guard passed (busy-host): %s ids, none found in the appended bytes of either trail\n' "${#ids[@]}"
     return 0
 }
 
@@ -301,10 +358,9 @@ case "$op" in
         [[ "${#ids_files[@]}" -eq 0 && "${#id_values[@]}" -eq 0 ]] || die 2 "--ids-file and --id belong to verify"
         [[ ! -e "$state" ]] || die 2 "state file $state already exists; use a fresh path"
         resolve_home
-        store_dir="$home/.agent-director"
         check_state_path
         printf 'home checked: %s (%s)\n' "$home" "$home_label"
-        wal_note "$store_dir"
+        wal_note
         if [[ "$busy" -eq 1 ]]; then
             snapshot_busy
         else
@@ -317,9 +373,8 @@ case "$op" in
         resolve_home
         recorded="$(state_get home)"
         [[ "$recorded" == "$home" ]] || die 2 "the snapshot checked $recorded but verify resolves $home"
-        store_dir="$home/.agent-director"
         printf 'home checked: %s (%s)\n' "$home" "$home_label"
-        wal_note "$store_dir"
+        wal_note
         case "$(state_get mode)" in
             quiet) verify_quiet ;;
             busy) verify_busy ;;

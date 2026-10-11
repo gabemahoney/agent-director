@@ -51,7 +51,7 @@ var (
 
 // TestMain builds agent-director-admin and agent-director with the same
 // version stamp, then pins HOME to a temp dir so in-process seeding never
-// reaches the real ~/.agent-director.
+// reaches the real ~/.config/agent-director (or the old ~/.agent-director).
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmp, err := os.MkdirTemp("", "agent-director-admin-test-")
@@ -89,7 +89,7 @@ type errorEnvelope struct {
 
 // stateDB returns the path of the store under home.
 func stateDB(home string) string {
-	return filepath.Join(home, ".agent-director", "state.db")
+	return filepath.Join(home, ".config", "agent-director", "state.db")
 }
 
 // tmuxTmpdir returns home's private TMUX_TMPDIR, making it.
@@ -322,7 +322,7 @@ func assertInvocationKinds(t *testing.T, home string, want ...string) [][]string
 // killCalled returns the ad.kill.called records of the trail under home.
 func killCalled(t *testing.T, home string) []map[string]any {
 	t.Helper()
-	f, err := os.Open(filepath.Join(home, ".agent-director", "ad-trail.jsonl"))
+	f, err := os.Open(filepath.Join(home, ".config", "agent-director", "ad-trail.jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

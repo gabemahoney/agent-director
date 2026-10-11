@@ -44,7 +44,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // we surface errors via the JSON envelope
 	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
-	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.agent-director/templates/<name>.toml")
+	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.config/agent-director/templates/<name>.toml")
 	fs.StringVar(&p.Agent, "agent", "", "claude or codex (case-sensitive; default: the template's agent; neither gives ErrAgentMissing)")
 	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")

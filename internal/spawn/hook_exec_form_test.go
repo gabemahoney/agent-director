@@ -124,7 +124,7 @@ func TestHookExecFormSettings(t *testing.T) {
 		{name: "plain path, no help entry unless injected", exe: "/opt/ad/bin/agent-director", helpBin: "/opt/help/agent-director"},
 		{name: "path with a space is verbatim", exe: "/opt/with space/agent-director"},
 		{name: "help entry shell form", exe: "/opt/ad/bin/agent-director", injectHelp: true,
-			helpBin: "/home/op/.agent-director/bin/agent-director", wantHelp: "/home/op/.agent-director/bin/agent-director help"},
+			helpBin: "/home/op/.config/agent-director/bin/agent-director", wantHelp: "/home/op/.config/agent-director/bin/agent-director help"},
 		{name: "help entry quoted, hooks verbatim", exe: "/opt/with space/agent-director", injectHelp: true,
 			helpBin: "/opt/help dir/agent-director", wantHelp: `"/opt/help dir/agent-director" help`},
 	}

@@ -28,7 +28,8 @@ See docs/engineering-guide.md "11. Commit subjects".
 
 Edit on the host freely, but **never execute this repo's tests or built
 binaries on the host** — doing so can silently rewrite the real
-`~/.agent-director` store (the b.8dr incident). Host `go test`, `bun test`,
+`~/.config/agent-director` store, or the `~/.agent-director` one it replaced on
+a host not yet moved (the b.8dr incident hit the latter). Host `go test`, `bun test`,
 `go run`, and direct `bin/` executions are **denied** by
 `.claude/settings.json`.
 

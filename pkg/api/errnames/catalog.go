@@ -102,18 +102,20 @@ var Catalog = []Entry{
 	{Name: "ErrPermissionRequestNotFound", Err: store.ErrPermissionRequestNotFound},
 	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
 	{Name: "ErrStoreBusy", Err: store.ErrStoreBusy},
-	// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch and
-	// ErrSchemaMigrationRequired come from no verb handler: clisetup.Open
+	// ErrConfigMalformed, ErrStoreOpen, ErrSchemaMismatch,
+	// ErrSchemaMigrationRequired and ErrOldLayout come from no verb handler: clisetup.Open
 	// names them when the CLI cannot open its Client, before any verb runs
 	// (the config cannot be loaded; the store cannot be opened; the store's
-	// schema is newer than the binary or needs a migration), and
-	// clisetup.NewOpenError names the last three alike when serve cannot open
+	// schema is newer than the binary or needs a migration; only the old
+	// directory is present), and
+	// clisetup.NewOpenError names the last four alike when serve cannot open
 	// its MCP Client (b.uii). They are
 	// catalogued so the surfaces built from this Catalog, the TS client's
 	// error classes among them, know them (b.vma, b.cm7). A
 	// clisetup.OpenError carries the sentinel its Name names (OpenError.Is).
 	// The two schema sentinels are the store's (clisetup re-exports
-	// store.ErrSchemaMismatch and store.ErrSchemaMigrationRequired), so an
+	// store.ErrSchemaMismatch, store.ErrSchemaMigrationRequired and
+	// store.ErrOldLayout), so an
 	// error from pkg/api.New that wraps one gets the same name as the CLI's
 	// OpenError (b.x8s). The store returns them only when it opens, so no
 	// verb error's name changes.
@@ -121,6 +123,7 @@ var Catalog = []Entry{
 	{Name: "ErrStoreOpen", Err: clisetup.ErrStoreOpen},
 	{Name: "ErrSchemaMismatch", Err: clisetup.ErrSchemaMismatch},
 	{Name: "ErrSchemaMigrationRequired", Err: clisetup.ErrSchemaMigrationRequired},
+	{Name: "ErrOldLayout", Err: clisetup.ErrOldLayout},
 	// ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite come from no verb
 	// handler either: the command binaries write them themselves (a verb the
 	// binary does not know; a JSON result the binary cannot write; a trail

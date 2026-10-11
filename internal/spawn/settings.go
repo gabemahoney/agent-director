@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
 // hookEventName is the event-key string used in Claude Code's settings.
@@ -253,13 +254,13 @@ func mergePermissions(p *Permissions, disableAUQ bool) (allow, deny, ask []strin
 //	                   hook command points at the real on-disk file.
 //
 // Stability assumption (load-bearing per SR-1.8): install.sh writes the
-// AD CLI binary to ~/.agent-director/bin/agent-director and re-runs of
+// AD CLI binary to ~/.config/agent-director/bin/agent-director and re-runs of
 // install.sh overwrite the file at the same absolute path — the
 // directory entry's identity is stable across re-installs even though
 // the file's inode may change.  Hook commands captured into a spawned
 // Claude session therefore continue to invoke the same path after an
 // in-place upgrade.  If install.sh is ever changed to write to a
-// per-version path (e.g. ~/.agent-director/bin/agent-director-0.7.0),
+// per-version path (e.g. ~/.config/agent-director/bin/agent-director-0.7.0),
 // the spawn-side hook contract breaks and this site plus the
 // architecture doc need synchronized updates.
 //
@@ -286,7 +287,7 @@ var executablePath = func() (string, error) {
 // agent-director binary used in the inject_help_hook SessionStart
 // entry. The hook fires inside a Spawn whose PATH may not include
 // ~/.local/bin, so the entry must embed the absolute install path
-// (~/.agent-director/bin/agent-director after ~ expansion) rather
+// (~/.config/agent-director/bin/agent-director after ~ expansion) rather
 // than rely on PATH resolution.
 //
 // Held as a var so tests can stub it without touching $HOME.
@@ -295,7 +296,7 @@ var helpHookBinPath = func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".agent-director", "bin", "agent-director"), nil
+	return layout.Join(home, layout.BinDir, layout.BinaryName), nil
 }
 
 // quoteIfWhitespace defensively double-quotes a path that contains

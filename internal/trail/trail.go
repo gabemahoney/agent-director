@@ -22,6 +22,12 @@
 //     writes one line to the operational logger and returns an error wrapping
 //     errNoHome. It never falls back to a path relative to the working
 //     directory or to another home source.
+//   - While the old directory (the one AD used before its move to
+//     ~/.config/agent-director) is present and ~/.config/agent-director is not
+//     (internal/layout's presence rules, SR-11.7), the writer writes and
+//     creates nothing, as when it has no path: every Emit returns an error
+//     wrapping errOldLayout and logs nothing. It is judged on every Emit, so a
+//     long-lived process starts writing once the new directory appears.
 package trail
 
 import (
@@ -32,13 +38,17 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-)
 
-const trailFilename = "ad-trail.jsonl"
+	"github.com/gabemahoney/agent-director/internal/layout"
+)
 
 // errNoHome reports that no absolute home directory could be determined, so
 // the trail has no path and nothing is written.
 var errNoHome = errors.New("trail: no home directory, trail not written")
+
+// errOldLayout reports that only the old directory is present, so the trail
+// writes nothing until the installer has moved it.
+var errOldLayout = errors.New("trail: only the old directory is present, trail not written")
 
 // Writer is a process-lifetime JSONL appender for the agent-director audit
 // trail. Obtain the process-singleton via Default(). The zero value is not
@@ -47,6 +57,7 @@ type Writer struct {
 	mu      sync.Mutex
 	f       *os.File
 	path    string      // absolute trail path; "" when no home directory was found
+	home    string      // home the path was resolved under; "" skips the old-layout check
 	pathErr error       // why path is "" (from resolvePath); nil when path is set
 	olog    *log.Logger // optional; nil silently discards fallback messages
 }
@@ -64,14 +75,15 @@ var (
 // never writes relative to the working directory).
 func Default() *Writer {
 	once.Do(func() {
-		p, err := resolvePath()
-		defaultWriter = &Writer{path: p, pathErr: err}
+		p, home, err := resolve()
+		defaultWriter = &Writer{path: p, home: home, pathErr: err}
 	})
 	return defaultWriter
 }
 
 // Path returns the resolved trail file path without opening the file. The
-// directory component is always ~/.agent-director/ (the user's home directory).
+// directory component is always ~/.config/agent-director/ (under the user's
+// home directory).
 // The filename is always "ad-trail.jsonl". When no home directory can be
 // determined (see resolvePath) Path returns "", meaning the trail is not
 // written; it never returns a relative path. Path is safe to call from
@@ -98,26 +110,33 @@ func Emit(ctx context.Context, event string, fields map[string]any) error {
 }
 
 // resolvePath computes the full trail file path,
-// <home>/.agent-director/ad-trail.jsonl, where home is os.UserHomeDir() ($HOME
-// on Unix).
+// <home>/.config/agent-director/ad-trail.jsonl, where home is os.UserHomeDir()
+// ($HOME on Unix); resolve also gives the home.
 //
 // When no home directory can be determined — os.UserHomeDir fails (on Unix,
 // HOME unset or empty) or returns a path that is not absolute — it returns ""
 // and an error wrapping errNoHome, and the trail fails soft with no file
 // written. It deliberately does not fall back to another home source such as
 // the passwd entry: an empty HOME is often deliberate isolation, and the
-// passwd home holds the real ~/.agent-director (the b.8dr incident class). It
+// passwd home holds the real AD directory (the b.8dr incident class). It
 // never returns a relative path, so no trail is ever written under the
 // working directory.
 func resolvePath() (string, error) {
-	home, err := os.UserHomeDir()
+	p, _, err := resolve()
+	return p, err
+}
+
+// resolve is resolvePath with the home the path is under, "" when there is
+// no path.
+func resolve() (path, home string, err error) {
+	home, err = os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", errNoHome, err)
+		return "", "", fmt.Errorf("%w: %w", errNoHome, err)
 	}
 	if !filepath.IsAbs(home) {
-		return "", fmt.Errorf("%w: home directory %q is not absolute", errNoHome, home)
+		return "", "", fmt.Errorf("%w: home directory %q is not absolute", errNoHome, home)
 	}
-	return filepath.Join(home, ".agent-director", trailFilename), nil
+	return layout.Join(home, layout.TrailFile), home, nil
 }
 
 // Emit writes a single audit event envelope to the trail file.
@@ -135,6 +154,10 @@ func resolvePath() (string, error) {
 // When the writer has no absolute path (no home directory, see resolvePath),
 // Emit writes no file, attempts no meta envelope, writes exactly one line to
 // the operational logger and returns an error wrapping errNoHome.
+//
+// While only the old directory is present (layout.OnlyOldPresent, judged on
+// every call) Emit writes and creates nothing, no meta envelope and no log
+// line, and returns an error wrapping errOldLayout.
 func (w *Writer) Emit(_ context.Context, event string, fields map[string]any) error {
 	if event == "" {
 		return fmt.Errorf("trail: event is required")
@@ -147,6 +170,10 @@ func (w *Writer) Emit(_ context.Context, event string, fields map[string]any) er
 		err := w.noPathErr()
 		w.operLog("trail: no trail path; original=%s error_class=no_home cause=%v", event, err)
 		return err
+	}
+
+	if w.home != "" && layout.OnlyOldPresent(w.home) {
+		return fmt.Errorf("%w: %s", errOldLayout, w.path)
 	}
 
 	line, err := buildEnvelope(event, fields, w.olog)

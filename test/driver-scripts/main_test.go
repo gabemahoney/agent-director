@@ -5,7 +5,7 @@
 // diagnostic rerun starts from a fresh db-reset; and db-reset.sh refuses to
 // run outside the harness container (b.8yq). The tests run the scripts
 // against temp-dir stores and plans, with a real sqlite3, a fake db-reset and
-// fake tmux; nothing touches ~/.agent-director, tmux or Docker.
+// fake tmux; nothing touches ~/.config/agent-director, tmux or Docker.
 package driverscripts_test
 
 import (

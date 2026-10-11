@@ -112,7 +112,7 @@ func readFileTrim(t testing.TB, path string) string {
 // process wrote under the test's HOME, numbers kept as json.Number.
 func hookTrailRecords(t testing.TB, home, event, id string) []map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, ".agent-director", "ad-trail.jsonl"))
+	data, err := os.ReadFile(filepath.Join(home, ".config", "agent-director", "ad-trail.jsonl"))
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -184,7 +184,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSpawnFix(t)
-			home := filepath.Dir(filepath.Dir(f.DBPath))
+			home := filepath.Dir(filepath.Dir(filepath.Dir(f.DBPath)))
 			ctl := t.TempDir()
 			if err := os.WriteFile(filepath.Join(ctl, "payload.json"), payload, 0o600); err != nil {
 				t.Fatalf("write payload: %v", err)

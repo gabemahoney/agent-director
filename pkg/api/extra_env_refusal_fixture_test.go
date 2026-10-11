@@ -36,7 +36,7 @@ func assertSpawnRefused(t *testing.T, r envRefusal, template bool) {
 	p := api.SpawnParams{Agent: "claude", CWD: t.TempDir(), ExtraEnv: r.extraEnv}
 	if template {
 		body := apitest.TemplateBody(apitest.TemplateFields{Agent: "claude", ExtraEnv: r.extraEnv})
-		if _, err := apitest.SeedTemplate(filepath.Join(env.home, ".agent-director", "templates"), "refused-env", body); err != nil {
+		if _, err := apitest.SeedTemplate(filepath.Join(adConfigDir(env.home), "templates"), "refused-env", body); err != nil {
 			t.Fatalf("SeedTemplate: %v", err)
 		}
 		p.Template, p.ExtraEnv = "refused-env", nil

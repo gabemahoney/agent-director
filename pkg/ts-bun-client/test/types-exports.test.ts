@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
-import type { SpawnParams, MakeTemplateParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
+import type { VersionResult, SpawnParams, MakeTemplateParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { DialogMaybeOpenDetails, ProvenGoneHow } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
@@ -27,6 +27,17 @@ test("DEV_SENTINEL_VERSION is the literal '0.0.0-dev' (SR-4.5)", () => {
   const x: "0.0.0-dev" = ad.DEV_SENTINEL_VERSION;
   expect(x).toBe("0.0.0-dev");
 });
+
+// Typecheck: VersionResult.config_dir is a required string (SR-14.4); tsc reports an unused
+// directive if it becomes optional, and an error if it is dropped.
+function _assertVersionResultConfigDir(v: VersionResult): void {
+  const _dir: string = v.config_dir;
+  // @ts-expect-error — config_dir is required
+  const _bad: VersionResult = { version: "1.0.0", commit: "abc" };
+  void _dir;
+  void _bad;
+}
+void _assertVersionResultConfigDir;
 
 test("vendored-binary error classes are gone (SR-4.6)", () => {
   for (const name of ["ErrUnsupportedPlatform", "ErrPlatformPackageMissing", "ErrCliNotExecutable"]) {

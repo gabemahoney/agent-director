@@ -1,6 +1,6 @@
 // Package config — template-storage helpers.
 //
-// Templates are TOML files under ~/.agent-director/templates/ (mode
+// Templates are TOML files under ~/.config/agent-director/templates/ (mode
 // 0700). The dir is lazy-created on first `make-template`; the install
 // skill (Epic 12) does NOT create it. Template names must be safe to
 // join with the templates dir without escaping it — empty / `.` / `..`
@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gabemahoney/agent-director/internal/layout"
 )
 
 // Template-storage errors. Names match the API surface promised by
@@ -55,9 +57,9 @@ var ErrTemplateExists = errors.New("ErrTemplateExists")
 func TemplatesDir() string {
 	home, _ := os.UserHomeDir()
 	if home == "" {
-		return "~/.agent-director/templates"
+		return layout.DisplayTemplatesDir
 	}
-	return filepath.Join(home, ".agent-director", "templates")
+	return layout.Join(home, layout.TemplatesDir)
 }
 
 // EnsureTemplatesDir creates the templates directory (mode 0700) and

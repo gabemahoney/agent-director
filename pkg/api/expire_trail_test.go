@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -471,7 +470,7 @@ func TestExpireTrailFailOpenChild(t *testing.T) {
 	if prefix == "" {
 		t.Skip("run only as TestExpireTrailFailOpen's child")
 	}
-	adDir := filepath.Join(apiTrailDir, ".agent-director")
+	adDir := adConfigDir(apiTrailDir)
 	if err := os.MkdirAll(adDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

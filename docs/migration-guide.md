@@ -110,7 +110,7 @@ migration.
 (`migrate_auth.go`) gates the chain. It looks for a sentinel file named
 `migrate-authorized` sibling to the *resolved* DB path — i.e. in the same
 directory as the DB file, so it authorizes the right store even under a custom
-store path (never hard-coded to `~/.agent-director`). The sentinel is a single
+store path (never hard-coded to `~/.config/agent-director`). The sentinel is a single
 JSON object naming exactly one transition:
 
 ```json
@@ -608,13 +608,15 @@ is no dry-run and no confirmation once authorization is in play.
 
 That is exactly the b.8dr incident. Running `bun test` on the b.aaj branch
 (schema v3 migration code) on the host migrated the real
-`~/.agent-director/state.db` from v2 to v3, breaking every consumer of the
+`~/.agent-director/state.db` (agent-director's directory then; it is
+`~/.config/agent-director` now) from v2 to v3, breaking every consumer of the
 installed v0.7.8 binary (which only understands v2 and now hits
 `ErrSchemaMismatch`). Host `$HOME` redirection does **not** save you: a test
 that does not redirect it, an absolute path to the real store, or a child
 binary started with the host's environment still opens the real
-`~/.agent-director/state.db`. A container whose HOME has no `.agent-director`
-is the only isolation boundary that holds.
+`~/.config/agent-director/state.db`. A container whose HOME has neither
+`.config/agent-director` nor the old `.agent-director` (a host not yet moved
+still has it) is the only isolation boundary that holds.
 
 **The rule:** any branch that bumps `schemaVersion` or changes migration code
 must **only ever be executed in the sandbox** — never on the host. Editing on
@@ -645,7 +647,7 @@ SQLite session against the affected file, then reset the version pragma. For a
 hop whose only forward change was an added column:
 
 ```sql
--- against the over-migrated state.db, e.g. ~/.agent-director/state.db
+-- against the over-migrated state.db, e.g. ~/.config/agent-director/state.db
 ALTER TABLE <table> DROP COLUMN <added_col>;   -- reverse the v(N-1)→vN DDL
 PRAGMA user_version = <N-1>;      -- stamp back to the version the old binary reads
 ```

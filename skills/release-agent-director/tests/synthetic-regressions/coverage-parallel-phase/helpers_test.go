@@ -25,7 +25,7 @@
 // REAL coverage gates. All executor runs use the toy gates-config defined in
 // toyconfig_test.go, whose gate commands are trivial, seconds-scale shell
 // snippets materialized into t.TempDir(). This keeps the package fast and
-// hermetic and guarantees it can never rewrite the real ~/.agent-director store.
+// hermetic and guarantees it can never rewrite the real ~/.config/agent-director store.
 //
 // CONVENTIONS (mirrors coverage-go-root-fires / release-postconditions)
 // =====================================================================
@@ -147,7 +147,7 @@ type executorResult struct {
 // path, exactly as production callers do (bash "$RUN_PARALLEL" "$CONFIG_FILE"),
 // capturing stdout, stderr, and the exit code. HOME is redirected to a
 // throwaway dir so the executor and its toy children can never touch the real
-// ~/.agent-director store (b.93m trail-leak isolation).
+// ~/.config/agent-director store (b.93m trail-leak isolation).
 func runExecutor(t *testing.T, configPath string) executorResult {
 	t.Helper()
 	root := repoRoot(t)

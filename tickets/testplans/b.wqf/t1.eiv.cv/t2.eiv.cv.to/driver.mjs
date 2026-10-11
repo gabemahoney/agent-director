@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { Client, ErrCallTimeout } from "agent-director";
 
 const HOME = process.env.HOME;
-const STORE = path.join(HOME, ".agent-director", "state.db");
+const STORE = path.join(HOME, ".config", "agent-director", "state.db");
 const TIMEOUT_MS = 500;
 
 function fail(msg) {

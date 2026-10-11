@@ -55,7 +55,9 @@ never drop Steps to reproduce, Expected, or Actual. Order them as listed.
    any repro command that executes tests or a built binary must be phrased as a
    sandbox invocation — `make sandbox CMD="…"` or `make test-sandbox` — never a
    bare `go test`, `bun test`, `go run`, or `bin/` execution. Host execution can
-   silently rewrite the real `~/.agent-director` store (the b.8dr incident); it
+   silently rewrite the real `~/.config/agent-director` store, or the old
+   `~/.agent-director` one on a host not yet moved (the b.8dr incident hit the
+   latter); it
    is denied by `.claude/settings.json` for exactly this reason. See
    docs/engineering-guide.md §10 "Sandboxed execution".
 
@@ -63,7 +65,10 @@ never drop Steps to reproduce, Expected, or Actual. Order them as listed.
    - `agent-director version --json` output (the build stamp).
    - Installed binary vs. a dev build from a branch — say which.
    - Host vs. sandbox.
-   - Relevant `~/.agent-director` state: schema version, hive config.
+   - Relevant `~/.config/agent-director` state: schema version, hive config
+     (the `config_dir` field of `agent-director version --json` names the
+     directory the binary uses; an older binary, with no such field, keeps
+     its state in `~/.agent-director`).
    - OS, if it could matter.
 
 4. **Expected result.** What should have happened, ideally citing the

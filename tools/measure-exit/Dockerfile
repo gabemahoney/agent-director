@@ -74,7 +74,8 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
  && claude --version \
  && mkdir -p /home/tester/.claude /etc/claude-code /opt/measure-exit/layers \
  && chown tester:tester /home/tester/.claude \
- && test ! -e /home/tester/.agent-director
+ && test ! -e /home/tester/.agent-director \
+ && test ! -e /home/tester/.config/agent-director
 COPY --from=build /out/measure-exit /usr/local/bin/measure-exit
 RUN chmod 0755 /usr/local/bin/measure-exit
 LABEL org.agent-director.measure-exit.claude-code-version="${CLAUDE_CODE_VERSION}"

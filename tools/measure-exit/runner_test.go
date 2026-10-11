@@ -78,9 +78,11 @@ func newRunnerRig(t *testing.T) *runnerRig {
 	r.toolLog = filepath.Join(t.TempDir(), "tools.log")
 	writeFile(t, filepath.Join(r.home, ".claude", "settings.json"), "{}")
 	writeFile(t, filepath.Join(r.home, ".claude.json"), "{}")
-	writeFile(t, filepath.Join(r.home, ".agent-director", "state.db"), "host db")
-	writeFile(t, filepath.Join(r.guardHome, ".agent-director", "state.db"), "fixture db")
-	writeFile(t, filepath.Join(r.guardHome, ".agent-director", "ad-trail.jsonl"), "{\"event\":\"fixture\"}\n")
+	for _, rel := range storeRels {
+		writeFile(t, filepath.Join(r.home, rel, "state.db"), "host db")
+		writeFile(t, filepath.Join(r.guardHome, rel, "state.db"), "fixture db "+rel)
+		writeFile(t, filepath.Join(r.guardHome, rel, "ad-trail.jsonl"), "{\"event\":\"fixture\"}\n")
+	}
 	for _, name := range []string{"user", "managed", "project", "local"} {
 		writeFile(t, filepath.Join(r.layers, name+".json"), `{"hooks": {}}`)
 	}
@@ -255,7 +257,7 @@ func TestRunnerPrintOnlyContainerCommand(t *testing.T) {
 	}
 	// /tmp is forbidden as a whole; the test's own temp dirs live under it.
 	uid := fmt.Sprint(os.Getuid())
-	for _, forbidden := range []string{r.home, filepath.Join(r.home, ".agent-director"), filepath.Join(r.home, ".claude"),
+	for _, forbidden := range []string{r.home, filepath.Join(r.home, oldStoreRel), filepath.Join(r.home, newStoreRel), filepath.Join(r.home, ".claude"),
 		filepath.Join(r.home, ".claude.json"), "/tmp", "/tmp/tmux-" + uid, "/var/run/docker.sock", "/run/docker.sock", "/run/podman"} {
 		for _, v := range flagValues(line, "-v") {
 			src := strings.SplitN(v, ":", 2)[0]
@@ -694,6 +696,25 @@ func TestRunnerRefusals(t *testing.T) {
 	}
 }
 
+// run.sh refuses a results root under either agent-director directory of the
+// home, before anything runs.
+func TestRunnerRefusesAResultsRootUnderEitherDirectory(t *testing.T) {
+	env := map[string]string{}
+	for _, k := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"} {
+		env[k] = runnerSentinels[k]
+	}
+	for _, rel := range storeRels {
+		t.Run(rel, func(t *testing.T) {
+			r := newRunnerRig(t)
+			code, out := r.run(t, env, "measure", "--results-root", filepath.Join(r.home, rel, "results"))
+			if code != 2 || !strings.Contains(out, "--results-root must lie outside ~/.agent-director, ~/.config/agent-director and ~/.claude*") {
+				t.Fatalf("exit %d, want 2 naming both directories:\n%s", code, out)
+			}
+			r.assertNothingRan(t)
+		})
+	}
+}
+
 func TestRunnerVerifiesAfterAFailedContainer(t *testing.T) {
 	for _, guardMode := range []string{"busy", "quiet"} {
 		t.Run(guardMode, func(t *testing.T) {
@@ -706,14 +727,16 @@ func TestRunnerVerifiesAfterAFailedContainer(t *testing.T) {
 			if code != 1 {
 				t.Fatalf("exit %d, want 1:\n%s", code, out)
 			}
-			wantGuard := map[string]string{"busy": "guard passed (busy-host)", "quiet": "guard passed: both files identical"}[guardMode]
+			wantGuard := map[string]string{"busy": "guard passed (busy-host)", "quiet": "guard passed: every watched file identical"}[guardMode]
 			if !strings.Contains(out, wantGuard) || !strings.Contains(out, "results: "+results) {
 				t.Errorf("output lacks the guard's verify or the results path:\n%s", out)
 			}
 			if guardMode == "quiet" {
-				s := sum(t, filepath.Join(r.guardHome, ".agent-director", "state.db"))
-				if !strings.Contains(out, "before "+s) || !strings.Contains(out, "after  "+s) {
-					t.Errorf("verify did not print state.db's checksum before and after:\n%s", out)
+				for _, rel := range storeRels {
+					s := sum(t, filepath.Join(r.guardHome, rel, "state.db"))
+					if !strings.Contains(out, "before "+s) || !strings.Contains(out, "after  "+s) {
+						t.Errorf("verify did not print %s/state.db's checksum before and after:\n%s", rel, out)
+					}
 				}
 			}
 			if readFile(t, filepath.Join(results, "guard-status.txt")) != "pass\n" || readFile(t, filepath.Join(results, "container-status.txt")) != "1\n" {
@@ -774,79 +797,86 @@ func TestRunnerProbeBisects(t *testing.T) {
 			"bisect stopped: the npm version listing failed or listed nothing; pin the candidates with --versions"}},
 		{"stop-skips-the-npm-listing", "2.1.285", "", npmListing, nil, 3, false, stop280},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := newRunnerRig(t)
-			const runID = "mx-probe-bisect"
-			env := map[string]string{"FAKE_PROBE_MIN": tc.min, "FAKE_PROBE_SILENT": tc.silent, "FAKE_NPM_VERSIONS": tc.npm,
-				"ANTHROPIC_API_KEY": runnerSentinels["ANTHROPIC_API_KEY"]}
-			wantGuard := "pass\n"
-			if tc.guardFails {
-				env["FAKE_TRAIL"] = filepath.Join(r.guardHome, ".agent-director", "ad-trail.jsonl")
-				wantGuard = "fail 1\n"
-			}
-			args := []string{"--run", "--run-id", runID}
-			if tc.npm == "" {
-				args = append(args, "--versions", versions)
-			}
-			code, out := r.run(t, env, "probe", append(args, tc.args...)...)
-			results := filepath.Join(r.resultsRoot, runID)
-			if code != tc.code {
-				t.Fatalf("exit %d, want %d:\n%s", code, tc.code, out)
-			}
-			summary := strings.Split(strings.TrimSpace(readFile(t, filepath.Join(results, "probe-summary.txt"))), "\n")
-			if !reflect.DeepEqual(summary, tc.summary) {
-				t.Errorf("probe summary\n got %q\nwant %q", summary, tc.summary)
-			}
-			verdict := tc.summary[1]
-			if readFile(t, filepath.Join(results, "deployed-verdict.txt")) != verdict+"\n" || !strings.Contains(out, "results: "+results+"\n"+verdict+"\n") {
-				t.Errorf("the deployed verdict %q is not in deployed-verdict.txt and at the end of the output:\n%s", verdict, out)
-			}
-			if (code == 3) != strings.Contains(out, "run.sh: STOP: Claude Code 2.1.280 (deployed) does NOT run exec-form hooks; tell the user at once") {
-				t.Errorf("exit %d and the STOP line disagree:\n%s", code, out)
-			}
-			var built []string
-			listings := 0
-			for _, c := range r.engineCalls() {
-				f := strings.Fields(c)
-				switch {
-				case f[0] == "build":
-					buildArgs := flagValues(f, "--build-arg")
-					built = append(built, strings.TrimPrefix(buildArgs[1], "CLAUDE_CODE_VERSION="))
-					if buildArgs[2] != "REQUIRE_NATIVE_CLAUDE=0" {
-						t.Errorf("probe build %q does not waive the native-binary check", c)
+		// A failing guard is shown for a trail change in either directory.
+		rels := []string{""}
+		if tc.guardFails {
+			rels = storeRels
+		}
+		for _, rel := range rels {
+			t.Run(tc.name+" "+rel, func(t *testing.T) {
+				r := newRunnerRig(t)
+				const runID = "mx-probe-bisect"
+				env := map[string]string{"FAKE_PROBE_MIN": tc.min, "FAKE_PROBE_SILENT": tc.silent, "FAKE_NPM_VERSIONS": tc.npm,
+					"ANTHROPIC_API_KEY": runnerSentinels["ANTHROPIC_API_KEY"]}
+				wantGuard := "pass\n"
+				if tc.guardFails {
+					env["FAKE_TRAIL"] = filepath.Join(r.guardHome, rel, "ad-trail.jsonl")
+					wantGuard = "fail 1\n"
+				}
+				args := []string{"--run", "--run-id", runID}
+				if tc.npm == "" {
+					args = append(args, "--versions", versions)
+				}
+				code, out := r.run(t, env, "probe", append(args, tc.args...)...)
+				results := filepath.Join(r.resultsRoot, runID)
+				if code != tc.code {
+					t.Fatalf("exit %d, want %d:\n%s", code, tc.code, out)
+				}
+				summary := strings.Split(strings.TrimSpace(readFile(t, filepath.Join(results, "probe-summary.txt"))), "\n")
+				if !reflect.DeepEqual(summary, tc.summary) {
+					t.Errorf("probe summary\n got %q\nwant %q", summary, tc.summary)
+				}
+				verdict := tc.summary[1]
+				if readFile(t, filepath.Join(results, "deployed-verdict.txt")) != verdict+"\n" || !strings.Contains(out, "results: "+results+"\n"+verdict+"\n") {
+					t.Errorf("the deployed verdict %q is not in deployed-verdict.txt and at the end of the output:\n%s", verdict, out)
+				}
+				if (code == 3) != strings.Contains(out, "run.sh: STOP: Claude Code 2.1.280 (deployed) does NOT run exec-form hooks; tell the user at once") {
+					t.Errorf("exit %d and the STOP line disagree:\n%s", code, out)
+				}
+				var built []string
+				listings := 0
+				for _, c := range r.engineCalls() {
+					f := strings.Fields(c)
+					switch {
+					case f[0] == "build":
+						buildArgs := flagValues(f, "--build-arg")
+						built = append(built, strings.TrimPrefix(buildArgs[1], "CLAUDE_CODE_VERSION="))
+						if buildArgs[2] != "REQUIRE_NATIVE_CLAUDE=0" {
+							t.Errorf("probe build %q does not waive the native-binary check", c)
+						}
+					case strings.Contains(c, " npm view "):
+						listings++
+						if c != "run --rm --network host agent-director-test npm view @anthropic-ai/claude-code versions --json" {
+							t.Errorf("npm listing %q, want credential-free on the host network", c)
+						}
+					case f[0] == "run" && (!reflect.DeepEqual(flagValues(f, "--network"), []string{"none"}) || strings.Contains(c, "ANTHROPIC_API_KEY")):
+						t.Errorf("probe container %q", c)
 					}
-				case strings.Contains(c, " npm view "):
-					listings++
-					if c != "run --rm --network host agent-director-test npm view @anthropic-ai/claude-code versions --json" {
-						t.Errorf("npm listing %q, want credential-free on the host network", c)
+				}
+				if wantListings := map[bool]int{true: 1}[tc.npm != "" && tc.code != 3]; listings != wantListings {
+					t.Errorf("%d npm listings, want %d", listings, wantListings)
+				}
+				var want []string
+				for _, s := range tc.summary {
+					if strings.HasPrefix(s, "probe ") {
+						want = append(want, strings.TrimSuffix(strings.Fields(s)[1], ":"))
 					}
-				case f[0] == "run" && (!reflect.DeepEqual(flagValues(f, "--network"), []string{"none"}) || strings.Contains(c, "ANTHROPIC_API_KEY")):
-					t.Errorf("probe container %q", c)
 				}
-			}
-			if wantListings := map[bool]int{true: 1}[tc.npm != "" && tc.code != 3]; listings != wantListings {
-				t.Errorf("%d npm listings, want %d", listings, wantListings)
-			}
-			var want []string
-			for _, s := range tc.summary {
-				if strings.HasPrefix(s, "probe ") {
-					want = append(want, strings.TrimSuffix(strings.Fields(s)[1], ":"))
+				if !reflect.DeepEqual(built, want) {
+					t.Errorf("build order %q, want %q", built, want)
 				}
-			}
-			if !reflect.DeepEqual(built, want) {
-				t.Errorf("build order %q, want %q", built, want)
-			}
-			if got := readFile(t, filepath.Join(results, "guard-status.txt")); got != wantGuard {
-				t.Errorf("guard-status.txt %q, want %q", got, wantGuard)
-			}
-			// decide takes one -in per version directory, so each needs the run's guard verdict.
-			for _, v := range want {
-				if got := readFile(t, filepath.Join(results, v, "guard-status.txt")); got != wantGuard {
-					t.Errorf("%s/guard-status.txt %q, want the run's %q", v, got, wantGuard)
+				if got := readFile(t, filepath.Join(results, "guard-status.txt")); got != wantGuard {
+					t.Errorf("guard-status.txt %q, want %q", got, wantGuard)
 				}
-			}
-			assertAbsent(t, "output", out, runnerSentinels["ANTHROPIC_API_KEY"])
-			r.assertNoToolCalls(t)
-		})
+				// decide takes one -in per version directory, so each needs the run's guard verdict.
+				for _, v := range want {
+					if got := readFile(t, filepath.Join(results, v, "guard-status.txt")); got != wantGuard {
+						t.Errorf("%s/guard-status.txt %q, want the run's %q", v, got, wantGuard)
+					}
+				}
+				assertAbsent(t, "output", out, runnerSentinels["ANTHROPIC_API_KEY"])
+				r.assertNoToolCalls(t)
+			})
+		}
 	}
 }

@@ -19,7 +19,7 @@ curl -fsSL https://bun.sh/install | bash
 export PATH="$HOME/.bun/bin:$PATH"
 
 # Install the AD CLI via install.sh (from the release tarball or a
-# local copy).  install.sh drops the binary at $HOME/.agent-director/
+# local copy).  install.sh drops the binary at $HOME/.config/agent-director/
 # bin/agent-director.
 curl -fsSL https://github.com/<org>/agent-director/releases/latest/download/install.sh | bash
 
@@ -35,7 +35,7 @@ bun add agent-director
 cat > /work/probe.ts <<'EOF'
 import { Client } from "agent-director";
 const c = await Client.create({});
-const expected = `${process.env.HOME}/.agent-director/bin/agent-director`;
+const expected = `${process.env.HOME}/.config/agent-director/bin/agent-director`;
 console.log(`binaryPath=${c.binaryPath}`);
 if (c.binaryPath !== expected) {
   console.log(`FAIL: expected ${expected}`);
@@ -50,5 +50,5 @@ cd /work && bun run probe.ts
 
 - Exit code 0.
 - Stdout includes `PASS`.
-- `client.binaryPath` equals `$HOME/.agent-director/bin/agent-director`
+- `client.binaryPath` equals `$HOME/.config/agent-director/bin/agent-director`
   (with `$HOME` expanded to the container's actual home directory).

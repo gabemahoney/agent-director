@@ -96,7 +96,7 @@ the value. It *does* persist the per-spawn `extra_env` map
 (`--extra-env` on the CLI) to the store — with no opt-out — so `resume` can restore a finished (`ended` or
 `missing`) row's original env (see `internal/spawn/relaunch.go`: "ExtraEnv is restored
 from the persisted row … including CLAUDE_CONFIG_DIR and any auth vars").
-That means the auth token sits at rest in `~/.agent-director/state.db`;
+That means the auth token sits at rest in `~/.config/agent-director/state.db`;
 the store file is forced `0600` in a `0700` directory on every open, so
 it is readable only by the owner. (See also the secrets-at-rest caveat
 in configuration.md.)
@@ -106,7 +106,7 @@ paths now put auth vars on disk; the difference is *where*. Per-spawn
 `extra_env` values land in the owner-only (`0600`) state DB described
 above. Auth vars baked into a template's `extra_env`, by contrast, are
 written verbatim to the template's plaintext TOML under
-`~/.agent-director/templates/` (see `pkg/api/make_template.go`), and
+`~/.config/agent-director/templates/` (see `pkg/api/make_template.go`), and
 spawn merges them back in at resolve time (`internal/spawn/params.go`).
 Prefer per-spawn `extra_env` for auth, and do not bake auth tokens
 into a template unless you accept them sitting on disk in plaintext.

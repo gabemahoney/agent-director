@@ -10,7 +10,7 @@ type Options struct {
 	// Resolution order (three-tier precedence):
 	//  1. Options.StorePath if non-empty (tilde-expanded by New).
 	//  2. cfg.Store.DbPath loaded from the resolved ConfigPath.
-	//  3. Hardcoded fallback: "~/.agent-director/state.db".
+	//  3. Hardcoded fallback: "~/.config/agent-director/state.db".
 	//
 	// This preserves the CLI's existing behavior: a user who set a custom
 	// [store] db_path in their TOML continues to hit that path even when
@@ -18,7 +18,7 @@ type Options struct {
 	StorePath string
 
 	// ConfigPath is the path to the TOML configuration file.
-	// Defaults to "~/.agent-director/config.toml" when empty.
+	// Defaults to "~/.config/agent-director/config.toml" when empty.
 	// A leading "~/" is tilde-expanded by New before the file is loaded.
 	ConfigPath string
 

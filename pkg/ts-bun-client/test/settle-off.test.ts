@@ -43,7 +43,7 @@ for (const variant of table.variants) {
     await withTempHome(async (homeDir) => {
       runHelper("seed-read-surface-store", { store: homeStore(homeDir) });
       if (variant.config !== null) {
-        fs.writeFileSync(path.join(homeDir, ".agent-director", "config.toml"), variant.config);
+        fs.writeFileSync(path.join(homeDir, ".config", "agent-director", "config.toml"), variant.config);
       }
       using client = await openClient(homeStore(homeDir));
       for (const c of table.cases) {

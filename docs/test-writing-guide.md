@@ -483,7 +483,7 @@ Maps to <Epic AC #N or "Subtask <id>">.
 
 ## Setup
 What state must already exist before this case runs. The DB-reset fixture
-already gives you a fresh `~/.agent-director/state.db` and clean
+already gives you a fresh `~/.config/agent-director/state.db` and clean
 `tmux` namespace — don't re-do that work.
 
 ## Steps
@@ -508,7 +508,7 @@ set -euo pipefail
 ### Per-case isolation
 
 Before each t2 case, the driver runs `test/driver/db-reset.sh` which
-clears `~/.agent-director/state.db`, kills tmux sessions matching the
+clears `~/.config/agent-director/state.db`, kills tmux sessions matching the
 `cd-` prefix, and re-creates the DB by calling `agent-director list` —
 which stamps the DB at the shipped binary's **current** schema version
 (a fresh DB is created directly at that version, not migrated up from
@@ -537,7 +537,7 @@ with a busy timeout. It takes the same arguments and stdin, and its output
 and exit status are sqlite3's own:
 
 ```bash
-token="$(/opt/driver/sql.sh -readonly "$HOME/.agent-director/state.db" \
+token="$(/opt/driver/sql.sh -readonly "$HOME/.config/agent-director/state.db" \
     "SELECT request_token FROM permission_requests
      WHERE instance_id = '$id' AND decision IS NULL;")"
 ```

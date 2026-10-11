@@ -12,7 +12,7 @@
 // shell, and any shell operator after the break (`&&`, `||`, `;`, `|`) executed
 // on the HOST — outside the container. That silently defeats the central safety
 // invariant ("never run this repo's tests/binaries on the host — it can rewrite
-// the real ~/.agent-director", b.8dr / CLAUDE.md). The failure was quiet: the
+// the real ~/.agent-director or ~/.config/agent-director", b.8dr / CLAUDE.md). The failure was quiet: the
 // command appeared to run, and the escaped half hit the host with no objection
 // from packages that don't call sandboxguard.Require().
 //
@@ -57,7 +57,8 @@
 // This mirrors the b.kbe git-mount regression next door (test/sandbox/gitmount):
 // exercise the Makefile's real plumbing without a real container. It runs `make`
 // and a shell shim only; it never builds or execs the agent-director binary and
-// never touches ~/.agent-director, so it needs no sandboxguard TestMain and runs
+// never touches ~/.agent-director or ~/.config/agent-director, so it needs no
+// sandboxguard TestMain and runs
 // fine under the normal suite (`go test ./...`) — including inside the sandbox,
 // where no real container engine (docker-in-docker) is available.
 //

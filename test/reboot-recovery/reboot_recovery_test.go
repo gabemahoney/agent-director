@@ -89,7 +89,7 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 		t.Fatalf("derive expected transcript path: %v", err)
 	}
 
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	dbPath := filepath.Join(home, ".config", "agent-director", "state.db")
 
 	// Wait for BOTH stubs' SessionStart hooks to persist identity + flip state
 	// to waiting. find-missing judges the recorded pid+starttime; the jsonl
@@ -290,7 +290,7 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 		t.Fatalf("derive expected transcript path: %v", err)
 	}
 
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	dbPath := filepath.Join(home, ".config", "agent-director", "state.db")
 
 	waitForObserved(t, pollDeadline, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
 		return rowReady(t, dbPath, targetID)

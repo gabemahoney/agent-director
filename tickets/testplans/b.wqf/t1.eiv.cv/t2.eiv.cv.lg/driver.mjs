@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { Client } from "agent-director";
 
 const HOME = process.env.HOME;
-const STORE = path.join(HOME, ".agent-director", "state.db");
+const STORE = path.join(HOME, ".config", "agent-director", "state.db");
 const EXPECTED_MIN_PAD = 180_000;
 
 function fail(msg) {

@@ -37,7 +37,7 @@ var binaryPath string
 
 // TestMain builds the CLI binary once, then pins $HOME to a temp dir so
 // in-process store writes (apitest seeding's trail records) never reach the
-// real ~/.agent-director.
+// real ~/.config/agent-director (or the old ~/.agent-director).
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmp, err := os.MkdirTemp("", "agent-director-test-")
@@ -250,8 +250,58 @@ func lastJSONLine(s string) string {
 	return s
 }
 
-// directorDir returns home's .agent-director directory.
-func directorDir(home string) string { return filepath.Join(home, ".agent-director") }
+// directorDir returns home's .config/agent-director directory.
+func directorDir(home string) string { return filepath.Join(home, ".config", "agent-director") }
+
+// oldDirOf returns home's old .agent-director directory, which this release
+// never creates; the ErrOldLayout tests seed it.
+func oldDirOf(home string) string { return filepath.Join(home, ".agent-director") }
+
+// oldLayout is a home holding only the old directory: a store, a config and a
+// templates file, as a host that has not run this release's install.sh has
+// (SR-11.7). The tests that run the binary in it check it afterwards with
+// assertUntouched, which compares every path and every byte.
+type oldLayout struct {
+	home  string
+	files map[string]string // path relative to home -> contents
+	tree  []string          // homeTree as seeded
+}
+
+// newOldLayout creates a fresh home holding only ~/.agent-director with a
+// state.db, a config.toml and templates/t.toml. The files are not valid for
+// any reader: a run that opens one fails with another error than ErrOldLayout.
+func newOldLayout(t *testing.T) oldLayout {
+	t.Helper()
+	o := oldLayout{home: t.TempDir(), files: map[string]string{
+		filepath.Join(".agent-director", "state.db"):            "not a database: the old store\n",
+		filepath.Join(".agent-director", "config.toml"):         "this is [not toml\n",
+		filepath.Join(".agent-director", "templates", "t.toml"): "agent = \"claude\"\n",
+	}}
+	for rel, body := range o.files {
+		path := filepath.Join(o.home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	o.tree = homeTree(t, o.home)
+	return o
+}
+
+// assertUntouched fails unless the home still holds exactly the paths and the
+// bytes newOldLayout wrote: no new directory, no ~/.config, no errors-log or
+// trail line, no store file or change in the old directory.
+func (o oldLayout) assertUntouched(t *testing.T) {
+	t.Helper()
+	assertHomeTree(t, o.home, o.tree...)
+	for rel, want := range o.files {
+		if got, err := os.ReadFile(filepath.Join(o.home, rel)); err != nil || string(got) != want {
+			t.Errorf("%s = %q (err %v); want it as seeded, %q", rel, got, err, want)
+		}
+	}
+}
 
 // stateDB returns home's state.db.
 func stateDB(home string) string { return filepath.Join(directorDir(home), "state.db") }
@@ -333,9 +383,10 @@ func assertHomeTree(t *testing.T, home string, want ...string) {
 	}
 }
 
-// passwdAgentDir returns the passwd home's .agent-director, failing unless it
-// is absent and removing it at cleanup; outside the sandbox it skips, since a
-// regression would write the real store.
+// passwdAgentDir returns the passwd home's .config/agent-director, failing
+// unless that and the old .agent-director are both absent and removing the
+// new one at cleanup (and ~/.config too when the run made it and it is empty);
+// outside the sandbox it skips, since a regression would write the real store.
 func passwdAgentDir(t *testing.T) string {
 	t.Helper()
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
@@ -345,11 +396,20 @@ func passwdAgentDir(t *testing.T) string {
 	if err != nil || !filepath.IsAbs(u.HomeDir) {
 		t.Fatalf("user.Current() = %v, %v; want an absolute passwd home", u, err)
 	}
-	dir := filepath.Join(u.HomeDir, ".agent-director")
-	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("%s must be absent before the run (Lstat: %v); the sandbox image has none", dir, err)
+	dir := directorDir(u.HomeDir)
+	for _, d := range []string{dir, oldDirOf(u.HomeDir)} {
+		if _, err := os.Lstat(d); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s must be absent before the run (Lstat: %v); the sandbox image has none", d, err)
+		}
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	configDir := filepath.Dir(dir)
+	_, statErr := os.Lstat(configDir)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			_ = os.Remove(configDir) // only if empty
+		}
+	})
 	return dir
 }
 

@@ -1,6 +1,6 @@
 /**
  * open-errors.test.ts — b.vma, b.cm7: the real CLI's store-open, config and
- * schema refusals reach a TS caller as their own classes, not ErrUnknownErrorName.
+ * schema refusals, and the old-layout refusal, reach a TS caller as their own classes, not ErrUnknownErrorName.
  */
 
 import { test, expect } from "bun:test";
@@ -13,6 +13,7 @@ import { Client } from "../src/client.js";
 import {
   type AgentDirectorError,
   ErrConfigMalformed,
+  ErrOldLayout,
   ErrSchemaMigrationRequired,
   ErrSchemaMismatch,
   ErrStoreOpen,
@@ -47,12 +48,37 @@ test.each([
 
 test("refused [pause] timeout_seconds → list() rejects with ErrConfigMalformed", async () => {
   await withTempHome(async (homeDir) => {
-    fs.mkdirSync(path.join(homeDir, ".agent-director"));
-    fs.writeFileSync(path.join(homeDir, ".agent-director", "config.toml"), "[pause]\ntimeout_seconds = -1\n");
+    fs.mkdirSync(path.join(homeDir, ".config", "agent-director"), { recursive: true });
+    fs.writeFileSync(path.join(homeDir, ".config", "agent-director", "config.toml"), "[pause]\ntimeout_seconds = -1\n");
     const err = await listRejection();
     expect(err).toBeInstanceOf(ErrConfigMalformed);
     expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
     expect((err as ErrConfigMalformed).errDescription).toContain("[pause] timeout_seconds = -1");
+  });
+}, 10_000);
+
+// SR-11.7: a host that still holds only the old directory is refused, not silently given a new store.
+test("the old directory only, no storePath → list() rejects with ErrOldLayout and creates nothing", async () => {
+  await withTempHome(async (homeDir) => {
+    fs.mkdirSync(path.join(homeDir, ".agent-director"));
+    const err = await listRejection();
+    expect(err).toBeInstanceOf(ErrOldLayout);
+    expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
+    expect((err as ErrOldLayout).errDescription).toContain("install.sh");
+    expect(fs.readdirSync(homeDir)).toEqual([".agent-director"]);
+    expect(fs.readdirSync(path.join(homeDir, ".agent-director"))).toEqual([]);
+  });
+}, 10_000);
+
+test("the old directory only, with a storePath → list() is not refused", async () => {
+  await withTempHome(async (homeDir) => {
+    fs.mkdirSync(path.join(homeDir, ".agent-director"));
+    const storePath = path.join(homeDir, "elsewhere", "state.db");
+    fs.mkdirSync(path.dirname(storePath));
+    runHelper("seed-empty-store", { store: storePath });
+    using client = await Client.create({ storePath, _cliPath: process.env.CLI_PATH } as unknown as Parameters<typeof Client.create>[0]);
+    await client.list({});
+    expect(fs.existsSync(path.join(homeDir, ".config"))).toBe(false);
   });
 }, 10_000);
 

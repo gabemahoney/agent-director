@@ -88,7 +88,7 @@ func matrixCases() map[string]matrixCase {
 		"expire":       {args: `{"older_than":"7d"}`},
 
 		// make-template needs an isolated HOME so we don't litter the
-		// developer's ~/.agent-director/templates/ on test runs. The
+		// developer's ~/.config/agent-director/templates/ on test runs. The
 		// per-subtest t.Setenv handles that. Its agent_args need an agent,
 		// so a dropped json tag on agent surfaces as ErrTemplateAgentMissing.
 		"make-template": {args: `{"name":"dispatch-matrix-test","agent":"claude","agent_args":["--model","opus"]}`},
@@ -125,7 +125,7 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 			}
 
 			// Isolate HOME so make-template (and any future verb that
-			// touches ~/.agent-director/) writes into a temp dir that
+			// touches ~/.config/agent-director/) writes into a temp dir that
 			// the runtime cleans up.
 			t.Setenv("HOME", t.TempDir())
 

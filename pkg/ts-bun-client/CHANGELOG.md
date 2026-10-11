@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking for TypeScript callers (b.ssz): agent-director's directory moves from `~/.agent-director` to `~/.config/agent-director`.** The standard install path the client discovers is now `~/.config/agent-director/bin/agent-director` (a binary on `$PATH` is found as before), and the CLI's config, store, trail and templates live in `~/.config/agent-director` (`HOME` decides; `XDG_CONFIG_HOME` is not read). A host that has not run this release's `install.sh` has no binary at the new path, so `Client.create()` throws `ErrSystemInstallNotFound` unless the binary is on `$PATH`.
+  - **`ErrOldLayout` (new, the catalog now has 61 entries):** thrown by every call that opens the store, when the CLI is about to open its default store (no `storePath`, and no `[store] db_path` in its config file), no store exists in `~/.config/agent-director`, and the old directory exists. Nothing is created. An operator runs this release's `install.sh`; do not retry or act on any agent.
+  - **`VersionResult.config_dir` (new, `string`):** the directory the CLI keeps its files in, `~/.config/agent-director` (unexpanded, for every `HOME`). A `VersionResult` literal in your code needs the field.
 - **Breaking for TypeScript callers (b.ssz): Claude-named keys are now agent-generic, and the old keys are refused with no aliases.** Rename these in every call and every result you read:
   - `claude_instance_id` is `instance_id`: the param of `spawn`, `status`, `get`, `sendKeys`, `readPane`, `pause`, `resume`, `kill` and `decide`, and the result key of `spawn`, `resume`, `get` and each `list` row.
   - `claude_args` is `agent_args`: the `spawn` and `makeTemplate` param, and the `get` result key.

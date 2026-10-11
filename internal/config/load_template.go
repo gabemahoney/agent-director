@@ -9,7 +9,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/oldnames"
 )
 
-// LoadTemplate reads ~/.agent-director/templates/<name>.toml and
+// LoadTemplate reads ~/.config/agent-director/templates/<name>.toml and
 // decodes it into a TemplateFile.
 //
 // Behavior (SRD §10.2):

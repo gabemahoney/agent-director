@@ -319,7 +319,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "template",
 				Type:          "string",
-				Description:   "Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).",
+				Description:   "Optional named template under ~/.config/agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -1003,7 +1003,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "make-template",
-		Description: "Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
+		Description: "Save a spawn preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1239,7 +1239,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "version",
-		Description: "Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.",
+		Description: "Print the version stamp as JSON ({version, commit, config_dir}). CLI aliases: --version, -v.",
 		Callable:    true,
 		HandleFree:  true,
 		Params:      []ParamDef{},
@@ -1256,6 +1256,14 @@ var Verbs = []VerbDef{
 				Name:          "commit",
 				Type:          "string",
 				Description:   "Full git SHA the binary was built from. \"unknown\" for unstamped builds.",
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+			{
+				Name:          "config_dir",
+				Type:          "string",
+				Description:   "Directory the binary keeps agent-director's files in: \"~/.config/agent-director\", unexpanded, for every HOME.",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: nil,

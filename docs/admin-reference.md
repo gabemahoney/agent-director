@@ -4,13 +4,13 @@ agent-director-admin is an operator tool. Do not run any of its commands without
 
 # agent-director-admin reference
 
-install.sh installs agent-director-admin at `~/.agent-director/admin/agent-director-admin` and never on PATH. It opens the same store, with the same config, as agent-director.
+install.sh installs agent-director-admin at `~/.config/agent-director/admin/agent-director-admin` and never on PATH. It opens the same store, with the same config, as agent-director.
 
 ## Global flags
 
 The global flags are agent-director's, parsed and applied the same way: give the ones agent-director's runs use, if any, so that agent-director-admin opens the same store and reaches the same tmux. Each goes before or after the verb, as --flag value or --flag=value.
 
-- `--store-path <path>`: Open the store at <path> instead of the configured one ([store] db_path in ~/.agent-director/config.toml, by default ~/.agent-director/state.db).
+- `--store-path <path>`: Open the store at <path> instead of the configured one ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db).
 - `--home <dir>`: Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it.
 - `--tmux-command <path>`: Run <path> as tmux instead of the tmux on PATH.
 - `--create-if-missing <true|false>`: With false, refuse a store that does not exist (ErrStoreOpen) and create none of it; with true, or when omitted, create a missing store (parent directories, file and schema).
@@ -61,7 +61,7 @@ Plain text, opening with the human-approval statement.
 
 `agent-director-admin version`
 
-Print the build-time version stamp, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. agent-director-admin --version and -v print it too. It opens no store and loads no config. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
+Print the build-time version stamp and config_dir, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. agent-director-admin --version and -v print it too. It opens no store and loads no config. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
 
 ### Flags
 
@@ -69,4 +69,4 @@ _None._
 
 ### Output
 
-{"version": "...", "commit": "..."}: the version stamp and the full git SHA the binary was built from.
+{"version": "...", "commit": "...", "config_dir": "..."}: the version stamp, the full git SHA the binary was built from and the directory it keeps its files in (~/.config/agent-director).

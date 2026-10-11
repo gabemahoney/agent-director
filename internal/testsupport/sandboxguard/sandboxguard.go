@@ -3,13 +3,14 @@
 //
 // Packages whose tests write agent-director state (open the store, emit trail
 // events) or exec built binaries can rewrite the developer's real
-// ~/.agent-director when run on the host (b.8dr). Redirecting $HOME is not
+// agent-director directory, ~/.agent-director or ~/.config/agent-director (a
+// host may hold either), when run on the host (b.8dr). Redirecting $HOME is not
 // enough to prevent that: a test that does not redirect it, an absolute path to
 // the real store, a child binary started with the host's environment, or a
 // home lookup that reads /etc/passwd instead of $HOME all still reach real
 // state. The container is the only isolation boundary.
 // The `make test-sandbox` / `make sandbox*` targets run those tests inside a
-// container whose HOME has no .agent-director and set
+// container whose HOME has neither directory and set
 // AGENT_DIRECTOR_TEST_SANDBOX=1. Require() checks that marker and aborts with a
 // short message if it is absent, so a stray host-side `go test` fails fast
 // instead of touching production state.
@@ -17,7 +18,7 @@
 // There is one other way through: BypassEnvVar
 // (BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS). It exists solely for CI runners
 // that have no real store to protect — an ephemeral GitHub-hosted runner has no
-// ~/.agent-director, so containerizing the run buys nothing. It is NOT a way to
+// agent-director directory, so containerizing the run buys nothing. It is NOT a way to
 // run these tests on a development host, where a real store exists; use
 // `make test-sandbox` there. Per b.175 the bypass must be set only at the
 // job/step level of the GitHub-hosted workflows (go-smoke.yml,
@@ -62,10 +63,10 @@ func Require() {
 		return
 	}
 	fmt.Fprintln(os.Stderr,
-		"refusing to run: neither "+EnvVar+" nor "+BypassEnvVar+" is set, so this process is running OUTSIDE the sandbox container (on the host), where it can rewrite the real ~/.agent-director.")
+		"refusing to run: neither "+EnvVar+" nor "+BypassEnvVar+" is set, so this process is running OUTSIDE the sandbox container (on the host), where it can rewrite the real ~/.agent-director or ~/.config/agent-director.")
 	fmt.Fprintln(os.Stderr,
 		"On a development host, run it via `make test-sandbox` (see the run-tests skill), which sets "+EnvVar+". A broken-quoting `make sandbox CMD=\"…\"` escape is one way to end up on the host here.")
 	fmt.Fprintln(os.Stderr,
-		"Do NOT set "+BypassEnvVar+" here: it is only for CI runners that have no real ~/.agent-director store to damage (ephemeral GitHub-hosted runners), not a way to run these tests on a host that has one.")
+		"Do NOT set "+BypassEnvVar+" here: it is only for CI runners that have no real ~/.agent-director or ~/.config/agent-director store to damage (ephemeral GitHub-hosted runners), not a way to run these tests on a host that has one.")
 	os.Exit(1)
 }

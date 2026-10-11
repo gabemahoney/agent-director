@@ -263,7 +263,7 @@ func TestReportShapeTranslationEndToEnd(t *testing.T) {
 	cmd := exec.Command("bash", runParallel, cfgPath)
 	cmd.Dir = root
 	// HOME redirect (b.93m, SR-5.1) — matches every other executor invocation in
-	// the bee: the gate subprocesses resolve ~/.agent-director from HOME, so an
+	// the bee: the gate subprocesses resolve ~/.config/agent-director from HOME, so an
 	// isolated per-test HOME keeps any nested emitter from writing ad-trail.jsonl
 	// into the real home and racing the trail-leak canary.
 	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())

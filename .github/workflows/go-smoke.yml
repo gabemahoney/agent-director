@@ -64,9 +64,9 @@ jobs:
         env:
           # sandboxguard.Require() (internal/testsupport/sandboxguard) refuses
           # to run these tests outside the sandbox container because on a dev
-          # host they can rewrite the real ~/.agent-director (b.8dr). This
+          # host they can rewrite the real ~/.agent-director or ~/.config/agent-director (b.8dr). This
           # runner is a GitHub-HOSTED, ephemeral ubuntu-latest VM: there is no
-          # real ~/.agent-director on it and nothing to protect, so we bypass
+          # real ~/.agent-director or ~/.config/agent-director on it and nothing to protect, so we bypass
           # the container requirement instead of paying for it.
           #
           # Per b.175 this variable must be set ONLY at this job/step level in

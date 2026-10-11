@@ -271,7 +271,7 @@ func TestMigrationRefusedWithoutSentinel(t *testing.T) {
 				"by an administrator via the agent-director install process.", from, schemaVersion); !strings.Contains(msg, want) {
 				t.Errorf("error = %q; want it to contain %q", msg, want)
 			}
-			for _, bad := range []string{"migrate", "--", "AGENT_DIRECTOR", "~/.agent-director", "/", sentinelFilename} {
+			for _, bad := range []string{"migrate", "--", "AGENT_DIRECTOR", "~/.config/agent-director", ".config/agent-director", "~/.agent-director", "/", sentinelFilename} {
 				if strings.Contains(strings.ToLower(msg), strings.ToLower(bad)) {
 					t.Errorf("error %q leaks the self-service breadcrumb %q", msg, bad)
 				}

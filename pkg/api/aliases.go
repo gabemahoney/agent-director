@@ -158,6 +158,13 @@ var ErrSchemaMismatch = store.ErrSchemaMismatch
 // configuration error; the store cannot be used until migrated.
 var ErrSchemaMigrationRequired = store.ErrSchemaMigrationRequired
 
+// ErrOldLayout is returned by api.New when it is about to open the default
+// store (no Options.StorePath, and no [store] db_path in the config file),
+// no store exists there, and the old directory, the one agent-director used
+// before ~/.config/agent-director, is present. Nothing is created. Run the
+// this release's install.sh, which moves the old directory.
+var ErrOldLayout = store.ErrOldLayout
+
 // ErrStoreNotInitialized is returned by api.New when CreateIfMissing is false
 // and the database file does not exist. Initialize the store first or set
 // CreateIfMissing: true.

@@ -12,7 +12,7 @@
 # install.sh run gets its own HOME under a private temp root, PATH holding only
 # a toolbox of links and fakes (fake claude, file when the image lacks it, curl
 # that never touches the network, an instant sleep) and `env -i`, so nothing
-# can reach the real ~/.agent-director.
+# can reach the real ~/.config/agent-director.
 #
 # Advice that does not work as written is a known-broken test: it is skipped
 # unless AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1, which runs it and shows it
@@ -127,7 +127,7 @@ ADMIN_NUL="$ROOT/bin/agent-director-admin-nul"
 # one more (store.go swapped in through a build overlay, the tree untouched).
 mkdir -p "$ROOT/probe-home"
 HOME="$ROOT/probe-home" "$BIN" list >/dev/null || die "probe list"
-SCHEMA="$("$SQLITE" "$ROOT/probe-home/.agent-director/state.db" 'PRAGMA user_version;')"
+SCHEMA="$("$SQLITE" "$ROOT/probe-home/.config/agent-director/state.db" 'PRAGMA user_version;')"
 [[ "$SCHEMA" =~ ^[0-9]+$ ]] || die "read schema version: $SCHEMA"
 sed -E "s/^const schemaVersion = [0-9]+$/const schemaVersion = $((SCHEMA + 1))/" \
     "$REPO_ROOT/internal/store/store.go" >"$ROOT/store-newer.go"
@@ -478,22 +478,22 @@ line_after() {
 # admin-src as agent-director-admin in its own 0700 directory (b.vqr), and a
 # state.db.
 expect_installed() {
-    local home="$1" src="$2" admin_src="$3" c="$1/.agent-director/bin/agent-director"
-    local a="$1/.agent-director/admin/agent-director-admin"
+    local home="$1" src="$2" admin_src="$3" c="$1/.config/agent-director/bin/agent-director"
+    local a="$1/.config/agent-director/admin/agent-director-admin"
     [[ -x "$c" ]] || { bad "no installed binary at $c"; return; }
     cmp -s "$c" "$src" || bad "installed binary is not $src"
     [[ -x "$a" ]] || { bad "no installed agent-director-admin at $a"; return; }
     cmp -s "$a" "$admin_src" || bad "installed agent-director-admin is not $admin_src"
     [[ "$(stat -c %a "${a%/*}")" == 700 ]] || bad "${a%/*} has mode $(stat -c %a "${a%/*}"); want 700"
     [[ "$(stat -c %a "$a")" == 755 ]] || bad "$a has mode $(stat -c %a "$a"); want 755"
-    [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
+    [[ -f "$home/.config/agent-director/state.db" ]] || bad "no state.db after install"
 }
 
 # hooks_injected <home>: home's settings.json is one JSON document holding both
 # `agent-director help` hooks, SessionStart and SessionEnd reason=compact, each
 # in an entry's hooks list (an entry that is null, or has no list, is passed over).
 hooks_injected() {
-    jq -se --arg c "$1/.agent-director/bin/agent-director help" 'length == 1 and (.[0]
+    jq -se --arg c "$1/.config/agent-director/bin/agent-director help" 'length == 1 and (.[0]
         | any(.hooks.SessionStart[]; any(.hooks | arrays | .[]; .command == $c))
         and any(.hooks.SessionEnd[]; .matcher == "compact" and any(.hooks | arrays | .[]; .command == $c)))' \
         "$1/.claude/settings.json" >/dev/null 2>&1
@@ -501,11 +501,11 @@ hooks_injected() {
 
 # expect_nothing_installed <home>: neither binary was installed.
 expect_nothing_installed() {
-    [[ ! -e "$1/.agent-director/bin/agent-director" ]] || bad "agent-director installed after the refusal"
-    [[ ! -e "$1/.agent-director/admin/agent-director-admin" ]] || bad "agent-director-admin installed after the refusal"
+    [[ ! -e "$1/.config/agent-director/bin/agent-director" ]] || bad "agent-director installed after the refusal"
+    [[ ! -e "$1/.config/agent-director/admin/agent-director-admin" ]] || bad "agent-director-admin installed after the refusal"
 }
-db_version() { "$SQLITE" "$1/.agent-director/state.db" 'PRAGMA user_version;'; }
-sentinel() { printf '%s' "$1/.agent-director/migrate-authorized"; }
+db_version() { "$SQLITE" "$1/.config/agent-director/state.db" 'PRAGMA user_version;'; }
+sentinel() { printf '%s' "$1/.config/agent-director/migrate-authorized"; }
 
 run_test() {
     T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
@@ -680,7 +680,7 @@ test_J3_NoSourceBinaryPassBinary() {
 # and check both are installed (b.vqr).
 j3_pass_both() {
     local h="$1" flags extra; shift
-    expect_advice "Tried: $h/.agent-director/admin/agent-director-admin"
+    expect_advice "Tried: $h/.config/agent-director/admin/agent-director-admin"
     expect_advice "Pass --binary <path> --admin-binary <path> (both from the same build) to override."
     expect_nothing_installed "$h"
     flags="$(advice_after "Pass ")" || { bad "no advised flags"; return; }
@@ -726,7 +726,7 @@ test_J3_NoAdminBinaryPassAdminBinary() {
     run "$h" "${argv[@]}"
     expect_rc 3 "no agent-director-admin source binary" || return
     expect_advice "install.sh: no agent-director-admin source binary found."
-    expect_advice "Tried: $h/.agent-director/admin/agent-director-admin"
+    expect_advice "Tried: $h/.config/agent-director/admin/agent-director-admin"
     expect_advice "Pass --admin-binary <path> to override."
     expect_nothing_installed "$h"
     run "$h" "${argv[@]}" --admin-binary "$ADMIN"
@@ -1006,8 +1006,8 @@ j6_failing_migration() {
     run "$J6H" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
     if [[ "${1:-}" == pre-0.11.0 ]]; then j11_pre_admin "$J6H" || return 1; fi
-    "$SQLITE" "$J6H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));" || { bad "damage store"; return 1; }
-    j6_break_hop "$J6H/.agent-director/state.db" || { bad "damage store"; return 1; }
+    "$SQLITE" "$J6H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));" || { bad "damage store"; return 1; }
+    j6_break_hop "$J6H/.config/agent-director/state.db" || { bad "damage store"; return 1; }
     J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run "$J6H" "${J6ARGV[@]}"
     expect_exit5 ErrStoreOpen "migration step fails" || return 1
@@ -1028,7 +1028,7 @@ test_J6_MigrationFailedRerunRetries() {
     local could="  schema  : state.db at v$((SCHEMA - 1)); could not tell whether a migration is needed (agent-director list failed: ErrStoreOpen)"
     grep -qxF "$could" "$OUT" || bad "no \"$could\" line: $(grep -F "  schema  : " "$OUT")"
     [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)) on a failed re-run"
-    j6_repair_hop "$J6H/.agent-director/state.db" || { bad "repair store"; return; }
+    j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; return; }
     run "$J6H" "${J6ARGV[@]}"
     expect_rc 0 "re-run once the cause is gone" || return
     [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J6H"); want v$SCHEMA"
@@ -1090,7 +1090,7 @@ test_J6_NewerStoreInstallNewer() {
     local h; h="$(new_home)"
     run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 0 "first install" || return
-    "$SQLITE" "$h/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
+    "$SQLITE" "$h/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
     run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_exit5 ErrSchemaMismatch "store newer than the binary" || return
     local none="  schema  : state.db at v$((SCHEMA + 1)); no migration authorization needed"
@@ -1099,7 +1099,7 @@ test_J6_NewerStoreInstallNewer() {
     expect_advice "If state.db is NEWER than this binary (ErrSchemaMismatch), install a newer agent-director instead."
     run "$h" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 0 "install a newer agent-director" && expect_installed "$h" "$BIN_NEWER" "$ADMIN"
-    run "$h" "$h/.agent-director/bin/agent-director" list
+    run "$h" "$h/.config/agent-director/bin/agent-director" list
     expect_rc 0 "list with the newer binary"
 }
 
@@ -1116,7 +1116,7 @@ J7FULL=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink --reg
 # prints use (b.c7f).
 j7_config() {
     [[ -n "${J7_BUSY_MS:-}" ]] || return 0
-    mkdir -p "$J7H/.agent-director" && printf '[store]\nbusy_timeout_ms = %s\n' "$J7_BUSY_MS" >"$J7H/.agent-director/config.toml"
+    mkdir -p "$J7H/.config/agent-director" && printf '[store]\nbusy_timeout_ms = %s\n' "$J7_BUSY_MS" >"$J7H/.config/agent-director/config.toml"
 }
 
 # j7_timeout: the busy timeout install.sh's check commands wait (.timeout):
@@ -1135,7 +1135,7 @@ j7_installed() {
 # next install migrates it.
 j7_older_store() {
     j7_installed || return 1
-    "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
+    "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
 }
 
 # j7_run <call> [<answer> [<stderr> [<status>]]]: run J7ARGV in J7H with
@@ -1182,7 +1182,7 @@ j7_unreadable() {
 # j7_schema_unreadable: stdout's state.db line shows <unreadable>, never a bare
 # "(schema v)" (b.n5a).
 j7_schema_unreadable() {
-    grep -qF "at $J7H/.agent-director/state.db (schema <unreadable>)" "$OUT" \
+    grep -qF "at $J7H/.config/agent-director/state.db (schema <unreadable>)" "$OUT" \
         || bad "no \"(schema <unreadable>)\" state.db line: $(flat "$OUT")"
 }
 
@@ -1194,7 +1194,7 @@ j7_schema_unreadable() {
 # line printed (b.xd9).
 j7_warned() {
     local want="install.sh: warning: state.db's schema version is unreadable after the store open" db line
-    db="$(printf %q "$J7H/.agent-director/state.db")"
+    db="$(printf %q "$J7H/.config/agent-director/state.db")"
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
     j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\"" "$1"
     if grep -qiE 'FAILED|could not|re-run' "$ERR"; then
@@ -1202,7 +1202,7 @@ j7_warned() {
     fi
     j7_schema_unreadable
     for line in "  hooks   : injected into $J7H/.claude/settings.json" "  mcp     : registered with claude mcp" \
-        "install.sh: done. Try: $J7H/.agent-director/bin/agent-director help"; do
+        "install.sh: done. Try: $J7H/.config/agent-director/bin/agent-director help"; do
         grep -qxF "$line" "$OUT" || bad "no \"$line\" line: the install stopped at step 5: $(flat "$OUT")"
     done
     grep -qE '^  config  : (merged|created) ' "$OUT" \
@@ -1215,7 +1215,7 @@ j7_warned() {
 j7_mismatch() {
     local t="$SCHEMA" a="$((SCHEMA - 1))" db
     j7_verify_fails "$a" || return 1
-    db="$(printf %q "$J7H/.agent-director/state.db")"
+    db="$(printf %q "$J7H/.config/agent-director/state.db")"
     expect_advice "actual user_version: $a"
     expect_advice "The store open (agent-director list) succeeded, and a successful open leaves state.db at v$t: any authorized migration has run, and its sentinel is consumed. Yet the read after the open gives v$a: state.db changed after the open, or the read is wrong. Check its version now: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\" A re-run of this install reads the version again: below v$t it brings state.db to v$t again, above v$t it stops at the store open (ErrSchemaMismatch), and at v$t it finishes the install. If a re-run fails this same way, contact the maintainers."
 }
@@ -1238,7 +1238,7 @@ test_J7_VersionMismatchRerun() {
     local version
     for version in $((SCHEMA - 1)) $((SCHEMA + 1)) "$SCHEMA"; do
         j7_mismatch || continue
-        "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
+        "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $version;"
         if ((version > SCHEMA)); then
             run "$J7H" "${J7ARGV[@]}"
             expect_exit5 ErrSchemaMismatch "v$version: re-run" || continue
@@ -1333,7 +1333,7 @@ test_J7_FailedReadRerun() {
             want="install.sh: schema migration verification FAILED" could="check the migration."
             j7_schema_unreadable
         else
-            grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "$what: the failure does not name state.db: $(flat "$ERR")"
+            grep -qxF "  state.db: $J7H/.config/agent-director/state.db" "$ERR" || bad "$what: the failure does not name state.db: $(flat "$ERR")"
             if grep -qF "no existing state.db" "$OUT"; then
                 bad "$what: an existing state.db reported as a fresh create: $(flat "$OUT")"
             fi
@@ -1386,7 +1386,7 @@ j7_not_a_version() {
         bad "the read's output reached a printf %d or the version compare: $(flat "$ERR")"
     fi
     if compgen -G "$(sentinel "$J7H")*" >/dev/null; then
-        bad "left in ~/.agent-director: $(compgen -G "$(sentinel "$J7H")*")"
+        bad "left in ~/.config/agent-director: $(compgen -G "$(sentinel "$J7H")*")"
     fi
 }
 
@@ -1426,7 +1426,7 @@ test_J7_NotAVersionBeforeOpenRerun() {
             version=$((SCHEMA - 1)) call=1 stand_in="$answer"
         else
             version="$answer" call=0 stand_in=""
-            "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $version;"
+            "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $version;"
         fi
         j7_run "$call" "$stand_in" "$err" 0
         expect_exit5 ErrVersionUnreadable "step 2's read printed \"$printed\"" || continue
@@ -1435,7 +1435,7 @@ test_J7_NotAVersionBeforeOpenRerun() {
         j7_rerun_same ErrVersionUnreadable "$call" "$stand_in" "$err" 0 || continue
         [[ "$(db_version "$J7H")" == "$version" ]] || bad "\"$printed\": store moved off v$version: v$(db_version "$J7H")"
         if [[ "$changed" == state.db ]]; then
-            "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
+            "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
         fi
         j7_rerun_verified "\"$printed\": re-run once $changed changed"
     done
@@ -1478,14 +1478,14 @@ test_J7_UnreadableAfterProbeRerun() {
     local answer could="tell whether the probe (agent-director list) ran a migration. A sentinel written before this install was beside state.db, and it may have authorized one."
     for answer in "" "[{\"user_version\":$SCHEMA}]"; do
         j6_failing_migration || continue
-        j6_repair_hop "$J6H/.agent-director/state.db" || { bad "repair store"; continue; }
+        j6_repair_hop "$J6H/.config/agent-director/state.db" || { bad "repair store"; continue; }
         J7H="$J6H"
         J7ARGV=("${J6ARGV[@]}")
         j7_run 2 "$answer" # step 2's read, then step 3's after the probe
         expect_exit5 ErrVersionUnreadable "step 3's read after the probe answered \"$answer\"" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: reading state.db's schema version FAILED" ]] \
             || bad "\"$answer\": first stderr line \"$(head -n 1 "$ERR")\""
-        grep -qxF "  state.db: $J7H/.agent-director/state.db" "$ERR" || bad "\"$answer\": the failure does not name state.db: $(flat "$ERR")"
+        grep -qxF "  state.db: $J7H/.config/agent-director/state.db" "$ERR" || bad "\"$answer\": the failure does not name state.db: $(flat "$ERR")"
         if grep -qF "  schema  : " "$OUT"; then
             bad "\"$answer\": a step-3 verdict after its read gave no version: $(grep -F "  schema  : " "$OUT")"
         fi
@@ -1685,7 +1685,7 @@ test_J10_PreAdminReleaseInstallNewer() {
 # j11_paths <home>: set J11C and J11A, the installed agent-director and
 # agent-director-admin under home.
 j11_paths() {
-    J11C="$1/.agent-director/bin/agent-director" J11A="$1/.agent-director/admin/agent-director-admin"
+    J11C="$1/.config/agent-director/bin/agent-director" J11A="$1/.config/agent-director/admin/agent-director-admin"
 }
 
 # The reasons --keep-prior gives for snapshotting neither binary (b.2wk): the
@@ -1908,11 +1908,11 @@ test_J13_ConfigRefusedFixAndRerun() {
         "older|[defaults]\nrelay_mode = off|toml: line 2 (last key|syntax"; do
         IFS='|' read -r store config named fix <<<"$spec"
         case "$store" in
-            fresh) J7H="$(new_home)" before=none; mkdir -p "$J7H/.agent-director" ;;
+            fresh) J7H="$(new_home)" before=none; mkdir -p "$J7H/.config/agent-director" ;;
             older) j7_older_store || continue; before=$((SCHEMA - 1)) ;;
             current) j7_installed || continue; before="$SCHEMA" ;;
         esac
-        printf '%b\n' "$config" >"$J7H/.agent-director/config.toml"
+        printf '%b\n' "$config" >"$J7H/.config/agent-director/config.toml"
         run "$J7H" "${J7ARGV[@]}"
         expect_exit5 ErrConfigMalformed "$store store, config \"$named\"" || continue
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store, \"$named\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
@@ -1932,12 +1932,12 @@ test_J13_ConfigRefusedFixAndRerun() {
         fi
         [[ ! -e "$(sentinel "$J7H")" ]] || bad "$store, \"$named\": a migration was authorized under a refused config"
         if [[ "$before" == none ]]; then
-            [[ ! -e "$J7H/.agent-director/state.db" ]] || bad "$store, \"$named\": state.db created under a refused config"
+            [[ ! -e "$J7H/.config/agent-director/state.db" ]] || bad "$store, \"$named\": state.db created under a refused config"
         elif [[ "$(db_version "$J7H")" != "$before" ]]; then
             bad "$store, \"$named\": store moved off v$before: v$(db_version "$J7H")"
         fi
         path="$(advice_after "  config  : ")" || { bad "$store, \"$named\": no config line"; continue; }
-        [[ "$path" == "$J7H/.agent-director/config.toml" ]] || bad "$store, \"$named\": config line names $path"
+        [[ "$path" == "$J7H/.config/agent-director/config.toml" ]] || bad "$store, \"$named\": config line names $path"
         key="${named#*] }"
         key="${key%% =*}"
         case "$fix" in
@@ -1970,7 +1970,7 @@ j14_snap() {
 # through printf %b, or a directory for <directory>, or for <unreadable> <fixed>
 # with no read permission.
 j14_config() {
-    local cfg="$1/.agent-director/config.toml"
+    local cfg="$1/.config/agent-director/config.toml"
     case "$2" in
         '<directory>') mkdir "$cfg" ;;
         '<unreadable>') printf '%b\n' "$3" >"$cfg" && chmod 000 "$cfg" ;;
@@ -1988,14 +1988,14 @@ is_kept() { "$SQLITE" "$1" "SELECT count(*) FROM sqlite_master WHERE name = 'kep
 
 # expect_store <home> <db> <context> [migrated]: after a successful install, the
 # store at <db> is at v$SCHEMA and the only one under <home>, with no sentinel
-# left beside it or in ~/.agent-director; with "migrated", it is the one
+# left beside it or in ~/.config/agent-director; with "migrated", it is the one
 # keep_older marked, migrated in place by a migration the run authorized beside it.
 expect_store() {
     local h="$1" db="$2" ctx="$3" dir="${2%/*}"
     [[ "$("$SQLITE" "$db" 'PRAGMA user_version;')" == "$SCHEMA" ]] || bad "$ctx: no store at v$SCHEMA at $db"
     [[ "$(find "$h" -type f -name '*.db')" == "$db" ]] || bad "$ctx: stores under HOME: $(find "$h" -type f -name '*.db' | tr '\n' ' '); want only $db"
-    if compgen -G "$dir/migrate-authorized*" >/dev/null || compgen -G "$h/.agent-director/migrate-authorized*" >/dev/null; then
-        bad "$ctx: sentinel left: $(compgen -G "$dir/migrate-authorized*"; compgen -G "$h/.agent-director/migrate-authorized*")"
+    if compgen -G "$dir/migrate-authorized*" >/dev/null || compgen -G "$h/.config/agent-director/migrate-authorized*" >/dev/null; then
+        bad "$ctx: sentinel left: $(compgen -G "$dir/migrate-authorized*"; compgen -G "$h/.config/agent-director/migrate-authorized*")"
     fi
     [[ "${4:-}" == migrated ]] || return 0
     [[ "$(is_kept "$db")" == 1 ]] || bad "$ctx: the store at $db is not the one there before"
@@ -2020,8 +2020,8 @@ test_J14_DbPathRefusedFixAndRerun() {
     local store broken advice fixed db h cfg before kept kept_sum
     local want="install.sh: cannot tell which store database agent-director opens; refusing to install."
     while IFS='|' read -r store broken advice fixed db <&3; do
-        h="$(new_home)" cfg="$h/.agent-director/config.toml" db="$h/$db" kept=""
-        mkdir -p "$h/.agent-director"
+        h="$(new_home)" cfg="$h/.config/agent-director/config.toml" db="$h/$db" kept=""
+        mkdir -p "$h/.config/agent-director"
         case "$store" in
             older)
                 printf '%b\n' "$fixed" >"$cfg"
@@ -2077,22 +2077,22 @@ kept|\xff\xfe[store]\ndb_path = "~/custom/s.db"|This line starts with the bytes 
 kept|[Store]\ndb_path = "~/custom/s.db"|agent-director reads this header as [store]: its TOML decoder matches names regardless of letter case. Write it as [store].|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 fresh|[store]\n[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|This is a second [store] header, and agent-director refuses a table defined twice. Move the lines under it, up to the next header, to under the first [store] header, then remove this header.|[store]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|custom/s.db
 fresh|[[store]]\ndb_path = "~/custom/s.db"|This makes store an array of tables ([[name]]), and agent-director reads [store] only as one table, so it refuses the file. Write it as [store].|[store]\ndb_path = "~/custom/s.db"|custom/s.db
-kept|[store]\n[[hooks]]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|This is an array of tables ([[name]]), which agent-director does not read: it ignores the lines under this header, or refuses the file. Remove the header and the lines under it, up to the next header.|[store]\n[defaults]\nrelay_mode = "off"|.agent-director/state.db
+kept|[store]\n[[hooks]]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|This is an array of tables ([[name]]), which agent-director does not read: it ignores the lines under this header, or refuses the file. Remove the header and the lines under it, up to the next header.|[store]\n[defaults]\nrelay_mode = "off"|.config/agent-director/state.db
 kept|["store"]\ndb_path = "~/custom/s.db"|agent-director reads this header as [store]: a quoted name is the same as the bare one, and its TOML decoder matches names regardless of letter case. Write it as [store].|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|["defaults"]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|A quoted table name is the same as the bare one. Write it as [defaults], without the quotes.|[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
-kept|[store]\n["a b"]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|agent-director reads no table with this name, so it ignores the lines under this header. Remove the header and the lines under it, up to the next header.|[store]\n[defaults]\nrelay_mode = "off"|.agent-director/state.db
-kept|[store]\n[store.extra]\ndb_path = "~/custom/s.db"|This header names a table within a table ([a.b]), which agent-director does not read: it ignores the lines under this header, or refuses the file. Remove the header and the lines under it, up to the next header.|[store]|.agent-director/state.db
+kept|[store]\n["a b"]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|agent-director reads no table with this name, so it ignores the lines under this header. Remove the header and the lines under it, up to the next header.|[store]\n[defaults]\nrelay_mode = "off"|.config/agent-director/state.db
+kept|[store]\n[store.extra]\ndb_path = "~/custom/s.db"|This header names a table within a table ([a.b]), which agent-director does not read: it ignores the lines under this header, or refuses the file. Remove the header and the lines under it, up to the next header.|[store]|.config/agent-director/state.db
 older|[defaults\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|This line starts with [ but is not a table header install.sh can read: a missing ], say, a quoted name holding an escape (\), or part of an array value that spans lines. Correct the header to [name], with the name bare, or write the array on one line.|[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|["st\\u006fre"]\ndb_path = "~/custom/s.db"|This line starts with [ but is not a table header install.sh can read: a missing ], say, a quoted name holding an escape (\), or part of an array value that spans lines. Correct the header to [name], with the name bare, or write the array on one line.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|[defaults]\nnotes = [\n  ["a"],\n]\n[store]\ndb_path = "~/custom/s.db"|This line starts with [ but is not a table header install.sh can read: a missing ], say, a quoted name holding an escape (\), or part of an array value that spans lines. Correct the header to [name], with the name bare, or write the array on one line.|[defaults]\nnotes = [["a"]]\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|"store" = { db_path = "~/custom/s.db" }|This sets store as a key (an inline table, say) rather than under a [store] header. Remove this line. If it sets db_path, set db_path under the file's [store] header instead, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|[store]\n"db_path" = "~/custom/s.db"|agent-director reads this key as db_path: a quoted key is the same as the bare one, and its TOML decoder matches names regardless of letter case. Write it as db_path.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|[defaults]\n"relay_mode" = "off"\n[store]\ndb_path = "~/custom/s.db"|A quoted key is the same as the bare one. Write it as relay_mode, without the quotes.|[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
-kept|[store]\n"db path" = "~/custom/s.db"|agent-director reads no key with this name, so it ignores this line. Remove it.|[store]|.agent-director/state.db
+kept|[store]\n"db path" = "~/custom/s.db"|agent-director reads no key with this name, so it ignores this line. Remove it.|[store]|.config/agent-director/state.db
 kept|store.db_path = "~/custom/s.db"|This sets a store key as a dotted key (store.db_path = ..., say) rather than under a [store] header. Move this line, without the store. prefix, to under the file's [store] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|defaults.relay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|Before any header, a dotted key a.b = value sets b under [a]. Move this line, without the defaults. prefix, to under the file's [defaults] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|custom/s.db
 kept|"a b".c = 1\n[store]\ndb_path = "~/custom/s.db"|agent-director reads no table with this key's first name, so it ignores this line. Remove it.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
-kept|[store]\nx.db_path = "~/custom/s.db"|This dotted key sets a key in a table within a table, which agent-director does not read: it ignores this line, or refuses the file. Remove it.|[store]|.agent-director/state.db
+kept|[store]\nx.db_path = "~/custom/s.db"|This dotted key sets a key in a table within a table, which agent-director does not read: it ignores this line, or refuses the file. Remove it.|[store]|.config/agent-director/state.db
 kept|[defaults]\nnotes = [\n  "a",\n]\n[store]\ndb_path = "~/custom/s.db"|This line is not a blank line, a # comment, a [name] header or a name = value line: part of a value that spans lines (an array, say), a quoted name holding an escape (\), or a typo. Write each value on one line, write the name bare, without quotes or escapes, or correct the typo.|[defaults]\nnotes = ["a"]\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
 kept|[store]\n"db\\u005fpath" = "~/custom/s.db"|This line is not a blank line, a # comment, a [name] header or a name = value line: part of a value that spans lines (an array, say), a quoted name holding an escape (\), or a typo. Write each value on one line, write the name bare, without quotes or escapes, or correct the typo.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
 fresh|[store]\ndb_path "~/custom/s.db"|This line is not a blank line, a # comment, a [name] header or a name = value line: part of a value that spans lines (an array, say), a quoted name holding an escape (\), or a typo. Write each value on one line, write the name bare, without quotes or escapes, or correct the typo.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
@@ -2164,8 +2164,8 @@ j14_move_line() {
 # default store.
 test_J14_DottedKeysMoveInTurn() {
     local h cfg db line advice before
-    h="$(new_home)" cfg="$h/.agent-director/config.toml" db="$h/custom/s.db"
-    mkdir -p "$h/.agent-director"
+    h="$(new_home)" cfg="$h/.config/agent-director/config.toml" db="$h/custom/s.db"
+    mkdir -p "$h/.config/agent-director"
     printf '%s\n' 'defaults.relay_mode = "on"' 'store.db_path = "~/custom/s.db"' >"$cfg"
     run "$h" "$BIN" list
     expect_rc 0 "agent-director list under the refused config" || return
@@ -2198,13 +2198,13 @@ EOF
 # again, the re-run migrates it.
 test_J15_SentinelTempFailedFixAndRerun() {
     local spec h db shown sentinel sum
-    for spec in '|.agent-director/state.db' '[store]\ndb_path = "~/custom/s.db"|custom/s.db'; do
+    for spec in '|.config/agent-director/state.db' '[store]\ndb_path = "~/custom/s.db"|custom/s.db'; do
         PATH_EXTRA=""
         h="$(new_home)" db="$h/${spec#*|}" shown=state.db
         sentinel="${db%/*}/migrate-authorized"
-        mkdir -p "$h/.agent-director"
+        mkdir -p "$h/.config/agent-director"
         if [[ -n "${spec%%|*}" ]]; then
-            printf '%b\n' "${spec%%|*}" >"$h/.agent-director/config.toml"
+            printf '%b\n' "${spec%%|*}" >"$h/.config/agent-director/config.toml"
             shown="$db"
         fi
         run "$h" "${J7ARGV[@]}"
@@ -2267,8 +2267,8 @@ test_J16_DefaultsKeyMoveUnderHeader() {
     local h cfg config reads_as merged before
     local want="install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install."
     while IFS='|' read -r config reads_as merged <&3; do
-        h="$(new_home)" cfg="$h/.agent-director/config.toml"
-        mkdir -p "$h/.agent-director"
+        h="$(new_home)" cfg="$h/.config/agent-director/config.toml"
+        mkdir -p "$h/.config/agent-director"
         printf '%b\n' "$config" >"$cfg"
         if [[ "$config" == '"defaults"'* ]]; then
             before="$(j14_snap "$h")"
@@ -2295,7 +2295,7 @@ test_J16_DefaultsKeyMoveUnderHeader() {
         expect_installed "$h" "$BIN" "$ADMIN"
         [[ "$(<"$cfg")" == "$(printf '%b' "$merged")" ]] \
             || bad "\"$config\": config after the re-run: $(paste -sd'|' "$cfg"); want $(printf '%b' "$merged" | paste -sd'|')"
-        run "$h" "$h/.agent-director/bin/agent-director" list
+        run "$h" "$h/.config/agent-director/bin/agent-director" list
         expect_rc 0 "\"$config\": agent-director list after the re-run"
     done 3<<'EOF'
 defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100||[relay]\npoll_base_ms = 100\n[defaults]\nrelay_mode = "off"\ninject_help_hook = true
@@ -2326,13 +2326,13 @@ j17_lock() { j7_older_store && j7_run 1; }
 # j17_config_refused: an older store under a config agent-director refuses.
 j17_config_refused() {
     j7_older_store || return 1
-    printf '[defaults]\nexpire_retention_days = -1\n' >"$J7H/.agent-director/config.toml"
+    printf '[defaults]\nexpire_retention_days = -1\n' >"$J7H/.config/agent-director/config.toml"
     run "$J7H" "${J7ARGV[@]}"
 }
 # j17_newer_store: a store one version newer than BIN.
 j17_newer_store() {
     j7_installed || return 1
-    "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
+    "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
     run "$J7H" "${J7ARGV[@]}"
 }
 # j17_mismatch: an older store whose step-5 read gives the pre-migration version.
@@ -2387,7 +2387,7 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
         case "$remedy" in
             rerun) run "$J7H" "${J7ARGV[@]}" ;;
             fix-config)
-                sed -i "$fix" "$J7H/.agent-director/config.toml"
+                sed -i "$fix" "$J7H/.config/agent-director/config.toml"
                 run "$J7H" "${J7ARGV[@]}" ;;
             newer-binary)
                 want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
@@ -2440,8 +2440,8 @@ test_J18_SettingsShapeFixAndRerun() {
     local inner="It is valid JSON, and its hooks hold event lists, but an entry in an event list, or a hook in an entry's hooks list, is not an object, the shape Claude Code reads. Not an object:"
     while IFS='|' read -r settings fixed odd <&3; do
         h="$(new_home)" sj="$h/.claude/settings.json"
-        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
-        fixed="${fixed//@CMD@/$h/.agent-director/bin/agent-director help}"
+        settings="${settings//@CMD@/$h/.config/agent-director/bin/agent-director help}"
+        fixed="${fixed//@CMD@/$h/.config/agent-director/bin/agent-director help}"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 4 "settings.json $settings" || continue
@@ -2496,7 +2496,7 @@ test_J18_UnreadValueStillMerges() {
     local h sj settings path value got
     while IFS='|' read -r settings path value <&3; do
         h="$(new_home)" sj="$h/.claude/settings.json"
-        settings="${settings//@CMD@/$h/.agent-director/bin/agent-director help}"
+        settings="${settings//@CMD@/$h/.config/agent-director/bin/agent-director help}"
         mkdir -p "$h/.claude" && printf '%s\n' "$settings" >"$sj"
         run "$h" "${argv[@]}"
         expect_rc 0 "settings.json $settings" || continue
@@ -2523,8 +2523,8 @@ test_J19_BusyTimeoutRefusedFixAndRerun() {
     local store broken line advice fixed h cfg db before
     local want="install.sh: cannot tell how long agent-director waits for a locked store database; refusing to install."
     while IFS='|' read -r store broken line advice fixed <&3; do
-        h="$(new_home)" cfg="$h/.agent-director/config.toml" db="$h/.agent-director/state.db"
-        mkdir -p "$h/.agent-director"
+        h="$(new_home)" cfg="$h/.config/agent-director/config.toml" db="$h/.config/agent-director/state.db"
+        mkdir -p "$h/.config/agent-director"
         if [[ "$store" == older ]]; then
             printf '%b\n' "$fixed" >"$cfg"
             run "$h" "${J7ARGV[@]}"
@@ -2548,7 +2548,7 @@ test_J19_BusyTimeoutRefusedFixAndRerun() {
         else
             expect_store "$h" "$db" "\"$broken\""
         fi
-        run "$h" "$h/.agent-director/bin/agent-director" list
+        run "$h" "$h/.config/agent-director/bin/agent-director" list
         expect_rc 0 "\"$broken\": agent-director list after the change"
     done 3<<'EOF'
 fresh|[store]\nBUSY_TIMEOUT_MS = 2500|2 : BUSY_TIMEOUT_MS = 2500|agent-director reads this key as busy_timeout_ms: its TOML decoder matches names regardless of letter case. Write it as busy_timeout_ms.|[store]\nbusy_timeout_ms = 2500
@@ -2577,7 +2577,7 @@ test_J20_LinkUnwritableFixOrNoHooks() {
     for file in settings.json config.toml; do
         for follow in fix-link no-hooks; do
             h="$(new_home)" store="$h/store" dir="$h/.claude" plain='{"theme":"dark"}'
-            [[ "$file" == settings.json ]] || dir="$h/.agent-director" plain='[defaults]\nrelay_mode = "off"'
+            [[ "$file" == settings.json ]] || dir="$h/.config/agent-director" plain='[defaults]\nrelay_mode = "off"'
             link="$dir/$file"
             mkdir -p "$dir" "$store" && printf '%b\n' "$plain" >"$store/$file" && ln -s "$store/$file" "$link" \
                 && chmod 0555 "$store" || { bad "$file, $follow: setup failed"; continue; }
@@ -2590,7 +2590,7 @@ test_J20_LinkUnwritableFixOrNoHooks() {
             fi
             [[ "$(head -n 1 "$ERR")" == "install.sh: cannot merge into $link through its symlink; refusing to install." ]] \
                 || bad "$file: first stderr line \"$(head -n 1 "$ERR")\""
-            expect_advice "link : $link target : $store/$file The target's directory, $store, cannot be written in (a read-only file system, say, such as home-manager's /nix/store). With hooks on, install.sh writes its merges into the file a symlinked settings.json or config.toml resolves to, keeping the link. Fix the link so it reaches a file in a directory you can write in. Or re-run this install with --no-hooks, which edits neither file, and add what the merges add where the files come from (your dotfiles or home-manager configuration, say): in settings.json, a SessionStart hook and a SessionEnd hook with matcher \"compact\", each a command hook running \"$h/.agent-director/bin/agent-director help\"; in config.toml, inject_help_hook = true under [defaults]. Nothing was installed or changed. Re-run this install after the change."
+            expect_advice "link : $link target : $store/$file The target's directory, $store, cannot be written in (a read-only file system, say, such as home-manager's /nix/store). With hooks on, install.sh writes its merges into the file a symlinked settings.json or config.toml resolves to, keeping the link. Fix the link so it reaches a file in a directory you can write in. Or re-run this install with --no-hooks, which edits neither file, and add what the merges add where the files come from (your dotfiles or home-manager configuration, say): in settings.json, a SessionStart hook and a SessionEnd hook with matcher \"compact\", each a command hook running \"$h/.config/agent-director/bin/agent-director help\"; in config.toml, inject_help_hook = true under [defaults]. Nothing was installed or changed. Re-run this install after the change."
             [[ "$(j14_snap "$h")" == "$before" ]] || bad "$file: the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
             if [[ "$follow" == fix-link ]]; then
                 mkdir "$h/dotfiles" && cp "$store/$file" "$h/dotfiles/$file" && ln -sfn "$h/dotfiles/$file" "$link"
@@ -2615,7 +2615,7 @@ test_J20_LinkUnwritableFixOrNoHooks() {
             # nothing (settings.json compared as JSON, as the merge rewrites it).
             chmod 0755 "$store"
             if [[ "$file" == settings.json ]]; then
-                added="$(jq --arg c "$h/.agent-director/bin/agent-director help" '
+                added="$(jq --arg c "$h/.config/agent-director/bin/agent-director help" '
                     .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]
                     | .hooks.SessionEnd += [{matcher: "compact", hooks: [{type: "command", command: $c}]}]' "$store/$file")"
                 printf '%s\n' "$added" >"$store/$file"
@@ -2628,7 +2628,7 @@ test_J20_LinkUnwritableFixOrNoHooks() {
             expect_rc 0 "$file: hooks-on install over what the advice added" || continue
             [[ "$file" == settings.json ]] && now="$(jq -S . "$store/$file")" || now="$(<"$store/$file")"
             [[ "$now" == "$added" ]] || bad "$file: the merge added to what the advice named: $(<"$store/$file")"
-            run "$h" "$h/.agent-director/bin/agent-director" list
+            run "$h" "$h/.config/agent-director/bin/agent-director" list
             expect_rc 0 "$file: agent-director list after the advice's additions"
         done
     done
@@ -2699,18 +2699,18 @@ test_J22_NoStoreAfterOpenCheckAndRerun() {
     local -a J7ARGV=(bash "$LOOSE" --binary "$FAKE_AD" --admin-binary "$ADMIN" --no-hooks --no-symlink)
     local cause h db cfg moved set_to want_set name put_back moved_sum first
     for cause in db-path moved custom not-back none; do
-        h="$(new_home)" db="$h/.agent-director/state.db" cfg="$h/.agent-director/config.toml"
+        h="$(new_home)" db="$h/.config/agent-director/state.db" cfg="$h/.config/agent-director/config.toml"
         moved="$h/attic/state.db.bak" want_set="" name="state.db"
         printf around >"$h/fake-list"
         case "$cause" in
             db-path)
                 want_set='"~/custom/s.db"'
                 printf '[store]\ndb_path = %s\n' "$want_set" >"$h/changed.toml"
-                echo 'mv "$HOME/changed.toml" "$HOME/.agent-director/config.toml"' >"$h/fake-before" ;;
+                echo 'mv "$HOME/changed.toml" "$HOME/.config/agent-director/config.toml"' >"$h/fake-before" ;;
             moved | custom | not-back)
                 if [[ "$cause" == custom ]]; then
                     want_set='"~/custom/s.db"' db="$h/custom/s.db" name="$h/custom/s.db"
-                    mkdir -p "$h/.agent-director"
+                    mkdir -p "$h/.config/agent-director"
                     printf '[store]\ndb_path = %s\n' "$want_set" >"$cfg"
                 fi
                 run "$h" "${J7ARGV[@]}"
@@ -2723,7 +2723,7 @@ test_J22_NoStoreAfterOpenCheckAndRerun() {
         expect_exit5 ErrSchemaVerifyFailed "$cause: no store after the open" || continue
         [[ "$(head -n 1 "$ERR")" == "install.sh: $name was not created by the store open" ]] \
             || bad "$cause: first stderr line \"$(head -n 1 "$ERR")\"; want \"install.sh: $name was not created by the store open\""
-        expect_advice "state.db: $db config : $cfg The store open (agent-director list) succeeded, yet there is no store at the state.db path above, where install.sh expected it. agent-director opens its store at [store] db_path in the config file above (~/.agent-director/state.db when unset), and install.sh read that file before the open. So either db_path changed since and agent-director opened a store somewhere else, or something removed or moved the store after the open. Check db_path in the config file, and whether anything (a cleanup, say) removed or moved the store. To keep a moved store's sessions, put it back at the state.db path above first: with no store there, a re-run creates a new, empty one. Then re-run this install: it reads db_path again and opens the store there. If a re-run fails this same way, the installed agent-director does not open its store where this install.sh expects it: contact the maintainers."
+        expect_advice "state.db: $db config : $cfg The store open (agent-director list) succeeded, yet there is no store at the state.db path above, where install.sh expected it. agent-director opens its store at [store] db_path in the config file above (~/.config/agent-director/state.db when unset), and install.sh read that file before the open. So either db_path changed since and agent-director opened a store somewhere else, or something removed or moved the store after the open. Check db_path in the config file, and whether anything (a cleanup, say) removed or moved the store. To keep a moved store's sessions, put it back at the state.db path above first: with no store there, a re-run creates a new, empty one. Then re-run this install: it reads db_path again and opens the store there. If a re-run fails this same way, the installed agent-director does not open its store where this install.sh expects it: contact the maintainers."
         # Check db_path in the config file the advice names.
         set_to="$(sed -n 's/^db_path = //p' "$(advice_after "  config  : ")" 2>/dev/null)"
         [[ "$set_to" == "$want_set" ]] || bad "$cause: db_path in the config file is \"$set_to\"; want \"$want_set\""

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// storeTrailDir is <home>/.agent-director for this test binary, set by TestMain.
+// storeTrailDir is <home>/.config/agent-director for this test binary, set by TestMain.
 var storeTrailDir string
 
 var storeTSRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$`)

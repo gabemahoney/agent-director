@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cwdfix"
 )
 
@@ -76,7 +77,7 @@ func TestDefaultWithoutHomeWritesNothing(t *testing.T) {
 func TestWriterWithoutAbsolutePathWritesNothing(t *testing.T) {
 	for _, tc := range []struct{ name, path string }{
 		{"empty", ""},
-		{"relative", filepath.Join(".agent-director", trailFilename)},
+		{"relative", filepath.Join(".config", "agent-director", layout.TrailFile)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cwd := cwdfix.Temp(t)

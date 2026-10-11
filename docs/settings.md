@@ -44,9 +44,10 @@ inject_help_hook = true
 
 Off by default. When true, every Spawn's synthesized `--settings`
 appends one extra `SessionStart` hook entry whose command is the
-absolute install path `~/.agent-director/bin/agent-director help`
+absolute install path `~/.config/agent-director/bin/agent-director help`
 (post `~` expansion). The state-tracking SessionStart entry is unchanged
-and fires alongside it.
+and fires alongside it. A hand-made hook or MCP entry that names the old
+directory needs the new path (see [Upgrade](install.md#upgrade)).
 
 The flag exists to cover the dynamic case the operator's static
 `~/.claude/settings.json` injection cannot reach: a Spawn that inherits
@@ -149,7 +150,7 @@ recording — see `hooks.md` for the caveat and mitigations.
 ## Templates and per-call merge
 
 An agent-director **template** is a TOML file at
-`~/.agent-director/templates/<name>.toml` that bakes a default
+`~/.config/agent-director/templates/<name>.toml` that bakes a default
 spawn-parameter set. A spawn's `template` param (`--template <name>` on
 the CLI) layers the per-call params on top per a fixed merge contract (SRD §7.1).
 
@@ -235,7 +236,7 @@ spelling (`RELAY_MODE` alone) loads. Keys under `[extra_env]` and
 ### Example
 
 ```toml
-# ~/.agent-director/templates/dev.toml
+# ~/.config/agent-director/templates/dev.toml
 cwd        = "/home/me/repos/widget"
 relay_mode = "off"
 agent      = "claude"

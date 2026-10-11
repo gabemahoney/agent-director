@@ -51,7 +51,7 @@
 # leave no temp file. A hooks-on install that creates ~/.claude gives it and
 # settings.json the owner's access, and group/other bits as the umask allows.
 #
-# [store] db_path (b.2io): with the store moved out of ~/.agent-director
+# [store] db_path (b.2io): with the store moved out of ~/.config/agent-director
 # (written with ~/, as an absolute path that is not clean, or relative), a
 # fresh install and an upgrade that migrates read, authorize and verify that
 # store, the sentinel written beside it and consumed. A stale default state.db
@@ -248,7 +248,7 @@ run_install() {
 
 # report_installed <name>: BIN and ADMIN are installed under H, at 0755.
 report_installed() {
-    local c="$H/.agent-director/bin/agent-director" a="$H/.agent-director/admin/agent-director-admin"
+    local c="$H/.config/agent-director/bin/agent-director" a="$H/.config/agent-director/admin/agent-director-admin"
     report "$1-binary-installed" "$(cmp -s "$c" "$BIN" && stat -c %a "$c")" "755"
     report "$1-admin-binary-installed" "$(cmp -s "$a" "$ADMIN" && stat -c %a "$a")" "755"
 }
@@ -308,7 +308,7 @@ symlinked() {
     report "$1-exit-code" "$RC" "0"
     report_installed "$1"
     report "$1-path-dir-entries" "$(ls -A "$2")" "agent-director"
-    report "$1-symlink-target" "$(readlink "$2/agent-director")" "$H/.agent-director/bin/agent-director"
+    report "$1-symlink-target" "$(readlink "$2/agent-director")" "$H/.config/agent-director/bin/agent-director"
 }
 
 echo "[b.kym install-sh retry] start"
@@ -316,6 +316,27 @@ echo "[b.kym install-sh retry] start"
 # Baseline: the retry wrapper must not regress the happy path; one
 # download per asset.
 scenario happy-path 0 '*' 2
+# The install root is ~/.config/agent-director (b.9r1): a fresh install makes
+# only that directory, and ~/.config at 0700 when it was missing; the default
+# store and its list open land there, and no other directory is made in HOME.
+new_home fresh-config-missing
+run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+report fresh-config-missing-exit-code "$RC" "0"
+report fresh-config-missing-home-entries "$(ls -A "$H")" ".config"
+report fresh-config-missing-config-entries "$(ls -A "$H/.config")" "agent-director"
+report fresh-config-missing-config-mode "$(stat -c %a "$H/.config")" "700"
+report fresh-config-missing-root-mode "$(stat -c %a "$H/.config/agent-director")" "700"
+report fresh-config-missing-store-at-new-root "$([[ -f "$H/.config/agent-director/state.db" ]] && echo yes)" "yes"
+report_installed fresh-config-missing
+# An ~/.config the operator made keeps its mode.
+new_home fresh-config-present
+mkdir -m 0755 "$H/.config"
+config_mode="$(stat -c %a "$H/.config")"
+run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+report fresh-config-present-exit-code "$RC" "0"
+report fresh-config-present-config-mode "$(stat -c %a "$H/.config")" "$config_mode"
+report fresh-config-present-config-entries "$(ls -A "$H/.config")" "agent-director"
+report fresh-config-present-home-entries "$(ls -A "$H")" ".config"
 # Two 404s of agent-director, then success: two visible retry lines.
 scenario retry-2 2 'agent-director-[!a]*' 4
 # All 5 attempts allowed; 4 fail, the 5th succeeds: exactly 4 retry lines
@@ -394,7 +415,7 @@ EOF
 # version this build writes).
 older_store() {
     new_home "$1"
-    db="$H/.agent-director/state.db"
+    db="$H/.config/agent-director/state.db"
     run_install 0 '*' --from-release v0.11.0-fake --no-symlink
     report "$1-first-install-exit-code" "$RC" "0"
     schema="$(sqlite3 "$db" 'PRAGMA user_version;')"
@@ -408,7 +429,7 @@ report_upgraded() {
     report "$1-exit-code" "$RC" "0"
     report "$1-step2-read" "$(grep -cF "authorized migration v$((schema - 1))→v$schema " "$OUT")" "1"
     report "$1-step5-read" "$(grep -cF "migration verified — state.db now at v$schema" "$OUT")" "1"
-    report "$1-no-sentinel-left" "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+    report "$1-no-sentinel-left" "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 }
 
 # An upgrade (the store set one version back) whose user_version reads each
@@ -529,7 +550,7 @@ PATH_PREFIX="$ROOT/mv-fails"
 run_install 0 '*' --from-release v0.11.0-fake --no-symlink
 PATH_PREFIX=""
 report sentinel-mv-fails-stopped-at-mv "$RC $(grep -c "b.hk7 stand-in" "$ERR")" "1 1"
-report sentinel-mv-fails-nothing-left "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+report sentinel-mv-fails-nothing-left "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 
 # A sentinel left beside the store from before that the step-3 probe does not
 # consume (b.dzw): at a v0 store (created, not migrated), a current one (never
@@ -537,7 +558,7 @@ report sentinel-mv-fails-nothing-left "$(ls -A "$H/.agent-director" | grep '^mig
 # own). Step 3 and step 5 read as with no sentinel.
 for name in v0 current older-mismatched; do
     older_store "leftover-sentinel-$name"
-    sentinel="$H/.agent-director/migrate-authorized" from=$((schema - 1)) left=migrate-authorized
+    sentinel="$H/.config/agent-director/migrate-authorized" from=$((schema - 1)) left=migrate-authorized
     lines="  schema  : state.db at v$schema; no migration authorization needed"
     case "$name" in
         v0)
@@ -553,14 +574,14 @@ for name in v0 current older-mismatched; do
     report "leftover-sentinel-$name-exit-code" "$RC" "0"
     report "leftover-sentinel-$name-schema-lines" "$(grep '^  schema  : ' "$OUT" | paste -sd'|')" "$lines"
     report "leftover-sentinel-$name-user-version" "$(sqlite3 "$db" 'PRAGMA user_version;')" "$schema"
-    report "leftover-sentinel-$name-sentinel" "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" "$left"
+    report "leftover-sentinel-$name-sentinel" "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" "$left"
 done
 
-# with_config <content>: H's ~/.agent-director/config.toml holds <content>
+# with_config <content>: H's ~/.config/agent-director/config.toml holds <content>
 # (printf %b).
 with_config() {
-    mkdir -p "$H/.agent-director"
-    printf '%b\n' "$1" >"$H/.agent-director/config.toml"
+    mkdir -p "$H/.config/agent-director"
+    printf '%b\n' "$1" >"$H/.config/agent-director/config.toml"
 }
 
 # local_install: install BIN and ADMIN under H; sets RC.
@@ -573,8 +594,8 @@ local_install() { run_install 0 '*' --binary "$BIN" --admin-binary "$ADMIN" --no
 # whose migrate-authorized authorizes it. Only a store outside the default
 # prints a "store" pre-flight line, and no other state.db appears.
 db_path_upgrade() {
-    local name="$1" db="$2" shown="$3" dir="$4" v store_line="" default="$H/.agent-director/state.db"
-    [[ "$shown" == state.db ]] || store_line="  store   : $db ([store] db_path in $H/.agent-director/config.toml)"
+    local name="$1" db="$2" shown="$3" dir="$4" v store_line="" default="$H/.config/agent-director/state.db"
+    [[ "$shown" == state.db ]] || store_line="  store   : $db ([store] db_path in $H/.config/agent-director/config.toml)"
     local_install
     report "$name-fresh-exit-code" "$RC" "0"
     report "$name-fresh-store-line" "$(grep '^  store   : ' "$OUT")" "$store_line"
@@ -589,17 +610,17 @@ db_path_upgrade() {
         "$(grep -cxF "  schema  : authorized migration v$((v - 1))→v$v (sentinel $dir/migrate-authorized)" "$OUT")" "1"
     report "$name-upgrade-verified" "$(grep -cxF "  schema  : migration verified — $shown now at v$v" "$OUT")" "1"
     report "$name-upgrade-user-version" "$(sqlite3 "$db" 'PRAGMA user_version;')" "$v"
-    report "$name-upgrade-sentinel-consumed" "$(compgen -G "$dir/migrate-authorized*"; compgen -G "$H/.agent-director/migrate-authorized*")" ""
+    report "$name-upgrade-sentinel-consumed" "$(compgen -G "$dir/migrate-authorized*"; compgen -G "$H/.config/agent-director/migrate-authorized*")" ""
     if [[ "$db" -ef "$default" ]]; then
-        report "$name-store-is-default" "$(compgen -G "$H/.agent-director/*.db")" "$default"
+        report "$name-store-is-default" "$(compgen -G "$H/.config/agent-director/*.db")" "$default"
     else
         report "$name-no-default-store" "$(compgen -G "$default*")" ""
     fi
 }
 
-# [store] db_path moves the store out of ~/.agent-director (b.2io): written
+# [store] db_path moves the store out of ~/.config/agent-director (b.2io): written
 # with ~/, as an absolute path that is not clean (used as written, as the
-# binary does), or relative to ~/.agent-director; each installs fresh and
+# binary does), or relative to ~/.config/agent-director; each installs fresh and
 # then upgrades with a migration authorized beside that store.
 new_home db-path-tilde
 with_config '[store]\ndb_path = "~/custom/agents.db"'
@@ -608,14 +629,14 @@ new_home db-path-absolute
 with_config "[store]\ndb_path = '$H//custom/./agents.db' # moved"
 db_path_upgrade db-path-absolute "$H//custom/./agents.db" "$H//custom/./agents.db" "$H/custom"
 new_home db-path-relative
-with_config '[defaults]\nrelay_mode = "off"\n\n[store]\ndb_path = "../custom/agents.db"'
+with_config '[defaults]\nrelay_mode = "off"\n\n[store]\ndb_path = "../../custom/agents.db"'
 db_path_upgrade db-path-relative "$H/custom/agents.db" "$H/custom/agents.db" "$H/custom"
 # The default store reads, and is named, as before, with no config, an empty
 # db_path or one that cleans to the default.
-for spec in "none|" 'empty|[store]\ndb_path = ""' 'unclean|[store]\ndb_path = "~/.agent-director/./state.db"'; do
+for spec in "none|" 'empty|[store]\ndb_path = ""' 'unclean|[store]\ndb_path = "~/.config/agent-director/./state.db"'; do
     new_home "db-path-default-${spec%%|*}"
     [[ "${spec%%|*}" == none ]] || with_config "${spec#*|}"
-    db_path_upgrade "db-path-default-${spec%%|*}" "$H/.agent-director/state.db" state.db "$H/.agent-director"
+    db_path_upgrade "db-path-default-${spec%%|*}" "$H/.config/agent-director/state.db" state.db "$H/.config/agent-director"
 done
 
 # A stale default state.db beside the db_path store (b.2io): the upgrade
@@ -624,7 +645,7 @@ new_home db-path-stale-default
 with_config '[store]\ndb_path = "real.db"'
 local_install
 report db-path-stale-default-first-install-exit-code "$RC" "0"
-real="$H/.agent-director/real.db" stale="$H/.agent-director/state.db"
+real="$H/.config/agent-director/real.db" stale="$H/.config/agent-director/state.db"
 v="$(sqlite3 "$real" 'PRAGMA user_version;')"
 sqlite3 "$real" "PRAGMA user_version = $((v - 1));"
 sqlite3 "$stale" "CREATE TABLE stale (x); PRAGMA user_version = $((v - 1));"
@@ -635,7 +656,7 @@ report db-path-stale-default-no-false-failure "$(grep -c "FAILED" "$ERR")" "0"
 report db-path-stale-default-verified "$(grep -cxF "  schema  : migration verified — $real now at v$v" "$OUT")" "1"
 report db-path-stale-default-real-version "$(sqlite3 "$real" 'PRAGMA user_version;')" "$v"
 report db-path-stale-default-stale-untouched "$(sha256sum "$stale")" "$stale_sum"
-report db-path-stale-default-sentinel-consumed "$(compgen -G "$H/.agent-director/migrate-authorized*")" ""
+report db-path-stale-default-sentinel-consumed "$(compgen -G "$H/.config/agent-director/migrate-authorized*")" ""
 
 # A sqlite3 in $ROOT/timeout-log that logs the value of each -cmd it is given
 # to $ROOT/timeouts.log, then runs the real one (b.c7f).
@@ -667,7 +688,7 @@ done 3<<'EOF'
 none||10000
 zero|[store]\nbusy_timeout_ms = 0|10000
 set|[store]\nbusy_timeout_ms = 1_234 # ms|1234
-crlf-beside-db-path|[store]\r\ndb_path = "~/.agent-director/state.db"\r\nbusy_timeout_ms = 2500\r|2500
+crlf-beside-db-path|[store]\r\ndb_path = "~/.config/agent-director/state.db"\r\nbusy_timeout_ms = 2500\r|2500
 EOF
 
 # With busy_timeout_ms = 1, the upgrade's first read gives up on a briefly held
@@ -683,7 +704,7 @@ PATH_PREFIX=""
 report busy-timeout-short-locked-exit-code "$RC" "5"
 report busy-timeout-short-locked-first-stderr-line "$(head -n 1 "$ERR")" "install.sh: reading state.db's schema version FAILED"
 report busy-timeout-short-locked-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held"
-report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 # The stand-in's holder may still hold the lock: wait it out.
 report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$((schema - 1))"
 
@@ -708,7 +729,7 @@ preflight_refused() {
     report "$name-exit-code" "$RC" "5"
     report "$name-first-stderr-line" "$(head -n 1 "$ERR")" \
         "${4:-install.sh: cannot tell which store database agent-director opens; refusing to install.}"
-    report "$name-names-config" "$(grep -cxF "  config  : $H/.agent-director/config.toml" "$ERR")" "1"
+    report "$name-names-config" "$(grep -cxF "  config  : $H/.config/agent-director/config.toml" "$ERR")" "1"
     report "$name-names-line" "$(grep -cxF "  line $3" "$ERR")" "1"
     report "$name-no-pre-flight-ok" "$(grep -c "pre-flight OK" "$OUT")" "0"
     report "$name-home-unchanged" "$(diff <(echo "$before") <(snap) >/dev/null && echo same)" "same"
@@ -732,7 +753,7 @@ shown() { cat -A "$1" | paste -sd'|'; }
 # output.
 ad_list() {
     local out rc
-    out="$(env -i HOME="$H" PATH="$FAKES:$PATH" TMPDIR="$ROOT/tmp" "$H/.agent-director/bin/agent-director" list 2>&1)"
+    out="$(env -i HOME="$H" PATH="$FAKES:$PATH" TMPDIR="$ROOT/tmp" "$H/.config/agent-director/bin/agent-director" list 2>&1)"
     rc=$?
     if [[ "$rc" -eq 0 ]]; then echo 0; else echo "$rc $out"; fi
 }
@@ -749,7 +770,7 @@ while IFS='|' read -r -u 3 name config merged uninstalled; do
     name="merge-$name"
     new_home "$name"
     with_config "$config"
-    cfg="$H/.agent-director/config.toml"
+    cfg="$H/.config/agent-director/config.toml"
     local_install
     rc="$RC" first="$(shown "$cfg")"
     local_install
@@ -811,7 +832,7 @@ EOF
 # the same config installs and is left as it was (b.whe).
 new_home merge-no-hooks-inline
 with_config 'defaults = { relay_mode = "off" }\n[relay]\npoll_base_ms = 100'
-cfg="$H/.agent-director/config.toml"
+cfg="$H/.config/agent-director/config.toml"
 before="$(shown "$cfg")"
 local_install
 report merge-no-hooks-inline-exit-code "$RC" "0"
@@ -871,7 +892,7 @@ while IFS='|' read -r -u 3 name mask cmode smode setup; do
     name="keep-mode-$name"
     new_home "$name"
     local_install
-    rc="$RC" cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
+    rc="$RC" cfg="$H/.config/agent-director/config.toml" sj="$H/.claude/settings.json"
     if [[ "$setup" == symlink ]]; then
         mkdir "$H/dotfiles"
         for f in "$cfg" "$sj"; do
@@ -918,17 +939,19 @@ EOF
 # of a chain of two relative links, the first through .., keeping every link as
 # it was (b.nw5).
 new_home link-chain
-cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
-mkdir -p "$H/.agent-director" "$H/.claude" "$H/dotfiles/real"
+cfg="$H/.config/agent-director/config.toml" sj="$H/.claude/settings.json"
+mkdir -p "$H/.config/agent-director" "$H/.claude" "$H/dotfiles/real"
 printf '[defaults]\nrelay_mode = "off"\n' >"$H/dotfiles/real/config.toml"
 printf '{"theme":"dark"}\n' >"$H/dotfiles/real/settings.json"
+up=../..
 for f in "$cfg" "$sj"; do
-    ln -s "real/${f##*/}" "$H/dotfiles/${f##*/}" && ln -s "../dotfiles/${f##*/}" "$f"
+    ln -s "real/${f##*/}" "$H/dotfiles/${f##*/}" && ln -s "$up/dotfiles/${f##*/}" "$f"
+    up=..
 done
 local_install
 report link-chain-exit-code "$RC" "0"
 report link-chain-links-kept "$(readlink "$cfg" "$H/dotfiles/config.toml" "$sj" "$H/dotfiles/settings.json" | paste -sd,)" \
-    "../dotfiles/config.toml,real/config.toml,../dotfiles/settings.json,real/settings.json"
+    "../../dotfiles/config.toml,real/config.toml,../dotfiles/settings.json,real/settings.json"
 report link-chain-merged \
     "$(grep -cx 'inject_help_hook = true' "$H/dotfiles/real/config.toml") $(jq -c '[.theme, (.hooks.SessionStart | length), (.hooks.SessionEnd | length)]' "$H/dotfiles/real/settings.json" 2>&1)" \
     '1 ["dark",1,1]'
@@ -956,9 +979,9 @@ report link-dangling-merged "$(jq -c '[(.hooks.SessionStart | length), (.hooks.S
 while IFS='|' read -r -u 3 file setup; do
     name="link-$setup-${file%.*}"
     new_home "$name"
-    link="$H/.claude/$file" rc=4 last="  Nothing was installed or changed. Re-run this install after the change."
+    link="$H/.claude/$file" rc=4 last="  Nothing was installed or changed. Re-run this install after the change." up=..
     if [[ "$file" == config.toml ]]; then
-        link="$H/.agent-director/$file" rc=5 last="install.sh: err_name=ErrConfigMalformed"
+        link="$H/.config/agent-director/$file" rc=5 last="install.sh: err_name=ErrConfigMalformed" up=../..
     fi
     target="$H/dotfiles/$file"
     mkdir -p "${link%/*}"
@@ -967,7 +990,7 @@ while IFS='|' read -r -u 3 file setup; do
     case "$setup" in
         loop)
             mkdir "$H/dotfiles"
-            ln -s "../dotfiles/$file" "$link" && ln -s "../${link#"$H/"}" "$target"
+            ln -s "$up/dotfiles/$file" "$link" && ln -s "../${link#"$H/"}" "$target"
             refusal+="|  The links loop: following them never reaches a file (more than 40 links)." lines=3 ;;
         missing-dir)
             ln -s "$target" "$link"
@@ -992,8 +1015,8 @@ HOOKS=""
 # settings.json whose links loop and a config.toml linked into a missing
 # directory install, both left as they were (b.nw5).
 new_home link-no-hooks
-cfg="$H/.agent-director/config.toml" sj="$H/.claude/settings.json"
-mkdir -p "$H/.agent-director" "$H/.claude" "$H/dotfiles"
+cfg="$H/.config/agent-director/config.toml" sj="$H/.claude/settings.json"
+mkdir -p "$H/.config/agent-director" "$H/.claude" "$H/dotfiles"
 ln -s ../dotfiles/settings.json "$sj" && ln -s ../.claude/settings.json "$H/dotfiles/settings.json"
 ln -s "$H/nowhere/config.toml" "$cfg"
 local_install
@@ -1015,7 +1038,7 @@ HOOKS=1
 while IFS='|' read -r -u 3 name settings starts; do
     name="settings-$name"
     new_home "$name"
-    sj="$H/.claude/settings.json" c="$H/.agent-director/bin/agent-director help"
+    sj="$H/.claude/settings.json" c="$H/.config/agent-director/bin/agent-director help"
     mkdir -p "$H/.claude"
     printf '%b' "${settings//@CMD@/$c}" >"$sj"
     cp "$sj" "$ROOT/$name.before"
@@ -1072,18 +1095,18 @@ new_home rerun-no-flags
 mkdir -p "$H/.local/bin"
 HOOKS=1 PATH_PREFIX="$H/.local/bin"
 run_install 0 '*' --from-release v0.11.0-fake
-rc="$RC" merged="$(cat "$H/.claude/settings.json" "$H/.agent-director/config.toml" | sha256sum)"
-bin_ino="$(stat -c %i "$H/.agent-director/bin/agent-director")"
-admin_ino="$(stat -c %i "$H/.agent-director/admin/agent-director-admin")"
+rc="$RC" merged="$(cat "$H/.claude/settings.json" "$H/.config/agent-director/config.toml" | sha256sum)"
+bin_ino="$(stat -c %i "$H/.config/agent-director/bin/agent-director")"
+admin_ino="$(stat -c %i "$H/.config/agent-director/admin/agent-director-admin")"
 run_install 0 '*'
 HOOKS="" PATH_PREFIX=""
 report rerun-no-flags-exit-codes "$rc $RC" "0 0"
 report_installed rerun-no-flags
 report rerun-no-flags-binaries-copied-again \
-    "$([[ "$(stat -c %i "$H/.agent-director/bin/agent-director")" != "$bin_ino" ]] && echo new || echo same) $([[ "$(stat -c %i "$H/.agent-director/admin/agent-director-admin")" != "$admin_ino" ]] && echo new || echo same)" "new new"
-report rerun-no-flags-merged-unchanged "$(cat "$H/.claude/settings.json" "$H/.agent-director/config.toml" | sha256sum)" "$merged"
+    "$([[ "$(stat -c %i "$H/.config/agent-director/bin/agent-director")" != "$bin_ino" ]] && echo new || echo same) $([[ "$(stat -c %i "$H/.config/agent-director/admin/agent-director-admin")" != "$admin_ino" ]] && echo new || echo same)" "new new"
+report rerun-no-flags-merged-unchanged "$(cat "$H/.claude/settings.json" "$H/.config/agent-director/config.toml" | sha256sum)" "$merged"
 report rerun-no-flags-backups \
-    "$(compgen -G "$H/.claude/settings.json.bak.*" | wc -l) $(compgen -G "$H/.agent-director/config.toml.bak.*" | wc -l)" "1 1"
+    "$(compgen -G "$H/.claude/settings.json.bak.*" | wc -l) $(compgen -G "$H/.config/agent-director/config.toml.bak.*" | wc -l)" "1 1"
 report rerun-no-flags-already-installed "$(cat "$OUT" "$ERR" | grep -c 'already installed')" "0"
 run_install 0 '*' --help
 report help-exit-code "$RC" "0"

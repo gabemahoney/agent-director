@@ -99,7 +99,7 @@ RUN chmod 0755 /usr/local/bin/agent-director /opt/bin/agent-director-admin \
 USER tester
 # AGENT_DIRECTOR_TEST_HARNESS=1 marks this container as the Docker test
 # harness. /opt/driver/db-reset.sh, which ends every tmux server the user runs
-# and deletes ~/.agent-director/state.db, refuses to run without it, so it
+# and deletes ~/.config/agent-director/state.db, refuses to run without it, so it
 # cannot do that on a host (b.8yq). Like the sandbox's
 # AGENT_DIRECTOR_TEST_SANDBOX it is an accident-prevention gate, not a
 # security boundary.

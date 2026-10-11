@@ -57,8 +57,8 @@ func TestNoExecFormCLIHookPayloadIgnored(t *testing.T) {
 	const instanceID = "id-noexec-1"
 	sessionStart := `{"hook_event_name":"SessionStart","session_id":"0a1b2c3d-noexec-uuid",` +
 		`"transcript_path":"` + noExecFormTranscript + `","source":"startup"}` + "\n"
-	trail := filepath.Join(".agent-director", "ad-trail.jsonl")
-	config := filepath.Join(".agent-director", "config.toml")
+	trail := filepath.Join(".config", "agent-director", "ad-trail.jsonl")
+	config := filepath.Join(".config", "agent-director", "config.toml")
 
 	cases := []struct {
 		name          string
@@ -92,7 +92,7 @@ func TestNoExecFormCLIHookPayloadIgnored(t *testing.T) {
 			} else {
 				envHome = recordHome
 			}
-			wantTree := []string{".agent-director", trail}
+			wantTree := []string{".config", filepath.Join(".config", "agent-director"), trail}
 			if tc.badConfig {
 				if err := os.MkdirAll(directorDir(recordHome), 0o700); err != nil {
 					t.Fatalf("mkdir: %v", err)

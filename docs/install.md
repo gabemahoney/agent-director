@@ -22,8 +22,9 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 It downloads the binaries from the
 [latest release](https://github.com/gabemahoney/agent-director/releases/latest),
-sets up `~/.agent-director/`, symlinks `agent-director` (see `--symlink-dir`),
-installs `agent-director-admin` at `~/.agent-director/admin/` (never on PATH),
+sets up `~/.config/agent-director/` (and `~/.config` itself, mode `0700`, if
+it is missing), symlinks `agent-director` (see `--symlink-dir`),
+installs `agent-director-admin` at `~/.config/agent-director/admin/` (never on PATH),
 migrates `state.db` and installs the SessionStart/SessionEnd help hooks.
 
 `install.sh` flags:
@@ -34,7 +35,7 @@ migrates `state.db` and installs the SessionStart/SessionEnd help hooks.
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
 - `--register-mcp`: register the stdio MCP server with Claude Code; by hand:
-  `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`
+  `claude mcp add agent-director ~/.config/agent-director/bin/agent-director serve --stdio`
 - `--no-hooks`: leave `~/.claude/settings.json` untouched.
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
 - `--no-symlink`: create no PATH symlink.

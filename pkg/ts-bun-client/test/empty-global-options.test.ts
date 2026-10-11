@@ -24,7 +24,7 @@ test.each([
       expect(err).toBeInstanceOf(ErrInvalidFlags);
       expect((err as ErrInvalidFlags).errDescription).toBe(`${flag} requires a value`);
     }
-    // No default store (~/.agent-director/state.db), config or trail.
+    // No default store (~/.config/agent-director/state.db), config or trail.
     expect(fs.readdirSync(homeDir)).toEqual([]);
   });
 });

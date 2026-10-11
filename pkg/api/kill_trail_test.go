@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -539,7 +538,7 @@ func trailFailOpenRuns(t *testing.T, prefix string, working bool) []string {
 // TestTrailFailOpen (SR-6.4, SR-7.4, SR-14): with the trail unwritable, kill
 // (with and without the finished-row opt-in), send-keys and pause give the
 // results, errors, tmux calls and rows of a run with a working trail. The
-// unwritable run is a child of this test binary whose HOME's .agent-director
+// unwritable run is a child of this test binary whose HOME's .config/agent-director
 // is mode 0500 before the trail opens.
 func TestTrailFailOpen(t *testing.T) {
 	t.Parallel()
@@ -571,7 +570,7 @@ func TestTrailFailOpenChild(t *testing.T) {
 	if prefix == "" {
 		t.Skip("run only as TestTrailFailOpen's child")
 	}
-	adDir := filepath.Join(apiTrailDir, ".agent-director")
+	adDir := adConfigDir(apiTrailDir)
 	if err := os.MkdirAll(adDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

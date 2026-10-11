@@ -20,14 +20,14 @@ is a no-op and installs the library with identical functionality.
 fastest path on a fresh machine is the one-liner published with the
 agent-director GitHub repo — it downloads the binary for your OS/arch
 from the [latest release](https://github.com/gabemahoney/agent-director/releases/latest)
-and sets up `~/.agent-director/`:
+and sets up `~/.config/agent-director/`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
 ```
 
 `Client.create()` discovers the installed binary at construction time
-(either at `~/.agent-director/bin/agent-director` or anywhere on
+(either at `~/.config/agent-director/bin/agent-director` or anywhere on
 `$PATH`) and rejects if it cannot find one. Other supported install
 mechanisms — `install.sh --binary <path> --admin-binary <path>` with
 locally-staged artifacts, or any drop-in copy onto `$PATH` — are documented in the
@@ -53,6 +53,9 @@ const v = await client.version({});
 console.log(v.version);
 ```
 
+The `version` result is `{ version, commit, config_dir }`; `config_dir` is the
+directory the CLI keeps its files in, `~/.config/agent-director` (unexpanded).
+
 Explicit `try/finally` (portable fallback):
 
 ```ts
@@ -65,7 +68,7 @@ try {
 }
 ```
 
-All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.agent-director/state.db`) — the CLI is the single source of truth for defaults. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
+All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.config/agent-director/state.db`) — the CLI is the single source of truth for defaults. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
 
 `ClientOptions` overrides forward to the CLI subprocess as global flags:
 
@@ -80,7 +83,7 @@ set, a `~/` in `storePath` or `tmuxCommand` resolves under `home`. With
 `HOME` unset or empty, a `home` of `~` or `~/…` rejects every call with
 `ErrInvalidFlags`, and with no `home` either, every call that opens the store
 is refused with `ErrStoreOpen`, whatever `storePath` is, because the CLI cannot
-expand its config path `~/.agent-director/config.toml`.
+expand its config path `~/.config/agent-director/config.toml`.
 
 Set them only when the consumer needs to override the CLI's default for that field.
 
@@ -92,7 +95,7 @@ store, such as `version`, are unaffected.
 
 For `spawn`, `home` and `storePath` must name the store of the tmux server
 the spawn reaches. The agent's hooks open the store that
-`~/.agent-director/config.toml` under the pane's `HOME` names, and on a
+`~/.config/agent-director/config.toml` under the pane's `HOME` names, and on a
 tmux server already running that is the server's `HOME`, not the one
 `home` sets, so a spawn into another store leaves its row `pending`. To
 spawn into another store, leave `storePath` unset (or set it to that
@@ -134,7 +137,7 @@ const result = await client.status({ instance_id: "<id>" });
 console.log(result.state);
 ```
 
-With `[state] settle_ms` set in the CLI's `~/.agent-director/config.toml`,
+With `[state] settle_ms` set in the CLI's `~/.config/agent-director/config.toml`,
 `status`, `get` and `list` report the settled state: a state a hook wrote
 shows only once it has held that long, the last settled state until then;
 `ended`, `missing` and a state a verb wrote show at once, and `list`'s
@@ -531,7 +534,7 @@ The public typed-error surface falls into four groups. Every class named below i
 
 ### Realistic catch-site shortlist
 
-Most services only need to route on the "agent-director is sick" set. Alert on these eleven and let everything else propagate:
+Most services only need to route on the "agent-director is sick" set. Alert on these twelve and let everything else propagate:
 
 - `ErrSystemInstallNotFound`
 - `ErrSystemInstallTooOld`
@@ -544,6 +547,7 @@ Most services only need to route on the "agent-director is sick" set. Alert on t
 - `ErrConfigMalformed`
 - `ErrSchemaMismatch`
 - `ErrSchemaMigrationRequired`
+- `ErrOldLayout`
 
 Almost everything else is either **programmer error** (bad arguments — fix the call site, do not retry) or a **normal operational signal** (an expected verb outcome you branch on, like "no such spawn" or "already decided"). `ErrConsumerSignal` sits in between: it is a runtime infrastructure failure, but a routine one during shutdown, so treat it as an operational signal rather than a page. `ErrUnknownErrorName` is a version error a developer fixes by upgrading this client, and `ErrInternal` and `ErrJSONMarshal` are failures of the CLI itself; see their rows below.
 
@@ -580,7 +584,7 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 60 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 61 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, a config or store the CLI cannot open, or a failure of the CLI itself — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -675,14 +679,15 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrInvalidFlags` | CLI flag parsing rejected the invocation; a call carried an old name of a renamed key (thrown before any process starts, naming the new key); `spawn` was given an explicit `instance_id` containing an ASCII control character (0x00–0x1f or 0x7f); `readPane`'s `n_lines` or `list`'s `limit` is negative (0 or omitted gives the default: 25 lines, no cap); `decide` was given a negative `max_wait_ms`; `sendKeys` was given params that do not fit together (a pane answer without `as`, `key` or `expect_pane_sha256` or with `text`; `key` with a non-empty `text`; `no_enter` with neither; `as` without `request_token`; a `key` that is neither a named key nor one character; a malformed hash); or `recordPaneAnswer` was given an `as` other than `"allow"`, `"deny"` or `"unknown"`, or a missing or malformed hash. Nothing was changed, sent or recorded. |
 
-**CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all four are in the "AD is sick" alert set):
+**CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; all five are in the "AD is sick" alert set):
 
 | Error | When it fires |
 |---|---|
-| `ErrConfigMalformed` | The CLI refused its config file, `~/.agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. Do not retry or act on any agent; alert an operator once, and never read it as an agent being dead. |
+| `ErrConfigMalformed` | The CLI refused its config file, `~/.config/agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. Do not retry or act on any agent; alert an operator once, and never read it as an agent being dead. |
 | `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. With `createIfMissing: false` it includes a store that does not exist (`database not initialized`); nothing was created. It says nothing about any agent. |
 | `ErrSchemaMismatch` | The CLI refused to open its store: the store was written by a newer agent-director than the binary (`found user_version=<N>, want <M>`), or it has no valid store id. The description says which. Nothing was written, and every call that opens the store fails this way until an operator acts: a newer store needs the agent-director release that wrote it. Do not retry or act on any agent, and never delete the store; alert an operator. It says nothing about any agent. |
 | `ErrSchemaMigrationRequired` | The CLI refused to open its store: the store is older than the binary and must be migrated first. The description gives both schema versions. Nothing was written, and every call that opens the store fails this way until an administrator migrates the store; no call through this client can. Do not retry or act on any agent; alert an operator. It says nothing about any agent. |
+| `ErrOldLayout` | The CLI refused to open its store: it was about to open the default store (no `storePath`, and no `[store] db_path` in its config file), no store exists in `~/.config/agent-director`, and the old directory exists. Nothing was created, and every call that opens the store fails this way until an operator runs this release's `install.sh`. Do not retry or act on any agent; alert an operator once, and never read it as an agent being dead. It says nothing about any agent. |
 
 **CLI itself** (the CLI failed, or does not know the verb, rather than refusing the call's input or state):
 

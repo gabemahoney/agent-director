@@ -99,7 +99,7 @@ const GlobalFlagsText = "The global flags are agent-director's, parsed and appli
 // takes (internal/clisetup.ParseGlobalFlags parses them for both binaries), in
 // the order help lists them.
 var GlobalFlags = []Flag{
-	{Name: "--store-path <path>", Description: "Open the store at <path> instead of the configured one ([store] db_path in ~/.agent-director/config.toml, by default ~/.agent-director/state.db)."},
+	{Name: "--store-path <path>", Description: "Open the store at <path> instead of the configured one ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db)."},
 	{Name: "--home <dir>", Description: "Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it."},
 	{Name: "--tmux-command <path>", Description: "Run <path> as tmux instead of the tmux on PATH."},
 	{Name: "--create-if-missing <true|false>", Description: "With false, refuse a store that does not exist (ErrStoreOpen) and create none of it; with true, or when omitted, create a missing store (parent directories, file and schema)."},
@@ -150,9 +150,9 @@ var Verbs = []Verb{
 	{
 		Name:  "version",
 		Usage: "agent-director-admin version",
-		Description: "Print the build-time version stamp, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. " +
+		Description: "Print the build-time version stamp and config_dir, as agent-director version does; install.sh installs the two binaries only when their stamps (version and commit) are the same. " +
 			"agent-director-admin --version and -v print it too. " + noStoreText + " " + errorsText,
-		Output: "{\"version\": \"...\", \"commit\": \"...\"}: the version stamp and the full git SHA the binary was built from.",
+		Output: "{\"version\": \"...\", \"commit\": \"...\", \"config_dir\": \"...\"}: the version stamp, the full git SHA the binary was built from and the directory it keeps its files in (~/.config/agent-director).",
 	},
 }
 

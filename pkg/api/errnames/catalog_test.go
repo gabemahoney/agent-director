@@ -94,6 +94,30 @@ func TestClassifyNewSchemaRefusal(t *testing.T) {
 	}
 }
 
+// TestClassifyOldLayout: ErrOldLayout resolves from the store's sentinel, bare
+// or wrapped, from clisetup's and from pkg/api's re-export of it, all the same
+// value, as the schema errors do (P-88).
+func TestClassifyOldLayout(t *testing.T) {
+	if clisetup.ErrOldLayout != store.ErrOldLayout || api.ErrOldLayout != store.ErrOldLayout {
+		t.Fatalf("ErrOldLayout sentinels differ: clisetup %p, api %p, store %p",
+			clisetup.ErrOldLayout, api.ErrOldLayout, store.ErrOldLayout)
+	}
+	for name, err := range map[string]error{
+		"store bare":          store.ErrOldLayout,
+		"store wrapped":       fmt.Errorf("open: %w", fmt.Errorf("%w: detail", store.ErrOldLayout)),
+		"clisetup":            clisetup.ErrOldLayout,
+		"api":                 api.ErrOldLayout,
+		"NewOpenError":        clisetup.NewOpenError(fmt.Errorf("%w: detail", store.ErrOldLayout)),
+		"NewOpenError of api": clisetup.NewOpenError(fmt.Errorf("%w: detail", api.ErrOldLayout)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, desc := errnames.Classify(err); got != "ErrOldLayout" || desc != err.Error() {
+				t.Errorf("Classify(%q) = (%q, %q), want (%q, %q)", err, got, desc, "ErrOldLayout", err.Error())
+			}
+		})
+	}
+}
+
 // TestClassifyOpenError: a clisetup.OpenError classifies as its Name, with its
 // cause's text (b.vma, b.cm7).
 func TestClassifyOpenError(t *testing.T) {
@@ -105,6 +129,7 @@ func TestClassifyOpenError(t *testing.T) {
 		{"ErrStoreOpen", errors.New("the cause")},
 		{"ErrSchemaMismatch", fmt.Errorf("%w: found user_version=99, want 7", store.ErrSchemaMismatch)},
 		{"ErrSchemaMigrationRequired", fmt.Errorf("%w: state.db is schema v1", store.ErrSchemaMigrationRequired)},
+		{"ErrOldLayout", fmt.Errorf("%w: ~/.agent-director is present, ~/.config/agent-director is not", store.ErrOldLayout)},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			name, desc := errnames.Classify(&clisetup.OpenError{Name: tc.want, Err: tc.cause})

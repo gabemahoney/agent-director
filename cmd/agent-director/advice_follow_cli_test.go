@@ -219,7 +219,9 @@ func TestAdviceFollow_H4_FlagValueShape(t *testing.T) {
 		{
 			name: "home last", argv: []string{"list", "--home"}, want: "--home requires a value",
 			follow: func(_ *testing.T, argv []string, s string) []string { return append(argv, s) },
-			check:  func(t *testing.T, _, s string) { advCLIExists(t, filepath.Join(s, ".agent-director", "state.db")) },
+			check: func(t *testing.T, _, s string) {
+				advCLIExists(t, filepath.Join(s, ".config", "agent-director", "state.db"))
+			},
 		},
 		{
 			name: "tmux-command last", argv: []string{"list", "--tmux-command"}, want: "--tmux-command requires a value",

@@ -401,6 +401,14 @@ export declare class ErrSchemaMismatch extends AgentDirectorError {
 /** Mirrors ErrSchemaMigrationRequired (package: clisetup) */
 export declare class ErrSchemaMigrationRequired extends AgentDirectorError {
 }
+/**
+ * Mirrors ErrOldLayout (package: clisetup): the call would open the default store, no store exists
+ * there and the old directory (the one agent-director used before it moved to the standard config
+ * location) is present. Nothing was opened or created. Run this release's install.sh, which moves
+ * the old directory; see the {@link https://github.com/gabemahoney/agent-director/blob/main/docs/install.md#upgrade | Upgrade section of docs/install.md}.
+ */
+export declare class ErrOldLayout extends AgentDirectorError {
+}
 /** Mirrors ErrUnknownVerb (package: clisetup) */
 export declare class ErrUnknownVerb extends AgentDirectorError {
 }

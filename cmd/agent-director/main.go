@@ -150,12 +150,6 @@ const hookExitCode = 0
 // The function never returns an error; it logs and returns.
 func runHook() int {
 	start := time.Now()
-	logger := newHookLogger()
-	// Wire the hook logger into the trail writer so emit failures and
-	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
-	// being silently discarded. SetLogger is safe to call before the
-	// first Emit (SR-A-7.6).
-	trail.SetLogger(logger)
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
 
@@ -171,6 +165,26 @@ func runHook() int {
 	// log, exiting silently.
 	stdinRaw, _ := io.ReadAll(io.LimitReader(os.Stdin, hook.MaxPayloadBytes+1))
 	eventName := hook.PeekEventName(stdinRaw)
+
+	// The old-layout refusal comes before the logger, which creates
+	// errors.log, and before the trail and the store: a refused hook creates
+	// nothing. It fails open (exit 0, one diagnostic line on stderr) and a
+	// relayed PermissionRequest still gets its deny, as for any failure
+	// before Handle.
+	if err := hookOldLayout(); err != nil {
+		hookLog(log.New(os.Stderr, "agent-director-hook ", log.LstdFlags), "hook: %v", err)
+		if relayActive && eventName == hook.EventNamePermissionRequest {
+			fmt.Fprintln(stdout, hook.EncodeDecision(eventName, "deny", ""))
+		}
+		return hookExitCode
+	}
+
+	logger := newHookLogger()
+	// Wire the hook logger into the trail writer so emit failures and
+	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
+	// being silently discarded. SetLogger is safe to call before the
+	// first Emit (SR-A-7.6).
+	trail.SetLogger(logger)
 
 	// Pre-Handle fail-closed: if relay is active AND we know this is
 	// a PermissionRequest event AND we can't get far enough to even
@@ -310,6 +324,19 @@ func hookParentProc() hook.ParentProc {
 	}{probe.NewProcChecker(), probe.NewCommandNameReader(), probe.NewParentPIDReader()}
 }
 
+// hookOldLayout is the hook's old-layout check: store.ErrOldLayout (wrapped)
+// when the hook is about to open the default store (the config loads and its
+// file sets no [store] db_path), no store exists there and the old directory
+// is present, nil otherwise. A config that fails to load is not judged here:
+// the hook's own load reports it. It creates nothing.
+func hookOldLayout() error {
+	cfg, err := config.Load(configPath)
+	if err != nil || cfg.Store.DbPathSet {
+		return nil
+	}
+	return store.CheckOldLayout()
+}
+
 // newHookLogger opens the configured error_log_path (best-effort) and
 // returns a *log.Logger writing to it. On any open failure it falls back
 // to stderr — the hook MUST still log somewhere because diagnostic
@@ -379,7 +406,8 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 }
 
 // versionHandler implements the `version` verb. Prints
-// {"version": "<stamp>", "commit": "<sha>"} per the manifest. The client's
+// {"version": "<stamp>", "commit": "<sha>", "config_dir": "<dir>"} per the
+// manifest. The client's
 // Version() fails only on a closed Client, and no caller passes one; a
 // failure is named as every verb handler names one
 // (errnames.Classify: its Catalog name, else ErrInternal), never

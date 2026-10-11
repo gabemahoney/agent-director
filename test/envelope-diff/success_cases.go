@@ -7,13 +7,13 @@
 //   - name:        optional; tells a verb's further cases apart (expire).
 //   - seed:       seeds a fresh store in a temp dir; returns srcDir (the
 //     directory whose contents copyFixtureStore copies into
-//     homeDir/.agent-director/) and a ctx map with any dynamic
+//     homeDir/.config/agent-director/) and a ctx map with any dynamic
 //     values (ids, sessionIDs, cwds) the other callbacks need.
 //   - params:      builds the params map[string]any for runClient.
 //   - cliArgv:     builds the []string argv (verb + flags) for runCLI.
 //   - extraSetup:  optional hook called after each copyFixtureStore with the
 //     resulting homeDir.  Used for verbs that need files outside
-//     .agent-director/ (e.g. resume needs a JSONL transcript at
+//     .config/agent-director/ (e.g. resume needs a JSONL transcript at
 //     HOME/.claude/projects/<slug>/<session_id>.jsonl; spawn and resume
 //     need HOME/.claude.json for pre-trust).
 //   - wantPreTrust: when set, both envelopes must carry pre_trust equal to it.
@@ -54,7 +54,7 @@ type successCase struct {
 
 	// seed builds a fixture store in a fresh temp dir and returns:
 	//   srcDir: the directory whose contents copyFixtureStore copies into
-	//           homeDir/.agent-director/.  A minimal srcDir contains only
+	//           homeDir/.config/agent-director/.  A minimal srcDir contains only
 	//           state.db; WAL shards are copied automatically when present.
 	//   ctx:    a map of dynamic values (ids, sessionIDs, cwds, …) consumed
 	//           by the params / cliArgv / extraSetup callbacks.
@@ -68,7 +68,7 @@ type successCase struct {
 
 	// extraSetup is an optional post-copyFixtureStore hook called once per
 	// homeDir copy (CLI copy and Client copy each receive their own call).
-	// Use it for verbs that need files outside .agent-director/.
+	// Use it for verbs that need files outside .config/agent-director/.
 	//
 	// The test driver sets HOME=homeDir via t.Setenv before invoking this
 	// callback so any helper that calls os.UserHomeDir() (e.g.
@@ -376,7 +376,7 @@ var successCases = append([]successCase{
 
 	// ── make-template ─────────────────────────────────────────────────────
 	// make-template overwrite-existing: SeedErrTemplateExists pre-populates
-	// HOME/.agent-director/templates/<name>.toml so the --overwrite path
+	// HOME/.config/agent-director/templates/<name>.toml so the --overwrite path
 	// exercises the atomic rename(2) write algorithm (SR-1.7) on a real
 	// collision.  Without --overwrite this would yield ErrTemplateExists;
 	// with it, the encoded body replaces the pre-existing file and the verb

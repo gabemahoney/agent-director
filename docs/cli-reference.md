@@ -25,7 +25,7 @@ Launch a tracked agent in a new tmux session. Returns the instance_id and pre_tr
 ### Parameters
 
 - `cwd` (string, required): Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required.
-- `template` (string, optional): Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).
+- `template` (string, optional): Optional named template under ~/.config/agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).
 - `agent` (string, optional): The agent to launch: claude (Claude Code) or codex (Codex), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's own non-empty agent_args replace them). A codex spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.
 - `instance_id` (string, optional): Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. An explicit id that already has a row returns ErrInstanceIdCollision: without the reuse opt-in any existing row collides, in any state; with it, only a live row (pending included) or a row that changed or was removed after this spawn examined it.
 - `label` ([]string, optional): Label k=v entries, one per array element (on the CLI, a repeatable flag). Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
@@ -384,7 +384,7 @@ _None._
 
 ## make-template
 
-Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.
+Save a spawn preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.
 
 ### Parameters
 
@@ -478,7 +478,7 @@ _None._
 
 ## version
 
-Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.
+Print the version stamp as JSON ({version, commit, config_dir}). CLI aliases: --version, -v.
 
 ### Parameters
 
@@ -488,6 +488,7 @@ _None._
 
 - `version` (string): Human-readable version stamp from `git describe --tags --always --dirty` at build time. "dev" for unstamped builds.
 - `commit` (string): Full git SHA the binary was built from. "unknown" for unstamped builds.
+- `config_dir` (string): Directory the binary keeps agent-director's files in: "~/.config/agent-director", unexpanded, for every HOME.
 
 ### Errors
 

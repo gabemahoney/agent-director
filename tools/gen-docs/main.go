@@ -229,7 +229,7 @@ func renderAdmin(globals []adminapi.Flag, verbs []adminapi.Verb) []byte {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "# agent-director-admin reference")
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, "install.sh installs agent-director-admin at `~/.agent-director/admin/agent-director-admin` and never on PATH. It opens the same store, with the same config, as agent-director.")
+	fmt.Fprintln(&b, "install.sh installs agent-director-admin at `~/.config/agent-director/admin/agent-director-admin` and never on PATH. It opens the same store, with the same config, as agent-director.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "## Global flags")
 	fmt.Fprintln(&b)

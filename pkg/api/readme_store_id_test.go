@@ -148,7 +148,7 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 			}
 			home := t.TempDir()
 			env = append(env, "HOME="+home) // the last HOME wins
-			dbPath := filepath.Join(home, ".agent-director", "state.db")
+			dbPath := filepath.Join(adConfigDir(home), "state.db")
 			st, err := store.OpenOrInit(dbPath)
 			if err != nil {
 				t.Fatalf("OpenOrInit: %v", err)

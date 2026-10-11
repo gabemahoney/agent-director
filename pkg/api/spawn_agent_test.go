@@ -56,7 +56,7 @@ func readDirFiles(t *testing.T, dir string) map[string]string {
 // seedAgentTemplate writes f as the template "t" under env's home and returns the templates dir.
 func seedAgentTemplate(t *testing.T, env spawnEnv, f apitest.TemplateFields) string {
 	t.Helper()
-	dir := filepath.Join(env.home, ".agent-director", "templates")
+	dir := filepath.Join(adConfigDir(env.home), "templates")
 	if _, err := apitest.SeedTemplate(dir, "t", apitest.TemplateBody(f)); err != nil {
 		t.Fatalf("SeedTemplate: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestSpawnAgentRefusals(t *testing.T) {
 			if !tc.noCWD {
 				p.CWD = t.TempDir()
 			}
-			tdir := filepath.Join(env.home, ".agent-director", "templates")
+			tdir := filepath.Join(adConfigDir(env.home), "templates")
 			if tc.tmpl != nil {
 				tdir = seedAgentTemplate(t, env, *tc.tmpl)
 				p.Template = "t"

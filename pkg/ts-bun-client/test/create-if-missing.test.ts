@@ -19,7 +19,7 @@ test("createIfMissing: false → list() rejects with ErrStoreOpen; no store or p
     expect(err).toBeInstanceOf(ErrStoreOpen);
     expect((err as ErrStoreOpen).errDescription).toContain("database not initialized");
     await client.version({});
-    // Neither the store, its parent dir, nor the default ~/.agent-director.
+    // Neither the store, its parent dir, nor the default ~/.config/agent-director.
     expect(fs.readdirSync(home)).toEqual([]);
   }));
 

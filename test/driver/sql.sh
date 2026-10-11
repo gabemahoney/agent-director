@@ -17,7 +17,7 @@
 #
 # Usage: exactly as sqlite3; every argument and stdin pass through unchanged.
 #
-#   /opt/driver/sql.sh -readonly "$HOME/.agent-director/state.db" "SELECT ..."
+#   /opt/driver/sql.sh -readonly "$HOME/.config/agent-director/state.db" "SELECT ..."
 #   /opt/driver/sql.sh -readonly -separator '|' "$db" "SELECT ..."
 #   /opt/driver/sql.sh "$db" "INSERT INTO spawns ..."
 #

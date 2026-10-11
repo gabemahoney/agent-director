@@ -5,17 +5,17 @@
 #   - Remove the two help hook entries from ~/.claude/settings.json
 #     (preserving any other user hooks).
 #   - Remove the canonical binary and any `.prior` rollback snapshot
-#     under ~/.agent-director/bin/.
-#   - Remove the operator tool ~/.agent-director/admin/agent-director-admin,
-#     any `.prior` rollback snapshot of it, and its ~/.agent-director/admin/
+#     under ~/.config/agent-director/bin/.
+#   - Remove the operator tool ~/.config/agent-director/admin/agent-director-admin,
+#     any `.prior` rollback snapshot of it, and its ~/.config/agent-director/admin/
 #     directory (b.vqr).
 #   - Remove the PATH symlink (if found at any of the standard
 #     locations or at --symlink-dir).
-#   - Leave ~/.agent-director/ intact (the operator may want to
+#   - Leave ~/.config/agent-director/ intact (the operator may want to
 #     keep their templates / state.db history).
 #
 # Flags:
-#   --purge              Also rm -rf ~/.agent-director (templates +
+#   --purge              Also rm -rf ~/.config/agent-director (templates +
 #                        state.db). Requires --force or an interactive
 #                        confirmation, asked before anything is removed
 #                        or changed.
@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
+readonly DEFAULT_INSTALL_ROOT="${HOME}/.config/agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
@@ -376,7 +376,7 @@ fi
 # --purge confirmation (b.nw5). Asked here, before anything is removed
 # or changed, as config.toml's symlink check below depends on it; and
 # after settings.json's check, which a purge does not waive (that file
-# lives outside ~/.agent-director), so no refusal follows a "y". From
+# lives outside ~/.config/agent-director), so no refusal follows a "y". From
 # here PURGE is 1 only for a confirmed purge. An aborted purge is a plain
 # uninstall: it goes on, and ends with "--purge aborted" (exit 0) where
 # the purge would have run.
@@ -398,7 +398,7 @@ fi
 # purge's rm -rf removes the link (never the file it resolves to), so a
 # refusal would only stop the purge. That file keeps inject_help_hook,
 # and the note names it. A config.toml that can be written through is
-# edited as without --purge, so a target outside ~/.agent-director (a
+# edited as without --purge, so a target outside ~/.config/agent-director (a
 # dotfiles repo, say) loses the key install.sh wrote there.
 if [[ "$config_edit" -eq 1 ]] && ! ad_link_write_check "$CONFIG_TOML"; then
     if [[ "$PURGE" -eq 1 ]]; then
@@ -481,7 +481,7 @@ fi
 
 # --------------------------------------------------------------------
 # --purge: full directory removal, confirmed above. rm -rf removes a
-# symlink under ~/.agent-director, not the file it points to.
+# symlink under ~/.config/agent-director, not the file it points to.
 # --------------------------------------------------------------------
 
 if [[ "$purge_aborted" -eq 1 ]]; then

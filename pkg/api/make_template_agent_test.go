@@ -61,7 +61,7 @@ func TestMakeTemplateAgentCheckOrder(t *testing.T) {
 			if !strings.HasPrefix(errText(err), tc.wantText) {
 				t.Errorf("description %q\nwant it to start %q", errText(err), tc.wantText)
 			}
-			if _, err := os.Stat(filepath.Join(home, ".agent-director", "templates")); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(filepath.Join(adConfigDir(home), "templates")); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("templates dir: %v; want none created", err)
 			}
 		})

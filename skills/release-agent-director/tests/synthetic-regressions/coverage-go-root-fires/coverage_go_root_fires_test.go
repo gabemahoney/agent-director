@@ -39,7 +39,7 @@
 // b.93m TRAIL-LEAK ISOLATION DISPOSITIONS (SR-5)
 // ==============================================
 //   - HOME redirect (SR-5.1): KEPT, unconditionally.  The gate subprocess still
-//     runs `go test`, whose child binaries resolve ~/.agent-director from HOME;
+//     runs `go test`, whose child binaries resolve ~/.config/agent-director from HOME;
 //     the trail singleton pins to it on first Emit.  Redirecting HOME to a
 //     per-test temp dir keeps any nested emitter from writing ad-trail.jsonl
 //     into the real home and racing the trail-leak canary.  Retained verbatim.
@@ -185,7 +185,7 @@ func runGate(t *testing.T, root, worktreeRoot string) (exitCode int, stdout, std
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "go-root.sh")
 	cmd := exec.Command("bash", gateScript, worktreeRoot)
 	// HOME redirect (SR-5.1) — kept unconditionally: the gate's inner `go test`
-	// binaries resolve ~/.agent-director from HOME; an isolated HOME prevents a
+	// binaries resolve ~/.config/agent-director from HOME; an isolated HOME prevents a
 	// nested emitter from racing the trail-leak canary (b.93m).
 	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
 	var stdoutBuf, stderrBuf strings.Builder

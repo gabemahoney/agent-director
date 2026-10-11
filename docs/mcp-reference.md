@@ -25,7 +25,7 @@ Launch a tracked agent in a new tmux session. Returns the instance_id and pre_tr
 ### Input schema
 
 - `cwd`: type=string, required=true — Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required.
-- `template`: type=string, required=false — Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).
+- `template`: type=string, required=false — Optional named template under ~/.config/agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; agent_args replaces wholesale).
 - `agent`: type=string, required=false — The agent to launch: claude (Claude Code) or codex (Codex), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's own non-empty agent_args replace them). A codex spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.
 - `instance_id`: type=string, required=false — Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. An explicit id that already has a row returns ErrInstanceIdCollision: without the reuse opt-in any existing row collides, in any state; with it, only a live row (pending included) or a row that changed or was removed after this spawn examined it.
 - `label`: type=[]string, required=false — Label k=v entries, one per array element (on the CLI, a repeatable flag). Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
@@ -384,7 +384,7 @@ Delete finished rows (ended/missing) whose ended_at is older than the retention 
 
 ## Tool: make-template
 
-Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.
+Save a spawn preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.
 
 ### Input schema
 
@@ -462,7 +462,7 @@ Shut down a waiting row: type `/exit`, wait up to pause.timeout_seconds for `end
 
 ## Tool: version
 
-Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --version, -v.
+Print the version stamp as JSON ({version, commit, config_dir}). CLI aliases: --version, -v.
 
 ### Input schema
 
@@ -472,6 +472,7 @@ Print the build-time version stamp as JSON ({version, commit}). CLI aliases: --v
 
 - `version`: type=string — Human-readable version stamp from `git describe --tags --always --dirty` at build time. "dev" for unstamped builds.
 - `commit`: type=string — Full git SHA the binary was built from. "unknown" for unstamped builds.
+- `config_dir`: type=string — Directory the binary keeps agent-director's files in: "~/.config/agent-director", unexpanded, for every HOME.
 
 ### Errors
 

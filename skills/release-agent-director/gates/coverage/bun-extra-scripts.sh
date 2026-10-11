@@ -30,9 +30,9 @@ cd "$PKG_DIR" || { printf 'bun-extra-scripts.sh: cannot cd into package dir: %s\
 # ── Per-gate scratch HOME (b.3jn) ──────────────────────────────────────────
 # The five coverage gates run concurrently inside one sandbox container, all
 # sharing HOME=/home/sandbox. The bun tests here write $HOME-resolved paths
-# such as ~/.agent-director/ad-trail.jsonl (their CLI subprocesses inherit
+# such as ~/.config/agent-director/ad-trail.jsonl (their CLI subprocesses inherit
 # $HOME unless a test overrides it). Sibling gate coverage.go-root runs
-# test/smoke/go, whose TestMain canary snapshots the real ~/.agent-director via
+# test/smoke/go, whose TestMain canary snapshots both real directories (~/.agent-director or ~/.config/agent-director) via
 # user.Current() (immune to $HOME) and fails the suite on ANY modification. So
 # give this bun gate its own scratch HOME. Pin the go/bun caches to their real
 # (HOME-derived) locations FIRST, before HOME is moved, so isolation does not

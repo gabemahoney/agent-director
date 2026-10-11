@@ -28,6 +28,61 @@ func TestValidateTemplateName(t *testing.T) {
 	}
 }
 
+// TestTemplatesDir: the templates dir is <HOME>/.config/agent-director/templates,
+// whatever XDG_CONFIG_HOME says; with no HOME it is the "~/" display form
+// naming the same directory.
+func TestTemplatesDir(t *testing.T) {
+	home := t.TempDir()
+	cases := []struct {
+		name, home, xdg, want string
+	}{
+		{"HOME set", home, "", filepath.Join(home, ".config", "agent-director", "templates")},
+		{"HOME set, XDG_CONFIG_HOME elsewhere", home, filepath.Join(t.TempDir(), "xdg"), filepath.Join(home, ".config", "agent-director", "templates")},
+		{"HOME empty", "", "", "~/.config/agent-director/templates"},
+		{"HOME empty, XDG_CONFIG_HOME set", "", filepath.Join(t.TempDir(), "xdg"), "~/.config/agent-director/templates"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", tc.home)
+			t.Setenv("XDG_CONFIG_HOME", tc.xdg)
+
+			if got := config.TemplatesDir(); got != tc.want {
+				t.Errorf("TemplatesDir() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnsureTemplatesDirCreatesUnderConfigDir: on a bare HOME, EnsureTemplatesDir
+// creates <HOME>/.config/agent-director/templates and nothing else, and never
+// the old default directory, even with XDG_CONFIG_HOME set elsewhere.
+func TestEnsureTemplatesDirCreatesUnderConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+
+	got, err := config.EnsureTemplatesDir()
+
+	want := filepath.Join(home, ".config", "agent-director", "templates")
+	if err != nil || got != want {
+		t.Fatalf("EnsureTemplatesDir = %q, %v; want %q", got, err, want)
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Errorf("stat %s: %v, %v; want a directory", want, info, err)
+	}
+	var found []string
+	err = filepath.WalkDir(home, func(p string, _ os.DirEntry, werr error) error {
+		if rel, rerr := filepath.Rel(home, p); werr == nil && rerr == nil && rel != "." {
+			found = append(found, rel)
+		}
+		return werr
+	})
+	wantTree := []string{".config", filepath.Join(".config", "agent-director"), filepath.Join(".config", "agent-director", "templates")}
+	if err != nil || !slices.Equal(found, wantTree) {
+		t.Errorf("HOME holds %v (walk error %v); want only %v", found, err, wantTree)
+	}
+}
+
 func TestEnsureTemplatesDirIsIdempotent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	first, err := config.EnsureTemplatesDir()

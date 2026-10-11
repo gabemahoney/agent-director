@@ -23,7 +23,7 @@ import {
 } from "agent-director";
 
 const HOME = process.env.HOME;
-const STORE = path.join(HOME, ".agent-director", "state.db");
+const STORE = path.join(HOME, ".config", "agent-director", "state.db");
 const FAKE_TMUX = process.env.FAKE_TMUX_BIN ?? "/work/source/test/fake-tmux/tmux";
 const BOGUS = "subprocess-smoke-bogus-id";
 

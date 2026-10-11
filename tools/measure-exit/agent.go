@@ -224,7 +224,7 @@ func (h *harness) notReady(instanceID, detail string) error {
 
 // trailPath is the container's own trail (the run's HOME, never a host's).
 func (h *harness) trailPath() string {
-	return filepath.Join(h.iso.Home, ".agent-director", "ad-trail.jsonl")
+	return filepath.Join(h.iso.Home, ".config", "agent-director", "ad-trail.jsonl")
 }
 
 // ignoredHookReasons reads the run's own trail read-only and returns the

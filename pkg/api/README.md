@@ -691,6 +691,7 @@ Common sentinels across verbs:
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
+| `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
 | `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry the call later |
 | `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |

@@ -13,7 +13,7 @@ import (
 // measurement container. Without it (and, in dry mode, without the sandbox
 // marker) the driver refuses before doing anything: it must never run on a
 // host, where agent-director's store resolution could reach the real
-// ~/.agent-director (b.8dr).
+// ~/.agent-director or ~/.config/agent-director (b.8dr).
 const containerMarkerEnv = "AGENT_DIRECTOR_MEASURE_CONTAINER"
 
 // sandboxMarkerEnv is the repo sandbox's marker (internal/testsupport/

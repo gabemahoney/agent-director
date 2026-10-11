@@ -164,7 +164,7 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 			if ids := rowIDs(t, d); len(ids) != 0 {
 				t.Errorf("rows after the refusals = %v; want none", ids)
 			}
-			if tpls, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".agent-director", "templates")); len(tpls) != 0 {
+			if tpls, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "templates")); len(tpls) != 0 {
 				t.Errorf("templates after the refusals = %v; want none", tpls)
 			}
 

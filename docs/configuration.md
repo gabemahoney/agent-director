@@ -1,7 +1,10 @@
 # Configuration
 
-`~/.agent-director/config.toml` (`install.sh` creates it, or adds to it, unless
-`--no-hooks`; all fields optional):
+`~/.config/agent-director/config.toml` (`install.sh` creates it, or adds to it,
+unless `--no-hooks`; all fields optional). `HOME` decides the directory;
+`XDG_CONFIG_HOME` is not read. The templates directory
+(`~/.config/agent-director/templates/`) lives in the same directory, and a
+relative `db_path` or `error_log_path` is joined onto it:
 
 ```toml
 [defaults]
@@ -22,7 +25,7 @@ timeout_seconds = 30
 lock_wait_seconds = 12
 
 [store]
-db_path = "~/.agent-director/state.db"
+db_path = "~/.config/agent-director/state.db"
 busy_timeout_ms = 10000
 
 [state]
@@ -33,7 +36,7 @@ settle_ms = 0   # 0 = off
 # codex_path = "/opt/codex/bin/codex"
 
 [log]
-error_log_path = "~/.agent-director/errors.log"
+error_log_path = "~/.config/agent-director/errors.log"
 
 [tmux]   # omit a key (or set 0) for its default
 # starting_session_seconds = 300
@@ -63,12 +66,12 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. |
 | `[pause] timeout_seconds` | 1 to 9223372036 | 30 | How long `pause` waits for the agent to exit. |
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. |
-| `[store] db_path` | path | `~/.agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores). Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
+| `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
 | `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new state must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The path of the Codex program, in the same form and under the same refusals as `claude_path`. Checked at load only; no launch runs it. |
-| `[log] error_log_path` | path | `~/.agent-director/errors.log` | Where hooks and the CLI append errors (stderr if it cannot be opened). |
+| `[log] error_log_path` | path | `~/.config/agent-director/errors.log` | Where hooks and the CLI append errors (stderr if it cannot be opened); a relative path is joined onto `~/.config/agent-director`. |
 
 ## Refused values
 

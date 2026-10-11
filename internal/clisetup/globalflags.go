@@ -207,8 +207,8 @@ func (g GlobalFlags) Apply() (Overrides, error) {
 //
 // When p is "~" or "~/…" and HOME is unset or empty, ok is false and p is
 // returned unchanged. It deliberately does not fall back to another home
-// source such as the passwd entry, which holds the real ~/.agent-director
-// (b.4uz, b.38a); internal/store and pkg/api refuse the same case.
+// source such as the passwd entry, which holds the real AD directory (b.4uz,
+// b.38a); internal/store and pkg/api refuse the same case.
 func ExpandTilde(p string) (expanded string, ok bool) {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
 		return p, true

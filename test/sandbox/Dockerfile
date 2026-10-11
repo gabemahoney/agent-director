@@ -1,6 +1,7 @@
 # Sandbox execution image (b.nh2) — the container boundary that makes it
 # safe to run the agent-director test suite (and ANY built artifact) without
-# risking the developer's real ~/.agent-director.
+# risking the developer's real agent-director directory (~/.agent-director or
+# ~/.config/agent-director; a host may hold either).
 #
 # b.8dr incident: `bun test` on a schema-bumping branch opened and silently
 # auto-migrated the LIVE ~/.agent-director/state.db (v2→v3), breaking every
@@ -8,7 +9,7 @@
 # test that skips the redirect, an absolute path to the real store, or a child
 # binary started with the host's environment still opens the real store — and
 # the store chmods the DB 0600 on every open. A container whose HOME has
-# NO .agent-director is the only boundary that holds. See the "Sandboxed
+# NEITHER directory is the only boundary that holds. See the "Sandboxed
 # execution" section of docs/engineering-guide.md.
 #
 # Distinct from test/Dockerfile (the Claude-Code testplan-driver harness):
@@ -24,7 +25,8 @@
 # would also map to the host user) is deliberate: tests that assert a
 # filesystem permission is DENIED (e.g. internal/trail's read-only-dir case)
 # only behave correctly for an unprivileged process — root bypasses DAC checks.
-# sandbox's HOME (/home/sandbox) contains no .agent-director, so the isolation
+# sandbox's HOME (/home/sandbox) contains neither ~/.agent-director nor
+# ~/.config/agent-director, so the isolation
 # invariant holds; the go smoke canary resolves that home via user.Current()
 # (/etc/passwd) and stays green as long as nothing writes there.
 
@@ -123,7 +125,8 @@ RUN apt-get update \
  && rm /tmp/bun-install.sh \
  && ln -s /opt/bun/bin/bun /usr/local/bin/bun \
  && bun --version \
- # Non-root user with a real /etc/passwd home that has NO .agent-director.
+ # Non-root user with a real /etc/passwd home that has NEITHER ~/.agent-director
+ # nor ~/.config/agent-director.
  # uid 1000 matches the host user the podman leg maps in (--userns=keep-id).
  && useradd --create-home --shell /bin/bash --uid 1000 sandbox \
  # Pre-create the HOME cache dirs and make the HOME tree group-writable by
@@ -139,7 +142,7 @@ RUN apt-get update \
  && chmod -R g=u /home/sandbox
 
 USER sandbox
-# HOME=/home/sandbox has no .agent-director (see header). The Go/bun cache env
+# HOME=/home/sandbox has neither directory (see header). The Go/bun cache env
 # vars point at the mount targets the Makefile supplies so a warm host cache
 # makes the suite fast; the module cache is mounted read-write.
 ENV HOME=/home/sandbox \

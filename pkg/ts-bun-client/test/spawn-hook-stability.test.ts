@@ -54,7 +54,7 @@ function spawnHookCommands(binary: string, home: string): string[] {
 
 test("hooks name the installed binary's absolute path, which survives an in-place re-install", () => {
   const home = tmp("ad-hook-stab-home-");
-  const binDir = join(home, ".agent-director", "bin");
+  const binDir = join(home, ".config", "agent-director", "bin");
   mkdirSync(binDir, { recursive: true });
   const installed = join(binDir, "agent-director");
   copyFileSync(cliPath, installed);
@@ -77,7 +77,7 @@ test("a symlinked install: hooks name the resolved real binary, not the symlink"
   const real = join(tmp("ad-hook-stab-real-"), "real-agent-director");
   copyFileSync(cliPath, real);
   chmodSync(real, 0o755);
-  const binDir = join(home, ".agent-director", "bin");
+  const binDir = join(home, ".config", "agent-director", "bin");
   mkdirSync(binDir, { recursive: true });
   const link = join(binDir, "agent-director");
   symlinkSync(real, link);

@@ -3,7 +3,7 @@ package main_test
 // help_test.go covers agent-director-admin's help and version (b.vqr): every
 // help path, global flags given or not, opens with the human-approval
 // statement and shows or points to the global flags, help and version open no
-// store and load no config (a poisoned ~/.agent-director stays as it was), and
+// store and load no config (a poisoned ~/.config/agent-director stays as it was), and
 // version prints the same stamp as agent-director.
 
 import (
@@ -24,14 +24,14 @@ var usageLines = map[string]string{
 	"version":       "agent-director-admin version",
 }
 
-// poisonedHome returns a HOME whose ~/.agent-director holds a malformed
+// poisonedHome returns a HOME whose ~/.config/agent-director holds a malformed
 // config and a state.db that is not a database, so a run that loads the
 // config or opens the store fails; dirEntries reads it back.
 func poisonedHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	dir := filepath.Join(home, ".agent-director")
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	dir := filepath.Join(home, ".config", "agent-director")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	for name, body := range map[string]string{"config.toml": "this is [not toml\n", "state.db": "not a database\n"} {
@@ -43,10 +43,10 @@ func poisonedHome(t *testing.T) string {
 }
 
 // dirEntries returns the names and contents of the files in home's
-// ~/.agent-director.
+// ~/.config/agent-director.
 func dirEntries(t *testing.T, home string) map[string]string {
 	t.Helper()
-	dir := filepath.Join(home, ".agent-director")
+	dir := filepath.Join(home, ".config", "agent-director")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read %s: %v", dir, err)
@@ -87,9 +87,9 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 		{[]string{"--help"}, all},
 		{[]string{"-h"}, all},
 		{[]string{"--home", "{home}"}, all},
-		{[]string{"--store-path", "{home}/.agent-director/state.db", "help"}, all},
+		{[]string{"--store-path", "{home}/.config/agent-director/state.db", "help"}, all},
 		{[]string{"-h", "--tmux-command={home}/no-tmux"}, all},
-		{[]string{"kill-finished", "--help", "--store-path", "{home}/.agent-director/state.db"}, []string{"kill-finished"}},
+		{[]string{"kill-finished", "--help", "--store-path", "{home}/.config/agent-director/state.db"}, []string{"kill-finished"}},
 		{[]string{"--home={home}", "delete", "-h"}, []string{"delete"}},
 		{[]string{"kill-finished", "-h"}, []string{"kill-finished"}},
 		{[]string{"delete", "--help"}, []string{"delete"}},
@@ -131,7 +131,7 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 				t.Errorf("help points to the global flags = %v; want %v:\n%s", got, !whole, stdout)
 			}
 			if after := dirEntries(t, home); !maps.Equal(after, before) {
-				t.Errorf("~/.agent-director changed: %v; want it as it was, %v", after, before)
+				t.Errorf("~/.config/agent-director changed: %v; want it as it was, %v", after, before)
 			}
 		})
 	}
@@ -139,8 +139,8 @@ func TestHelpOpensWithApprovalStatement(t *testing.T) {
 
 // TestVersionMatchesMainBinary: agent-director-admin version and its aliases
 // --version and -v (b.fv2), global flags given or not, print exactly what
-// agent-director version prints for the same build, the stamp the build set,
-// and load no config.
+// agent-director version prints for the same build, the stamp the build set
+// and the config_dir ~/.config/agent-director (SR-11.7), and load no config.
 func TestVersionMatchesMainBinary(t *testing.T) {
 	home := poisonedHome(t)
 	mainOut, mainErr, mainCode := runMain(t, home, "version")
@@ -151,7 +151,7 @@ func TestVersionMatchesMainBinary(t *testing.T) {
 	if err := json.Unmarshal([]byte(mainOut), &stamp); err != nil {
 		t.Fatalf("parse %q: %v", mainOut, err)
 	}
-	if want := map[string]any{"version": testVersion, "commit": testCommit}; !maps.Equal(stamp, want) {
+	if want := map[string]any{"version": testVersion, "commit": testCommit, "config_dir": "~/.config/agent-director"}; !maps.Equal(stamp, want) {
 		t.Errorf("version = %v; want %v", stamp, want)
 	}
 	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"--home", home, "-v"}} {

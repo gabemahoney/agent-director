@@ -103,10 +103,10 @@ func TestHookCLIOpensTheVerbsStore(t *testing.T) {
 		name, dbPath string // the config's db_path, "<HOME>" replaced; "-" writes no config
 		store        string // the store both open, under HOME
 	}{
-		{"no config", "-", ".agent-director/state.db"},
-		{"empty", "", ".agent-director/state.db"},
+		{"no config", "-", ".config/agent-director/state.db"},
+		{"empty", "", ".config/agent-director/state.db"},
 		{"tilde", "~/t/s.db", "t/s.db"},
-		{"relative", "r/s.db", ".agent-director/r/s.db"},
+		{"relative", "r/s.db", ".config/agent-director/r/s.db"},
 		{"absolute", "<HOME>/a/s.db", "a/s.db"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

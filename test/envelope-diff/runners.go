@@ -135,7 +135,7 @@ var forwardedTmuxEnv = []string{"TMUX", "TMUX_TMPDIR", faketmuxfix.EnvTables}
 //   - exit != 0 → stderr bytes (error envelope).
 //
 // The subprocess environment is kept minimal: HOME is set to the parent of
-// .agent-director/ (derived from dbPath) so the CLI resolves its store at
+// .config/agent-director/ (derived from dbPath) so the CLI resolves its store at
 // dbPath without reading the test runner's real config. PATH is prepended with
 // the fake-tmux directory so tmux-dependent verbs hit the fake binary; the
 // forwardedTmuxEnv variables are passed on when set.
@@ -147,9 +147,9 @@ func runCLI(t *testing.T, binPath, dbPath string, args ...string) (envelope []by
 
 	fakeTmuxDir := buildFakeTmux(t)
 
-	// dbPath = <homeDir>/.agent-director/state.db
-	// homeDir is the fake HOME so ~/.agent-director/state.db resolves to dbPath.
-	homeDir := filepath.Dir(filepath.Dir(dbPath))
+	// dbPath = <homeDir>/.config/agent-director/state.db
+	// homeDir is the fake HOME so ~/.config/agent-director/state.db resolves to dbPath.
+	homeDir := filepath.Dir(filepath.Dir(filepath.Dir(dbPath)))
 
 	cmd := exec.Command(binPath, args...)
 	cmd.Env = []string{
@@ -195,11 +195,11 @@ func runClient(t *testing.T, dbPath, verb string, params map[string]any) (envelo
 
 	ensureFakeTmuxOnPath(t)
 
-	// dbPath = <homeDir>/.agent-director/state.db; derive configPath to ensure
+	// dbPath = <homeDir>/.config/agent-director/state.db; derive configPath to ensure
 	// the Client uses the same (absent) config as the CLI subprocess — both
 	// fall through to config.Default() when the file is missing.
-	homeDir := filepath.Dir(filepath.Dir(dbPath))
-	configPath := filepath.Join(homeDir, ".agent-director", "config.toml")
+	homeDir := filepath.Dir(filepath.Dir(filepath.Dir(dbPath)))
+	configPath := filepath.Join(homeDir, ".config", "agent-director", "config.toml")
 
 	c, err := api.New(api.Options{
 		StorePath:       dbPath,

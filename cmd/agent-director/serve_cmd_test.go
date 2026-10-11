@@ -53,7 +53,8 @@ func TestMCPClientOptions(t *testing.T) {
 }
 
 // TestServeMCPClientOpenErrorName: a failed open of serve's MCP Client is named as
-// setupClient's is, a schema refusal by its schema name (b.uii); serial, as captureStdio is.
+// setupClient's is, a schema refusal by its schema name (b.uii) and an
+// old-layout refusal as ErrOldLayout; serial, as captureStdio is.
 func TestServeMCPClientOpenErrorName(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -61,6 +62,7 @@ func TestServeMCPClientOpenErrorName(t *testing.T) {
 	}{
 		{"ErrSchemaMismatch", fmt.Errorf("api: open store: %w: found user_version=99, want 7", pkgapi.ErrSchemaMismatch)},
 		{"ErrSchemaMigrationRequired", fmt.Errorf("api: open store: %w: state.db is schema v1", pkgapi.ErrSchemaMigrationRequired)},
+		{"ErrOldLayout", fmt.Errorf("api: %w", pkgapi.ErrOldLayout)},
 		{"ErrStoreOpen", errors.New("api: open store: unable to open database file")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

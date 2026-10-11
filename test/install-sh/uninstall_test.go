@@ -71,7 +71,7 @@ func TestUninstallRemovesAdminBinary(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			root := filepath.Join(home, ".agent-director")
+			root := filepath.Join(home, ".config", "agent-director")
 			admin := filepath.Join(root, "admin")
 			files := []string{"bin/agent-director", "bin/agent-director.prior", "admin/agent-director-admin",
 				"admin/agent-director-admin.prior", "admin/agent-director-admin.tmp.123", "state.db"}
@@ -126,7 +126,7 @@ func TestUninstallClearsInjectHelpHookOnlyUnderDefaults(t *testing.T) {
 	}
 	cli2TrackInputs(t)
 	home := t.TempDir()
-	cfg := filepath.Join(home, ".agent-director", "config.toml")
+	cfg := filepath.Join(home, ".config", "agent-director", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -235,9 +235,9 @@ func TestUninstallKeepsFileModes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			cfg := filepath.Join(home, ".agent-director", "config.toml")
+			cfg := filepath.Join(home, ".config", "agent-director", "config.toml")
 			settings := filepath.Join(home, ".claude", "settings.json")
-			hook := filepath.Join(home, ".agent-director", "bin", "agent-director") + " help"
+			hook := filepath.Join(home, ".config", "agent-director", "bin", "agent-director") + " help"
 			files := []struct {
 				path, before string
 				mode         os.FileMode
@@ -381,7 +381,7 @@ func checkSettingsLeftAlone(t *testing.T, cases []settingsLeftAlone) {
 				t.Skip("root can write in the 0555 directory that stands in for a read-only one")
 			}
 			home := t.TempDir()
-			bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
+			bin := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
 			claude := filepath.Join(home, ".claude")
 			settings := filepath.Join(claude, "settings.json")
 			fill := strings.NewReplacer("{bin}", bin, "{settings}", settings).Replace
@@ -453,7 +453,7 @@ func TestUninstallRemovesHookEntriesBesideOddValues(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
+			bin := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
 			settings := filepath.Join(home, ".claude", "settings.json")
 			fill := strings.NewReplacer("{bin}", bin).Replace
 			writeMode(t, bin, "binary", 0o755)
@@ -545,7 +545,7 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 			"{bin} help", "dark",
 			"remove agent-director's hook entries from",
 			"each SessionStart and SessionEnd entry holding a hook whose command starts with {bin}."},
-		{"config.toml", ".agent-director",
+		{"config.toml", ".config/agent-director",
 			"[defaults]\nrelay_mode = \"off\"\ninject_help_hook = true\n",
 			"[defaults]\nrelay_mode = \"off\"\n",
 			"inject_help_hook", "relay_mode",
@@ -556,7 +556,7 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 		for _, follow := range []string{"fix the link", "remove the entry"} {
 			t.Run(f.base+", "+follow, func(t *testing.T) {
 				home := t.TempDir()
-				bin := filepath.Join(home, ".agent-director", "bin", "agent-director")
+				bin := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
 				fill := strings.NewReplacer("{bin}", bin).Replace
 				link := filepath.Join(home, f.dir, f.base)
 				writeMode(t, bin, "binary", 0o755)
@@ -649,7 +649,7 @@ func TestUninstallPurge(t *testing.T) {
 		force        bool
 		code         int
 		prompted     bool
-		purged       bool   // the purge was confirmed, so ~/.agent-director is removed (checked only where configAfter is set)
+		purged       bool   // the purge was confirmed, so ~/.config/agent-director is removed (checked only where configAfter is set)
 		has, last    string // text the output holds, and its last line ("" either unchecked)
 		configAfter  string // the file config.toml names, after; "" wants HOME unchanged
 	}{
@@ -670,7 +670,7 @@ func TestUninstallPurge(t *testing.T) {
 				t.Skip("root can write in the 0555 directory that stands in for a read-only one")
 			}
 			home := t.TempDir()
-			root := filepath.Join(home, ".agent-director")
+			root := filepath.Join(home, ".config", "agent-director")
 			bin := filepath.Join(root, "bin", "agent-director")
 			cfg, settings := filepath.Join(root, "config.toml"), filepath.Join(home, ".claude", "settings.json")
 			writeMode(t, bin, "binary", 0o755)

@@ -30,7 +30,7 @@ const storeIDBusyTimeoutPlaceholder = "<busy_timeout_ms>"
 
 // storeIDCommand is the documented read-only lookup of this store's id.
 const storeIDCommand = `sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ` + storeIDBusyTimeoutPlaceholder +
-	`" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
+	`" ~/.config/agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
 
 // storeIDItemCommands returns the trimmed lines starting "sqlite3" in the
 // fenced blocks of the "This store's id" item. Both the command's pinned

@@ -9,7 +9,7 @@
 //
 // It must run ONLY inside the sandbox container: the tests build and exec the
 // real binary and open agent-director state, which can rewrite the developer's
-// real ~/.agent-director on the host (b.8dr). TestMain enforces the sandbox
+// real ~/.config/agent-director on the host (b.8dr). TestMain enforces the sandbox
 // marker via sandboxguard and additionally skips cleanly when tmux is absent
 // from PATH (defense-in-depth — the deny rules already block host runs). The
 // sandbox image installs tmux + procps, and find-missing's start-time reader

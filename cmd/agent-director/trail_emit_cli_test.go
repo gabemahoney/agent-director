@@ -48,6 +48,19 @@ func TestTrailEmitRelayAttemptCLI(t *testing.T) {
 	}
 }
 
+// TestTrailEmitOldLayoutReportsTrailWrite: with only the old directory present
+// trail-emit writes nothing and creates nothing: it fails ErrTrailWrite, as for
+// any trail it cannot write, and the home keeps every path and byte (SR-11.7).
+func TestTrailEmitOldLayoutReportsTrailWrite(t *testing.T) {
+	o := newOldLayout(t)
+
+	stdout, stderr, code := runCLIWithHome(t, o.home, "trail-emit", "relay-attempt", "--token", "tok-old",
+		"--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "old-x")
+
+	assertOnlyEnvelope(t, stdout, stderr, code, "ErrTrailWrite")
+	o.assertUntouched(t)
+}
+
 // TestTrailNoHomeWritesNothing: with HOME="" trail-emit fails ErrTrailWrite and
 // a no-verb hook payload exits 0 silently, neither writing under the cwd (b.iin).
 func TestTrailNoHomeWritesNothing(t *testing.T) {
