@@ -120,7 +120,8 @@ type HandleConfig struct {
 	// Start is the instant the hook process started, on Now's clock:
 	// cmd/agent-director reads time.Now first thing in the hook verb. The
 	// relay hook's kill instant is Start plus RelayTimeout (b.146 rule 4),
-	// and the main agent's Stop or idle-prompt Notification proves gone only
+	// and the main agent's Stop, idle-prompt Notification or (Codex) Interrupt
+	// proves gone only
 	// the requests recorded before the second of Start (the turn_end proof's
 	// cut, store.RequestProof.RecordedBefore; b.omt), so Start must be the
 	// wall clock the store's created_at is written on. The zero time reads
@@ -235,15 +236,18 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // holds it (one that still awaits an answer and is not proven gone; b.omt),
 // returns to waiting, any other row is soft refreshed, and
 // either way the row records idle_since (applyOrdinaryHook; b.svb, b.146
-// problem 3). On a relayed row, a PostToolUse or PostToolUseFailure carrying
-// a tool_use_id, and the main agent's Stop or idle-prompt Notification, first
+// problem 3). On a relayed row, a Claude PostToolUse or PostToolUseFailure
+// carrying a tool_use_id, and the main agent's Stop or idle-prompt
+// Notification (Codex: its Stop or Interrupt, with no agent_id), first
 // prove permission requests' dialogs gone (proveRequestsGone; b.146 step 2c),
-// with the same gate, the Stop or idle prompt only those recorded before the
+// with the same gate, the turn end only those recorded before the
 // hook's start; a request proven gone no longer holds the row's move to
 // working (b.omt). Then such a PostToolUse or PostToolUseFailure closes the
 // fallen-back request with that tool_use_id (closeToolRan; b.146 rule 13: the
 // tool ran, so its dialog was answered allow), with the same gate, before its
-// ordinary write.
+// ordinary write. No Codex hook proves by tool_use_id or closes this way
+// (ClassifyResult.ToolRan is never true for one): Codex's permission requests
+// carry no tool_use_id.
 //
 // The agent (HandleConfig.Agent, the verb's --agent): its raw value is
 // validated once ad.hook.fired is armed (ResolveAgent); an invalid one is a
@@ -257,7 +261,11 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // like any subagent's; and after any applied write of a Codex hook without an
 // agent_id, a NULL jsonl_path is healed from the payload's path when that
 // exists and its file name carries the hook's session id (healCodexTranscript,
-// SR-6.3).
+// SR-6.3). A relayed PermissionRequest is the exception: runRelay owns its
+// write and reports no applied flag, and a heal there would add a store write,
+// with its lock wait, to the relay hook's window before its poll for nothing
+// the next applied hook does not do (RN-10: the rollout exists at
+// SessionStart), so that hook heals nothing.
 //
 // Subagent capture (b.xjn; subagent.go; Claude hooks only, ClassifyResult.
 // SubagentCapture, which Claude's table alone sets): SubagentStart and SubagentStop are one
@@ -599,9 +607,11 @@ func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.H
 
 // proveRequestsGone is a hook's proof that permission requests' dialogs are
 // gone (b.146 step 2c; store ProveRequestsGone, with the hook's gate and
-// hc's clock): a PostToolUse or PostToolUseFailure carrying a tool_use_id
-// (ToolRan) proves the requests with that tool_use_id gone, tool_ran; the
-// main agent's Stop or idle-prompt Notification (TurnEnded) proves every
+// hc's clock): a Claude PostToolUse or PostToolUseFailure carrying a
+// tool_use_id (ToolRan; never a Codex hook) proves the requests with that
+// tool_use_id gone, tool_ran; the main agent's Stop or idle-prompt
+// Notification, or a Codex Interrupt with no agent_id (TurnEnded; a marked
+// Interrupt is not one), proves every
 // request with no agent_id recorded before start, the hook's start (Handle's,
 // from HandleConfig.Start), turn_end: one whose created_at is strictly before
 // start's whole second (store.RequestProof.RecordedBefore; b.omt). The cut is

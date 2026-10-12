@@ -111,15 +111,17 @@ A caller that cannot judge the pane follows the
 
 A row with `relay_mode=on` stays in `check_permission` until the agent's
 next hook after its last permission request. A request answered at the
-pane outside agent-director stops holding the row once Claude Code shows
-its dialog gone: its tool runs, or, for the main agent's request (not a
-subagent's), the turn ends. When the agent's next hook is lost (for
-example the end of a turn after a denied request), the notification Claude
-Code sends while the agent sits idle at its prompt moves the row to
-`waiting` once none of its requests still holds it. Failing that,
+pane outside agent-director stops holding the row once the agent's hooks
+show its dialog gone: its tool runs (a Claude agent), or, for the main
+agent's request (not a subagent's), the turn ends. When the agent's next
+hook is lost (for example the end of a turn after a denied request), the
+notification Claude Code sends while the agent sits idle at its prompt moves
+the row to `waiting` once none of its requests still holds it. Failing that,
 `find-missing` moves the row out once none of its requests still holds it
 and none of its relay hooks can still run: to `waiting` when that idle
-notification was the agent's last hook, otherwise to `working`. Such a row
+notification was the agent's last hook, otherwise to `working`. A Codex
+row always goes to `working`, since Codex never sends the idle
+notification. Such a row
 is in neither `ids` nor `unverified_ids`. Without a scheduled
 `find-missing`, a relay row left in `check_permission` after its agent
 moved on stays there. A relayed request's delivery needs no sweep: it is

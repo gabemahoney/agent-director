@@ -81,7 +81,7 @@ type RecordPaneAnswerEnv struct {
 // paneClaimMinAge is how long a request's relay hook must have been gone
 // (from its hook_gone_at, or its confirm_by when that is earlier and the hook
 // is judged by time: claimNotBefore) before record-pane-answer accepts a
-// record for it (b.146 rule 13, decision 5): Claude Code draws a permission
+// record for it (b.146 rule 13, decision 5): the agent draws a permission
 // dialog only after the hook is gone, so a pane read in between may not show
 // it yet.
 const paneClaimMinAge = 2 * time.Second
@@ -317,10 +317,10 @@ func claimTooSoonError(instanceID string, pr PermissionRow, d RequestDelivery, n
 	case notBefore == nil:
 		why = "its relay hook runs and may still answer it"
 	case byConfirm:
-		why = fmt.Sprintf("its relay hook cannot be checked and may still answer it until its confirm_by %s, and Claude Code may not have drawn its dialog until %s after that (not before %s)",
+		why = fmt.Sprintf("its relay hook cannot be checked and may still answer it until its confirm_by %s, and the agent may not have drawn its dialog until %s after that (not before %s)",
 			d.ConfirmBy.UTC().Format(time.RFC3339Nano), paneClaimMinAge, notBefore.UTC().Format(time.RFC3339Nano))
 	default:
-		why = fmt.Sprintf("its relay hook has been gone less than %s (not before %s): Claude Code may not have drawn its dialog yet",
+		why = fmt.Sprintf("its relay hook has been gone less than %s (not before %s): the agent may not have drawn its dialog yet",
 			paneClaimMinAge, notBefore.UTC().Format(time.RFC3339Nano))
 	}
 	return &DetailedError{
@@ -389,7 +389,7 @@ func (r *recordPaneRun) paneMatches(t ReadPaneTmux, paneID string, launch tmux.L
 //
 // It is accepted only when the request has fallen back (its relay hook gone
 // and no verdict acked), no pane answer through agent-director on it is
-// still being sent, its hook has been gone at least 2 s (Claude Code draws
+// still being sent, its hook has been gone at least 2 s (the agent draws
 // the dialog only after the hook ends), and the agent's pane still has the
 // hash the caller read (read-pane's pane_sha256 with the same NLines).
 //

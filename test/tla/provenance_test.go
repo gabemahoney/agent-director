@@ -32,7 +32,8 @@ func pinLines(t *testing.T, prov string) map[string]string {
 // TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
 // against the file's SHA-256, and that only the repo's own files are unpinned:
 // three named files plus the unpinned run sets (launch/, subagent/). The b.3ie
-// model (settle/) and the b.36h model (hold36h/) each have their own pin list.
+// model (settle/), the b.36h model (hold36h/) and the b.ssz Codex models
+// (codex/) each have their own pin list.
 func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
@@ -46,7 +47,7 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(tree, p)
-		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "subagent/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "hold36h/") {
+		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "subagent/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "hold36h/") && !strings.HasPrefix(rel, "codex/") {
 			unpinned = append(unpinned, rel)
 		}
 		return nil
@@ -102,6 +103,50 @@ func TestSettleProvenance(t *testing.T) {
 // hold36h/ with its SHA-256, and each pin names one of those files.
 func TestHold36hProvenance(t *testing.T) {
 	checkOwnPins(t, "hold36h")
+}
+
+// TestCodexProvenance: codex/PROVENANCE.txt pins every other file under
+// codex/ with its SHA-256, and each pin names one of those files.
+func TestCodexProvenance(t *testing.T) {
+	checkOwnPins(t, "codex")
+}
+
+// TestCodexHasNoJar: the vendored Codex job directories carry no
+// tla2tools.jar (the repo keeps the one at spec/tla/tla2tools.jar), and each
+// job's tlcjob.sh is byte-identical to spec/tla/jobs/lib/tlcjob.sh, which
+// codex/PROVENANCE.txt states.
+func TestCodexHasNoJar(t *testing.T) {
+	tree := filepath.Join(repoRoot(t), "spec", "tla")
+	lib, err := os.ReadFile(filepath.Join(tree, "jobs", "lib", "tlcjob.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := 0
+	err = filepath.WalkDir(filepath.Join(tree, "codex"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if strings.HasSuffix(d.Name(), ".jar") {
+			t.Errorf("%s: a jar under codex/", p)
+		}
+		if d.Name() == "tlcjob.sh" {
+			jobs++
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if string(b) != string(lib) {
+				t.Errorf("%s differs from spec/tla/jobs/lib/tlcjob.sh", p)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jobs == 0 {
+		t.Error("no job directory under codex/")
+	}
 }
 
 // checkOwnPins checks that spec/tla/<dir>/PROVENANCE.txt pins every other

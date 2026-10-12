@@ -58,53 +58,71 @@ var holdClosures = []holdClosure{
 func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	proofs := []struct {
+	// A Claude request is proven by its tool's PostToolUse or the main agent's
+	// Stop. A Codex request has no tool_use_id and no tool_ran proof: only the
+	// main agent's Interrupt (turn_end) proves it.
+	type proofCase struct {
 		name  string
 		proof store.RequestProof
-	}{
-		{"its tool's PostToolUse", toolRan(paToolUseID)},
-		{"the main agent's Stop", turnEnd},
 	}
-	for _, c := range holdClosures {
-		for _, pf := range proofs {
-			t.Run(c.name+"/"+pf.name, func(t *testing.T) {
-				t.Parallel()
-				p := newPAEnv(t)
-				c.close(t, p)
-				since := c.since(p, p.request(t, tok))
-				p.now = p.now.Add(time.Minute)
-				if n := p.prove(t, toolRan("toolu_01OTHER")); n != 0 {
-					t.Fatalf("another tool's PostToolUse proved %d; want none", n)
-				}
-				row, err := p.st.GetSpawn(p.r.ID)
-				if err != nil {
-					t.Fatalf("GetSpawn: %v", err)
-				}
+	proofsOf := map[string][]proofCase{
+		"claude": {{"its tool's PostToolUse", toolRan(paToolUseID)}, {"the main agent's Stop", turnEnd}},
+		"codex":  {{"the main agent's Interrupt", turnEnd}},
+	}
+	for _, ag := range paAgents {
+		for _, c := range holdClosures {
+			for _, pf := range proofsOf[ag.name] {
+				t.Run(ag.label(c.name+"/"+pf.name), func(t *testing.T) {
+					t.Parallel()
+					p := ag.env(t)
+					c.close(t, p)
+					since := c.since(p, p.request(t, tok))
+					p.now = p.now.Add(time.Minute)
+					if n := p.prove(t, toolRan("toolu_01OTHER")); n != 0 {
+						t.Fatalf("another tool's PostToolUse proved %d; want none", n)
+					}
+					if p.isCodex() {
+						// A Codex request records no tool_use_id, so no PostToolUse matches it.
+						if n := p.prove(t, toolRan(paToolUseID)); n != 0 {
+							t.Fatalf("a PostToolUse proved %d requests of a Codex row; want none (no tool_ran proof applies)", n)
+						}
+					}
+					row, err := p.st.GetSpawn(p.r.ID)
+					if err != nil {
+						t.Fatalf("GetSpawn: %v", err)
+					}
 
-				held := p.sendKeysRun(p.plain("hi"))
+					held := p.sendKeysRun(p.plain("hi"))
 
-				d := assertDialogMaybeOpen(t, held.err, tok, row.State)
-				if len(held.calls) != 0 {
-					t.Errorf("calls = %v; want none, nothing sent", paKinds(held.calls))
-				}
-				if d.Delivery != c.delivery || d.PaneAnswer != c.pane || d.UnprovenSince == nil || !d.UnprovenSince.Equal(since) {
-					t.Errorf("err_details = %s; want delivery %s, pane_answer %s, unproven_since %v", jsonOf(t, d), c.delivery, c.pane, since)
-				}
-				if pr := p.request(t, tok); pr.AwaitsAnswer() || pr.ProvenGone() {
-					t.Fatalf("request A = %+v; want closed in agent-director's records, not proven gone", pr)
-				}
+					d := assertDialogMaybeOpen(t, held.err, tok, row.State)
+					if len(held.calls) != 0 {
+						t.Errorf("calls = %v; want none, nothing sent", paKinds(held.calls))
+					}
+					if d.Delivery != c.delivery || d.PaneAnswer != c.pane || d.UnprovenSince == nil || !d.UnprovenSince.Equal(since) {
+						t.Errorf("err_details = %s; want delivery %s, pane_answer %s, unproven_since %v", jsonOf(t, d), c.delivery, c.pane, since)
+					}
+					if p.isCodex() {
+						if d.ToolUseID != nil || d.ToolName != "Bash" {
+							t.Errorf("err_details tool_use_id = %v, tool_name = %q; want null and Codex's Bash", d.ToolUseID, d.ToolName)
+						}
+						adviceAssertPhrase(t, held.err, "no Stop or Interrupt of the main agent after it for a request with no agent_id")
+					}
+					if pr := p.request(t, tok); pr.AwaitsAnswer() || pr.ProvenGone() {
+						t.Fatalf("request A = %+v; want closed in agent-director's records, not proven gone", pr)
+					}
 
-				if n := p.prove(t, pf.proof); n != 1 {
-					t.Fatalf("%s proved %d; want request A", pf.name, n)
-				}
-				run := p.sendKeysRun(p.plain("hi"))
-				if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
-					t.Fatalf("plain send-keys once proven = %v, calls %v; want it typed", run.err, paKinds(run.calls))
-				}
-				if pr := p.request(t, tok); pr.ProvenGoneHow != pf.proof.How {
-					t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, pf.proof.How)
-				}
-			})
+					if n := p.prove(t, pf.proof); n != 1 {
+						t.Fatalf("%s proved %d; want request A", pf.name, n)
+					}
+					run := p.sendKeysRun(p.plain("hi"))
+					if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+						t.Fatalf("plain send-keys once proven = %v, calls %v; want it typed", run.err, paKinds(run.calls))
+					}
+					if pr := p.request(t, tok); pr.ProvenGoneHow != pf.proof.How {
+						t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, pf.proof.How)
+					}
+				})
+			}
 		}
 	}
 }
@@ -157,38 +175,40 @@ func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 		{"A's relay hook alive, the pane's hash", []r7Step{r7HookAlive}, "pane", api.ErrSendKeysWhileRelayed, nil},
 		{"A fallen back, the pane's hash", nil, "pane", api.ErrRelayFallenBack, nil},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			p := newPAEnv(t)
-			for _, step := range tc.steps {
-				step(t, p)
-			}
-			params := p.plain("hi")
-			switch tc.hash {
-			case "pane":
-				params.ExpectPaneSHA256 = p.hash()
-			case "stale":
-				params.ExpectPaneSHA256 = p.hash()
-				p.setPane("the pane changed\n")
-			}
-
-			run := p.sendKeysRun(params)
-
-			if tc.want == nil {
-				if run.err != nil {
-					t.Fatalf("send-keys = %v; want it typed", run.err)
+	for _, ag := range paAgents {
+		for _, tc := range cases {
+			t.Run(ag.label(tc.name), func(t *testing.T) {
+				t.Parallel()
+				p := ag.env(t)
+				for _, step := range tc.steps {
+					step(t, p)
 				}
-			} else {
-				assertOneSentinel(t, run.err, tc.want)
-			}
-			if !slices.Equal(paKinds(run.calls), tc.calls) {
-				t.Errorf("calls = %v; want %v", paKinds(run.calls), tc.calls)
-			}
-			if pr := p.request(t, storefix.TestRequestTokenA); pr.ProvenGone() {
-				t.Errorf("request A proven gone at %v; want the hash to prove nothing", pr.ProvenGoneAt)
-			}
-		})
+				params := p.plain("hi")
+				switch tc.hash {
+				case "pane":
+					params.ExpectPaneSHA256 = p.hash()
+				case "stale":
+					params.ExpectPaneSHA256 = p.hash()
+					p.setPane("the pane changed\n")
+				}
+
+				run := p.sendKeysRun(params)
+
+				if tc.want == nil {
+					if run.err != nil {
+						t.Fatalf("send-keys = %v; want it typed", run.err)
+					}
+				} else {
+					assertOneSentinel(t, run.err, tc.want)
+				}
+				if !slices.Equal(paKinds(run.calls), tc.calls) {
+					t.Errorf("calls = %v; want %v", paKinds(run.calls), tc.calls)
+				}
+				if pr := p.request(t, storefix.TestRequestTokenA); pr.ProvenGone() {
+					t.Errorf("request A proven gone at %v; want the hash to prove nothing", pr.ProvenGoneAt)
+				}
+			})
+		}
 	}
 }
 

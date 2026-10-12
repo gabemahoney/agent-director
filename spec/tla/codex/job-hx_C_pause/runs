@@ -1,0 +1,2 @@
+# b.ssz: one run per job (fast tier). Expected: FAIL PauseSeesEnd
+Phase5HookCx hx_C_pause @3300

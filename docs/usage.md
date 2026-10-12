@@ -358,7 +358,7 @@ agent-director decide --instance-id "$id" \
 hook to confirm it took the verdict, and returns the request's `delivery`:
 
 - `delivered`: the relay hook confirmed the verdict before handing it to
-  Claude Code.
+  the agent.
 - `not_confirmed`: no confirmation yet. Poll `get-permission` until
   `delivery` reads `delivered` or `fallen_back`; it does by `confirm_by`.
 
@@ -411,7 +411,7 @@ deny; a `decide` allow has none), `timeout` (the relay hook's own deny),
 `find_missing` and `ended` (a deny written when the request was closed with
 its agent), `pane` (a pane answer through `send-keys`), `pane_outside`
 (`record-pane-answer`) and `tool_ran` (the request's tool ran, so it was
-allowed).
+allowed; a Claude agent only).
 
 `get` and `list` carry the same delivery fields on each request in a row's
 `permission_requests`; they list only requests that still await an answer,
@@ -424,10 +424,12 @@ can read `waiting`, `working` or `ask_user` while a request it recorded
 still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
-`proven_gone_at` and `proven_gone_how` say when and how Claude Code itself
-showed the request's dialog gone: `tool_ran` (its tool ran), `turn_end`
-(the turn of the agent that asked ended after it was written) or
-`agent_gone` (the agent ended). `delivered` and a pane answer are
+`proven_gone_at` and `proven_gone_how` say when and how the agent itself
+showed the request's dialog gone: `tool_ran` (its tool ran; a Claude agent
+only), `turn_end` (the turn of the agent that asked ended after it was
+written) or `agent_gone` (the agent ended). A Codex agent's request carries
+no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
+[how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
 agent-director's own records, not proof. `get` lists every request not yet
 proven gone in `unproven_requests`, with `unproven_since`. A request that
 reads `delivered` or closed at the pane but stays unproven for a while is a
@@ -468,8 +470,11 @@ agent-director record-pane-answer --request-token "$token" \
     --as unknown --expect-pane-sha256 "$hash"
 ```
 
-Pass `--as unknown` unless you saw how it was answered. A request whose
-tool then runs is closed on its own (`decision_reason` `tool_ran`). A
+Pass `--as unknown` unless you saw how it was answered. On a Claude agent, a
+request whose tool then runs is closed on its own (`decision_reason`
+`tool_ran`); a Codex request is closed only by one of the two calls above.
+A Codex pane's keys and an example are in
+[Answering a Codex approval at the pane](permissions.md#answering-a-codex-approval-at-the-pane). A
 closed request keeps `delivery` `fallen_back`; its `pane_answer` (`sent`,
 `outside` or `tool_ran`) says how it was closed.
 

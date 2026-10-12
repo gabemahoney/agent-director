@@ -105,6 +105,13 @@ func SeedDeleteFixture(t *testing.T) (*store.Store, string) {
 // The store is registered for cleanup via t.Cleanup.
 func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 	t.Helper()
+	return SeedDecideFixtureAgent(t, relayMode, store.AgentClaude)
+}
+
+// SeedDecideFixtureAgent is SeedDecideFixture for a row of agent
+// (store.AgentClaude or store.AgentCodex), as that agent's launch stores it.
+func SeedDecideFixtureAgent(t *testing.T, relayMode, agent string) (*store.Store, string) {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	s, err := store.OpenOrInit(dbPath)
 	if err != nil {
@@ -115,7 +122,7 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 
 	if err := s.InsertPending(store.Spawn{
 		InstanceID:      "id-d-1",
-		Agent:           store.AgentClaude,
+		Agent:           agent,
 		CWD:             "/tmp",
 		TmuxSessionName: "cd-d-1",
 		RelayMode:       relayMode,

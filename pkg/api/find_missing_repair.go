@@ -31,7 +31,10 @@ const reasonStaleCheckPermission = "stale_check_permission"
 // the pane, or, recorded before schema v7, undecided, and that Claude Code
 // has not proven gone; b.omt) and none has a relay hook that may still run:
 // to waiting when the main agent's idle-prompt Notification is the
-// last hook it recorded (idle_since set), to working otherwise. Such a row's
+// last hook it recorded (idle_since set), to working otherwise; a Codex row,
+// whose agent sends no idle-prompt Notification, always to working (the store
+// statement reads the row's agent, so the choice is made under the same
+// guards). Such a row's
 // agent moved on from its last permission dialog and the hook that would have
 // moved the row was lost (a lost Stop after a delivered timeout deny, for
 // example).

@@ -476,8 +476,10 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 }
 
 // repairCheckPermissionSQL is RepairCheckPermissionIfSameLife's one
-// statement: the move out of check_permission (waiting when idle_since is
-// set, working otherwise), the launch-start clear and the version advance,
+// statement: the move out of check_permission (on a Claude row waiting when
+// idle_since is set, working otherwise; on a Codex row, whose agent sends no
+// idle-prompt Notification, always working: SR-8.3), the launch-start clear
+// and the version advance,
 // guarded by check_permission, relay_mode on, the examined row snapshot and
 // no permission request of the row holding it (holdsRowSQL: still awaiting an
 // answer, b.146 rule 9, and not proven gone, b.omt).
@@ -485,8 +487,8 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // as state, and state_changed_ms the statement's clock (the WHERE pins
 // check_permission, so the value always changes).
 var repairCheckPermissionSQL = `UPDATE spawns
-    SET state = CASE WHEN idle_since IS NOT NULL THEN ? ELSE ? END,
-        settled_state = CASE WHEN idle_since IS NOT NULL THEN ? ELSE ? END,
+    SET state = CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END,
+        settled_state = CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END,
         state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -499,7 +501,10 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // check_permission row (b.146 rule 9, problem 3): one conditional statement
 // that moves the row out of check_permission, to waiting when idle_since is
 // set (the main agent's idle-prompt Notification landed and no hook since)
-// and to working otherwise, only while the row is in check_permission with
+// and to working otherwise; a Codex row (the row's own agent column, read in
+// the same statement) always goes to working whatever idle_since reads, since
+// Codex sends no idle-prompt Notification and a hand-set or stale idle_since
+// says nothing of its turn (SR-8.3). It writes only while the row is in check_permission with
 // relay_mode on (a row with the relay off is in check_permission while
 // Claude Code's own dialog waits, with no request on record), still holds
 // examined (the snapshot the sweep read; SR-5.3) and none of its permission

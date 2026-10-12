@@ -46,11 +46,23 @@ type relayEnv struct {
 // alive with that identity.
 func newRelayEnv(t *testing.T, hook store.ProcessIdentity) *relayEnv {
 	t.Helper()
-	s, dbPath := apitest.SeedDecideFixture(t, "on")
+	return newRelayEnvAgent(t, hook, store.AgentClaude)
+}
+
+// newRelayEnvAgent is newRelayEnv on a row of agent (store.AgentClaude or
+// store.AgentCodex): a Codex row's request A has a null tool_use_id, as
+// Codex's PermissionRequest has none.
+func newRelayEnvAgent(t *testing.T, hook store.ProcessIdentity, agent string) *relayEnv {
+	t.Helper()
+	s, dbPath := apitest.SeedDecideFixtureAgent(t, "on", agent)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	e := &relayEnv{s: s, dbPath: dbPath, id: "id-d-1", pc: procfix.New(), ns: relayNS, now: now, settled: now.Add(time.Hour)}
-	storefix.SeedRelayRequest(t, s, e.id, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash",
-		ToolInput: `{"cmd":"ls"}`, ToolUseID: "toolu_01", Hook: hook, SettledAt: e.settled})
+	req := store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash",
+		ToolInput: `{"cmd":"ls"}`, ToolUseID: "toolu_01", Hook: hook, SettledAt: e.settled}
+	if agent == store.AgentCodex {
+		req.ToolUseID = ""
+	}
+	storefix.SeedRelayRequest(t, s, e.id, req)
 	if hook.PID > 0 {
 		e.pc.Set(hook.PID, procfix.Alive(hook.Starttime))
 	}

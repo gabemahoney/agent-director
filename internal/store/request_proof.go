@@ -10,7 +10,7 @@ import (
 // This file holds a hook's proof that permission requests' dialogs are gone
 // (b.146 step 2c). agent-director's own records of a request (its relay
 // hook's ack, a pane answer, record-pane-answer) say what agent-director did,
-// not what Claude Code shows; only Claude Code's own hooks, or the end of its
+// not what the agent shows; only the agent's own hooks, or the end of its
 // agent, prove the dialog gone. Until then the request holds plain send-keys
 // to its Spawn, and, while it awaits an answer, its Spawn's row
 // (holdsRowSQL: the working hold, the idle-prompt Notification's move out of
@@ -21,10 +21,11 @@ import (
 // RequestProof is what one hook of a Spawn's agent proves gone (b.146 step
 // 2c).
 type RequestProof struct {
-	// How is ProvenGoneToolRan (a PostToolUse or PostToolUseFailure: the
-	// requests carrying ToolUseID) or ProvenGoneTurnEnd (the main agent's Stop
-	// or idle-prompt Notification: every request with no agent_id recorded
-	// before RecordedBefore).
+	// How is ProvenGoneToolRan (a Claude PostToolUse or PostToolUseFailure:
+	// the requests carrying ToolUseID; never written for a Codex row, whose
+	// requests carry no tool_use_id) or ProvenGoneTurnEnd (the main agent's
+	// Stop or idle-prompt Notification, or a Codex main-agent Interrupt:
+	// every request with no agent_id recorded before RecordedBefore).
 	How string
 	// ToolUseID is, for ProvenGoneToolRan, the hook's tool_use_id.
 	ToolUseID string

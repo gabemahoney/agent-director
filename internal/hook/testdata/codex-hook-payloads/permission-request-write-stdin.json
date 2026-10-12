@@ -1,0 +1,21 @@
+{
+  "cwd": "/work/demo",
+  "hook_event_name": "PermissionRequest",
+  "model": "codex-fixture-model",
+  "permission_mode": "default",
+  "session_id": "019f0000-0000-7000-8000-000000000023",
+  "tool_input": {
+    "additional_permissions": null,
+    "approval_id": "call_mock_4_0",
+    "chars": "hello-fixture\n",
+    "cwd": "file:///work/demo",
+    "environment_id": "local",
+    "parent_call_id": "call_mock_1_0",
+    "sandbox_permissions": "require_escalated",
+    "session_id": 1001,
+    "tty": true
+  },
+  "tool_name": "write_stdin",
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-23-00-019f0000-0000-7000-8000-000000000023.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000033"
+}

@@ -164,11 +164,12 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // ErrDialogMaybeOpen is returned by a plain send-keys (no request token)
 // without expect_pane_sha256, and by pause, which types `/exit` and Enter as
 // such a send-keys would (b.zdz), while a permission request of the Spawn is
-// not proven gone (b.146 step 2c): no hook of Claude Code has shown its
+// not proven gone (b.146 step 2c): no hook of the agent has shown its
 // dialog gone, so the dialog may still be on the pane, and typed keys, an
 // Enter above all, would land on it. A request is proven gone by its tool's
-// PostToolUse or PostToolUseFailure (the same tool_use_id), by the main
-// agent's Stop or idle-prompt Notification written after it (a request with
+// PostToolUse or PostToolUseFailure (the same tool_use_id; Claude rows only),
+// by the main agent's Stop or idle-prompt Notification, or a Codex main
+// agent's Interrupt, written after it (a request with
 // no agent_id: the main agent's, or one recorded before this release), or by
 // its Spawn's end (marked missing, ended, or resumed). agent-director's own
 // records prove nothing: a request whose relay hook acked its verdict
@@ -201,8 +202,8 @@ var ErrDialogMaybeOpen = errors.New("ErrDialogMaybeOpen")
 var ErrPaneAnswerInProgress = errors.New("ErrPaneAnswerInProgress")
 
 // ErrClaimTooSoon is returned by record-pane-answer when the request's relay
-// hook has not been gone for at least 2 s (b.146 rule 13, decision 5): Claude
-// Code draws a permission dialog only after the hook is gone, so a pane read
+// hook has not been gone for at least 2 s (b.146 rule 13, decision 5): the agent
+// draws a permission dialog only after the hook is gone, so a pane read
 // just after the hook's end may not show the dialog yet. It is measured from
 // the request's hook_gone_at, when a reader first found the hook gone (a
 // request with none yet gets it written now), or, when the hook cannot be

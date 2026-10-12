@@ -1,0 +1,351 @@
+spec/tla/codex/ provenance
+
+What this is
+  Bee b.ssz's TLA+ check of the Codex design changes: the Codex session-end
+  rule (SessionEnd as an end report, `ended` by find-missing and pause) and
+  the Codex state mapping and permission relay (Interrupt as a turn end, no
+  tool_ran proof, no PostToolUse close, no idle-prompt Notification). Three
+  models carry the knobs: Phase5HookCx.tla (the hook gate and the row's life),
+  Hold36hCx.tla (the working hold and the relay's proofs) and B146R5Cx.tla
+  (the integrated relay model). Every knob is FALSE by default, so each cfg
+  that leaves them off checks its source model unchanged. With the models
+  come their 41 cfgs, the scripts that wrote them, the 41 scheduler job
+  directories as submitted (less their jar, below), the job table, the job
+  ids and the verdicts. Bee b.ssz owns the models and their results. The
+  files are vendored as the record of the model checking done before the
+  product code of tasks E4-T3 (find-missing and pause on Codex rows) and
+  E4-T4 (permission relay on Codex rows).
+
+Results
+  All 41 jobs match the expected verdict in suite.tsv (verdicts.txt). Every
+  PASS run is a complete PASS; every control, limit and probe fails on its
+  target. The 21 fast runs (2026-10-11) and the Q2 gate's 15 runs
+  (2026-10-12) are in verdicts.txt, as are the 5 optional runs (2026-10-12):
+  hx_S5 PASS (45,361,001 distinct states, pid reuse), hx_V_endlive,
+  hx_V_missing and rx_V_intproof fail their targets, rx_claude_keys PASS
+  (239,820, knobs off). Knobs-off equivalence is proved by exact distinct-state
+  counts equal to the source model's: hx_eq_Sns (Phase5HookCx, 11,387,737, the
+  count of b.zuj's run 4), rx_eq_live (Hold36hCx, 109,518) and r5x_eq
+  (B146R5Cx, 833,740, b.146's fin1_time_ub). For the gate's added knobs: level 1
+  (every knob off, final model text) by rx_eq_live_g (109,518) and r5x_eq_g
+  (833,740); level 2 (the cfgs of the Codex runs with only the gate's knobs
+  off, final model text) by rx_safe_k0 (64,027), rx_keys_k0 (67,511),
+  rx_live_k0 (35,589), r5x_time_k0 (296,382) and r5x_t_k0 (2,122,224), each
+  equal to the run it shadows.
+
+Not wired into make tla
+  Nothing in the repo runs these files. `make tla` runs ci/suite.tsv only,
+  and ci/run_ci.sh never reads codex/. To run a job again, copy
+  spec/tla/tla2tools.jar into its job-<run>/ directory and submit that
+  directory to the job scheduler.
+
+Source
+  Bee b.ssz, directory tickets/Ideas/b.ssz/tla/ of the Apiary ticket tree
+  (outside this repo). Copied byte for byte with rsync -a on 2026-10-12,
+  after the last result came in, and checked equal to the source with diff
+  -r. Not copied: each job directory's tla2tools.jar. Every one of those 41
+  jars was checked byte-identical (sha256sum) to spec/tla/tla2tools.jar,
+  SHA-256 32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81,
+  so the repo keeps one copy, and test/tla's TestCodexHasNoJar keeps it so.
+  Every job directory holds exactly six files: tlcjob.sh equal to
+  spec/tla/jobs/lib/tlcjob.sh (checked at copy time and by TestCodexHasNoJar),
+  one model, its cfg (equal to src/cfg/<run>.cfg), a Dockerfile, its runs file
+  and the jar. A job directory's model equals src/ except for 14 early jobs
+  (below).
+  Base models (the bees that own them):
+    Phase5HookCx.tla  from spec/tla/Phase5Hook.tla at dev/v0.12.0
+                      (SHA-256 e34dc715...). The repo's Phase5Hook.tla has
+                      since taken bee b.xjn's subagent records (SHA-256
+                      7e7d2efb...); those are not modelled here, because
+                      Codex subagent records belong to a later epic.
+    Hold36hCx.tla     from spec/tla/hold36h/Hold36h.tla (SHA-256 7856c1d8...)
+    B146R5Cx.tla      from b.146 round 5's B146R5.tla (SHA-256 53daaa8c...);
+                      the repo does not hold that file.
+  The 14 early job directories (rx_eq_live, rx_safe, rx_keys, rx_live,
+  rx_C_intnoend, rx_C_subproof, rx_C_subint, rx_lim_rowsettles, rx_V_subheld,
+  rx_V_intproof, rx_claude_keys: Hold36hCx.tla SHA-256 e4381571...; r5x_eq,
+  r5x_time, r5x_t: B146R5Cx.tla SHA-256 a80b0221...) hold the models as
+  submitted before the Q2 gate, which added the /review thread's unmarked
+  hooks (CxReview, CxRv) behind knobs that are off in those cfgs. src/ holds
+  the final models (Hold36hCx.tla 440fc185..., B146R5Cx.tla fc490df9...);
+  Phase5HookCx.tla (87d081da...) is the same in every job. That the early
+  results stand for the final models is shown by the level-1 and level-2
+  equivalence runs above: rx_eq_live_g and r5x_eq_g (final models, gate cfgs
+  off) reach the same counts as rx_eq_live and r5x_eq, and the *_k0 runs
+  reach the same counts as rx_safe, rx_keys, rx_live, r5x_time and r5x_t.
+
+Layout (the bee folder's relative layout)
+  README.md               the design, the knobs, the run table, findings F1-F6
+  src/*.tla               the three final models
+  src/cfg/*.cfg           one cfg per scheduler job (41)
+  src/gencfg.sh           wrote src/cfg/
+  suite.tsv               run, model, expected verdict, budgets, what it shows
+  mkjobs.sh               wrote the job directories (its paths name the
+                          ticket tree and the b.ssz worktree)
+  submit-fast.sh, submit-gate.sh, submit-order.txt, watch-jobs.sh,
+  watch-gate.sh           the submit and watch scripts and the submit order
+  job-<run>/              each job directory as submitted, less its jar
+  job-ids.txt             the 41 scheduler job ids, with each verdict
+  verdicts.txt            the audited JOB-VERDICT line of each job
+
+Pins (sha256sum format, paths relative to spec/tla/codex/)
+b12cbd1a229e70a057d940007b0c5116ba0d8e3ad3a9eeb3a1146cf16c7dfaa9  README.md
+1f28d9640c7a7d98c1abb5d02e48d7497d28e37631a626646d83531bea8aea73  job-hx_C_endnow/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_C_endnow/Phase5HookCx.tla
+4a45419b04df889e2011b7b348603dd6fe7a1244975b4342137f9a19c2afec91  job-hx_C_endnow/hx_C_endnow.cfg
+a27d5f51277127bbf4fe5b513db4c59404361a0517f848a4c4313bc4cc357d3a  job-hx_C_endnow/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_C_endnow/tlcjob.sh
+2dd908b38e389e354bdff3b6bec6f28faaba08617517941a312e612277b4c1a3  job-hx_C_pause/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_C_pause/Phase5HookCx.tla
+34304dbf03f91751afe6e54fc9b18b07608a29d4e08be0618fc03f504bb09c90  job-hx_C_pause/hx_C_pause.cfg
+4296c4adabb92c25b0fade2a87bed4902a93215d3d71cab9bdb68b1f3f701942  job-hx_C_pause/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_C_pause/tlcjob.sh
+d9dd48ee66ec47d2f0cdfd78fa69d0401099d8f03692758cabc73cd3d7c0e68f  job-hx_L/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_L/Phase5HookCx.tla
+d3d2e6f59bdcfbd113659edbadf9e38a12845b761494b22ae83895733cda1975  job-hx_L/hx_L.cfg
+3f555bfcd31bb479335d80b12a7065c9d096ac9a24a09f4d31796422cdc939aa  job-hx_L/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_L/tlcjob.sh
+1ec0a7660f273e9b82e88be3bcd376ff92dea9c84a94216d9a5863fb692448d9  job-hx_P/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_P/Phase5HookCx.tla
+20fe90eaebf70e08e433114ae9e08f2dd068658c49ad8d235cc2ff9b57f29f83  job-hx_P/hx_P.cfg
+9e175b555db3c7e94855d0908397d8dd621d060e12c47e9200125c425a40c78f  job-hx_P/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_P/tlcjob.sh
+1ec0a7660f273e9b82e88be3bcd376ff92dea9c84a94216d9a5863fb692448d9  job-hx_S/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_S/Phase5HookCx.tla
+1eb79bc7e98cb20ebae39c340235dbb828baa39c72ba17eec4083c914656a42a  job-hx_S/hx_S.cfg
+c7ff175e9307447416a743a7d4b7726017bb40d1ba15cd7c1be9eea59e14b69d  job-hx_S/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_S/tlcjob.sh
+910cf29bcac6d34d6baa37690fabfb07227d4528bb708f2cceee2530b142cec4  job-hx_S5/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_S5/Phase5HookCx.tla
+784247131dac0a4eba643fa9982979f7e428c8f280d1eef187a544cf5184cd9a  job-hx_S5/hx_S5.cfg
+5b2dda512831008a10257360de1c45941c55d371b85d297111c0a53258457d86  job-hx_S5/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_S5/tlcjob.sh
+c2efb359f12dc5653e772151b7248ff44af94e6238f4d286bdbe364a76869eaa  job-hx_V_endlive/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_V_endlive/Phase5HookCx.tla
+210699d44214e22579bc9946080655c4d45a04dbdeeacb068352675e84bd2294  job-hx_V_endlive/hx_V_endlive.cfg
+2bf0d8edea3b704a934184eb99fc4236e6ea1a27ba0a48f7fc12d16b15fb27bd  job-hx_V_endlive/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_V_endlive/tlcjob.sh
+4ab1a0032a843792a256151f820de72a35e1ef2656372c541c663b25713f38fb  job-hx_V_fmended/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_V_fmended/Phase5HookCx.tla
+1c1c11c6dbb951406f5b45c7c183641db93a38073b67a6731462a669042ff499  job-hx_V_fmended/hx_V_fmended.cfg
+1191c301474da93abc837283569f2e0e77b69c72358b7a54aca5cce7b9bb1273  job-hx_V_fmended/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_V_fmended/tlcjob.sh
+f022762db41309e69fe841a02cd9b14ba425c74674a3d68bb5522c2ee478f758  job-hx_V_followed/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_V_followed/Phase5HookCx.tla
+626fa1ab44c20e7d2dd93464c7aead9c83cce13bd2248235d0698cd009490919  job-hx_V_followed/hx_V_followed.cfg
+aa57e3422e202075575f40dc9c869906492761c7682a80ae7a59c2b0c6c2fdd9  job-hx_V_followed/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_V_followed/tlcjob.sh
+67a405ac933a5e8f3147e4cf619e18aece5b990d12980c4c322f0e907b4ea2f3  job-hx_V_missing/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_V_missing/Phase5HookCx.tla
+cdb2e3e9503edcfecfdce2daabaa54234bef2433cc0de37d0948be37a5141fd3  job-hx_V_missing/hx_V_missing.cfg
+d50c6174e57a9b365be55894b44173e792b425aa988439736017f121391de153  job-hx_V_missing/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_V_missing/tlcjob.sh
+21f22aded4e0af94e517081f9b6eedad7c45f63bc631be0670b3a7ab66c5d3ac  job-hx_V_pauseended/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_V_pauseended/Phase5HookCx.tla
+81e85e2b49cc2f6e243a9eaf3a11ab76ef2ab5f9501665683079f9ab2635d6b1  job-hx_V_pauseended/hx_V_pauseended.cfg
+572fda0a81805df46dfe4469802fd233e971e190fdac95888dbb791c62b214c5  job-hx_V_pauseended/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_V_pauseended/tlcjob.sh
+05b891d8fdc8f1e00aa5f2f2d5f4172b0a9884e69ec03749b57b355a9b4f8b85  job-hx_eq_Sns/Dockerfile
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_eq_Sns/Phase5HookCx.tla
+e213d308792825a523a5013d7587d431318c58486457ebf2c395baa4ce068c4e  job-hx_eq_Sns/hx_eq_Sns.cfg
+576f3ce56a7e7291a6ba22bdc5201a4fdc1fdf415238cabbc6cdf0534378b0c4  job-hx_eq_Sns/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-hx_eq_Sns/tlcjob.sh
+dd8de5db2d7179f6de284da8f2b2bee2bc6942321638df15f4b6e6233b39676b  job-ids.txt
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_V_review/B146R5Cx.tla
+01a26dda48703be48965f72740617d2b070af2cc882c05fa6a3b4ead6cb77de4  job-r5x_V_review/Dockerfile
+0ad00ed399f238465ed7fd014b17ec49aa9612daaa32f2a1cce40f8131e48615  job-r5x_V_review/r5x_V_review.cfg
+08f854c91e14ba6531e60f694c73a46c54a3d8a1f013c32fa3da287d1ed482e1  job-r5x_V_review/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_V_review/tlcjob.sh
+a80b022137f371b4795669c5e328f65d6216d68997f3c3be0f28820c56e63a61  job-r5x_eq/B146R5Cx.tla
+99abd279db90a6082a8b4ec798ae203526ad706b49371fba898f19947266fcf4  job-r5x_eq/Dockerfile
+589157d67352b57963c55f20b4232290453a988660b83cb54462e515af1bd187  job-r5x_eq/r5x_eq.cfg
+25076146ef5c3681f630be334133648695c6753a1d108ecbf3e9528a26d8bc21  job-r5x_eq/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_eq/tlcjob.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_eq_g/B146R5Cx.tla
+0b8f450eb568bf790031d8e2afa23db7f48473cf13b68929a2279f1a1d446b49  job-r5x_eq_g/Dockerfile
+d0f814718a3defb70bb5eebce6ea5353f09016337f9bb65b926e60afe0a01ba1  job-r5x_eq_g/r5x_eq_g.cfg
+410b4c1d3e6044636c7e2ea6f211ac30ba32a364074d7047c94371c039c373ca  job-r5x_eq_g/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_eq_g/tlcjob.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_lim_rowsettles_rv/B146R5Cx.tla
+3d39eb05f9a27e6d587b7fbaf4e50eac9872a6b47d37b51f384b504ab024a9a2  job-r5x_lim_rowsettles_rv/Dockerfile
+7e83b043c907023110364ab3b631f63fd8a2fe43e6ce02f6f6e654eb826c4fea  job-r5x_lim_rowsettles_rv/r5x_lim_rowsettles_rv.cfg
+0451702da49fee9c8dbef679f02d471d90137b47cd26fca0e5dfbdb478264883  job-r5x_lim_rowsettles_rv/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_lim_rowsettles_rv/tlcjob.sh
+a80b022137f371b4795669c5e328f65d6216d68997f3c3be0f28820c56e63a61  job-r5x_t/B146R5Cx.tla
+99abd279db90a6082a8b4ec798ae203526ad706b49371fba898f19947266fcf4  job-r5x_t/Dockerfile
+24e7715c6f5437500356013293999e903c6861ad1dfed80cbd2ab544c0a9c22d  job-r5x_t/r5x_t.cfg
+9ce6c4fef63a8d5d3cdd90b5d3850ebd857ad17d1f8ceaf5d7d1aef854cd8ace  job-r5x_t/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_t/tlcjob.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_t_k0/B146R5Cx.tla
+2007b627732ec06251350b4696e125767ada849d24fd36a1e8331993081043b9  job-r5x_t_k0/Dockerfile
+45815d264a1a2658df58da1170dcb2496627a8518c3a2b83f74d5b737f194c4e  job-r5x_t_k0/r5x_t_k0.cfg
+a610e887f67bac2910e333ddc0468aabb61041275c0650ffebeeadd7920e7e06  job-r5x_t_k0/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_t_k0/tlcjob.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_t_rv/B146R5Cx.tla
+99abd279db90a6082a8b4ec798ae203526ad706b49371fba898f19947266fcf4  job-r5x_t_rv/Dockerfile
+bcebb280b871b272f49f97437657cea68a88543ceec78b1c1fedc694cc68b52e  job-r5x_t_rv/r5x_t_rv.cfg
+868fa0517137781af343220981104fd5ea4433e8d7cc75184ed9f9aa4af25988  job-r5x_t_rv/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_t_rv/tlcjob.sh
+a80b022137f371b4795669c5e328f65d6216d68997f3c3be0f28820c56e63a61  job-r5x_time/B146R5Cx.tla
+99abd279db90a6082a8b4ec798ae203526ad706b49371fba898f19947266fcf4  job-r5x_time/Dockerfile
+92c41d1e2ec59fdc0ad8b1ca489f455f517271def25a1166f844f5e8ecee4350  job-r5x_time/r5x_time.cfg
+f5b77246d24d7c0601014939d6fff3cddffd780b8ab79beef4fea38795f67075  job-r5x_time/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_time/tlcjob.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_time_k0/B146R5Cx.tla
+ab0cc4f721cdd4c666adc67c084ed04e968dd74ad670fbd46822e0648a45fb3e  job-r5x_time_k0/Dockerfile
+8e5c2469c726a5d1bdbf493497a1952054bf28691c6dff10459ddbbd692662b6  job-r5x_time_k0/r5x_time_k0.cfg
+bbf311f3d1e00fc7979f1a4dd90bda97ffdd6636180054e2085efb0b9cec2e8c  job-r5x_time_k0/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_time_k0/tlcjob.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  job-r5x_time_rv/B146R5Cx.tla
+99abd279db90a6082a8b4ec798ae203526ad706b49371fba898f19947266fcf4  job-r5x_time_rv/Dockerfile
+d533194b02eead103ee81d3f0959e4455fdfc6352c13cf0f732e61e262eaf496  job-r5x_time_rv/r5x_time_rv.cfg
+bc238eab7e72a82d0f4a9f838ba068453188b5e1da4d4829d249510c4980aeba  job-r5x_time_rv/runs
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-r5x_time_rv/tlcjob.sh
+eda58094a6c2bccdd5443f44032c7b56878561f36d024a47a41c2a6812a2f4fd  job-rx_C_intnoend/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_C_intnoend/Hold36hCx.tla
+40254ff2c9cea3b8ebe7aadca69703c4817da0237e9fbb8a03adcc339bf86945  job-rx_C_intnoend/runs
+e11f1fbd1835c1e568038234b235942f652f5089a836c3c40e701d6eeea4c0cb  job-rx_C_intnoend/rx_C_intnoend.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_C_intnoend/tlcjob.sh
+abe6fe222becf864318b7f74ff583d551a180bbdc45859ff42ba82b928472662  job-rx_C_subint/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_C_subint/Hold36hCx.tla
+f2a0fc24fc9ceda8bdecff3ca114b15ba5b17e91c4bcb62fa1fa15404a02e65a  job-rx_C_subint/runs
+a37c3ec161be6488b99b0fd5de881d3f1a2471db34025dbb404c0f2d6077aa79  job-rx_C_subint/rx_C_subint.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_C_subint/tlcjob.sh
+abe6fe222becf864318b7f74ff583d551a180bbdc45859ff42ba82b928472662  job-rx_C_subproof/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_C_subproof/Hold36hCx.tla
+3f172faea229727625785e6a1c18f7612f0d718197080dca9f950e1f99421c5c  job-rx_C_subproof/runs
+e7a2c05b29d139d457364a2cd790764111395a6fc9b2d0e63a9825c06b1b77e8  job-rx_C_subproof/rx_C_subproof.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_C_subproof/tlcjob.sh
+90e64c60e04fbbe4ea28b0e0c2fdc6af403f3b1a3cd2239006220abc0a66ce20  job-rx_V_intproof/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_V_intproof/Hold36hCx.tla
+a2b8d5dd557b6186ec0f4854435db5ac158f690a691c4d5a8fba96347af73a1d  job-rx_V_intproof/runs
+28efbd40b470b130612c897cf7ff799ff3aa7fb3a6cf5353d7529ca36de179d0  job-rx_V_intproof/rx_V_intproof.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_V_intproof/tlcjob.sh
+90e64c60e04fbbe4ea28b0e0c2fdc6af403f3b1a3cd2239006220abc0a66ce20  job-rx_V_review/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_V_review/Hold36hCx.tla
+467fc7308590775903a8ed692da04726d54a6a4e9ceb3afd99a0e2abd76adbba  job-rx_V_review/runs
+ffcbef05b87e0ac8e9ec7137c1a549bb289077fa79621cc6821651fbe984d16f  job-rx_V_review/rx_V_review.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_V_review/tlcjob.sh
+1c0b77095c17b1ab465ebbdf2d7f4f277f4cc2cae3c566fa89139160148af839  job-rx_V_subheld/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_V_subheld/Hold36hCx.tla
+ce51f649910ecd23a073c77047b76ab7efbcd62cd1a56c6c89ffabcbd69efd96  job-rx_V_subheld/runs
+638c7158de5711c9715c04fc43ab9aa6fe72c10f388b21cb373d5d9ddcd0ef7a  job-rx_V_subheld/rx_V_subheld.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_V_subheld/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_claude_keys/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_claude_keys/Hold36hCx.tla
+bc0d6f66a5b9b26239c89c7bc5e6bf97e69d60ef22ab002e23f0f79d14a180ad  job-rx_claude_keys/runs
+d86c2e052d8e232aa490f00b12873cb91ddc7f49b2fc69dd198be8f6e8f163dd  job-rx_claude_keys/rx_claude_keys.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_claude_keys/tlcjob.sh
+66306a5a32d73d05078d135d87fb412188169f9405caa48e24b2b36cd6bf25e9  job-rx_eq_live/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_eq_live/Hold36hCx.tla
+8178a21ad0a15e536c82b2f72d43187d7bd5d1b478609f1056585656e18a2aac  job-rx_eq_live/runs
+b314bbb06e0b9da9ce2f3c9e4fe87af0ad3f1f9c8be88e7b23aea361fce0c09f  job-rx_eq_live/rx_eq_live.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_eq_live/tlcjob.sh
+66306a5a32d73d05078d135d87fb412188169f9405caa48e24b2b36cd6bf25e9  job-rx_eq_live_g/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_eq_live_g/Hold36hCx.tla
+e57e020feb804349172164195b52de799dd71585c9c98b5f0fb378371f7d3587  job-rx_eq_live_g/runs
+d88413eac5bfa0720a99480a254dac6bbe9863704ae02fe85c2a7fe7c8cd1652  job-rx_eq_live_g/rx_eq_live_g.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_eq_live_g/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_keys/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_keys/Hold36hCx.tla
+189d916d8f77e4c12ccff906a18253db417b91ac56873a1a8ff94f3b15fa9e66  job-rx_keys/runs
+c8feb295b1c71da6875b3a585162861132fd5d523ecd8f36774175a67a05512f  job-rx_keys/rx_keys.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_keys/tlcjob.sh
+4aa4fceb6c63d7f532a5cba46c2311347ecde02585286d336cd458b44bb58bb7  job-rx_keys_k0/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_keys_k0/Hold36hCx.tla
+cd862de490c96ddce38cd09df0bff5b15d365d56ee8da9bb019791db4aec3c89  job-rx_keys_k0/runs
+eaa924bba57255b8f85e30d983f1ba881d02be2447418950fc7da032918de956  job-rx_keys_k0/rx_keys_k0.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_keys_k0/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_keys_rv/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_keys_rv/Hold36hCx.tla
+38908e411b2d6573c0556d648fc929f3be63f2c82ba3a06378d62ef56240016e  job-rx_keys_rv/runs
+14c92b95d4d7702256de22267e39916d726a8b7f962349a58ff362939440c792  job-rx_keys_rv/rx_keys_rv.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_keys_rv/tlcjob.sh
+b6f8dc8f471999fc6f8bb90f86838472ad4996c64548673c34341c161009db21  job-rx_lim_rowsettles/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_lim_rowsettles/Hold36hCx.tla
+57d83b2b9327658ef7bd0d0b9d0230e8008ee082ad837707c5b1c69e1d63b43b  job-rx_lim_rowsettles/runs
+4d9cb26b9e59c0329f972f433127ebcb290eef09e570aeb7199c5b37175d652e  job-rx_lim_rowsettles/rx_lim_rowsettles.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_lim_rowsettles/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_live/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_live/Hold36hCx.tla
+bfae32d03a0726b99bedc39a90b36d989eea5d47cb3d58bc59365257a959281d  job-rx_live/runs
+69cae596c0cd63f68ba07e0b77f8defe03b41d2540a688c737f9b46456bbefb2  job-rx_live/rx_live.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_live/tlcjob.sh
+fb4dd207a463199e2fbc7546bcc22e7d6c3d7b88c7f64b1d631e799b24890176  job-rx_live_k0/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_live_k0/Hold36hCx.tla
+636c283573da6552b0dcde5a7bf9a4d7b36a5b658c6b86f23690e0606065b114  job-rx_live_k0/runs
+bd79172993c10f32bb6d26b8fd40034c682532f79a1f7696e36aaa4146bfded5  job-rx_live_k0/rx_live_k0.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_live_k0/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_live_rv/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_live_rv/Hold36hCx.tla
+73e95c62cb50e106715c14eede2aa6a3422a743150c7cc16c3ecaecdb6e869e0  job-rx_live_rv/runs
+bf98ceff257a0f398f1e9551293abb817161dcabd2cce34d2d938f47125ccf06  job-rx_live_rv/rx_live_rv.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_live_rv/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_safe/Dockerfile
+e43815719c5ba402e4b08389049524411fa0827e474dd15ccc6db7e45e5420dd  job-rx_safe/Hold36hCx.tla
+490a6ac9c8f30e211040ed4138b094d8138f2f7b8852bdfbb3c9c905c07ba478  job-rx_safe/runs
+80a56605fd5fb77b889e37554ea277e542ce7f16916109944d3e735c5b7840de  job-rx_safe/rx_safe.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_safe/tlcjob.sh
+bc4b8da89dd8ccc22bdf53d7271e236c80d814397592ba86c0dc78dee6edfbe0  job-rx_safe_k0/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_safe_k0/Hold36hCx.tla
+3526af64326a7b2963debb99380752a8517c43aae075800bcdd09096397db25e  job-rx_safe_k0/runs
+d7d5a4a0fb40f21b5c9783bd47845d4bf0933ea884aa78612dfb17de8ab31e54  job-rx_safe_k0/rx_safe_k0.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_safe_k0/tlcjob.sh
+de43b2caa8a50cbae653d83a338282584dd20641043d69f0e86b336f01d62265  job-rx_safe_rv/Dockerfile
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  job-rx_safe_rv/Hold36hCx.tla
+dc23a10fdd301dcea0ccf213bdc9f0912c938f8beb55d65b371ab1f5f03be00f  job-rx_safe_rv/runs
+f3501f3d6a9041e29c777a4e3cec5f820ae9797263c036880ba1c71bf658fc4f  job-rx_safe_rv/rx_safe_rv.cfg
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_safe_rv/tlcjob.sh
+611887e66babc963387047145d64b1e11098cd00c32d30e92ff3804f0ecd8156  mkjobs.sh
+fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  src/B146R5Cx.tla
+440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  src/Hold36hCx.tla
+87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  src/Phase5HookCx.tla
+4a45419b04df889e2011b7b348603dd6fe7a1244975b4342137f9a19c2afec91  src/cfg/hx_C_endnow.cfg
+34304dbf03f91751afe6e54fc9b18b07608a29d4e08be0618fc03f504bb09c90  src/cfg/hx_C_pause.cfg
+d3d2e6f59bdcfbd113659edbadf9e38a12845b761494b22ae83895733cda1975  src/cfg/hx_L.cfg
+20fe90eaebf70e08e433114ae9e08f2dd068658c49ad8d235cc2ff9b57f29f83  src/cfg/hx_P.cfg
+1eb79bc7e98cb20ebae39c340235dbb828baa39c72ba17eec4083c914656a42a  src/cfg/hx_S.cfg
+784247131dac0a4eba643fa9982979f7e428c8f280d1eef187a544cf5184cd9a  src/cfg/hx_S5.cfg
+210699d44214e22579bc9946080655c4d45a04dbdeeacb068352675e84bd2294  src/cfg/hx_V_endlive.cfg
+1c1c11c6dbb951406f5b45c7c183641db93a38073b67a6731462a669042ff499  src/cfg/hx_V_fmended.cfg
+626fa1ab44c20e7d2dd93464c7aead9c83cce13bd2248235d0698cd009490919  src/cfg/hx_V_followed.cfg
+cdb2e3e9503edcfecfdce2daabaa54234bef2433cc0de37d0948be37a5141fd3  src/cfg/hx_V_missing.cfg
+81e85e2b49cc2f6e243a9eaf3a11ab76ef2ab5f9501665683079f9ab2635d6b1  src/cfg/hx_V_pauseended.cfg
+e213d308792825a523a5013d7587d431318c58486457ebf2c395baa4ce068c4e  src/cfg/hx_eq_Sns.cfg
+0ad00ed399f238465ed7fd014b17ec49aa9612daaa32f2a1cce40f8131e48615  src/cfg/r5x_V_review.cfg
+589157d67352b57963c55f20b4232290453a988660b83cb54462e515af1bd187  src/cfg/r5x_eq.cfg
+d0f814718a3defb70bb5eebce6ea5353f09016337f9bb65b926e60afe0a01ba1  src/cfg/r5x_eq_g.cfg
+7e83b043c907023110364ab3b631f63fd8a2fe43e6ce02f6f6e654eb826c4fea  src/cfg/r5x_lim_rowsettles_rv.cfg
+24e7715c6f5437500356013293999e903c6861ad1dfed80cbd2ab544c0a9c22d  src/cfg/r5x_t.cfg
+45815d264a1a2658df58da1170dcb2496627a8518c3a2b83f74d5b737f194c4e  src/cfg/r5x_t_k0.cfg
+bcebb280b871b272f49f97437657cea68a88543ceec78b1c1fedc694cc68b52e  src/cfg/r5x_t_rv.cfg
+92c41d1e2ec59fdc0ad8b1ca489f455f517271def25a1166f844f5e8ecee4350  src/cfg/r5x_time.cfg
+8e5c2469c726a5d1bdbf493497a1952054bf28691c6dff10459ddbbd692662b6  src/cfg/r5x_time_k0.cfg
+d533194b02eead103ee81d3f0959e4455fdfc6352c13cf0f732e61e262eaf496  src/cfg/r5x_time_rv.cfg
+e11f1fbd1835c1e568038234b235942f652f5089a836c3c40e701d6eeea4c0cb  src/cfg/rx_C_intnoend.cfg
+a37c3ec161be6488b99b0fd5de881d3f1a2471db34025dbb404c0f2d6077aa79  src/cfg/rx_C_subint.cfg
+e7a2c05b29d139d457364a2cd790764111395a6fc9b2d0e63a9825c06b1b77e8  src/cfg/rx_C_subproof.cfg
+28efbd40b470b130612c897cf7ff799ff3aa7fb3a6cf5353d7529ca36de179d0  src/cfg/rx_V_intproof.cfg
+ffcbef05b87e0ac8e9ec7137c1a549bb289077fa79621cc6821651fbe984d16f  src/cfg/rx_V_review.cfg
+638c7158de5711c9715c04fc43ab9aa6fe72c10f388b21cb373d5d9ddcd0ef7a  src/cfg/rx_V_subheld.cfg
+d86c2e052d8e232aa490f00b12873cb91ddc7f49b2fc69dd198be8f6e8f163dd  src/cfg/rx_claude_keys.cfg
+b314bbb06e0b9da9ce2f3c9e4fe87af0ad3f1f9c8be88e7b23aea361fce0c09f  src/cfg/rx_eq_live.cfg
+d88413eac5bfa0720a99480a254dac6bbe9863704ae02fe85c2a7fe7c8cd1652  src/cfg/rx_eq_live_g.cfg
+c8feb295b1c71da6875b3a585162861132fd5d523ecd8f36774175a67a05512f  src/cfg/rx_keys.cfg
+eaa924bba57255b8f85e30d983f1ba881d02be2447418950fc7da032918de956  src/cfg/rx_keys_k0.cfg
+14c92b95d4d7702256de22267e39916d726a8b7f962349a58ff362939440c792  src/cfg/rx_keys_rv.cfg
+4d9cb26b9e59c0329f972f433127ebcb290eef09e570aeb7199c5b37175d652e  src/cfg/rx_lim_rowsettles.cfg
+69cae596c0cd63f68ba07e0b77f8defe03b41d2540a688c737f9b46456bbefb2  src/cfg/rx_live.cfg
+bd79172993c10f32bb6d26b8fd40034c682532f79a1f7696e36aaa4146bfded5  src/cfg/rx_live_k0.cfg
+bf98ceff257a0f398f1e9551293abb817161dcabd2cce34d2d938f47125ccf06  src/cfg/rx_live_rv.cfg
+80a56605fd5fb77b889e37554ea277e542ce7f16916109944d3e735c5b7840de  src/cfg/rx_safe.cfg
+d7d5a4a0fb40f21b5c9783bd47845d4bf0933ea884aa78612dfb17de8ab31e54  src/cfg/rx_safe_k0.cfg
+f3501f3d6a9041e29c777a4e3cec5f820ae9797263c036880ba1c71bf658fc4f  src/cfg/rx_safe_rv.cfg
+a10a00688be7b3456569a4dc047442fcbbb9b6609e6e48ffda1987e7fa69c84e  src/gencfg.sh
+b91a33786b01a55438351aad3ede05425880e868d787e85c031cc44d2960954e  submit-fast.sh
+28829a3b0ebb1a73d81c363c0f6214ade54f43536cc8352a792f696276edb4b8  submit-gate.sh
+851c48d39b58b66aff7c5354e3de5a3b3730035257f9aad48df455ebc566b425  submit-order.txt
+14062974e077138f660663ede73d7a747e94a1493be39c147bbe3e33c0463f9e  suite.tsv
+f59ce6ea7dedd7ac926bfafc647aa316ebd4e7876b3025da8e3ee1b3b4e0b593  verdicts.txt
+36f0e41328afae28abbc6556f3d2005c58be877ff89dc5f81a3466c226ad6e93  watch-gate.sh
+67f56856cca6103134f1a402ddb2b30418e7ccce74be6ead3b37d51c203e1b3d  watch-jobs.sh

@@ -17,6 +17,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // paGoneLongAgo records request token's hook_gone_at a minute before p.now.
@@ -37,44 +38,46 @@ func (p *paEnv) paGoneLongAgo(t *testing.T, token string) {
 func TestRecordPaneAnswerClaims(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	for _, tc := range []struct {
-		as       string
-		decision *string
-		nLines   int
-	}{{"allow", ptr("allow"), 0}, {"deny", ptr("deny"), 7}, {"unknown", nil, 0}} {
-		t.Run(tc.as, func(t *testing.T) {
-			t.Parallel()
-			p := newPAEnv(t)
-			p.paGoneLongAgo(t, tok)
-			params := p.outside(tok, tc.as)
-			params.NLines = tc.nLines
+	for _, ag := range paAgents {
+		for _, tc := range []struct {
+			as       string
+			decision *string
+			nLines   int
+		}{{"allow", ptr("allow"), 0}, {"deny", ptr("deny"), 7}, {"unknown", nil, 0}} {
+			t.Run(ag.label(tc.as), func(t *testing.T) {
+				t.Parallel()
+				p := ag.env(t)
+				p.paGoneLongAgo(t, tok)
+				params := p.outside(tok, tc.as)
+				params.NLines = tc.nLines
 
-			run := runVerb(p.killEnv, func() (api.RecordPaneAnswerResult, error) { return p.recordPaneAnswer(params) })
+				run := runVerb(p.killEnv, func() (api.RecordPaneAnswerResult, error) { return p.recordPaneAnswer(params) })
 
-			if run.err != nil {
-				t.Fatalf("record-pane-answer: %v", run.err)
-			}
-			want := api.RecordPaneAnswerResult{RequestToken: tok, PaneAnswer: "outside", PaneAs: tc.as, Decision: tc.decision,
-				DecisionReason: "pane_outside"}
-			if jsonOf(t, run.res) != jsonOf(t, want) {
-				t.Errorf("result = %s; want %s", jsonOf(t, run.res), jsonOf(t, want))
-			}
-			wantLines := tc.nLines
-			if wantLines == 0 {
-				wantLines = api.DefaultReadPaneLines
-			}
-			if !slices.Equal(paKinds(run.calls), paneReadCalls) || run.calls[2].NLines != wantLines || run.calls[2].ANSI {
-				t.Errorf("calls = %+v; want the lookup, the listing and one capture of %d lines, no escapes, nothing typed", run.calls, wantLines)
-			}
-			pr := p.request(t, tok)
-			if pr.PaneAnswer != store.PaneAnswerOutside || pr.PaneAs != tc.as || pr.DecisionReason != store.DecisionReasonPaneOutside ||
-				(tc.decision == nil) != (pr.Decision == "") || pr.AwaitsAnswer() {
-				t.Errorf("request A = %+v; want outside, pane_as %s, pane_outside, closed", pr, tc.as)
-			}
-			_, err := p.recordPaneAnswer(p.outside(tok, "deny"))
-			assertOneSentinel(t, err, store.ErrAlreadyDecided)
-			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
-		})
+				if run.err != nil {
+					t.Fatalf("record-pane-answer: %v", run.err)
+				}
+				want := api.RecordPaneAnswerResult{RequestToken: tok, PaneAnswer: "outside", PaneAs: tc.as, Decision: tc.decision,
+					DecisionReason: "pane_outside"}
+				if jsonOf(t, run.res) != jsonOf(t, want) {
+					t.Errorf("result = %s; want %s", jsonOf(t, run.res), jsonOf(t, want))
+				}
+				wantLines := tc.nLines
+				if wantLines == 0 {
+					wantLines = api.DefaultReadPaneLines
+				}
+				if !slices.Equal(paKinds(run.calls), paneReadCalls) || run.calls[2].NLines != wantLines || run.calls[2].ANSI {
+					t.Errorf("calls = %+v; want the lookup, the listing and one capture of %d lines, no escapes, nothing typed", run.calls, wantLines)
+				}
+				pr := p.request(t, tok)
+				if pr.PaneAnswer != store.PaneAnswerOutside || pr.PaneAs != tc.as || pr.DecisionReason != store.DecisionReasonPaneOutside ||
+					(tc.decision == nil) != (pr.Decision == "") || pr.AwaitsAnswer() {
+					t.Errorf("request A = %+v; want outside, pane_as %s, pane_outside, closed", pr, tc.as)
+				}
+				_, err := p.recordPaneAnswer(p.outside(tok, "deny"))
+				assertOneSentinel(t, err, store.ErrAlreadyDecided)
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
+			})
+		}
 	}
 }
 
@@ -168,6 +171,45 @@ func TestRecordPaneAnswerRefusals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRecordPaneAnswerWordingIsAgentNeutral: ErrClaimTooSoon's message on a
+// Codex row, and record-pane-answer's request_token description, name "the
+// agent", never Claude Code.
+func TestRecordPaneAnswerWordingIsAgentNeutral(t *testing.T) {
+	t.Parallel()
+	const claude = "Claude Code"
+	for _, ag := range paAgents {
+		t.Run(ag.label("ErrClaimTooSoon"), func(t *testing.T) {
+			t.Parallel()
+			p := ag.env(t)
+			r7HookAlive(t, p)
+
+			_, err := p.recordPaneAnswer(p.outside(storefix.TestRequestTokenA, "allow"))
+
+			assertOneSentinel(t, err, api.ErrClaimTooSoon)
+			if strings.Contains(err.Error(), claude) {
+				t.Errorf("ErrClaimTooSoon = %q; want no %q", err, claude)
+			}
+		})
+	}
+	verb, ok := manifest.Lookup("record-pane-answer")
+	if !ok {
+		t.Fatal("manifest has no record-pane-answer verb")
+	}
+	found := false
+	for _, param := range verb.Params {
+		if param.Name != "request_token" {
+			continue
+		}
+		found = true
+		if strings.Contains(param.Description, claude) {
+			t.Errorf("record-pane-answer request_token description = %q; want no %q", param.Description, claude)
+		}
+	}
+	if !found {
+		t.Error("record-pane-answer has no request_token param")
 	}
 }
 

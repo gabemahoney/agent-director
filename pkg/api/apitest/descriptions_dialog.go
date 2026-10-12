@@ -1,0 +1,62 @@
+package apitest
+
+// descriptions_dialog.go holds the shared description helper's cases of the
+// proof texts of b.146 step 2c as they read on a Codex row (b.ssz Epic 4):
+// ErrDialogMaybeOpen's description names what would prove the request gone,
+// and that is the agent's own signal. A Claude row's text is the one that
+// shipped (DescDialogMaybeOpenClaude pins it unchanged); a Codex row's request
+// carries no tool_use_id and no PostToolUse proves it, so its text names the
+// main agent's Stop or Interrupt instead (DescDialogMaybeOpenCodex). The
+// manifest's proven_gone_how text says the same of the field
+// (DescProvenGoneHow).
+
+// DescDialogMaybeOpenClaude is ErrDialogMaybeOpen's description on a Claude
+// row, byte for byte as it shipped: the tool_use_id PostToolUse, the end of
+// the main agent's turn and the end of the agent are the proofs, and it says
+// nothing was sent. It never names an Interrupt. Check it with
+// AssertDescription.
+func DescDialogMaybeOpenClaude() DescCase {
+	return DescCase{
+		Name: "ErrDialogMaybeOpen on a Claude row",
+		Require: []string{
+			"is not proven gone (no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded)",
+			"so its permission dialog may still be on the pane",
+			"nothing was sent",
+		},
+		MustNot: []string{"Interrupt"},
+	}
+}
+
+// DescDialogMaybeOpenCodex is ErrDialogMaybeOpen's description on a Codex row:
+// the proofs are the main agent's Stop or Interrupt after the request (for a
+// request with no agent_id) and the end of the agent, and it never names a
+// PostToolUse or a tool_use_id, which prove nothing on Codex. Check it with
+// AssertDescription.
+func DescDialogMaybeOpenCodex() DescCase {
+	return DescCase{
+		Name: "ErrDialogMaybeOpen on a Codex row",
+		Require: []string{
+			"is not proven gone (no Stop or Interrupt of the main agent after it for a request with no agent_id, and no end of its agent is recorded)",
+			"so its permission dialog may still be on the pane",
+			"nothing was sent",
+		},
+		MustNot: []string{"PostToolUse", "tool_use_id"},
+	}
+}
+
+// DescProvenGoneHow is the manifest's text of the proven_gone_how field on a
+// permission request's delivery facts: tool_ran is a Claude hook's proof and
+// never applies on a Codex row, turn_end is the main agent's Stop or idle-prompt
+// Notification or a Codex main agent's Interrupt, and agent_gone is the end of
+// the spawn. Check it with AssertAgentTextCase.
+func DescProvenGoneHow() DescCase {
+	return DescCase{
+		Name: "proven_gone_how field",
+		Require: []string{
+			"tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id (never on a Codex row)",
+			"turn_end: the turn of the agent that asked ended after it was written",
+			"the main agent's Stop or idle-prompt Notification, or a Codex main agent's Interrupt (Esc), proves a request with no agent_id",
+			"agent_gone: its spawn was marked missing, ended or resumed",
+		},
+	}
+}

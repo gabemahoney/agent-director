@@ -789,7 +789,7 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // of whose permission requests still awaits an answer and none of whose relay
 // hooks may still run (a request find-missing's mark closed is not judged) is
 // moved to waiting when the agent's idle-prompt Notification was the last
-// hook it recorded, and to working otherwise. Repaired rows are in neither
+// hook it recorded, and to working otherwise (a Codex row always to working). Repaired rows are in neither
 // result list.
 //
 // CLI: agent-director find-missing

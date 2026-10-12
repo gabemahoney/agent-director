@@ -1,0 +1,14 @@
+{
+  "cwd": "/work/demo",
+  "hook_event_name": "PermissionRequest",
+  "model": "codex-fixture-model",
+  "permission_mode": "default",
+  "session_id": "019f0000-0000-7000-8000-000000000025",
+  "tool_input": {
+    "command": "curl -sS -m 8 -o /dev/null -w fixture-net-%{http_code} http://example.com/",
+    "description": "fixture"
+  },
+  "tool_name": "Bash",
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-25-00-019f0000-0000-7000-8000-000000000025.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000035"
+}

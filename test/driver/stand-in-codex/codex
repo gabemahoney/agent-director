@@ -58,6 +58,14 @@
 # shell is killed: a Codex that dies without saying so is the point of the
 # find-missing cases.
 #
+# A lone Escape typed at the pane (the Escape pane answer of a fallen-back
+# permission request) is dropped: readline reads Escape as the prefix of a
+# meta key and would turn the first character of the next typed line into
+# one (a hook line typed after it would lose its first letter). The pane's
+# shell binds Escape to an empty macro and shortens readline's key-sequence
+# timeout to 50 ms, both from the PROMPT_COMMAND function below, so the
+# Escape does nothing and the line typed next is read as typed.
+#
 # Every launch argument is ignored. --noprofile --norc: nothing from the
 # image's dotfiles runs; -i: the shell reads commands from the pane's
 # terminal.
@@ -102,6 +110,8 @@ fi
 # shell, before the prompt that follows each command.
 __stand_in_codex_exit() {
     local entry cmd rec sid transcript payload
+    bind 'set keyseq-timeout 50' 2>/dev/null
+    bind '"\e": ""' 2>/dev/null
     entry="$(HISTTIMEFORMAT='' history 1)"
     read -r _ cmd <<<"$entry"
     [[ "$cmd" == "/exit" ]] || return 0

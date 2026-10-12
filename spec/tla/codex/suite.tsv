@@ -1,0 +1,42 @@
+run	spec	expected	budget_s	xmx	direct	disk_mb	sched_timeout	sched_memory	tier	what
+hx_eq_Sns	Phase5HookCx	PASS (distinct = 11387737)	1800	16g	4g	20000	1h	24g	fast	knobs off: b.zuj run 4's ci_H_Sns exactly; the count must match (knobs-off argument, and a check of the copy's edits)
+rx_eq_live	Hold36hCx	PASS (distinct = 109518)	1800	8g	2g	10000	1h	16g	fast	knobs off: b.36h's cond_live exactly; the count must match
+hx_S	Phase5HookCx	PASS	3400	16g	4g	30000	1h	24g	fast	Codex session-end rule + pause (fix): RowOnlyByAgent, KillAllGone, ClockBound, CxNoEndedWhileAlive; whole world (nested, teammate, stray, leftover, /new, lost reply, SIGHUP, unreadable start)
+hx_C_endnow	Phase5HookCx	FAIL CxNoEndedWhileRunning	900	8g	2g	8000	1h	16g	fast	control: a Codex SessionEnd ends the row at once; in-TUI /new ends a row whose agent goes on running
+hx_C_pause	Phase5HookCx	FAIL PauseSeesEnd	3400	16g	4g	30000	1h	24g	fast	control = the brief as written (finding F1): pause's wait polls the state only; with find-missing not scheduled the paused Codex row never reads ended
+hx_P	Phase5HookCx	PASS	3400	16g	4g	30000	1h	24g	fast	the fix (F1): pause's wait judges the agent process and writes ended on a Codex row with an end report; PauseSeesEnd with find-missing not scheduled
+hx_L	Phase5HookCx	PASS	7000	20g	4g	40000	2h	28g	fast	Codex rule + pause (fix), find-missing fair: PendingResolves, ReportInResolves, CxEndResolves, PauseSeesEnd
+rx_safe	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	fast	Codex events: WorkingTrue, NoStaleHold, TypeOK; subagent, two turns, every switch (b.36h's cond_safe under Codex)
+rx_keys	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	fast	Codex events: KeysSafe (plain send-keys and pause never reach a shown dialog), with the last-gasp window; subagent, two turns
+rx_live	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	fast	Codex events: WorkingTrue, NoStaleHold, RowSettlesCx (RowSettles with the PRD's exception), KeysSettle; subagent, two turns, hook deaths, record-pane-answer
+rx_C_intnoend	Hold36hCx	FAIL KeysSettle	900	8g	2g	8000	1h	16g	fast	control: Codex's Interrupt not counted as turn_end: an interrupted main request holds plain send-keys for good
+rx_C_subproof	Hold36hCx	FAIL KeysSafe	900	8g	2g	8000	1h	16g	fast	control: the main agent's turn end also releases the subagent's request: plain keys reach its shown dialog
+rx_C_subint	Hold36hCx	FAIL KeysSafe	900	8g	2g	8000	1h	16g	fast	control: an unmarked subagent Interrupt read as the main turn end: plain keys reach the main agent's shown dialog (the PRD's marking assumption is load-bearing)
+rx_lim_rowsettles	Hold36hCx	FAIL RowSettles	900	8g	2g	8000	1h	16g	fast	documented difference: Claude's RowSettles fails under Codex events (no automatic repair of a row left working)
+hx_V_followed	Phase5HookCx	FAIL NotCxFollowed	900	8g	2g	8000	1h	16g	fast	probe: /new's SessionEnd records an end report; the next SessionStart follows the new session and clears it
+hx_V_fmended	Phase5HookCx	FAIL NotCxFMEnded	900	8g	2g	8000	1h	16g	fast	probe: the agent exits after its end report; find-missing marks the row ended
+hx_V_pauseended	Phase5HookCx	FAIL NotCxPauseEnded	900	8g	2g	8000	1h	16g	fast	probe: pause's wait (the fix) writes ended after the agent's end report and exit
+rx_V_subheld	Hold36hCx	FAIL NeverSubAllowHeld	900	8g	2g	8000	1h	16g	fast	probe: a subagent's request allowed through the relay still holds plain send-keys at rest
+r5x_time	B146R5Cx	PASS	3300	22g	3g	30000	1h	28g	fast	Codex events on b.146 round 5's integrated model (Unproven + Bypass), every property (fin1_time_ub)
+r5x_t	B146R5Cx	PASS	3300	22g	3g	30000	1h	28g	fast	Codex events on b.146 round 5's integrated model (Unproven + Bypass), safety, 0.5 s ticks (fin1_t_ub)
+r5x_eq	B146R5Cx	PASS(=833740)	3200	22g	3g	30000	1h	28g	fast	knobs-off equivalence: b.146 fin1_time_ub unchanged (CxR5 FALSE) must reach exactly 833,740 distinct states
+hx_S5	Phase5HookCx	PASS	7000	20g	6g	40000	2h	32g	extra	as hx_S with pid reuse and readable start times (MaxClock 5, PidPool 3)
+hx_V_endlive	Phase5HookCx	FAIL NotCxEndLive	900	8g	2g	8000	1h	16g	extra	probe: an end report while the agent keeps running (in-TUI /new)
+hx_V_missing	Phase5HookCx	FAIL NotCxMissing	900	8g	2g	8000	1h	16g	extra	probe: a Codex agent gone with no end report reads missing, as a Claude row
+rx_V_intproof	Hold36hCx	FAIL NeverHit	900	8g	2g	8000	1h	16g	extra	probe: Codex's Interrupt hook proves a main request cancelled at its dialog
+rx_claude_keys	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	extra	baseline, knobs off (Claude today): KeysSafe with the last-gasp window, every switch
+rx_eq_live_g	Hold36hCx	PASS (distinct = 109518)	1800	8g	2g	10000	1h	16g	gate	knobs-off equivalence, level 1, on the Q2-gate model text: b.36h's cond_live exactly (all knobs off); the count must match
+r5x_eq_g	B146R5Cx	PASS (distinct = 833740)	3200	22g	3g	30000	1h	28g	gate	knobs-off equivalence, level 1, on the Q2-gate model text: b.146 fin1_time_ub unchanged (CxR5 and CxRv FALSE) must reach exactly 833,740 distinct states
+rx_safe_k0	Hold36hCx	PASS (distinct = 64027)	1800	8g	2g	10000	1h	16g	gate	knobs-off equivalence, level 2: rx_safe's cfg on the final model text, CxReview off
+rx_keys_k0	Hold36hCx	PASS (distinct = 67511)	1800	8g	2g	10000	1h	16g	gate	knobs-off equivalence, level 2: rx_keys's cfg on the final model text, CxReview off
+rx_live_k0	Hold36hCx	PASS (distinct = 35589)	1800	8g	2g	10000	1h	16g	gate	knobs-off equivalence, level 2: rx_live's cfg on the final model text, CxReview off
+r5x_time_k0	B146R5Cx	PASS (distinct = 296382)	3300	22g	3g	30000	1h	28g	gate	knobs-off equivalence, level 2: r5x_time's cfg on the final model text, CxRv off
+r5x_t_k0	B146R5Cx	PASS (distinct = 2122224)	3300	22g	3g	30000	1h	28g	gate	knobs-off equivalence, level 2: r5x_t's cfg on the final model text, CxRv off
+rx_safe_rv	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	gate	Q2 gate: rx_safe + CxReview (the /review thread's unmarked hooks): TypeOK, WorkingTrue, NoStaleHold
+rx_keys_rv	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	gate	Q2 gate: rx_keys + CxReview with LastGasp: TypeOK, KeysSafe, NoStaleHold
+rx_live_rv	Hold36hCx	PASS	1800	8g	2g	10000	1h	16g	gate	Q2 gate: rx_live + CxReview: WorkingTrue, NoStaleHold, RowSettlesCx (no new exception), KeysSettle
+rx_V_review	Hold36hCx	FAIL NeverHit	900	8g	2g	8000	1h	16g	gate	Q2 gate probe: a review write leaves the row working at rest (reachable)
+r5x_time_rv	B146R5Cx	PASS	3300	22g	3g	30000	1h	28g	gate	Q2 gate: fin1_time_ub + CxR5 + CxRv: every property, RowSettlesRv in place of RowSettles
+r5x_t_rv	B146R5Cx	PASS	3300	22g	3g	30000	1h	28g	gate	Q2 gate: fin1_t_ub + CxR5 + CxRv: the 15 invariants
+r5x_lim_rowsettles_rv	B146R5Cx	FAIL RowSettles	3300	22g	3g	30000	1h	28g	gate	Q2 gate limit: RowSettles unrestated fails with the /review thread's writes (the documented residual)
+r5x_V_review	B146R5Cx	FAIL NeverHit	3300	22g	3g	30000	1h	28g	gate	Q2 gate probe: a review write leaves the row working at rest (reachable)

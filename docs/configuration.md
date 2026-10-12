@@ -62,7 +62,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether every spawn, of either agent, adds a help SessionStart hook; `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
-| `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit: Claude Code ends the hook that long after it starts. A request has this less 3 s to be decided (see [The relay hook's time limit](#the-relay-hooks-time-limit)). |
+| `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit: the agent ends the hook that long after it starts. A request has this less 3 s to be decided (see [The relay hook's time limit](#the-relay-hooks-time-limit)). |
 | `[relay] permission_request_cap` | 0 or more | 1000 | Permission requests kept before the oldest closed ones go; 0 is unbounded, negative gives the default. |
 | `[pause] timeout_seconds` | 1 to 9223372036 | 30 | How long `pause` waits for the agent to exit. |
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |
@@ -93,10 +93,10 @@ fire. The MCP server: after a restart. A Go `Client`: when it is built.
 ## The relay hook's time limit
 
 The relay hook keeps the last 3 s of its time limit for itself: it waits
-for `decide` until 3 s before Claude Code would end it, then records and
+for `decide` until 3 s before the agent would end it, then records and
 returns a deny. So a request has `timeout_seconds` less 3 s to be decided,
 and a value of 3 or less leaves no time at all: at 3 the request is denied
-at once, and at 2 or less the hook gives no answer, so Claude Code asks in
+at once, and at 2 or less the hook gives no answer, so the agent asks in
 its own permission prompt. An agent keeps the value in force when it was
 launched (`spawn` or `resume`).
 
@@ -107,7 +107,7 @@ Three waits keep their time limits whatever `busy_timeout_ms` is:
 | Who | Time limit | How it keeps it |
 |---|---|---|
 | `decide --max-wait-ms N` | the caller's deadline | waits for the store at most until N ms after it started (`ErrStoreBusy`, nothing recorded) |
-| the relay hook | Claude Code ending it | each write waits for the store at most until 2 s before that end; if the store stays busy, its first write gives way to a deny, and any later one to no answer, so Claude Code asks in its own permission prompt |
+| the relay hook | the agent ending it | each write waits for the store at most until 2 s before that end; if the store stays busy, its first write gives way to a deny, and any later one to no answer, so the agent asks in its own permission prompt |
 | `get`, `list`, `get-permission` | the caller's | never wait for the store's write lock |
 
 `decide` without `--max-wait-ms` waits up to `busy_timeout_ms` per write,

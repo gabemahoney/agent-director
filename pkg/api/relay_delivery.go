@@ -98,8 +98,8 @@ type RequestDelivery struct {
 	ProvenGoneAt *time.Time `json:"proven_gone_at"`
 	// ProvenGoneHow is how: tool_ran (its tool's PostToolUse or
 	// PostToolUseFailure, by tool_use_id), turn_end (the turn of the agent
-	// that asked ended after it: the main agent's Stop or idle-prompt
-	// Notification proves a request with no agent_id) or agent_gone (its
+	// that asked ended after it: the main agent's Stop, idle-prompt
+	// Notification or (Codex) Interrupt proves a request with no agent_id) or agent_gone (its
 	// Spawn was marked missing, ended or resumed); null until then.
 	ProvenGoneHow *string `json:"proven_gone_how"`
 	// UnprovenSince is, for a request not proven gone that no longer awaits

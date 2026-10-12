@@ -128,7 +128,7 @@ func TestHookProvesRequestsGone(t *testing.T) {
 				record()
 				hc.Start = onlyRequest(t, st, id).CreatedAt.Add(time.Second)
 				if tc.sameSecond {
-					hc.Start = onlyRequest(t, st, id).CreatedAt.Add(999 * time.Millisecond)
+					hc.Start = onlyRequest(t, st, id).CreatedAt.Truncate(time.Second).Add(999 * time.Millisecond)
 				}
 			}
 

@@ -85,7 +85,7 @@ in `init`. The verb registry
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v9; see "Schema v9" below), exposes typed CRUD primitives (added in later Tasks). Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. **Must use:** read it only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path` and `codex_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `Load` refuses a blank value, a relative one, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a value that is neither `claude` nor `codex` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude` and `config.AgentCodex` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `internal/layout` | The one definition of where agent-director keeps its files: `DirRel` (`.config/agent-director`), `Display` (`~/.config/agent-director`), the file and directory names in it (`ConfigFile`, `StoreFile`, `ErrorLogFile`, `TrailFile`, `TemplatesDir`, `BinDir`, `BinaryName`), the `~/` forms of the defaults (`DisplayConfigPath`, `DisplayStorePath`, `DisplayErrorLogPath`, `DisplayTemplatesDir`), `Dir(home)` and `Join(home, ...)`; and, in `old.go`, the presence rules `OldPresent`, `NewPresent`, `OnlyOldPresent` and `StoreExists`, the only code that names the old directory. See [`internal/layout`](#internallayout). **Must use:** every default path in the Go code derives from this package, never a literal `.config/agent-director`; a presence question about the two directories is asked only through `old.go`. | stdlib only. | Every other `internal/` and `pkg/` package (it is a leaf, so each can import it without a cycle). |
-| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); the template body builder `TemplateBody` (see [apitest template factory](#apitest-template-factory-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture` (with `SeedDecideFixtureAgent`), `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); the template body builder `TemplateBody` (see [apitest template factory](#apitest-template-factory-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds every name the command binaries give outside a verb handler, so it lists every err_name the CLI writes in an error envelope (b.cm7): the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired`, which `internal/clisetup.Open` gives before any verb runs (b.vma, b.cm7), and the last three of which `serve` gives through `clisetup.NewOpenError` when it cannot open its MCP Client (b.uii); the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which the binaries write themselves; and `ErrInternal`, `Classify`'s fallback, paired with the unexported sentinel `errInternal`, which no error wraps (see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (its seven sentinels only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags` (naming the new key when the argument is an old name, see [Refusal of old names](#refusal-of-old-names)); every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `internal/oldnames` | The one table of the old, Claude-named public names (`Table`, one `Entry{Surface, Old, New}` per name and surface: the CLI, MCP, config and template surfaces), `Find` (exact for CLI and MCP names, letter-case-blind for config and template names, as the TOML decoder matches them), the refusal texts (`Entry.FlagText`, `KeyText`, `ConfigText`) and `RefuseFlag`, which turns the flag package's unknown-flag error into the refusal. **Must use:** every surface that refuses an old name builds its refusal from this table (see [Refusal of old names](#refusal-of-old-names)). | stdlib only (`errors`, `flag`, `strings`): a leaf package. | Every other package of the module. |
@@ -3708,7 +3708,7 @@ from the result's outputs: `NewState`, `SoftRefresh`, `WaitingIfWorking`,
 result's `EventName` and `ToolName` are still read where an event needs its
 own handling (`Handle` for `SessionStart` and `PermissionRequest`,
 `subagent.go` for the subagent events and the `Agent` tool). The result's
-`Agent` is read only by `ToolRan()`; no code outside the classifier branches
+`Agent` is read only by `ToolRan()` and `TurnEnded()`; no code outside the classifier branches
 on the agent to decide a write, and the grandparent advice is chosen by the
 row's agent, not the result's (see "Hooks move a row only for its own
 agent"). `SubagentCapture` is the classifier's output that gates subagent capture:
@@ -3725,8 +3725,8 @@ code outside the classifier does not branch on the agent to decide a write.
 | `SessionStart` | none | `waiting`; the session id is the payload's `session_id` and the transcript path is the payload's path, verbatim |
 | `Stop` | none | `waiting` |
 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | none | `working`, for any tool (never `ask_user`, `request_user_input` and `request_user_input_async` included) |
-| `Interrupt` | none | `waiting` |
-| `Interrupt` | present | soft refresh: a marked Interrupt is never the main agent's turn end. Codex never sends it; the rule is a safety net |
+| `Interrupt` | none | `waiting`, and the main agent's turn end for the relay's proofs (`TurnEnded`; see "The relay on Codex rows" under [Permission relay](#permission-relay)) |
+| `Interrupt` | present | soft refresh: a marked Interrupt is never the main agent's turn end and proves nothing. Codex never sends it; the rule is a safety net |
 | `PermissionRequest` | any | `check_permission` |
 | `SessionEnd` | none | `EndReport` true, `SoftRefresh` true, any reason (see below) |
 | `SessionStart`, `SessionEnd` | present | ignored as `subagent_event`, decided before the gate, with a null `hook_session_id` |
@@ -3738,8 +3738,10 @@ without `agent_id`. A hook with `agent_id` has an empty `SessionID`:
 `classifyCodex` keeps the payload's transcript path, and `Handle` blanks it
 for a marked hook, so such a hook records neither. `ToolUseID` is kept verbatim, and
 `ToolRan()` is false for Codex: its permission requests carry no
-`tool_use_id`, so a tool hook proves no request gone. Codex sends no
-idle-prompt Notification, so `WaitingIfWorking` is never set.
+`tool_use_id`, so a tool hook proves no request gone and closes none.
+Codex sends no idle-prompt Notification, so `WaitingIfWorking` is never set;
+`TurnEnded()` is true for a Codex `Interrupt` without `agent_id`, as for a
+`Stop`.
 
 **The end report (`ApplyHookEndReport`).** A Codex `SessionEnd` without
 `agent_id` says a session of the process ended; it does not say the agent
@@ -3763,7 +3765,8 @@ extra trail record.
 
 **The hook heal (`healCodexTranscript`).** After any applied write of a
 Codex hook without `agent_id` (the `SessionStart` branch and the default
-branch; the relay path returns early and owns its write), the handler may
+branch; the relay path returns early and owns its write, so a relayed
+`PermissionRequest` heals nothing and the next applied hook does), the handler may
 fill a NULL `jsonl_path` from the payload's path. It does so only when the
 path exists on disk and its file name carries the hook's own session id,
 then calls the store's `HealJsonlPath`, which writes only while
@@ -3786,7 +3789,9 @@ was (fail-open).
   set `working`, and no `Stop` or `Interrupt` of its own. A row it moved to
   `working` stays `working` until the next prompt (an Esc during the review
   gives one main `Interrupt`). No Codex row returns to `waiting` by an
-  idle-prompt Notification, so there is no return.
+  idle-prompt Notification, so there is no return. The review thread opens
+  no permission request and proves none gone (see "The relay on Codex rows"
+  under [Permission relay](#permission-relay)).
 
 **Fixtures.** Codex's payloads come from scrubbed captures in
 `internal/hook/testdata/codex-hook-payloads/` (the "Hook payload fixtures"
@@ -4509,7 +4514,15 @@ payload over 1 MiB is dropped whole before any of this.
   rollout; `resume` carries the resumed session's id; `clear` and `fork` carry
   new ones); one built from source, not captured, carries a `fixture_note`
   saying so. A Codex test that needs a payload with keys changed starts from
-  these files with `codexPayload`, and never writes a payload inline.
+  these files with `codexPayload`, and never writes a payload inline. The
+  relay's Codex requests are `permission-request-*.json`: a shell command
+  outside the sandbox, an `apply_patch` outside the writable roots,
+  `write_stdin`, an MCP tool, a network-access approval and a denied network
+  escalation, beside `permission-request-bash.json` and
+  `permission-request-subagent.json`. **Must use:** a test of the relay on a
+  Codex row (`hook_codex_relay_test.go`, the `internal/mcp` and
+  `cmd/agent-director` relay tests) reads one of them and does not write a
+  `PermissionRequest` payload inline.
   A test that needs a fixture with keys set or removed, nested ones included,
   builds it with `variant` and the `setKey` and `delKey` edits
   (`hook_subagent_payloads_test.go`), never a JSON literal; a `background_tasks`
@@ -9714,12 +9727,12 @@ allow/deny out-of-band, and learn whether the verdict reached the agent.
 Conceptually:
 
 ```
-  Claude Code ─PermissionRequest hook→ agent-director hook (the relay hook)
+  the agent ───PermissionRequest hook→ agent-director hook (the relay hook)
                                          │ 1. records the request and moves the
                                          │    row to check_permission (one tx)
                                          │ 2. polls the request
                                          │ 3. acks the verdict (delivered_at),
-                                         │    then writes it to Claude Code
+                                         │    then writes it to the agent
                                          ↑
                                          │ writes decision
                                          │
@@ -9731,7 +9744,9 @@ The caller-facing contract is in `docs/permissions.md` ("Relay mode"),
 `docs/usage.md` ("Intercept permission prompts" and "Answer a request at the
 pane") and `docs/caller-contract.md` ("Permission relay"). This section is the mechanism
 (b.146 step 2: the rules and problems of the design, numbered as in
-`timeout-design-final.md`). Every request carries a set of delivery facts
+`timeout-design-final.md`). The agent is Claude Code or Codex; what differs
+on a Codex row is gathered in "The relay on Codex rows" below, and the rest
+of this section holds for both. Every request carries a set of delivery facts
 derived when it is read; the store records only what the relay hook,
 `decide` and the readers observed (the v7 columns under
 [`internal/store`](#internalstore)).
@@ -9786,7 +9801,7 @@ falls back when the hook exits.
    with no answer), then runs `AckRelayDecision` with the parent check,
    `parentCheck`, as its `check` argument. The store runs the check inside
    the ack's transaction, once `BEGIN IMMEDIATE` has taken the write lock
-   and before the statement, so a Claude Code that died while the hook
+   and before the statement, so an agent that died while the hook
    waited for the lock gets no ack: `parentIsStarter` holds when the hook's
    parent pid is still the one `Handle` captured at entry, and that pid
    runs with the start time captured then (an unwired reader or a start
@@ -9814,7 +9829,7 @@ falls back when the hook exits.
    left before the reserve, an ack or a deny that fails or is cut, an ack
    that matches nothing, `ctx` cancelled, the request deleted (its spawn
    row removed), the read-retry budget spent — is `silent`: one log line,
-   empty stdout, exit 0. Claude Code shows its own dialog, and readers find
+   empty stdout, exit 0. The agent shows its own dialog, and readers find
    the request fallen back once they find the hook gone.
 
 Claude Code reads a hook's JSON on any exit code, so the ack comes first:
@@ -10046,7 +10061,7 @@ give `[]` in `permission_requests` (filled only while the raw state is
 `check_permission`), so a caller follows a tracked request with
 `get-permission`. Holding `ask_user` too would hide the agent's question
 from callers. A request holds the row while it still awaits an answer
-(`awaitingAnswerSQL`) and Claude Code has not proven its dialog gone
+(`awaitingAnswerSQL`) and the agent has not proven its dialog gone
 (`proven_gone_at` NULL): `holdsRowSQL`
 (b.omt; see its "Must use" under [`internal/store`](#internalstore)).
 After the last answer, the row moves with the agent's next hook. The
@@ -10083,11 +10098,12 @@ Bee b.36h's model, `spec/tla/hold36h/`, checks this design (see
 **A request proven gone holds nothing (b.omt).** A request a person
 answered at the pane outside agent-director still awaits an answer, since
 nothing records that answer, until `record-pane-answer` or a close of the
-row's requests closes it. Claude Code's own hooks end its hold instead:
+row's requests closes it. The agent's own hooks end its hold instead:
 the main agent's `Stop` or idle-prompt Notification after it proves it
 gone (`turn_end`, a request with no `agent_id` recorded before the hook
-started), and its tool's `PostToolUse` or `PostToolUseFailure` does
-(`tool_ran`, an allow). Each proof is the hook's first write, so the
+started; on a Codex row its `Stop` or its `Interrupt`, the idle prompt
+being Claude's), and a Claude tool's `PostToolUse` or `PostToolUseFailure`
+does (`tool_ran`, an allow; never a Codex row's). Each proof is the hook's first write, so the
 hook's own write is not held by it, and from then on the agent's moves to
 `working` apply though the request stays open. A `PostToolUse` whose tool
 ran therefore moves the row to `working` even when the PostToolUse close
@@ -10109,11 +10125,18 @@ Residuals, accepted:
   row's moves to `working` until `record-pane-answer`, its tool's
   `PostToolUse`, or the row's end. The main agent's `Stop` still moves the
   row to `waiting` (only moves to `working` are held), so the row can read
-  `waiting` through later turns until one of those.
+  `waiting` through later turns until one of those. On a Codex row there is
+  no `PostToolUse` to wait for, so a subagent's request holds until
+  `record-pane-answer` or the row's end, allowed or denied.
 - **A turn interrupted by a pane deny.** Claude Code sends no `Stop` on a
   user interrupt, so after a deny at the pane that interrupts the turn the
   hold lasts until the idle-prompt Notification, once the agent idles, or
-  the next turn's `Stop`.
+  the next turn's `Stop`. A Codex row has no such residual: its `Interrupt`
+  is the turn end.
+- **A Codex row's allow.** With no `tool_ran` proof (Codex's requests carry
+  no `tool_use_id`), a request allowed at the pane outside agent-director
+  holds the row's moves to `working` until the turn ends, not until its
+  tool runs.
 - **The hook's start second.** A `turn_end` proof covers only requests
   created before the second its hook process started (see "The `turn_end`
   ordering rule" under "The dialog hold" below). A request recorded in the
@@ -10124,11 +10147,12 @@ Residuals, accepted:
 
 When the hook that would move the row is lost:
 
-- the idle-prompt Notification moves a relay-on `check_permission` row
-  with no request holding it to `waiting`, and records `idle_since` either
-  way (see "The idle-prompt Notification" in
+- on a Claude row, the idle-prompt Notification moves a relay-on
+  `check_permission` row with no request holding it to `waiting`, and
+  records `idle_since` either way (see "The idle-prompt Notification" in
   [Event → state mapping](#event--state-mapping-srd-52)); its own
-  `turn_end` proof runs first;
+  `turn_end` proof runs first. A Codex row has none; its `Stop` and
+  `Interrupt` do the move as they do for any row;
 - `find-missing`'s repair, `RepairCheckPermission`
   (`pkg/api/find_missing_repair.go`), which `Client.FindMissing` runs
   after the sweep on a fresh read of the live rows. For each row in
@@ -10147,7 +10171,10 @@ When the hook that would move the row is lost:
   off; the proof leaves it out of the statement's guard only. Otherwise one
   guarded statement, `RepairCheckPermissionIfSameLife`
   (`internal/store/find_missing_writes.go`), moves the row to `waiting`
-  when `idle_since` is set and to `working` otherwise, only while the row
+  when `idle_since` is set and to `working` otherwise (a Codex row always
+  to `working`: the statement's `CASE` also tests `agent <> 'codex'`, since
+  Codex sends no idle-prompt Notification and an `idle_since` on its row
+  says nothing of its turn), only while the row
   is still in `check_permission` with `relay_mode` on, holds the snapshot
   the read gave, and has no request holding it (`holdsRowSQL`). It NULLs
   `launch_started_at`, advances `row_version` and writes no other column
@@ -10292,8 +10319,8 @@ of that kind uses it, never an `UPDATE subagents` or a
 
 A request answered at the pane outside agent-director stays fallen back,
 and rule 7 refuses every plain `send-keys` on its account, until it is
-closed. One close needs no caller: Claude Code runs a tool only once its
-permission dialog is answered allow, and the agent's `PostToolUse` (or
+closed. One close needs no caller on a Claude row: Claude Code runs a tool
+only once its permission dialog is answered allow, and the agent's `PostToolUse` (or
 `PostToolUseFailure`, for a tool that ran and failed) carries the tool use's
 `tool_use_id`, which the relay hook recorded on the request.
 
@@ -10322,6 +10349,11 @@ permission dialog is answered allow, and the agent's `PostToolUse` (or
   written just before, normally has). Each close emits one
   `ad.row_mutation.committed` (writer `hook`). It is fail-open: a store
   without the method, or a failed close, logs and changes nothing else.
+- **A Codex row has none.** `ToolRan()` is never true for a Codex hook and
+  a Codex request records no `tool_use_id`, so no `PostToolUse` closes or
+  proves a Codex request; a fallen-back allow there closes only through
+  `record-pane-answer` or a pane answer (see "The relay on Codex rows"
+  below).
 - **What it does not cover.** It closes only allows (Claude Code runs no
   hook for a deny at its dialog), never a request recorded before v7 (no
   `tool_use_id` on record), and the hook that would make it can die, so it
@@ -10352,7 +10384,8 @@ docs/engineering-guide.md).
   `tool_use_id` is the hook's, whatever their `agent_id` (an empty id
   proves nothing); `turn_end` means the turn of the agent that asked ended
   after the request was written, and the main agent's `Stop` or idle
-  prompt, the only `turn_end` hooks today, cover the requests with no
+  prompt, and on a Codex row its `Stop` or `Interrupt`, the only `turn_end`
+  hooks today, cover the requests with no
   `agent_id` recorded before the hook started, the main agent's and every
   one recorded before v7 (the
   value is defined by the asking agent's turn, not by the hook, so a
@@ -10392,9 +10425,10 @@ docs/engineering-guide.md).
 - **The hook side.** `Handle` calls `proveRequestsGone`
   (`internal/hook/handler.go`) on a relay-on agent as the first of an
   ordinary hook's writes, before `closeToolRan` and `applyOrdinaryHook`:
-  `ClassifyResult.ToolRan()` gives a `tool_ran` proof with the payload's
-  `tool_use_id`, `ClassifyResult.TurnEnded()` (a `Stop`, `EventNameStop`,
-  or the idle-prompt Notification, `WaitingIfWorking`, with no `agent_id`)
+  `ClassifyResult.ToolRan()` (Claude only) gives a `tool_ran` proof with the
+  payload's `tool_use_id`, `ClassifyResult.TurnEnded()` (a `Stop`,
+  `EventNameStop`, or the idle-prompt Notification, `WaitingIfWorking`, or,
+  on a Codex result, an `Interrupt`, with no `agent_id`)
   a `turn_end` proof whose `RecordedBefore` is `Handle`'s `start` (from
   `HandleConfig.Start`); any other hook proves nothing. It goes through the
   optional `requestProver` extension of `HookStore` and is fail-open: a
@@ -10403,7 +10437,10 @@ docs/engineering-guide.md).
   A request with an `agent_id` is proven only by its `PostToolUse` or by
   the agent's end: a background subagent can outlive the main turn, and
   `SubagentStop`, though registered, proves no request gone (`ToolRan()` and
-  `TurnEnded()` are false for it).
+  `TurnEnded()` are false for it). On a Codex row a request with an
+  `agent_id` has no `PostToolUse` proof at all, so it holds until the agent's
+  end whether it was allowed or denied, and an `Interrupt` carrying an
+  `agent_id` (Codex sends none) proves nothing.
 - **The agent's end.** `closeOrphanedRequests`' third statement,
   `proveAgentGoneSQL`, proves every request of the row not yet proven
   (`agent_gone`) in the transaction of `find-missing`'s mark, the ended
@@ -10452,6 +10489,92 @@ the row is `holdsRowSQL` (see "The row after the last answer" above); and a proo
 written only through `ProveRequestsGone`, `proveAgentGoneSQL`, the
 PostToolUse close or the v6 → v7 hop's `v7ProveFinishedSQL` (see "Must use: a request's proof" under
 [`internal/store`](#internalstore)).
+
+### The relay on Codex rows (b.ssz)
+
+The relay serves a Codex row through the same path: `Handle` sends a Codex
+`PermissionRequest` to `runRelay` when the row's `relay_mode` is on, the
+request is one `permission_requests` row, and delivery, `confirm_by`, the
+fallback and the pane answers are as above. What differs follows from what
+Codex sends, and the code reads it in three places: `ClassifyResult.ToolRan()`
+and `TurnEnded()` (`internal/hook/classify.go`), the repair statement
+(`repairCheckPermissionSQL`) and the hook's heal. No store column, verb or
+error is new.
+
+- **The request.** `tool_name` is `Bash`, `apply_patch` (the patch text in the
+  command field), `write_stdin` (relayed only for a command launched outside
+  the sandbox; the launch adds `--enable write_stdin_approval`),
+  `mcp__<server>__<tool>`, or a network-access approval (an escalated `Bash`,
+  or a `Bash` whose description names a URL). Its `tool_use_id` is null, so
+  the request records none, and a Codex request with an `agent_id` is a
+  subagent's. The verdict envelope is the one a Claude hook writes. The
+  tool's dialog keys differ (see docs/permissions.md, "The relay on Codex
+  rows"), which only the pane-answer caller sees.
+- **Proofs by agent.**
+
+  | Proof (`proven_gone_how`) | Claude row | Codex row |
+  | --- | --- | --- |
+  | `tool_ran` | `PostToolUse` or `PostToolUseFailure` with the request's `tool_use_id` | never: no `tool_use_id`, `ToolRan()` false |
+  | `turn_end` | the main agent's `Stop` or idle-prompt Notification, no `agent_id` | the main agent's `Stop` or `Interrupt`, no `agent_id`; an `Interrupt` with one proves nothing |
+  | `agent_gone` | a close of the Spawn's requests | the same, and the Codex move to `ended` |
+
+  So on a Codex row the hold after a main-agent allow lasts until the turn
+  ends, and a subagent's request, allowed or denied, holds plain `send-keys`
+  and `pause` until the agent ends. The PostToolUse close does not run, so a
+  fallen-back allow closes only through `record-pane-answer` or a pane
+  answer.
+- **One end signal per turn (F4).** Codex sends no idle-prompt
+  Notification, so a lost `Stop` or `Interrupt` hook leaves the turn's
+  requests unproven, and the row possibly `working`, until the next turn's end.
+  Claude needs both of its two lost for that. The hash bypass is the way
+  past, and `find-missing`'s repair moves a stale `check_permission` row to
+  `working` whatever `idle_since` reads.
+- **Esc while a relay hook polls (F5).** Codex kills the hook at once, runs
+  no command and draws no dialog afterwards. The request has no ack, so it
+  falls back (`ErrRelayFallenBack`) once the hook is gone, and a fallen-back
+  request with `pane_answer` none refuses plain `send-keys` whether it is
+  proven or not. It stays open until `record-pane-answer --as deny` (with the
+  hash of a `read-pane`, once the hook has been gone 2 s) or a pane answer;
+  the `Interrupt` that follows proves it gone (`turn_end`) but never closes
+  it, except that a request recorded in the second the Interrupt hook
+  started is not proven (the `turn_end` ordering rule above). A request
+  closed while unproven keeps plain `send-keys` held
+  (`ErrDialogMaybeOpen`) until a later turn end or a send with the pane's
+  hash. Before the hook dies, rule 1 holds plain keys while it lives.
+- **A relayed request heals nothing.** `runRelay` owns its write and reports
+  no applied flag, so a relayed `PermissionRequest` does not fill a NULL
+  `jsonl_path` (`healCodexTranscript`); a heal there would add a store write,
+  with its lock wait, to the relay window before the poll. The next applied
+  hook heals.
+- **A verdict Codex ignores.** A zsh `.zshenv`, or a file named by a
+  caller-set `BASH_ENV`, that prints to stdout before Codex reads the hook's
+  answer makes Codex ignore the verdict and draw its own dialog, while the
+  request reads `delivered`. The request stays unproven until the turn ends,
+  so the dialog hold keeps plain keys off the dialog (the same gap as a hook
+  that acks and dies). agent-director launches Codex with `BASH_ENV` empty
+  (see hooks.md, "The shell between Codex and the hook").
+- **The `/review` thread.** Its tool and prompt hooks carry no `agent_id`;
+  they write `working` through the ordinary hold, open no request and prove
+  none (its `PostToolUse` carries a `tool_use_id` that no Codex row reads),
+  and it sends no `Stop`. The row it left `working` stays so until the
+  next prompt's end, or an Esc's `Interrupt`: the residual the Codex
+  models' `RowSettlesCx` already allows (F6).
+- **The relay window.** The hook's `--timeout` carries the window as for
+  Claude. A Codex launch also puts it on the hook entry's `timeout` (see
+  hooks.md, "The Codex entry set"); Codex lists it as given, and
+  agent-director caps it nowhere inside the 1..2147483 range.
+
+**Models.** `spec/tla/codex/` checked these rules before the code (see [Model
+check (`make tla`)](#model-check-make-tla)): `Hold36hCx` and `B146R5Cx` for
+the proofs and the hold (`KeysSafe`, `NoStaleHold`, `WorkingTrue` and every
+property of the source models under Codex events), with controls that fail
+as expected when the Interrupt does not prove, when a main turn end proves a
+subagent's request, and when a subagent's Interrupt reads as unmarked.
+
+**Must use:** whether a hook ends a request's hold is `TurnEnded()` and
+`ToolRan()`, never a test of the agent in the handler; no write ties a Codex
+row's repair to `idle_since`; and a Codex request is never proven by
+`tool_use_id`.
 
 ### Requests recorded before v7
 
@@ -14393,15 +14516,16 @@ the section that describes it in detail.
   a pane hash, and `pause` (b.zdz), until a hook proves the request gone
   (see "The dialog hold" under [Permission relay](#permission-relay)),
   which costs:
-  - after an allow, the hold lasts until the tool has run; after a deny,
-    until the main agent's turn ends, even when no dialog is left; an
+  - after an allow, the hold lasts until the tool has run (on a Codex row,
+    until the turn ends); after a deny, until the main agent's turn ends, even when no dialog is left; an
     `Escape` to stop the agent right after a deny needs a caller that
     looked and sends the pane's hash;
   - a subagent's denied request (`agent_id` set) is proven only by the
     agent's end: no `PostToolUse` follows a deny, the main agent's `Stop`
     and idle prompt do not cover it, and `SubagentStop` (registered, for
     subagent capture) proves no request gone. Until the Spawn ends, only a hashed send
-    gets through;
+    gets through. On a Codex row this holds for a subagent's allowed request
+    too;
   - when both end-of-turn hooks of a turn are lost, the hold lasts until
     someone looks or the Spawn ends;
   - a request recorded before v7 on a live row has no proof (the hop
@@ -14423,6 +14547,27 @@ the section that describes it in detail.
     [Permission relay](#permission-relay)), so requests no hook proves
     before their Spawn ends (a subagent's denied request, say) can keep
     the table above the cap until then.
+- **Codex rows hold longer (b.ssz).** A Codex row has no `tool_ran` proof
+  and no idle-prompt Notification (see "The relay on Codex rows" under
+  [Permission relay](#permission-relay)), which costs:
+  - after an allow, the hold of plain `send-keys` and `pause`, and of the
+    row's moves to `working` when the allow was answered at the pane
+    outside agent-director, lasts until the turn ends, not until the tool
+    has run;
+  - a subagent's request, allowed or denied, holds until the agent ends;
+  - a fallen-back allow closes only through `record-pane-answer` or a pane
+    answer; nothing closes it on its own;
+  - a lost `Stop` or `Interrupt` hook leaves the turn's requests unproven
+    until the next turn ends (one end signal per turn);
+  - Esc while a relay hook polls makes the request fall back and stay open
+    until `record-pane-answer --as deny` or a pane answer (the Interrupt
+    proves it `turn_end` but never closes it, unless it was recorded in the
+    Interrupt hook's start second, when it proves nothing), and once it is
+    closed unproven it keeps plain `send-keys` held until a later turn end
+    or a send with the pane's hash;
+  - a printing startup file makes Codex ignore the verdict and draw its own
+    dialog while the request reads `delivered` (docs/operator-actions.md);
+  - a `/review` can leave the row `working` until the next prompt ends.
 - **The row hold (b.omt).** A request that still awaits an answer and is
   not proven gone holds the row's moves to `working`, the idle-prompt
   Notification's move out of `check_permission` and `find-missing`'s
@@ -14802,6 +14947,16 @@ meaning and links to the section that describes it in detail.
   [`pause`](#pause)). A Spawn with the relay off, or with
   no unproven request, pauses as before. **Upgrade:** a request recorded
   before this release that holds plain `send-keys` holds `pause` too.
+- **The relay's proofs and repair on Codex rows (b.ssz).** A Codex row with
+  the relay on records its `PermissionRequest` and waits for `decide`, as a
+  Claude row does, and its requests are proven gone and repaired by what
+  Codex sends. On such a row a
+  `tool_ran` proof and the PostToolUse close never happen, the Codex
+  `Interrupt` (no `agent_id`) proves the main agent's requests gone
+  (`turn_end`), `find-missing`'s repair of a `check_permission` row always
+  writes `working`, and a subagent's request holds until the agent ends.
+  Claude rows are unchanged, and no verb, field or error is new (see "The
+  relay on Codex rows" under [Permission relay](#permission-relay)).
 - **A Codex row reaches `ended` through `find-missing` and `pause`.**
   Before, a Codex row whose agent exited kept its last state, `find-missing`
   marked it `missing` and a `pause` of it timed out. Now `find-missing`
@@ -16761,6 +16916,50 @@ under its own pin list (`hold36h/PROVENANCE.txt`, which records the
 contents, the verdicts and how to run a job again), and is not wired into
 `make tla`: `ci/run_ci.sh` never reads it.
 
+[`spec/tla/codex/`](../spec/tla/codex/README.md) holds bee b.ssz's check of
+the Codex design before the code of the find-missing and pause task and the
+permission relay task. It carries three models with Codex knobs, each a copy
+of an earlier model: `Phase5HookCx.tla` (the hook gate and the row's life;
+from the `Phase5Hook.tla` before b.xjn's change), `Hold36hCx.tla` (the
+working hold and the relay's proofs; from `hold36h/`) and `B146R5Cx.tla` (the
+integrated relay model; from b.146's round 5). Every knob defaults to off,
+and an equivalence run per model reproduces its source's distinct-state
+count exactly (11,387,737, 109,518 and 833,740). The directory also holds
+41 cfgs, their 41 scheduler job directories as submitted (without
+`tla2tools.jar`, which the repo keeps once at `spec/tla/tla2tools.jar`),
+`suite.tsv`, `verdicts.txt`, `job-ids.txt` and its own `PROVENANCE.txt` pin
+list. No run was made on the dev host: every verdict is a scheduler result
+and every one matches the expectation (the PASS runs complete, the controls,
+limits and probes failing on their target). It is not wired into `make tla`
+or `ci/suite.tsv`, and `ci/run_ci.sh` never reads it.
+
+The runs back the Codex rules of this file. Six findings came out of them,
+and the README states each:
+
+- **F1** (design flaw): pause's wait did not observe a gone agent process, so
+  on a Codex row (where the exit SessionEnd writes only an end report) it
+  would time out. The fix is the guarded `ended` write in pause's wait (see
+  [`pause`](#pause)); `hx_C_pause` fails and `hx_P` passes.
+- **F2**: a stale end report turns a crash into `ended` rather than
+  `missing`. It does not apply: Codex sends no SessionEnd at `/new`.
+- **F3**: Codex's marking of every subagent hook is load-bearing for the
+  relay. An unmarked subagent Interrupt would read as the main agent's turn
+  end and release the hold on a main-agent dialog still up (`rx_C_subint`
+  fails `KeysSafe`). See "The relay on Codex rows" under
+  [Permission relay](#permission-relay).
+- **F4**: Codex has one end signal per turn, so a lost Stop or Interrupt
+  hook leaves the turn's requests unproven until the next turn ends. Modelled
+  as the existing both-end-signals-lost residual.
+- **F5**: Esc while a main-agent relay hook polls. Not modelled; the same
+  section states what the code does with it.
+- **F6**: a `/review` thread's unmarked hooks can leave the row `working`
+  until the next prompt ends. The Q2 gate (15 runs) showed `KeysSafe` and
+  `NoStaleHold` still hold with those hooks unmarked, so the code keeps the
+  narrower answer: their writes to `working` go through the ordinary hold,
+  they open no request and they prove nothing. The
+  residual sits inside `RowSettlesCx`, the one exception to "a row settles
+  to `waiting`" under Codex events.
+
 **What the suite checks.** The threat model is accidents only. Respawn and
 `remain-on-exit` are out of scope. The model's three actors are named here
 as follows:
@@ -17069,15 +17268,20 @@ scheduler. The suite's files:
   `subagent/cfg/`, the subagent groups' budgets (2740, 1940 and 8400 s), the
   props ok rule, and the preflight refusals for bad props or an ambiguous or
   missing cfg.
-- **`provenance_test.go`** has six tests:
+- **`provenance_test.go`** has eight tests:
   - every pin matches its file, and only `.gitattributes`,
-    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/` and
-    `hold36h/` (each of the last two has its own pin list) are unpinned by
-    `spec/tla/PROVENANCE.txt`;
+    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`,
+    `hold36h/` and `codex/` (each of the last three has its own pin list)
+    are unpinned by `spec/tla/PROVENANCE.txt`;
   - `settle/PROVENANCE.txt` pins every other file under `settle/` with its
     SHA-256, and each of its pins names one of them (`TestSettleProvenance`);
   - `hold36h/PROVENANCE.txt` does the same for `hold36h/`
     (`TestHold36hProvenance`);
+  - `codex/PROVENANCE.txt` does the same for `codex/`
+    (`TestCodexProvenance`);
+  - `codex/` holds no `.jar`, and each of its job directories' `tlcjob.sh`
+    is byte-identical to `spec/tla/jobs/lib/tlcjob.sh`
+    (`TestCodexHasNoJar`);
   - for each of `launch/` and `subagent/` (`TestRunSets`), `cfg/` holds
     exactly the cfgs `suite.tsv` names, each row has eight columns with
     the props column `-` on exactly the pass rows, every cfg turns the
@@ -19238,7 +19442,11 @@ text, the recovery recourse and the history-by-life forbidden forms) and
 the older-serve sentence ending each spawn and list param text that was
 renamed or that MCP did not decode before 0.11.0;
 `descriptions_pane.go` holds the pane verbs'
-(`read-pane`, `send-keys`, `pause`) cases; `descriptions_kill_optin.go`
+(`read-pane`, `send-keys`, `pause`) cases; `descriptions_dialog.go` holds
+`ErrDialogMaybeOpen`'s proof text per agent, `DescDialogMaybeOpenClaude` (the
+shipped text, which never names an Interrupt) and `DescDialogMaybeOpenCodex`
+(the main agent's `Stop` or `Interrupt`, and no `PostToolUse` or
+`tool_use_id`), and `DescProvenGoneHow` for the manifest's field text; `descriptions_kill_optin.go`
 holds the cases of `kill`'s finished-row opt-in;
 `descriptions_unusable.go` holds the cases of a row whose recorded tmux
 session name cannot be used (every verb's refusal, the trigger, the
@@ -19292,6 +19500,11 @@ the serve test through its `assertConfigRefused`).
 It holds, as code, the required phrases of each SR-1.4 error
 description case and the forms no agent-facing text may contain. The
 package doc comment (`doc.go`, "# Description helper") says the same.
+**Must use:** a test of `ErrDialogMaybeOpen`'s text or of the manifest's
+`proven_gone_how` text asserts it with `DescDialogMaybeOpenClaude`,
+`DescDialogMaybeOpenCodex` or `DescProvenGoneHow` (`descriptions_dialog.go`),
+the Codex case naming the main agent's `Stop` or `Interrupt` and never a
+`PostToolUse`, the Claude case never an `Interrupt`; never its own phrases.
 
 **API:**
 
@@ -20257,6 +20470,38 @@ serial, marked `// Serial: it uses the shared Codex-folder fixture`); a test of 
 command and stored row uses `assertCodexLaunch`; a test that seeds a row of an
 agent uses `agentRowOpts` or `codexRowOpts`. Do not seed a Codex folder or
 walk a tree by hand, and do not point a test at a real Codex folder.
+
+### pkg/api relay agent dimension (package-internal test fixtures)
+
+The relay's `pkg/api` tests run each case on a Claude row and on a Codex row
+(see "The relay on Codex rows" under [Permission relay](#permission-relay)).
+The files are package `api_test`; their doc comments carry the detail.
+
+- `apitest.SeedDecideFixtureAgent(t, relayMode, agent)` is
+  `SeedDecideFixture` for a row of `store.AgentClaude` or `store.AgentCodex`;
+  `SeedDecideFixture` is it with Claude.
+- `newRelayEnvAgent(t, hook, agent)` (`relay_delivery_test.go`) is
+  `newRelayEnv` on a row of that agent; a Codex row's request A records no
+  `tool_use_id`. `relayAgents` and `agentLabel(agent, name)`
+  (`codex_reporting_test.go`) are the agent loop and the subtest name: the
+  plain name for Claude, `codex/<name>` for Codex, so Claude's subtest names
+  stay as they were.
+- `paAgents` (`pane_answer_fixture_test.go`) lists `paAgent` rows, each with
+  `env` and `subagent` constructors (`newPAEnv`, `newSubagentPAEnv`;
+  `newCodexPAEnv`, `newCodexSubagentPAEnv`, both through `newPAEnvAgent`) and a
+  `label` method. `paEnv` carries the row's `agent`, with `isCodex` and
+  `toolUseID` (`paToolUseID` on Claude, none on Codex). The proofs a case
+  uses by agent are a table: Claude's `tool_ran` and `turn_end` (`Stop`),
+  Codex's `turn_end` (`Interrupt`) alone.
+- `codexKinds` (`codex_reporting_test.go`) lists the five kinds of Codex
+  request, the `tool_name` and the `tool_input` as the relay hook stores them.
+
+**Must use:** a `pkg/api` relay test that must hold on both agents loops over
+`relayAgents` or `paAgents` and names its subtests with `agentLabel` or
+`label`; it seeds a Codex row with `SeedDecideFixtureAgent`,
+`newRelayEnvAgent` or `newPAEnvAgent`, never a hand-built Codex row with a
+`tool_use_id`, and never a test of its own that proves a Codex request by
+`tool_ran`.
 
 ### pkg/api kill fixture and shared verb tables (reusable test fixtures)
 

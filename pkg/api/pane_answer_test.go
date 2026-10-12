@@ -204,46 +204,48 @@ func TestSendKeysShapeRefusedBeforeAnything(t *testing.T) {
 func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	for _, tc := range []struct{ as, key string }{{"allow", "1"}, {"deny", "Escape"}, {"allow", "Down"}} {
-		t.Run(tc.as+" "+tc.key, func(t *testing.T) {
-			t.Parallel()
-			p := newPAEnv(t)
-			stamped := p.now.Add(time.Second) // the clock once the capture, inside the intent's transaction, returns
-			p.rec.AfterCall(tmux.CallCapture, func(tmuxfix.SocketCall, error) { p.now = stamped })
-			var atKey *store.PermissionRow
-			p.rec.AfterCall(paKeyCall(tc.key), func(tmuxfix.SocketCall, error) {
-				pr, err := p.st.GetPermissionRequest(p.r.ID, tok)
-				if err == nil {
-					atKey = &pr
+	for _, ag := range paAgents {
+		for _, tc := range []struct{ as, key string }{{"allow", "1"}, {"deny", "Escape"}, {"allow", "Down"}} {
+			t.Run(ag.label(tc.as+" "+tc.key), func(t *testing.T) {
+				t.Parallel()
+				p := ag.env(t)
+				stamped := p.now.Add(time.Second) // the clock once the capture, inside the intent's transaction, returns
+				p.rec.AfterCall(tmux.CallCapture, func(tmuxfix.SocketCall, error) { p.now = stamped })
+				var atKey *store.PermissionRow
+				p.rec.AfterCall(paKeyCall(tc.key), func(tmuxfix.SocketCall, error) {
+					pr, err := p.st.GetPermissionRequest(p.r.ID, tok)
+					if err == nil {
+						atKey = &pr
+					}
+				})
+
+				run := p.sendKeysRun(p.answer(tok, tc.as, tc.key))
+
+				if run.err != nil {
+					t.Fatalf("pane answer: %v", run.err)
 				}
+				assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, tc.key, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+				if atKey == nil || atKey.PaneAnswer != store.PaneAnswerIntent || atKey.PaneAs != tc.as || atKey.PaneSender != paSender ||
+					!atKey.PaneIntentAt.Equal(stamped) || !atKey.HookGoneAt.Equal(stamped) || atKey.Decision != "" {
+					t.Fatalf("request A as the key went out = %+v; want intent %s committed by %+v at %v, after the capture", atKey, tc.as, paSender, stamped)
+				}
+				pr := p.request(t, tok)
+				if pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != tc.as || pr.DecisionReason != store.DecisionReasonPane || pr.AwaitsAnswer() {
+					t.Errorf("request A after = %+v; want sent, decision %s, decision_reason pane, closed", pr, tc.as)
+				}
+				var committed []map[string]any
+				for _, l := range readAPITrailLines(t) {
+					if l["event"] == "ad.row_mutation.committed" && l["instance_id"] == p.r.ID && l["mutation_kind"] == "update" {
+						committed = append(committed, l)
+					}
+				}
+				if len(committed) != 1 || committed[0]["writer_process"] != store.WriterProcessSendKeys || committed[0]["decision"] != tc.as ||
+					committed[0]["decision_reason"] != store.DecisionReasonPane {
+					t.Errorf("ad.row_mutation.committed = %v; want one, writer send_keys, decision %s, reason pane", committed, tc.as)
+				}
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
 			})
-
-			run := p.sendKeysRun(p.answer(tok, tc.as, tc.key))
-
-			if run.err != nil {
-				t.Fatalf("pane answer: %v", run.err)
-			}
-			assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, tc.key, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
-			if atKey == nil || atKey.PaneAnswer != store.PaneAnswerIntent || atKey.PaneAs != tc.as || atKey.PaneSender != paSender ||
-				!atKey.PaneIntentAt.Equal(stamped) || !atKey.HookGoneAt.Equal(stamped) || atKey.Decision != "" {
-				t.Fatalf("request A as the key went out = %+v; want intent %s committed by %+v at %v, after the capture", atKey, tc.as, paSender, stamped)
-			}
-			pr := p.request(t, tok)
-			if pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != tc.as || pr.DecisionReason != store.DecisionReasonPane || pr.AwaitsAnswer() {
-				t.Errorf("request A after = %+v; want sent, decision %s, decision_reason pane, closed", pr, tc.as)
-			}
-			var committed []map[string]any
-			for _, l := range readAPITrailLines(t) {
-				if l["event"] == "ad.row_mutation.committed" && l["instance_id"] == p.r.ID && l["mutation_kind"] == "update" {
-					committed = append(committed, l)
-				}
-			}
-			if len(committed) != 1 || committed[0]["writer_process"] != store.WriterProcessSendKeys || committed[0]["decision"] != tc.as ||
-				committed[0]["decision_reason"] != store.DecisionReasonPane {
-				t.Errorf("ad.row_mutation.committed = %v; want one, writer send_keys, decision %s, reason pane", committed, tc.as)
-			}
-			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
-		})
+		}
 	}
 }
 

@@ -57,6 +57,10 @@ func relayRequestB(t *testing.T, s *store.Store, id string, settled time.Time) {
 		ToolInput: `{}`, Hook: relayHookB, SettledAt: settled})
 }
 
+// repairIdleMovesRow names TestRepairCheckPermission's case where Claude's idle
+// Notification itself moves the row to waiting: Claude only.
+const repairIdleMovesRow = "timeout deny delivered, then the idle Notification"
+
 // TestRepairCheckPermission (rules 9, 12, problem 3): the repair moves a
 // relay-on check_permission row out only when no request awaits an answer
 // unproven (b.omt: one proven gone does not hold it) and no relay hook may
@@ -69,13 +73,13 @@ func TestRepairCheckPermission(t *testing.T) {
 	closedThenB := []string{"decide", "mark", "resume", "relayB", "denyB"}
 	cases := []struct {
 		name      string
-		steps     []string // "idle" (the idle Notification), "deny" (A's timeout deny, delivered), "decide" (a verdict on A, not acked), "mark" (find-missing's mark), "resume" (the row resumed), "relayB" (request B recorded by relayHookB), "denyB" (its timeout deny, delivered), "turnEnd" (the main agent's turn end proves A gone)
+		steps     []string // "idle" (the idle Notification), "deny" (A's timeout deny, delivered), "decide" (a verdict on A, not acked), "mark" (find-missing's mark), "resume" (the row resumed), "relayB" (request B recorded by relayHookB), "denyB" (its timeout deny, delivered), "turnEnd" (the main agent's turn end proves A gone), "outside" (A recorded answered at the pane outside agent-director)
 		hook      string   // A's hook at the repair: "gone", "alive", "can't tell" (recorded in another pid namespace); B's is gone
 		past      bool     // the repair runs at the requests' confirm_by
 		wantState string
 		wantIdle  bool
 	}{
-		{"timeout deny delivered, then the idle Notification", []string{"deny", "idle"}, "gone", false, store.StateWaiting, true},
+		{repairIdleMovesRow, []string{"deny", "idle"}, "gone", false, store.StateWaiting, true},
 		{"idle Notification while it awaited, then delivered", []string{"idle", "deny"}, "gone", false, store.StateWaiting, true},
 		{"delivered, no idle Notification", []string{"deny"}, "gone", false, store.StateWorking, false},
 		{"delivered, its hook still running", []string{"deny"}, "alive", false, store.StateCheckPermission, false},
@@ -87,6 +91,8 @@ func TestRepairCheckPermission(t *testing.T) {
 		{"undecided, proven gone by a turn end, its hook gone", []string{"turnEnd"}, "gone", false, store.StateWorking, false},
 		{"undecided, idle Notification while it awaited, then proven gone, its hook gone", []string{"idle", "turnEnd"}, "gone", false,
 			store.StateWaiting, true},
+		{"answered at the pane, then proven gone by a turn end, its hook gone", []string{"outside", "turnEnd"}, "gone", false, store.StateWorking, false},
+		{"answered at the pane, no turn end yet, its hook gone", []string{"outside"}, "gone", false, store.StateWorking, false},
 		{"undecided, proven gone by a turn end, its hook still running", []string{"turnEnd"}, "alive", false, store.StateCheckPermission, false},
 		{"a verdict closed by the mark, then resumed and B delivered", closedThenB, "gone", false, store.StateWorking, false},
 		{"closed, its hook can't be checked, before confirm_by; resumed and B delivered", closedThenB, "can't tell", false,
@@ -95,55 +101,76 @@ func TestRepairCheckPermission(t *testing.T) {
 		{"closed, its hook can't be checked; resumed, idle Notification while B awaited, then B delivered",
 			[]string{"decide", "mark", "resume", "relayB", "idle", "denyB"}, "can't tell", false, store.StateWaiting, true},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			hookA := relayEnvHook
-			if tc.hook == "can't tell" {
-				hookA.PIDNamespace = relayOtherNS
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, tc := range cases {
+			name, wantState := tc.name, tc.wantState
+			if agent == store.AgentCodex && tc.name == repairIdleMovesRow {
+				// The idle Notification of a delivered request moves a Claude row to waiting itself, so the
+				// repair has nothing to move. Codex sends none (its hook never classifies as one); the cases
+				// that seed idle_since while the request awaits are the ones a Codex row shares.
+				continue
 			}
-			e := newRelayEnv(t, hookA)
-			for _, step := range tc.steps {
-				switch step {
-				case "idle":
-					idleNotification(t, e.s, e.dbPath, e.id)
-				case "deny":
-					timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenA)
-				case "decide":
-					if _, _, err := e.decideWith(t, e.s, "allow", ptr(int64(0)), nil); err != nil {
-						t.Fatalf("decide: %v", err)
-					}
-				case "mark":
-					closeMark(t, e)
-				case "resume":
-					closeResume(t, e)
-				case "relayB":
-					relayRequestB(t, e.s, e.id, e.settled)
-				case "denyB":
-					timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenB)
-				case "turnEnd":
-					if n := proveOn(t, e.s, e.dbPath, e.id, turnEnd); n != 1 {
-						t.Fatalf("the main agent's turn end proved %d; want request A", n)
-					}
+			if agent == store.AgentCodex {
+				// Codex sends no idle-prompt Notification: the repair never reads idle_since
+				// as waiting (SR-8.3). idle_since itself is left as it was (the repair writes no other column).
+				name = "codex/" + name
+				if wantState == store.StateWaiting {
+					wantState = store.StateWorking
 				}
 			}
-			if tc.hook == "gone" {
-				e.pc.Set(hookA.PID, procfix.Gone())
-			}
-			if tc.past {
-				e.now = e.settled
-			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				hookA := relayEnvHook
+				if tc.hook == "can't tell" {
+					hookA.PIDNamespace = relayOtherNS
+				}
+				e := newRelayEnvAgent(t, hookA, agent)
+				for _, step := range tc.steps {
+					switch step {
+					case "outside":
+						if ok, err := e.s.RecordPaneOutside(e.id, storefix.TestRequestTokenA, "allow", store.DefaultLockWait, nil); err != nil || !ok {
+							t.Fatalf("RecordPaneOutside = %v, %v", ok, err)
+						}
+					case "idle":
+						idleNotification(t, e.s, e.dbPath, e.id)
+					case "deny":
+						timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenA)
+					case "decide":
+						if _, _, err := e.decideWith(t, e.s, "allow", ptr(int64(0)), nil); err != nil {
+							t.Fatalf("decide: %v", err)
+						}
+					case "mark":
+						closeMark(t, e)
+					case "resume":
+						closeResume(t, e)
+					case "relayB":
+						relayRequestB(t, e.s, e.id, e.settled)
+					case "denyB":
+						timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenB)
+					case "turnEnd":
+						if n := proveOn(t, e.s, e.dbPath, e.id, turnEnd); n != 1 {
+							t.Fatalf("the main agent's turn end proved %d; want request A", n)
+						}
+					}
+				}
+				if tc.hook == "gone" {
+					e.pc.Set(hookA.PID, procfix.Gone())
+				}
+				if tc.past {
+					e.now = e.settled
+				}
 
-			api.RepairCheckPermission(e.s, e.view(), nil)
+				api.RepairCheckPermission(e.s, e.view(), nil)
 
-			sp, err := e.s.GetSpawn(e.id)
-			if err != nil {
-				t.Fatalf("GetSpawn: %v", err)
-			}
-			if sp.State != tc.wantState || (sp.IdleSince != "") != tc.wantIdle {
-				t.Errorf("row = state %q, idle_since %q; want %q, idle_since set %v", sp.State, sp.IdleSince, tc.wantState, tc.wantIdle)
-			}
-		})
+				sp, err := e.s.GetSpawn(e.id)
+				if err != nil {
+					t.Fatalf("GetSpawn: %v", err)
+				}
+				if sp.State != wantState || (sp.IdleSince != "") != tc.wantIdle {
+					t.Errorf("row = state %q, idle_since %q; want %q, idle_since set %v", sp.State, sp.IdleSince, wantState, tc.wantIdle)
+				}
+			})
+		}
 	}
 }
 
@@ -190,66 +217,76 @@ func TestFindMissingRepairsStaleCheckPermission(t *testing.T) {
 		{"relay on, a closed request's hook can't be checked, B delivered", true, false, true, store.StateWorking},
 		{"relay off", false, false, false, store.StateCheckPermission},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: tc.relay})
-			if tc.relay {
-				hookA, settled := relayEnvHook, e.clock.Now().Add(time.Hour)
-				if tc.closed {
-					hookA.PIDNamespace = relayOtherNS
-				}
-				storefix.SeedRelayRequest(t, e.st, r.ID, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash",
-					ToolInput: `{}`, Hook: hookA, SettledAt: settled})
-				if tc.idle {
-					idleNotification(t, e.st, e.dbPath, r.ID)
-				}
-				if tc.closed {
-					re := &relayEnv{s: e.st, id: r.ID} // the closeSteps read only the store and the id
-					closeDecide(t, re)
-					closeMark(t, re)
-					e.resumeOnPane(t, r)
-					relayRequestB(t, e.st, r.ID, settled)
-					timeoutDeny(t, e.st, r.ID, storefix.TestRequestTokenB)
-				} else {
-					timeoutDeny(t, e.st, r.ID, storefix.TestRequestTokenA) // e.pc lists no hook process: it has exited
+		for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+			name, want := tc.name, tc.want
+			if agent == store.AgentCodex {
+				// A Codex row is never repaired to waiting (SR-8.3), whatever idle_since reads.
+				name = "codex/" + name
+				if want == store.StateWaiting {
+					want = store.StateWorking
 				}
 			}
-			c, _ := e.client(t)
-			api.SetSelfPIDNSForTest(c, func() (string, bool) { return relayNS, true })
-			mark := trailMark(t)
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				e := newKillEnv(t)
+				r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: tc.relay, Opts: agentRowOpts(agent)})
+				if tc.relay {
+					hookA, settled := relayEnvHook, e.clock.Now().Add(time.Hour)
+					if tc.closed {
+						hookA.PIDNamespace = relayOtherNS
+					}
+					storefix.SeedRelayRequest(t, e.st, r.ID, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash",
+						ToolInput: `{}`, Hook: hookA, SettledAt: settled})
+					if tc.idle {
+						idleNotification(t, e.st, e.dbPath, r.ID)
+					}
+					if tc.closed {
+						re := &relayEnv{s: e.st, id: r.ID} // the closeSteps read only the store and the id
+						closeDecide(t, re)
+						closeMark(t, re)
+						e.resumeOnPane(t, r)
+						relayRequestB(t, e.st, r.ID, settled)
+						timeoutDeny(t, e.st, r.ID, storefix.TestRequestTokenB)
+					} else {
+						timeoutDeny(t, e.st, r.ID, storefix.TestRequestTokenA) // e.pc lists no hook process: it has exited
+					}
+				}
+				c, _ := e.client(t)
+				api.SetSelfPIDNSForTest(c, func() (string, bool) { return relayNS, true })
+				mark := trailMark(t)
 
-			res, err := c.FindMissing(context.Background())
-			if err != nil {
-				t.Fatalf("FindMissing: %v", err)
-			}
+				res, err := c.FindMissing(context.Background())
+				if err != nil {
+					t.Fatalf("FindMissing: %v", err)
+				}
 
-			if sp, err := e.st.GetSpawn(r.ID); err != nil || sp.State != tc.want {
-				t.Errorf("state after find-missing = %q, %v; want %q", sp.State, err, tc.want)
-			}
-			if slices.Contains(res.IDs, r.ID) || slices.Contains(res.UnverifiedIDs, r.ID) {
-				t.Errorf("result = %+v; want %s in neither list", res, r.ID)
-			}
-			ticks := slices.DeleteFunc(ticksSince(t, mark, r.ID), func(tk map[string]any) bool {
-				return tk["reconciliation_reason"] != "stale_check_permission"
+				if sp, err := e.st.GetSpawn(r.ID); err != nil || sp.State != want {
+					t.Errorf("state after find-missing = %q, %v; want %q", sp.State, err, want)
+				}
+				if slices.Contains(res.IDs, r.ID) || slices.Contains(res.UnverifiedIDs, r.ID) {
+					t.Errorf("result = %+v; want %s in neither list", res, r.ID)
+				}
+				ticks := slices.DeleteFunc(ticksSince(t, mark, r.ID), func(tk map[string]any) bool {
+					return tk["reconciliation_reason"] != "stale_check_permission"
+				})
+				if want == store.StateCheckPermission {
+					if len(ticks) != 0 {
+						t.Errorf("stale_check_permission ticks = %v; want none", ticks)
+					}
+					return
+				}
+				if len(ticks) != 1 {
+					t.Fatalf("stale_check_permission ticks = %d; want 1", len(ticks))
+				}
+				wantTick := map[string]any{"event": "ad.find_missing.tick", "instance_id": r.ID, "source": "ad_find_missing",
+					"prior_state": store.StateCheckPermission, "new_state": want, "reconciliation_reason": "stale_check_permission"}
+				for k, v := range wantTick {
+					assertAPITrailStr(t, ticks[0], k, v.(string))
+				}
+				if _, ok := ticks[0]["ts"]; !ok || len(ticks[0]) != len(wantTick)+1 {
+					t.Errorf("tick = %v; want exactly ts and %v", ticks[0], wantTick)
+				}
 			})
-			if tc.want == store.StateCheckPermission {
-				if len(ticks) != 0 {
-					t.Errorf("stale_check_permission ticks = %v; want none", ticks)
-				}
-				return
-			}
-			if len(ticks) != 1 {
-				t.Fatalf("stale_check_permission ticks = %d; want 1", len(ticks))
-			}
-			want := map[string]any{"event": "ad.find_missing.tick", "instance_id": r.ID, "source": "ad_find_missing",
-				"prior_state": store.StateCheckPermission, "new_state": tc.want, "reconciliation_reason": "stale_check_permission"}
-			for k, v := range want {
-				assertAPITrailStr(t, ticks[0], k, v.(string))
-			}
-			if _, ok := ticks[0]["ts"]; !ok || len(ticks[0]) != len(want)+1 {
-				t.Errorf("tick = %v; want exactly ts and %v", ticks[0], want)
-			}
-		})
+		}
 	}
 }

@@ -27,39 +27,41 @@ import (
 func TestPauseHeldWhileSubagentRequestUnproven(t *testing.T) {
 	t.Parallel()
 	tok := storefix.TestRequestTokenA
-	for _, en := range ptrEntries {
-		t.Run(en.name, func(t *testing.T) {
-			t.Parallel()
-			p := newSubagentPAEnv(t)
-			r7Acked(t, p)
-			p.mainAgentStop(t)
-			if pr := p.request(t, tok); pr.AgentID != paSubagentID || pr.AwaitsAnswer() || pr.ProvenGone() {
-				t.Fatalf("request A = %+v; want the subagent's, acked, not proven gone", pr)
-			}
-			sk := p.sendKeysRun(p.plain("hi"))
-			want := assertDialogMaybeOpen(t, sk.err, tok, store.StateWaiting)
-			if want.Delivery != api.DeliveryDelivered || want.PaneAnswer != "none" {
-				t.Fatalf("send-keys err_details = %s; want A delivered, pane_answer none", jsonOf(t, want))
-			}
-			before, mark := p.columns(t, p.r.ID), trailMark(t)
+	for _, ag := range paAgents {
+		for _, en := range ptrEntries {
+			t.Run(ag.label(en.name), func(t *testing.T) {
+				t.Parallel()
+				p := ag.subagent(t)
+				r7Acked(t, p)
+				p.mainAgentStop(t)
+				if pr := p.request(t, tok); pr.AgentID != paSubagentID || pr.AwaitsAnswer() || pr.ProvenGone() {
+					t.Fatalf("request A = %+v; want the subagent's, acked, not proven gone", pr)
+				}
+				sk := p.sendKeysRun(p.plain("hi"))
+				want := assertDialogMaybeOpen(t, sk.err, tok, store.StateWaiting)
+				if want.Delivery != api.DeliveryDelivered || want.PaneAnswer != "none" {
+					t.Fatalf("send-keys err_details = %s; want A delivered, pane_answer none", jsonOf(t, want))
+				}
+				before, mark := p.columns(t, p.r.ID), trailMark(t)
 
-			run := p.pauseRun(t, en.client)
+				run := p.pauseRun(t, en.client)
 
-			got := assertDialogMaybeOpen(t, run.err, tok, store.StateWaiting)
-			if errText(run.err) != errText(sk.err) {
-				t.Errorf("pause = %q; want send-keys' %q", errText(run.err), errText(sk.err))
-			}
-			if jsonOf(t, got) != jsonOf(t, want) {
-				t.Errorf("pause err_details = %s; want send-keys' %s", jsonOf(t, got), jsonOf(t, want))
-			}
-			p.assertNoTmuxCall(t)
-			// Client.Pause polls through its own store, which p.store does not count.
-			if !en.client && p.store.stateReads != 0 {
-				t.Errorf("state reads = %d; want no wait after the refusal", p.store.stateReads)
-			}
-			p.assertRowUnchanged(t, p.r.ID, before)
-			ptrAssertOnlyDisagrees(t, mark, p.r.ID, true)
-		})
+				got := assertDialogMaybeOpen(t, run.err, tok, store.StateWaiting)
+				if errText(run.err) != errText(sk.err) {
+					t.Errorf("pause = %q; want send-keys' %q", errText(run.err), errText(sk.err))
+				}
+				if jsonOf(t, got) != jsonOf(t, want) {
+					t.Errorf("pause err_details = %s; want send-keys' %s", jsonOf(t, got), jsonOf(t, want))
+				}
+				p.assertNoTmuxCall(t)
+				// Client.Pause polls through its own store, which p.store does not count.
+				if !en.client && p.store.stateReads != 0 {
+					t.Errorf("state reads = %d; want no wait after the refusal", p.store.stateReads)
+				}
+				p.assertRowUnchanged(t, p.r.ID, before)
+				ptrAssertOnlyDisagrees(t, mark, p.r.ID, true)
+			})
+		}
 	}
 }
 
@@ -177,42 +179,44 @@ func TestPauseRelayRefusalsAsPlainSendKeys(t *testing.T) {
 		{"A fallen back, B's relay hook alive", []r7Step{r7OtherAlive}, api.ErrSendKeysWhileRelayed, false},
 		{"A fallen back", nil, api.ErrRelayFallenBack, false},
 	}
-	for _, en := range ptrEntries {
-		for _, tc := range cases {
-			t.Run(en.name+"/"+tc.name, func(t *testing.T) {
-				t.Parallel()
-				p := newSubagentPAEnv(t)
-				for _, step := range tc.steps {
-					step(t, p)
-				}
-				p.mainAgentStop(t)
-				before := p.columns(t, p.r.ID)
+	for _, ag := range paAgents {
+		for _, en := range ptrEntries {
+			for _, tc := range cases {
+				t.Run(ag.label(en.name+"/"+tc.name), func(t *testing.T) {
+					t.Parallel()
+					p := ag.subagent(t)
+					for _, step := range tc.steps {
+						step(t, p)
+					}
+					p.mainAgentStop(t)
+					before := p.columns(t, p.r.ID)
 
-				run := p.pauseRun(t, en.client)
-				sk := p.sendKeysRun(p.plain("hi"))
+					run := p.pauseRun(t, en.client)
+					sk := p.sendKeysRun(p.plain("hi"))
 
-				assertOneSentinel(t, run.err, tc.want)
-				want := errText(sk.err)
-				if tc.decided {
-					adviceAssertPhrase(t, sk.err, "; retry send-keys later")
-					want = strings.TrimSuffix(want, "retry send-keys later") + "retry later"
-				}
-				if errText(run.err) != want {
-					t.Errorf("pause = %v; want %q", run.err, want)
-				}
-				if strings.Contains(errText(run.err), "retry send-keys") {
-					t.Errorf("pause = %v; want no send-keys named as the call to retry", run.err)
-				}
-				if got, want := jsonOf(t, api.ErrDetails(run.err)), jsonOf(t, api.ErrDetails(sk.err)); got != want {
-					t.Errorf("pause err_details = %s; want send-keys' %s", got, want)
-				}
-				p.assertNoTmuxCall(t)
-				// Client.Pause polls through its own store, which p.store does not count.
-				if !en.client && p.store.stateReads != 0 {
-					t.Errorf("state reads = %d; want no wait after the refusal", p.store.stateReads)
-				}
-				p.assertRowUnchanged(t, p.r.ID, before)
-			})
+					assertOneSentinel(t, run.err, tc.want)
+					want := errText(sk.err)
+					if tc.decided {
+						adviceAssertPhrase(t, sk.err, "; retry send-keys later")
+						want = strings.TrimSuffix(want, "retry send-keys later") + "retry later"
+					}
+					if errText(run.err) != want {
+						t.Errorf("pause = %v; want %q", run.err, want)
+					}
+					if strings.Contains(errText(run.err), "retry send-keys") {
+						t.Errorf("pause = %v; want no send-keys named as the call to retry", run.err)
+					}
+					if got, want := jsonOf(t, api.ErrDetails(run.err)), jsonOf(t, api.ErrDetails(sk.err)); got != want {
+						t.Errorf("pause err_details = %s; want send-keys' %s", got, want)
+					}
+					p.assertNoTmuxCall(t)
+					// Client.Pause polls through its own store, which p.store does not count.
+					if !en.client && p.store.stateReads != 0 {
+						t.Errorf("state reads = %d; want no wait after the refusal", p.store.stateReads)
+					}
+					p.assertRowUnchanged(t, p.r.ID, before)
+				})
+			}
 		}
 	}
 }

@@ -213,9 +213,13 @@ other open requests: close it with a pane answer or with
 every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
 
 After a permission request, a plain `send-keys` without
-`--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until Claude
-Code shows the request's dialog gone: after an allow, once its tool has
-run; after a deny, once the agent's turn ends. Nothing is sent. Its
+`--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until the agent's
+hooks show the request's dialog gone: after an allow, once its tool has
+run (on a Codex agent, once the turn ends); after a deny, once the agent's
+turn ends. On a Codex agent a subagent's request, allowed or denied, holds
+until the agent ends (see
+[how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows)).
+Nothing is sent. Its
 `err_details` name the oldest such request, how agent-director's records
 say it closed and since when, and the agent's other such requests. Keep
 the keys and retry later. If it is still held after some seconds, have a

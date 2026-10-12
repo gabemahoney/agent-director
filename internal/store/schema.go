@@ -717,7 +717,8 @@ func migrateV5toV6(db *sql.DB) error {
 //     (milliseconds since the epoch), and how: tool_ran (the PostToolUse or
 //     PostToolUseFailure with its tool_use_id), turn_end (the turn of the
 //     agent that asked ended after it: the main agent's Stop or idle-prompt
-//     Notification, for a request with no agent_id) or agent_gone (a close
+//     Notification, or a Codex main agent's Interrupt, for a request with no
+//     agent_id) or agent_gone (a close
 //     of its Spawn's requests, or the hop on a finished row). NULL until
 //     then; while NULL, plain send-keys to the Spawn is refused
 //     (ErrDialogMaybeOpen) unless it carries a matching pane hash. A request

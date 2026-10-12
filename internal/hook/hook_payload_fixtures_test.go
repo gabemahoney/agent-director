@@ -97,6 +97,12 @@ var payloadFixtures = []struct {
 	{"codex", "post-tool-use-subagent.json", "PostToolUse", "tool_response", "", cxSubagentID},
 	{"codex", "permission-request-bash.json", "PermissionRequest", "tool_name", "Bash", ""},
 	{"codex", "permission-request-subagent.json", "PermissionRequest", "tool_name", "Bash", cxSubagentID},
+	{"codex", "permission-request-bash-outside-sandbox.json", "PermissionRequest", "tool_name", "Bash", ""},
+	{"codex", "permission-request-apply-patch-outside-roots.json", "PermissionRequest", "tool_name", "apply_patch", ""},
+	{"codex", "permission-request-write-stdin.json", "PermissionRequest", "tool_name", "write_stdin", ""},
+	{"codex", "permission-request-mcp.json", "PermissionRequest", "tool_name", "mcp__ad__list", ""},
+	{"codex", "permission-request-network-denied-escalation.json", "PermissionRequest", "tool_name", "Bash", ""},
+	{"codex", "permission-request-network-access.json", "PermissionRequest", "tool_name", "Bash", ""},
 	{"codex", "stop.json", "Stop", "last_assistant_message", "", ""},
 	{"codex", "interrupt.json", "Interrupt", "turn_id", "", ""},
 	// Built from Codex's source shape, not captured (Q3): Codex never sends it.

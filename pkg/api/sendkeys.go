@@ -236,9 +236,9 @@ type sendKeysGuard struct {
 //     the oldest. Only a call that names the request it answers can type on
 //     such a row.
 //  3. Plain without expect_pane_sha256, any request of the row is not proven
-//     gone (b.146 step 2c: no PostToolUse with its tool_use_id, no main-agent
-//     Stop or idle-prompt Notification after it for a request with no
-//     agent_id, and no end of the row's agent recorded), however
+//     gone (b.146 step 2c: no PostToolUse with its tool_use_id (Claude), no
+//     main-agent Stop, idle-prompt Notification or (Codex) Interrupt after it
+//     for a request with no agent_id, and no end of the row's agent recorded), however
 //     agent-director's own records say it closed: ErrDialogMaybeOpen with
 //     err_details (DialogMaybeOpenDetails), naming the oldest. A plain call
 //     with expect_pane_sha256 is not held by this rule: its hash check below

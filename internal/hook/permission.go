@@ -178,7 +178,7 @@ type relayRun struct {
 //     fails, the hook writes today's fail-closed deny (the tool is denied, no
 //     dialog appears): nothing was recorded. When the gate does not hold (the row is
 //     no longer this process's, SR-22.9) nothing is recorded, nothing is
-//     written to stdout (Claude Code asks as it would with no relay) and
+//     written to stdout (the agent asks as it would with no relay) and
 //     onIgnored is called once with the store's reason (decision A8).
 //  2. The poll (Poll), until its deadline.
 //  3. A decision read is acked, then written (deliver): the hook commits
@@ -186,8 +186,8 @@ type relayRun struct {
 //     (rule 3), its lock wait cut so a commit leaves the reserve before the
 //     kill (rule 4), and only then writes that decision to stdout. Inside the
 //     ack's transaction, once the write lock is taken and before the
-//     statement, it checks that its parent is still the Claude Code that
-//     started it (problem 7), so a Claude Code that died while the hook
+//     statement, it checks that its parent is still the agent that
+//     started it (problem 7), so an agent that died while the hook
 //     waited for the lock gets no ack.
 //  4. At the poll's deadline, the timeout deny (timeoutDeny): one guarded
 //     statement records deny, reason timeout and delivered_at together, only
@@ -197,8 +197,8 @@ type relayRun struct {
 //
 // It never writes an answer that is not acked (rule 3): a failed or cut ack,
 // read or timeout deny, a parent that changed, or no time left ends the hook
-// with no answer (an empty stdout), so Claude Code's own dialog appears and
-// the request falls back. Claude Code reads a hook's JSON on any exit code,
+// with no answer (an empty stdout), so the agent's own dialog appears and
+// the request falls back. The agent reads a hook's JSON on any exit code,
 // so the ack must come first.
 //
 // fields is the ad.hook.fired trail map owned by Handle; runRelay sets
@@ -252,7 +252,7 @@ func runRelay(ctx context.Context, stdout io.Writer, hs HookStore, hc HandleConf
 	// own deadline less the reserve (b.146 problem 1). With nothing left it
 	// still goes ahead if the lock is free at once: the gate then decides as
 	// for any hook (a hook of another process stays silent), and a request
-	// recorded this late is never acked, so it falls back to Claude Code's
+	// recorded this late is never acked, so it falls back to the agent's
 	// dialog when the hook exits.
 	wait := max(clock.waitLeft(), 0)
 	req := store.RelayRequest{
@@ -317,23 +317,23 @@ func runRelay(ctx context.Context, stdout io.Writer, hs HookStore, hc HandleConf
 		r.timeoutDeny(res.CreatedAt)
 	default:
 		// ctx cancelled, the request deleted, or the read-retry budget
-		// spent: no answer (rule 3), so Claude Code's dialog appears.
+		// spent: no answer (rule 3), so the agent's dialog appears.
 		r.silent("poll ended without a decision: %s", res.Why)
 	}
 }
 
 // silent ends the relay hook with no answer on stdout (b.146 rule 3), so
-// Claude Code shows its own dialog and the request falls back. It logs why.
+// the agent shows its own dialog and the request falls back. It logs why.
 func (r *relayRun) silent(why string, args ...any) {
 	logf(r.logger, "relay: exit with no answer (instance=%s, token=%s): "+why,
 		append([]any{r.instanceID, r.token}, args...)...)
 }
 
 // errParentChanged is the parent check's failure (b.146 problem 7): the
-// hook's parent is no longer the Claude Code that started it.
-var errParentChanged = errors.New("its parent is no longer the Claude Code that started it")
+// hook's parent is no longer the agent that started it.
+var errParentChanged = errors.New("its parent is no longer the agent that started it")
 
-// parentIsStarter reports whether the hook's parent is still the Claude Code
+// parentIsStarter reports whether the hook's parent is still the agent
 // that started it (b.146 problem 7): the hook's parent pid is still the one
 // captured at its start, and that pid runs with the start time captured
 // then. A parent that exits reparents the hook, so its parent pid changes.
@@ -354,7 +354,7 @@ func (r *relayRun) parentIsStarter() bool {
 // parentCheck is the precondition of the hook's ack and timeout deny
 // (b.146 problem 7), which the store runs inside the write's transaction once
 // the write lock is taken and before the statement: errParentChanged when the
-// parent is no longer the hook's starting Claude Code (parentIsStarter), so
+// parent is no longer the hook's starting agent (parentIsStarter), so
 // the write rolls back and the hook exits with no answer.
 func (r *relayRun) parentCheck() error {
 	if !r.parentIsStarter() {

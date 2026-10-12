@@ -1,0 +1,48 @@
+# b.ssz TLA+ scheduler verdicts, fast set, 2026-10-11 (channel C0B3X876XSB). All 21 runs (20 + r5x_eq, added after review round 3) match expectation.
+# run                 job id                    expected                      result (distinct states)
+hx_eq_Sns             j20261011104055-b9beac    PASS =11,387,737              PASS 11,387,737 (knobs-off equivalence)
+rx_eq_live            j20261011104055-4c98de    PASS =109,518                 PASS 109,518 (knobs-off equivalence)
+hx_S                  j20261011104055-eb8dbc    PASS                          PASS 17,228,946
+hx_C_endnow           j20261011104055-7cabc6    FAIL CxNoEndedWhileRunning    FAIL CxNoEndedWhileRunning (440)
+hx_C_pause            j20261011104055-3b0882    FAIL PauseSeesEnd             FAIL PauseSeesEnd (159,882)
+hx_P                  j20261011104055-356b99    PASS                          PASS 1,397,160
+hx_L                  j20261011104055-8adf3c    PASS                          PASS 6,619,160
+rx_safe               j20261011104055-b4c577    PASS                          PASS 64,027
+rx_keys               j20261011104055-d6849b    PASS                          PASS 67,511
+rx_live               j20261011104055-481d4d    PASS                          PASS 35,589
+rx_C_intnoend         j20261011104055-b47224    FAIL KeysSettle               FAIL KeysSettle (80)
+rx_C_subproof         j20261011104055-20b6b7    FAIL KeysSafe                 FAIL KeysSafe (290)
+rx_C_subint           j20261011104056-efce73    FAIL KeysSafe                 FAIL KeysSafe (215)
+rx_lim_rowsettles     j20261011104056-e23efb    FAIL RowSettles               FAIL RowSettles (3,112)
+hx_V_followed         j20261011104056-7bd174    FAIL NotCxFollowed            FAIL NotCxFollowed (23,918)
+hx_V_fmended          j20261011104056-481922    FAIL NotCxFMEnded             FAIL NotCxFMEnded (6,962)
+hx_V_pauseended       j20261011104056-ce994d    FAIL NotCxPauseEnded          FAIL NotCxPauseEnded (24,352)
+rx_V_subheld          j20261011104056-c8a555    FAIL NeverSubAllowHeld        FAIL NeverSubAllowHeld (841)
+r5x_time              j20261011104056-dab6ee    PASS                          PASS 296,382
+r5x_t                 j20261011104056-422405    PASS                          PASS 2,122,224
+r5x_eq                j20261011130211-63b62c    PASS =833,740                 PASS 833,740 (knobs-off equivalence of B146R5Cx; added after review round 3)
+# Optional runs, submitted 2026-10-12 (channel C0B3X876XSB). All match expectation.
+# run                 job id                    expected                      result (distinct states)
+hx_V_endlive          j20261012105026-71e730    FAIL NotCxEndLive             FAIL NotCxEndLive (433)
+hx_V_missing          j20261012105027-f1d92d    FAIL NotCxMissing             FAIL NotCxMissing (2,064)
+rx_V_intproof         j20261012105028-f8ab11    FAIL NeverHit                 FAIL NeverHit (62)
+rx_claude_keys        j20261012105029-429de9    PASS                          PASS 239,820 (knobs off: Claude today)
+hx_S5                 j20261012105025-b9e467    PASS                          PASS 45,361,001 (pid reuse, MaxClock 5, PidPool 3; ran 9 min)
+
+# b.ssz Q2 gate: the /review thread's unmarked hooks (CxReview in Hold36hCx, CxRv in B146R5Cx), 2026-10-12 (channel C0B3X876XSB). All 15 runs match expectation.
+# run                    job id                    expected                      result (distinct states)
+rx_V_review              j20261012070009-621c00    FAIL NeverHit                 FAIL NeverHit (75)
+r5x_V_review             j20261012070009-c6556d    FAIL NeverHit                 FAIL NeverHit (653)
+rx_eq_live_g             j20261012070055-51f897    PASS =109,518                 PASS 109,518 (knobs-off equivalence, level 1)
+r5x_eq_g                 j20261012070055-6fb2fa    PASS =833,740                 PASS 833,740 (knobs-off equivalence, level 1)
+rx_safe_rv               j20261012070055-239da0    PASS                          PASS 404,248
+rx_keys_rv               j20261012070055-4f0182    PASS                          PASS 424,284
+rx_live_rv               j20261012070056-462079    PASS                          PASS 144,196
+r5x_time_rv              j20261012070056-fe6b01    PASS                          PASS 658,632
+r5x_t_rv                 j20261012070056-4df375    PASS                          PASS 4,722,108
+r5x_lim_rowsettles_rv    j20261012070056-eec2cb    FAIL RowSettles               FAIL RowSettles (28,459)
+rx_safe_k0               j20261012070056-0d25be    PASS =64,027                  PASS 64,027 (knobs-off equivalence, level 2)
+rx_keys_k0               j20261012070056-3e49ea    PASS =67,511                  PASS 67,511 (knobs-off equivalence, level 2)
+rx_live_k0               j20261012070056-c7bab7    PASS =35,589                  PASS 35,589 (knobs-off equivalence, level 2)
+r5x_time_k0              j20261012070056-9a5562    PASS =296,382                 PASS 296,382 (knobs-off equivalence, level 2)
+r5x_t_k0                 j20261012070056-dee74a    PASS =2,122,224               PASS 2,122,224 (knobs-off equivalence, level 2)

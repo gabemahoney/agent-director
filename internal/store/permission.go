@@ -134,10 +134,11 @@ const (
 // The proven_gone_how values (schema v7; b.146 step 2c): how Claude Code, not
 // agent-director's own records, proved a request's permission dialog gone.
 // ProvenGoneToolRan: the agent's PostToolUse or PostToolUseFailure carried the
-// request's tool_use_id, so its tool ran. ProvenGoneTurnEnd: the turn of the
-// agent that asked ended after the request was written; the main agent's Stop
-// or idle-prompt Notification proves a request with no agent_id (a request
-// recorded before v7 included). ProvenGoneAgentGone: a close of its Spawn's
+// request's tool_use_id, so its tool ran (a Claude row only). ProvenGoneTurnEnd:
+// the turn of the agent that asked ended after the request was written; the
+// main agent's Stop or idle-prompt Notification, or a Codex main agent's
+// Interrupt (Esc), proves a request with no agent_id (a request recorded
+// before v7 included). ProvenGoneAgentGone: a close of its Spawn's
 // requests (closeOrphanedRequests: find-missing's mark, the terminal
 // SessionEnd, resume's backstop) ran while the request was not yet proven, or
 // the v6 → v7 migration found its row already ended or missing
@@ -291,8 +292,8 @@ const awaitingAnswerSQL = `pr.closed_at IS NULL AND pr.pane_answer IN ('none', '
 // EXISTS is noRequestHoldsRowSQL. A request proven gone holds none of them,
 // whatever agent-director's own records say of it: a person's answer at the
 // pane, which nothing records, leaves it awaiting an answer, and the main
-// agent's Stop or idle-prompt Notification after it then proves its dialog
-// gone (turn_end), so it no longer keeps the row in check_permission. Every
+// agent's Stop, idle-prompt Notification or (Codex) Interrupt after it then
+// proves its dialog gone (turn_end), so it no longer keeps the row in check_permission. Every
 // other reader of a request that awaits an answer (get and list, decide,
 // send-keys and its pane answers, the closes, the cap eviction) reads
 // awaitingAnswerSQL alone. It has no placeholders.

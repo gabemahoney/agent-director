@@ -85,6 +85,10 @@ var (
 // advNotProvenGone is ErrDialogMaybeOpen's fact naming token (b.146 step 2c).
 func advNotProvenGone(token string) string { return "request " + token + " is not proven gone" }
 
+// r7ClaudeOnly names TestSendKeysRule7's case a Codex row does not run: a
+// PostToolUse closes a request by its tool_use_id, which a Codex request has none of.
+const r7ClaudeOnly = "plain, A's tool ran"
+
 // TestSendKeysRule7 (b.146 rule 7, the round 3 §4.2 table, in its order; rule
 // 12): request A fallen back unless a case says otherwise. Plain: a relay hook
 // that may still answer is ErrSendKeysWhileRelayed (decide's advice for an
@@ -116,7 +120,7 @@ func TestSendKeysRule7(t *testing.T) {
 		{"plain, A acked, its relay hook still running", []r7Step{r7Acked, r7HookAlive}, "", api.ErrSendKeysWhileRelayed, advSendKeysRetryLater(tokA)},
 		{"plain, A acked, its relay hook gone", []r7Step{r7Acked}, "", api.ErrDialogMaybeOpen, advNotProvenGone(tokA)},
 		{"plain, A answered outside agent-director", []r7Step{r7Outside}, "", api.ErrDialogMaybeOpen, advNotProvenGone(tokA)},
-		{"plain, A's tool ran", []r7Step{r7ToolRan}, "", nil, ""},
+		{r7ClaudeOnly, []r7Step{r7ToolRan}, "", nil, ""},
 		{"plain, A closed by find-missing's mark, the row resumed", []r7Step{r7Mark, r7Resume}, "", nil, ""},
 		{"plain, A open when the row ended, the row resumed", []r7Step{r7End, r7Resume}, "", nil, ""},
 		{"plain, A decided, not acked, when the row ended, the row resumed", []r7Step{r7Decided, r7End, r7Resume}, "", nil, ""},
@@ -129,38 +133,43 @@ func TestSendKeysRule7(t *testing.T) {
 		{"an unknown token", nil, "dddddddd-dddd-4ddd-addd-dddddddddddd", store.ErrNoOpenPermissionRequest, "has no permission request"},
 		{"A's token, A fallen back", nil, tokA, nil, ""},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			p := newPAEnv(t)
-			for _, step := range tc.steps {
-				step(t, p)
+	for _, ag := range paAgents {
+		for _, tc := range cases {
+			if tc.name == r7ClaudeOnly && ag.name == "codex" {
+				continue
 			}
-			row, err := p.st.GetSpawn(p.r.ID)
-			if err != nil || !(row.State == store.StateWaiting || row.State == store.StateWorking || row.State == store.StateCheckPermission) {
-				t.Fatalf("row = %q, %v; want a live row", row.State, err)
-			}
-			params := p.plain("hi")
-			if tc.token != "" {
-				params = p.answer(tc.token, "allow", "1")
-			}
-
-			eval, refusal, err := api.EvaluateRelayGuardForTest(p.store, p.view(), 0, row, params)
-
-			if err != nil {
-				t.Fatalf("guard read: %v", err)
-			}
-			if tc.want == nil {
-				if eval != "released" || refusal != nil {
-					t.Errorf("guard = %q, %v; want released", eval, refusal)
+			t.Run(ag.label(tc.name), func(t *testing.T) {
+				t.Parallel()
+				p := ag.env(t)
+				for _, step := range tc.steps {
+					step(t, p)
 				}
-				return
-			}
-			if eval != "held" {
-				t.Errorf("guard = %q; want held", eval)
-			}
-			adviceAssertAdvice(t, refusal, tc.want, tc.advice)
-		})
+				row, err := p.st.GetSpawn(p.r.ID)
+				if err != nil || !(row.State == store.StateWaiting || row.State == store.StateWorking || row.State == store.StateCheckPermission) {
+					t.Fatalf("row = %q, %v; want a live row", row.State, err)
+				}
+				params := p.plain("hi")
+				if tc.token != "" {
+					params = p.answer(tc.token, "allow", "1")
+				}
+
+				eval, refusal, err := api.EvaluateRelayGuardForTest(p.store, p.view(), 0, row, params)
+
+				if err != nil {
+					t.Fatalf("guard read: %v", err)
+				}
+				if tc.want == nil {
+					if eval != "released" || refusal != nil {
+						t.Errorf("guard = %q, %v; want released", eval, refusal)
+					}
+					return
+				}
+				if eval != "held" {
+					t.Errorf("guard = %q; want held", eval)
+				}
+				adviceAssertAdvice(t, refusal, tc.want, tc.advice)
+			})
+		}
 	}
 }
 
@@ -199,9 +208,20 @@ func TestSendKeysRule7EveryLiveState(t *testing.T) {
 // its description never says the dialog is on screen.
 func TestPlainSendKeysRelayFallenBackDetails(t *testing.T) {
 	t.Parallel()
+	for _, ag := range paAgents {
+		t.Run(ag.name, func(t *testing.T) {
+			t.Parallel()
+			fallenBackDetailsCase(t, ag)
+		})
+	}
+}
+
+// fallenBackDetailsCase is TestPlainSendKeysRelayFallenBackDetails' body on ag's rows.
+func fallenBackDetailsCase(t *testing.T, ag paAgent) {
+	t.Helper()
 	tokA, tokB, tokC, tokD := storefix.TestRequestTokenA, storefix.TestRequestTokenB, storefix.TestRequestTokenC,
 		"dddddddd-dddd-4ddd-addd-dddddddddddd"
-	p := newPAEnv(t)
+	p := ag.env(t)
 	p.seedRequest(t, tokB, "toolu_01B", relayEnvHook)
 	p.seedRequest(t, tokC, "toolu_01C", relayEnvHook)
 	p.seedRequest(t, tokD, "toolu_01D", relayEnvHook)
@@ -232,7 +252,13 @@ func TestPlainSendKeysRelayFallenBackDetails(t *testing.T) {
 		t.Errorf("calls = %v; want none", paKinds(run.calls))
 	}
 	m := assertFallenBackDetails(t, run.err, tokA, store.StateCheckPermission)
-	wantA := map[string]any{"tool_name": "Bash", "tool_input": `{"command":"ls"}`, "tool_use_id": paToolUseID,
+	var wantToolUseID any = paToolUseID
+	wantInput := `{"command":"ls"}`
+	if p.isCodex() {
+		// A Codex request has no tool_use_id; its tool_input is Codex's as sent.
+		wantToolUseID, wantInput = nil, `{"command":"ls","description":"List the files"}`
+	}
+	wantA := map[string]any{"tool_name": "Bash", "tool_input": wantInput, "tool_use_id": wantToolUseID,
 		"attempted_decision": "allow", "hook_alive": false, "pane_answer": "none", "pane_as": nil, "decision": nil,
 		"decision_reason": nil, "hook_gone_at": jsonTime(t, decidedAt), "attempted_at": jsonTime(t, decidedAt),
 		"confirm_by": jsonTime(t, decidedAt.Add(time.Hour)), "proven_gone_at": nil, "proven_gone_how": nil, "unproven_since": nil}

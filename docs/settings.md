@@ -57,8 +57,9 @@ project `.codex/`, and it needs no cleanup. It holds:
   tool is turned off for the launch (see
   [Permissions](permissions.md#disable_ask_user-config)).
 - **Approval of input to a running command, on.** Text sent to a command that
-  is already running asks for approval like any other command. A caller's own
-  `--disable write_stdin_approval` turns it off again.
+  is already running asks for approval like any other command, except input to
+  a command running inside Codex's sandbox, which asks nothing and is never
+  relayed. A caller's own `--disable write_stdin_approval` turns it off again.
 - **`BASH_ENV` set to empty.** The agent's shell then reads no startup file
   through `BASH_ENV`. A `BASH_ENV` in the spawn's `extra_env` (or its
   template's) wins. The agent's own commands run without a `BASH_ENV` file

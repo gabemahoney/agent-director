@@ -61,35 +61,37 @@ func TestDecideReportsDelivery(t *testing.T) {
 		{"the hook cannot be checked, before settled_at", "pid:[4026532000]", false, false, nil, api.DeliveryNotConfirmed, "null", time.Second},
 		{"max_wait_ms reached during the wait", relayNS, false, false, ptr(int64(300)), api.DeliveryNotConfirmed, "true", 300 * time.Millisecond},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newRelayEnv(t, relayEnvHook)
-			e.ns = tc.ns
-			acked := false
-			res, waited, err := e.decideWith(t, e.s, "allow", tc.maxWaitMs, func() {
-				if tc.gone {
-					e.pc.Set(relayEnvHook.PID, procfix.Gone())
-				}
-				if tc.ack && !acked {
-					acked = true
-					if _, _, ok, err := e.s.AckRelayDecision(e.id, storefix.TestRequestTokenA, e.now, store.DefaultLockWait, nil); err != nil || !ok {
-						t.Errorf("the hook's ack = %v, %v", ok, err)
+	for _, agent := range relayAgents {
+		for _, tc := range cases {
+			t.Run(agentLabel(agent, tc.name), func(t *testing.T) {
+				t.Parallel()
+				e := newRelayEnvAgent(t, relayEnvHook, agent)
+				e.ns = tc.ns
+				acked := false
+				res, waited, err := e.decideWith(t, e.s, "allow", tc.maxWaitMs, func() {
+					if tc.gone {
+						e.pc.Set(relayEnvHook.PID, procfix.Gone())
 					}
+					if tc.ack && !acked {
+						acked = true
+						if _, _, ok, err := e.s.AckRelayDecision(e.id, storefix.TestRequestTokenA, e.now, store.DefaultLockWait, nil); err != nil || !ok {
+							t.Errorf("the hook's ack = %v, %v", ok, err)
+						}
+					}
+				})
+
+				if err != nil {
+					t.Fatalf("decide: %v; want the verdict recorded", err)
+				}
+				if res.Delivery != tc.want || aliveIs(res.HookAlive) != tc.alive || !res.ConfirmBy.Equal(e.settled) || waited != tc.waited {
+					t.Errorf("decide = delivery %q, hook_alive %s, confirm_by %v after waiting %v; want %q, %s, %v after %v",
+						res.Delivery, aliveIs(res.HookAlive), res.ConfirmBy, waited, tc.want, tc.alive, e.settled, tc.waited)
+				}
+				if pr := e.request(t); pr.Decision != "allow" {
+					t.Errorf("request decision = %q; want allow recorded", pr.Decision)
 				}
 			})
-
-			if err != nil {
-				t.Fatalf("decide: %v; want the verdict recorded", err)
-			}
-			if res.Delivery != tc.want || aliveIs(res.HookAlive) != tc.alive || !res.ConfirmBy.Equal(e.settled) || waited != tc.waited {
-				t.Errorf("decide = delivery %q, hook_alive %s, confirm_by %v after waiting %v; want %q, %s, %v after %v",
-					res.Delivery, aliveIs(res.HookAlive), res.ConfirmBy, waited, tc.want, tc.alive, e.settled, tc.waited)
-			}
-			if pr := e.request(t); pr.Decision != "allow" {
-				t.Errorf("request decision = %q; want allow recorded", pr.Decision)
-			}
-		})
+		}
 	}
 }
 
@@ -103,51 +105,57 @@ func TestDecideReportsDelivery(t *testing.T) {
 // after that write (step 2b).
 func TestDecideRefusesFallenBackAtOnce(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		gone bool // the hook is gone; otherwise it cannot be checked and settled_at has passed
-	}{
-		{"hook gone", true},
-		{"hook cannot be checked, past settled_at", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newRelayEnv(t, relayEnvHook)
-			if tc.gone {
-				e.pc.Set(relayEnvHook.PID, procfix.Gone())
-			} else {
-				e.ns, e.now = "", e.settled
-			}
-			first := e.now
+	for _, agent := range relayAgents {
+		for _, tc := range []struct {
+			name string
+			gone bool // the hook is gone; otherwise it cannot be checked and settled_at has passed
+		}{
+			{"hook gone", true},
+			{"hook cannot be checked, past settled_at", false},
+		} {
+			t.Run(agentLabel(agent, tc.name), func(t *testing.T) {
+				t.Parallel()
+				e := newRelayEnvAgent(t, relayEnvHook, agent)
+				var wantToolUseID any = "toolu_01" // a Codex request has no tool_use_id
+				if agent == store.AgentCodex {
+					wantToolUseID = nil
+				}
+				if tc.gone {
+					e.pc.Set(relayEnvHook.PID, procfix.Gone())
+				} else {
+					e.ns, e.now = "", e.settled
+				}
+				first := e.now
 
-			_, waited, err := e.decideWith(t, e.s, "allow", nil, nil)
+				_, waited, err := e.decideWith(t, e.s, "allow", nil, nil)
 
-			assertOneSentinel(t, err, api.ErrRelayFallenBack)
-			adviceAssertPhrase(t, err, advRelayFallenBack)
-			d := assertFallenBackDetails(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
-			if d["attempted_decision"] != "allow" || d["hook_gone_at"] == nil || d["tool_use_id"] != "toolu_01" || len(d["open_requests"].([]any)) != 0 {
-				t.Errorf("err_details = %v; want the attempt (allow), hook_gone_at and tool_use_id recorded, no other open request", d)
-			}
-			if waited != 0 {
-				t.Errorf("decide waited %v; want the refusal at once", waited)
-			}
-			pr := e.request(t)
-			if pr.Decision != "" || pr.AttemptedDecision != "allow" || !pr.AttemptedAt.Equal(first) || !pr.HookGoneAt.Equal(first) {
-				t.Errorf("request = decision %q, attempted %q at %v, hook_gone_at %v; want none, allow at %v, %v",
-					pr.Decision, pr.AttemptedDecision, pr.AttemptedAt, pr.HookGoneAt, first, first)
-			}
+				assertOneSentinel(t, err, api.ErrRelayFallenBack)
+				adviceAssertPhrase(t, err, advRelayFallenBack)
+				d := assertFallenBackDetails(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
+				if d["attempted_decision"] != "allow" || d["hook_gone_at"] == nil || d["tool_use_id"] != wantToolUseID || len(d["open_requests"].([]any)) != 0 {
+					t.Errorf("err_details = %v; want the attempt (allow), hook_gone_at and tool_use_id recorded, no other open request", d)
+				}
+				if waited != 0 {
+					t.Errorf("decide waited %v; want the refusal at once", waited)
+				}
+				pr := e.request(t)
+				if pr.Decision != "" || pr.AttemptedDecision != "allow" || !pr.AttemptedAt.Equal(first) || !pr.HookGoneAt.Equal(first) {
+					t.Errorf("request = decision %q, attempted %q at %v, hook_gone_at %v; want none, allow at %v, %v",
+						pr.Decision, pr.AttemptedDecision, pr.AttemptedAt, pr.HookGoneAt, first, first)
+				}
 
-			e.now = e.now.Add(time.Minute)
-			_, _, err = e.decideWith(t, e.s, "deny", nil, nil)
-			assertOneSentinel(t, err, api.ErrRelayFallenBack)
-			if pr := e.request(t); pr.AttemptedDecision != "deny" || !pr.AttemptedAt.Equal(e.now) || !pr.HookGoneAt.Equal(first) {
-				t.Errorf("after a second refusal: attempted %q at %v, hook_gone_at %v; want deny at %v, %v kept",
-					pr.AttemptedDecision, pr.AttemptedAt, pr.HookGoneAt, e.now, first)
-			}
-			if res := e.getPermission(t, e.s); res.AttemptedDecision == nil || *res.AttemptedDecision != "deny" || res.Decision != nil {
-				t.Errorf("get-permission = attempted %v, decision %v; want deny shown, no decision", res.AttemptedDecision, res.Decision)
-			}
-		})
+				e.now = e.now.Add(time.Minute)
+				_, _, err = e.decideWith(t, e.s, "deny", nil, nil)
+				assertOneSentinel(t, err, api.ErrRelayFallenBack)
+				if pr := e.request(t); pr.AttemptedDecision != "deny" || !pr.AttemptedAt.Equal(e.now) || !pr.HookGoneAt.Equal(first) {
+					t.Errorf("after a second refusal: attempted %q at %v, hook_gone_at %v; want deny at %v, %v kept",
+						pr.AttemptedDecision, pr.AttemptedAt, pr.HookGoneAt, e.now, first)
+				}
+				if res := e.getPermission(t, e.s); res.AttemptedDecision == nil || *res.AttemptedDecision != "deny" || res.Decision != nil {
+					t.Errorf("get-permission = attempted %v, decision %v; want deny shown, no decision", res.AttemptedDecision, res.Decision)
+				}
+			})
+		}
 	}
 }
 
@@ -181,64 +189,66 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 		{name: "fallen-back refusal", gone: true, want: api.ErrRelayFallenBack},
 		{name: "lock taken after the commit", lockLater: true, decision: "allow"},
 	}
-	for _, busyMs := range []int{store.DefaultBusyTimeoutMs, config.MaxStoreBusyTimeoutMs} {
-		for _, tc := range cases {
-			t.Run(tc.name+"/busy "+time.Duration(busyMs*int(time.Millisecond)).String(), func(t *testing.T) {
-				t.Parallel()
-				var e *relayEnv
-				if tc.legacy {
-					s, dbPath := apitest.SeedDecideFixture(t, "on")
-					apitest.SeedPermissionRow(t, s, "id-d-1")
-					e = &relayEnv{s: s, dbPath: dbPath, id: "id-d-1", pc: procfix.New(), ns: relayNS}
-				} else {
-					e = newRelayEnv(t, relayEnvHook)
-				}
-				if tc.gone {
-					e.pc.Set(relayEnvHook.PID, procfix.Gone())
-				}
-				s, err := store.OpenWithBusyTimeout(e.dbPath, busyMs)
-				if err != nil {
-					t.Fatalf("OpenWithBusyTimeout: %v", err)
-				}
-				defer s.Close()
-				view := e.view()
-				view.Now = time.Now
-				var release func()
-				if !tc.lockLater {
-					release = apitest.HoldWriteLock(t, e.dbPath, time.Minute)
-				}
-				if tc.connHeld {
-					release = holdStoreConnection(t, s, release)
-				}
-				sleep := func(d time.Duration) {
-					if release == nil {
+	for _, agent := range relayAgents {
+		for _, busyMs := range []int{store.DefaultBusyTimeoutMs, config.MaxStoreBusyTimeoutMs} {
+			for _, tc := range cases {
+				t.Run(agentLabel(agent, tc.name+"/busy "+time.Duration(busyMs*int(time.Millisecond)).String()), func(t *testing.T) {
+					t.Parallel()
+					var e *relayEnv
+					if tc.legacy {
+						s, dbPath := apitest.SeedDecideFixtureAgent(t, "on", agent)
+						apitest.SeedPermissionRow(t, s, "id-d-1")
+						e = &relayEnv{s: s, dbPath: dbPath, id: "id-d-1", pc: procfix.New(), ns: relayNS}
+					} else {
+						e = newRelayEnvAgent(t, relayEnvHook, agent)
+					}
+					if tc.gone {
+						e.pc.Set(relayEnvHook.PID, procfix.Gone())
+					}
+					s, err := store.OpenWithBusyTimeout(e.dbPath, busyMs)
+					if err != nil {
+						t.Fatalf("OpenWithBusyTimeout: %v", err)
+					}
+					defer s.Close()
+					view := e.view()
+					view.Now = time.Now
+					var release func()
+					if !tc.lockLater {
 						release = apitest.HoldWriteLock(t, e.dbPath, time.Minute)
 					}
-					time.Sleep(d)
-				}
-
-				start := time.Now()
-				res, err := api.DecideWithSleep(s, view, sleep, api.DecideParams{InstanceID: e.id,
-					RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(bound))})
-				took := time.Since(start)
-				if release != nil {
-					release()
-				}
-
-				if tc.want == nil {
-					if err != nil || res.Delivery != api.DeliveryNotConfirmed {
-						t.Errorf("decide = %+v, %v; want not_confirmed, no error", res, err)
+					if tc.connHeld {
+						release = holdStoreConnection(t, s, release)
 					}
-				} else {
-					assertOneSentinel(t, err, tc.want)
-				}
-				if limit := bound*time.Millisecond + time.Second; took > limit {
-					t.Errorf("decide returned after %v; want within %v", took, limit)
-				}
-				if pr := e.request(t); pr.Decision != tc.decision || pr.AttemptedDecision != "" {
-					t.Errorf("request = decision %q, attempted %q; want %q, none", pr.Decision, pr.AttemptedDecision, tc.decision)
-				}
-			})
+					sleep := func(d time.Duration) {
+						if release == nil {
+							release = apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+						}
+						time.Sleep(d)
+					}
+
+					start := time.Now()
+					res, err := api.DecideWithSleep(s, view, sleep, api.DecideParams{InstanceID: e.id,
+						RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(bound))})
+					took := time.Since(start)
+					if release != nil {
+						release()
+					}
+
+					if tc.want == nil {
+						if err != nil || res.Delivery != api.DeliveryNotConfirmed {
+							t.Errorf("decide = %+v, %v; want not_confirmed, no error", res, err)
+						}
+					} else {
+						assertOneSentinel(t, err, tc.want)
+					}
+					if limit := bound*time.Millisecond + time.Second; took > limit {
+						t.Errorf("decide returned after %v; want within %v", took, limit)
+					}
+					if pr := e.request(t); pr.Decision != tc.decision || pr.AttemptedDecision != "" {
+						t.Errorf("request = decision %q, attempted %q; want %q, none", pr.Decision, pr.AttemptedDecision, tc.decision)
+					}
+				})
+			}
 		}
 	}
 	t.Run("a request recorded before v7, its relay hook settling after the bound", func(t *testing.T) {

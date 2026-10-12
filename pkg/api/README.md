@@ -342,8 +342,8 @@ Most-likely sentinel errors:
   <request_token> is recorded and its relay hook may still be delivering
   it; retry send-keys later`; from `Pause`, `… retry later`); `Decide` on
   it would return `ErrAlreadyDecided`. Once that hook has ended, a plain
-  retry can get `ErrDialogMaybeOpen` until Claude Code proves the request
-  gone.
+  retry can get `ErrDialogMaybeOpen` until the agent's hooks prove the
+  request gone.
 - `ErrRelayFallenBack`: a plain call (no `RequestToken`) while a request
   of the row has fallen back with no pane answer recorded (its relay hook
   is gone and acked no verdict); nothing was sent. `api.ErrDetails(err)`
@@ -351,10 +351,10 @@ Most-likely sentinel errors:
   row's other open requests. Close it with a pane answer or with
   `RecordPaneAnswer` (see [Permission relay](#permission-relay)).
 - `ErrDialogMaybeOpen`: a plain call without `ExpectPaneSHA256` while a
-  permission request of the row is not proven gone by Claude Code's hooks
-  (its tool's PostToolUse, the main agent's end of turn after it, or the
-  agent's end), whatever agent-director's records say of it; nothing was
-  sent. `api.ErrDetails(err)` is a `DialogMaybeOpenDetails` naming that
+  permission request of the row is not proven gone by the agent's hooks
+  (a Claude agent's tool's PostToolUse, the main agent's end of turn after
+  it, or the agent's end), whatever agent-director's records say of it;
+  nothing was sent. `api.ErrDetails(err)` is a `DialogMaybeOpenDetails` naming that
   request (the oldest), the row's `State` and its other
   `UnprovenRequests`. Retry later; if it stays held, have a person or an
   LLM look at the pane and send with its hash (see
@@ -610,7 +610,7 @@ verdict, and no pane answer is recorded on it through agent-director.
 for the Spawn's oldest such request. `api.ErrDetails(err)` returns its facts as a
 `RelayFallenBackDetails`: the request's `PermissionRequestInfo`, the
 Spawn's `State`, and `OpenRequests`, the Spawn's other open requests. It
-is closed in one of three ways, each recorded in `PaneAnswer` (`PaneAs`
+is closed in one of these ways, each recorded in `PaneAnswer` (`PaneAs`
 holds the caller's claim, never checked):
 
 - **A pane answer**: `SendKeys` with `RequestToken`, `As` (`"allow"` or
@@ -634,25 +634,30 @@ holds the caller's claim, never checked):
   has not been gone 2 s yet; retry at the `NotBefore` of its
   `ClaimTooSoonDetails` (nil only while the hook is seen running).
 - **The agent's PostToolUse or PostToolUseFailure** for the request's
-  tool, which records
+  tool (a Claude Spawn only: a Codex request has no tool use id, so a Codex
+  request closes only by the two ways above), which records
   `PaneAnswer` `"tool_ran"`, `Decision` `"allow"`, `DecisionReason`
   `"tool_ran"`.
 
 None of these, nor the relay hook's ack (`Delivery` `delivered`), proves
-that Claude Code's dialog for the request is gone. Only Claude Code's own
+that the agent's dialog for the request is gone. Only the agent's own
 hooks do, recorded on the request as `ProvenGoneAt` and `ProvenGoneHow`
-(`"tool_ran"`: its tool's PostToolUse; `"turn_end"`: the turn of the agent
-that asked ended after it was written, which the main agent's Stop or idle
-prompt proves for a request with no agent id; `"agent_gone"`: the Spawn's
-end). Until then a plain `SendKeys` without `ExpectPaneSHA256`
-returns `ErrDialogMaybeOpen`: after an allow until the tool has run, after
-a deny until the main agent's turn ends. `Get`'s `SpawnRow.UnprovenRequests`
+(`"tool_ran"`: a Claude agent's tool's PostToolUse, never on a Codex
+Spawn; `"turn_end"`: the turn of the agent that asked ended after it was
+written, which the main agent's Stop or idle prompt, or a Codex main
+agent's Stop or Interrupt, proves for a request with no agent id;
+`"agent_gone"`: the Spawn's end). Until then a plain `SendKeys` without
+`ExpectPaneSHA256` returns `ErrDialogMaybeOpen`: after an allow until the
+tool has run (on a Codex Spawn, until the turn ends), after a deny until
+the main agent's turn ends. `Get`'s `SpawnRow.UnprovenRequests`
 lists every request not proven gone, each with `UnprovenSince` (when
 agent-director's records stopped awaiting an answer); one that stays
 unproven a while is a reason to read the pane. A plain `SendKeys` whose
 `ExpectPaneSHA256` matches the pane passes the hold: it means a person or
 an LLM judged that screen, so never set it from an automatic flow. A
-subagent's denied request is proven only by the Spawn's end.
+subagent's denied request is proven only by the Spawn's end, and on a Codex
+Spawn so is a subagent's allowed one (see
+[Permissions](../../docs/permissions.md#how-the-hold-differs-on-codex-rows)).
 
 `Pause` types `/exit` and Enter as a plain `SendKeys` without
 `ExpectPaneSHA256` would (on a Codex Spawn it clears a draft of up to 64 lines
@@ -661,8 +666,9 @@ first, and ends the row itself once the agent exits; see the
 returns `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or
 `ErrDialogMaybeOpen`, with the same `ErrDetails`, typing nothing and
 starting no wait, whenever that `SendKeys` would. It takes no pane hash, so
-it stays held until Claude Code proves each request gone (after a
-subagent's denied request, until the Spawn ends). To stop a held Spawn,
+it stays held until the agent's hooks prove each request gone (after a
+subagent's denied request, or on a Codex Spawn an allowed one, until the
+Spawn ends). To stop a held Spawn,
 `Kill` it, or have a person or an LLM read the pane, first close any
 fallen-back request (a pane answer with its `RequestToken`, or
 `RecordPaneAnswer`: a pane hash gets a plain `SendKeys` past
@@ -747,7 +753,7 @@ Common sentinels across verbs:
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
 | `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry the call later |
 | `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |
-| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by Claude Code's hooks; nothing was sent — retry later, or have a person or an LLM look and send with the pane's hash (for `Pause`, `/exit`; or `Kill`); `ErrDetails` gives its facts |
+| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by the agent's hooks; nothing was sent — retry later, or have a person or an LLM look and send with the pane's hash (for `Pause`, `/exit`; or `Kill`); `ErrDetails` gives its facts |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

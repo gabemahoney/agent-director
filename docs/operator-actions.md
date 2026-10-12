@@ -215,6 +215,53 @@ killed agent. A human finds it once the agent is gone:
    recheck its start time (step 3), then `kill '<pid>'`, and run the `ps` of
    step 3 again: the pid is gone.
 
+## A Codex agent shows its own approval dialog after a relayed verdict
+
+A relayed Codex agent (`relay_mode` on) ignores a verdict and draws Codex's own
+approval dialog ("Would you like to run the following command?") when its shell
+prints text to stdout before the relay hook runs, while the request reads
+`delivered` and the command waits for a person. The cause is a zsh `.zshenv`
+that prints, or a file named by a `BASH_ENV` the caller set in `extra_env`
+that prints (agent-director launches Codex with `BASH_ENV` empty). Text on
+stderr is harmless. The consequence is described in
+[Permissions](permissions.md#startup-files-that-print). A human checks and
+fixes it:
+
+1. Look at the pane (the dialog waits for a person; answer it there, or leave
+   it), and confirm the request reads `delivered`:
+
+   ```sh
+   agent-director read-pane --instance-id <id>
+   agent-director get-permission --request-token '<token>' | jq '{delivery, decision, proven_gone_at}'
+   ```
+
+2. Find the shell Codex starts for a hook: the account's login shell, bash or
+   zsh (any other login shell gives bash), run with `-c`, not as a login
+   shell. Run this as the agent's user, with the agent's `HOME`:
+
+   ```sh
+   getent passwd "$(id -un)" | cut -d: -f7
+   ```
+
+3. Print what a hook's shell prints. Output of 0 bytes is clean; anything else
+   is the text that makes Codex ignore the verdict. For zsh, run it as is (it
+   reads `.zshenv`, in `ZDOTDIR` when that is set); for bash, name the file
+   the spawn's (or its template's) `extra_env` gives as `BASH_ENV`:
+
+   ```sh
+   zsh -c : | wc -c
+   BASH_ENV='<the file>' bash -c : | wc -c
+   ```
+
+4. Fix what printed. In `.zshenv`, delete the printing lines, send them to
+   stderr (`>&2`) or guard them with `[[ -o interactive ]]`. For `BASH_ENV`,
+   remove it from the spawn's `extra_env` (or the template's), or make its
+   file print nothing on stdout. Run step 3 again: 0 bytes.
+5. A changed `.zshenv` takes effect at the agent's next hook. A changed
+   `extra_env` takes effect only when the agent is launched again: end the
+   agent (`pause` or `kill`) and launch it again with the corrected
+   `extra_env`.
+
 ## The agent's pane was not found
 
 `ErrTmuxSessionConflict` ("the agent's pane was not found") from `read-pane`,

@@ -49,6 +49,7 @@ type paEnv struct {
 	hold    time.Duration
 	sks     api.SendKeysStore
 	agentID string
+	agent   string // "claude" (the default) or "codex": the row's agent
 }
 
 // paSubagentID is the agent_id of a background subagent's requests (newSubagentPAEnv).
@@ -62,31 +63,94 @@ func newPAEnv(t *testing.T) *paEnv { return newPAEnvOf(t, "") }
 func newSubagentPAEnv(t *testing.T) *paEnv { return newPAEnvOf(t, paSubagentID) }
 
 // newPAEnvOf seeds a paEnv whose requests record agentID.
-func newPAEnvOf(t *testing.T, agentID string) *paEnv {
+func newPAEnvOf(t *testing.T, agentID string) *paEnv { return newPAEnvAgent(t, "claude", agentID) }
+
+// newCodexPAEnv is newPAEnv on a Codex row: request A is the main agent's (no
+// agent_id) and has a null tool_use_id, as Codex's PermissionRequest has none.
+func newCodexPAEnv(t *testing.T) *paEnv { return newPAEnvAgent(t, "codex", "") }
+
+// newCodexSubagentPAEnv is newSubagentPAEnv on a Codex row.
+func newCodexSubagentPAEnv(t *testing.T) *paEnv { return newPAEnvAgent(t, "codex", paSubagentID) }
+
+// newPAEnvAgent seeds a paEnv whose row is agent's ("claude" or "codex") and
+// whose requests record agentID.
+func newPAEnvAgent(t *testing.T, agent, agentID string) *paEnv {
 	t.Helper()
 	e := newKillEnv(t)
-	p := &paEnv{killEnv: e, r: seedRelayRow(t, e), now: e.clock.Now(), self: paSender, sks: e.store, agentID: agentID}
+	var r killRow
+	if agent == "claude" {
+		r = seedRelayRow(t, e)
+	} else {
+		r = e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true, Opts: agentRowOpts(agent)})
+	}
+	p := &paEnv{killEnv: e, r: r, now: e.clock.Now(), self: paSender, sks: e.store, agentID: agentID, agent: agent}
 	e.pc.Set(paSender.PID, procfix.Alive(paSender.Starttime))
 	p.seedRequest(t, storefix.TestRequestTokenA, paToolUseID, relayEnvHook)
 	p.setPane("pane of request A\n")
 	return p
 }
 
-// seedRequest records token on p's row as a relay hook with identity hook
-// does, with toolUseID, p.agentID and a settle instant an hour after p.now.
-func (p *paEnv) seedRequest(t *testing.T, token, toolUseID string, hook api.ProcessIdentity) {
-	t.Helper()
-	storefix.SeedRelayRequest(t, p.st, p.r.ID, store.RelayRequest{RequestToken: token, ToolName: "Bash",
-		ToolInput: `{"command":"ls"}`, ToolUseID: toolUseID, AgentID: p.agentID, Hook: hook, SettledAt: p.now.Add(time.Hour)})
+// paAgent is one row of the agent dimension of the relay tests: the agent's
+// name and the constructors of its main-agent and subagent paEnvs.
+type paAgent struct {
+	name     string
+	env      func(*testing.T) *paEnv
+	subagent func(*testing.T) *paEnv
 }
 
-// mainAgentStop applies the main agent's Stop to p's row as the hook handler
-// does: its turn_end proof (requests with no agent_id), then the move to waiting.
+// paAgents are the agents a relay row can be: Claude, and Codex (whose
+// requests have no tool_use_id and whose turn_end proof is its Interrupt).
+var paAgents = []paAgent{
+	{"claude", newPAEnv, newSubagentPAEnv},
+	{"codex", newCodexPAEnv, newCodexSubagentPAEnv},
+}
+
+// label is a subtest name for a case on a's rows: name for Claude (the
+// pre-Codex name), "codex/"+name for Codex.
+func (a paAgent) label(name string) string {
+	if a.name == "claude" {
+		return name
+	}
+	return a.name + "/" + name
+}
+
+// isCodex reports whether p's row is a Codex row.
+func (p *paEnv) isCodex() bool { return p.agent == "codex" }
+
+// toolUseID is the tool_use_id request A records on p's row: paToolUseID on a
+// Claude row, none on a Codex row.
+func (p *paEnv) toolUseID() string {
+	if p.isCodex() {
+		return ""
+	}
+	return paToolUseID
+}
+
+// seedRequest records token on p's row as a relay hook with identity hook
+// does, with p.agentID and a settle instant an hour after p.now, and, on a
+// Claude row, toolUseID (a Codex row's PermissionRequest has none).
+func (p *paEnv) seedRequest(t *testing.T, token, toolUseID string, hook api.ProcessIdentity) {
+	t.Helper()
+	input := `{"command":"ls"}`
+	if p.isCodex() {
+		toolUseID, input = "", `{"command":"ls","description":"List the files"}`
+	}
+	storefix.SeedRelayRequest(t, p.st, p.r.ID, store.RelayRequest{RequestToken: token, ToolName: "Bash",
+		ToolInput: input, ToolUseID: toolUseID, AgentID: p.agentID, Hook: hook, SettledAt: p.now.Add(time.Hour)})
+}
+
+// mainAgentStop applies the main agent's Stop (a Codex row's Interrupt) to p's
+// row as the hook handler does: its turn_end proof (requests with no agent_id), then the move to waiting.
 func (p *paEnv) mainAgentStop(t *testing.T) {
 	t.Helper()
 	p.prove(t, turnEnd)
-	if a := apitest.ApplyAgentHook(t, p.dbPath, p.r.ID, "Stop", ""); !a.Applied {
-		t.Fatalf("the main agent's Stop not applied: %s", a.Reason)
+	event, opts := "Stop", []apitest.HookOption(nil)
+	if p.isCodex() {
+		// Codex's turn end is the main agent's Interrupt (no agent_id).
+		event, opts = "Interrupt", []apitest.HookOption{apitest.HookAgent("codex")}
+	}
+	if a := apitest.ApplyAgentHook(t, p.dbPath, p.r.ID, event, "", opts...); !a.Applied {
+		t.Fatalf("the main agent's %s not applied: %s", event, a.Reason)
 	}
 }
 

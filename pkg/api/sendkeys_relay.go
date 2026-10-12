@@ -15,7 +15,7 @@ import (
 // still answer it, whether it has fallen back, whether a pane answer on it is
 // still being sent (problem 2), ErrRelayFallenBack's err_details (rule 15),
 // and step 2c's hold of plain send-keys while a request is not proven gone
-// (ErrDialogMaybeOpen). Every judgement rests on the store, on Claude Code's
+// (ErrDialogMaybeOpen). Every judgement rests on the store, on the agent's
 // hooks as the store recorded them, and on process checks; none reads the
 // pane.
 
@@ -87,7 +87,7 @@ func (r spawnRequests) awaits(pr PermissionRow) bool {
 // hookMayAnswer reports whether pr's relay hook may still answer it (b.146
 // rule 7, rows 1 and 3): pr is not closed, and its hook process is seen
 // running (an acked request's hook included: it is writing its verdict to
-// Claude Code), or pr is not_confirmed (no ack, and its hook cannot be
+// the agent), or pr is not_confirmed (no ack, and its hook cannot be
 // checked and confirm_by has not passed; a request recorded before schema v7,
 // by its relay window). A closed request's hook answers nothing that reaches
 // the agent's dialog, so it holds nothing.
@@ -135,7 +135,7 @@ func (r spawnRequests) oldestFallenBack() (PermissionRow, bool) {
 	return PermissionRow{}, false
 }
 
-// unproven returns every request that Claude Code has not proven gone (b.146
+// unproven returns every request that the agent has not proven gone (b.146
 // step 2c), oldest first.
 func (r spawnRequests) unproven() []PermissionRow {
 	var out []PermissionRow
@@ -191,7 +191,7 @@ func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration
 			return relayFallenBackError(id, pr.RequestToken, "nothing was sent", r.fallenBackDetails(pr))
 		}
 		if unproven := r.unproven(); len(unproven) > 0 && params.ExpectPaneSHA256 == "" {
-			return dialogMaybeOpenError(id, r.dialogMaybeOpenDetails(unproven))
+			return dialogMaybeOpenError(id, r.sp.Agent, r.dialogMaybeOpenDetails(unproven))
 		}
 		return nil
 	}
@@ -325,19 +325,28 @@ func (r spawnRequests) dialogMaybeOpenDetails(unproven []PermissionRow) DialogMa
 	return d
 }
 
-// dialogMaybeOpenError is ErrDialogMaybeOpen for spawn instanceID, with d as
-// its err_details (b.146 step 2c): the request d names is not proven gone by
-// any hook of Claude Code, so its permission dialog may still be on the pane.
-// The description states facts only: the request, what agent-director's
-// records say of it, since when, and that nothing was sent.
-func dialogMaybeOpenError(instanceID string, d DialogMaybeOpenDetails) error {
+// dialogMaybeOpenError is ErrDialogMaybeOpen for spawn instanceID of agent
+// (store.AgentCodex, or anything else for Claude), with d as its err_details
+// (b.146 step 2c): the request d names is not proven gone by any hook of the
+// agent, so its permission dialog may still be on the pane. The description
+// states facts only: the request, what agent-director's records say of it,
+// since when, and that nothing was sent. What would prove it gone is the
+// agent's: for Claude a PostToolUse with its tool_use_id or the end of the
+// main agent's turn (Stop or idle prompt); for Codex, whose requests carry no
+// tool_use_id, the end of the main agent's turn (a Stop or an Interrupt). The
+// Claude text is unchanged.
+func dialogMaybeOpenError(instanceID, agent string, d DialogMaybeOpenDetails) error {
 	since := "it still awaits an answer"
 	if d.UnprovenSince != nil {
 		since = "its record has read closed since " + d.UnprovenSince.UTC().Format(time.RFC3339Nano)
 	}
+	proofs := "no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded"
+	if agent == store.AgentCodex {
+		proofs = "no Stop or Interrupt of the main agent after it for a request with no agent_id, and no end of its agent is recorded"
+	}
 	return &DetailedError{
-		Err: fmt.Errorf("%w: %s request %s is not proven gone (no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded), so its permission dialog may still be on the pane; agent-director's records give delivery %s and pane_answer %s, and %s; %d other request(s) of the spawn are not proven gone (err_details); nothing was sent",
-			ErrDialogMaybeOpen, instanceID, d.RequestToken, d.Delivery, d.PaneAnswer, since, len(d.UnprovenRequests)),
+		Err: fmt.Errorf("%w: %s request %s is not proven gone (%s), so its permission dialog may still be on the pane; agent-director's records give delivery %s and pane_answer %s, and %s; %d other request(s) of the spawn are not proven gone (err_details); nothing was sent",
+			ErrDialogMaybeOpen, instanceID, d.RequestToken, proofs, d.Delivery, d.PaneAnswer, since, len(d.UnprovenRequests)),
 		Details: d,
 	}
 }

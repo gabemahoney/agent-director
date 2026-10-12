@@ -236,12 +236,20 @@ const EventNameStop = "Stop"
 
 // TurnEnded reports whether the result is the main agent's end of turn (b.146
 // step 2c): a Stop, or the idle-prompt Notification (WaitingIfWorking), with
-// no agent_id. Claude Code sends either only once the main agent's turn has
-// ended, so no permission dialog the main agent asked before it is still
-// waiting. A hook carrying an agent_id (a subagent or an in-process
-// teammate) is not one: a background subagent can outlive the main turn.
+// no agent_id, or, for a Codex result, an Interrupt with no agent_id (Esc
+// during a running turn, RN-8; SR-8.2). Claude Code sends either of its two
+// only once the main agent's turn has ended, and Codex sends its Interrupt
+// only once the turn is cancelled, so no permission dialog the main agent
+// asked before it is still waiting. A hook carrying an agent_id (a subagent or
+// an in-process teammate) is not one: a background subagent can outlive the
+// main turn, and an Interrupt that carries an agent_id (Codex never sends one,
+// Q3) proves nothing. A Claude result is never an Interrupt turn end:
+// Claude's table does not know the event.
 func (r ClassifyResult) TurnEnded() bool {
-	return r.AgentID == "" && (r.EventName == EventNameStop || r.WaitingIfWorking)
+	if r.AgentID != "" {
+		return false
+	}
+	return r.EventName == EventNameStop || r.WaitingIfWorking || (r.Agent == store.AgentCodex && r.EventName == EventNameInterrupt)
 }
 
 // SubagentLifecycle reports whether the result is a SessionStart or
@@ -376,7 +384,8 @@ const EventNameInterrupt = "Interrupt"
 //     working, whatever the tool (`request_user_input` and
 //     `request_user_input_async` included: a Codex row is never ask_user);
 //     Stop → waiting;
-//   - Interrupt without an agent_id → waiting; with one → a soft refresh
+//   - Interrupt without an agent_id → waiting, and a turn end for the relay's
+//     proofs (TurnEnded); with one → a soft refresh that proves nothing
 //     (Codex never sends it; the rule is a safety net, Q3);
 //   - PermissionRequest → check_permission;
 //   - SessionEnd without an agent_id → the end report (EndReport), whatever
@@ -387,7 +396,9 @@ const EventNameInterrupt = "Interrupt"
 //
 // The session id is the payload's session_id, none for a hook with an
 // agent_id (it records no session id or path). The transcript path is the
-// rollout's, verbatim. No Codex result is a SubagentCapture or a ToolRan.
+// rollout's, verbatim. No Codex result is a SubagentCapture or a ToolRan: a
+// Codex PostToolUse or PostToolUseFailure reaches neither the tool-ran proof
+// nor the PostToolUse close, whatever tool_use_id it carries (ToolRan).
 func classifyCodex(p payload) ClassifyResult {
 	res := ClassifyResult{
 		Agent:           store.AgentCodex,
