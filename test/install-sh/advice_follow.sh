@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J31, J26 retired, and G8 for the binary's ErrOldLayout). Each test
+# (advice inventory J1-J33, J26 retired, and G8 for the binary's ErrOldLayout). Each test
 # triggers one install.sh refusal, checks the advice text word for word, does
 # exactly what the text says (re-runs the same command, runs the advised
 # command, puts the missing tool on PATH) and checks the promised outcome.
@@ -203,6 +203,9 @@ EOF
 install_copy() {
     mkdir -p "$(dirname "$1")" || die "mkdir for $1"
     cp "$INSTALL_SRC" "$1" || die "copy install.sh to $1"
+    # schedule/ beside it, as the skill's directory has it (b.wur).
+    rm -rf "$(dirname "$1")/schedule"
+    cp -R "$REPO_ROOT/skills/install-agent-director/schedule" "$(dirname "$1")/schedule" || die "copy schedule/ beside $1"
 }
 
 # LOOSE: install.sh outside any git checkout, with no bin/ beside it.
@@ -376,6 +379,9 @@ pass=0 fail=0 skip=0 skip_broken=0 skip_tag=0
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
 FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
+# The schedule step's stand-ins (b.wur): CRONTAB_STAND_IN names a crontab program
+# (none: a path that does not exist), CRON_RUNNING says a cron daemon runs.
+CRONTAB_STAND_IN="" CRON_RUNNING=1
 
 bad() { echo "    FAIL: $*"; T_FAILED=1; }
 
@@ -404,6 +410,8 @@ run_in() {
     RUN_N=$((RUN_N + 1))
     OUT="$ROOT/runs/$RUN_N.out" ERR="$ROOT/runs/$RUN_N.err"
     (cd "$cwd" && env -i HOME="$home" PATH="${PATH_EXTRA:+$PATH_EXTRA:}$TOOLBOX" TMPDIR="$ROOT/tmp" \
+        INSTALL_SH_TEST_CRONTAB="${CRONTAB_STAND_IN:-$ROOT/no-such-crontab}" INSTALL_SH_TEST_SYSTEMCTL="$ROOT/no-such-systemctl" \
+        INSTALL_SH_TEST_CRON_RUNNING="$CRON_RUNNING" INSTALL_SH_TEST_PASSWD_HOME="$home" \
         INSTALL_SH_TEST_CURL_OVERRIDE="$TOOLBOX/curl" FAKE_CURL_BODY="$BIN" FAKE_CURL_ADMIN_BODY="$ADMIN" \
         FAKE_CURL_STATUS="$FAKE_CURL_STATUS" FAKE_CURL_ADMIN_STATUS="$FAKE_CURL_ADMIN_STATUS" \
         FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
@@ -416,7 +424,8 @@ run() { local home="$1"; shift; run_in "$home" "$ROOT" "$@"; }
 
 # run_advised <home> <cwd> <command text>: run an advised command as written,
 # its words split as a shell splits them (quotes and backslashes, as printf %q
-# writes a path with a space); "a && b" runs b only if a succeeds. make runs in
+# writes a path with a space); "a && b" runs b only if a succeeds, and a part
+# `cd <dir>` moves the cwd of the parts after it. make runs in
 # the caller's own env (it needs the Go toolchain and caches); everything else
 # in the install env. A part that does not parse (a <placeholder> left in it)
 # fails the test with RC 255.
@@ -430,6 +439,17 @@ run_advised() {
             bad "advised command does not parse as shell words: $part"
             RC=255
             return 0
+        fi
+        if [[ "${words[0]}" == cd ]]; then
+            # `cd <dir> && ...`: the later parts run there (b.wur: the schedule
+            # warning's re-run command starts with the directory the install ran in).
+            if [[ ${#words[@]} -ne 2 || ! -d "${words[1]}" ]]; then
+                bad "advised cd does not name one directory that exists: $part"
+                RC=255
+                return 0
+            fi
+            cwd="${words[1]}"
+            continue
         fi
         if [[ "${words[0]}" == make ]]; then
             RUN_N=$((RUN_N + 1)); OUT="$ROOT/runs/$RUN_N.out" ERR="$ROOT/runs/$RUN_N.err"
@@ -515,7 +535,7 @@ sentinel() { printf '%s' "$1/.config/agent-director/migrate-authorized"; }
 
 run_test() {
     T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
-    FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
+    FAKE_SQLITE3_ANSWER="" FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA="" CRONTAB_STAND_IN="" CRON_RUNNING=1
     echo "=== RUN   $1"
     "$1"
     if [[ "$T_FAILED" -ne 0 ]]; then
@@ -1208,7 +1228,9 @@ j7_warned() {
     db="$(printf %q "$J7H/.config/agent-director/state.db")"
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
     j7_unreadable "The store open (agent-director list) succeeded and no migration was authorized, so the install carries on. Check the version later with: sqlite3 -batch -init /dev/null -cmd \".timeout $(j7_timeout)\" $db \"PRAGMA user_version;\"" "$1"
-    if grep -qiE 'FAILED|could not|re-run' "$ERR"; then
+    # The schedule warning (b.wur) that ends stderr when nothing is scheduled is
+    # not about this step: look at what comes before it.
+    if sed '/^install\.sh: WARNING: nothing schedules /,$d' "$ERR" | grep -qiE 'FAILED|could not|re-run'; then
         bad "the warning speaks as if the install failed: $(flat "$ERR")"
     fi
     j7_schema_unreadable
@@ -4061,6 +4083,97 @@ test_G8_OldLayoutRunInstallShThenVerbSucceeds() {
     expect_rc 0 "list after install.sh" || return
     rows="$(jq -r '.spawns[] | "\(.instance_id) \(.state)"' "$OUT" | sort | paste -sd'|')"
     [[ "$rows" == "id-ended ended|id-gone missing" ]] || bad "rows after the move: \"$rows\"; want id-ended ended|id-gone missing"
+}
+
+# ---- J33: the schedule warning (b.wur) -----------------------------------------
+
+# J33: an install that sets no schedule up ends with a warning on stderr: "These
+# crontab lines (crontab -e, as that user) run this install's binary:" and the
+# two lines, then "Copy them by hand (...), or let the install script install
+# them, as the user the agents run as:" and the command that does it: `cd <the
+# directory the install ran in> && bash <this script> <its arguments...>
+# --schedule`, every word shell-quoted (here a script path and a directory with a
+# space, and relative --binary and --admin-binary paths that only resolve in that
+# directory). Followed as written, from another directory, the command is run
+# again: it succeeds, and the crontab holds the two lines the warning printed,
+# word for word, and nothing else of ours; the install it repeats is the same one
+# (the same binaries and flags), and the warning is gone. Run from that other
+# directory without the cd, the same words fail (the relative paths do not
+# resolve), which is what the cd is for.
+test_J33_ScheduleWarningFollowTheRerunCommand() {
+    local h sh cmd want a l1 l2 canon crontab_file text n d elsewhere
+    sh="$ROOT/loose spaced/skills/install-agent-director/install.sh"
+    install_copy "$sh"
+    h="$(new_home)"
+    canon="$h/.config/agent-director/bin/agent-director"
+    crontab_file="$ROOT/j33-crontab.txt"
+    rm -f "$crontab_file"
+    cat >"$ROOT/j33-crontab" <<EOF
+#!/bin/bash
+f="$crontab_file"
+case "\$1" in
+-l) [[ -f "\$f" ]] || { echo "no crontab for tester" >&2; exit 1; }; cat "\$f" ;;
+-) cat >"\$f" ;;
+-r) rm -f "\$f" ;;
+*) exit 2 ;;
+esac
+EOF
+    chmod 0755 "$ROOT/j33-crontab" || { bad "make the crontab stand-in"; return; }
+    CRONTAB_STAND_IN="$ROOT/j33-crontab"
+    # The install runs in $d, with the binaries beside it, named relative to it.
+    d="$ROOT/j33 cwd"
+    elsewhere="$ROOT/j33-elsewhere"
+    mkdir -p "$d" "$elsewhere" || { bad "make the working directories"; return; }
+    cp "$BIN" "$d/ad-main" && cp "$ADMIN" "$d/ad-admin" || { bad "copy the binaries into $d"; return; }
+    local -a argv=(--binary ./ad-main --admin-binary ./ad-admin --no-hooks --no-symlink)
+    run_in "$h" "$d" bash "$sh" "${argv[@]}"
+    expect_rc 0 "a plain install with nothing scheduled" || return
+    grep -qxF "install.sh: WARNING: nothing schedules agent-director's find-missing and expire sweeps on this machine." "$ERR" \
+        || bad "no schedule warning: $(flat "$ERR")"
+    # The lines, as printed: the tmux directory in PATH, the installed binary,
+    # the marker; no HOME (it is the passwd home here).
+    l1="$(line_after "These crontab lines (crontab -e, as that user) run this install's binary:")"
+    l2="$(grep -m1 -F -A2 -- "These crontab lines (crontab -e, as that user) run this install's binary:" "$ERR" | tail -n1)"
+    l2="${l2#"${l2%%[![:space:]]*}"}"
+    [[ "$l1" == "*/2 * * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon find-missing >/dev/null # agent-director-schedule" ]] \
+        || bad "the find-missing line is \"$l1\""
+    [[ "$l2" == "17 3 * * * PATH="*":/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin $canon expire >/dev/null # agent-director-schedule" ]] \
+        || bad "the expire line is \"$l2\""
+    [[ "$l1" != *" HOME="* ]] || bad "the lines carry HOME, which is the passwd entry's: $l1"
+    # The command, word for word: cd to where the install ran, the script, every
+    # argument as given and shell-quoted, --schedule last. No "run it from" note.
+    want="cd $(printf '%q' "$d") && bash $(printf '%q' "$sh")"
+    for a in "${argv[@]}"; do want="$want $(printf '%q' "$a")"; done
+    want="$want --schedule"
+    cmd="$(line_after "agents run as:")"
+    [[ "$cmd" == "$want" ]] || bad "the advised command is \"$cmd\"; want \"$want\""
+    expect_advice "(--schedule uses cron when crontab works here and a cron daemon runs, else systemd user timers, else it installs nothing.)"
+    ! grep -qF "run it from" "$ERR" || bad "the warning still carries a run-it-from note: $(flat "$ERR")"
+    [[ ! -e "$crontab_file" ]] || bad "the plain install wrote the crontab"
+    # Without the cd the same words, run from another directory, do not resolve
+    # the relative paths: the install is refused and no schedule is added.
+    run_in "$h" "$elsewhere" bash "$sh" "${argv[@]}" --schedule
+    [[ "$RC" -ne 0 ]] || bad "the install ran from $elsewhere without the cd, where ./ad-main does not exist"
+    [[ ! -e "$crontab_file" ]] || bad "the install without the cd wrote the crontab"
+    # Follow it, literally, from another directory.
+    run_advised "$h" "$elsewhere" "$cmd"
+    expect_rc 0 "the advised command: $cmd" || return
+    expect_installed "$h" "$BIN" "$ADMIN"
+    ! grep -q 'WARNING' "$ERR" || bad "the advised install still warns: $(flat "$ERR")"
+    grep -qF "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # agent-director-schedule." "$OUT" \
+        || bad "stdout does not say the schedule was added: $(flat "$OUT")"
+    [[ -f "$crontab_file" ]] || { bad "the advised command wrote no crontab"; return; }
+    text="$(<"$crontab_file")"
+    grep -qxF "$l1" "$crontab_file" || bad "the crontab lacks the find-missing line the warning printed: $text"
+    grep -qxF "$l2" "$crontab_file" || bad "the crontab lacks the expire line the warning printed: $text"
+    n="$(grep -c 'agent-director-schedule' "$crontab_file")"
+    [[ "$n" == 3 ]] || bad "$n lines carry the marker (the two jobs and the header comment); want 3: $text"
+    # And once more: the same command changes nothing.
+    cp "$crontab_file" "$ROOT/j33-crontab.before"
+    run_advised "$h" "$elsewhere" "$cmd"
+    expect_rc 0 "the advised command again" || return
+    cmp -s "$crontab_file" "$ROOT/j33-crontab.before" || bad "the repeat changed the crontab: $(diff "$ROOT/j33-crontab.before" "$crontab_file")"
+    grep -qF "nothing changed" "$OUT" || bad "the repeat does not say nothing changed: $(flat "$OUT")"
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"

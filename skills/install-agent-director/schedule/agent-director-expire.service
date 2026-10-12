@@ -1,0 +1,24 @@
+## systemd user service: one run of the expire sweep. The timer
+## agent-director-expire.timer starts it once a day. See
+## agent-director-find-missing.service for how install.sh --schedule fills the
+## placeholders and installs the pair, and for how to do it by hand. Lines that
+## start with two # are notes: install.sh does not install them.
+##   @@AGENT_DIRECTOR@@  the absolute path of the installed agent-director, in
+##                       double quotes when it holds a space.
+##   @@ENV_LINES@@       Environment="NAME=value" lines: PATH (always:
+##                       <the directory of tmux>:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin),
+##                       TMUX_TMPDIR (only when the agents' tmux server lives in
+##                       one) and HOME (only when the install's $HOME differs
+##                       from the user's passwd home). Never empty.
+## Run as the agents' user, in the agents' tmux environment: expire run as
+## another user, as root or against another tmux server can wrongly delete rows
+## whose agent still runs, and a deleted row cannot be resumed.
+##
+# agent-director-schedule: the expire sweep (install-agent-director skill, schedule/)
+[Unit]
+Description=agent-director expire sweep
+
+[Service]
+Type=oneshot
+@@ENV_LINES@@
+ExecStart=@@AGENT_DIRECTOR@@ expire

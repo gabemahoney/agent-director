@@ -1,0 +1,37 @@
+## agent-director's two sweeps as crontab lines: find-missing every 2 minutes,
+## expire once a day. install.sh --schedule adds the lines below this block to
+## the crontab of the user it runs as; the same lines are what its warning prints
+## when no schedule is set up.
+##
+## Lines that start with two # are notes for you: install.sh does not install
+## them. Every other line is installed, and every installed line carries the
+## marker agent-director-schedule, which is how install.sh (a re-run) and
+## uninstall.sh find and replace or remove exactly these lines and no others.
+##
+## To install them by hand, the easiest way is to copy the filled-in lines that
+## install.sh's warning prints (they are these two lines with the placeholders
+## filled). To fill them yourself, replace the two placeholders and add the
+## lines to the crontab of the user the agents run as (crontab -e):
+##   @@AGENT_DIRECTOR@@  the absolute path of the installed agent-director,
+##                       ~/.config/agent-director/bin/agent-director, written out.
+##   @@ENV_PREFIX@@      the environment cron does not give a job, as NAME=value
+##                       words before the command. install.sh writes, always,
+##                       PATH=<the directory of tmux>:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+##                       (without the tmux directory and its colon when tmux is
+##                       not on the PATH of the install); then, only when the
+##                       agents' tmux server lives in a TMUX_TMPDIR,
+##                       TMUX_TMPDIR=<that directory>; then, only when the
+##                       install's $HOME is not the home directory of the user's
+##                       passwd entry (cron sets HOME from that entry, and the
+##                       binary keeps its files in $HOME/.config/agent-director),
+##                       HOME=<the install's $HOME>. The value is never empty.
+## Run as the agents' user, in the agents' tmux environment: find-missing run
+## as another user, as root or against another tmux server can wrongly mark
+## live rows missing, and expire can wrongly delete rows whose agent still
+## runs. The config directory is $HOME/.config/agent-director, so the sweep
+## needs the install's HOME (see HOME above). A % in a path is written \% in a
+## crontab.
+##
+# agent-director-schedule: the find-missing and expire sweeps (install-agent-director skill, schedule/agent-director.cron)
+*/2 * * * * @@ENV_PREFIX@@ @@AGENT_DIRECTOR@@ find-missing >/dev/null # agent-director-schedule
+17 3 * * * @@ENV_PREFIX@@ @@AGENT_DIRECTOR@@ expire >/dev/null # agent-director-schedule

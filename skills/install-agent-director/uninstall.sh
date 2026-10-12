@@ -7,6 +7,27 @@
 #     command starts with the old directory's bin/agent-director path
 #     (~/.agent-director/bin/agent-director: the help hooks an install
 #     before the move to ~/.config/agent-director wrote).
+#   - Remove the schedule `install.sh --schedule` added (b.wur): the
+#     crontab lines tagged `# agent-director-schedule` (every other line of
+#     the crontab kept; the crontab itself removed only when nothing else was
+#     in it), and the systemd user units agent-director-find-missing and
+#     agent-director-expire (.service and .timer, in the user manager's unit
+#     directory: its XDG_CONFIG_HOME's systemd/user, else its HOME's
+#     .config/systemd/user, as `systemctl --user show-environment` tells; this
+#     shell's ~/.config/systemd/user or $XDG_CONFIG_HOME/systemd/user when the
+#     manager does not say), their timers disabled first. A unit
+#     file is removed only when it carries that marker. Nothing else is
+#     touched, and with none present it is a no-op. Failing to read or edit
+#     the crontab (anything but "no crontab for <user>" or busybox's "No such file or directory") is reported on
+#     stderr, with the lines to remove by hand, and does not change the exit
+#     status. Only the job lines are counted in the "removed N" message; the
+#     schedule's marked header comment goes with them. It also removes the copy of the
+#     schedule files install.sh keeps in ~/.config/agent-director/schedule/
+#     when it ran piped to bash and fetched them (its five files, then the
+#     directory, which is left, with a note, when it holds other files).
+#     Test-only switches (not in --help):
+#     INSTALL_SH_TEST_CRONTAB and INSTALL_SH_TEST_SYSTEMCTL name the program
+#     run in place of `crontab` (`-l`, `-`, `-r`) and `systemctl`.
 #   - Remove the canonical binary and any `.prior` rollback snapshot
 #     under ~/.config/agent-director/bin/.
 #   - Remove the operator tool ~/.config/agent-director/admin/agent-director-admin,
@@ -1156,6 +1177,189 @@ if [[ "$config_edit" -eq 1 ]]; then
     ad_replace_keeping_mode "$CONFIG_TOML" "$cleaned"
     echo "uninstall.sh: cleared inject_help_hook from $CONFIG_TOML (backup $backup_cfg)"
 fi
+
+# --------------------------------------------------------------------
+# Remove the schedule install.sh --schedule added (b.wur): the crontab lines
+# that carry the marker, and the systemd user units of the two sweeps. Done
+# before the binaries go, so nothing runs a binary that is gone. A run with
+# none present prints nothing and changes nothing. The marker, the unit names
+# and the two test switches are install.sh's (its "The schedule" section);
+# keep them in step.
+# --------------------------------------------------------------------
+
+readonly SCHEDULE_MARK="agent-director-schedule"
+SCHEDULE_UNIT_FILES=(
+    agent-director-find-missing.service agent-director-find-missing.timer
+    agent-director-expire.service agent-director-expire.timer
+)
+SCHEDULE_TIMERS=(agent-director-find-missing.timer agent-director-expire.timer)
+
+# ad_sched_mgr_read — ask the systemd user manager, once, whether it answers
+# and what its HOME and XDG_CONFIG_HOME are (`systemctl --user show-environment`),
+# as install.sh does: sets SCHED_MGR_OK, SCHED_MGR_HOME and SCHED_MGR_XDG (each
+# empty unless an absolute path). Called in the shell itself, not in a $( ).
+SCHED_MGR_READ=0
+SCHED_MGR_OK=0
+SCHED_MGR_HOME=""
+SCHED_MGR_XDG=""
+ad_sched_mgr_read() {
+    local sc env line
+    [[ "$SCHED_MGR_READ" -eq 0 ]] || return 0
+    SCHED_MGR_READ=1
+    sc="${INSTALL_SH_TEST_SYSTEMCTL:-systemctl}"
+    command -v "$sc" >/dev/null 2>&1 || return 0
+    env="$("$sc" --user show-environment 2>/dev/null </dev/null)" || return 0
+    SCHED_MGR_OK=1
+    while IFS= read -r line; do
+        case "$line" in
+            HOME=/*) SCHED_MGR_HOME="${line#HOME=}" ;;
+            XDG_CONFIG_HOME=/*) SCHED_MGR_XDG="${line#XDG_CONFIG_HOME=}" ;;
+        esac
+    done <<<"$env"
+}
+
+# ad_sched_unit_dir — the directory the systemd user manager reads the user's
+# units from, by install.sh's rule: the manager's own XDG_CONFIG_HOME's
+# systemd/user when that is an absolute path, else its HOME's
+# .config/systemd/user; with neither known (the manager does not answer, or its
+# answer has neither), this shell's rule: an absolute $XDG_CONFIG_HOME's
+# systemd/user, else $HOME/.config/systemd/user.
+ad_sched_unit_dir() {
+    ad_sched_mgr_read
+    if [[ "$SCHED_MGR_OK" -eq 1 ]]; then
+        if [[ -n "$SCHED_MGR_XDG" ]]; then
+            printf '%s' "${SCHED_MGR_XDG}/systemd/user"
+            return 0
+        elif [[ -n "$SCHED_MGR_HOME" ]]; then
+            printf '%s' "${SCHED_MGR_HOME%/}/.config/systemd/user"
+            return 0
+        fi
+    fi
+    case "${XDG_CONFIG_HOME:-}" in
+        /*) printf '%s' "${XDG_CONFIG_HOME}/systemd/user" ;;
+        *) printf '%s' "${HOME}/.config/systemd/user" ;;
+    esac
+}
+
+# ad_sched_remove_cron — remove the marked lines from the user's crontab, every
+# other line kept. Prints what it did. Nothing to remove (no crontab program,
+# no crontab, no marked line) is a silent no-op; a `crontab -l` that fails for
+# any reason but "no crontab for <user>" is reported on stderr (the exit status
+# is not changed), as install.sh's schedule step does.
+ad_sched_remove_cron() {
+    local cmd text l t kept="" jobs=0 notes=0 rc=0 lrc=0 err
+    cmd="${INSTALL_SH_TEST_CRONTAB:-crontab}"
+    command -v "$cmd" >/dev/null 2>&1 || return 0
+    text="$("$cmd" -l 2>/dev/null </dev/null)" || lrc=$?
+    if [[ "$lrc" -ne 0 ]]; then
+        err="$("$cmd" -l 2>&1 >/dev/null </dev/null || true)"
+        case "$err" in
+            *"no crontab"*|*"No such file or directory"*) return 0 ;;
+        esac
+        {
+            echo "uninstall.sh: could not read the crontab to remove the schedule (crontab -l failed, exit $lrc): ${err:-no output}"
+            echo "  If install.sh --schedule added lines tagged # $SCHEDULE_MARK to it, remove them by hand (crontab -e)."
+        } >&2
+        return 0
+    fi
+    [[ -n "$text" ]] || return 0
+    while IFS= read -r l; do
+        if [[ "$l" == *"$SCHEDULE_MARK"* ]]; then
+            # The header comment of the schedule is removed with the jobs but is
+            # not a schedule line: only the jobs are counted.
+            t="${l#"${l%%[![:space:]]*}"}"
+            if [[ "$t" == "#"* ]]; then
+                notes=$((notes + 1))
+            else
+                jobs=$((jobs + 1))
+            fi
+        else
+            kept="${kept}${l}"$'\n'
+        fi
+    done <<<"$text"
+    [[ $((jobs + notes)) -gt 0 ]] || return 0
+    if [[ -z "${kept//[[:space:]]/}" ]]; then
+        err="$("$cmd" -r 2>&1 >/dev/null </dev/null)" || rc=$?
+    else
+        err="$(printf '%s' "$kept" | "$cmd" - 2>&1 >/dev/null)" || rc=$?
+    fi
+    if [[ "$rc" -ne 0 ]]; then
+        {
+            echo "uninstall.sh: could not remove the schedule from the crontab (exit $rc): ${err:-no output}"
+            echo "  Remove the $((jobs + notes)) line(s) tagged # $SCHEDULE_MARK by hand (crontab -e)."
+        } >&2
+        return 0
+    fi
+    if [[ "$jobs" -gt 0 ]]; then
+        echo "uninstall.sh: removed $jobs schedule line(s) tagged # $SCHEDULE_MARK from the crontab"
+    else
+        echo "uninstall.sh: removed the schedule's marker comment from the crontab"
+    fi
+}
+
+# ad_sched_remove_units — disable the two timers and remove the units, each
+# file only when it carries the marker. Prints what it did; none present is a
+# silent no-op.
+ad_sched_remove_units() {
+    local dir sc f t found=0 usable=0
+    ad_sched_mgr_read
+    dir="$(ad_sched_unit_dir)"
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        if [[ -f "${dir}/${f}" ]] && grep -q -F "$SCHEDULE_MARK" "${dir}/${f}"; then
+            found=1
+        fi
+    done
+    [[ "$found" -eq 1 ]] || return 0
+    sc="${INSTALL_SH_TEST_SYSTEMCTL:-systemctl}"
+    if [[ "$SCHED_MGR_OK" -eq 1 ]]; then
+        usable=1
+        "$sc" --user disable --now "${SCHEDULE_TIMERS[@]}" >/dev/null 2>&1 </dev/null || true
+    fi
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        if [[ -f "${dir}/${f}" ]] && grep -q -F "$SCHEDULE_MARK" "${dir}/${f}"; then
+            rm -f "${dir}/${f}"
+        fi
+    done
+    for t in "${SCHEDULE_TIMERS[@]}"; do
+        if [[ -L "${dir}/timers.target.wants/${t}" ]]; then
+            rm -f "${dir}/timers.target.wants/${t}"
+        fi
+    done
+    if [[ "$usable" -eq 1 ]]; then
+        "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null || true
+        echo "uninstall.sh: disabled the agent-director systemd user timers and removed their units from $dir"
+    else
+        echo "uninstall.sh: removed the agent-director systemd user units from $dir (the user manager was not reachable, so the timers were not disabled; they stop at its next start)"
+    fi
+}
+
+ad_sched_remove_cron
+ad_sched_remove_units
+
+# ad_sched_remove_local — remove the copy of the five schedule files install.sh
+# keeps in ~/.config/agent-director/schedule/ when it ran piped to bash and
+# fetched them, then the directory; a directory that holds other files stays,
+# with a note. A fetch's leftover temp directory (.schedule.*) goes too. None
+# present is a silent no-op.
+ad_sched_remove_local() {
+    local dir="${DEFAULT_INSTALL_ROOT}/schedule" f
+    for f in "${DEFAULT_INSTALL_ROOT}"/.schedule.*; do
+        if [[ -d "$f" && ! -L "$f" ]]; then
+            rm -rf -- "$f"
+        fi
+    done
+    [[ -d "$dir" && ! -L "$dir" ]] || return 0
+    for f in agent-director.cron "${SCHEDULE_UNIT_FILES[@]}"; do
+        rm -f -- "${dir}/${f}"
+    done
+    if rmdir "$dir" 2>/dev/null; then
+        echo "uninstall.sh: removed the fetched schedule files and $dir"
+    else
+        echo "uninstall.sh: removed the fetched schedule files; left $dir, which holds other files"
+    fi
+}
+
+ad_sched_remove_local
 
 # --------------------------------------------------------------------
 # Remove binaries (canonical + .prior snapshot + any legacy

@@ -14,8 +14,8 @@ file, and tmux.
 - A **permission relay**: answer a Spawn's permission prompts allow/deny
   from outside, and learn whether the answer reached the agent.
 - **Pause and resume** that keep the conversation.
-- **Sweep verbs** you schedule, `find-missing` and `expire`, that keep the
-  row states honest.
+- **Sweep verbs**, `find-missing` and `expire`, that keep the row states
+  honest. The install can schedule them for you.
 
 ## Prerequisites
 
@@ -34,7 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 This installs `agent-director` on your PATH and creates
 `~/.config/agent-director/`. Add `--register-mcp` to also register the MCP server
-with Claude Code.
+with Claude Code, and `--schedule` to also schedule the two sweeps (see
+"Keep it healthy").
 
 ## First spawn
 
@@ -54,9 +55,10 @@ The row is `pending` until the agent reports in, then `waiting`.
 
 ## Keep it healthy
 
-Schedule these with cron, a systemd timer or launchd, as the agents' user:
+Two sweeps need a schedule, as the agents' user; the install's `--schedule` sets
+both up:
 
 ```sh
 agent-director find-missing   # often, e.g. every 2 minutes
-agent-director expire
+agent-director expire         # e.g. daily
 ```

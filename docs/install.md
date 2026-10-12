@@ -72,6 +72,9 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   `inject_help_hook` in `config.toml` (see
   [settings](settings.md#defaultsinject_help_hook-config)). It does not skip
   the [rename migration](#upgrade).
+- `--schedule`: schedule the `find-missing` and `expire` sweeps for the user
+  running the script, who must be the agents' user. Off by default. See
+  [Schedule the sweeps](#schedule-the-sweeps).
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
 - `--no-symlink`: create no PATH symlink.
 - `--keep-prior`: keep each overwritten binary as `<target>.prior` (roll back
@@ -179,8 +182,8 @@ then say **install agent-director** in Claude Code:
 mkdir -p ~/.claude/skills && ln -s "$PWD/skills/install-agent-director" ~/.claude/skills/install-agent-director
 ```
 
-The skill asks four questions (source, symlink, MCP, hooks), then runs
-`install.sh`.
+The skill asks five questions (source, symlink, MCP, hooks, schedule), then
+runs `install.sh`.
 
 ## Install from source
 
@@ -190,6 +193,27 @@ In a git checkout (`install.sh` refuses a plain `go build`):
 make build
 bash skills/install-agent-director/install.sh --binary ./bin/agent-director --admin-binary ./bin/agent-director-admin
 ```
+
+## Schedule the sweeps
+
+`--schedule` schedules the two sweeps:
+
+```sh
+bash skills/install-agent-director/install.sh --schedule
+```
+
+What it installs, how to do it by hand and the same-environment rule are in
+[Maintenance](maintenance.md#scheduling-the-sweeps). An install that finds no
+schedule ends with a warning on stderr: see
+[`install.sh` warns that nothing schedules the sweeps](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
+
+**A piped install** (`curl ... | bash -s -- ...`) has no `schedule/` beside it.
+When `--schedule` is given or nothing is scheduled yet, it fetches the same five
+files from `raw.githubusercontent.com` at the release tag (with
+`--from-release`) or, with `--binary`, at the full commit stamp of the binaries,
+all or none, and keeps them in `~/.config/agent-director/schedule/`. When the
+release tag or commit has no `schedule/` (an older release: HTTP 404), it tries
+once more at `main`, and the `schedule:` line says so.
 
 ## Upgrade
 
@@ -335,6 +359,13 @@ It works on `~/.config/agent-director`, or on the old directory (see
 binaries, the PATH link, the help hooks in `~/.claude/settings.json` (those of
 an install from before the move included) and the `inject_help_hook` setting,
 and keeps the directory unless `--purge`.
+
+It also removes the schedule `--schedule` added and nothing else: the crontab
+lines tagged `agent-director-schedule` (the crontab itself only when nothing
+else is left in it), the tagged systemd user units with their timers, and the
+schedule files a piped install kept in `~/.config/agent-director/schedule/`
+(the directory stays, with a note, when it holds other files). With no schedule
+present it prints nothing about it.
 
 `--purge` also removes every directory the upgrade or the way back left:
 each `~/.agent-director.pre-move-*`, `~/.config/agent-director.after-upgrade-*`

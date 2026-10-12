@@ -7109,14 +7109,19 @@ from `PATH`, so a Codex-only host installs with no change to either agent.
 An upgrade also migrates `config.toml` and the stored templates to the
 agent-generic keys (see [Config and template migration at
 install-time](#config-and-template-migration-at-install-time)).
+With `--schedule` it also schedules the two sweep verbs, and without it an
+install that finds no schedule ends with a warning (see [The schedule for the
+sweeps](#the-schedule-for-the-sweeps)).
 The npm package is not an installer: it installs nothing outside
 `node_modules/`, so it neither installs the CLI nor stages the skill
 (see [Staging the install skill](#staging-the-install-skill)).
 
 ### Staging the install skill
 
-The skill is `SKILL.md`, `install.sh` and `uninstall.sh` in
-`skills/install-agent-director/`. Claude Code finds personal skills in
+The skill is `SKILL.md`, `install.sh`, `uninstall.sh` and the `schedule/`
+directory of schedule files (see [The schedule for the
+sweeps](#the-schedule-for-the-sweeps)) in `skills/install-agent-director/`.
+Claude Code finds personal skills in
 `~/.claude/skills/` and project skills in a project's `.claude/skills/`;
 the repo's top-level `skills/` is neither, and nothing in agent-director
 copies the skill into either. The npm package does not carry it:
@@ -7140,7 +7145,8 @@ copies the skill into either. The npm package does not carry it:
 2. **A checkout.** `bash skills/install-agent-director/install.sh` with
    its options.
 3. **The one-liner.** It fetches `install.sh` from `main` and installs
-   the latest release's binaries:
+   the latest release's binaries (it has no `schedule/` beside it, so its
+   schedule step fetches the files it needs):
 
    ```
    curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
@@ -7264,7 +7270,16 @@ claude /install-agent-director (or `bash install.sh`)
     `"$CLAUDE_PROG" mcp add agent-director -- <path> serve --stdio`; a
     failed add or remove ends the install with exit 6, after every other
     step
+  → the schedule step (see "The schedule for the sweeps"): with --schedule,
+    install the schedule for the user running the script (cron when a cron
+    daemon runs, else systemd user timers, else nothing, with the reason);
+    zero or more `  schedule: ...` lines print (none when it only warns,
+    except the one saying a piped run fetched the schedule files)
   → print the admin path once, for the human
+  → `install.sh: done`, then, unless both sweeps' tagged cron lines (with a
+    cron daemon running) or all four units are present, the schedule warning on stderr
+    (never an exit status); after an MCP failure (exit 6) the warning comes
+    just before the final `installed, but the MCP registration failed` line
 ```
 
 The pre-flight summary prints one line per agent: `  claude  : <version>
@@ -8305,9 +8320,20 @@ agent-director with one script.
 ├── config.toml.pre-agent-rename.<time>
 │                                  (config.toml as it was before the
 │                                    migration rewrote it; its mode)
+├── schedule/                      (the five schedule files; present only
+│                                    after a run that fetched them, see
+│                                    "The schedule for the sweeps")
 └── errors.log                     (touched on first hook-fire failure)
 
 ~/.local/bin/agent-director       → ~/.config/agent-director/bin/agent-director   (optional)
+
+crontab of the user                (only with --schedule: two job lines and a
+                                    header comment, all tagged
+                                    `agent-director-schedule`)
+~/.config/systemd/user/            (only with --schedule where cron is not
+├── agent-director-find-missing.{service,timer}   usable; the directory is the
+└── agent-director-expire.{service,timer}         user manager's, see "The
+                                                  schedule for the sweeps")
 
 ~/.claude/settings.json
 └── hooks
@@ -8668,6 +8694,122 @@ refusal's wording or cause updates its section in
 sections by heading), the cause table above and `advice_follow.sh`'s J23 to
 J25.
 
+### The schedule for the sweeps
+
+`find-missing` and `expire` keep the row states honest, and nothing runs them
+unless they are scheduled: a live row whose agent is gone stays live, a relay
+row stays in `check_permission`, a killed agent's running subagent records are
+never turned `lost` (they turn only when the row is marked `missing` or
+`ended`), and finished rows are never expired. The binary schedules nothing
+itself. `install.sh` ships the schedule as files and installs it only on
+request.
+
+**The files** are in `skills/install-agent-director/schedule/`, beside
+`install.sh` and `SKILL.md`: `agent-director.cron` (the two crontab lines) and
+`agent-director-find-missing` and `agent-director-expire`, each as a systemd
+user `.service` and `.timer`. `find-missing` runs every 2 minutes and `expire`
+daily at 03:17 (`Persistent=true` on the expire timer only). They hold
+three placeholders:
+`@@AGENT_DIRECTOR@@` (the canonical binary path,
+`~/.config/agent-director/bin/agent-director`, written out), and, for the
+environment cron and systemd do not pass, `@@ENV_PREFIX@@` (cron) and
+`@@ENV_LINES@@` (units: the same as `Environment=` lines). That environment is
+always `PATH=<tmux dir>:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (without
+the tmux directory when `tmux` is not on the install's `PATH`, so never empty),
+then `TMUX_TMPDIR` only when it is set, then `HOME` only when the install's
+`$HOME` differs from the home directory of the user's passwd entry (or that
+cannot be told), because cron and systemd set `HOME` from the passwd entry and
+the binary keeps its files in `$HOME/.config/agent-director`. `TMUX` is not
+carried, because each row records its own socket. The binary path in a unit's
+`ExecStart` is quoted when it needs it; a path holding a quote or a backslash,
+or any value holding a control character, is refused, and so is a file that
+still holds an `@@` placeholder after the three are filled (a file from another
+version). Lines that start with `##` are notes for the reader and
+are never installed. Every installed line carries the marker
+`agent-director-schedule` (the cron file's header comment too), which is how a
+re-run and `uninstall.sh` find exactly these lines.
+
+**`--schedule`** (default off) installs from those files and nothing else, for
+the user running the script, who must be the agents' user (see [Cron user
+invariant](#cron-user-invariant)); it refuses when `HOME`'s owner is another
+user. It uses cron when `crontab -l` works and a cron daemon is running (a
+process named `cron` or `crond`, looked for with `pgrep` or `/proc`; Linux
+only, and taken as running where it cannot be told). The lines replace the
+marked ones, every other line is kept, and the result is read back. Else it
+uses systemd user units with both timers enabled when `systemctl --user
+show-environment` succeeds. The unit directory comes from that command's
+output, because the user manager's `HOME` and `XDG_CONFIG_HOME` are what it
+reads units from and a `HOME` carried into the install can differ: the
+manager's absolute `XDG_CONFIG_HOME` plus `/systemd/user`, else its absolute
+`HOME` plus `/.config/systemd/user`, else (neither reported) this shell's rule,
+an absolute `$XDG_CONFIG_HOME`'s `systemd/user`, else `$HOME/.config/systemd/user`;
+`uninstall.sh` finds the directory the same way. A failed reload, enable or restart puts back
+the units this run replaced or created and leaves an earlier run's units alone.
+Else nothing, with the reason. With `crontab` working, no cron daemon and no
+usable systemd, and none of this install's units present, the cron lines are put
+in anyway (they run once a daemon starts), the run says so on stderr and counts
+as failed, so the warning fires. A re-run changes nothing already right and
+re-points the entries at the binary installed now; installing through cron
+removes this install's units, and installing through systemd removes its cron
+lines, so one copy is scheduled. A user timer runs only while the user's
+systemd manager does (while the user is logged in, or always after
+`loginctl enable-linger`); a cron entry needs the cron daemon running.
+
+**The warning.** Whenever entries for both sweeps are not all present after the
+run, with or without `--schedule` (present means both tagged cron lines with a
+cron daemon running, or all four units), `install.sh` ends with a loud warning on
+stderr, after `install.sh: done` (just before the final line when the MCP
+registration failed, exit 6). Its cron lines count only with a cron daemon
+running, so without `--schedule` its own lines in a crontab with no daemon
+warn too. It names the exact crontab lines for the installed binary, says to
+run them as the agents' user, names the directory of the files and, when it
+could render them, prints the command to run again whether or not `--schedule`
+was given: `cd <the directory the install ran in> && bash <script> <the
+arguments as given, shell-quoted> --schedule` (the `cd` because a relative path
+and `--register-mcp`, which is local to the working directory, depend on it; a
+piped script cannot know its arguments and says to run the same install
+command again with `--schedule` added). When the files could not be found or
+rendered it points at them on `main` in the repository instead. It never
+changes an exit status. It cannot see an entry made by
+hand, so a host scheduled another way gets it too, and the text says to ignore
+it.
+
+**Piped install.** With no `schedule/` beside the script (`curl ... | bash`,
+or a copy of the skill without it), and only when `--schedule` is given or no
+schedule is present, `install.sh` fetches the five files from
+`raw.githubusercontent.com/<repo>/<ref>/skills/install-agent-director/schedule/`
+with the `curl` of `--from-release`, at the release tag with `--from-release`,
+else at the binaries' 40-hex commit stamp (any other stamp gives no ref, so
+nothing is fetched). A ref with no `schedule/` (HTTP 404: a release tag older
+than the directory) is retried once at `main`, which may be newer than the
+install, and the `schedule:` fetch line says so. The fetch is all or nothing and
+each file must carry the marker; the files are kept in
+`~/.config/agent-director/schedule/`, which exists only after a fetched run. A
+failed fetch (or one `main` answers no better) changes no exit status; the
+warning gives the reason and points at the repository directory on `main`.
+
+**Test seam.** `INSTALL_SH_TEST_CRONTAB` and `INSTALL_SH_TEST_SYSTEMCTL` (not
+in `--help`) name the programs run in place of `crontab` and `systemctl`;
+`uninstall.sh` reads the same two. `INSTALL_SH_TEST_CRON_RUNNING` (1 or 0)
+stands in for the cron daemon check and `INSTALL_SH_TEST_PASSWD_HOME` for the
+passwd home that `$HOME` is compared with; `install.sh` alone reads them. The Go fixtures set both to a program that
+does not exist unless a case wants a stand-in, so no case reads or changes the
+host's crontab or user manager (`schedule_test.go`,
+`schedule_uninstall_test.go`; the Docker case `install-13` of
+`epic-12-install`, whose image has no cron, installs through a stand-in
+`crontab` and runs the installed `find-missing` line itself, as cron would).
+
+**Must use:** `install.sh` installs and warns from the shipped files, never
+from a copy of their text in the script; a change to a line, placeholder or
+unit name is made in the files and in `install.sh`'s `ad_sched_render` and
+`ad_sched_env`, and in step with `docs/maintenance.md`. The marker, the unit
+names and the two test switches are `install.sh`'s and `uninstall.sh`'s own
+copies, each marked with a comment saying so: change both together. An entry
+must reach the agents' tmux server and config directory: it carries `PATH` with
+tmux's directory, `TMUX_TMPDIR` when set and `HOME` when it is not the passwd
+home, and runs the canonical binary path, so an upgrade needs no change. The step never schedules as another user or as root, and never
+changes what `find-missing` or `expire` do.
+
 ### Uninstall semantics
 
 `uninstall.sh` removes ONLY what `install.sh` wrote: the canonical
@@ -8680,7 +8822,19 @@ the optional PATH symlink, and the two hook entries it injected
 directory's and the old directory's both, so an install never moved is
 cleaned too; see the `ours` test below), and the
 `inject_help_hook` key the config merge set in `config.toml`'s
-`[defaults]` (see "The config.toml merge" above). Other
+`[defaults]` (see "The config.toml merge" above), and the schedule
+`--schedule` added (see [The schedule for the sweeps](#the-schedule-for-the-sweeps)):
+the crontab lines carrying the marker `agent-director-schedule` (`crontab -r`
+only when nothing else remains, else the rest is written back), the unit files
+that carry it with their `timers.target.wants` links (the timers disabled first
+when the user manager answers), and the copy of the files a piped install kept
+in `~/.config/agent-director/schedule/` (left, with a note, when it holds other
+files). A `crontab -l` that fails for a reason other than "no crontab" (busybox
+says "No such file or directory" for that, and `install.sh` counts it as no
+crontab too), or a crontab it cannot write back, is reported on stderr with the lines to remove by
+hand, and the exit status is unchanged; the "removed N" count is the job lines
+only (the marked header comment goes with them); with no schedule present it
+prints nothing, and a line or unit a human wrote is never touched. Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
 rewrite of `settings.json` or `config.toml` takes a timestamped `.bak`
 first, keeps the file's mode and writes through a symlink to its target,
@@ -12385,8 +12539,9 @@ proof that the agent has exited. `expire` removes finished rows older than
 the retention window whose agent is gone (its process not seen running and
 no tmux session of the agent), and keeps and reports the others. The verbs
 can be run by an operator's own scheduler at different cadences;
-agent-director installs no schedule (see
-[Cron user invariant](#cron-user-invariant)).
+the binary installs no schedule, and `install.sh --schedule` is the opt-in
+that installs one (see [Cron user invariant](#cron-user-invariant) and [The
+schedule for the sweeps](#the-schedule-for-the-sweeps)).
 
 ### Probe layer (`internal/probe`)
 
@@ -12891,8 +13046,9 @@ user, as root or against another tmux server can mark live rows `missing`:
 their processes may read unreadable, and the lookup then asks the wrong
 server, which answers that the row's session is Gone. The recommended
 operator setup is a **systemd user timer or a personal crontab** of the
-agents' user, not a system-level cron; agent-director installs no schedule
-itself.
+agents' user, not a system-level cron; the binary installs no schedule
+itself (`install.sh --schedule` does, for the user running it: see [The
+schedule for the sweeps](#the-schedule-for-the-sweeps)).
 
 **Finished-row cleanup (SR-18.7).** Finished rows are removed by an
 operator-scheduled `expire` at the default retention, run as the same user
@@ -13415,7 +13571,12 @@ operates on whatever rows the DB happens to hold).
 The recommended operator setup is a systemd user timer or a personal
 crontab of the agents' user, not a system-level cron, so the sweep's
 identity and tmux environment match the ones that launched the agents.
-agent-director installs no schedule itself.
+The binary installs no schedule itself. `install.sh --schedule` installs one
+for the user running it, from the files in `schedule/` (see [The schedule for
+the sweeps](#the-schedule-for-the-sweeps)): it refuses a `HOME` owned by
+another user, uses cron only when a cron daemon runs (else systemd user timers), and its entries carry `PATH` with tmux's directory,
+`TMUX_TMPDIR` when set and `HOME` when it is not the passwd home, so the sweep
+reaches the agents' tmux server and config directory.
 
 ### Reboot-recovery runbook
 
@@ -13963,8 +14124,10 @@ adds it here.
 - This covers `find-missing`: it must run as the agents' user in their
   tmux environment. A run as another user, as root or against another tmux
   server can mark live rows `missing`, because their processes may read
-  unreadable and the other server answers that their sessions are gone
-  (see [Cron user invariant](#cron-user-invariant)).
+  unreadable and the other server answers that their sessions are gone.
+  The same holds for `HOME`: the sweeps read `$HOME/.config/agent-director`,
+  so a scheduled entry carries the install's `HOME` when cron or systemd
+  would set another (see [Cron user invariant](#cron-user-invariant)).
 
 ### Live-row sequence
 
@@ -17316,6 +17479,10 @@ way a test builds an old-layout install and runs `install.sh` against it.
   blocked copy, `sqlite3`, `ps`, `lsof`, `file`, `claude`), and
   `h.WrapTool(name, preamble)` runs a preamble and then the real tool.
   `INSTALL_SH_TEST_PROC_CHECK` selects the process check's branch.
+  `INSTALL_SH_TEST_CRONTAB` and `INSTALL_SH_TEST_SYSTEMCTL` name programs that
+  do not exist by default, so no case reads or changes the host's crontab or
+  user manager, and the shared loose copy of `install.sh` has the repo's
+  `schedule/` beside it (a case that wants none builds its own copy).
 - `h.Snapshot(ignore...)` and `moveDiff(want, got)` compare two trees for the
   refusal tests (a refusal changes nothing); paths a read-only store read
   may create (an empty `-wal` and a `-shm`) are ignored by name.
