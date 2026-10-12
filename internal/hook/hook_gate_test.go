@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -178,10 +179,77 @@ func assertNoIgnored(t *testing.T, before int, id string) {
 	}
 }
 
+// gateLaunchOpenedMs is the opened_at of the claimable launch seeded under a gate
+// test: far past any receipt time, so a main-agent Stop's grace delete (SR-4.5)
+// never takes it and only a close can remove it.
+const gateLaunchOpenedMs int64 = 4_000_000_000_000
+
+// seedGateSubagents seeds a running subagent record and a claimable launch on
+// id's row, both of its current launch (SR-8.1's subjects).
+func seedGateSubagents(t *testing.T, dbPath, id string) {
+	t.Helper()
+	if err := apitest.SeedSubagent(dbPath, id, "gate-sub",
+		apitest.WithSubagentType("general-purpose"), apitest.WithSubagentToolUseID("toolu_gate")); err != nil {
+		t.Fatalf("SeedSubagent: %v", err)
+	}
+	if err := apitest.SeedSubagentLaunch(dbPath, id, "toolu_gate_launch",
+		apitest.WithClaimableOpenedAt(gateLaunchOpenedMs)); err != nil {
+		t.Fatalf("SeedSubagentLaunch: %v", err)
+	}
+}
+
+// readGateSubagents returns every entry and claimable launch stored for id.
+func readGateSubagents(t *testing.T, dbPath, id string) apitest.SubagentRows {
+	t.Helper()
+	rows, err := apitest.ReadSubagentRows(dbPath, id)
+	if err != nil {
+		t.Fatalf("ReadSubagentRows: %v", err)
+	}
+	return rows
+}
+
+// assertGateSubagentsUnchanged fails when id's entries or claimable launches
+// differ from before in any column.
+func assertGateSubagentsUnchanged(t *testing.T, dbPath, id string, before apitest.SubagentRows) {
+	t.Helper()
+	if after := readGateSubagents(t, dbPath, id); !reflect.DeepEqual(after, before) {
+		t.Errorf("subagent rows changed:\n got  %+v\n want %+v", after, before)
+	}
+}
+
+// assertGateSubagentsClosed fails unless id's one running record turned lost
+// (agent_gone) at an instant in [fromMs, toMs] with no other column changed and
+// its claimable launch is gone.
+func assertGateSubagentsClosed(t *testing.T, dbPath, id string, before apitest.SubagentRows, fromMs, toMs int64) {
+	t.Helper()
+	after := readGateSubagents(t, dbPath, id)
+	if len(after.Launches) != 0 {
+		t.Errorf("claimable launches = %+v; want none (deleted by the close)", after.Launches)
+	}
+	if len(after.Entries) != 1 || len(before.Entries) != 1 {
+		t.Fatalf("entries = %d (before %d); want 1: the close turns an entry, never deletes it", len(after.Entries), len(before.Entries))
+	}
+	got, want := after.Entries[0], before.Entries[0]
+	lostAt, ok := got.LostAt.(int64)
+	if !ok || lostAt < fromMs || lostAt > toMs {
+		t.Errorf("lost_at = %v; want an instant in [%d, %d] (the write's)", got.LostAt, fromMs, toMs)
+	}
+	want.State = store.SubagentStateLost
+	want.CloseReason = store.SubagentCloseAgentGone
+	want.LostAt = got.LostAt
+	want.ActivityAt = got.ActivityAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("entry = %+v; want the seeded entry turned lost/agent_gone and nothing else changed (%+v)", got, want)
+	}
+}
+
 // TestHookGateOrdinaryEventAppliesFromAgent: each ordinary event (and an unknown
 // one) from the recorded pane process applies per the event table, records the
 // payload's session id on a row with none and clears any liveness note: a
-// pending row noted unreported goes to working on UserPromptSubmit (b.kdf).
+// pending row noted unreported goes to working on UserPromptSubmit (b.kdf). A
+// running record and a claimable launch seeded on the row are closed and deleted
+// only by the terminal SessionEnd (SR-8.1); every other event, SessionEnd with
+// reason clear included, leaves both (SR-8.2).
 func TestHookGateOrdinaryEventAppliesFromAgent(t *testing.T) {
 	st, dbPath := storefix.OpenTempStore(t)
 	for _, rs := range gateRowStates {
@@ -189,14 +257,24 @@ func TestHookGateOrdinaryEventAppliesFromAgent(t *testing.T) {
 			t.Run(rs.name+"/"+ev.name, func(t *testing.T) {
 				id := "gate-apply-" + strings.NewReplacer(" ", "-", "/", "-").Replace(rs.name+"-"+ev.name)
 				seedGateRow(t, dbPath, id, rs.state, "", rs.opts...)
+				seedGateSubagents(t, dbPath, id)
 				agent := agentParent(t, st, id)
 				payload := gatePayload(t, ev)
 				prior := mustGetSpawn(t, st, id)
+				subsBefore := readGateSubagents(t, dbPath, id)
 				before := len(readTrailLines(t, trailFile()))
 
+				fromMs := time.Now().UnixMilli()
 				stdout := fireGate(t, st, id, agent, nil, payload)
+				toMs := time.Now().UnixMilli()
 
 				row := mustGetSpawn(t, st, id)
+				// SR-8.1, SR-8.2: only the terminal SessionEnd closes the row's entries and deletes its claimable launches.
+				if ev.state == store.StateEnded {
+					assertGateSubagentsClosed(t, dbPath, id, subsBefore, fromMs, toMs)
+				} else {
+					assertGateSubagentsUnchanged(t, dbPath, id, subsBefore)
+				}
 				// SR-22.9: a hook from the recorded pane process applies whatever the row's state.
 				if want := ev.wantState(rs.state); row.State != want {
 					t.Errorf("State = %q; want %q", row.State, want)
@@ -393,4 +471,24 @@ func TestHookGateSessionIDRecordedNotGate(t *testing.T) {
 			assertNoIgnored(t, before, id)
 		})
 	}
+}
+
+// TestHookGateSessionEndOtherClosesNothing: a killed agent's SessionEnd carries
+// reason other, which is not terminal (N9): through Handle it keeps the row's
+// state and leaves its running record and claimable launch as they were (SR-8.2).
+func TestHookGateSessionEndOtherClosesNothing(t *testing.T) {
+	st, dbPath := storefix.OpenTempStore(t)
+	const id = "gate-session-end-other"
+	seedGateRow(t, dbPath, id, store.StateWorking, "")
+	seedGateSubagents(t, dbPath, id)
+	subsBefore := readGateSubagents(t, dbPath, id)
+	transcript := writeTranscript(t, "sess-killed")
+	payload := []byte(`{"hook_event_name":"SessionEnd","reason":"other","session_id":"sess-killed","transcript_path":"` + transcript + `"}`)
+
+	fireGate(t, st, id, agentParent(t, st, id), nil, payload)
+
+	if row := mustGetSpawn(t, st, id); row.State != store.StateWorking {
+		t.Errorf("State = %q; want working (reason other is a soft refresh)", row.State)
+	}
+	assertGateSubagentsUnchanged(t, dbPath, id, subsBefore)
 }

@@ -64,8 +64,13 @@ type closedRequest struct {
 // instant and proven_gone_how agent_gone (proveAgentGoneSQL; b.146 step 2c).
 // It returns the requests it closed in request-id order and emits nothing:
 // its caller emits once its transaction commits (emitDeny).
-func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID, reason string) ([]closedRequest, error) {
-	at := millisArg(time.Now())
+//
+// at is the close's instant in integer milliseconds, read by the caller from the
+// store's clock (storeNowMillis) inside the transaction. The ended write and
+// find-missing's mark pass the one value they also give the subagent close
+// (closeSubagentsAgentGone), so the requests' closed_at and the entries' lost_at
+// are the same instant; resume's move reads its own.
+func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID, reason string, at int64) ([]closedRequest, error) {
 	denied, err := queryClosedRequests(ctx, conn, true, denyOrphanedRequestsSQL, "deny", reason, at, instanceID)
 	if err != nil {
 		return nil, err
@@ -81,6 +86,10 @@ func closeOrphanedRequests(ctx context.Context, conn *sql.Conn, instanceID, reas
 	slices.SortFunc(closed, func(a, b closedRequest) int { return cmp.Compare(a.requestID, b.requestID) })
 	return closed, nil
 }
+
+// storeNowMillis reads the store's clock once, in integer milliseconds: the
+// instant a closing write takes inside its transaction (SR-3.5).
+func storeNowMillis() int64 { return millisArg(time.Now()).(int64) }
 
 // queryClosedRequests runs one of the close's statements, q with args, on
 // conn and returns the requests it returned, each marked denied as given.

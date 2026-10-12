@@ -69,7 +69,9 @@ func rrNoPreTrustClass(t *testing.T, f *v5Store, id string) string {
 // no launch start, the reset version + 1, the failure time for a NULL ended_at
 // and a NULL parent once the pre-reuse parent is deleted, the agent and end
 // report and subagent_tracking (the reset set 1) included; the reset's archive
-// and request deletion stay and no subagent entry or claimable launch changes.
+// and request deletion stay; the restore closes and reopens no subagent entry:
+// what the reset closed (SR-8.1, SR-10.3) stays closed and no claimable launch comes back
+// (SR-8.4).
 func TestReuseRestoreApplied(t *testing.T) {
 	badToken := reuseIdentity()
 	badToken.Token = "NOT-a-token!"
@@ -103,10 +105,12 @@ func TestReuseRestoreApplied(t *testing.T) {
 			if tc.seedClass != "" && seededClass != tc.seedClass {
 				t.Fatalf("seeded typeof(no_pre_trust) = %q; want %q", seededClass, tc.seedClass)
 			}
-			r := rrDoReset(t, f, id, reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust))
+			mix := f.seedCloseMix(id)
+			fresh := reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust)
+			r := rrDoReset(t, f, id, fresh)
 			reset := f.subagentRowsOf(id)
-			if len(reset.Entries) != 2 || len(reset.Launches) != 1 {
-				t.Fatalf("seedReuseRow left %d entries and %d claimable launches; want 2 and 1", len(reset.Entries), len(reset.Launches))
+			if reflect.DeepEqual(reset, mix.rows) || !reflect.DeepEqual(reset, cmClosed(mix.rows, fresh.LaunchStartedAtMillis)) {
+				t.Fatalf("the reset left the entries and launches %+v from %+v; want the close mix closed at the launch start, or the restore check is vacuous", reset, mix.rows)
 			}
 			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "SessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt", "SubagentTracking"} {
 				b, a := reflect.ValueOf(r.before).FieldByName(col).Interface(), reflect.ValueOf(r.reset).FieldByName(col).Interface()
@@ -139,6 +143,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 			if got := f.subagentRowsOf(id); !reflect.DeepEqual(got, reset) {
 				t.Errorf("subagent rows %+v -> %+v; want unchanged by the restore", reset, got)
 			}
+			f.assertBystanderKept(mix)
 			if reqs := f.reuseRequests(t, id); len(seeded.requests) == 0 || len(reqs) != 0 {
 				t.Errorf("requests %d -> %d after the restore; want the reset's deletion kept", len(seeded.requests), len(reqs))
 			}
@@ -165,7 +170,10 @@ func TestReuseRestoreErrors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
-			r := rrDoReset(t, f, seedReuseRow(t, f, reuseSpec{}).id, reuseFresh("", false))
+			id := seedReuseRow(t, f, reuseSpec{}).id
+			mix := f.seedCloseMix(id)
+			fresh := reuseFresh("", false)
+			r := rrDoReset(t, f, id, fresh)
 			if res, err := f.s.RestoreAfterFailedReuse(r.id, r.version, tc.prior(t, f, r), rrFailedAt); err == nil || res != 0 {
 				t.Fatalf("RestoreAfterFailedReuse = %v, %v; want an error with no CondResult", res, err)
 			}
@@ -177,6 +185,7 @@ func TestReuseRestoreErrors(t *testing.T) {
 			if got := f.historyAllLives(r.id); !reflect.DeepEqual(got, r.history) {
 				t.Errorf("history %+v -> %+v; want the reset's", r.history, got)
 			}
+			f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
 		})
 	}
 }

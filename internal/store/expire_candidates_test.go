@@ -141,7 +141,15 @@ func TestExpireDeleteFinishedIfSameLife(t *testing.T) {
 	}{
 		{"unchanged ended row", store.StateEnded, nil, store.CondApplied},
 		{"unchanged missing row", store.StateMissing, nil, store.CondApplied},
-		{"resume's move to pending after examination", store.StateEnded, (&rvResume{}).move, store.CondChanged},
+		// The move closes the row's entries and deletes its claimable launches, so a
+		// launch is seeded on the new launch afterwards: the refused delete must keep
+		// both the closed entry and that launch.
+		{"resume's move to pending after examination", store.StateEnded, func(t *testing.T, f *v5Store, id string) {
+			(&rvResume{}).move(t, f, id)
+			if err := apitest.SeedSubagentLaunch(f.path, id, "toolu-exp-after-move"); err != nil {
+				t.Fatalf("SeedSubagentLaunch after the move: %v", err)
+			}
+		}, store.CondChanged},
 		{"deleted by another caller", store.StateEnded, func(t *testing.T, f *v5Store, id string) {
 			if err := f.s.DeleteSpawn(id); err != nil {
 				t.Fatalf("DeleteSpawn: %v", err)

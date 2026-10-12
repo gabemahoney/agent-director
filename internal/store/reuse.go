@@ -319,13 +319,26 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     fresh.StartedAt and fresh.LaunchStartedAtMillis.
 //   - Permission requests: every request of the id, decided or not, is
 //     deleted. Children keep their parent_id; no other row changes.
+//   - Subagent close (closeSubagentsAgentGone, SR-8.1, SR-10.3): every running
+//     subagent entry of the id, of any launch, turns lost with close_reason
+//     agent_gone, and every claimable launch of the id is deleted, whatever
+//     the row's subagent_tracking flag, so no record of the earlier life reads
+//     running in the launch the reset begins. The entries stay (SR-10.3): only
+//     running ones change; stopped and lost ones are untouched, and a
+//     SubagentStart reopens one in the new launch. Its instant is
+//     fresh.LaunchStartedAtMillis, the new launch's launch_started_at the
+//     reset writes: lost_at and activity_at equal it, and the store reads no
+//     clock for it. A non-positive fresh.LaunchStartedAtMillis is refused by
+//     the close, so a reset that applied with it fails whole. Only an applied
+//     reset closes; CondAbsent and CondChanged close nothing.
 //
 // Applied, it returns CondApplied, the archived session id ("" when the row
 // had none) and resetVersion = examined.RowVersion + 1, the version the reset
 // produced, which the restore's condition takes.
 //
-// Any failure rolls everything back, leaves the row, its history and its
-// permission requests as they were, and returns a wrapped error with a zero
+// Any failure rolls everything back (archive, reset, request deletion and
+// subagent close together), leaves the row, its history, its permission
+// requests, its entries and its claimable launches as they were, and returns a wrapped error with a zero
 // CondResult. An archive failure's error holds ErrReuseArchive (errors.Is),
 // so the caller tells it apart; every other failure (an encoding failure, a
 // parentID naming no row, the reset or deletion, a busy store past its
@@ -426,6 +439,10 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		return 0, "", 0, fmt.Errorf("%s: delete permission requests: %w", errPrefix, err)
 	}
 
+	if err := closeSubagentsAgentGone(q, instanceID, fresh.LaunchStartedAtMillis); err != nil {
+		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
@@ -486,7 +503,10 @@ var restoreAfterFailedReuseSQL = func() string {
 // state is an immediate write (b.3ie): settled_state takes it too and
 // state_changed_ms the statement's clock, so it reports at once. It never
 // touches session_history or permission_requests: the reuse's archived entry
-// stays, and the deleted requests stay deleted. It emits no trail event.
+// stays, and the deleted requests stay deleted. It closes no subagent entry and
+// deletes no claimable launch (SR-8.1): the reset already closed the earlier
+// life's running entries, and the restored life does not reopen a closed entry
+// (only a SubagentStart does). It emits no trail event.
 //
 // A prior not produced by ReadForReuse (the zero RawLife), or whose state is
 // not ended or missing, is a caller error: an error is returned and nothing

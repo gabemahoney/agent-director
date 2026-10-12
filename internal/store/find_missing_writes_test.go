@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,9 @@ func seedFMRow(t *testing.T, f *v5Store, state string, opts ...apitest.SpawnOpti
 // of a pending row (b.kdf), which keeps the state, launch_started_at (CSCB),
 // last_seen_at, the launch owner, every identity and an earlier note's time,
 // and the repair of a stale check_permission row (b.146 rule 9), which writes
-// working, or waiting when idle_since is set, and keeps idle_since.
+// working, or waiting when idle_since is set, and keeps idle_since. Every row
+// carries the close mix: only the mark closes it, at one instant of the store's
+// clock; no other write changes an entry or a claimable launch (SR-8.1, SR-8.2).
 func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	type applied struct {
 		name, state string
@@ -138,9 +141,10 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 		}})
 	}
 	f := newV5Store(t)
-	rows := make([]fmRow, len(cases))
+	rows, mixes := make([]fmRow, len(cases)), make([]closeMix, len(cases))
 	for i, tc := range cases {
 		rows[i] = seedFMRow(t, f, tc.state, tc.opts...)
+		mixes[i] = f.seedCloseMix(rows[i].id)
 	}
 	// CURRENT_TIMESTAMP has whole seconds: pass the seeding's second so the
 	// mark's last_seen_at differs from the seeded one.
@@ -148,8 +152,16 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := rows[i]
-			if res, err := tc.write(f.s, r); err != nil || res != store.CondApplied {
+			var res store.CondResult
+			var err error
+			lo, hi := cmWindow(func() { res, err = tc.write(f.s, r) })
+			if err != nil || res != store.CondApplied {
 				t.Fatalf("write = %v, %v; want CondApplied, nil", res, err)
+			}
+			if strings.HasPrefix(tc.name, "mark/") {
+				f.assertMixClosedInWindow(mixes[i], lo, hi)
+			} else {
+				f.assertMixUnchanged(mixes[i])
 			}
 			after, want := f.rawColumns(r.id), r.before
 			want.RowVersion = r.before.RowVersion.(int64) + 1
@@ -231,6 +243,12 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 					state = cmp.Or(liveState[name], store.StateWaiting)
 				}
 				r := seedFMRow(t, f, state, append(slices.Clone(liveness), writeOpts[name]...)...)
+				// Only the mark closes entries, so only its refusals carry the mix; a
+				// deleted row's entries went with the row (the cascade is another test's).
+				var mix closeMix
+				if name == "mark" && !tc.delete {
+					mix = f.seedCloseMix(r.id)
+				}
 				if tc.mutate != nil {
 					tc.mutate(&r.examined)
 				}
@@ -239,6 +257,9 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 						t.Fatalf("first %s = %v, %v; want CondApplied", name, res, err)
 					}
 					r.before = f.rawColumns(r.id)
+					if mix.id != "" {
+						mix.rows = f.subagentRowsOf(mix.id) // as the first mark closed them
+					}
 				}
 				if tc.delete {
 					if err := f.s.DeleteSpawn(r.id); err != nil {
@@ -251,6 +272,9 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 				after, err := apitest.ReadSpawnColumns(f.path, r.id)
 				if tc.delete && !errors.Is(err, store.ErrSpawnNotFound) || !tc.delete && !reflect.DeepEqual(after, r.before) {
 					t.Errorf("row after a refused %s (%v):\n got  %+v\n want %+v", name, err, after, r.before)
+				}
+				if mix.id != "" {
+					f.assertMixUnchanged(mix)
 				}
 			})
 		}

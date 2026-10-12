@@ -76,10 +76,12 @@ const (
 	// SubagentRecord fails every insert, update and delete of the id's rows in
 	// subagents and in subagent_launches (b.xjn): the writes that create,
 	// change or remove a subagent entry or a claimable launch. Also matched:
-	// the SR-8.1 closes (a close of the id's running entries is an update, and
-	// a reuse's delete of its claimable launches a delete, so resume's move,
-	// reuse's reset and the ended write that carry one fail with it), the caps'
-	// evictions, a delete of the id's spawns row (delete, expire) while it
+	// the SR-8.1 closes, which all four closing writes carry (the ended write,
+	// find-missing's mark, resume's move and reuse's reset): a close updates
+	// the id's running entries and deletes the id's claimable launches, and the
+	// triggers fire per affected row, so a close fails only when the id has a
+	// running entry or a claimable launch (with neither, it writes nothing and
+	// succeeds). Also matched: the caps' evictions, a delete of the id's spawns row (delete, expire) while it
 	// still has entries or claimable launches, through the cascade, and
 	// apitest.SeedSubagent and apitest.SeedSubagentLaunch: install after
 	// seeding. Writes to the id's spawns row itself, and every write to another

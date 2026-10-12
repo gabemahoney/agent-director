@@ -277,8 +277,9 @@ var errEndedNotApplied = errors.New("store: ended transition not applied")
 
 // applyEndedTransition is ApplyHookTransitionResult's move to ended (a
 // terminal SessionEnd: the row's own agent exited) with the close of the
-// row's open permission requests (b.146 rule 12), in ONE transaction, both or
-// neither. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
+// row's open permission requests (b.146 rule 12) and of its running subagent
+// entries and claimable launches (SR-8.1), in ONE transaction, all or
+// nothing. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
 // waiting the store's busy timeout for the write lock, as every hook write
 // does), so it holds the write lock before its first read. Inside it:
 //
@@ -299,11 +300,21 @@ var errEndedNotApplied = errors.New("store: ended transition not applied")
 //     has not acked its verdict keeps it. Every request of the row not yet
 //     proven gone, closed now or before, is proven gone, agent_gone (b.146
 //     step 2c).
+//  4. The subagent close (closeSubagentsAgentGone, SR-8.1): every running
+//     subagent entry of the row, of any launch, turns lost with close_reason
+//     agent_gone, and every claimable launch of the row is deleted, whatever
+//     the row's subagent_tracking flag. Its instant is the one store-clock
+//     read (storeNowMillis, at millisecond precision) taken once inside this
+//     transaction after the write applied and shared with step 3's closed_at:
+//     the entries' lost_at and activity_at equal the requests' closed_at. A
+//     not-applied write reads no clock and closes nothing.
 //
 // Not applied rolls back and is reported as ApplyHookTransitionResult's (one
-// read after the rollback, hookNotApplied). Any other failure rolls the whole
-// transaction back, the row and its requests as they were, and is returned
-// wrapped with a zero HookApplied and UpsertError. After the commit, and only
+// read after the rollback, hookNotApplied). Any other failure, a failed
+// subagent close included, rolls the whole transaction back, the row, its
+// requests, its entries and its claimable launches as they were, and is
+// returned wrapped with a zero HookApplied and UpsertError (the hook still
+// exits 0). After the commit, and only
 // then, it emits, in request-id order, one ad.row_mutation.committed (writer
 // hook, decision_reason ended) per request it denied, then the
 // ad.spawn.state_transition (the prior state to ended), fail-open.
@@ -331,11 +342,15 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 		} else if n == 0 {
 			return errEndedNotApplied
 		}
-		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded)
+		// One store-clock read, inside the transaction after the write lock and
+		// only once the write applied, shared by the request close's closed_at
+		// and the subagent close's lost_at (SR-3.5).
+		at := storeNowMillis()
+		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, at)
 		if err != nil {
 			return fmt.Errorf("close permission requests: %w", err)
 		}
-		return nil
+		return closeSubagentsAgentGone(connQuerier{ctx: ctx, conn: conn}, instanceID, at)
 	})
 	if errors.Is(err, errEndedNotApplied) {
 		applied, err := s.hookNotApplied(instanceID, gate, errPrefix)

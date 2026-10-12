@@ -188,7 +188,10 @@ func TestReuseReadForReuse(t *testing.T) {
 // subagent_tracking 1 over the seeded 0), life and
 // version each +1, the pre-trust choice either way, an empty parent stored NULL; every request
 // of the id deleted (another id's kept), the child and older history kept; a
-// row with no session archives nothing.
+// row with no session archives nothing. The reset closes the row's close mix at
+// the fresh launch start: every running entry lost (agent_gone), every claimable
+// launch deleted, the entries themselves, every closed one and another row's
+// records kept (SR-8.1, SR-10.3).
 func TestReuseResetApplied(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -210,6 +213,7 @@ func TestReuseResetApplied(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			r := seedReuseRow(t, f, tc.spec)
+			mix := f.seedCloseMix(r.id)
 			seedRequest(t, f, r.parent)
 			otherRequests := f.reuseRequests(t, r.parent)
 			var parent any
@@ -280,6 +284,7 @@ func TestReuseResetApplied(t *testing.T) {
 			if _, before := splitHistory(r.history, reuseSessionID); !reflect.DeepEqual(others, before) || len(cur) != wantCur {
 				t.Errorf("history after the reset: %+v archived, others %+v; want %q archived once, the rest kept", cur, others, wantArchived)
 			}
+			f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
 		})
 	}
 }
@@ -295,4 +300,24 @@ func splitHistory(h []apitest.HistoryEntry, sessionID string) (cur, others []api
 		}
 	}
 	return cur, others
+}
+
+// TestReuseResetRowComesBack checks a reset row, once its relaunch records the
+// pane again, keeps every closed entry closed until a SubagentStart names it
+// (SR-8.3): the start reopens the entry in the new life's launch, and nothing else.
+func TestReuseResetRowComesBack(t *testing.T) {
+	f := newV5Store(t)
+	r := seedReuseRow(t, f, reuseSpec{})
+	mix := f.seedCloseMix(r.id)
+	fresh := reuseFresh("", false)
+	res, _, v, err := f.reuseReset(r, fresh)
+	if err != nil || res != store.CondApplied {
+		t.Fatalf("ResetForReuse = %v, %d, %v; want CondApplied", res, v, err)
+	}
+	f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
+	if res, err := f.s.RecordLaunchIdentity(r.id, v, fresh.Identity.Token, fresh.Identity); err != nil || res != store.CondApplied {
+		t.Fatalf("RecordLaunchIdentity = %v, %v; want CondApplied", res, err)
+	}
+	f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
+	f.assertStartReopens(r.id, fresh.Identity.Token, fresh.LaunchStartedAtMillis+60_000)
 }

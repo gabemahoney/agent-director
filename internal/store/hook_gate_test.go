@@ -127,7 +127,8 @@ func hgAssertIgnored(t *testing.T, f *v5Store, id string, mark int, got, want st
 // TestHookGateOrdinaryTable is the gate table (SR-22.9, SR-5.2): every
 // ordinary hook branch, from every gate case, on a pending, a live and a
 // missing-before-report row. The own pane process applies whatever the state;
-// any other parent changes nothing and gets its reason.
+// any other parent changes nothing and gets its reason. The ended branch runs
+// over the close mix: only the own pane process's write closes it (SR-8.1).
 func TestHookGateOrdinaryTable(t *testing.T) {
 	branches := []struct {
 		name, event, to string
@@ -152,9 +153,18 @@ func TestHookGateOrdinaryTable(t *testing.T) {
 							t.Fatalf("SeedPermissionRequest: %v", err)
 						}
 					}
+					var mix closeMix
+					if b.to == store.StateEnded {
+						mix = f.seedCloseMix(id)
+					}
 					before, requests, mark := hgColumns(t, f, id), hgOpenRequests(t, f, id), store.TrailMark(t)
 					gate := hgGate(b.event, g.parent(hgAgentParent(t, f, id)), hgHookSession)
-					out, got, err := f.s.ApplyHookTransitionResult(id, gate, b.to, b.soft, b.event, hgHookPath, true)
+					var out store.UpsertOutcome
+					var got store.HookApplied
+					var err error
+					lo, hi := cmWindow(func() {
+						out, got, err = f.s.ApplyHookTransitionResult(id, gate, b.to, b.soft, b.event, hgHookPath, true)
+					})
 					if err != nil {
 						t.Fatalf("ApplyHookTransitionResult: %v", err)
 					}
@@ -168,10 +178,16 @@ func TestHookGateOrdinaryTable(t *testing.T) {
 					}
 					if g.reason != "" {
 						hgAssertIgnored(t, f, id, mark, got, store.HookApplied{Reason: g.reason}, before)
+						if mix.id != "" {
+							f.assertMixUnchanged(mix)
+						}
 						return
 					}
 					if !got.Applied {
 						t.Fatalf("result = %+v; want applied", got)
+					}
+					if mix.id != "" {
+						f.assertMixClosedInWindow(mix, lo, hi)
 					}
 					lines := store.TrailEventsSince(t, mark, "ad.spawn.state_transition", id)
 					if b.held {

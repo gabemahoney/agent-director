@@ -3,7 +3,8 @@ package store_test
 // Resume's restore after a failed launch (SR-8.5, SR-5.3, SR-5.6, AC-RES-12):
 // the applied restore leaves no trace but the move's parent id (NULL once that
 // parent is deleted), the advanced version and subagent_tracking written back
-// (the move set 1) with every subagent entry and claimable launch unchanged.
+// (the move set 1). The restore closes and reopens no subagent entry: what the
+// move closed (SR-8.1) stays closed and no claimable launch comes back (SR-8.4).
 // Each case drives the real move
 // first (resume_move_test.go's seedMoveRow). Its refusals are
 // row_version_test.go's no-op cases; its store errors, store_errors_test.go.
@@ -42,7 +43,7 @@ func rsShow(v any) string {
 // or pid included, and the end report the move cleared) except the move's
 // parent, no launch start and version + 1; subagent_tracking returns to the
 // prior's value, which the move had set to 1, and no entry or claimable launch
-// changes.
+// changes from what the move left.
 func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -62,6 +63,7 @@ func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			r := seedMoveRow(t, f, tc.spec)
+			mix := f.seedCloseMix(r.id)
 			parent := f.seed(store.StateWaiting, "")
 			res, v, err := f.move(r, parent)
 			if err != nil || res != store.CondApplied {
@@ -71,8 +73,8 @@ func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 				t.Fatalf("subagent_tracking %v -> %v after the move; want 0 -> 1, or the restore check is vacuous", r.before.SubagentTracking, got)
 			}
 			moved := f.subagentRowsOf(r.id)
-			if len(moved.Entries) != 2 || len(moved.Launches) != 1 {
-				t.Fatalf("seedMoveRow left %d entries and %d claimable launches; want 2 and 1", len(moved.Entries), len(moved.Launches))
+			if reflect.DeepEqual(moved, mix.rows) || !reflect.DeepEqual(moved, cmClosed(mix.rows, moveLaunchMillis)) {
+				t.Fatalf("the move left the entries and launches %+v from %+v; want the close mix closed at the launch start, or the restore check is vacuous", moved, mix.rows)
 			}
 			if after := f.rawColumns(r.id); r.before.EndReportedAt != moveEndReported || after.EndReportedAt != nil {
 				t.Fatalf("end_reported_at %v -> %v after the move; want %d -> NULL, or the restore check is vacuous", r.before.EndReportedAt, after.EndReportedAt, moveEndReported)
@@ -102,6 +104,7 @@ func TestRestoreAfterFailedResumeApplied(t *testing.T) {
 			if got := f.subagentRowsOf(r.id); !reflect.DeepEqual(got, moved) {
 				t.Errorf("subagent rows %+v -> %+v; want unchanged by the restore", moved, got)
 			}
+			f.assertBystanderKept(mix)
 		})
 	}
 }

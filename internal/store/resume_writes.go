@@ -64,8 +64,9 @@ const moveToPendingSQL = `UPDATE spawns
 
 // MoveToPending is resume's move of a finished row to pending, the write that
 // begins its launch (SR-8.3), with a backstop close of the row's open
-// permission requests (b.146 rule 12) in the same transaction, both or
-// neither. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
+// permission requests (b.146 rule 12) and the close of the row's running subagent
+// entries and claimable launches (SR-8.1) in the same transaction, all or
+// nothing. The transaction is begun with BEGIN IMMEDIATE (inImmediateTx,
 // waiting the store's busy timeout for the write lock).
 //
 // The move is one conditional statement (SR-5.6) that applies only while the
@@ -84,9 +85,8 @@ const moveToPendingSQL = `UPDATE spawns
 // last_seen_at, agent and the request fields) is unchanged, and session_history
 // is not touched. It also sets subagent_tracking to 1, the flag of the launch
 // it begins (subagentTrackedSQL, SR-9; no parameter: every launch on this build
-// registers the subagent events), including over a row that held 0. It closes
-// no subagent entry here: the entries are the closes' (SR-8.1), not this
-// statement's.
+// registers the subagent events), including over a row that held 0. The statement
+// itself touches no subagent entry; the close below does.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request
 // of the row that still awaits an answer gets closed_at, an undecided one
@@ -101,13 +101,26 @@ const moveToPendingSQL = `UPDATE spawns
 // (writer resume, decision_reason ended) per request it denied, in
 // request-id order, fail-open; nothing else.
 //
+// The subagent close (closeSubagentsAgentGone, SR-8.1), only when the move
+// applied: every running subagent entry of the row, of any launch, turns lost
+// with close_reason agent_gone and every claimable launch of the row is deleted,
+// whatever the row's subagent_tracking flag, so no record of the earlier launch
+// reads running in the launch the move begins (a SubagentStart reopens one in
+// the new launch). Its instant is launchStartedAtMillis, the new launch's
+// launch_started_at the move writes: lost_at and activity_at equal it and the
+// store reads no clock for the close (SR-3.5). The request close above keeps its
+// own store-clock closed_at, unchanged. A non-positive launchStartedAtMillis is
+// refused by the close, so a move that applied with it fails whole. A move that
+// did not apply closes nothing.
+//
 // It returns CondApplied with movedVersion, the version the write produced
 // (examined.RowVersion + 1), which the restore's condition takes; CondChanged
 // when the row exists but is live, pending or differs from examined; CondAbsent
 // when no row has the id. Neither writes anything and both return movedVersion
 // 0. A store failure, a foreign-key failure on a parentID that names no row
 // included, returns a wrapped error with a zero CondResult and writes nothing,
-// the row and its requests as they were (SR-5.8).
+// the row, its requests, its entries and its claimable launches as they were
+// (SR-5.8).
 func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchStartedAtMillis int64, token, socket, parentID string, owner LaunchOwner) (res CondResult, movedVersion int64, err error) {
 	const errPrefix = "store: move to pending"
 	args := append(immediateStateArgs(StatePending),
@@ -136,11 +149,11 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 			return nil
 		}
 		moved = true
-		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded)
+		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, storeNowMillis())
 		if err != nil {
 			return fmt.Errorf("close permission requests: %w", err)
 		}
-		return nil
+		return closeSubagentsAgentGone(connQuerier{ctx: ctx, conn: conn}, instanceID, launchStartedAtMillis)
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("%s: %w", errPrefix, err)
@@ -201,7 +214,11 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
 // unchanged: parent_id keeps the move's value (RR5b T-h), and
 // session_id, jsonl_path, life_number, no_pre_trust, started_at,
 // last_seen_at and the request fields are untouched. It never touches
-// session_history or permission_requests and emits no trail event.
+// session_history or permission_requests and emits no trail event. It closes
+// no subagent entry and deletes no claimable launch (SR-8.1): the move already
+// closed the earlier launch's running entries, a failed launch's own hooks never
+// reached a row with no pane, and the earlier launch becoming current again
+// does not reopen a closed entry (only a SubagentStart does).
 //
 // A stored launch_token that was not well formed was read as "" (SR-5.5), so
 // the restore writes NULL for it: the row then has no current label, which

@@ -142,3 +142,71 @@ func TestMarkMissingCloseFailureMarksNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestClosingWritesFailWhole checks a write that closes the row's subagent
+// entries and claimable launches fails whole when that close fails (SR-8.1):
+// the ended write (a SessionEnd hook), the find-missing mark and resume's move
+// return an error with a zero result, and the row, its open permission request,
+// its entries and launches (and another row's) stay as they were, the write's
+// own change rolled back with them, and no state transition or committed row
+// mutation reaches the trail.
+func TestClosingWritesFailWhole(t *testing.T) {
+	type result = []any
+	cases := []struct {
+		name  string
+		state string
+		write func(t *testing.T, f *v5Store, id string, sp store.Spawn) (result, error)
+	}{
+		{"ended write", store.StateWaiting, func(t *testing.T, f *v5Store, id string, _ store.Spawn) (result, error) {
+			pid, start, err := storefix.AgentHookParent(f.s, id)
+			if err != nil {
+				t.Fatalf("AgentHookParent: %v", err)
+			}
+			applied, err := storefix.FireHook(f.s, id, "SessionEnd", "", pid, start)
+			return result{applied}, err
+		}},
+		{"find-missing mark", store.StateWaiting, func(t *testing.T, f *v5Store, id string, sp store.Spawn) (result, error) {
+			prior, res, err := f.s.MarkMissingIfSameLife(id, sp.Snapshot)
+			return result{prior, res}, err
+		}},
+		{"resume's move to pending", store.StateEnded, func(t *testing.T, f *v5Store, id string, sp store.Spawn) (result, error) {
+			res, v, err := f.s.MoveToPending(id, sp.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{})
+			return result{res, v}, err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newV5Store(t)
+			id := f.seed(tc.state, "", apitest.WithLaunchIdentity(fullIdentity()), apitest.WithLaunchStartedAt(launchStart))
+			seedRequest(t, f, id)
+			mix := f.seedCloseMix(id)
+			storefix.InjectWriteFailure(t, f.path, storefix.WriteFailSubagentRecord, id)
+			sp, before, requests := rvExamine(t, f, id), f.rawColumns(id), f.reuseRequests(t, id)
+
+			mark := store.TrailMark(t)
+
+			got, err := tc.write(t, f, id, sp)
+
+			if want := "injected write failure: " + storefix.WriteFailSubagentRecord.String(); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s err = %v; want it to contain %q", tc.name, err, want)
+			}
+			for i, v := range got {
+				if !reflect.ValueOf(v).IsZero() {
+					t.Errorf("result %d = %#v with the error; want the zero value", i, v)
+				}
+			}
+			if after := f.rawColumns(id); !reflect.DeepEqual(after, before) {
+				t.Errorf("row changed:\n before %+v\n after  %+v", before, after)
+			}
+			if after := f.reuseRequests(t, id); len(requests) == 0 || !reflect.DeepEqual(after, requests) {
+				t.Errorf("requests %+v -> %+v; want the seeded open request unchanged", requests, after)
+			}
+			f.assertMixUnchanged(mix)
+			for _, ev := range []string{"ad.spawn.state_transition", "ad.row_mutation.committed"} {
+				if lines := store.TrailEventsSince(t, mark, ev, id); len(lines) != 0 {
+					t.Errorf("%s lines = %v; want none", ev, lines)
+				}
+			}
+		})
+	}
+}

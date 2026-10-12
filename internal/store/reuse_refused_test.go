@@ -18,24 +18,27 @@ import (
 
 // reuseState is what a reset may touch: the row, its history and requests
 // (read on the store's own connection, so a transaction left open shows),
+// its subagent entries and claimable launches (the reset closes them, SR-8.1, SR-10.3)
 // and its child.
 type reuseState struct {
-	row      apitest.SpawnColumns
-	history  []apitest.HistoryEntry
-	requests []store.PermissionRow
-	child    apitest.SpawnColumns
+	row       apitest.SpawnColumns
+	history   []apitest.HistoryEntry
+	requests  []store.PermissionRow
+	subagents apitest.SubagentRows
+	child     apitest.SpawnColumns
 }
 
 // reuseStateOf reads r's reuseState now.
 func (f *v5Store) reuseStateOf(t *testing.T, r reuseRow) reuseState {
 	t.Helper()
-	return reuseState{f.rawColumns(r.id), f.historyAllLives(r.id), f.reuseRequests(t, r.id), f.rawColumns(r.child)}
+	return reuseState{f.rawColumns(r.id), f.historyAllLives(r.id), f.reuseRequests(t, r.id), f.subagentRowsOf(r.id), f.rawColumns(r.child)}
 }
 
 // TestReuseResetNotApplied checks a reset after its own agent's hook moved the
 // snapshot, of a live row, or of a row deleted after examination, gives
 // CondChanged or CondAbsent with no archived id or version, and archives,
-// deletes and writes nothing.
+// deletes and writes nothing: no running entry is closed and no claimable
+// launch deleted, on the row or another (SR-8.1, SR-10.3).
 func TestReuseResetNotApplied(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -59,6 +62,7 @@ func TestReuseResetNotApplied(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			r := seedReuseRow(t, f, tc.spec)
+			mix := f.seedCloseMix(r.id)
 			if tc.write != nil {
 				tc.write(t, f, r)
 			}
@@ -78,34 +82,46 @@ func TestReuseResetNotApplied(t *testing.T) {
 			} else if after := f.reuseStateOf(t, r); !reflect.DeepEqual(after, before) {
 				t.Errorf("a reset that did not apply wrote:\n before %+v\n after  %+v", before, after)
 			}
+			f.assertBystanderKept(mix)
 		})
 	}
 }
 
 // TestReuseResetFailClosed checks each injected store failure and a parent id
 // naming no row return an error (the archive marker only for the archive), no
-// outcome, and leave row, history, requests and child as before.
+// outcome, and leave row, history, requests, entries, claimable launches and
+// child as before; a failed close of the entries rolls the whole reset back, and
+// so does a fresh launch with no instant (0), which the close refuses
+// (SR-8.1, SR-10.3).
 func TestReuseResetFailClosed(t *testing.T) {
 	cases := []struct {
 		name        string
 		kind        storefix.WriteFailureKind // 0: no injection
 		parent      string
 		wantArchive bool // errors.Is(err, store.ErrReuseArchive)
+		noInstant   bool // the fresh launch has LaunchStartedAtMillis 0
 	}{
-		{"archive", storefix.WriteFailReuseArchive, "", true},
-		{"reset", storefix.WriteFailReuseReset, "", false},
-		{"permission-request deletion", storefix.WriteFailReusePermissionDelete, "", false},
-		{"parent id names no row", 0, "no-such-parent", false},
+		{"archive", storefix.WriteFailReuseArchive, "", true, false},
+		{"reset", storefix.WriteFailReuseReset, "", false, false},
+		{"permission-request deletion", storefix.WriteFailReusePermissionDelete, "", false, false},
+		{"subagent entry and launch close", storefix.WriteFailSubagentRecord, "", false, false},
+		{"parent id names no row", 0, "no-such-parent", false, false},
+		{"fresh launch with no instant", 0, "", false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			r := seedReuseRow(t, f, reuseSpec{})
+			mix := f.seedCloseMix(r.id) // before the injection, which fails the seed inserts too
 			if tc.kind != 0 {
 				storefix.InjectWriteFailure(t, f.path, tc.kind, r.id)
 			}
 			before := f.reuseStateOf(t, r)
-			res, archived, v, err := f.reuseReset(r, reuseFresh(tc.parent, false))
+			fresh := reuseFresh(tc.parent, false)
+			if tc.noInstant {
+				fresh.LaunchStartedAtMillis = 0
+			}
+			res, archived, v, err := f.reuseReset(r, fresh)
 			if err == nil || res != 0 || archived != "" || v != 0 {
 				t.Fatalf("ResetForReuse = %v, %q, %d, %v; want an error with no outcome", res, archived, v, err)
 			}
@@ -115,6 +131,7 @@ func TestReuseResetFailClosed(t *testing.T) {
 			if after := f.reuseStateOf(t, r); !reflect.DeepEqual(after, before) {
 				t.Errorf("a failed reset wrote:\n before %+v\n after  %+v", before, after)
 			}
+			f.assertBystanderKept(mix)
 		})
 	}
 }

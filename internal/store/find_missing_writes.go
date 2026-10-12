@@ -60,7 +60,8 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
 
 // MarkMissingIfSameLife is find-missing's mark (SR-11.3, SR-11.6; Appendix
 // F.4), with the close of the row's open permission requests (SR-5.4) in the
-// same transaction (b.146 rule 12): both or neither.
+// same transaction (b.146 rule 12), and the close of the row's running subagent
+// entries and claimable launches (SR-8.1): all or nothing.
 //
 // The transaction is begun with BEGIN IMMEDIATE on the store's one
 // connection, so it holds the database write lock before it reads the row;
@@ -96,11 +97,19 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
 //     decision_reason and decided_at. Two statements, the deny first; then
 //     a third proves every request of the row not yet proven gone, closed
 //     now or before, proven_gone_how agent_gone (b.146 step 2c).
+//  4. The subagent close (closeSubagentsAgentGone, SR-8.1), only when the mark
+//     applied: every running subagent entry of the row, of any launch, turns
+//     lost with close_reason agent_gone and every claimable launch of the row is
+//     deleted, whatever the row's subagent_tracking flag. The instant is one
+//     store-clock read (storeNowMillis, millisecond precision) taken once inside
+//     the transaction after the mark applied and shared with step 3's closed_at,
+//     so the entries' lost_at and activity_at equal the requests' closed_at.
+//     CondChanged and CondAbsent read no clock and close nothing.
 //
 // Any failure in the read, the mark, the close or the commit rolls the whole
-// transaction back: the row keeps its state and snapshot, and its requests
-// stay as they were. The mark never applies without the close, and the close
-// never applies without the mark.
+// transaction back: the row keeps its state and snapshot, and its requests,
+// entries and claimable launches stay as they were. The mark never applies
+// without the closes, and the closes never apply without the mark.
 //
 // After the commit, and only then, it emits per closed request, in request-id
 // order, one ad.row_mutation.committed (writer find_missing) for a request it
@@ -165,9 +174,13 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 		return "", CondChanged, nil
 	}
 
-	closed, err := closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonFindMissing)
+	at := storeNowMillis()
+	closed, err := closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonFindMissing, at)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: close permission requests: %w", errPrefix, err)
+	}
+	if err := closeSubagentsAgentGone(connQuerier{ctx: ctx, conn: conn}, instanceID, at); err != nil {
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)

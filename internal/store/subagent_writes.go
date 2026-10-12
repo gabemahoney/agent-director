@@ -641,8 +641,8 @@ func (t *subagentTx) launchFailure(f SubagentLaunchFailure) error {
 // turnEnd applies the main agent's turn end (SR-4.5, SR-7.4, SR-7.5): it deletes
 // the current launch's claimable launches opened strictly more than
 // SubagentGraceMs before the receipt time. Only the current launch's: an earlier
-// launch's leftovers go only with the cap until the closes of SR-8.1 (a stated
-// deviation from SR-12.2's literal "the row"). Then, when the Stop carries a
+// launch's claimable launches are already gone, deleted by the closes of SR-8.1
+// (closeSubagentsAgentGone) when the launch ended or the next one began. Then, when the Stop carries a
 // snapshot, it creates, confirms and fills the listed subagents and closes the
 // unlisted running background entries past the grace.
 func (t *subagentTx) turnEnd(te SubagentTurnEnd) error {

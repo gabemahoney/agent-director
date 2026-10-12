@@ -10,7 +10,8 @@ import (
 // TestClassifyEventSRDTable pins the SRD §5.2 event → state table, b.svb (the
 // main agent's idle prompt), b.pmn (only a known terminal SessionEnd cause, in
 // reason, matcher or endReason, ends the row; none or an unknown one is a soft
-// refresh) and the SRD test rig's legacy event_name field.
+// refresh, and so is `other`, the reason a killed agent's SessionEnd carries,
+// N9, so it closes no subagent record) and the SRD test rig's legacy event_name field.
 func TestClassifyEventSRDTable(t *testing.T) {
 	cases := []struct {
 		name, raw   string
@@ -37,6 +38,8 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{name: "SessionEnd logout", raw: `{"hook_event_name":"SessionEnd","reason":"logout"}`, wantState: store.StateEnded},
 		{name: "SessionEnd prompt_input_exit", raw: `{"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}`, wantState: store.StateEnded},
 		{name: "SessionEnd exit", raw: `{"hook_event_name":"SessionEnd","reason":"exit"}`, wantState: store.StateEnded},
+		{name: "SessionEnd other", raw: `{"hook_event_name":"SessionEnd","reason":"other"}`, wantSoft: true},
+		{name: "SessionEnd matcher other", raw: `{"hook_event_name":"SessionEnd","matcher":"other"}`, wantSoft: true},
 		{name: "SessionEnd unknown reason", raw: `{"hook_event_name":"SessionEnd","reason":"future_value"}`, wantSoft: true},
 		{name: "SessionEnd no cause", raw: `{"hook_event_name":"SessionEnd"}`, wantSoft: true},
 		{name: "SessionEnd matcher logout", raw: `{"hook_event_name":"SessionEnd","matcher":"logout"}`, wantState: store.StateEnded},

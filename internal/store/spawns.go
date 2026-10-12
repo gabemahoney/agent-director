@@ -777,7 +777,9 @@ const endHeldLaunchSQL = `UPDATE spawns
 // writes no other column: the launch token, socket, server and pane identity
 // (the server and pane identity columns NULL, since no session was created),
 // last_seen_at, the request columns, life_number, no_pre_trust and parent_id
-// keep the insert's values.
+// keep the insert's values. It closes no subagent entry and deletes no
+// claimable launch (SR-8.1): no agent of the held launch ran, so the row has
+// none, and the insert's subagent_tracking flag is left as it is.
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but no longer matches: another versioned write

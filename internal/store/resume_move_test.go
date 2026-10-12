@@ -109,6 +109,9 @@ func requireSet(t *testing.T, cols map[string]any) {
 // is 1 over the seeded 0; the launch start, token, socket
 // and parent (NULL for "") are the move's, also over a row with no token; every
 // kept column (the agent included) and the history are byte for byte unchanged.
+// The move closes the row's close mix at the launch start it records: every
+// running entry lost (agent_gone), every claimable launch deleted, every closed
+// entry and another row's records untouched (SR-8.1).
 func TestMoveToPendingApplied(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -129,6 +132,7 @@ func TestMoveToPendingApplied(t *testing.T) {
 			if r.before.SubagentTracking != int64(0) {
 				t.Fatalf("seeded subagent_tracking = %v; want 0, or the move's write is vacuous", r.before.SubagentTracking)
 			}
+			mix := f.seedCloseMix(r.id)
 			var parent any
 			parentID := ""
 			if tc.parent {
@@ -160,6 +164,99 @@ func TestMoveToPendingApplied(t *testing.T) {
 			if !reflect.DeepEqual(moveKept(after), moveKept(r.before)) || !reflect.DeepEqual(f.historyAllLives(r.id), r.history) {
 				t.Errorf("kept columns or history changed:\n before %v\n after  %v", moveKept(r.before), moveKept(after))
 			}
+			f.assertMixClosedAt(mix, moveLaunchMillis)
 		})
 	}
+}
+
+// TestMoveToPendingNotAppliedClosesNothing checks a move that applies nothing
+// leaves the row's entries and claimable launches, and another row's, as they
+// were (SR-8.1): the guard refuses a live or pending row and a snapshot that no
+// longer matches the row, the row may be gone, and a parent that names no row fails the
+// statement itself.
+func TestMoveToPendingNotAppliedClosesNothing(t *testing.T) {
+	cases := []struct {
+		name    string
+		state   string
+		run     func(f *v5Store, r moveRow) (store.CondResult, error)
+		want    store.CondResult
+		wantErr bool
+	}{
+		{name: "live row", state: store.StateWaiting, want: store.CondChanged},
+		{name: "pending row", state: store.StatePending, want: store.CondChanged},
+		{name: "snapshot a version behind the row", want: store.CondChanged,
+			run: func(f *v5Store, r moveRow) (store.CondResult, error) {
+				stale := r.examined.Snapshot
+				stale.RowVersion--
+				res, _, err := f.s.MoveToPending(r.id, stale, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{})
+				return res, err
+			}},
+		{name: "row that is gone", want: store.CondAbsent,
+			run: func(f *v5Store, r moveRow) (store.CondResult, error) {
+				res, _, err := f.s.MoveToPending("move-no-such-row", r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "", store.LaunchOwner{})
+				return res, err
+			}},
+		{name: "parent id that names no row", wantErr: true,
+			run: func(f *v5Store, r moveRow) (store.CondResult, error) {
+				res, _, err := f.s.MoveToPending(r.id, r.examined.Snapshot, moveLaunchMillis, moveToken, moveSocket, "move-no-such-parent", store.LaunchOwner{})
+				return res, err
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newV5Store(t)
+			r := seedMoveRow(t, f, moveSpec{state: tc.state})
+			mix := f.seedCloseMix(r.id)
+			run := tc.run
+			if run == nil {
+				run = func(f *v5Store, r moveRow) (store.CondResult, error) { res, _, err := f.move(r, ""); return res, err }
+			}
+			res, err := run(f, r)
+			if tc.wantErr != (err != nil) || res != tc.want {
+				t.Fatalf("MoveToPending = %v, %v; want %v, error %v", res, err, tc.want, tc.wantErr)
+			}
+			f.assertMixUnchanged(mix)
+		})
+	}
+}
+
+// TestMoveToPendingWithoutLaunchInstantFails checks a move given no launch
+// instant (0), which the close of the row's running entries and claimable
+// launches refuses, fails whole: an error with a zero result, and the row, its
+// history, entries and claimable launches (and another row's) as they were
+// (SR-8.1).
+func TestMoveToPendingWithoutLaunchInstantFails(t *testing.T) {
+	f := newV5Store(t)
+	r := seedMoveRow(t, f, moveSpec{})
+	mix := f.seedCloseMix(r.id)
+	before := f.rawColumns(r.id)
+
+	res, v, err := f.s.MoveToPending(r.id, r.examined.Snapshot, 0, moveToken, moveSocket, "", store.LaunchOwner{})
+
+	if err == nil || res != 0 || v != 0 {
+		t.Fatalf("MoveToPending(launch instant 0) = %v, %d, %v; want an error with a zero result", res, v, err)
+	}
+	if after := f.rawColumns(r.id); !reflect.DeepEqual(after, before) || !reflect.DeepEqual(f.historyAllLives(r.id), r.history) {
+		t.Errorf("row or history changed:\n before %+v\n after  %+v", before, after)
+	}
+	f.assertMixUnchanged(mix)
+}
+
+// TestMoveToPendingRowComesBack checks a moved row, once its relaunch records
+// the pane again, keeps every closed entry closed until a SubagentStart names it
+// (SR-8.3): the start reopens the entry in the new launch, and nothing else.
+func TestMoveToPendingRowComesBack(t *testing.T) {
+	f := newV5Store(t)
+	r := seedMoveRow(t, f, moveSpec{})
+	mix := f.seedCloseMix(r.id)
+	res, v, err := f.move(r, "")
+	if err != nil || res != store.CondApplied {
+		t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
+	}
+	f.assertMixClosedAt(mix, moveLaunchMillis)
+	if res, err := f.s.RecordLaunchIdentity(r.id, v, moveToken, moveIdentity()); err != nil || res != store.CondApplied {
+		t.Fatalf("RecordLaunchIdentity = %v, %v; want CondApplied", res, err)
+	}
+	f.assertMixClosedAt(mix, moveLaunchMillis)
+	f.assertStartReopens(r.id, moveToken, moveLaunchMillis+60_000)
 }

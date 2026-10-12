@@ -64,7 +64,7 @@ null.
 | `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (see "A relay row left in `check_permission`" below); any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below). With `relay_mode=on`, it first proves the main agent's permission requests recorded before it started gone, as `Stop` does |
 | `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
-| `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, closes the row's permission requests that still await an answer and proves every request of the row gone; see "The agent's end closes its requests" below) |
+| `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, closes the row's permission requests that still await an answer and proves every request of the row gone; see "The agent's end closes its requests" below; it also turns the row's `running` subagent records `lost`, see [usage.md](usage.md#when-an-agent-ends-goes-missing-or-relaunches)) |
 | `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
 | `SubagentStart` | — | soft refresh: bumps `last_seen_at`, state unchanged, `idle_since` and the settle clock untouched. With `agent_id` it records no session id, and writes the subagent's entry in the same write |
 | `SubagentStop` | — | as `SubagentStart`; with `agent_id` its entry write also applies the subagents its `background_tasks` lists |
@@ -454,9 +454,10 @@ the hook started.
 - **`PostToolUseFailure`** for the `Agent` tool closes the open Agent call
   with its `tool_use_id` and writes nothing else.
 - **A main-agent `Stop`** (no `agent_id`) closes the open Agent calls of
-  the current launch opened more than 2 s before the `Stop`. Calls of an
-  earlier launch stay. A `Stop` carrying `agent_id` writes nothing of
-  this kind. It also applies its `background_tasks` as a snapshot of the
+  the current launch opened more than 2 s before the `Stop`. No call of an
+  earlier launch is left to close: the closes of a row that ends, goes
+  missing or begins a new launch delete them. A `Stop` carrying `agent_id`
+  writes nothing of this kind. It also applies its `background_tasks` as a snapshot of the
   agent's running background subagents (see "The `background_tasks` list"
   below), in the same transaction:
   - A listed subagent with no record gets one, `running`, `run_mode`
@@ -522,16 +523,17 @@ reaches the log or the trail.
 
 Limits:
 
-- Only the hooks above end an entry. A subagent whose stop signals never
+- Apart from the closes of a row that ends, goes missing or begins a new
+  launch (see [usage.md](usage.md#when-an-agent-ends-goes-missing-or-relaunches)),
+  only the hooks above end an entry. A subagent whose stop signals never
   reached agent-director (a foreground one is still stopped by its completed
-  launch result), a row that ends or goes missing, and a `resume` or `reuse`
-  that starts a new launch all leave their `running` entries running.
-- A later snapshot repairs only one case: a `running` background entry of the
-  current launch whose stop event was dropped or never sent, and which the
-  snapshot does not list, is turned `lost`. A foreground entry, or one of
-  unknown run mode, stays `running`. An entry of an `ended` or `missing` row
-  takes no hooks, so nothing turns it `lost`. After a `resume` or `reuse`
-  the old entries belong to an earlier launch, which a snapshot leaves alone.
+  launch result) leaves its entry `running` until a close of the row or a
+  snapshot ends it.
+- A snapshot closes only a `running` background entry of the current launch
+  that it does not list, turning it `lost`; it never closes a foreground
+  entry, one of unknown run mode, or one of an earlier launch. What that
+  leaves a consumer reading is in
+  [usage.md](usage.md#how-long-a-record-reads-running).
 - A background subagent whose hooks were all missed has no entry until a
   later main-agent `Stop` lists it as running. A `SubagentStop`'s listing
   never creates an entry.

@@ -182,6 +182,58 @@ func subagentRowGateArgs(instanceID string, gate HookGate) []any {
 	return append([]any{instanceID}, hookGateArgs(gate)...)
 }
 
+// closeRunningSubagentsSQL is the liveness close's first statement (SR-8.1):
+// every running entry of the row, record or observation, of any launch, becomes
+// lost with close_reason agent_gone, lost_at and activity_at the instant. Every
+// other column is left as it is. Placeholders: the state lost, the reason, the
+// instant twice, the id, the state running.
+const closeRunningSubagentsSQL = `UPDATE subagents
+   SET state = ?, close_reason = ?, lost_at = ?, activity_at = ?
+ WHERE instance_id = ? AND state = ?`
+
+// closeClaimableLaunchesSQL is the liveness close's second statement (SR-8.1):
+// every claimable launch of the row, of any launch, is deleted. Placeholder: the
+// id.
+const closeClaimableLaunchesSQL = `DELETE FROM subagent_launches WHERE instance_id = ?`
+
+// closeSubagentsAgentGone is the close of SR-8.1, shared by the four writes that
+// end or restart a row's launch: the terminal SessionEnd's move to ended
+// (applyEndedTransition), find-missing's mark (MarkMissingIfSameLife), resume's
+// move to pending (MoveToPending) and reuse's reset (ResetForReuse). On q, the
+// caller's open transaction, it turns every running entry of instanceID (records
+// and observations, any launch) lost with close_reason agent_gone, lost_at and
+// activity_at at, and deletes every claimable launch of the row. Entries that
+// are stopped or lost, every other column of a closed entry and every other
+// row's entries and claimable launches are untouched.
+//
+// at is an instant in integer milliseconds, chosen by the caller: the store's
+// own clock read once inside the transaction for the ended write and the mark
+// (the value its request close takes too), the new launch's launch_started_at for
+// the move and the reset (SR-3.5, SR-6.2). A non-positive at is a caller error
+// and is always refused, with nothing written and no clock fallback, so the
+// caller's transaction rolls back whole.
+//
+// The caller runs it only after its own write applied, inside that write's
+// transaction, so the close and the write commit or roll back together: a write
+// that did not apply closes nothing, and a close that fails undoes the write. It
+// is independent of the row's subagent_tracking flag and of the hook gate (the
+// writes it follows are the row's own liveness, not an entry event), emits no
+// trail record, and logs nothing. Nothing is deleted from subagents. Its errors
+// name the failed step only; each caller wraps them once with its own prefix.
+func closeSubagentsAgentGone(q querier, instanceID string, at int64) error {
+	if at <= 0 {
+		return fmt.Errorf("close subagent entries: instant %d is not positive", at)
+	}
+	if _, err := q.Exec(closeRunningSubagentsSQL,
+		SubagentStateLost, SubagentCloseAgentGone, at, at, instanceID, SubagentStateRunning); err != nil {
+		return fmt.Errorf("close subagent entries: %w", err)
+	}
+	if _, err := q.Exec(closeClaimableLaunchesSQL, instanceID); err != nil {
+		return fmt.Errorf("close subagent launches: %w", err)
+	}
+	return nil
+}
+
 // execEvict runs one eviction statement on q and reports whether it deleted a
 // row.
 func execEvict(q querier, what, stmt string, args ...any) (bool, error) {

@@ -156,11 +156,15 @@ The values of the enumerated fields are fixed:
 
 - `state`: `running` (started, neither stopped nor judged lost), `stopped`
   (its agent reported it finished) or `lost` (judged gone without a stop
-  report; see [When a record turns lost](#when-a-record-turns-lost)).
+  report; see [When a record turns lost](#when-a-record-turns-lost) and
+  [When an agent ends, goes missing or relaunches](#when-an-agent-ends-goes-missing-or-relaunches)).
 - `close_reason`: `stop_event` (its agent reported it finished),
   `absent_from_snapshot` (the agent's list of running background tasks at a
-  stop did not name it) or `agent_gone` (its agent ended, went missing or began a
-  new launch).
+  stop did not name it) or `agent_gone` (its agent ended, was marked missing or
+  began a new launch; see
+  [When an agent ends, goes missing or relaunches](#when-an-agent-ends-goes-missing-or-relaunches)).
+  It is not the `agent_gone` of a permission request's `proven_gone_how` (see
+  [Intercept permission prompts](#intercept-permission-prompts)).
 - `parent_type`: `agent` (the agent itself launched it) or `subagent` (another
   subagent launched it, or an in-process teammate, which has no record; see
   [Subagents and in-process teammates](hooks.md#subagents-and-in-process-teammates)).
@@ -218,19 +222,17 @@ These cases show a record late or oddly:
 ### How long a record reads running
 
 A record stays `running` until a stop signal arrives: a stop event, or for a
-foreground subagent its finished launch result. A record of any run mode stays
-`running` when its agent ends, goes missing or is relaunched, when its subagent
-ends with no stop event (for example when the user interrupts it), and when its
-stop event and its launch result are both over the 1 MiB payload limit (see
-[Fail-open invariant](hooks.md#fail-open-invariant)). A later stop turns a
-record `lost` only in one case, described next: a `running` background record
-of the agent's current launch whose stop event was dropped or never sent. A
-foreground record, or one whose run mode is unknown, is never turned `lost`
-and stays `running`, so a foreground subagent whose stop event and launch
-result were both over the limit keeps reading `running`. A record of an agent
-that has ended or gone missing takes no later stop, so it stays `running`, and
-after a relaunch the old records belong to an earlier launch, which a later
-stop leaves alone. No record carries the `agent_gone` reason.
+foreground subagent its finished launch result. It also stays `running` when
+its subagent ends with no stop event (for example when the user interrupts it),
+and when its stop event and its launch result are both over the 1 MiB payload
+limit (see [Fail-open invariant](hooks.md#fail-open-invariant)). A later stop
+turns a record `lost` only in one case, described next: a `running` background
+record of the agent's current launch whose stop event was dropped or never
+sent. A foreground record, or one whose run mode is unknown, is never turned
+`lost` by a stop, so a foreground subagent whose stop event and launch result
+were both over the limit keeps reading `running` until its agent's row ends,
+goes missing or the agent begins a new launch (see
+[When an agent ends, goes missing or relaunches](#when-an-agent-ends-goes-missing-or-relaunches)).
 
 ### When a record turns lost
 
@@ -260,6 +262,27 @@ A start for a `stopped` subagent runs its record again. While another stop
 hook blocks a stop, the record reads `stopped` although the subagent keeps
 running; the real stop then updates `stopped_at`.
 
+### When an agent ends, goes missing or relaunches
+
+Every `running` record of the agent turns `lost` with `close_reason`
+`agent_gone`, whatever its run mode and launch, when one of these happens.
+`lost_at` is the time of that change:
+
+- The agent exits and its row becomes `ended`. A session end that only clears
+  or compacts the conversation closes nothing (see
+  [Hooks](hooks.md#the-eleven-state-tracking-hooks)).
+- `find-missing` marks the row `missing` (see
+  [Maintenance](maintenance.md) for scheduling it). A row it leaves live, with
+  an unverified result or the `unreported` note, closes nothing.
+- The agent begins a new launch, by `resume` or by reuse of its id. `lost_at`
+  is the new launch's start, the `launch_started_at` of its `pending` row.
+
+`kill` alone changes no record: a killed agent's `running` records turn `lost`
+once its row is marked `missing` or ends, as the row itself changes.
+
+A row that comes back to a live state through its own agent's hooks after it
+ended or was marked `missing` keeps its closed records closed.
+
 ### Limits and retention
 
 Each string field holds at most 1 KiB, cut at a whole character. Only the
@@ -270,7 +293,8 @@ An agent keeps at most 300 entries: its records plus starts that nothing has
 confirmed, which are never shown. When a new entry arrives at the limit, one is
 evicted first: a closed unconfirmed start, else a closed record, else a
 `running` entry only when nothing closed remains; within each, the one changed
-longest ago goes first. A `resume` or reuse keeps the records. They are
+longest ago goes first. A `resume` or reuse keeps every record, the `running`
+ones closed as above, so none of an earlier launch reads `running`. They are
 deleted with the row (see [Maintenance](maintenance.md) for `expire` and
 [Operator actions](operator-actions.md) for `agent-director-admin delete`).
 
