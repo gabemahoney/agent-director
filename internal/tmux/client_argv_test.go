@@ -87,6 +87,23 @@ func argvCases() []argvCase {
 			want:    [][]string{{"send-keys", "-t", "%3", "C-u"}},
 			timeout: testTimeouts.Action,
 		},
+		{
+			// RN-19: a Codex line clear is one call repeating C-u 127 times
+			// (-N), not 127 calls.
+			name:    "key send repeated",
+			script:  []tmux.RunResult{exitZero("")},
+			call:    func(c *tmux.Client) error { return c.SendKeyPaneRepeat(testSocket, "%3", "C-u", 127) },
+			want:    [][]string{{"send-keys", "-t", "%3", "-N", "127", "C-u"}},
+			timeout: testTimeouts.Action,
+		},
+		{
+			// A count below 1 still sends the key once.
+			name:    "key send repeated with count zero sends once",
+			script:  []tmux.RunResult{exitZero("")},
+			call:    func(c *tmux.Client) error { return c.SendKeyPaneRepeat(testSocket, "%3", "C-u", 0) },
+			want:    [][]string{{"send-keys", "-t", "%3", "-N", "1", "C-u"}},
+			timeout: testTimeouts.Action,
+		},
 	}, argvTextCases(), []argvCase{
 		{
 			name:   "capture",

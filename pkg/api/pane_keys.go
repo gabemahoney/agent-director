@@ -18,7 +18,9 @@ import (
 // /exit (b.9o4): C-u, which Claude Code's prompt input binds to deleting
 // from the cursor to the start of the line, and a tty to erasing the line.
 // It clears a one-line leftover such as an unsubmitted /exit, not a
-// multi-line text, so send-keys does not send it.
+// multi-line text, so send-keys does not send it. A Codex row's pause sends
+// it codexLineClearPresses times in one call (keysRun.clearPresses), enough
+// for a draft of up to 64 lines.
 const lineClearKey = "C-u"
 
 // keysTmux is the tmux surface of the pane verbs that type keys
@@ -37,6 +39,9 @@ type lineClearTmux interface {
 	// SendKeyPane sends one key, by its tmux key name and never typed
 	// literally, to the pane paneID on socket.
 	SendKeyPane(socket, paneID, key string) error
+	// SendKeyPaneRepeat sends the key count times in one call (a Codex
+	// row's clear).
+	SendKeyPaneRepeat(socket, paneID, key string, count int) error
 }
 
 // keysFacts is what one keys verb's tmux phase found and did, kept so the
@@ -91,6 +96,10 @@ type keysRun struct {
 	// deletes only back to the start of the cursor's line); nil sends none
 	// (send-keys).
 	clear lineClearTmux
+	// clearPresses, when above 1, is how many presses of lineClearKey the
+	// clear sends, in one call (a Codex row: codexLineClearPresses); 0 or 1
+	// sends the one key as before.
+	clearPresses int
 	// found is what the phase found and did.
 	found keysFacts
 }
@@ -145,7 +154,13 @@ func (r *keysRun) targetPane() (string, tmux.Launch, error) {
 // have reached the pane" mode (sendFailed) with the verb's next step.
 func (r *keysRun) typeText(paneID string, launch tmux.Launch, text string, enter bool) error {
 	if r.clear != nil {
-		if err := r.clear.SendKeyPane(r.socket, paneID, lineClearKey); err != nil {
+		var err error
+		if r.clearPresses > 1 {
+			err = r.clear.SendKeyPaneRepeat(r.socket, paneID, lineClearKey, r.clearPresses)
+		} else {
+			err = r.clear.SendKeyPane(r.socket, paneID, lineClearKey)
+		}
+		if err != nil {
 			return r.sendFailed(err, tmux.CallSendKey, launch)
 		}
 	}

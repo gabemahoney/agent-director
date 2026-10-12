@@ -9,8 +9,9 @@ import (
 
 // This file holds find-missing's per-row outcome writers (SR-11.3, SR-11.4,
 // SR-11.6, SR-5.8): the guarded mark, whose transaction also denies the row's
-// open permission requests, with its tick; the note write with SR-11.4's tick
-// rule; the note clear; and the unreported note of a live pending row, under
+// open permission requests, with its tick; the guarded move of a Codex row
+// with an end report to ended (markEndedSameLife, shared with pause); the note
+// write with SR-11.4's tick rule; the note clear; and the unreported note of a live pending row, under
 // the same tick rule (b.kdf). The
 // process path uses them, and Task 2's tmux path reuses them unchanged for
 // its marks (tmux_absent, tmux_name_held) and notes, passing the snapshot its
@@ -34,8 +35,8 @@ const (
 // findMissingWrite is the outcome of one find-missing per-row writer.
 type findMissingWrite struct {
 	// Listed reports whether the row belongs in the writer's result list:
-	// ids for a mark, unverified_ids for a note; never for a clear or an
-	// unreported note.
+	// ids for a mark, unverified_ids for a note; never for a move to ended
+	// (markEndedSameLife), a clear or an unreported note.
 	Listed bool
 	// Wrote reports whether a guarded write was attempted; false when the
 	// writer's rule needed none (an equal note, a row with no note to clear,
@@ -83,17 +84,80 @@ func markMissingSameLife(s FindMissingStore, id string, examined RowSnapshot, re
 	if res != CondApplied {
 		return w
 	}
+	emitMarkTick(id, prior, "missing", reason, extra)
+	w.Listed = true
+	return w
+}
+
+// emitMarkTick writes the one ad.find_missing.tick of a mark or a move that
+// applied: instance_id, prior_state (the state the write replaced), new_state
+// (missing or ended), reconciliation_reason reason and source ad_find_missing,
+// plus every field of extra; extra never replaces one of those five.
+// Fail-open: a trail-write failure is discarded. The mark and the Codex end
+// (markEndedSameLife) share it, so find-missing and pause emit the same record.
+func emitMarkTick(id, prior, newState, reason string, extra map[string]any) {
 	fields := make(map[string]any, len(extra)+5)
 	for k, v := range extra {
 		fields[k] = v
 	}
 	fields["instance_id"] = id
 	fields["prior_state"] = prior
-	fields["new_state"] = "missing"
+	fields["new_state"] = newState
 	fields["reconciliation_reason"] = reason
 	fields["source"] = findMissingTickSource
 	_ = trail.Emit(context.Background(), findMissingTickEvent, fields)
-	w.Listed = true
+}
+
+// EndedMover is the one store write the Codex end needs: the guarded move of a
+// live Codex row holding an end report to ended (store.MarkEndedIfSameLife).
+// FindMissingStore and PauseStore both carry it, so find-missing's sweep and
+// pause's pre-check and wait polls make the one move through one writer
+// (markEndedSameLife).
+type EndedMover interface {
+	// MarkEndedIfSameLife moves a live Codex row that holds an end report to
+	// ended in one write guarded on examined, the row snapshot the caller
+	// read, and closes the row's permission requests (an undecided one denied
+	// with decision_reason ended, every one proven agent_gone) and its running
+	// subagent entries in the same transaction. It returns the prior state and
+	// CondApplied when it applied; CondChanged (not a Codex row, no end report
+	// or a cleared one, terminal, or another snapshot) or CondAbsent, prior
+	// state "", having written nothing; and a store error as an error with a
+	// zero CondResult (SR-5.8), having written nothing.
+	MarkEndedIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error)
+}
+
+// markEndedSameLife is the shared outcome writer of the Codex end (SR-6.5,
+// SR-7.3, SR-7.5): the guarded move of one live Codex row, whose agent process
+// the caller proved gone and which holds an end report, to ended
+// (EndedMover.MarkEndedIfSameLife), guarded on examined. Find-missing's two
+// gone-process paths and pause (before its state rules and in each wait poll)
+// call it, so each emits the same records, in order:
+//
+//  1. the move's transaction, which closes the row's permission requests and
+//     subagent records and, once it commits, writes each denied request's
+//     ad.row_mutation.committed (writer find_missing) and each closed
+//     request's permission_orphan_closeout tick;
+//  2. when it applied, exactly one ad.find_missing.tick: instance_id,
+//     prior_state (the state the move replaced), new_state ended,
+//     reconciliation_reason reason (proc_absent), source ad_find_missing, plus
+//     every field of extra. It emits no subagent record (the close writes
+//     none) and no ad.spawn.state_transition.
+//
+// A move that finds the row changed or absent, or fails in the store (its
+// closes included), applies nothing: no tick, no close. A store error is logged
+// on lg (a nil lg writes nothing) and returned in the outcome's Err. Listed is
+// always false: a row moved to ended is in neither ids nor unverified_ids.
+func markEndedSameLife(s EndedMover, id string, examined RowSnapshot, reason string, extra map[string]any, lg FindMissingLogger) findMissingWrite {
+	prior, res, err := s.MarkEndedIfSameLife(id, examined)
+	w := findMissingWrite{Wrote: true, Res: res, Err: err}
+	if err != nil {
+		w.Res = 0
+		logFindMissing(lg, "MarkEndedIfSameLife", id, err)
+		return w
+	}
+	if res == CondApplied {
+		emitMarkTick(id, prior, "ended", reason, extra)
+	}
 	return w
 }
 

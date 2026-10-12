@@ -16,8 +16,8 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// rvGuarded is one of find-missing's guarded writes; prior is the mark's
-// returned prior state, the repair's written state, and "" for the others.
+// rvGuarded is one of find-missing's guarded writes; prior is the mark's and
+// the move's returned prior state, the repair's written state, and "" for the others.
 type rvGuarded struct {
 	name string
 	run  func(s *store.Store, id string, examined store.RowSnapshot) (prior string, res store.CondResult, err error)
@@ -29,6 +29,9 @@ const rvNewNote = "process_not_seen_tmux_unchecked"
 var (
 	rvMark = rvGuarded{"MarkMissingIfSameLife", func(s *store.Store, id string, e store.RowSnapshot) (string, store.CondResult, error) {
 		return s.MarkMissingIfSameLife(id, e)
+	}}
+	rvMarkEnded = rvGuarded{"MarkEndedIfSameLife", func(s *store.Store, id string, e store.RowSnapshot) (string, store.CondResult, error) {
+		return s.MarkEndedIfSameLife(id, e)
 	}}
 	rvNote = rvGuarded{"SetLivenessNoteIfSameLife", func(s *store.Store, id string, e store.RowSnapshot) (string, store.CondResult, error) {
 		res, err := s.SetLivenessNoteIfSameLife(id, e, rvNewNote)
@@ -46,6 +49,20 @@ var (
 		return s.RepairCheckPermissionIfSameLife(id, e)
 	}}
 )
+
+// rvEndReported is the end report the move's seeds carry (Unix ms).
+const rvEndReported int64 = 1790000123456
+
+// codexEnded seeds a Codex row holding an end report, the row the move applies to.
+var codexEnded = []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(rvEndReported)}
+
+// endReportKept fails unless end_reported_at is the seeded report, still set.
+func endReportKept(t *testing.T, before, after apitest.SpawnColumns) {
+	t.Helper()
+	if before.EndReportedAt != rvEndReported || after.EndReportedAt != rvEndReported {
+		t.Errorf("end_reported_at %#v -> %#v; want %d kept", before.EndReportedAt, after.EndReportedAt, rvEndReported)
+	}
+}
 
 // idleKept fails unless idle_since is unchanged.
 func idleKept(t *testing.T, before, after apitest.SpawnColumns) {
@@ -215,6 +232,19 @@ func rvFindMissingWrites() []rowVersionCase {
 			clears: true, wantState: "missing", write: applied(rvMark, "waiting"), check: livenessCleared},
 		{name: "MarkMissingIfSameLife/applied, pending row with a note", state: "pending", opts: liveness,
 			clears: true, wantState: "missing", write: applied(rvMark, "pending"), check: livenessCleared},
+		// The move to ended: the mark's clears, end_reported_at kept.
+		{name: "MarkEndedIfSameLife/applied, pending Codex row with a note", state: "pending",
+			opts: append(slices.Clone(liveness), codexEnded...), clears: true, wantState: "ended",
+			write: applied(rvMarkEnded, "pending"), check: func(t *testing.T, b, a apitest.SpawnColumns) {
+				livenessCleared(t, b, a)
+				endReportKept(t, b, a)
+			}},
+		{name: "MarkEndedIfSameLife/applied, working Codex row", state: "working",
+			opts: append(slices.Clone(liveness), codexEnded...), clears: true, wantState: "ended",
+			write: applied(rvMarkEnded, "working"), check: func(t *testing.T, b, a apitest.SpawnColumns) {
+				livenessCleared(t, b, a)
+				endReportKept(t, b, a)
+			}},
 		{name: "SetLivenessNoteIfSameLife/applied, first note on pending row", state: "pending", wantState: "pending",
 			write: applied(rvNote, ""), check: noteWritten},
 		{name: "SetLivenessNoteIfSameLife/applied, note overwritten on live row", state: "waiting", opts: liveness,
@@ -298,6 +328,25 @@ func rvFindMissingNoOps() []rowVersionCase {
 			opts: []apitest.SpawnOption{rvRelayOn}, write: rvRepair.write("", nil, store.CondChanged, "")},
 		rowVersionCase{name: "RepairCheckPermissionIfSameLife/absent row", state: "check_permission",
 			opts: []apitest.SpawnOption{rvRelayOn}, write: rvRepair.write("rv-absent", nil, store.CondAbsent, "")},
+	)
+	// The move: another launch, a finished row, no row, and the end-report
+	// guard (a Claude row, no report); a refusal writes nothing.
+	cases = append(cases,
+		rowVersionCase{name: "MarkEndedIfSameLife/stale snapshot, hook wrote first", state: "waiting",
+			opts: append(slices.Clone(liveness), codexEnded...), setup: rvSoftRefresh,
+			write: rvMarkEnded.write("", func(s *store.RowSnapshot) { s.RowVersion-- }, store.CondChanged, "")},
+		rowVersionCase{name: "MarkEndedIfSameLife/finished row", state: "ended", opts: append(slices.Clone(liveness), codexEnded...),
+			write: rvMarkEnded.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "MarkEndedIfSameLife/missing row", state: "missing", opts: append(slices.Clone(liveness), codexEnded...),
+			write: rvMarkEnded.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "MarkEndedIfSameLife/absent row", state: "waiting", opts: append(slices.Clone(liveness), codexEnded...),
+			write: rvMarkEnded.write("rv-absent", nil, store.CondAbsent, "")},
+		rowVersionCase{name: "MarkEndedIfSameLife/Claude row holding an end report", state: "waiting",
+			opts:  append(slices.Clone(liveness), apitest.WithEndReportedAt(rvEndReported)),
+			write: rvMarkEnded.write("", nil, store.CondChanged, "")},
+		rowVersionCase{name: "MarkEndedIfSameLife/Codex row with no end report", state: "waiting",
+			opts:  append(slices.Clone(liveness), apitest.WithAgent(store.AgentCodex)),
+			write: rvMarkEnded.write("", nil, store.CondChanged, "")},
 	)
 	for _, g := range []rvGuarded{rvMark, rvNote, rvClear} {
 		cases = append(cases,

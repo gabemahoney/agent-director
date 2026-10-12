@@ -42,38 +42,50 @@ func assertOneKillCalled(t *testing.T, home, id string, sent bool) {
 
 // TestKillFinishedReportedInSession: on an ended row whose own session
 // reported in, kill-finished ends the agent's pane and the session by tmux id
-// and prints kill_sent true; the row is unchanged and still ended.
+// and prints kill_sent true; the row is unchanged and still ended. A Codex row
+// (ended, holding its end report, SR-7.5) is ended exactly as a Claude row.
 func TestKillFinishedReportedInSession(t *testing.T) {
-	r := seedFinishedWithSession(t)
+	for _, agent := range []struct {
+		name string
+		opts []apitest.SpawnOption
+	}{
+		{"claude", nil},
+		{"codex", []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex), apitest.WithNoSubagentTracking(),
+			apitest.WithEndReportedAt(1790000123456)}},
+	} {
+		t.Run(agent.name, func(t *testing.T) {
+			r := seedFinishedWithSession(t, agent.opts...)
 
-	stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--instance-id", r.id)
+			stdout, stderr, code := runAdmin(t, r.home, "kill-finished", "--instance-id", r.id)
 
-	if code != 0 || stderr != "" {
-		t.Fatalf("kill-finished exit = %d, stderr = %q; want 0 and empty", code, stderr)
-	}
-	assertKillSent(t, stdout, true)
-	invs := assertInvocationKinds(t, r.home, "list-sessions", "list-panes", "kill-pane", "kill-session")
-	wantKills := [][]string{
-		{"-u", "-S", r.socket, "kill-pane", "-t", apitest.TestPaneID},
-		{"-u", "-S", r.socket, "kill-session", "-t", "$5"},
-	}
-	for i, want := range wantKills {
-		if got := invs[2+i]; !slices.Equal(got, want) {
-			t.Errorf("kill invocation %d = %q; want %q", i, got, want)
-		}
-	}
-	if left := sessionsLeft(t, r.socket); len(left) != 0 {
-		t.Errorf("sessions after kill-finished = %+v; want none", left)
-	}
-	assertRowUnchanged(t, r.home, r.id, r.before)
-	assertOneKillCalled(t, r.home, r.id, true)
+			if code != 0 || stderr != "" {
+				t.Fatalf("kill-finished exit = %d, stderr = %q; want 0 and empty", code, stderr)
+			}
+			assertKillSent(t, stdout, true)
+			invs := assertInvocationKinds(t, r.home, "list-sessions", "list-panes", "kill-pane", "kill-session")
+			wantKills := [][]string{
+				{"-u", "-S", r.socket, "kill-pane", "-t", apitest.TestPaneID},
+				{"-u", "-S", r.socket, "kill-session", "-t", "$5"},
+			}
+			for i, want := range wantKills {
+				if got := invs[2+i]; !slices.Equal(got, want) {
+					t.Errorf("kill invocation %d = %q; want %q", i, got, want)
+				}
+			}
+			if left := sessionsLeft(t, r.socket); len(left) != 0 {
+				t.Errorf("sessions after kill-finished = %+v; want none", left)
+			}
+			assertRowUnchanged(t, r.home, r.id, r.before)
+			assertOneKillCalled(t, r.home, r.id, true)
 
-	stdout, stderr, code = runMain(t, r.home, "get", "--instance-id", r.id)
-	var got struct {
-		State string `json:"state"`
-	}
-	if code != 0 || json.Unmarshal([]byte(stdout), &got) != nil || got.State != store.StateEnded {
-		t.Errorf("agent-director get exit = %d, stdout = %q (stderr %q); want state %s", code, stdout, stderr, store.StateEnded)
+			stdout, stderr, code = runMain(t, r.home, "get", "--instance-id", r.id)
+			var got struct {
+				State string `json:"state"`
+			}
+			if code != 0 || json.Unmarshal([]byte(stdout), &got) != nil || got.State != store.StateEnded {
+				t.Errorf("agent-director get exit = %d, stdout = %q (stderr %q); want state %s", code, stdout, stderr, store.StateEnded)
+			}
+		})
 	}
 }
 

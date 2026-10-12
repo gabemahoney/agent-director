@@ -103,14 +103,40 @@ func TestListFailures(t *testing.T) {
 	}
 }
 
-// TestListShowsRowAgent (SR-1.5): each list row carries the agent its row runs,
-// claude or codex.
+// TestListShowsRowAgent (SR-1.5, SR-7.5): each list row carries the agent its
+// row runs, claude or codex, and the label filter returns a Codex row as it
+// does a Claude one.
 func TestListShowsRowAgent(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	seedWaiting(t, dbPath, "row-claude", apitest.WithAgent("claude"))
-	seedWaiting(t, dbPath, "row-codex", apitest.WithAgent("codex"))
-	res, err := api.List(openDB(t, dbPath), api.RelayView{}, api.ListParams{})
+	seedWaiting(t, dbPath, "row-claude", apitest.WithAgent("claude"), apitest.WithRawLabels(`{"team":"core","only":"claude"}`))
+	seedWaiting(t, dbPath, "row-codex", codexRowOpts(apitest.WithRawLabels(`{"team":"core","only":"codex"}`))...)
+	s := openDB(t, dbPath)
+	for _, tc := range []struct {
+		labels []string
+		want   []string
+	}{
+		{[]string{"team=core"}, []string{"row-claude", "row-codex"}},
+		{[]string{"only=codex"}, []string{"row-codex"}},
+		{[]string{"team=core", "only=claude"}, []string{"row-claude"}},
+	} {
+		res, err := api.List(s, api.RelayView{}, api.ListParams{Labels: tc.labels})
+		if err != nil {
+			t.Fatalf("List(labels %v): %v", tc.labels, err)
+		}
+		ids := []string{}
+		for _, r := range res.Spawns {
+			ids = append(ids, r.InstanceID)
+			if want := map[string]string{"row-claude": "claude", "row-codex": "codex"}[r.InstanceID]; r.Agent != want || r.Labels["team"] != "core" {
+				t.Errorf("labels %v: row %s agent %q, labels %v; want %q and team=core", tc.labels, r.InstanceID, r.Agent, r.Labels, want)
+			}
+		}
+		sort.Strings(ids)
+		if !equalStrings(ids, tc.want) {
+			t.Errorf("List(labels %v) = %v; want %v", tc.labels, ids, tc.want)
+		}
+	}
+	res, err := api.List(s, api.RelayView{}, api.ListParams{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

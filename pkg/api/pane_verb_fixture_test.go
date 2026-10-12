@@ -24,6 +24,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -741,6 +742,23 @@ func (w *killStore) GetSpawnState(id string) (string, error) {
 // err (errInjectedStore when nil).
 func (w *killStore) failStateReads(err error) { w.stateErr = orInjected(err) }
 
+// MarkEndedIfSameLife counts the attempt, then returns failEndedMove's error,
+// else delegates (the Codex move to ended pause makes).
+func (w *killStore) MarkEndedIfSameLife(id string, examined api.RowSnapshot) (string, api.CondResult, error) {
+	w.endedTries++
+	if hook := w.beforeEnded; hook != nil {
+		w.beforeEnded = nil
+		hook()
+	}
+	if w.endedErr != nil {
+		return "", 0, w.endedErr
+	}
+	return w.st.MarkEndedIfSameLife(id, examined)
+}
+
+// failEndedMove makes every later move to ended return err (errInjectedStore when nil).
+func (w *killStore) failEndedMove(err error) { w.endedErr = orInjected(err) }
+
 // exitText is what pause types into the agent's pane.
 const exitText = "/exit"
 
@@ -861,8 +879,31 @@ func (e *killEnv) assertExitTyped(t *testing.T, socket, paneID string) {
 }
 
 // assertLineCleared fails unless exactly one key send was made, paneClearKey
-// to paneID on socket, and it came before every text call (b.9o4).
+// to paneID on socket, pressed once (a Claude row's clear), and it came before
+// every text call (b.9o4).
 func (e *killEnv) assertLineCleared(t *testing.T, socket, paneID string) {
+	t.Helper()
+	e.assertLineClearedTimes(t, socket, paneID, 1)
+}
+
+// codexClearPresses is how many C-u presses a Codex row's line clear is (RN-19):
+// 127 in one call, enough for a draft of 64 lines.
+const codexClearPresses = 127
+
+// clearPresses is the presses of r's line clear: one on a Claude row,
+// codexClearPresses on a Codex row.
+func clearPresses(r killRow) int {
+	if r.Spawn.Agent == store.AgentCodex {
+		return codexClearPresses
+	}
+	return 1
+}
+
+// assertLineClearedTimes fails unless exactly one key send was made, paneClearKey
+// to paneID on socket, pressing it presses times in that one call (a plain
+// send for one), and it came before every text call (b.9o4, RN-19). Never
+// another key (C-c quits an empty Codex).
+func (e *killEnv) assertLineClearedTimes(t *testing.T, socket, paneID string, presses int) {
 	t.Helper()
 	var keys []tmuxfix.SocketCall
 	textFirst := false
@@ -880,9 +921,77 @@ func (e *killEnv) assertLineCleared(t *testing.T, socket, paneID string) {
 	if c := keys[0]; c.Key != paneClearKey || c.Socket != socket || c.Target != paneID {
 		t.Errorf("key send %q to %q on %s; want %s to %s on %s", c.Key, c.Target, c.Socket, paneClearKey, paneID, socket)
 	}
+	if got := max(keys[0].Repeat, 1); got != presses {
+		t.Errorf("key send presses = %d (repeat %d); want %d in one call", got, keys[0].Repeat, presses)
+	}
 	if textFirst {
 		t.Errorf("a text call came before the line was cleared; want %s first", paneClearKey)
 	}
+}
+
+// assertExitDeliveredTimes is assertExitDelivered for a line clear of presses.
+func (e *killEnv) assertExitDeliveredTimes(t *testing.T, socket, paneID string, presses int) {
+	t.Helper()
+	e.assertPaneCalls(t, pauseSendCalls...)
+	e.assertLineClearedTimes(t, socket, paneID, presses)
+	e.assertTextSent(t, socket, paneID, exitText)
+	e.assertEnterSent(t, socket, paneID)
+}
+
+// codexSpec is the killRowSpec of a Codex row (agent codex, subagent_tracking 0
+// as a Codex launch stores it) in state, its agent process in agent's state,
+// holding an end report (the agent's SessionEnd) when report; opts go last.
+func codexSpec(state string, agent agentState, report bool, opts ...apitest.SpawnOption) killRowSpec {
+	o := codexRowOpts()
+	if report {
+		o = append(o, apitest.WithEndReportedAt(codexEndReport))
+	}
+	return killRowSpec{State: state, Agent: agent, Opts: append(o, opts...)}
+}
+
+// codexEndReport is the end report (Unix ms) codexSpec seeds.
+var codexEndReport = killClockStart.Add(-time.Minute).UnixMilli()
+
+// codexSessionEnds applies the SessionEnds a Codex agent sends at /exit, one
+// per session id named (the row's own when none), each as the agent through
+// storefix's Codex builder (apitest.HookAgent): they set the row's end report
+// and keep its state. It reports what the first that did not apply says, "" when all did.
+func (e *killEnv) codexSessionEnds(t *testing.T, r killRow, sessionIDs ...string) string {
+	t.Helper()
+	if len(sessionIDs) == 0 {
+		sessionIDs = []string{r.Spawn.SessionID}
+	}
+	for _, id := range sessionIDs {
+		if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", id, apitest.HookAgent(store.AgentCodex)); !a.Applied {
+			return a.Reason
+		}
+	}
+	return ""
+}
+
+// codexExits is the exit of r's Codex agent: its SessionEnds (codexSessionEnds,
+// the end report) and then its process gone in the process fixture. markAfterReport
+// receives the trail's length once the reports are written, before the process
+// is gone, so a test can look at the records the move alone writes.
+func (e *killEnv) codexExits(t *testing.T, r killRow, markAfterReport *int, sessionIDs ...string) {
+	t.Helper()
+	if why := e.codexSessionEnds(t, r, sessionIDs...); why != "" {
+		t.Errorf("Codex SessionEnd not applied: %s", why)
+	}
+	if markAfterReport != nil {
+		*markAfterReport = trailMark(t)
+	}
+	e.pc.Set(r.AgentPID, procfix.Gone())
+}
+
+// codexExitsAfterEnter makes r's Codex agent exit (codexExits) when the first
+// Enter call returns; the test fails unless it ran. mark is what codexExits fills.
+func (e *killEnv) codexExitsAfterEnter(t *testing.T, r killRow, mark *int, sessionIDs ...string) {
+	t.Helper()
+	e.onceAfter(t, tmux.CallSendEnter, "Codex exit", func() (bool, string) {
+		e.codexExits(t, r, mark, sessionIDs...)
+		return true, ""
+	})
 }
 
 // pauseDisagrees returns id's ad.provenance.disagree records written by pause.

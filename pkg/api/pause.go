@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // PauseTmux is the narrow tmux surface Pause needs (SRD Appendix F.3): the
@@ -20,6 +21,11 @@ type PauseTmux interface {
 	// SendKeyPane sends one key, by its tmux key name and never typed
 	// literally, to the pane paneID on socket (key send): pause's C-u.
 	SendKeyPane(socket, paneID, key string) error
+	// SendKeyPaneRepeat sends the key count times in one call (send-keys -N
+	// count; a count of 1 or less is SendKeyPane's call), by its tmux key name
+	// and never typed literally: a Codex row's line clear (codexLineClearPresses
+	// presses of C-u).
+	SendKeyPaneRepeat(socket, paneID, key string, count int) error
 	// SendKeysPane types text literally into the pane paneID on socket and
 	// then, only if that succeeded and pressEnter is set, sends Enter; the
 	// failed call is named on the *TmuxCallError (text send or Enter send).
@@ -31,17 +37,26 @@ type PauseTmux interface {
 // every permission request of the row and its hook_gone_at write on a request
 // it finds fallen back (send-keys' own, b.146 rules 7 and 8; b.zdz), the
 // adoption write of SR-3.6 (a lost create reply's server and pane identity,
-// applied only if the row still has the snapshot Pause examined) and this
-// store's id, which every label the lookup accepts ends with (SR-3.4). The
-// adoption and hook_gone_at are the only writes pause makes. *store.Store
-// satisfies it; tests use the shared killStore fixture, a wrapper over a real
+// applied only if the row still has the snapshot Pause examined), the guarded
+// move of a Codex row whose agent is gone and which holds an end report to
+// ended (EndedMover; SR-6.5, SR-7.3) and this store's id, which every label
+// the lookup accepts ends with (SR-3.4). The adoption, hook_gone_at and, on a
+// Codex row only, that move are the only writes pause makes; a Claude row's
+// state is never written by pause. *store.Store satisfies it; tests use the shared killStore fixture, a wrapper over a real
 // store that can fail the state read, the requests read or the adoption
 // write.
 type PauseStore interface {
-	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound.
+	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound. A Codex row's
+	// wait reads it again in each poll that does not find ended (the row's
+	// launch, state, end report and snapshot the Codex end is judged on).
 	GetSpawn(instanceID string) (Spawn, error)
 	// GetSpawnState reads only the row's state, for the wait.
 	GetSpawnState(instanceID string) (string, error)
+	// EndedMover: MarkEndedIfSameLife makes pause's Codex end, the guarded
+	// move of a live Codex row holding an end report to ended once its agent
+	// process is proven gone, with the request close and the records of
+	// find-missing's (the shared writer, markEndedSameLife).
+	EndedMover
 	// PermissionRequestsForSpawn reads every permission request of the row.
 	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 	// RecordHookGone records hook_gone_at on the requests with requestIDs
@@ -99,12 +114,26 @@ var pausePollInterval = 200 * time.Millisecond
 var pauseSleep = time.Sleep
 
 // Pause politely shuts down a live Spawn by clearing the input line of the
-// agent's own pane of the row's current launch (C-u: it clears a one-line
-// leftover, not a multi-line input), by pane id, then typing `/exit` and
-// Enter, and waiting up to timeoutSeconds for the row to reach `ended` (SRD
-// SR-7.2, SR-7.3, SR-3.6, SR-3.7, SR-13.2; b.9o4). Behavior:
+// agent's own pane of the row's current launch (one C-u on a Claude row: it
+// clears a one-line leftover, not a multi-line input; codexLineClearPresses
+// C-u in one call on a Codex row, which clears a draft of up to 64 lines), by
+// pane id, then typing `/exit` and Enter, and waiting up to timeoutSeconds for
+// the row to reach `ended` (SRD SR-7.2, SR-7.3, SR-3.6, SR-3.7, SR-13.2; b.9o4).
+// Behavior:
 //
 //   - Unknown id: ErrSpawnNotFound from the store.
+//   - A Codex row in a live state (pending included) whose agent process is
+//     already gone and which holds an end report (the SessionEnd of its
+//     agent) is moved to ended before any of the rules below, with no tmux
+//     call, no relay guard, no unusable-name check and nothing sent: the same
+//     guarded move, request close and records as find-missing's
+//     (markEndedSameLife, reason proc_absent), and pause returns success. The
+//     process is judged as find-missing judges it (the row's recorded agent
+//     process by its start time; no tmux). A move that does not apply, because
+//     the row changed, leaves the row as it reads then: the rules below run on
+//     a fresh read of it. An agent process that is alive, cannot be judged or
+//     is not recorded, a gone one with no end report, and every Claude row
+//     (which makes no process read) go on to the rules below as before.
 //   - State ended or missing: no-op success, with no tmux call; the desired
 //     post-condition is already met.
 //   - State pending, working, ask_user or check_permission:
@@ -154,7 +183,14 @@ var pauseSleep = time.Sleep
 //     the start of its line, not earlier lines of a multi-line input, so a
 //     one-line leftover with the cursor at its end (the unsubmitted `/exit` a
 //     failed pause left, or a one-line draft) is cleared and the agent gets
-//     `/exit` alone, never `/exit/exit`. For a row that records no server
+//     `/exit` alone, never `/exit/exit`. On a Codex row the clear is
+//     codexLineClearPresses C-u presses in this one key-send call (a Codex
+//     composer needs 2N-1 presses to empty an N-line draft, and extra presses
+//     on an empty one are harmless), never C-c, which quits an empty Codex.
+//     Pause reads no screen text, so it cannot count draft lines: a draft
+//     longer than 64 lines is not cleared whole, the rest and `/exit` are
+//     submitted to the agent as a prompt, Codex does not exit and pause times
+//     out. For a row that records no server
 //     identity or no pane (a lost create reply), what the lookup and the pane
 //     whose @ad_pane names the row's launch token show is used for this call
 //     and written once, guarded on the row as read; the write's outcome never
@@ -183,20 +219,31 @@ var pauseSleep = time.Sleep
 //     attempt left typed.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// The calls are at most one lookup, one pane listing, the C-u, the text
-// call, the Enter call and, only after an action failure other than a
-// timeout, one follow-up lookup (SR-13.2); the wait is not counted. On any
-// error the wait does not start.
+// The calls are at most one lookup, one pane listing, the C-u (one call,
+// however many presses), the text call, the Enter call and, only after an
+// action failure other than a timeout, one follow-up lookup (SR-13.2); the
+// wait is not counted. On any error the wait does not start.
 //
 // The wait, once C-u, `/exit` and Enter went through: the row's state is
 // polled at pausePollInterval until it is `ended` (nil) or timeoutSeconds
 // elapse on the real clock (ErrPauseTimeout); ctx.Done() during the wait
 // returns ctx.Err() so the caller's cancel-on-signal handler can cut a long
 // wait short. timeoutSeconds is used as given, with no default applied: 0 or
-// less times out at the first state check that does not find `ended`.
+// less times out at the first state check that does not find `ended`. On a
+// Codex row a SessionEnd only records an end report and leaves the state, so
+// each poll that does not find `ended` also reads the row again and makes the
+// pre-check's judgement and move (MC-4): the move applies only to the launch
+// pause sent its keys to (the row's launch identity read before the keys), in
+// a live state, with an end report and a gone agent process; when it applies
+// pause returns success, and when it does not (the agent is alive or cannot
+// be judged, there is no end report, the row changed or its launch is another)
+// the wait goes on, so an agent gone with no end report runs to
+// ErrPauseTimeout and find-missing settles the row. A store error from the
+// move is returned as pause's error. A nil start-time reader makes no move.
 // Client.Pause passes pause.timeout_seconds through
-// config.Pause.EffectiveTimeoutSeconds. Pause never writes the row's state;
-// the adoption and the relay guard's hook_gone_at are its only store writes.
+// config.Pause.EffectiveTimeoutSeconds. Pause never writes a Claude row's
+// state; its only store writes there are the adoption and the relay guard's
+// hook_gone_at, and on a Codex row also the move to ended.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
 // timeout expires, or when ctx is cancelled. There is no incremental
@@ -217,7 +264,7 @@ var pauseSleep = time.Sleep
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
-	r := &pauseRun{s: s, caller: callerIdentity()}
+	r := &pauseRun{s: s, caller: callerIdentity(), procs: env.Relay.Procs}
 	delivered, err := r.exit(t, env, params)
 	// The tmux phase has decided: write its ad.provenance.disagree records
 	// now, before the wait. Source ad_send_keys, not a pause source: pause
@@ -231,8 +278,37 @@ func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeout
 	if err != nil || !delivered {
 		return PauseResult{}, err
 	}
-	return PauseResult{}, waitEnded(ctx, s, timeoutSeconds, params.InstanceID)
+	var gone func() (bool, error)
+	if r.codex {
+		gone = r.endIfGoneInWait(params.InstanceID)
+	}
+	return PauseResult{}, waitEnded(ctx, s, timeoutSeconds, params.InstanceID, gone)
 }
+
+// codexLineClearPresses is how many C-u presses a Codex row's line clear
+// sends, in one key-send call (RN-19, SR-7.3). A Codex composer's C-u clears
+// one line, and a second press removes the newline before it, so an N-line
+// draft needs 2N-1 presses: 127 clears a draft of up to 64 lines, and extra
+// presses on an empty composer are harmless. Pause never reads screen text
+// (SR-6.7), so it cannot count lines: a longer draft keeps its remainder, the
+// `/exit` that follows is submitted as a prompt and the wait times out. Never
+// C-c: it clears a whole draft but quits Codex when the composer is empty.
+const codexLineClearPresses = 127
+
+// launchKey identifies a row's launch for the wait's end check: the launch
+// token and the life number, the two a resume or a reuse rewrite (SR-7.3's
+// "same launch"). It leaves out the server and pane identity: the adoption write
+// (SR-3.6), by pause's own tmux phase or a find-missing during the wait, fills
+// those in on the SAME launch, so keying on them would read the row as another
+// launch and the wait would never move it. A row moved onto a new launch while
+// pause waited reads as another launch.
+type launchKey struct {
+	token string
+	life  int64
+}
+
+// launchOf returns row's launchKey.
+func launchOf(row Spawn) launchKey { return launchKey{token: row.Identity.Token, life: row.LifeNumber} }
 
 // pauseRun is one Pause call's tmux phase: the keys verbs' shared phase
 // (keysRun), with the pane verbs' Leftover refusal, whose found facts (the
@@ -245,16 +321,75 @@ type pauseRun struct {
 	// caller is the invoking process's identity, collected once per call
 	// (callerIdentity) for the call's ad.provenance.disagree records.
 	caller caller
+	// procs is the start-time reader the Codex end check judges the agent
+	// process with (the relay view's); nil makes no move.
+	procs ProcChecker
+	// codex reports that the row is a Codex row whose keys were sent, so the
+	// wait makes the end check; launch is the launch it sent them to.
+	codex  bool
+	launch launchKey
+}
+
+// endIfGone is the Codex end check: when row is a Codex row in a live state
+// that holds an end report and the start-time reader judges its recorded agent
+// process gone (the process find-missing selects from the row's SessionStart
+// identity and pane identity, judged by its start time; no tmux), it makes
+// find-missing's guarded move to ended through the shared outcome writer
+// (markEndedSameLife, reason proc_absent), guarded on the snapshot row holds.
+// attempted is false when no move was made (not a live Codex row, no end
+// report, no reader, or an agent alive, unknown or not recorded); res is the
+// move's result when it was. A store error from the move is err.
+func (r *pauseRun) endIfGone(row Spawn) (res CondResult, attempted bool, err error) {
+	if row.Agent != store.AgentCodex || row.EndReportedAtMillis <= 0 || !store.IsLiveState(row.State) || r.procs == nil {
+		return 0, false, nil
+	}
+	if tmux.JudgeProcess(r.procs, agentProcess(row, row.Identity).Identity) != tmux.ProcGone {
+		return 0, false, nil
+	}
+	w := markEndedSameLife(r.s, row.InstanceID, row.Snapshot, reasonProcAbsent, nil, nil)
+	return w.Res, true, w.Err
+}
+
+// endIfGoneInWait returns the wait's check for a Codex row (waitEnded): it
+// reads the row again, leaves a row on another launch than the one pause sent
+// its keys to (r.launch) alone, and otherwise makes endIfGone's judgement and
+// move. It reports true only when the move applied.
+func (r *pauseRun) endIfGoneInWait(instanceID string) func() (bool, error) {
+	return func() (bool, error) {
+		row, err := r.s.GetSpawn(instanceID)
+		if err != nil {
+			return false, err
+		}
+		if launchOf(row) != r.launch {
+			return false, nil
+		}
+		res, attempted, err := r.endIfGone(row)
+		return err == nil && attempted && res == CondApplied, err
+	}
 }
 
 // exit is pause's row read, state rules, relay guard and tmux phase, which
 // clears the agent's input line before typing (keysRun.clear). It reports
 // whether C-u, `/exit` and Enter went through, so the wait is due; a finished
-// row is (false, nil). Every refusal before the lookup makes no tmux call.
+// row, and a Codex row the end check moved to ended, are (false, nil). Every refusal before the lookup makes no tmux call.
 func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, error) {
 	row, err := r.s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return false, err
+	}
+
+	// The Codex end check comes first (SR-7.3, MC-4): before the state rules,
+	// the relay guard, the name check and any tmux call. A move that did not
+	// apply leaves the row as it now reads, which the rules below judge.
+	switch res, attempted, err := r.endIfGone(row); {
+	case err != nil:
+		return false, err
+	case attempted && res == CondApplied:
+		return false, nil
+	case attempted:
+		if row, err = r.s.GetSpawn(params.InstanceID); err != nil {
+			return false, err
+		}
 	}
 
 	switch row.State {
@@ -289,6 +424,10 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	r.clear = t
+	if row.Agent == store.AgentCodex {
+		r.clearPresses = codexLineClearPresses
+		r.codex, r.launch = true, launchOf(row)
+	}
 	if err := r.deliver("/exit"); err != nil {
 		return false, err
 	}
@@ -298,8 +437,12 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 // waitEnded is pause's wait after a delivered `/exit` (SR-7.2, SR-17): it
 // polls the row's state at pausePollInterval, sleeping through pauseSleep,
 // until the row is `ended` (nil), the real-clock deadline timeoutSeconds
-// away passes (ErrPauseTimeout) or ctx is done (ctx.Err()).
-func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID string) error {
+// away passes (ErrPauseTimeout) or ctx is done (ctx.Err()). gone, set for a
+// Codex row only, is the end check: each poll that does not read `ended` calls
+// it, and true (the move applied) ends the wait as success; false keeps
+// waiting; an error is returned. nil (a Claude row) makes no check and no
+// write.
+func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID string, gone func() (bool, error)) error {
 	timeout := time.Duration(timeoutSeconds) * time.Second
 	deadline := time.Now().Add(timeout)
 
@@ -316,6 +459,15 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 		}
 		if state == store.StateEnded {
 			return nil
+		}
+		if gone != nil {
+			moved, err := gone()
+			if err != nil {
+				return err
+			}
+			if moved {
+				return nil
+			}
 		}
 
 		if !time.Now().Before(deadline) {

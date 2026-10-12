@@ -4,7 +4,8 @@ package store_test
 // closing write is run over, and the assertions that every running entry of the
 // row turned lost at one instant, every claimable launch of the row went, and
 // nothing else changed (a closed entry, another column, another row). Used by
-// hook_gate_test.go, find_missing_writes_test.go, resume_move_test.go,
+// hook_gate_test.go, find_missing_writes_test.go, find_missing_ended_test.go,
+// resume_move_test.go,
 // reuse_test.go, reuse_refused_test.go and store_errors_test.go.
 
 import (

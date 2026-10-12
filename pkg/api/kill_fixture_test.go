@@ -59,6 +59,10 @@ type killStore struct {
 	stateReads int
 	permErr    error
 	stateErr   error
+	endedTries int   // moves to ended attempted (MarkEndedIfSameLife)
+	endedErr   error // failEndedMove's error
+	// beforeEnded, set by a test, runs once just before the next move to ended is attempted.
+	beforeEnded func()
 }
 
 // failAdopt makes every later adoption write return err (errInjectedStore when nil).

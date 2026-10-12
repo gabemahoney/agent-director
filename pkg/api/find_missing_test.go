@@ -28,7 +28,7 @@ import (
 type fakeFindMissingStore struct {
 	rows    []store.LiveSpawnIdentity
 	listErr error
-	// answers is keyed by op ("adopt", "mark", "note", "clear", "unreported") then instance id.
+	// answers is keyed by op ("adopt", "mark", "ended", "note", "clear", "unreported") then instance id.
 	answers map[string]map[string]fmAnswer
 	calls   []storeCall
 	// adopted holds, per row, the snapshot an applied adoption returned: the guard of the row's next write.
@@ -48,7 +48,7 @@ type fmAnswer struct {
 	err error
 }
 
-// storeCall is one recorded write; op is "adopt", "mark", "note" (note: the note it wrote), "clear" or "unreported"
+// storeCall is one recorded write; op is "adopt", "mark", "ended" (the Codex move), "note" (note: the note it wrote), "clear" or "unreported"
 // (the unreported note of a live pending row, b.kdf).
 type storeCall struct {
 	op       string
@@ -111,6 +111,21 @@ func (f *fakeFindMissingStore) AdoptIdentityIfSameLife(id string, examined store
 func (f *fakeFindMissingStore) MarkMissingIfSameLife(id string, examined store.RowSnapshot) (string, store.CondResult, error) {
 	f.record(storeCall{op: "mark", id: id, snap: examined})
 	res, err := f.result("mark", id)
+	if err != nil || res != store.CondApplied {
+		return "", res, err
+	}
+	for _, r := range f.rows {
+		if r.InstanceID == id && r.State != "" {
+			return r.State, res, nil
+		}
+	}
+	return store.StateWorking, res, nil
+}
+
+// MarkEndedIfSameLife records the move to ended (op "ended") and answers like MarkMissingIfSameLife.
+func (f *fakeFindMissingStore) MarkEndedIfSameLife(id string, examined store.RowSnapshot) (string, store.CondResult, error) {
+	f.record(storeCall{op: "ended", id: id, snap: examined})
+	res, err := f.result("ended", id)
 	if err != nil || res != store.CondApplied {
 		return "", res, err
 	}
@@ -437,6 +452,16 @@ func withLaunch(state string, launchMs int64) fmRowOpt {
 // withNote sets the liveness note the sweep reads on the row.
 func withNote(note string) fmRowOpt {
 	return func(r *store.LiveSpawnIdentity) { r.LivenessNote = note }
+}
+
+// withAgent sets the row's agent (store.AgentClaude or store.AgentCodex).
+func withAgent(agent string) fmRowOpt {
+	return func(r *store.LiveSpawnIdentity) { r.Agent = agent }
+}
+
+// withEndReport records that the row's agent reported its SessionEnd at ms (Unix milliseconds).
+func withEndReport(ms int64) fmRowOpt {
+	return func(r *store.LiveSpawnIdentity) { r.EndReportedAtMillis = ms }
 }
 
 // assertLists fails unless res lists exactly ids and unverified (sorted) with matching counts.

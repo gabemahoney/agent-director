@@ -12,10 +12,10 @@
 #
 #   [KEY=VALUE ...] agent-director hook < <dir>/payload.json > <dir>/out 2> <dir>/err; echo $? > <dir>/rc
 #
-# into the pane with `tmux send-keys -l --` and then Enter. That line is two
-# simple commands, so the pane's bash forks `agent-director hook` directly
-# (no sh -c, no subshell, no script) and the hook's parent is the pane
-# process.
+# (`agent-director hook --agent codex < ...` with --agent codex) into the pane
+# with `tmux send-keys -l --` and then Enter. That line is two simple
+# commands, so the pane's bash forks `agent-director hook` directly (no sh -c,
+# no subshell, no script) and the hook's parent is the pane process.
 #
 # Usage:
 #   pane-hook.sh [options] <instance-id> <payload-json | ->
@@ -28,6 +28,11 @@
 #       Wait for a --no-wait job; print, copy and exit as the first form.
 #
 # Options:
+#   --agent <name>     the agent the hook is for: claude (the default; the
+#                      typed line has no --agent) or codex (the line types
+#                      `agent-director hook --agent codex`, for a row whose
+#                      pane process is the Codex stand-in, stand-in-codex/
+#                      codex, and a Codex payload).
 #   --pane <target>    type into this pane (e.g. a pane id %7 from
 #                      split-window -P -F '#{pane_id}') instead of the row's
 #                      recorded pane_id; the tmux socket is still the row's.
@@ -62,10 +67,14 @@ mode=wait
 pane=""
 job=""
 envs=()
+agent=claude
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pane) [[ $# -ge 2 ]] || die 2 "--pane needs a target"; pane="$2"; shift 2 ;;
+        --agent)
+            [[ $# -ge 2 && ( "$2" == claude || "$2" == codex ) ]] || die 2 "--agent needs claude or codex"
+            agent="$2"; shift 2 ;;
         --env)
             [[ $# -ge 2 ]] || die 2 "--env needs KEY=VALUE"
             [[ "$2" =~ ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_./:@%+,=-]*$ ]] \
@@ -116,7 +125,7 @@ if [[ "$mode" == join ]]; then
     finish "$job"
 fi
 
-[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--pane <target>] [--env K=V]... [--timeout <secs>] [--no-wait] <instance-id> <payload-json | ->"
+[[ $# -eq 2 ]] || die 2 "usage: pane-hook.sh [--agent claude|codex] [--pane <target>] [--env K=V]... [--timeout <secs>] [--no-wait] <instance-id> <payload-json | ->"
 id="$1"
 payload="$2"
 
@@ -148,7 +157,9 @@ line=""
 for kv in "${envs[@]}"; do
     line+="$kv "
 done
-line+="agent-director hook < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
+hook_cmd="agent-director hook"
+[[ "$agent" == claude ]] || hook_cmd+=" --agent $agent"
+line+="$hook_cmd < $job/payload.json > $job/out 2> $job/err; echo \$? > $job/rc"
 
 tmux ${socket:+-S "$socket"} send-keys -t "$pane" -l -- "$line"
 tmux ${socket:+-S "$socket"} send-keys -t "$pane" Enter

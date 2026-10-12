@@ -139,7 +139,8 @@ func (r *findMissingRun) oursRow(row findMissingRow, it LiveSpawnIdentity, state
 // (aliveRow): a pending row, its pane just adopted, stays pending and is
 // noted unreported, or keeps a provenance_conflict note (b.kdf), any other
 // row's note is cleared; gone: marked
-// missing with reason proc_absent; unknown: unverified, note probe_eacces.
+// missing with reason proc_absent (goneRow: a Codex row holding an end report
+// is moved to ended instead); unknown: unverified, note probe_eacces.
 // Every write is guarded on sa.Guard, the adoption write's snapshot when it
 // applied.
 func (r *findMissingRun) adoptedPaneRow(row findMissingRow, it LiveSpawnIdentity, sa sweepAdoption) findMissingRow {
@@ -151,7 +152,7 @@ func (r *findMissingRun) adoptedPaneRow(row findMissingRow, it LiveSpawnIdentity
 	case tmux.ProcAlive:
 		return r.aliveRow(row, it, sa.Guard, sa.Identity)
 	case tmux.ProcGone:
-		return r.markRow(row, it, sa.Guard, reasonProcAbsent, nil)
+		return r.goneRow(row, it, sa.Guard)
 	case tmux.ProcUnknown:
 		return r.noteRow(row, it, sa.Guard, noteProbeEACCES)
 	}

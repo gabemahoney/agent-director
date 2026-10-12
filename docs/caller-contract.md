@@ -74,6 +74,30 @@ To end a live row (`pending` included) and relaunch its id:
 
    A caller whose ids agent-director mints spawns fresh instead.
 
+## When a Codex agent exits
+
+A Claude row's clean exit ends the row at once. A Codex agent that exits other
+than through `pause`, an `/exit` typed at its pane, leaves its row in its last
+state, and so does a crash or a `kill` of either agent. Until something sees
+the agent gone, `send-keys` gets `ErrTmuxSendKeys` and `read-pane`
+`ErrTmuxCaptureFailed`. Run `find-missing`: it marks the row `ended` when the
+agent's end was reported, else `missing`, and an `ended` row is in neither of
+its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
+
+`pause` on a Codex row ends it itself:
+
+- Its agent exits after the `/exit` and `pause` returns success with the row
+  `ended`.
+- A live row whose agent already exited with an end report, in any live state,
+  returns success having sent nothing, and the row is `ended`.
+- A gone agent with no end report, or one that cannot be judged, gets today's
+  outcomes: `ErrTmuxSendKeys` for a waiting row's keys, or `ErrPauseTimeout`.
+  `find-missing` then settles the row.
+
+The look-and-send recovery for a held agent (send `/exit` with the pane's hash,
+poll `status` until `ended`) gains, on a Codex row, one step: once the agent has
+exited, run `find-missing` (or `pause`).
+
 ## Spawn and template input refusals
 
 Each of these is refused before anything is written: no row, session, trust

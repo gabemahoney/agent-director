@@ -490,11 +490,14 @@ the two still gets nothing recorded. `send-keys` refuses an `ended` or
 `missing` spawn before its relay guard reads any request
 (`ErrSpawnNotInteractive`).
 
-Three writes close a spawn's open requests, each in the same store
+Four writes close a spawn's open requests, each in the same store
 transaction as its own change, so both are written or neither is:
 
 - `find-missing`'s mark of the spawn `missing`;
 - the agent's terminal SessionEnd, which moves the spawn to `ended`;
+- the move of a Codex spawn to `ended` once its agent is gone with an end
+  report, made by `find-missing`, or by `pause` before its keys or while it
+  waits (see [How a Codex row ends](hooks.md#how-a-codex-row-ends));
 - `resume`'s move of the finished spawn to `pending`, as a backstop for a
   request left open by a release before this close.
 
@@ -506,7 +509,7 @@ Every request that still awaits an answer is closed (`closed_at` is set),
 decided or not:
 
 - an undecided request gets `decision` `deny` with `decision_reason`
-  `find_missing` (the mark) or `ended` (the other two), so a relay hook
+  `find_missing` (the mark) or `ended` (the other three), so a relay hook
   still polling for it reads that deny (and returns it, once confirmed, if
   its Claude Code is still the one that started it). `decide` on the
   mark's deny returns `ErrAlreadyDecided`, and on the `ended` deny
@@ -520,7 +523,9 @@ decided or not:
   hook has confirmed it).
 
 Each deny is written to the trail as one `ad.row_mutation.committed`
-(`writer_process` `find_missing`, `hook` or `resume`).
+(`writer_process` `find_missing`, `hook` or `resume`). The mark's deny and the
+Codex move's `ended` deny both carry `find_missing`, so that writer can come
+from `pause`.
 
 A closed request stays closed after a `resume`: it no longer awaits an
 answer, so `get` and `list` do not show it, it no longer holds the spawn in
@@ -796,10 +801,15 @@ it never says that a prompt is on screen. A refusal that finds a request
 fallen back records its `hook_gone_at` when it has none, waiting for the
 store's write lock as any write does (fail-open).
 
-**`pause`.** `pause` types `C-u`, `/exit` and Enter into the agent's pane,
-as a plain `send-keys` without `expect_pane_sha256` would, so on a spawn
-with `relay_mode=on` it is held as one. On a `waiting` spawn (the only
-state it pauses), before any tmux call, it runs the same check with no
+**`pause`.** `pause` types the line-clear key `C-u` (pressed enough times on a
+Codex spawn to clear a long draft; see
+[Pause and resume](usage.md#pause-and-resume)), `/exit` and Enter into the
+agent's pane, as a plain `send-keys` without `expect_pane_sha256` would, so
+on a spawn with `relay_mode=on` it is held as one. On a Codex spawn whose
+agent already exited with an end report, `pause` ends the row first, before
+the check below, and closes its requests (see
+[How a Codex row ends](hooks.md#how-a-codex-row-ends)). On a `waiting` spawn
+(the only state it types into), before any tmux call, it runs the same check with no
 `request_token` and no pane hash, and refuses in the same order, with the
 same `err_details`, typing nothing (no `C-u` either) and starting no wait:
 
@@ -817,7 +827,8 @@ same `err_details`, typing nothing (no `C-u` either) and starting no wait:
 A spawn with the relay off, a spawn with no permission request and one
 whose every request is proven gone pause as before. A finished spawn is
 still a no-op success, and a spawn in any other live state still gets
-`ErrSpawnNotPausable`.
+`ErrSpawnNotPausable`, except a Codex spawn whose agent already exited with an
+end report (above).
 
 `pause` takes no pane hash, so it has no way past the dialog hold, which
 lasts until Claude Code's own hooks prove each request gone, whatever is
@@ -844,7 +855,9 @@ spawn, `kill` it, or have a person or an LLM do what `pause` would:
    ```
 
 4. Poll `get` or `status` until the row reads `ended`: `send-keys` does
-   not wait for it as `pause` does.
+   not wait for it as `pause` does. A Codex row reads `ended` only after
+   `find-missing` or `pause` sees its agent gone (see the
+   [caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
 Never pass the hash from an automatic flow (see "The look-and-send path"
 below).

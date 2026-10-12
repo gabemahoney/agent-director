@@ -46,8 +46,10 @@ func seedFMRow(t *testing.T, f *v5Store, state string, opts ...apitest.SpawnOpti
 // last_seen_at, the launch owner, every identity and an earlier note's time,
 // and the repair of a stale check_permission row (b.146 rule 9), which writes
 // working, or waiting when idle_since is set, and keeps idle_since. Every row
-// carries the close mix: only the mark closes it, at one instant of the store's
-// clock; no other write changes an entry or a claimable launch (SR-8.1, SR-8.2).
+// carries the close mix: only the mark and the move of a Codex row holding an
+// end report to ended close it, at one instant of the store's clock, the move
+// keeping end_reported_at; no other write changes an entry or a claimable
+// launch (SR-8.1, SR-8.2).
 func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	type applied struct {
 		name, state string
@@ -125,20 +127,36 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 				w.State, w.LaunchStartedAt = store.StateWaiting, nil
 			}},
 	}
-	for _, st := range []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
-		cases = append(cases, applied{"mark/" + st, st, liveness, func(s *store.Store, r fmRow) (store.CondResult, error) {
-			prior, res, err := s.MarkMissingIfSameLife(r.id, r.examined)
-			if err == nil && prior != st {
-				err = fmt.Errorf("prior state %q, want %q", prior, st)
-			}
-			return res, err
-		}, func(t *testing.T, w *apitest.SpawnColumns, a apitest.SpawnColumns) {
-			if a.EndedAt == nil || a.EndedAt != a.LastSeenAt || a.LastSeenAt == w.LastSeenAt {
-				t.Errorf("ended_at %#v, last_seen_at %#v (seeded %#v); want both the mark's time", a.EndedAt, a.LastSeenAt, w.LastSeenAt)
-			}
-			w.State, w.EndedAt, w.LastSeenAt = store.StateMissing, a.EndedAt, a.LastSeenAt
-			w.LivenessUnverifiedSince, w.LivenessNote, w.LaunchStartedAt = nil, nil, nil
-		}})
+	// terminal are the two writes that end a live row: the mark (missing) and the
+	// move of a Codex row holding an end report (ended).
+	terminal := []struct {
+		prefix, to string
+		opts       []apitest.SpawnOption
+		run        func(s *store.Store, r fmRow) (string, store.CondResult, error)
+	}{
+		{"mark/", store.StateMissing, nil, func(s *store.Store, r fmRow) (string, store.CondResult, error) {
+			return s.MarkMissingIfSameLife(r.id, r.examined)
+		}},
+		{"ended/", store.StateEnded, codexEnded, func(s *store.Store, r fmRow) (string, store.CondResult, error) {
+			return s.MarkEndedIfSameLife(r.id, r.examined)
+		}},
+	}
+	for _, tm := range terminal {
+		for _, st := range []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
+			cases = append(cases, applied{tm.prefix + st, st, append(slices.Clone(liveness), tm.opts...), func(s *store.Store, r fmRow) (store.CondResult, error) {
+				prior, res, err := tm.run(s, r)
+				if err == nil && prior != st {
+					err = fmt.Errorf("prior state %q, want %q", prior, st)
+				}
+				return res, err
+			}, func(t *testing.T, w *apitest.SpawnColumns, a apitest.SpawnColumns) {
+				if a.EndedAt == nil || a.EndedAt != a.LastSeenAt || a.LastSeenAt == w.LastSeenAt {
+					t.Errorf("ended_at %#v, last_seen_at %#v (seeded %#v); want both the write's time", a.EndedAt, a.LastSeenAt, w.LastSeenAt)
+				}
+				w.State, w.EndedAt, w.LastSeenAt = tm.to, a.EndedAt, a.LastSeenAt
+				w.LivenessUnverifiedSince, w.LivenessNote, w.LaunchStartedAt = nil, nil, nil
+			}})
+		}
 	}
 	f := newV5Store(t)
 	rows, mixes := make([]fmRow, len(cases)), make([]closeMix, len(cases))
@@ -158,7 +176,7 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 			if err != nil || res != store.CondApplied {
 				t.Fatalf("write = %v, %v; want CondApplied, nil", res, err)
 			}
-			if strings.HasPrefix(tc.name, "mark/") {
+			if strings.HasPrefix(tc.name, "mark/") || strings.HasPrefix(tc.name, "ended/") {
 				f.assertMixClosedInWindow(mixes[i], lo, hi)
 			} else {
 				f.assertMixUnchanged(mixes[i])
@@ -173,8 +191,9 @@ func TestAppliedWriteChangesOnlyItsColumns(t *testing.T) {
 	}
 }
 
-// TestFindMissingIfSameLifeRefused checks each guarded write (the adoption, the
-// unreported note and the check_permission repair included) is refused,
+// TestFindMissingIfSameLifeRefused checks each guarded write (the move to
+// ended, the adoption, the unreported note and the check_permission repair
+// included) is refused,
 // writing nothing, for each
 // differing snapshot component, a repeat from the same snapshot, a finished
 // row and a deleted one.
@@ -182,6 +201,9 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 	writes := map[string]func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error){
 		"mark": func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
 			return s.MarkMissingIfSameLife(id, snap)
+		},
+		"ended": func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
+			return s.MarkEndedIfSameLife(id, snap)
 		},
 		"note": func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
 			res, err := s.SetLivenessNoteIfSameLife(id, snap, "fm new note")
@@ -212,7 +234,7 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 	// the repair only to a relay-on check_permission row (b.146 rule 9), which
 	// writeOpts seeds with the relay on.
 	liveState := map[string]string{"unreported": store.StatePending, "repair": store.StateCheckPermission}
-	writeOpts := map[string][]apitest.SpawnOption{"repair": {rvRelayOn}}
+	writeOpts := map[string][]apitest.SpawnOption{"repair": {rvRelayOn}, "ended": codexEnded}
 	cases := []struct {
 		name   string
 		state  string                   // "" = waiting
@@ -243,7 +265,7 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 					state = cmp.Or(liveState[name], store.StateWaiting)
 				}
 				r := seedFMRow(t, f, state, append(slices.Clone(liveness), writeOpts[name]...)...)
-				// Only the mark closes entries, so only its refusals carry the mix; a
+				// Only the mark and the move close entries, so only their refusals carry the mix; a
 				// deleted row's entries went with the row (the cascade is another test's).
 				var mix closeMix
 				if name == "mark" && !tc.delete {

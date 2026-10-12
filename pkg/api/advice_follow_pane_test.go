@@ -862,6 +862,8 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 // recourse is to retry the pause; the agent may still be running."; the
 // retried pause must leave the row ended. The wait's deadline is real time,
 // so a 0 s timeout makes the first wait time out at its first poll.
+// A Codex agent's SessionEnd only records an end report, so on its row the
+// retried pause itself moves the row to ended, with no tmux call.
 func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "errors.go", "ErrPauseTimeout", "The caller's recourse is to retry the pause; the agent may still be running.")
@@ -871,8 +873,11 @@ func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
 		late   bool     // the agent ends after the first wait timed out
 		exits  []string // what the agent got submitted, both calls
 		calls  int      // tmux calls the retry makes
+		codex  bool     // a Codex row: its agent's SessionEnd only records an end report, and the exit ends the row at the next pause
 	}{
 		{name: "the agent ended after the wait timed out", late: true, exits: []string{exitText}},
+		{name: "a Codex agent sent its SessionEnd and exited after the wait timed out", late: true, codex: true,
+			exits: []string{exitText}},
 		{name: "the agent ignored the first /exit", exitOn: 2, exits: []string{exitText, exitText},
 			calls: len(pauseSendCalls)},
 	}
@@ -882,13 +887,20 @@ func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{})
+			spec := killRowSpec{}
+			if tc.codex {
+				spec = codexSpec(store.StateWaiting, agentAlive, false)
+			}
+			r := e.seedRow(t, spec)
 			in := paneAgentExiting(t, e, r, false, tc.exitOn)
 
 			if _, err := pause(e, r); !errors.Is(err, api.ErrPauseTimeout) {
 				t.Fatalf("pause = %v; want ErrPauseTimeout", err)
 			}
-			if tc.late {
+			switch {
+			case tc.late && tc.codex:
+				e.codexExits(t, r, nil)
+			case tc.late:
 				if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", ""); !a.Applied {
 					t.Fatalf("late SessionEnd not applied: %s", a.Reason)
 				}

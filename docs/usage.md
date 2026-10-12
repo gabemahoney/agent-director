@@ -32,14 +32,18 @@ reports in, `find-missing` notes the row `unreported` (see
 A Codex agent reports in at its first prompt, not when its screen opens, so
 its row stays `pending` until someone prompts it. Until then `pause` and
 `send-keys` without `allow_pending` (`--allow-pending` on the CLI) are
-refused, as for any `pending` row. Pass the first prompt in the `spawn`
+refused, as for any `pending` row (once the agent has exited with an end
+report, `pause` ends the row instead; see the
+[caller contract](caller-contract.md#when-a-codex-agent-exits)). Pass the first prompt in the `spawn`
 arguments, or read the pane with `read-pane` and then type with
 `allow_pending`. After the first prompt the row moves
 with Codex's own events: a turn's prompt and tools read `working`, its end
 (`Stop`, or Esc) reads `waiting`, and a permission request reads
 `check_permission`. No Codex tool reads `ask_user`. A session change in the
 agent (`/clear`, `/new`, `/fork`, `/resume`) shows from the next prompt, and
-the `SessionEnd` that `/exit` sends leaves the row's state as it is. After Codex's `/review` the row can
+the `SessionEnd` that `/exit` sends leaves the row's state as it is, until
+`find-missing` or `pause` sees the agent gone (see
+[How a Codex row ends](hooks.md#how-a-codex-row-ends)). After Codex's `/review` the row can
 read `working` until the next prompt. The events and the limits are in
 [Hooks](hooks.md#hooks-from-a-codex-agent).
 
@@ -303,7 +307,9 @@ Every `running` record of the agent turns `lost` with `close_reason`
 
 - The agent exits and its row becomes `ended`. A session end that only clears
   or compacts the conversation closes nothing (see
-  [Hooks](hooks.md#the-eleven-state-tracking-hooks)).
+  [Hooks](hooks.md#the-eleven-state-tracking-hooks)). A Codex row becomes
+  `ended` once `find-missing` or `pause` sees its agent gone (see
+  [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
 - `find-missing` marks the row `missing` (see
   [Maintenance](maintenance.md) for scheduling it). A row it leaves live, with
   an unverified result or the `unreported` note, closes nothing.
@@ -475,7 +481,8 @@ may still have its dialog open, a plain `send-keys` and `pause` are held
 held agent, `kill` it, or close any fallen-back request (above), then have
 a person or an LLM read the pane, answer any dialog, check the prompt is
 empty, send `/exit` with that read's hash and poll `status` until the row
-is `ended`:
+is `ended` (a Codex row needs one more step, see the
+[caller contract](caller-contract.md#when-a-codex-agent-exits)):
 
 ```sh
 agent-director send-keys --instance-id "$id" --text /exit \
@@ -509,9 +516,17 @@ stored. `resume` refuses none of them, even one a new `spawn` would refuse.
 A resumed Claude row reads `waiting` at once. A resumed Codex row reports in
 only at its first prompt, so it reads `pending` until then and `pause` and
 `send-keys` without `allow_pending` are refused (see
-[Spawn states](#spawn-states)).
+[Spawn states](#spawn-states); once the agent has exited with an end report,
+`pause` ends the row instead, see the
+[caller contract](caller-contract.md#when-a-codex-agent-exits)).
 
 ```sh
 agent-director pause --instance-id "$id"
 agent-director resume --instance-id "$id"
 ```
+
+On a Codex row `pause` clears a draft of up to 64 lines before it types
+`/exit`, and ends the row itself once the agent exits (see the
+[caller contract](caller-contract.md#when-a-codex-agent-exits)). Past 64 lines
+the rest of the draft and the `/exit` are submitted to the agent as a prompt,
+the row goes `working` and `pause` times out.

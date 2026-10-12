@@ -229,7 +229,7 @@ that never writes" below).
 | `Interrupt` with `agent_id` | soft refresh: bumps `last_seen_at`, state unchanged (Codex does not send it) |
 | `Stop` | `waiting` |
 | `PermissionRequest` | `check_permission` |
-| `SessionEnd`, no `agent_id` | the end report, for any reason (see "The end report" below): soft refresh, state unchanged |
+| `SessionEnd`, no `agent_id` | the end report, for any reason (see "The end report" below): soft refresh, state unchanged; the row reaches `ended` only as "How a Codex row ends" below says |
 | `SessionStart` or `SessionEnd` with `agent_id` | ignored, reason `subagent_event` (see "Subagents and in-process teammates") |
 | `Notification`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, any unknown event name | soft refresh: bumps `last_seen_at`, state unchanged |
 
@@ -283,7 +283,40 @@ row's state, applies a soft refresh and records that a report arrived. It
 closes no permission request and no subagent record. The trail records one
 `ad.spawn.state_transition` from the row's state to the same state, with
 `soft_refresh` true and `triggering_event_name` `SessionEnd`. A later
-`SessionStart` from the agent clears the record of the report.
+`SessionStart` from the agent clears the record of the report. What turns a
+report into `ended` is in "How a Codex row ends" below.
+
+### How a Codex row ends
+
+A Codex row moves to `ended` only when both hold: the agent process of its
+current launch is proven gone (judged by its recorded start time, as
+`find-missing` judges every row, with no tmux call) and the row holds an end
+report. Two verbs make the move, each through the same guarded write:
+
+- `find-missing`, for every live row it finds gone.
+- `pause`, before it sends any key (in any live state, `pending` included) and
+  in each poll while it waits for `ended`.
+
+A Codex row never reads `ended` while its agent runs. An `/exit` typed at the
+pane records the end report only, so the row stays in its last state until
+`find-missing` or `pause` sees the agent gone (what a caller does is in the
+[caller contract](caller-contract.md#when-a-codex-agent-exits)).
+
+- **Gone, no end report:** `find-missing` marks the row `missing`, as for a
+  Claude row.
+- **Judged on tmux evidence alone** (the process cannot be checked, or was
+  never recorded): `find-missing` marks the row `missing`, whatever report it
+  holds.
+- **The move closes the row's requests** and its `running` subagent records, in
+  the same store transaction (see "The agent's end closes its requests" below).
+  The row keeps its end report.
+
+Whichever verb makes the move, it writes `find-missing`'s records: one
+`ad.find_missing.tick` with `new_state` `ended` and `reconciliation_reason`
+`proc_absent`, and, for each request it denies, one
+`ad.row_mutation.committed` with `decision_reason` `ended` and
+`writer_process` `find_missing`, which can therefore come from `pause`. It
+writes no `ad.spawn.state_transition`.
 
 ### Subagent records
 
@@ -1172,7 +1205,11 @@ the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
 `missing` row's requests the same way (`decision_reason` `find_missing`),
 and `resume`'s move to `pending` closes any request a release before this
 one left open on the finished row (`decision_reason` `ended`,
-`writer_process` `resume`). Each of the three also proves every request of
+`writer_process` `resume`). The move of a Codex row to `ended` (see "How a
+Codex row ends" above), made by `find-missing` or by `pause`, closes them
+too, as the `ended` close does: `decision_reason` `ended` and
+`writer_process` `find_missing`, so `decide` on such a request returns
+`ErrNoOpenPermissionRequest`. Each of these also proves every request of
 the row gone in the same transaction, closed now or before
 (`proven_gone_how` `agent_gone`; see "Hooks that prove a request's dialog
 gone" below).
@@ -1225,8 +1262,9 @@ Notification, not a `Stop` or idle prompt carrying `agent_id`, not a
   nothing.
 - **Fail-open.** A failed proof write logs to `errors.log` and changes
   nothing else; the requests stay unproven until a later proof.
-- **The agent's end.** The terminal `SessionEnd`, `find-missing`'s mark
-  and `resume`'s move prove every request of the row gone (`agent_gone`),
+- **The agent's end.** The terminal `SessionEnd`, `find-missing`'s mark,
+  the move of a Codex row to `ended` and `resume`'s move prove every request
+  of the row gone (`agent_gone`),
   in the transaction of their close (see "The agent's end closes its
   requests" above). The upgrade to this release proves the requests of a
   row already `ended` or `missing` the same way.

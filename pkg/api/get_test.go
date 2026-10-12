@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -76,8 +78,9 @@ func assertOptionalString(t *testing.T, out any, key string, got *string, want s
 	}
 }
 
-// TestGetShowsRowAgent (SR-1.5): get's agent is the agent the row runs, claude
-// or codex, whether the seed names it or takes the default.
+// TestGetShowsRowAgent (SR-1.5, SR-7.5): get's agent is the agent the row runs,
+// claude or codex, whether the seed names it or takes the default; the row's
+// labels are shown the same for either.
 func TestGetShowsRowAgent(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -92,10 +95,13 @@ func TestGetShowsRowAgent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "state.db")
-			seedWaiting(t, dbPath, "row-agent", tc.opts...)
+			seedWaiting(t, dbPath, "row-agent", append(tc.opts, apitest.WithRawLabels(`{"team":"core","env":"dev"}`))...)
 			got, err := api.Get(openDB(t, dbPath), api.RelayView{}, "row-agent")
 			if err != nil || got.Agent != tc.want {
 				t.Fatalf("Get agent = %q, %v; want %q", got.Agent, err, tc.want)
+			}
+			if want := map[string]string{"team": "core", "env": "dev"}; !maps.Equal(got.Labels, want) {
+				t.Errorf("Get labels = %v; want %v", got.Labels, want)
 			}
 			if raw, _ := jsonField(t, got, "agent"); string(raw) != strconv.Quote(tc.want) {
 				t.Errorf("JSON agent = %s; want %q", raw, tc.want)
@@ -300,4 +306,38 @@ func TestGetJSONLPathAndNoExtraEnv(t *testing.T) {
 			t.Errorf("%s: get output carries extra_env: %s", id, out)
 		}
 	}
+}
+
+// TestGetAndListHideCodexConfigFolder (SR-7.1): a Codex row whose extra_env
+// names CODEX_HOME shows neither the variable nor the folder it names, nor any
+// config folder, in get or in list, and the folder is left as seeded.
+func TestGetAndListHideCodexConfigFolder(t *testing.T) {
+	// Serial: it uses the shared Codex-folder fixture.
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	folder := seedCodexFolder(t, filepath.Join(t.TempDir(), "codex-home-marker"))
+	rollout := codexfix.TempRolloutPath(t, "sess-hide-codex", false) // outside the folder: jsonl_path is shown verbatim
+	seedWaiting(t, dbPath, "row-codex", codexRowOpts(folder.env(), apitest.WithJsonlPath(rollout),
+		apitest.WithExtraEnv(map[string]string{"CODEX_HOME": folder.dir, "OTHER_SECRET": "leak-me-not"}))...)
+	s := openDB(t, dbPath)
+
+	got, err := api.Get(s, api.RelayView{}, "row-codex")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	listed, err := api.List(s, api.RelayView{}, api.ListParams{})
+	if err != nil || len(listed.Spawns) != 1 {
+		t.Fatalf("List = %+v, %v; want the one row", listed.Spawns, err)
+	}
+
+	for verb, out := range map[string]string{"get": jsonOf(t, got), "list": jsonOf(t, listed)} {
+		for _, hidden := range []string{"extra_env", "CODEX_HOME", "OTHER_SECRET", "leak-me-not", "codex-home-marker", "config_dir", "config_folder"} {
+			if strings.Contains(out, hidden) {
+				t.Errorf("%s output carries %q: %s", verb, hidden, out)
+			}
+		}
+	}
+	if got.Agent != "codex" || got.JSONLPath != rollout {
+		t.Errorf("Get agent %q, jsonl_path %q; want codex and the rollout path %q", got.Agent, got.JSONLPath, rollout)
+	}
+	folder.assertUnchanged(t, "after get and list")
 }

@@ -50,6 +50,14 @@ type LiveSpawnIdentity struct {
 	// row whose owner is provably alive. The zero value (PID 0) records no
 	// owner. It equals GetSpawn's LaunchOwner for the same row.
 	LaunchOwner LaunchOwner
+	// Agent is the row's agent column as stored (TEXT NOT NULL DEFAULT ''),
+	// read as is (SR-3.1); only "codex" takes the Codex end of find-missing and
+	// pause.
+	Agent string
+	// EndReportedAtMillis is end_reported_at as Spawn.EndReportedAtMillis
+	// reads it: milliseconds since the epoch of a Codex row's end report; 0 =
+	// absent (decodeEndReportedAt). It equals GetSpawn's for the same row.
+	EndReportedAtMillis int64
 }
 
 // ListLiveSpawnIdentities returns a LiveSpawnIdentity for every row in a
@@ -79,7 +87,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 	}
 	q := "SELECT instance_id, state, launch_started_at, COALESCE(liveness_note, ''), " + lifeColumns +
 		", " + launchOwnerColumns +
-		" FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
+		", agent, end_reported_at FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list live identities: %w", err)
@@ -90,14 +98,17 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 		var (
 			it              LiveSpawnIdentity
 			launchStartedAt any
+			endReportedAt   any
 			life            lifeScan
 		)
 		dest := append([]any{&it.InstanceID, &it.State, &launchStartedAt, &it.LivenessNote}, life.dest()...)
 		dest = append(dest, launchOwnerDest(&it.LaunchOwner)...)
+		dest = append(dest, &it.Agent, &endReportedAt)
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("store: list live identities scan: %w", err)
 		}
 		it.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
+		it.EndReportedAtMillis = decodeEndReportedAt(endReportedAt)
 		it.Snapshot, it.Identity = life.result()
 		it.PID = it.Snapshot.PID
 		it.ProcStarttime = it.Snapshot.ProcStarttime

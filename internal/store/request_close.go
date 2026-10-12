@@ -12,8 +12,9 @@ import (
 // This file holds the close of a Spawn's open permission requests (b.146 rule
 // 12): a request whose asking agent is gone, or judged gone, is closed for
 // good, in the transaction of the write that ends the agent's launch, so it
-// no longer awaits an answer once the row is resumed. Three writes run it:
-// find-missing's mark (MarkMissingIfSameLife, reason find_missing), the
+// no longer awaits an answer once the row is resumed. Four writes run it:
+// find-missing's mark (MarkMissingIfSameLife, reason find_missing), its move of
+// a Codex row with an end report to ended (MarkEndedIfSameLife, reason ended), the
 // terminal SessionEnd's move to ended (ApplyHookTransitionResult, reason
 // ended) and, as a backstop for a request an earlier release left open on a
 // finished row, resume's move to pending (MoveToPending, reason ended). The

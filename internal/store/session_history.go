@@ -167,6 +167,9 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 // a NULL jsonl_path — i.e. a session that started but whose transcript had not
 // been written when SessionStart fired (b.v2c AC3). find-missing recomposes the
 // path for each and stats it, healing rows whose transcript has since appeared.
+// Claude rows only: the heal composes a Claude Code transcript path, which a
+// Codex row (whose jsonl_path may stay NULL for good) has none of, so a row
+// whose agent is codex is never listed.
 func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 	placeholders := make([]string, len(liveStates))
 	args := make([]any, len(liveStates))
@@ -179,6 +182,7 @@ func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 	       WHERE jsonl_path IS NULL
 	         AND session_id IS NOT NULL
 	         AND session_id != ''
+	         AND agent <> '` + AgentCodex + `'
 	         AND state IN (` + joinPlaceholders(placeholders) + `)`
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

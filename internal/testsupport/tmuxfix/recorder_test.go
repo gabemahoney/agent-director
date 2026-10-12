@@ -265,6 +265,38 @@ func TestRecorder_SendKeysPane(t *testing.T) {
 	}
 }
 
+// TestRecorder_SendKeyPaneRepeat: a repeated key send is one CallSendKey record
+// carrying the key and the repeat count (a plain key send records Repeat 0); an
+// unknown pane fails the one call.
+func TestRecorder_SendKeyPaneRepeat(t *testing.T) {
+	cases := []struct {
+		name, pane string
+		send       func(r *tmuxfix.Recorder, pane string) error
+		wantRepeat int
+		wantErr    bool
+	}{
+		{"repeat-127", "%0", func(r *tmuxfix.Recorder, p string) error { return r.SendKeyPaneRepeat(sockA, p, "C-u", 127) }, 127, false},
+		{"plain-key-has-no-repeat", "%0", func(r *tmuxfix.Recorder, p string) error { return r.SendKeyPane(sockA, p, "C-u") }, 0, false},
+		{"unknown-pane", "%9", func(r *tmuxfix.Recorder, p string) error { return r.SendKeyPaneRepeat(sockA, p, "C-u", 127) }, 127, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := seeded()
+			err := tc.send(r, tc.pane)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("send err = %v, want error %v", err, tc.wantErr)
+			}
+			if err != nil && callErr(t, err).Call != tmux.CallSendKey {
+				t.Errorf("err = %v; want a failed %v call", err, tmux.CallSendKey)
+			}
+			want := tmuxfix.SocketCall{Call: tmux.CallSendKey, Socket: sockA, Target: tc.pane, Key: "C-u", Repeat: tc.wantRepeat}
+			if got := r.SocketCalls(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+				t.Errorf("calls = %+v, want exactly one %+v", got, want)
+			}
+		})
+	}
+}
+
 // TestRecorder_CapturePaneID: the pane's capture text whole (default empty),
 // with its arguments recorded; an unknown pane fails.
 func TestRecorder_CapturePaneID(t *testing.T) {

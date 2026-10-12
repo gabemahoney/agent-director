@@ -135,11 +135,17 @@ func TestSessionHistoryReadFiltersByLife(t *testing.T) {
 // reported transcript is not on disk records no path, clearing a recorded one,
 // so the live row is listed as provisional with its CLAUDE_CONFIG_DIR;
 // HealJsonlPath records a path only while it is NULL and the session matches.
+// A live Codex row with a session and no transcript path is never listed: the
+// heal composes a Claude transcript path.
 func TestProvisionalTranscriptHeal(t *testing.T) {
 	f := newV5Store(t)
 	prov := f.seed(store.StateWaiting, "", apitest.WithExtraEnv(map[string]string{"CLAUDE_CONFIG_DIR": "/cfg"}))
 	present := f.seed(store.StateWaiting, "")
 	f.sessionStart(present, "session-present", "/x/here.jsonl", true)
+	codex := f.seed(store.StateWaiting, "session-codex", apitest.WithAgent(store.AgentCodex))
+	if c := f.rawColumns(codex); c.JSONLPath != nil || c.SessionID != "session-codex" {
+		t.Fatalf("Codex row jsonl_path, session_id = %v, %v; want NULL and a session, or the exclusion check is vacuous", c.JSONLPath, c.SessionID)
+	}
 	f.sessionStart(prov, "session-1", "/x/present.jsonl", true)
 	f.sessionStart(prov, "session-1", "/x/gone.jsonl", false)
 	if got := f.rawColumns(prov).JSONLPath; got != nil {

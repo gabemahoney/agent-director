@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -51,41 +53,61 @@ func (e *killEnv) assertStillStored(t *testing.T, rows ...killRow) {
 // TestExpireSelection checks the window (override, else config's retention)
 // selects finished rows by ended_at on the fixture clock; an explicit zero
 // selects all; a live row and a NULL-ended_at row are never selected. A
-// negative override is refused (TestExpireOnlyExplicitZeroSelectsEvery).
+// negative override is refused (TestExpireOnlyExplicitZeroSelectsEvery). The
+// codex- rows are finished Codex rows (ended holding an end report, and
+// missing) that expire exactly as a Claude row of the same age (SR-7.5): the
+// Codex folder their extra_env names, and the rollout file their session wrote
+// in it, are left as seeded.
 func TestExpireSelection(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	ages := map[string]time.Duration{
-		"ended-2h":              2 * time.Hour,
-		"missing-2h":            2 * time.Hour,
-		"ended-10m":             10 * time.Minute,
-		"ended-under-retention": expireRetention - time.Hour,
-		"ended-past-retention":  expireRetention + time.Hour,
-		"ended-after-clock":     -time.Hour, // a store write ahead of the injected clock
+		"ended-2h":                   2 * time.Hour,
+		"missing-2h":                 2 * time.Hour,
+		"ended-10m":                  10 * time.Minute,
+		"ended-under-retention":      expireRetention - time.Hour,
+		"ended-past-retention":       expireRetention + time.Hour,
+		"ended-after-clock":          -time.Hour, // a store write ahead of the injected clock
+		"codex-ended-2h":             2 * time.Hour,
+		"codex-missing-2h":           2 * time.Hour,
+		"codex-ended-past-retention": expireRetention + time.Hour,
 	}
 	every := []string{"ended-2h", "missing-2h", "ended-10m", "ended-under-retention", "ended-past-retention",
-		"ended-after-clock"}
+		"ended-after-clock", "codex-ended-2h", "codex-missing-2h", "codex-ended-past-retention"}
 	cases := []struct {
 		name string
 		over *time.Duration
 		want []string // deleted
 	}{
 		{"older than 1h", olderThan(time.Hour),
-			[]string{"ended-2h", "missing-2h", "ended-under-retention", "ended-past-retention"}},
-		{"older than 24h", olderThan(24 * time.Hour), []string{"ended-under-retention", "ended-past-retention"}},
-		{"default retention from config", nil, []string{"ended-past-retention"}},
+			[]string{"ended-2h", "missing-2h", "ended-under-retention", "ended-past-retention",
+				"codex-ended-2h", "codex-missing-2h", "codex-ended-past-retention"}},
+		{"older than 24h", olderThan(24 * time.Hour),
+			[]string{"ended-under-retention", "ended-past-retention", "codex-ended-past-retention"}},
+		{"default retention from config", nil, []string{"ended-past-retention", "codex-ended-past-retention"}},
 		{"zero override", olderThan(0), every},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			e := newKillEnv(t)
+			home := filepath.Join(t.TempDir(), "codex-home")
+			codexfix.RolloutPath(t, home, "sess-expire-codex", true)
+			folder := seedCodexFolder(t, home)
 			for id, age := range ages {
-				spec := e.finishedSpec(age, agentGone)
+				var opts []apitest.SpawnOption
+				if strings.HasPrefix(id, "codex-") {
+					opts = codexRowOpts(folder.env(), apitest.WithJsonlPath(codexfix.RolloutPath(t, home, "sess-expire-codex", false)))
+					if !strings.Contains(id, "missing") {
+						opts = append(opts, apitest.WithEndReportedAt(1790000123456))
+					}
+				}
+				spec := e.finishedSpec(age, agentGone, opts...)
 				spec.ID = id
-				if strings.HasPrefix(id, "missing") {
+				if strings.Contains(id, "missing") {
 					spec.State = store.StateMissing
 				}
 				e.seedRow(t, spec)
 			}
+			folder.snap = snapshotTrees(t, folder.watch)
 			never := e.seedUnselectable(t)
 			mark := trailMark(t)
 			res, lg, err := e.expire(c.over)
@@ -108,6 +130,7 @@ func TestExpireSelection(t *testing.T) {
 			if len(lg.lines) != 0 {
 				t.Errorf("log = %q; want none", lg.lines)
 			}
+			folder.assertUnchanged(t, "after expire")
 		})
 	}
 }

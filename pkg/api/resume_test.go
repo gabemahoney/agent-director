@@ -419,7 +419,8 @@ func TestResumeMoveNotApplied(t *testing.T) {
 // move's parent (a second resume then launches), after another write or the
 // row's removal writes nothing, and on a store error leaves it pending with
 // one WARN. The error carries its sentence, the trail records it, and the call
-// charges Q + C plus A per label or kill.
+// charges Q + C plus A per label or kill; a Codex row (SR-7.7) is charged the
+// same.
 func TestResumeRestore(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID with t.Setenv.
 	create, label, kill := tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
@@ -454,6 +455,7 @@ func TestResumeRestore(t *testing.T) {
 		desc        descFn
 		outcome     apitest.RestoreOutcome
 		again       bool // a second resume launches
+		codex       bool // the row is a Codex row, its CODEX_HOME a seeded folder under a test HOME
 	}{
 		{name: "create timed out", prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: {Failure: tmux.FailTimeout}},
 			noRestore: true, want: "ErrTmuxUnresponsive", desc: timedOut(false)},
@@ -486,13 +488,26 @@ func TestResumeRestore(t *testing.T) {
 			}, want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreRowRemoved},
 		{name: "restore store error", prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: fails},
 			failRestore: true, want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreStoreError},
+		{name: "Codex row, create timed out", codex: true, prior: store.StateEnded,
+			scripts:   map[tmux.Call]tmuxfix.Script{create: {Failure: tmux.FailTimeout}},
+			noRestore: true, want: "ErrTmuxUnresponsive", desc: timedOut(false)},
+		{name: "Codex row, create failed", codex: true, prior: store.StateEnded, scripts: map[tmux.Call]tmuxfix.Script{create: once(fails)},
+			want: "ErrTmuxSessionCreate", desc: createFailed, outcome: apitest.RestoreApplied, again: true},
+		{name: "Codex row, session not labelled, killed by id", codex: true, prior: store.StateEnded, scripts: unlabelled,
+			calls: []tmux.Call{label, kill}, want: "ErrTmuxSessionCreate", desc: notLabelled(true), outcome: apitest.RestoreApplied, again: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
 			parent := pendParent(t, e)
 			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
-			r := e.seedResumable(t, tc.prior)
+			var opts []apitest.SpawnOption
+			if tc.codex {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				opts = codexRowOpts(seedCodexFolder(t, filepath.Join(home, "codex")).env())
+			}
+			r := e.seedResumable(t, tc.prior, opts...)
 			for call, s := range tc.scripts {
 				e.rec.Script(tmuxfix.AnySocket, s, call)
 			}

@@ -5,7 +5,8 @@
 Nothing runs the two sweep verbs until they are scheduled:
 
 ```sh
-# Mark live rows whose agent is gone `missing`; run often (e.g. every 2 min):
+# Mark live rows whose agent is gone `missing` (`ended` if it reported its end);
+# run often (e.g. every 2 min):
 agent-director find-missing
 # Delete finished rows older than expire_retention_days that nothing runs:
 agent-director expire
@@ -88,10 +89,13 @@ binary keeps its files in `$HOME/.config/agent-director`.
 
 `find-missing` marks a live row `missing` when its agent's process is gone or,
 when the process cannot be checked, when tmux shows no session of its launch;
-otherwise the row stays unverified. A `pending` row is not judged until its
-grace period has passed. Marked rows are in `ids`; undecided rows are in
-`unverified_ids`, each with `liveness_unverified_since` and `liveness_note`
-in `list` and `get`.
+otherwise the row stays unverified. A Codex row whose agent reported its end
+and whose process is gone is marked `ended` instead, and is in neither `ids`,
+`count` nor `unverified_ids` (see
+[How a Codex row ends](hooks.md#how-a-codex-row-ends)). A `pending` row is not
+judged until its grace period has passed. Marked rows are in `ids`; undecided
+rows are in `unverified_ids`, each with `liveness_unverified_since` and
+`liveness_note` in `list` and `get`.
 
 Past its grace period, a `pending` row whose agent runs but has not reported
 in stays `pending` with `liveness_note` `unreported`. Read the pane, then type
@@ -138,12 +142,13 @@ A reboot kills every agent and tmux server; the rows survive. Run these two
 steps in order from a startup script:
 
 ```sh
-agent-director find-missing                       # mark dead rows `missing`
+agent-director find-missing                       # end or mark dead rows `missing`
 agent-director resume --instance-id <id>   # relaunch with history
 ```
 
 `resume` acts on any finished row (`ended` or `missing`); `find-missing` first
-makes a dead live row `missing`. Without a session id or transcript (see
+makes a dead live row `missing` (or `ended`, for a Codex row that reported its
+end). Without a session id or transcript (see
 `transcript_status` in `get`), spawn the id again with reuse and the row's
 agent, which `get` shows; the new agent has no memory of the old
 conversation:

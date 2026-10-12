@@ -14,7 +14,9 @@ import (
 
 // FindMissingStore is the narrow store surface find-missing needs (SRD
 // Appendix F.4): the live-row read, the life-guarded mark (with the denial of
-// the row's open permission requests in the same transaction), note write and
+// the row's open permission requests in the same transaction) and the
+// life-guarded move of a Codex row with an end report to ended (EndedMover),
+// note write and
 // clear (SR-11.6), the life-guarded unreported note of a live pending row
 // (b.kdf), the life-guarded adoption write of a lost create reply's identity
 // (SR-3.6; LFR H2), the provisional-transcript healing, and this store's id,
@@ -23,8 +25,8 @@ import (
 type FindMissingStore interface {
 	// ListLiveSpawnIdentities reads every row in a live state, pending
 	// included, with its state, launch start, recorded session name,
-	// liveness note, row snapshot, launch identity and launch owner (SR-11.7;
-	// b.kdf).
+	// liveness note, row snapshot, launch identity, launch owner, agent and
+	// end report (SR-11.7; b.kdf).
 	ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error)
 	// MarkMissingIfSameLife marks a live row missing in one write guarded on
 	// examined, the row snapshot the sweep read or its adoption produced, with
@@ -37,6 +39,13 @@ type FindMissingStore interface {
 	// when it did not, and a store error as an error with a zero CondResult
 	// (SR-5.8), having written nothing.
 	MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error)
+	// EndedMover: MarkEndedIfSameLife moves a live Codex row that holds an end
+	// report (the SessionEnd of its agent) to ended instead, once the sweep
+	// proved its agent process gone: the same write guarded on examined, with
+	// the same request close, the row's subagent close and the same results.
+	// Used only where the process is gone; tmux evidence alone still marks
+	// missing.
+	EndedMover
 	// SetLivenessNoteIfSameLife overwrites a live row's liveness note, keeping
 	// its first unverified time, in one write guarded on examined (SR-11.4,
 	// SR-11.6). It writes even a note equal to the stored one: skipping an
@@ -66,10 +75,10 @@ type FindMissingStore interface {
 	// a zero snapshot, and a store error as an error with a zero CondResult
 	// (SR-5.8).
 	AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot, id LaunchIdentity) (res CondResult, now RowSnapshot, err error)
-	// ListProvisionalTranscripts returns live rows with a session id but a NULL
-	// jsonl_path — sessions that started before their transcript was written
-	// (b.v2c AC3). find-missing recomposes and stats each, healing rows whose
-	// transcript has since appeared.
+	// ListProvisionalTranscripts returns live Claude rows (never a Codex row)
+	// with a session id but a NULL jsonl_path — sessions that started before
+	// their transcript was written (b.v2c AC3). find-missing recomposes and
+	// stats each, healing rows whose transcript has since appeared.
 	ListProvisionalTranscripts() ([]ProvisionalTranscript, error)
 	// HealJsonlPath records a now-present transcript path onto a provisional
 	// row (jsonl_path NULL) for the given session id. Returns true when written.
@@ -112,14 +121,16 @@ type ProvisionalTranscript = store.ProvisionalTranscript
 
 // FindMissingResult is the typed return shape. Count is the number of
 // rows this sweep marked `missing`; IDs is the sorted list (sorted so the
-// JSON envelope is deterministic across runs).
+// JSON envelope is deterministic across runs). A Codex row the sweep moved to
+// `ended` (its agent process gone, with an end report) is in neither.
 type FindMissingResult struct {
 	// Count is the number of rows this sweep marked missing: the length of
-	// IDs.
+	// IDs. A Codex row moved to ended is not counted.
 	Count int `json:"count"`
 	// IDs is the sorted slice of instance ids this sweep marked missing, on
 	// process or tmux evidence: rows whose agent process (the SessionStart
-	// one or the recorded pane's) is gone, and rows whose process could not
+	// one or the recorded pane's) is gone, except a Codex row holding an end
+	// report, which the sweep moves to ended instead and does not list, and rows whose process could not
 	// be checked and whose lookup found no session or pane of their current
 	// launch; a pending row only past the pending grace period, never while
 	// its launch owner holds it, and never for being noted unreported. A row
@@ -238,6 +249,9 @@ const (
 
 // The ad.provenance.disagree action values a find-missing row's records
 // carry (SR-14): what the sweep did to the row, known once its write settled.
+// findMissingActionMarked is also the action of a Codex row moved to ended on
+// a gone process with an end report (goneRow): the adopted-pane path keeps its
+// existing value and the trail gains no new one.
 const (
 	findMissingActionMarked     = nameHeldRowMarkedMissing
 	findMissingActionLeftLive   = "left_live"
@@ -350,7 +364,9 @@ func findMissingAction(r findMissingRow) string {
 //     row noted provenance_conflict keeps that note, which unreported never
 //     overwrites. Dead marks it missing with
 //     reason proc_absent, denying its open permission requests in the same
-//     transaction. Neither makes a tmux call. A child process or another
+//     transaction; a dead Codex row that holds an end report is moved to
+//     ended instead (goneRow; same tick reason, same request close, the new
+//     state ended), and is in neither result list. Neither makes a tmux call. A child process or another
 //     process carrying the row's id never keeps it alive.
 //  4. A row whose process evidence is unknown or absent and whose recorded
 //     session name cannot be used (tmux.Unusable: empty, then a control
@@ -379,7 +395,8 @@ func findMissingAction(r findMissingRow) string {
 //     per-row store error are row outcomes, never a sweep error (SR-11.7,
 //     SR-5.8). A row's ad.provenance.disagree records are written once its
 //     write settled.
-//  7. Provisional transcripts are healed (healProvisionalTranscripts).
+//  7. Provisional transcripts of Claude rows are healed
+//     (healProvisionalTranscripts); a Codex row is never statted or healed.
 //
 // The result lists are sorted. The only error FindMissing returns is the
 // live-row read's, and (c *Client).FindMissing adds one, ErrClientClosed on a
@@ -483,7 +500,8 @@ type findMissingRun struct {
 //     unreported (b.kdf), and any other row's note is cleared (no tick; a
 //     row with no note is not written);
 //   - gone (absent, a zombie, or another start time): marked missing with
-//     reason proc_absent, with no tmux call;
+//     reason proc_absent, with no tmux call (a Codex row holding an end
+//     report is moved to ended with the same reason, goneRow);
 //   - unknown (unreadable, or a pid-only identity reading alive) or no
 //     identity recorded: a row whose recorded session name cannot be used
 //     (tmux.Unusable) is left unverified with its own note
@@ -499,7 +517,7 @@ func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 	case tmux.ProcAlive:
 		return r.aliveRow(findMissingRow{}, it, it.Snapshot, it.Identity)
 	case tmux.ProcGone:
-		return r.markRow(findMissingRow{}, it, it.Snapshot, reasonProcAbsent, nil)
+		return r.goneRow(findMissingRow{}, it, it.Snapshot)
 	default: // tmux.ProcUnknown, tmux.ProcNone
 		if note := unusableNameNote(tmux.Unusable(it.TmuxSessionName)); note != "" {
 			return r.noteRow(findMissingRow{}, it, it.Snapshot, note)
@@ -563,6 +581,26 @@ func (r *findMissingRun) clearRow(row findMissingRow, it LiveSpawnIdentity, guar
 // on guard, with tick reason reason and the tick's extra fields.
 func (r *findMissingRun) markRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot, reason string, extra map[string]any) findMissingRow {
 	row.write = markMissingSameLife(r.s, it.InstanceID, guard, reason, extra, r.lg)
+	row.marked = true
+	row.action = findMissingActionMarked
+	return row
+}
+
+// goneRow completes row for a row whose agent process was proven gone (the
+// recorded identity's, or the adopted pane's), guarded on guard, with tick
+// reason proc_absent. A Codex row that holds an end report (SR-6.5) gets the
+// guarded move to ended through the shared outcome writer (markEndedSameLife):
+// it is in neither ids nor unverified_ids, and its ad.provenance.disagree
+// action is still marked_missing (no new action value). Any other row,
+// whatever its agent and a Codex row without an end report included, is marked
+// missing (markRow), exactly as before. Marks on tmux evidence alone (tmux
+// absent, name held, no pane) never come here and stay missing whatever the end
+// report.
+func (r *findMissingRun) goneRow(row findMissingRow, it LiveSpawnIdentity, guard RowSnapshot) findMissingRow {
+	if it.Agent != store.AgentCodex || it.EndReportedAtMillis <= 0 {
+		return r.markRow(row, it, guard, reasonProcAbsent, nil)
+	}
+	row.write = markEndedSameLife(r.s, it.InstanceID, guard, reasonProcAbsent, nil, r.lg)
 	row.marked = true
 	row.action = findMissingActionMarked
 	return row
@@ -633,7 +671,9 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 
 // healProvisionalTranscripts sweeps live rows whose jsonl_path is NULL (a
 // session that started before its transcript was written) and records the path
-// for any whose transcript has since appeared on disk (b.v2c AC3). The path is
+// for any whose transcript has since appeared on disk (b.v2c AC3). Claude rows
+// only: the store's listing never yields a Codex row, so none is statted or
+// healed. The path is
 // recomposed the same way resume's fallback does: under the row's
 // CLAUDE_CONFIG_DIR when usable (spawn.ConfigDirUsable), else ~/.claude.
 // Per-row store errors are logged and skipped; a compose or stat miss is a
@@ -678,7 +718,10 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // child process or other process carrying the row's id keeps the row alive.
 // A process alive with its recorded start time leaves the row live and
 // clears any liveness note; a dead one marks the row missing whatever tmux
-// shows, with no tmux call. A `pending` row whose recorded (or just adopted)
+// shows, with no tmux call, except that a Codex row holding an end report (its
+// agent's SessionEnd) whose process is gone is moved to ended instead and is
+// not in ids or count; a Codex row without an end report, or judged on tmux
+// evidence alone, is marked missing as any row. A `pending` row whose recorded (or just adopted)
 // pane process is alive instead stays pending with liveness note unreported:
 // the agent is alive, but no hook has reported since its launch. It may sit
 // at a Claude Code startup screen or idle at its prompt, for example after

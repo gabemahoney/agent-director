@@ -45,6 +45,10 @@ type SocketCall struct {
 	// C-u before /exit (b.9o4); "" on every other call. A key send is
 	// recorded under its own call kind, never the text or Enter call's.
 	Key string
+	// Repeat is how many times a repeated key send presses its Key
+	// (SendKeyPaneRepeat: send-keys -N <count>); 0 on a plain key send and
+	// on every other call.
+	Repeat int
 	// NLines and ANSI are CapturePaneID's arguments.
 	NLines int
 	ANSI   bool
@@ -216,6 +220,15 @@ func (r *Recorder) SendKeysPane(socket, paneID, text string, pressEnter bool) er
 // be in socket's table.
 func (r *Recorder) SendKeyPane(socket, paneID, key string) error {
 	_, err := r.do(SocketCall{Call: tmux.CallSendKey, Socket: socket, Target: paneID, Key: key},
+		sendEffect(paneID, tmux.CallSendKey))
+	return err
+}
+
+// SendKeyPaneRepeat records one key send of a repeated key, tmux.CallSendKey
+// with Key key and Repeat count (a Codex row's pause clear, one call), like
+// SendKeyPane. The pane must be in socket's table.
+func (r *Recorder) SendKeyPaneRepeat(socket, paneID, key string, count int) error {
+	_, err := r.do(SocketCall{Call: tmux.CallSendKey, Socket: socket, Target: paneID, Key: key, Repeat: count},
 		sendEffect(paneID, tmux.CallSendKey))
 	return err
 }

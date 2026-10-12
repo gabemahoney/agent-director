@@ -16,7 +16,8 @@ import (
 
 // TestListLiveSpawnIdentities checks one read returns every live row and no
 // finished one, each with its state, decoded launch start, name, process
-// identity, liveness note, snapshot and launch identity as seeded (NULL as the
+// identity, liveness note, snapshot, launch identity, agent and end report
+// (positive integer only; anything else reads absent) as seeded (NULL as the
 // zero value), whatever else the row holds.
 func TestListLiveSpawnIdentities(t *testing.T) {
 	const startedAt, note = "2026-03-04 05:06:07", "tmux server not answering"
@@ -48,6 +49,16 @@ func TestListLiveSpawnIdentities(t *testing.T) {
 			}},
 		{"malformed labels, agent_args and extra_env", store.StateWaiting, "", []apitest.SpawnOption{apitest.WithRawLabels("{not json"),
 			apitest.WithRawAgentArgs("[unterminated"), apitest.WithRawExtraEnv("not an object")}, nil},
+		{"waiting, Codex row with an end report", store.StateWaiting, "", []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex),
+			apitest.WithEndReportedAt(1790000123456)}, func(w *live) { w.Agent, w.EndReportedAtMillis = store.AgentCodex, 1790000123456 }},
+		{"pending, Codex row, no end report", store.StatePending, "", []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex)},
+			func(w *live) {
+				w.Agent, w.LaunchStartedAtMillis = store.AgentCodex, time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC).UnixMilli()
+			}},
+		{"working, Codex row, end report zero reads absent", store.StateWorking, "", []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex),
+			apitest.WithEndReportedAt(0)}, func(w *live) { w.Agent = store.AgentCodex }},
+		{"waiting, Codex row, negative end report reads absent", store.StateWaiting, "", []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex),
+			apitest.WithEndReportedAt(-5)}, func(w *live) { w.Agent = store.AgentCodex }},
 	}
 	f := newV5Store(t)
 	want := map[string]live{}
@@ -55,7 +66,7 @@ func TestListLiveSpawnIdentities(t *testing.T) {
 		version, name := int64(100+i), fmt.Sprintf("live-%d", i)
 		id := f.seed(tc.state, tc.session, append([]apitest.SpawnOption{apitest.WithRowVersion(version),
 			apitest.WithStartedAt(startedAt), apitest.WithTmuxSessionName(name), apitest.WithLaunchIdentity(fullIdentity())}, tc.opts...)...)
-		w := live{InstanceID: id, State: tc.state, TmuxSessionName: name, Identity: fullIdentity(),
+		w := live{InstanceID: id, State: tc.state, TmuxSessionName: name, Identity: fullIdentity(), Agent: store.AgentClaude,
 			Snapshot: store.RowSnapshot{RowVersion: version, StartedAt: startedAt, TmuxSessionName: name}}
 		if tc.edit != nil {
 			tc.edit(&w)

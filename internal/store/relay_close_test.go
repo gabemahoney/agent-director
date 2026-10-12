@@ -2,7 +2,8 @@ package store
 
 // relay_close_test.go — the close of a row's relay requests (b.146 rule 12,
 // closed_at; closeOrphanedRequests) by each write that runs it: find-missing's
-// mark, the terminal SessionEnd's move to ended and, as a backstop for a row
+// mark, its move of a Codex row holding an end report to ended, the terminal
+// SessionEnd's move to ended and, as a backstop for a row
 // an earlier release ended, resume's move to pending. Each closes every
 // request that still awaits an answer, denying an undecided one and keeping a
 // recorded verdict, with its own write or not at all; once the row is resumed
@@ -60,6 +61,39 @@ func moveRelayRow(t *testing.T, s *Store) {
 	trailMove(t, s, mustGetSpawn(t, s, relayID))
 }
 
+// codexEndReportedAt is the end report moveCodexRow gives relayID (Unix ms).
+const codexEndReportedAt int64 = 1790000123456
+
+// makeRelayRowCodex makes relayID a Codex row, optionally holding an end report,
+// as the row's own SessionEnd leaves it; its version and requests are kept.
+func makeRelayRowCodex(t *testing.T, s *Store, endReported bool) {
+	t.Helper()
+	var report any
+	if endReported {
+		report = codexEndReportedAt
+	}
+	if _, err := s.db.Exec(`UPDATE spawns SET agent = ?, end_reported_at = ? WHERE instance_id = ?`, AgentCodex, report, relayID); err != nil {
+		t.Fatalf("make %s a Codex row: %v", relayID, err)
+	}
+}
+
+// endRelayRowCodex is find-missing's move to ended of relayID as a Codex row
+// holding an end report; it must apply.
+func endRelayRowCodex(t *testing.T, s *Store) {
+	t.Helper()
+	makeRelayRowCodex(t, s, true)
+	if _, res, err := s.MarkEndedIfSameLife(relayID, mustGetSpawn(t, s, relayID).Snapshot); err != nil || res != CondApplied {
+		t.Fatalf("MarkEndedIfSameLife = %v, %v; want CondApplied", res, err)
+	}
+}
+
+// markRelayRowCodex is find-missing's mark of relayID as a Codex row with no end report.
+func markRelayRowCodex(t *testing.T, s *Store) {
+	t.Helper()
+	makeRelayRowCodex(t, s, false)
+	markRelayRow(t, s)
+}
+
 // closer is one write that closes relayID's requests still awaiting an
 // answer, with what it writes and emits.
 type closer struct {
@@ -73,10 +107,14 @@ type closer struct {
 	state      string // the row's state after the close
 }
 
-// closers are the three writes that run the close.
+// closers are the writes that run the close.
 var closers = []closer{
 	{name: "find-missing's mark", close: markRelayRow, reason: DecisionReasonFindMissing, writer: WriterProcessFindMissing,
 		tick: true, state: StateMissing},
+	{name: "find-missing's mark of a Codex row with no end report", close: markRelayRowCodex, reason: DecisionReasonFindMissing,
+		writer: WriterProcessFindMissing, tick: true, state: StateMissing},
+	{name: "find-missing's move of a Codex row with an end report", close: endRelayRowCodex, reason: DecisionReasonEnded,
+		writer: WriterProcessFindMissing, tick: true, state: StateEnded},
 	{name: "the terminal SessionEnd", close: endRelayRow, reason: DecisionReasonEnded, writer: WriterProcessHook,
 		transition: true, state: StateEnded},
 	{name: "resume's move of a row an earlier release ended", unclosed: true, close: moveRelayRow, reason: DecisionReasonEnded,
@@ -274,8 +312,9 @@ func lockStore(t *testing.T, path string) {
 }
 
 // TestCloseWritesNothingUnlessItsWriteApplies (b.146 rule 12): the terminal
-// SessionEnd and resume's move close the row's requests in their own write's
-// transaction, both or neither: a gate that does not hold, a live or stale or
+// SessionEnd, find-missing's move to ended and resume's move close the row's
+// requests in their own write's transaction, both or neither: a gate that does
+// not hold, a Claude row or one with no end report (the move), a live or stale or
 // absent row, a close that fails, or a write lock held past the busy timeout
 // leaves the row and every request as they were and emits nothing. A held
 // lock is a store error, never ErrStoreBusy (neither verb names it).
@@ -305,10 +344,25 @@ func TestCloseWritesNothingUnlessItsWriteApplies(t *testing.T) {
 			return result{applied: res == CondApplied, cond: res, err: err}
 		}
 	}
+	endMove := func(id string, stale bool) func(s *Store) result {
+		return func(s *Store) result {
+			sp, err := s.GetSpawn(relayID)
+			if err != nil {
+				return result{err: err}
+			}
+			if stale {
+				sp.Snapshot.RowVersion--
+			}
+			_, res, err := s.MarkEndedIfSameLife(id, sp.Snapshot)
+			return result{applied: res == CondApplied, cond: res, err: err}
+		}
+	}
+	codexReported := func(t *testing.T, s *Store) { makeRelayRowCodex(t, s, true) }
 	cases := []struct {
 		name    string
 		ended   bool                            // an earlier release ended the row first (the move's cases)
-		arrange func(t *testing.T, path string) // before the write
+		prep    func(t *testing.T, s *Store)    // changes the row before its state is read: what the move's guards judge
+		arrange func(t *testing.T, path string) // before the write, after the state is read
 		busyMs  int                             // the store's busy timeout; 0 the default
 		write   func(s *Store) result
 		want    result // err: nil none, errAnyStore any error
@@ -321,6 +375,21 @@ func TestCloseWritesNothingUnlessItsWriteApplies(t *testing.T) {
 			want: result{err: errAnyStore}, wantMsg: errTestClose},
 		{name: "SessionEnd/write lock held past the busy timeout", arrange: lockStore, busyMs: 100,
 			write: end(relayID, agentGate("SessionEnd", "")), want: result{err: errAnyStore}},
+		{name: "ended move/Claude row", write: endMove(relayID, false), want: result{cond: CondChanged}},
+		{name: "ended move/Claude row holding an end report", prep: func(t *testing.T, s *Store) {
+			if _, err := s.db.Exec(`UPDATE spawns SET end_reported_at = ? WHERE instance_id = ?`, codexEndReportedAt, relayID); err != nil {
+				t.Fatal(err)
+			}
+		}, write: endMove(relayID, false), want: result{cond: CondChanged}},
+		{name: "ended move/Codex row with no end report", prep: func(t *testing.T, s *Store) { makeRelayRowCodex(t, s, false) },
+			write: endMove(relayID, false), want: result{cond: CondChanged}},
+		{name: "ended move/stale snapshot", prep: codexReported, write: endMove(relayID, true), want: result{cond: CondChanged}},
+		{name: "ended move/row already ended", ended: true, prep: codexReported, write: endMove(relayID, false), want: result{cond: CondChanged}},
+		{name: "ended move/absent row", prep: codexReported, write: endMove("relay-absent", false), want: result{cond: CondAbsent}},
+		{name: "ended move/the close fails", prep: codexReported, arrange: failClose, write: endMove(relayID, false),
+			want: result{err: errAnyStore}, wantMsg: errTestClose},
+		{name: "ended move/write lock held past the busy timeout", prep: codexReported, arrange: lockStore, busyMs: 100,
+			write: endMove(relayID, false), want: result{err: errAnyStore}},
 		{name: "resume's move/live row", write: move(relayID, false), want: result{cond: CondChanged}},
 		{name: "resume's move/stale snapshot", ended: true, write: move(relayID, true), want: result{cond: CondChanged}},
 		{name: "resume's move/absent row", ended: true, write: move("relay-absent", false), want: result{cond: CondAbsent}},
@@ -335,6 +404,9 @@ func TestCloseWritesNothingUnlessItsWriteApplies(t *testing.T) {
 			insertRelay(t, s, relayReq(tokenA))
 			insertRelay(t, s, relayReq(tokenB))
 			decideB(t, s)
+			if tc.prep != nil {
+				tc.prep(t, s)
+			}
 			if tc.ended {
 				endRelayRowUnclosed(t, path)
 			}

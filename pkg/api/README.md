@@ -596,8 +596,9 @@ Once the verdict is recorded, `Decide` never returns `ErrStoreBusy`.
 
 `ErrNoOpenPermissionRequest` means no open request has that token, or the
 request is closed: do not answer it at the pane. A request still awaiting
-an answer when its Spawn ended (its agent's terminal SessionEnd) or when
-`find-missing` marked it `missing` is closed in the same write, an
+an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
+of a Codex Spawn to `ended` by `FindMissing` or by `Pause` once its agent is
+gone with an end report) or when `find-missing` marked it `missing` is closed in the same write, an
 undecided one denied with `DecisionReason` `ended` or `find_missing`, and
 stays closed after `Resume`; `Get` and `List` no longer show it.
 `GetPermission` still reads its delivery, which is `delivered` only if its
@@ -654,7 +655,9 @@ an LLM judged that screen, so never set it from an automatic flow. A
 subagent's denied request is proven only by the Spawn's end.
 
 `Pause` types `/exit` and Enter as a plain `SendKeys` without
-`ExpectPaneSHA256` would, so on a relayed Spawn it is held as one: it
+`ExpectPaneSHA256` would (on a Codex Spawn it clears a draft of up to 64 lines
+first, and ends the row itself once the agent exits; see the
+[caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits)), so on a relayed Spawn it is held as one: it
 returns `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or
 `ErrDialogMaybeOpen`, with the same `ErrDetails`, typing nothing and
 starting no wait, whenever that `SendKeys` would. It takes no pane hash, so
@@ -668,7 +671,8 @@ other dialog, read the pane again and check the prompt is empty
 (`SendKeys` does not clear a draft as `Pause` does), then send `/exit`
 with `SendKeys` and that read's `PaneSHA256` as `ExpectPaneSHA256`, and
 poll `Status` until the row reads `ended` (`SendKeys` does not wait for
-it).
+it). A Codex row reads `ended` only once `FindMissing` (or `Pause`) sees its
+agent gone: call it after the agent has exited.
 
 `api.DetailedError` is the error type that carries such facts: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`

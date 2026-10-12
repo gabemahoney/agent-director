@@ -349,9 +349,9 @@ const (
 	WriteFailLaunchIdentity        = writefailfix.LaunchIdentityWrite
 	WriteFailPermissionDecision    = writefailfix.PermissionDecision
 	// WriteFailSubagentRecord (b.xjn) fails every insert, update and delete of
-	// the id's subagent entries and claimable launches, the four SR-8.1 closes
-	// (the ended write, find-missing's mark, resume's move and reuse's reset,
-	// each failing only when the id has a running entry or a claimable launch),
+	// the id's subagent entries and claimable launches, the five SR-8.1 closes
+	// (the ended write, find-missing's mark, its move of a Codex row to ended,
+	// resume's move and reuse's reset, each failing only when the id has a running entry or a claimable launch),
 	// the caps' evictions and a cascaded delete from the spawns row included, and
 	// apitest.SeedSubagent and apitest.SeedSubagentLaunch: install it after
 	// seeding. Used only through InjectWriteFailure.

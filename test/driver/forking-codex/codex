@@ -1,0 +1,29 @@
+#!/bin/bash
+# Forking `codex` launcher for the Docker harness (SRD SR-6.1, SR-22.9).
+#
+# Many real Codex installs put a launcher in front of the program: an npm
+# shim, a version manager, a wrapper script. It runs the real program as a
+# CHILD and stays the pane's process. A hook the program's own session runs
+# then has the program as its parent and this launcher as its grandparent,
+# never the pane process, so agent-director refuses it as `pid_mismatch`
+# (a SessionStart of a pending row also writes one
+# ad.hook.pane_is_grandparent record naming codex).
+#
+# This file stands in for such a launcher. It runs the Codex stand-in
+# (../stand-in-codex/codex, which records the launch and ends as an
+# interactive bash) as a child, with the arguments it was given, and waits for
+# it. `exit $?`, not a bare last command, keeps the shell from exec-ing the
+# stand-in in place of itself.
+#
+# Use: put this directory first on the PATH of the agent-director process
+# that launches the session, with [launch] codex_path unset:
+#
+#   PATH=/opt/driver/forking-codex:$PATH agent-director spawn --agent codex --cwd /tmp
+#
+# (`codex_path` names the program itself, so naming this file there makes
+# the pane process the launcher too; the case that wants the grandparent
+# refusal leaves codex_path unset and uses the PATH.)
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$here/../stand-in-codex/codex" "$@"
+exit $?

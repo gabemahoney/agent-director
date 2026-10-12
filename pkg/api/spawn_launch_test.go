@@ -8,6 +8,7 @@ package api_test
 // virtual time. The create argv is spawn_reuse_launch_test.go's parity case.
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"path/filepath"
@@ -330,11 +331,13 @@ func spawnReturned(c *api.Client, p api.SpawnParams) (res api.SpawnResult, err e
 // TestSpawnLaunchBoundLostReplyKeepsLabel (SR-3.5, SR-9.4, SR-13.2; AC-LKP-17,
 // AC-SPN-05): a create that times out (charged its default timeout), gives
 // an unparseable reply, or whose launch stops before the identity write
-// leaves its session labelled and the row pending with no identity.
+// leaves its session labelled and the row pending with no identity. A Codex
+// launch (SR-7.7) is charged the same time and leaves the same row.
 func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	cases := []struct {
 		name         string
+		agent        string          // "" is claude
 		minted       bool            // no caller-supplied id, so no scan lookup
 		script       *tmuxfix.Script // the create's scripted result; nil answers from the table
 		stop         bool            // an after-call hook on the create ends Spawn
@@ -348,6 +351,10 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 		{name: "exit 0 with unparseable reply", script: &tmuxfix.Script{Failure: tmux.FailUnrecognized,
 			ExitStatus: 0, HadStdout: true, Applied: true}},
 		{name: "stop before the identity write", stop: true},
+		{name: "create times out, minted id, Codex", agent: "codex", minted: true,
+			script: &tmuxfix.Script{Failure: tmux.FailTimeout, Applied: true}, unresponsive: true},
+		{name: "exit 0 with unparseable reply, Codex", agent: "codex", script: &tmuxfix.Script{Failure: tmux.FailUnrecognized,
+			ExitStatus: 0, HadStdout: true, Applied: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -364,7 +371,8 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 			}
 			mark := trailLen(t)
 
-			res, err, returned := spawnReturned(e.c, api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: id})
+			agent := cmp.Or(tc.agent, "claude")
+			res, err, returned := spawnReturned(e.c, api.SpawnParams{Agent: agent, CWD: t.TempDir(), InstanceID: id})
 
 			if got := callKinds(e.rec); !reflect.DeepEqual(got, calls) {
 				t.Fatalf("tmux calls = %q; want %q (no label by id, no kill)", got, calls)
@@ -383,6 +391,9 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 			}
 			cols, cerr := apitest.ReadSpawnColumns(e.dbPath, id)
 			token, _ := cols.LaunchToken.(string)
+			if cols.Agent != agent {
+				t.Errorf("row agent = %q; want %q", cols.Agent, agent)
+			}
 			if cerr != nil || cols.State != store.StatePending || cols.RowVersion != int64(0) ||
 				cols.LaunchStartedAt != launchStart.UnixMilli() || !spawnTokenRE.MatchString(token) || cols.TmuxSocket != e.socket ||
 				!reflect.DeepEqual(identityCols(cols), noIdentity) {
@@ -417,7 +428,9 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 
 // TestSpawnLaunchBoundCeiling (SR-13.2; AC-SPN-06): the longest plain-spawn path
 // (chained label, relabel and kill all failing) charges C + 2A, plus Q for a
-// caller-supplied id's scan, and leaves the row pending.
+// caller-supplied id's scan, and leaves the row pending; the same for a Codex
+// launch (SR-7.7), so it stays within the cap under the TS client's default
+// call timeout.
 func TestSpawnLaunchBoundCeiling(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	const name = "bound-ceiling"
@@ -426,12 +439,18 @@ func TestSpawnLaunchBoundCeiling(t *testing.T) {
 		id       string
 		wantCall []tmux.Call
 		want     time.Duration
+		agent    string // "" is claude
 	}{
-		{"minted id", "", []tmux.Call{tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
-			boundC + 2*boundA},
-		{"caller-supplied id", "bound-ceiling-" + uuid.NewString()[:8],
-			[]tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
-			boundQ + boundC + 2*boundA},
+		{name: "minted id", wantCall: []tmux.Call{tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
+			want: boundC + 2*boundA},
+		{name: "caller-supplied id", id: "bound-ceiling-" + uuid.NewString()[:8],
+			wantCall: []tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
+			want:     boundQ + boundC + 2*boundA},
+		{name: "minted id, Codex", agent: "codex", wantCall: []tmux.Call{tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
+			want: boundC + 2*boundA},
+		{name: "caller-supplied id, Codex", agent: "codex", id: "bound-ceiling-" + uuid.NewString()[:8],
+			wantCall: []tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession},
+			want:     boundQ + boundC + 2*boundA},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -439,7 +458,7 @@ func TestSpawnLaunchBoundCeiling(t *testing.T) {
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailLabel}, tmux.CallCreate).
 				Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallSetLabel, tmux.CallKillSession)
 
-			_, err := e.c.Spawn(api.SpawnParams{Agent: "claude", CWD: t.TempDir(), InstanceID: tc.id,
+			_, err := e.c.Spawn(api.SpawnParams{Agent: cmp.Or(tc.agent, "claude"), CWD: t.TempDir(), InstanceID: tc.id,
 				TmuxSessionName: name, TmuxSessionNameSupplied: true})
 			if !errors.Is(err, api.ErrTmuxSessionCreate) {
 				t.Fatalf("Spawn err = %v; want ErrTmuxSessionCreate", err)

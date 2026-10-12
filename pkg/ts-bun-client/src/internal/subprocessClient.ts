@@ -465,7 +465,7 @@ export class SubprocessClient {
     return this.#enqueue<ResumeResult>("resume", params);
   }
 
-  /** findMissing — sweep live Spawns, marking each `missing` or leaving it unverified on process and tmux evidence; see FindMissingResult. */
+  /** findMissing — sweep live Spawns, marking each `missing` (a Codex row with its end report: `ended`) or leaving it unverified on process and tmux evidence; see FindMissingResult. */
   async findMissing(params: FindMissingParams): Promise<FindMissingResult> {
     this.#assertOpen();
     return this.#enqueue<FindMissingResult>("find-missing", params);
@@ -507,7 +507,9 @@ export class SubprocessClient {
    * or ErrDialogMaybeOpen whenever that sendKeys would. It takes no pane hash, and the hold
    * (ErrDialogMaybeOpen) lasts until the agent's hooks prove each request gone, whatever is
    * done at the pane. Past it: readPane, answer any dialog, then sendKeys `/exit` with the judged
-   * pane's expect_pane_sha256; or kill.
+   * pane's expect_pane_sha256; or kill. On a Codex row whose agent process is gone and which
+   * holds an end report, pause moves the row to `ended` (before typing anything, or while it
+   * waits) and succeeds.
    */
   async pause(params: PauseParams): Promise<PauseResult> {
     this.#assertOpen();

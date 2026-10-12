@@ -44,6 +44,9 @@ type TmuxClient interface {
 	// SendKeyPane sends one key, by its tmux key name and never typed
 	// literally, to the pane paneID on socket (pause's C-u).
 	SendKeyPane(socket, paneID, key string) error
+	// SendKeyPaneRepeat sends the key count times in one call (a Codex row's
+	// pause: 127 C-u).
+	SendKeyPaneRepeat(socket, paneID, key string, count int) error
 	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 	// NewSession creates the session name on socket with its chained labels,

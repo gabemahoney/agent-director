@@ -75,9 +75,10 @@ fi
 
 // codexStubScript is the stand-in `codex`. After the shared block it stays the
 // pane's process with a stable argv (a loop, never an exec), like the Claude
-// stand-in of hook_parent_test.go.
+// stand-in of hook_parent_test.go, and answers the on-demand requests of
+// codexStubTail.
 const codexStubScript = "#!/bin/bash\n# Stand-in codex for test/realtmux/codex_launch_test.go.\n" +
-	codexSharedBlock + "while :; do sleep 3600; done\n"
+	codexSharedBlock + codexStubTail
 
 // codexRecord is one launch's directory of the stand-in.
 type codexRecord struct{ dir string }

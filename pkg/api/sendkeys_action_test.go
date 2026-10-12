@@ -34,13 +34,13 @@ func (v paneVerb) actions() []keysAction {
 }
 
 // assertTyped fails unless v's keys reached r's agent pane up to action, the
-// failed call: pause's line cleared first, then the text (skaText or /exit)
+// failed call: pause's line cleared first (a Codex row's by its 127 presses), then the text (skaText or /exit)
 // unless the line clear failed, and Enter exactly when action is Enter.
 func (v paneVerb) assertTyped(t *testing.T, e *killEnv, r killRow, action tmux.Call) {
 	t.Helper()
 	pane, text := r.Spawn.Identity.PaneID, skaText
 	if v.verb == apitest.PanePause {
-		e.assertLineCleared(t, r.Socket, pane)
+		e.assertLineClearedTimes(t, r.Socket, pane, clearPresses(r))
 		if action == tmux.CallSendKey {
 			e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
 			return
@@ -70,6 +70,22 @@ func assertKeysFailed(t *testing.T, e *killEnv, v paneVerb, r killRow, before ap
 	}
 }
 
+// keysActionRow is a row a failed keys call is run on: its spec and its subtest name's suffix.
+type keysActionRow struct {
+	suffix string
+	spec   killRowSpec
+}
+
+// keysActionRows are the rows the keys call a of v fails on: a Claude row, and for
+// pause's line clear (RN-19: a Codex row's is 127 presses in one call) a Codex row too.
+func keysActionRows(v paneVerb, a keysAction) []keysActionRow {
+	rows := []keysActionRow{{spec: killRowSpec{}}}
+	if v.verb == apitest.PanePause && a.call == tmux.CallSendKey {
+		rows = append(rows, keysActionRow{suffix: "/codex row", spec: codexSpec(store.StateWaiting, agentAlive, false)})
+	}
+	return rows
+}
+
 // TestKeysVerbsActionTimeout: a timed-out keys call (pause's line clear too)
 // is ErrTmuxUnresponsive naming it, the keys may have been delivered, with the
 // verb's next step; no follow-up lookup, no later keys call, no wait.
@@ -77,16 +93,18 @@ func TestKeysVerbsActionTimeout(t *testing.T) {
 	t.Parallel()
 	for _, v := range keysVerbs() {
 		for _, a := range v.actions() {
-			t.Run(v.name+"/"+string(a.call), func(t *testing.T) {
-				t.Parallel()
-				e := newKillEnv(t)
-				r := e.seedRow(t, killRowSpec{})
-				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, a.call)
-				before := e.columns(t, r.ID)
-				_, err := v.run(t, e, r)
-				assertKeysFailed(t, e, v, r, before, err, "ErrTmuxUnresponsive",
-					apitest.DescKeysTimeout(v.verb, a.call, e.cfg.EffectiveActionTimeout()), a.call, a.calls)
-			})
+			for _, row := range keysActionRows(v, a) {
+				t.Run(v.name+"/"+string(a.call)+row.suffix, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					r := e.seedRow(t, row.spec)
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, a.call)
+					before := e.columns(t, r.ID)
+					_, err := v.run(t, e, r)
+					assertKeysFailed(t, e, v, r, before, err, "ErrTmuxUnresponsive",
+						apitest.DescKeysTimeout(v.verb, a.call, e.cfg.EffectiveActionTimeout()), a.call, a.calls)
+				})
+			}
 		}
 	}
 }
@@ -169,26 +187,28 @@ func TestKeysVerbsActionFailureFollowUp(t *testing.T) {
 	}
 	for _, v := range keysVerbs() {
 		for _, a := range v.actions() {
-			for _, tc := range cases {
-				t.Run(v.name+"/"+string(a.call)+"/"+tc.name, func(t *testing.T) {
-					t.Parallel()
-					e := newKillEnv(t)
-					r := e.seedRow(t, killRowSpec{})
-					e.seedBystander(t, r.Socket)
-					e.rec.Script(r.Socket, tc.script, a.call)
-					if tc.world != nil {
-						tc.world(t, e, r, a.call)
-					}
-					before := e.columns(t, r.ID)
+			for _, row := range keysActionRows(v, a) {
+				for _, tc := range cases {
+					t.Run(v.name+"/"+string(a.call)+row.suffix+"/"+tc.name, func(t *testing.T) {
+						t.Parallel()
+						e := newKillEnv(t)
+						r := e.seedRow(t, row.spec)
+						e.seedBystander(t, r.Socket)
+						e.rec.Script(r.Socket, tc.script, a.call)
+						if tc.world != nil {
+							tc.world(t, e, r, a.call)
+						}
+						before := e.columns(t, r.ID)
 
-					_, err := v.run(t, e, r)
+						_, err := v.run(t, e, r)
 
-					desc := tc.desc(v.verb, r, a.call).AfterTextFailed()
-					if a.call == tmux.CallSendEnter {
-						desc = tc.desc(v.verb, r, a.call).AfterEnterFailed(v.verb)
-					}
-					assertKeysFailed(t, e, v, r, before, err, tc.errName, desc, a.call, withFollowUp(a.calls))
-				})
+						desc := tc.desc(v.verb, r, a.call).AfterTextFailed()
+						if a.call == tmux.CallSendEnter {
+							desc = tc.desc(v.verb, r, a.call).AfterEnterFailed(v.verb)
+						}
+						assertKeysFailed(t, e, v, r, before, err, tc.errName, desc, a.call, withFollowUp(a.calls))
+					})
+				}
 			}
 		}
 	}

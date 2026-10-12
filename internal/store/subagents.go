@@ -181,9 +181,10 @@ const closeRunningSubagentsSQL = `UPDATE subagents
 // id.
 const closeClaimableLaunchesSQL = `DELETE FROM subagent_launches WHERE instance_id = ?`
 
-// closeSubagentsAgentGone is the close of SR-8.1, shared by the four writes that
+// closeSubagentsAgentGone is the close of SR-8.1, shared by the five writes that
 // end or restart a row's launch: the terminal SessionEnd's move to ended
-// (applyEndedTransition), find-missing's mark (MarkMissingIfSameLife), resume's
+// (applyEndedTransition), find-missing's mark (MarkMissingIfSameLife), its move
+// of a Codex row with an end report to ended (MarkEndedIfSameLife), resume's
 // move to pending (MoveToPending) and reuse's reset (ResetForReuse). On q, the
 // caller's open transaction, it turns every running entry of instanceID (records
 // and observations, any launch) lost with close_reason agent_gone, lost_at and

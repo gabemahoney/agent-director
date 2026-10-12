@@ -171,8 +171,8 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 
 // inImmediateTx runs fn inside one BEGIN IMMEDIATE transaction on the store's
 // connection, waiting for the connection and the write lock as every other
-// write does (the store's busy timeout), as MarkMissingIfSameLife and
-// ResetForReuse begin theirs. Unlike inWriteTx, a lock not taken in that time
+// write does (the store's busy timeout), as MarkMissingIfSameLife,
+// MarkEndedIfSameLife and ResetForReuse begin theirs. Unlike inWriteTx, a lock not taken in that time
 // is returned as the driver's busy error, an unnamed store failure, never
 // ErrStoreBusy: it is for a write whose verb names no ErrStoreBusy (resume's
 // move to pending, a hook's ended transition). When fn returns an error, or

@@ -175,7 +175,7 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 //
 // It is a soft refresh and does not prove the agent gone, so it neither closes
 // the row's open permission requests nor the subagent records
-// (closeSubagentsAgentGone is the four ending writes' alone); the move to
+// (closeSubagentsAgentGone is the five ending writes' alone); the move to
 // ended is a different write.
 func (s *Store) ApplyHookEndReport(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	priorState, found, err := s.selectPriorState(instanceID)

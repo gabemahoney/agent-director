@@ -117,6 +117,18 @@ func (c *Client) SendKeyPane(socket, paneID, key string) error {
 	return c.runAction(CallSendKey, socket, []string{"send-keys", "-t", paneID, key})
 }
 
+// SendKeyPaneRepeat sends the key count times in one call: send-keys -t
+// <pane id> -N <count> <key>. A Codex row's pause sends C-u 127 times this way
+// to clear a draft of up to 64 lines, never C-c. count is at least 1 (a
+// smaller one is sent as 1); key is a fixed key name the caller chooses.
+// Action timeout. The error's Call is CallSendKey.
+func (c *Client) SendKeyPaneRepeat(socket, paneID, key string, count int) error {
+	if count < 1 {
+		count = 1
+	}
+	return c.runAction(CallSendKey, socket, []string{"send-keys", "-t", paneID, "-N", strconv.Itoa(count), key})
+}
+
 // CapturePaneID returns the last nLines lines of the pane paneID on socket:
 // capture-pane -p [-e] -t <pane id> -S -<n>, -e when ansi is set (SR-2.1).
 // Action timeout. The text is the standard output of an exit-0 call.

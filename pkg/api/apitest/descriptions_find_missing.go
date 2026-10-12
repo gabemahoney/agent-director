@@ -50,14 +50,21 @@ func FindMissingOwnText(text string) string {
 	return text[:i]
 }
 
+// findMissingKillPointer is find-missing's pointer to kill for SR-18.7's two
+// consequences of a run in the wrong environment, which kill's manifest
+// description states in full (SR-18.7 amendment, b.ssz Epic 4).
+const findMissingKillPointer = "See kill for what a wrong server leads to."
+
 // DescFindMissingManifest is find-missing's liveness and same-environment
 // rules as its manifest description states them (SR-18.9, SR-18.7, SR-3.8),
 // by key phrase: liveness comes only from the agent process; tmux is
 // consulted, on the row's recorded socket, only for a row whose process
 // cannot be checked or was never recorded; the sweep runs as the agents'
 // user in their tmux environment, and a run as another user, as root or
-// against another tmux server can mark live rows missing; and SR-18.7's two
-// consequences (shared with DescKillManifest). It must not carry the dropped
+// against another tmux server can mark live rows missing; and, for SR-18.7's
+// two consequences, a pointer to kill (findMissingKillPointer), which states
+// them in full (DescKillManifest; the help guard leaves find-missing no room
+// to repeat them). It must not carry the dropped
 // claims: the environment probe-set scan and "never marked missing on
 // ambiguous evidence". Check it with AssertAgentTextCase on
 // FindMissingOwnText of the description.
@@ -70,7 +77,7 @@ func DescFindMissingManifest() DescCase {
 			"on its recorded socket",
 			"same user", "same tmux environment",
 			"another user", "as root", "another tmux server", "can mark live rows `missing`",
-			finishedRowNotVerification, wrongServerSecondAgent,
+			findMissingKillPointer,
 		},
 		MustNot: []string{"probe-set", "environ probe", "environment scan", "on ambiguous evidence"},
 	}

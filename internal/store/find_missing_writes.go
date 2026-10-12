@@ -129,7 +129,89 @@ var clearLivenessIfSameLifeSQL = `UPDATE spawns
 // row_version (SR-5.2), so a mark that applied found the row unchanged since
 // the read.
 func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error) {
-	const errPrefix = "store: mark missing if same life"
+	args := append(immediateStateArgs(StateMissing), instanceID)
+	args = append(args, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(examined)...)
+	return s.terminalMarkIfSameLife("store: mark missing if same life", markMissingIfSameLifeSQL, args,
+		instanceID, DecisionReasonFindMissing)
+}
+
+// markEndedIfSameLifeSQL is MarkEndedIfSameLife's one statement: the mark's
+// statement with state ended in place of missing, and with three more
+// conditions in its WHERE: the row is a Codex row (agent codex), and it holds
+// an end report, read as decodeEndReportedAt reads it (an integer above zero;
+// NULL, zero, a negative and any other stored type are no report). The
+// statement never writes end_reported_at: the report stays set. ended is an
+// immediate write (immediateStateSet, b.3ie): it reports at once.
+var markEndedIfSameLifeSQL = `UPDATE spawns
+    SET ` + immediateStateSet + `,
+        ended_at                  = CURRENT_TIMESTAMP,
+        last_seen_at              = CURRENT_TIMESTAMP,
+        liveness_unverified_since = NULL,
+        liveness_note             = NULL,
+        ` + launchStartClear + `,
+        ` + rowVersionAdvance + `
+  WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL + `
+    AND agent = '` + AgentCodex + `' AND typeof(end_reported_at) = 'integer' AND end_reported_at > 0`
+
+// MarkEndedIfSameLife is the guarded move of a live Codex row to ended (SR-6.5,
+// MC-2, finding F1's fix): find-missing's mark with state ended in place of
+// missing, and decision_reason ended in place of find_missing, made once the
+// row's agent process is proven gone and the row holds an end report (the
+// Codex SessionEnd of its verified process, ApplyHookEndReport). find-missing
+// and pause both make this one write, through one outcome writer.
+//
+// It follows MarkMissingIfSameLife step for step, in one BEGIN IMMEDIATE
+// transaction on the store's one connection: the prior state read (no row:
+// CondAbsent); the one conditional statement (markEndedIfSameLifeSQL); then,
+// only when the statement applied, one store-clock read at (storeNowMillis),
+// the close of the row's permission requests (closeOrphanedRequests with
+// reason ended and at: an undecided request denied with decision_reason
+// ended, a decided one keeping its verdict, every request proven agent_gone;
+// b.146 rule 12) and the close of the row's running subagent entries and
+// claimable launches (closeSubagentsAgentGone with the same at, so the entries'
+// lost_at and activity_at equal the requests' closed_at; SR-8.1, b.xjn); then
+// COMMIT. It is a fifth write that closes subagent records, after the
+// terminal SessionEnd's move to ended, the mark, resume's move to pending and
+// reuse's reset.
+//
+// The statement applies only while the row is a Codex row, in a live state,
+// still holds examined (the snapshot the caller read, compared through the
+// store's one snapshot-match condition, SR-5.3) and still holds an end
+// report. It sets state to ended with the settle columns of an immediate
+// write, ended_at and last_seen_at to CURRENT_TIMESTAMP, NULLs
+// liveness_unverified_since, liveness_note and launch_started_at, and advances
+// row_version by exactly one. It leaves end_reported_at set and writes no other
+// column. A row that exists but is a Claude row (even one whose end_reported_at
+// a hand set), is terminal, has no end report (including one cleared between
+// the caller's read and this write) or holds another snapshot: CondChanged,
+// with nothing written, no clock read, no request closed and no trail.
+//
+// Any failure in the read, the move, either close or the commit rolls the whole
+// transaction back. After the commit, and only then, it emits per closed
+// request, in request-id order, one ad.row_mutation.committed (writer
+// find_missing) for a request it denied and one ad.find_missing.tick with
+// reconciliation_reason permission_orphan_closeout for every request it closed
+// (fail-open). It emits no ad.spawn.state_transition and no tick for the move
+// itself: the row's tick is the caller's.
+//
+// It returns the prior state and CondApplied when the transaction committed;
+// CondChanged or CondAbsent, with the prior state "", otherwise. A store failure
+// is returned as a wrapped error with a zero CondResult (SR-5.8).
+func (s *Store) MarkEndedIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error) {
+	args := append(immediateStateArgs(StateEnded), instanceID)
+	args = append(args, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(examined)...)
+	return s.terminalMarkIfSameLife("store: mark ended if same life", markEndedIfSameLifeSQL, args,
+		instanceID, DecisionReasonEnded)
+}
+
+// terminalMarkIfSameLife is the transaction MarkMissingIfSameLife and
+// MarkEndedIfSameLife share: the prior state read, the one conditional
+// statement stmt with args, and, when it applied, the close of the row's
+// requests with reason and of its subagent records at one instant, the commit
+// and the post-commit emits (writer find_missing). Their docs state each step.
+func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, instanceID, reason string) (priorState string, res CondResult, err error) {
 	// The pool has one connection: everything below runs on conn, never
 	// through s.db, which would wait for it.
 	ctx := context.Background()
@@ -157,10 +239,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 		return "", 0, fmt.Errorf("%s: prior state: %w", errPrefix, err)
 	}
 
-	args := append(immediateStateArgs(StateMissing), instanceID)
-	args = append(args, liveStateGuardArgs()...)
-	args = append(args, snapshotMatchArgs(examined)...)
-	r, err := conn.ExecContext(ctx, markMissingIfSameLifeSQL, args...)
+	r, err := conn.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -175,7 +254,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 	}
 
 	at := storeNowMillis()
-	closed, err := closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonFindMissing, at)
+	closed, err := closeOrphanedRequests(ctx, conn, instanceID, reason, at)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: close permission requests: %w", errPrefix, err)
 	}
@@ -188,7 +267,7 @@ func (s *Store) MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (
 	committed = true
 
 	for _, c := range closed {
-		c.emitDeny(instanceID, DecisionReasonFindMissing, WriterProcessFindMissing)
+		c.emitDeny(instanceID, reason, WriterProcessFindMissing)
 		emitOrphanCloseoutTick(instanceID, c.token)
 	}
 	return prior, CondApplied, nil

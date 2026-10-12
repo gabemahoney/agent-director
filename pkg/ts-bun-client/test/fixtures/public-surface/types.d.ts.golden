@@ -820,8 +820,9 @@ export interface FindMissingParams {
 /** Mirrors pkg/api/find_missing.go::FindMissingResult */
 export interface FindMissingResult {
     /**
-     * Number of rows this sweep marked `missing` (the length of `ids`). Zero is
-     * a normal result when nothing needed marking.
+     * Number of rows this sweep marked `missing` (the length of `ids`); a Codex
+     * row it moved to `ended` is not counted. Zero is a normal result when
+     * nothing needed marking.
      */
     count: number;
     /**
@@ -831,9 +832,10 @@ export interface FindMissingResult {
      * found no session or pane of their current launch; a pending row only past
      * the pending grace period, and never while the spawn, reuse or resume that
      * began its launch still runs. A row whose guarded write found it changed or
-     * gone, or failed, is in neither list, and so is a pending row the sweep
-     * notes `unreported` (its agent alive) or finds already noted so.
-     * `missing` is the sweep's judgement on the evidence available to it, not
+     * gone, or failed, is in neither list, and so is a Codex row the sweep moved
+     * to `ended` (its agent process gone and an end report held) and a pending
+     * row the sweep notes `unreported` (its agent alive) or finds already noted
+     * so. `missing` is the sweep's judgement on the evidence available to it, not
      * proof that the agent has exited. Never null; [] when none.
      */
     ids: string[];

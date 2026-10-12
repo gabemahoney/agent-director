@@ -167,14 +167,53 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
    jq -c 'select(.event == "ad.kill.called" and .instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.config/agent-director/ad-trail.jsonl | tail -n 1
    ```
 
-2. Confirm it is the agent, a Claude Code process started at launch:
-   `ps -o pid,lstart,args -p '<pid>'`.
+2. Confirm it is the agent, the Claude Code or Codex process started at
+   launch: `ps -o pid,lstart,args -p '<pid>'`.
 3. Look for its pane, on any other tmux server you know of too (steps 4b and 3);
    end the pane by id if not wanted. In no pane: recheck its start time, then
    `kill '<pid>'`. Do the same for a survivor.
 4. Run `agent-director kill --instance-id <id>` again, or wait for
-   `find-missing` to mark the row `missing`, then resume or respawn as the
+   `find-missing` to mark the row `missing` (a Codex row whose agent reported
+   its end: `ended`), then resume or respawn as the
    [caller contract](caller-contract.md) says.
+
+## A command left running after Esc on a Codex agent
+
+Esc stops a Codex agent's turn, and the row reads `waiting`, while a command the
+agent started keeps running (the agent's footer says "1 background terminal
+running"). Nothing is needed while the agent runs: `pause` and `kill` end the
+agent and the command with it, within seconds. One command outlives the agent:
+one that left Codex's session and runs outside its sandbox (the agent started it
+detached, for example with `setsid ... &`, after it was approved to run outside
+the sandbox). It is reparented to init and runs on after `pause`, `kill` or a
+killed agent. A human finds it once the agent is gone:
+
+1. Read the row's folder and times:
+
+   ```sh
+   agent-director get --instance-id <id> | jq '{cwd, started_at, ended_at}'
+   ```
+
+2. List the agents' user's processes that init now owns (parent pid 1, or the
+   user's `systemd --user`, where one runs), with their start times, and look
+   for the command you expect:
+
+   ```sh
+   ps -u "$(id -un)" -o pid,ppid,lstart,args | awk -v sd="$(pgrep -u "$(id -u)" -x systemd | head -1)" '$2 == 1 || $2 == sd'
+   ```
+
+3. For a candidate, confirm it belongs to the row: it started after the row's
+   `started_at`, and its folder is the row's `cwd` (on Linux
+   `readlink /proc/<pid>/cwd` also prints it; macOS has no `/proc`):
+
+   ```sh
+   ps -o pid,lstart,args -p '<pid>'
+   lsof -a -p '<pid>' -d cwd -Fn
+   ```
+
+4. A process you cannot tie to the row may be someone's own: leave it. Else
+   recheck its start time (step 3), then `kill '<pid>'`, and run the `ps` of
+   step 3 again: the pid is gone.
 
 ## The agent's pane was not found
 

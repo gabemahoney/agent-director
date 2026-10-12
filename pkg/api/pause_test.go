@@ -302,6 +302,8 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 			ownTmux: true},
 		{name: "ours, row ends", seed: sktRow(killRowSpec{}, ptrEnds), outcome: "ok"},
 		{name: "ours, wait times out", seed: sktRow(killRowSpec{}), outcome: "ErrPauseTimeout", apiOnly: true},
+		{name: "ours, agent process gone, row left as it is", seed: sktRow(killRowSpec{Agent: agentGone}),
+			outcome: "ErrPauseTimeout", apiOnly: true},
 		{name: "leftover", seed: sktRow(killRowSpec{NoSession: true}, sktLeftover), outcome: "ErrTmuxSessionConflict"},
 		{name: "pane not found", seed: sktRow(killRowSpec{NoSession: true}, rpnSeedPane), outcome: "ErrTmuxSessionConflict"},
 		{name: "gone", seed: sktRow(killRowSpec{NoSession: true}), outcome: "ErrTmuxSendKeys"},
@@ -346,15 +348,21 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 
 // ptrLineClearDisagreeCases are pause's own rows of the keys verbs' disagree
 // table (b.9o4): a line clear (C-u) that timed out or failed types no text,
-// so the call's action is nothing_sent.
+// so the call's action is nothing_sent, on a Claude row and on a Codex row (whose clear is
+// 127 presses in one call, RN-19).
 func ptrLineClearDisagreeCases() []keysDisagreeCase {
 	type setups = []func(*testing.T, *killEnv, *killRow)
 	nothingSent := []disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "nothing_sent",
 		ours: true}}
+	codex := codexSpec(store.StateWaiting, agentAlive, false)
 	return []keysDisagreeCase{
 		{name: "server_restarted, line clear timed out",
 			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendKey)}, want: nothingSent},
 		{name: "server_restarted on the lookup and the follow-up, line clear failed",
+			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendKey)}, want: nothingSent},
+		{name: "codex row, server_restarted, line clear timed out", spec: codex,
+			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendKey)}, want: nothingSent},
+		{name: "codex row, server_restarted on the lookup and the follow-up, line clear failed", spec: codex,
 			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendKey)}, want: nothingSent},
 	}
 }

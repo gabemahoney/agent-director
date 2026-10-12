@@ -41,6 +41,23 @@
 # this passes AD_CODEX_HOOK, and writes hookcmd, payload.json and go itself;
 # the default is no hook, and the shell below is all that runs.
 #
+# Typing /exit at the pane ends it the way Codex's /exit does: the shell
+# fires a Codex SessionEnd (reason other, no agent_id: the end report) through
+# `agent-director hook --agent codex`, a direct child of the pane's shell, and
+# then exits. It is the shell's PROMPT_COMMAND (an exported function, set
+# below) that notices the line just run was /exit, so it needs no tty trick
+# and works anywhere the stand-in runs, the `make sandbox-shell` demo
+# included; the typed line itself only prints "No such file or directory".
+# The session id of the payload is the one in the record directory's
+# session-id file when there is one (a case that wants the id of its own
+# SessionStart writes it there), else a fixed fixture id; its transcript_path
+# is a rollout name under $CODEX_HOME (/tmp when unset), which is never
+# created. The hook's stdout, stderr and exit status go to exit-hook.out,
+# exit-hook.err and exit-hook.exit (written last) in the record directory when
+# there is one. Nothing ever sends SessionEnd on SIGHUP, SIGTERM or when the
+# shell is killed: a Codex that dies without saying so is the point of the
+# find-missing cases.
+#
 # Every launch argument is ignored. --noprofile --norc: nothing from the
 # image's dotfiles runs; -i: the shell reads commands from the pane's
 # terminal.
@@ -80,5 +97,33 @@ if [[ -n "$dir" && -n "${AD_CODEX_HOOK:-}" ]]; then
     mv "$dir/hook.exit.tmp" "$dir/hook.exit"
 fi
 # <<< shared with test/realtmux/codex_standin_test.go
+
+# The /exit answer (see the header). It runs as PROMPT_COMMAND of the pane's
+# shell, before the prompt that follows each command.
+__stand_in_codex_exit() {
+    local entry cmd rec sid transcript payload
+    entry="$(HISTTIMEFORMAT='' history 1)"
+    read -r _ cmd <<<"$entry"
+    [[ "$cmd" == "/exit" ]] || return 0
+    rec=""
+    if [[ "${AGENT_DIRECTOR_INSTANCE_ID:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        rec="${AD_CODEX_RECORD_DIR:-/tmp/stand-in-codex}/$AGENT_DIRECTOR_INSTANCE_ID"
+    fi
+    sid="019f0000-0000-7000-8000-000000000018"
+    [[ -z "$rec" || ! -s "$rec/session-id" ]] || sid="$(<"$rec/session-id")"
+    transcript="${CODEX_HOME:-/tmp}/sessions/2026/01/15/rollout-2026-01-15T10-10-00-$sid.jsonl"
+    payload="$(printf '{"cwd":"%s","hook_event_name":"SessionEnd","reason":"other","session_id":"%s","transcript_path":"%s"}' "$PWD" "$sid" "$transcript")"
+    if [[ -n "$rec" && -d "$rec" ]]; then
+        agent-director hook --agent codex <<<"$payload" >"$rec/exit-hook.out" 2>"$rec/exit-hook.err"
+        printf '%s\n' "$?" >"$rec/exit-hook.exit.tmp"
+        mv "$rec/exit-hook.exit.tmp" "$rec/exit-hook.exit"
+    else
+        agent-director hook --agent codex <<<"$payload" >/dev/null
+    fi
+    exit 0
+}
+export -f __stand_in_codex_exit
+export PROMPT_COMMAND=__stand_in_codex_exit
+export HISTFILE=/dev/null
 
 exec bash --noprofile --norc -i
