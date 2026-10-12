@@ -4,7 +4,7 @@
 
 A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 
-- Spawns agent instances inside tmux sessions.
+- Spawns agent instances (Claude Code or Codex, chosen per Spawn) inside tmux sessions.
 - Hooks into those agent sessions (via the agent's hooks mechanism) to track state, capture transcripts, and relay events.
 - Exposes a CLI for humans and a stdio MCP server for LLM callers — both implemented by the same binary in different modes.
 
@@ -28,6 +28,11 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 - SQLite at `~/.config/agent-director/state.db` for spawn state, parent/child links, permission requests, subagent records, and labels.
 - TOML config at `~/.config/agent-director/config.toml`.
 - Templates as plain files in `~/.config/agent-director/templates/`.
+
+Nothing in that directory may rely on a file or directory named `.git`,
+`.agents`, `.codex` or `.aws`: Codex mounts those names read-only beneath a
+writable root, and a Codex agent's sandbox may name that directory as one (see
+[Usage](usage.md#drive-a-spawn-from-another-agent)).
 
 See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
@@ -55,6 +60,42 @@ SQLite via `modernc.org/sqlite`). There is no FFI / shared-library
 build path; the b.eiv refactor (b.19d) replaced the previous `pkg/cabi`
 FFI surface with a subprocess-CLI architecture where the TS Client
 spawns the CLI binary per verb call.
+
+## What a new agent reuses
+
+The agent-specific parts of agent-director are small, named seams. A future
+agent plugs into each one and never assembles an argv, classifies an event or
+branches on the agent anywhere else. Each seam's own section states its rule
+(its **Must use** entry); this list only points to them.
+
+- **Launch.** The agent's program, argument check, settings, environment and
+  pre-trust live in its one composition, entered through `ComposeLaunch` and
+  `ComposeRelaunch`: [Per-agent launch
+  composition](#per-agent-launch-composition). The agent's program is chosen by
+  its `...Program` function and the agent's words in advice come from the
+  agent helpers: [The agent: resolution, ownership and
+  checks](#the-agent-resolution-ownership-and-checks).
+- **Hooks.** The event-to-write decision comes from the classifier: [The
+  agent-aware hook classifier](#the-agent-aware-hook-classifier). Its output
+  also gates subagent capture, so a new agent gets no subagent entry write
+  until its classifier says so; a Codex row stores `subagent_tracking` 0. The
+  close of a row's subagent entries when its agent is gone is [The liveness
+  close of subagent entries](#the-liveness-close-of-subagent-entries).
+- **The permission relay.** What a row's relay proves and holds, per agent: [The
+  relay on Codex rows](#the-relay-on-codex-rows-bssz), checked by the models in
+  [`spec/tla/codex/`](../spec/tla/codex/README.md) (see [Model check (`make
+  tla`)](#model-check-make-tla)).
+- **Test components.** A test of a launch's argv or an agent's own files uses
+  [codexfix](#codexfix-codexs-own-files-and-launch-command-reusable-test-fixture)
+  and, in `pkg/api`, the [Codex-folder
+  fixture](#pkgapi-codex-folder-fixture-package-internal-test-fixture). A test
+  that needs a real pane process as the agent uses the stand-ins and, for the
+  agent's end and the launcher case, the `/exit` stand-in and the forking
+  launcher: [Docker hook
+  pattern](#docker-hook-pattern-the-stand-in-claude-and-pane-hooksh) and [the
+  stand-in `codex`](#testrealtmux-real-tmux-proof-of-the-client-reusable-test-fixtures).
+  Hook-trust data comes from [Hook-trust golden
+  data](#hook-trust-golden-data-reusable-test-data).
 
 ## Package Layout & Layer Boundaries
 
@@ -7130,8 +7171,8 @@ column. Labels live in their own data plane:
 `parent_id` is auto-derived alongside labels at spawn time, but lives
 on its own column:
 
-- `internal/spawn/launch.go` reads `os.Getenv("AGENT_DIRECTOR_INSTANCE_ID")`
-  in the spawning process.
+- `spawn.ParentIDFromEnv` (`internal/spawn/compose.go`) reads
+  `os.Getenv("AGENT_DIRECTOR_INSTANCE_ID")` in the spawning process.
 - If set, that value is written to the new row's `parent_id`.
 - If unset (operator running from a plain shell), `parent_id` is NULL.
 - The schema's `ON DELETE SET NULL` on the FK keeps orphans clean
@@ -7140,6 +7181,28 @@ on its own column:
 The `list --parent <id>` filter walks this column directly; the
 MCP server (Epic 11) exposes the same filter so an LLM client can
 map a tree by recursive listings.
+
+**Callers that are Codex agents.** A caller's id and its tmux server reach
+agent-director only through the caller's process environment:
+`AGENT_DIRECTOR_INSTANCE_ID` for `parent_id`, and `TMUX` and `TMUX_TMPDIR` for
+the tmux server (`tmux.ResolveSocket`, `internal/tmux/socket.go`). Nothing
+agent-specific derives either, and agent-director adds no verb, input or
+environment variable for a Codex caller.
+
+- A Codex agent's `serve --stdio` starts with Codex's cleared environment, so
+  it has the three variables only through the `env_vars` list of the
+  documented per-folder MCP entry (see [Settings](settings.md#set-up-agent-director-in-a-codex-folder)).
+  Without them its spawns record no `parent_id` and resolve the default tmux
+  server.
+- The CLI run from a Codex agent's shell has the shell's environment, which
+  Codex's `shell_environment_policy` may trim, and the sandbox's limits: the
+  writable roots must name agent-director's directory (and any `[store]
+  db_path` or `[log] error_log_path` directory outside it) and network access
+  must be on for the tmux socket, or the agent has full access (see
+  [Usage](usage.md#drive-a-spawn-from-another-agent)).
+- agent-director's own hooks run outside Codex's sandbox, with Codex's own
+  environment whatever the shell policy, so a sandbox or policy setting does not
+  change what a hook can do or see.
 
 ## Install flows
 
@@ -9072,6 +9135,13 @@ shell. The server is **long-lived** per SRD §3.3: config is loaded
 once at startup; in-flight edits to `~/.config/agent-director/config.toml`
 don't take effect until the next `serve --stdio` invocation.
 
+The server learns its caller's id and tmux server only from its own process
+environment, as the CLI does (see [parent_id](#parent_id)). A Codex agent starts
+a stdio server with an environment cleared except for the variables its MCP
+entry lists, so the entry names `AGENT_DIRECTOR_INSTANCE_ID`, `TMUX` and
+`TMUX_TMPDIR`; the setup is by hand in each Codex folder and the server adds
+nothing for it.
+
 ### Drift-free schema generation
 
 The tool list is generated from `pkg/api/manifest.Verbs`, the
@@ -10929,7 +10999,7 @@ before the upgrade (rule 5's compatibility clause), through
   states the margin, either boundary or a release time, and new text MUST
   NOT either. `decide`'s manifest Description states none of them; the
   pre-v7 wait's bound (at most 3 s) is documented in `docs/permissions.md`
-  ("Requests recorded before this release"), and the advice not to answer
+  ("Requests recorded by an older binary"), and the advice not to answer
   a refused pre-v7 request at the pane is in `ErrNoOpenPermissionRequest`'s
   message only.
 

@@ -201,7 +201,7 @@ below holds for both agents unless it says otherwise; what differs on a
 Codex row is in [The relay on Codex rows](#the-relay-on-codex-rows).
 
 Only the Spawn's own agent is relayed. A PermissionRequest whose
-hook parent is not the row's recorded pane process (a nested `claude`, a
+hook parent is not the row's recorded pane process (a nested agent, a
 teammate pane), or one on a row that records no pane yet, opens no
 request and returns no decision, so that process's agent asks as
 it would with no relay; the hook writes one `ad.hook.ignored` trail
@@ -231,8 +231,8 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
      table can stay above the cap by the number of such requests. A
      spawn's newest request is kept as well while that spawn has a
      request that still awaits an answer, because `decide` relies on it
-     for a request recorded before this release (see "Requests recorded
-     before this release" below), so the table can stay above the cap by
+     for a request recorded by an older binary (see "Requests recorded by
+     an older binary" below), so the table can stay above the cap by
      one more closed row per such spawn.
    - Polls its own row at
      `max(50ms, relay.poll_base_ms + uniform(0, relay.poll_jitter_ms))`
@@ -296,7 +296,7 @@ can be read from the payload exit silently instead: Claude Code routes hook
 stdout by file descriptor, so a permission-shaped deny emitted by a
 process that might be handling a *different* event (e.g. PreToolUse)
 would be applied to the in-flight tool and race the legitimate
-PermissionRequest process (the b.45p fix).
+PermissionRequest process.
 
 Once the request is recorded, the hook writes only an answer it has first
 confirmed in the store, and every failure ends with **no answer**: the hook
@@ -312,8 +312,8 @@ the agent while `decide` and `get-permission` report that it did not. SRD
 | `AGENT_DIRECTOR_INSTANCE_ID` missing / invalid | deny envelope |
 | Config load failure | deny envelope |
 | Store open failure (including no usable `HOME`: unset or empty) | deny envelope |
-| stdin payload read failure | silent exit 0 (event name unknowable — b.45p) |
-| Classify failure (unparseable payload) | silent exit 0 (event name unknowable — b.45p) |
+| stdin payload read failure | silent exit 0 (event name unknowable) |
+| Classify failure (unparseable payload) | silent exit 0 (event name unknowable) |
 | The first write (the request and `check_permission`) fails, or its wait for the store's write lock reaches 2 s before the agent ends the hook | deny envelope; nothing recorded |
 | The poll reaches its end (3 s before the agent ends the hook) | `timeout` deny recorded and confirmed, then a deny envelope |
 | The hook's parent process is no longer the agent that started it | no answer |
@@ -549,7 +549,7 @@ The decide verb writes the decision via a single-statement UPDATE in its
 own write transaction, guarded by the first-call-wins `decision IS NULL`
 predicate, the request being unconfirmed, without a pane answer and not
 closed with its spawn, a `created_at > ?` deliverability predicate that
-applies only to a request recorded before this release (one with no
+applies only to a request recorded by an older binary (one with no
 `settled_at`), and a check that the request's spawn is not `ended` or
 `missing` (the checks and the write are one atomic statement):
 
@@ -583,10 +583,10 @@ these outcomes:
 - Row is still open but its spawn is `ended` or `missing` →
   `ErrNoOpenPermissionRequest` (see "A request of a finished spawn is
   closed" below).
-- A request recorded before this release, still open past its relay
+- A request recorded by an older binary, still open past its relay
   window → `ErrRelayFallenBack`, `ErrAlreadyDecided` or
-  `ErrNoOpenPermissionRequest` (see "Requests recorded before this
-  release" below).
+  `ErrNoOpenPermissionRequest` (see "Requests recorded by an older
+  binary" below).
 
 When the caller passes `--max-wait-ms`, the reads before the write and the
 write itself wait for the store at most what is left of it; a wait cut by
@@ -626,7 +626,7 @@ transaction as its own change, so both are written or neither is:
   report, made by `find-missing`, or by `pause` before its keys or while it
   waits (see [How a Codex row ends](hooks.md#how-a-codex-row-ends));
 - `resume`'s move of the finished spawn to `pending`, as a backstop for a
-  request left open by a release before this close.
+  request an older binary left open on the finished spawn.
 
 The same close proves every request of the spawn gone, closed now or
 before (`proven_gone_how` `agent_gone`; see "The dialog hold" below): its
@@ -685,8 +685,8 @@ this release, never by a reader (see "The dialog hold" below):
 | `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported that its tool ran (a Claude row only). `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
 | `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. It is the caller's claim, stored and never checked. |
 | `proven_gone_at` | When the agent's own hooks proved the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`. |
-| `proven_gone_how` | `tool_ran`: a `PostToolUse` or `PostToolUseFailure` carried its `tool_use_id` (never on a Codex row). `turn_end`: the turn of the agent that asked ended after it was written; the main agent's `Stop` or idle-prompt Notification (on a Codex row, its `Stop` or Interrupt) proves a request with no `agent_id`. `agent_gone`: its spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded to this release. `null` until proven. |
-| `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded before this release, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
+| `proven_gone_how` | `tool_ran`: a `PostToolUse` or `PostToolUseFailure` carried its `tool_use_id` (never on a Codex row). `turn_end`: the turn of the agent that asked ended after it was written; the main agent's `Stop` or idle-prompt Notification (on a Codex row, its `Stop` or Interrupt) proves a request with no `agent_id`. `agent_gone`: its spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. `null` until proven. |
+| `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded by an older binary, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
 
 **`decision` is not the outcome.** `decision` is the verdict recorded,
 set before delivery is known: a request can read `decision` `allow` with
@@ -802,11 +802,11 @@ answered that way it holds the row's moves to `working` until
 `record-pane-answer`, its tool's `PostToolUse` (Claude rows) or the spawn's
 end.
 
-### Requests recorded before this release
+### Requests recorded by an older binary
 
-A request recorded by a relay hook of an earlier release has no hook
+A request recorded by the relay hook of an older binary has no hook
 identity, no confirmation and no settle instant. It is judged by time, as
-before the upgrade:
+that binary judged it:
 
 - `confirm_by` is its `requested_at` plus the relay window plus 2 s, and
   `hook_alive` is `null`. Until `confirm_by`, `delivery` is
@@ -882,7 +882,7 @@ but, until it is proven gone, a plain call without a pane hash
 first rule only while that hook's process is seen running (it is writing
 its verdict to the agent), then by the dialog hold until it is proven
 gone. There is no time window of the guard's own: the first rule ends when
-the relay hook does, and a request recorded before this release, whose
+the relay hook does, and a request recorded by an older binary, whose
 hook recorded no identity, holds by it until its `confirm_by`, its relay
 window plus 2 s (see "Residual race" below).
 
@@ -997,7 +997,7 @@ below).
 
 **Residual race.** A request whose relay hook cannot be checked is held
 until its `confirm_by` and is then fallen back. For a request recorded
-before this release, that is 2 s after its relay window ends, counted from
+by an older binary, that is 2 s after its relay window ends, counted from
 its `created_at`, and rests on a live relay hook having answered, or been
 killed by the agent, by then. Keys can still reach the agent's prompt before
 a live hook's verdict or deny does only if both:
@@ -1005,7 +1005,7 @@ a live hook's verdict or deny does only if both:
 - the hook's delivery of its verdict or timeout deny (reading the verdict,
   or noticing its deadline, and its store writes; then writing its
   envelope and exiting) ends more than 2 s past its window, for example
-  because the process stalls (a relay hook from before this release could
+  because the process stalls (an older binary's relay hook could
   wait up to `[store] busy_timeout_ms`, 10 s by default, for each store
   write); and
 - The agent kills the hook more than 1 s after its per-hook timeout.
@@ -1034,8 +1034,8 @@ prove it gone:
 | `proven_gone_how` | Proof |
 |---|---|
 | `tool_ran` | A Claude agent's `PostToolUse` or `PostToolUseFailure` carrying the request's `tool_use_id`: the tool ran, so its dialog was answered. Any request with that id, a subagent's included. Never on a Codex row. |
-| `turn_end` | The turn of the agent that asked ended after the request was written. The main agent's `Stop`, or its idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`), or on a Codex row its `Interrupt` with no `agent_id`, proves it for every request with no `agent_id` recorded before the second the hook started, one recorded before this release included. |
-| `agent_gone` | `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. The upgrade to this release proves every request of a spawn already `ended` or `missing` the same way. |
+| `turn_end` | The turn of the agent that asked ended after the request was written. The main agent's `Stop`, or its idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`), or on a Codex row its `Interrupt` with no `agent_id`, proves it for every request with no `agent_id` recorded before the second the hook started, one recorded by an older binary included. |
+| `agent_gone` | `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a spawn already `ended` or `missing` the same way. |
 
 The ack (`delivered`), a pane answer recorded `sent` and
 `record-pane-answer` prove nothing. A hook proves something only when it
@@ -1203,7 +1203,7 @@ gone. Two ways close it:
    gone at least 2 s (from its `hook_gone_at`, written now when it has
    none, or from its `confirm_by` when that is earlier and the hook is
    judged by time: it cannot be checked, or the request was recorded
-   before this release), and, under the store's write lock, the pane still
+   by an older binary), and, under the store's write lock, the pane still
    has hash H. It
    records `pane_answer` `outside`, `pane_as` and `decision` the claim
    (`decision` `null` for `unknown`) and `decision_reason` `pane_outside`,
@@ -1253,7 +1253,7 @@ raw tmux**:
    to recover; if it returns `ErrNoOpenPermissionRequest`, the request is
    closed or its prompt cannot be shown to wait: do not answer it at the
    pane. If a plain `send-keys` is still refused with `ErrRelayFallenBack`
-   on that request (a stale record from before this release), close it
+   on that request (a stale record from an older binary), close it
    with step 4.
 2. `read-pane`, and have a person or an LLM look at it.
 3. If the request's prompt waits there, answer it with `send-keys` and its
@@ -1355,7 +1355,7 @@ processes, never the agent's screen. These cases are not covered:
   (`ErrDialogMaybeOpen`) until the agent's hooks prove the request gone: after
   a denied subagent request (on a Codex row, an allowed one too), until the
   spawn's agent ends; after a request
-  recorded before this release on an agent already idle at its prompt when
+  recorded by an older binary on an agent already idle at its prompt when
   you upgraded, until its next turn ends. Stopping such a spawn needs
   `kill`, or a person or an LLM who looks at the pane and sends `/exit`
   with `send-keys` and the pane's hash, which neither clears a draft first
@@ -1364,7 +1364,7 @@ processes, never the agent's screen. These cases are not covered:
   its key possibly typed. The request stays open and fallen back, so plain
   `send-keys` stays refused, until a retry with a fresh hash or
   `record-pane-answer` closes it.
-- **Requests recorded before this release.** `decide`'s check that the
+- **Requests recorded by an older binary.** `decide`'s check that the
   spawn is shown sitting on such a request alone reads stored records
   only, so it can be wrong both ways. A record left open after its prompt
   closed (answered at the pane after the hook was killed, or closed by a
@@ -1382,7 +1382,7 @@ processes, never the agent's screen. These cases are not covered:
   with `ErrNoOpenPermissionRequest`; the request stalls until a human
   answers it at the pane.
 - **A pane answer does not apply `decide`'s check.** `send-keys` with the
-  token of a request recorded before this release is accepted once the
+  token of a request recorded by an older binary is accepted once the
   request has fallen back and the caller's hash matches, even when
   `decide` refused that request with `ErrNoOpenPermissionRequest`.
   Following that error's "do not answer it at the pane" is up to the

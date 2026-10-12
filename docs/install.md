@@ -11,9 +11,10 @@
 - For Claude Code: `claude` (Claude Code) 2.1.280 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
   `exec`s it, not a shim that runs it as a child.
-- For Codex: the native Codex program, not a launcher that runs it as a child.
-  Codex installed with npm puts a node launcher script on PATH: set `[launch]
-  codex_path` to the native program instead. On Linux x86_64 it is the file
+- For Codex: `codex` (Codex) 0.156.0 or later, the native Codex program, not a
+  launcher that runs it as a child. Codex installed with npm puts a node
+  launcher script on PATH: set `[launch] codex_path` to the native program
+  instead. On Linux x86_64 it is the file
   `vendor/x86_64-unknown-linux-musl/bin/codex` inside the npm package
   `@openai/codex-linux-x64`, which this finds:
 
@@ -21,9 +22,17 @@
   find "$(npm root -g)" -path '*codex-linux-x64*' -name codex -type f
   ```
 
-  The standalone Codex install puts a link to its native program on PATH, which
-  needs no setting. Where the native program is on macOS arm64 is not
-  documented here.
+  Codex's standalone install, which needs no setting:
+
+  ```sh
+  curl -fsSL https://chatgpt.com/codex/install.sh | sh
+  ```
+
+  It puts a link to its native program on PATH. On Linux x86_64 that program is
+  `$HOME/.codex/packages/standalone/releases/<version>-x86_64-unknown-linux-musl/bin/codex`,
+  whose `<version>` changes with each update, so leave `codex_path` unset and
+  use the link. Where the native program is on macOS arm64 is not documented
+  here.
 - `tmux` 3.2 or later on PATH (verified: 3.2a and 3.3a), with `remain-on-exit`
   off (the default). No tmux server needs to be running.
 - `HOME` set to an absolute path when `install.sh` or `uninstall.sh` runs: each
@@ -60,8 +69,10 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
 - `--register-mcp`: register the stdio MCP server with Claude Code (Claude Code
-  only; Codex gets nothing). It runs the program `[launch] claude_path` names
-  when that is an executable file, else `claude` from PATH. By hand, with that
+  only; a Codex folder's entry is made by hand, see [Set up agent-director in a
+  Codex folder](settings.md#set-up-agent-director-in-a-codex-folder)). It runs
+  the program `[launch] claude_path` names when that is an executable file, else
+  `claude` from PATH. By hand, with that
   program for `claude`:
   `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`
   (the `--` before the path is required; without it Claude Code refuses
@@ -70,8 +81,9 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
 - `--no-hooks`: leave `~/.claude/settings.json` untouched (see
   [Upgrade](#upgrade) for the old entries it prints) and do not set
   `inject_help_hook` in `config.toml` (see
-  [settings](settings.md#defaultsinject_help_hook-config)). It does not skip
-  the [rename migration](#upgrade).
+  [settings](settings.md#defaultsinject_help_hook-config)), which is also what
+  gives a Codex launch its help entry. It does not skip the [rename
+  migration](#upgrade).
 - `--schedule`: schedule the `find-missing` and `expire` sweeps for the user
   running the script, who must be the agents' user. Off by default. See
   [Schedule the sweeps](#schedule-the-sweeps).
@@ -92,7 +104,8 @@ Before it changes anything, `install.sh` looks for each agent (see
   line, `claude mcp get`, `add` and `remove`) goes through it.
 - **Codex found:** the program's path, with a note that its version was not
   checked and the command to check it. `install.sh` never runs Codex, because
-  `codex --version` writes files in the Codex folder.
+  `codex --version` writes Codex's own files (`tmp/arg0/...`) in the Codex
+  folder it runs against: the default one unless `CODEX_HOME` names another.
 - **An agent not found:** `not installed`, with the reason.
 - **A `[launch]` path that names no executable file:** a line saying so. The
   agent counts as installed only if its program is on PATH, and that program is
@@ -108,8 +121,10 @@ differences:
 - `inject_help_hook` is still set in `config.toml` unless `--no-hooks`.
 
 `install.sh` registers nothing with Codex, writes nothing in any Codex folder
-and never writes `[launch]`. With neither agent found it stops, exit 2, before
-anything changes, and says how to make one found: put `claude` or `codex` on
+and never writes `[launch]`. A Codex folder's MCP entry and help entry are made
+by hand: see [Set up agent-director in a Codex
+folder](settings.md#set-up-agent-director-in-a-codex-folder). With neither agent
+found it stops, exit 2, before anything changes, and says how to make one found: put `claude` or `codex` on
 PATH, or set `[launch] claude_path` or `codex_path` in `config.toml`. The
 message names the `config.toml` the install read: the old directory's while the
 move is due (see [Upgrade](#upgrade)), else `~/.config/agent-director/config.toml`.
@@ -311,7 +326,8 @@ holds the old name of the arguments key is refused at spawn, naming
   for scripts that still name the old path.
 - Change by hand each entry that names the old path: a `claude mcp add`
   registration the installer did not find, help hooks in the `settings.json` of
-  other `CLAUDE_CONFIG_DIR` folders, Codex MCP and help entries, and scripts or
+  other `CLAUDE_CONFIG_DIR` folders, [Codex MCP and help
+  entries](settings.md#set-up-agent-director-in-a-codex-folder), and scripts or
   test setups that pass the old binary's path.
 - An earlier release is installed with its own `install.sh`, fetched from its
   tag; this release's `install.sh` refuses an earlier release's binaries (exit
@@ -358,7 +374,9 @@ It works on `~/.config/agent-director`, or on the old directory (see
 [Upgrade](#upgrade)) for an install that was never moved. It removes the
 binaries, the PATH link, the help hooks in `~/.claude/settings.json` (those of
 an install from before the move included) and the `inject_help_hook` setting,
-and keeps the directory unless `--purge`.
+and keeps the directory unless `--purge`. It leaves the MCP and help entries
+made by hand in Codex folders; remove them as [Set up agent-director in a Codex
+folder](settings.md#set-up-agent-director-in-a-codex-folder) says.
 
 It also removes the schedule `--schedule` added and nothing else: the crontab
 lines tagged `agent-director-schedule` (the crontab itself only when nothing

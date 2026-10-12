@@ -349,16 +349,104 @@ jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, 
 
 ## A row stays `pending` and the trail shows `pid_mismatch`
 
-Hooks are ignored when `claude` on PATH is a shim that runs Claude Code as a
-child, not by `exec` (the second query's `parent_command` is Claude Code).
+Hooks are ignored when the agent program the row runs is not the process the
+hook finds as its parent: a launcher or shim that runs the agent as a child, not
+by `exec`. The second query's `parent_command` is the agent (Claude Code or
+Codex) and `pane_command` is the launcher. The usual causes:
+
+- **Claude Code:** `claude` on PATH is a shim that runs Claude Code as a child.
+- **Codex:** `codex` on PATH, or `[launch] codex_path`, is the node launcher an
+  npm install of Codex puts there, a wrapper that does not `exec` the native
+  program, or a program such as `timeout`, `setsid` or `sh -c` that runs it as a
+  child (`nohup` makes Codex exit instead).
+- **Either agent:** a `[launch]` path names a launcher or a wrapper that does
+  not `exec` the agent.
 
 ```sh
 jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.config/agent-director/ad-trail.jsonl | tail -n 5
 jq -c 'select(.event == "ad.hook.pane_is_grandparent") | {ts, instance_id, pane_command, parent_command, advice}' ~/.config/agent-director/ad-trail.jsonl | tail -n 5
 ```
 
-Fix it per [Requirements](install.md#requirements), then end and relaunch each
-`pending` row as in the previous item.
+The `advice` in the second record follows the row's agent. Fix it per
+[Requirements](install.md#requirements): point the agent's `[launch]` path
+(`claude_path` or `codex_path`) at the native program, or at a wrapper that
+`exec`s it. Then end and relaunch each `pending` row as in the previous item.
+
+## A Codex row stays `pending` or goes `missing` for another reason
+
+A Codex agent reports in at its first prompt, not at its start, so a fresh
+Codex row is `pending` until then; this is not a fault. These causes leave a row
+`pending` past the pending grace period, noted `unreported` by `find-missing`
+(the agent runs but no hook reported), or `missing` (the agent's process is
+gone). The `pid_mismatch` cause has its own item above. Look at the pane
+first, read-only, as step 3 of "Inspect and end a session by hand" does: Codex
+usually says what it refuses. Whatever the cause, end and relaunch each
+`pending` row as the [caller contract](caller-contract.md) says once fixed.
+
+Every command below that runs Codex (`codex --version` or any other) writes
+Codex's own files, such as `tmp/arg0/...`, into the Codex folder it runs
+against: the default `~/.codex`, or the folder `CODEX_HOME` names. Run it
+against a folder you accept that in.
+
+- **`codex` or `codex_path` is missing, too old, or does not qualify.** The
+  program the launch runs is not there, so the pane ends and the row goes
+  `missing`; or it is older than the minimum in
+  [Requirements](install.md#requirements) and does not understand the launch's
+  settings, so its pane shows an error or the agent never reports. Check the
+  path the launch uses (`[launch] codex_path`, else `codex` on the PATH of the
+  agents' tmux server) and its version:
+
+  ```sh
+  command -v codex
+  codex --version
+  ```
+
+  Fix: install Codex at the minimum version, or set `[launch] codex_path` to
+  the native program (see [Requirements](install.md#requirements)); a program
+  that runs Codex as a child is the `pid_mismatch` item above. A Claude row
+  whose `[launch] claude_path` names no program goes `missing` the same way:
+  check the path with `ls -l '<claude_path>'`, then fix or unset it.
+- **The group folder is missing, not signed in, or under the system temp
+  folder.** A `CODEX_HOME` in `extra_env` that is not an existing folder, or one
+  with no login, leaves Codex at its sign-in or error screen: the row stays
+  `pending`, noted `unreported`, or goes `missing` if Codex exits. A folder
+  under the system temp folder makes Codex create none of its helper programs
+  (such as `apply_patch`), so use a folder outside it. Check:
+
+  ```sh
+  ls -ld '<folder>'
+  CODEX_HOME='<folder>' codex login status
+  ```
+
+  Fix: create the folder and sign it in once by hand as [Setting up a group
+  folder](multi-account.md#setting-up-a-group-folder) says, or spawn with an
+  absolute `CODEX_HOME` outside the system temp folder.
+- **A Codex config turns hooks off or allows managed hooks only.** Codex then
+  runs none of agent-director's hooks, so the row never reports in: it stays
+  `pending`, noted `unreported`, while the agent works at its prompt. The
+  layers that can do it are the default or group folder's `config.toml`, the
+  project's `.codex/` and `/etc/codex`. Look in each for a `hooks` setting
+  (`<folder>` is `~/.codex` or the group folder):
+
+  ```sh
+  grep -sn 'hooks' '<folder>/config.toml' '<project>/.codex/config.toml' /etc/codex/*.toml
+  ```
+
+  Fix: remove `hooks = false` under `[features]`, or the managed-hooks-only
+  setting, from the layer that has it. A spawn's own arguments cannot do this:
+  `spawn` refuses `--disable hooks` and `features.hooks` (see the [caller
+  contract](caller-contract.md#spawn-and-template-input-refusals)).
+- **A newer Codex rejects the hook-trust hash agent-director computes.**
+  agent-director trusts each of its hook entries by a hash of the entry, so a
+  Codex that computes that hash differently asks for a review of
+  agent-director's own hooks. With pre-trust `ok` the launch's bypass of the
+  hook review covers them and nothing shows. With `pre_trust` `skipped` (the
+  spawn or the row set `no_pre_trust`) or `failed`, the pane shows Codex's hook
+  review naming agent-director's hooks, and the row stays `pending`, noted
+  `unreported`. Check the `pre_trust` of the spawn's result (`get` shows
+  `no_pre_trust`) and the pane. Fix: relaunch with pre-trust on (an absolute
+  `CODEX_HOME`, no `no_pre_trust`), or answer the review in the pane yourself
+  by trusting the hooks.
 
 ## A row on a different tmux server
 

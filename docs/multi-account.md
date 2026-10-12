@@ -206,6 +206,9 @@ and `CODEX_HOME` moves it. Agents that share an account share a group folder.
   the system keyring.
 - **A first start on a new folder can be slower** than later ones, while Codex
   sets the folder up.
+- **agent-director's MCP server and help entry are set up by hand in each
+  group folder,** as in the default one (see [Set up agent-director in a Codex
+  folder](settings.md#set-up-agent-director-in-a-codex-folder)).
 
 ## References
 

@@ -79,11 +79,40 @@ several rows.
 
 ## Drive a Spawn from another agent
 
-Install with `--register-mcp`. The verbs then appear as
-`mcp__agent-director__spawn`, `mcp__agent-director__send_keys`, etc.; `hook`,
-`serve` and `trail-emit` are CLI-only. Tool arguments use underscores
-(`--instance-id` is `instance_id`); the list is in
-`mcp-reference.md`.
+An agent that supervises other agents calls agent-director over MCP, whether
+it is a Claude Code or a Codex agent:
+
+- **A Claude Code caller:** install with `--register-mcp`. The verbs then appear
+  as `mcp__agent-director__spawn`, `mcp__agent-director__send_keys`, etc.; `hook`,
+  `serve` and `trail-emit` are CLI-only. Tool arguments use underscores
+  (`--instance-id` is `instance_id`); the list is in
+  `mcp-reference.md`.
+- **A Codex caller:** follow [Set up agent-director in a Codex
+  folder](settings.md#set-up-agent-director-in-a-codex-folder) in each Codex
+  folder the caller runs in. Codex names the tools `mcp__<server>__<tool>`, with
+  `<server>` the name its `config.toml` gives the server, and by default asks
+  before each call (see [What is relayed](permissions.md#what-is-relayed)).
+
+A Spawn the caller makes has the caller as its `parent_id` and runs on the
+caller's tmux server.
+
+MCP always works and is the recommended path for a Codex caller. A Codex
+agent's own shell reaches agent-director's CLI, and the Go and TypeScript
+clients, only where Codex's sandbox lets it: in Codex's `workspace-write`
+sandbox, with both of these in the folder's `config.toml`, or with full access:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["/home/you/.config/agent-director"]
+network_access = true
+```
+
+`writable_roots` names agent-director's directory, plus any directory that
+holds a `[store] db_path` or `[log] error_log_path` outside it (replace
+`/home/you` with your home directory); `network_access` is needed for the tmux
+socket. The shell must also pass the caller's variables: Codex's default
+`shell_environment_policy` does, `inherit = "core"` and `"none"` can drop them,
+and an `include_only` list must name `AGENT_DIRECTOR_*` and `TMUX*`.
 
 ## Watch a Spawn's state
 

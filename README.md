@@ -1,7 +1,7 @@
 # agent-director
 
-Supervise long-running Claude Code sessions ("Spawns") from a script,
-another agent, or an MCP-capable LLM client. One Go binary, one SQLite
+Supervise long-running Claude Code and Codex sessions ("Spawns") from a
+script, another agent, or an MCP-capable LLM client. One Go binary, one SQLite
 file, and tmux.
 
 ## What you get
@@ -22,7 +22,10 @@ file, and tmux.
 - Linux x86_64 or Apple Silicon (arm64) macOS.
 - At least one of Claude Code and Codex, each on PATH or named by `[launch]
   claude_path` / `codex_path` in `config.toml`. For Claude Code, `claude` (Claude
-  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it.
+  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it. For
+  Codex, `codex` (Codex) 0.156.0 or later: its native program, or a wrapper that
+  `exec`s it. An npm-installed `codex` does not qualify: set `[launch]
+  codex_path` in `~/.config/agent-director/config.toml` to the native program.
 - `tmux` 3.2 or later on PATH.
 - `jq`, `sqlite3` and `file` on PATH.
 
@@ -35,23 +38,24 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 This installs `agent-director` on your PATH and creates
 `~/.config/agent-director/`. Add `--register-mcp` to also register the MCP server
 with Claude Code, and `--schedule` to also schedule the two sweeps (see
-"Keep it healthy").
+"Keep it healthy"). The install registers nothing with Codex.
 
 ## First spawn
 
 ```sh
-id=$(agent-director spawn --cwd "$PWD" --agent claude | jq -r '.instance_id')
+agent=claude   # or codex
+id=$(agent-director spawn --cwd "$PWD" --agent "$agent" -- "what is 2+2?" | jq -r '.instance_id')
 
 agent-director list --state waiting
-
-agent-director send-keys --instance-id "$id" --text "what is 2+2?"
 
 agent-director read-pane --instance-id "$id"
 
 agent-director pause --instance-id "$id"
 ```
 
-The row is `pending` until the agent reports in, then `waiting`.
+The first prompt is one argument after `--`. The row is `pending` until the
+agent reports in (a Codex agent does at its first prompt), `working` while it
+answers, and `waiting` once it has answered.
 
 ## Keep it healthy
 

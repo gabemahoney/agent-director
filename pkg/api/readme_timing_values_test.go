@@ -3,8 +3,8 @@ package api_test
 // readme_timing_values_test.go pins docs/configuration.md's [tmux] example block and
 // timing table, and the listed user-doc and architecture statements of the
 // [tmux] timing defaults, safe minimums and kill and pause worst cases, to
-// the internal/config constants, and the user docs' Claude Code minimum
-// statements to each other (Epic 21, decision 6). Key names come from
+// the internal/config constants, and the user docs' per-agent (Claude Code,
+// Codex) minimum statements to each other (Epic 21, decision 6; SR-15.2). Key names come from
 // config.TmuxKey (SR-20.2), never spelt here. -run TestReadmeTimingValues
 // selects them all.
 
@@ -27,6 +27,8 @@ const (
 	prerequisitesTitle    = "Prerequisites"
 	requirementsTitle     = "Requirements"
 	noExecFormItemTitle   = "A row stays `pending` and the trail shows `no_exec_form`"
+
+	codexOtherCauseItemTitle = "A Codex row stays `pending` or goes `missing` for another reason"
 )
 
 var (
@@ -268,33 +270,59 @@ func TestReadmeTimingValuesTable(t *testing.T) {
 	}
 }
 
-// TestReadmeTimingValuesClaudeCodeMinimum: the README's Prerequisites and
-// install.md's Requirements each state the Claude Code minimum exactly once
-// and the same version; operator-actions.md's no_exec_form item, found
-// through operatorActionsItem, points to install.md's Requirements instead of
-// repeating it.
-func TestReadmeTimingValuesClaudeCodeMinimum(t *testing.T) {
+// agentMinimums are the per-agent minimum statements of the user docs. Each
+// agent's minimum is stated once in the README's Prerequisites and once in
+// install.md's Requirements, and nowhere else; pointer is the operator-actions
+// item for that agent's launch failure, which links Requirements instead.
+var agentMinimums = []struct{ agent, program, pointer string }{
+	{"Claude Code", "claude", noExecFormItemTitle},
+	{"Codex", "codex", codexOtherCauseItemTitle},
+}
+
+// TestReadmeTimingValuesAgentMinimum: for each agent, the README's
+// Prerequisites and install.md's Requirements each state its minimum exactly
+// once and the same version; no other user doc states it; operator-actions.md's
+// item for that agent's launch failure, found through operatorActionsItem,
+// points to install.md's Requirements instead of repeating it.
+func TestReadmeTimingValuesAgentMinimum(t *testing.T) {
 	t.Parallel()
 	const version = `([0-9]+\.[0-9]+\.[0-9]+)`
 	readme, install, oa := readMD(t, mdTopREADME), readMD(t, mdInstall), readMD(t, mdOperatorActions)
-	prereq := "`claude` \\(Claude Code\\) " + version + ` or later`
-	var versions, stated []string
-	for _, s := range []struct{ path, section, text string }{
-		{readme.path, prerequisitesTitle, normalised(sectionBody(t, readme, prerequisitesTitle))},
-		{install.path, requirementsTitle, normalised(sectionBody(t, install, requirementsTitle))},
-	} {
-		ms := regexp.MustCompile(prereq).FindAllStringSubmatch(s.text, -1)
-		if len(ms) != 1 {
-			t.Fatalf("%s section %q: %d statements match %q; want 1", s.path, s.section, len(ms), prereq)
-		}
-		versions, stated = append(versions, ms[0][1]), append(stated, fmt.Sprintf("%q", ms[0][0]))
-	}
-	if versions[0] != versions[1] {
-		t.Fatalf("the user docs' Claude Code minimum statements disagree: %s", strings.Join(stated, "; "))
-	}
-	item := normalised(oa.body(operatorActionsItem(t, oa, noExecFormItemTitle)))
-	if link := "[Requirements](install.md#" + mdAnchor(requirementsTitle) + ")"; !strings.Contains(item, link) {
-		t.Errorf("%s section %q lacks the pointer %s to the minimum", oa.path, noExecFormItemTitle, link)
+	for _, a := range agentMinimums {
+		t.Run(a.agent, func(t *testing.T) {
+			t.Parallel()
+			prereq := regexp.MustCompile("`" + a.program + "` \\(" + regexp.QuoteMeta(a.agent) + "\\) " + version + ` or later`)
+			var versions, stated []string
+			for _, s := range []struct {
+				d       mdDoc
+				section string
+			}{{readme, prerequisitesTitle}, {install, requirementsTitle}} {
+				ms := prereq.FindAllStringSubmatch(normalised(sectionBody(t, s.d, s.section)), -1)
+				if len(ms) != 1 {
+					t.Fatalf("%s section %q: %d statements match %q; want 1", s.d.path, s.section, len(ms), prereq)
+				}
+				versions, stated = append(versions, ms[0][1]), append(stated, fmt.Sprintf("%q", ms[0][0]))
+			}
+			if versions[0] != versions[1] {
+				t.Fatalf("the user docs' %s minimum statements disagree: %s", a.agent, strings.Join(stated, "; "))
+			}
+			for _, path := range mdUserDocs {
+				if path == mdTopREADME || path == mdInstall {
+					continue
+				}
+				d := readMD(t, path)
+				if ms := prereq.FindAllString(normalised(strings.Join(d.lines, "\n")), -1); len(ms) > 0 {
+					t.Errorf("%s states the %s minimum (%q); only the README and install.md do, others link", path, a.agent, ms[0])
+				}
+			}
+			item := normalised(oa.body(operatorActionsItem(t, oa, a.pointer)))
+			if link := "[Requirements](install.md#" + mdAnchor(requirementsTitle) + ")"; !strings.Contains(item, link) {
+				t.Errorf("%s section %q lacks the pointer %s to the minimum", oa.path, a.pointer, link)
+			}
+			if strings.Contains(item, versions[0]) {
+				t.Errorf("%s section %q repeats the %s minimum %s instead of linking it", oa.path, a.pointer, a.agent, versions[0])
+			}
+		})
 	}
 }
 

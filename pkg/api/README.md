@@ -709,10 +709,7 @@ requires CLI binary `v0.X.Y`. The two components share an envelope shape
 the binary produces. Mixing versions risks silent field mismatches that
 are not detectable at compile time.
 
-> **Note (recommended-defer):** the version-coupling policy is marked
-> "recommended-defer" in the SRD Open Questions for Plan bee `b.qe2`.
-> This section may need updating if the policy changes. See Plan bee
-> `b.qe2` for the current status.
+> **Note:** the version-coupling policy is provisional and may change.
 
 ---
 
@@ -762,6 +759,5 @@ Common sentinels across verbs:
 
 - [`../../docs/architecture.md`](../../docs/architecture.md) — internal architecture and topology
 - [`../../docs/cli-reference.md`](../../docs/cli-reference.md) — manifest-derived CLI reference
-- Plan bee `b.qe2` — the plan governing this library's public API surface (bee tickets are not on GitHub)
 - [`../../docs/test-writing-guide.md`](../../docs/test-writing-guide.md) — for contributors writing tests against this package
 - <https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api> — godoc index

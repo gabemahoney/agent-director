@@ -215,7 +215,9 @@ they never replace or disable the user's, the group's or the project's own
 Codex hooks, and the trust Codex recorded for those is kept. A Codex config
 that turns hooks off, or allows managed hooks only, stops agent-director's hooks
 too: the row then never reports in and stays `pending` (see "A SessionStart
-that never writes" below).
+that never writes" below, and for the check and the fix [A Codex row stays
+`pending` or goes `missing` for another
+reason](operator-actions.md#a-codex-row-stays-pending-or-goes-missing-for-another-reason)).
 
 ### The Codex states
 
@@ -236,7 +238,10 @@ that never writes" below).
 No Codex tool moves a row to `ask_user`: Codex's question tools
 (`request_user_input` and `request_user_input_async`) read `working` like
 every other tool. Codex has no idle-prompt Notification either, so nothing
-returns a `working` row to `waiting` except `Stop` and `Interrupt`.
+returns a `working` row to `waiting` except `Stop` and `Interrupt`. A Codex
+row left `working` (the hook that would end the turn was lost) is therefore
+never repaired: `find-missing` repairs only a row stuck at `check_permission`
+(see "A relay row left in `check_permission`" below). Check the pane (`read-pane`) to see where the agent is.
 
 `Interrupt` is Codex's Esc: it ends the turn the agent was working on. As
 for Claude, a non-empty `agent_id` marks a subagent's hook. Apart from the
@@ -348,7 +353,9 @@ A Codex started through a launcher that runs it as a child (the node
 launcher npm installs, or a wrapper that does not `exec`) makes the hook's
 grandparent the pane process: the hook is refused with `pid_mismatch` (see "A
 `claude` that does not exec"). The advice in that record names `codex`, the
-launcher case and `[launch] codex_path`; see [Requirements](install.md#requirements).
+launcher case and `[launch] codex_path`; see [Requirements](install.md#requirements)
+and, for the steps, [A row stays `pending` and the trail shows
+`pid_mismatch`](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
 ### Limits
 
@@ -357,7 +364,8 @@ launcher case and `[launch] codex_path`; see [Requirements](install.md#requireme
   they set `working`. It sends no `Stop` and no `Interrupt` of its own, and
   after its last tool nothing returns the row to `waiting`: the row reads
   `working` until the agent's next prompt (an Esc during the review sends one
-  `Interrupt`).
+  `Interrupt`). Check the pane (`read-pane`) to tell a finished review from a
+  running one.
 - **Other internal threads.** Codex's other internal threads (compaction,
   memory work) are not known to send hooks marked with `agent_id` either, so
   they can leave the same trace.
@@ -373,10 +381,10 @@ start time. The check is part of each database write, so nothing can
 change the row between the check and the write.
 
 A hook from any other process that carries the row's
-`AGENT_DIRECTOR_INSTANCE_ID` changes nothing: a nested `claude` started
-in the agent's shell, a teammate pane split in the agent's session, a
-leftover of an earlier launch, or a shell that pipes a payload into
-`agent-director hook`. So does every hook while the row records no pane
+`AGENT_DIRECTOR_INSTANCE_ID` changes nothing: a nested `claude` or `codex`
+started by hand in the agent's shell, a Codex service shared with other
+agents, a teammate pane split in the agent's session, a leftover of an earlier
+launch, or a shell that pipes a payload into `agent-director hook`. So does every hook while the row records no pane
 yet (for SessionStart, only after the bounded wait described below).
 Such a hook:
 
@@ -907,8 +915,11 @@ Both entries are in shell form (`"command": "<install path> help"`, no
 run exec-form hooks still runs `agent-director help`, so the no-verb
 `no_exec_form` check never applies to them. The same holds for a Claude
 Spawn's per-Spawn `inject_help_hook` SessionStart entry, which is in shell form
-too. A Codex agent has no persistent pair: its help entry is per launch (see
-"The Codex entry set" above).
+too. The installer adds that pair for Claude Code only. A Codex agent
+agent-director launches has a help entry per launch (see "The Codex entry set"
+above); a Codex folder gets a help entry of its own, for the agents you start
+there by hand, only when you add it (see [Set up agent-director in a Codex
+folder](settings.md#set-up-agent-director-in-a-codex-folder)).
 
 ### Why both events
 
@@ -1069,7 +1080,7 @@ an invalid `--agent`, classify failure), and `cmd/agent-director`'s `runHook` wr
 deny when the config cannot be loaded or the store cannot be opened. The
 helper writes a deny envelope only when `relayActive`
 is true AND the payload's peeked event name is `PermissionRequest`
-(the b.45p gate). Failures where the event name is unknowable —
+(the gate that keeps a deny from landing on another event). Failures where the event name is unknowable —
 stdin read failure, unparseable payload — exit silently instead,
 because a permission-shaped envelope from a non-PermissionRequest
 process would be routed by fd to the in-flight tool and race the
@@ -1095,8 +1106,8 @@ table exceeds `relay.permission_request_cap`, once proven gone (see
 `ended` or `missing`; a closed row not yet proven gone on a live spawn is
 kept, past the cap if need be. A spawn's newest request is kept too while
 that spawn has a request that still awaits an answer (`decide` relies on
-it for a request recorded before this release; see
-[permissions.md](permissions.md#requests-recorded-before-this-release)).
+it for a request recorded by an older binary; see
+[permissions.md](permissions.md#requests-recorded-by-an-older-binary)).
 
 ### A relay row left in `check_permission`
 
@@ -1219,8 +1230,8 @@ hook had not confirmed the verdict keeps it. Each deny is written to the
 trail as one `ad.row_mutation.committed` (`writer_process` `hook`), before
 the row's `ad.spawn.state_transition`. `find-missing`'s mark closes a
 `missing` row's requests the same way (`decision_reason` `find_missing`),
-and `resume`'s move to `pending` closes any request a release before this
-one left open on the finished row (`decision_reason` `ended`,
+and `resume`'s move to `pending` closes any request an older binary
+left open on the finished row (`decision_reason` `ended`,
 `writer_process` `resume`). The move of a Codex row to `ended` (see "How a
 Codex row ends" above), made by `find-missing` or by `pause`, closes them
 too, as the `ended` close does: `decision_reason` `ended` and
@@ -1253,7 +1264,7 @@ row's requests not yet proven, as `proven_gone_at` (the hook's clock) and
 | Hook | Requests it proves | `proven_gone_how` |
 | --- | --- | --- |
 | `PostToolUse` or `PostToolUseFailure` with a `tool_use_id` (a Claude agent's) | every request carrying that `tool_use_id`, whatever agent-director's records say of it, a subagent's included | `tool_ran` |
-| `Stop` with no `agent_id` | every request with no `agent_id` recorded before the second the hook started, one recorded before this release included | `turn_end` |
+| `Stop` with no `agent_id` | every request with no `agent_id` recorded before the second the hook started, one recorded by an older binary included | `turn_end` |
 | idle-prompt `Notification` with no `agent_id` (a Claude agent's) | as `Stop` | `turn_end` |
 | `Interrupt` with no `agent_id` (a Codex agent's: Esc in a running turn) | as `Stop` | `turn_end` |
 

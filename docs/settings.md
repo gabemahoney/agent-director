@@ -12,7 +12,9 @@ For Claude Code's own description of settings, see the upstream docs:
 <https://docs.claude.com/en/docs/claude-code/settings>.
 
 The Claude Code merge sections below describe `claude` Spawns; the
-template and `inject_help_hook` sections cover both agents.
+template and `inject_help_hook` sections cover both agents, and
+[Set up agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)
+covers the entries a Codex folder needs by hand.
 
 ## What `--settings` carries
 
@@ -128,8 +130,10 @@ absolute install path `~/.config/agent-director/bin/agent-director help`
 and fires alongside it. Every Codex launch carries a help entry of its own in
 its per-launch block while the setting is on (see
 [Hooks](hooks.md#what-agent-director-help-actually-outputs)), and none when it
-is off; the persistent pair described there is Claude-only. A hand-made hook or MCP entry that names the old
-directory needs the new path (see [Upgrade](install.md#upgrade)).
+is off; the persistent pair described there is Claude-only. A Codex folder gets
+a help entry for the agents you start there by hand (see [Set up
+agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)),
+which also covers a hand-made entry that names the old directory.
 
 The flag exists to cover the dynamic case the operator's static
 `~/.claude/settings.json` injection cannot reach: a Spawn that inherits
@@ -149,6 +153,67 @@ The hook command is an absolute path rather than a bare
 `agent-director` because the spawned Claude's PATH may not include
 `~/.local/bin`, and the hook fires before any shell-rc manipulation
 could amend PATH.
+
+## Set up agent-director in a Codex folder
+
+agent-director registers nothing with Codex and writes nothing in a Codex
+folder, so each Codex folder gets its entries by hand: the default folder
+(`~/.codex`) and every group folder (see
+[Codex group folders](multi-account.md#codex-group-folders)). Both entries go
+in that folder's `config.toml`. Both name the installed binary,
+`~/.config/agent-director/bin/agent-director`; an entry that names the old
+directory needs the new path (see [Upgrade](install.md#upgrade)).
+
+**The MCP entry** lets an agent that runs in the folder call agent-director.
+Codex starts the server with only a small environment of its own plus the
+variables `env_vars` names. agent-director reads its caller's id from
+`AGENT_DIRECTOR_INSTANCE_ID` and its tmux server from `TMUX` and `TMUX_TMPDIR`,
+so the entry forwards all three. Without them an agent it spawns gets no
+`parent_id` and may land on another tmux server. `command` is an absolute path:
+replace `/home/you` with your home directory.
+
+```toml
+[mcp_servers.agent-director]
+command = "/home/you/.config/agent-director/bin/agent-director"
+args = ["serve", "--stdio"]
+env_vars = ["AGENT_DIRECTOR_INSTANCE_ID", "TMUX", "TMUX_TMPDIR"]
+```
+
+By default Codex asks before each agent-director call over MCP, so every call
+is an approval: a person answers it, or, for an agent agent-director launched with
+`relay_mode` on, the orchestrator does (see [What is
+relayed](permissions.md#what-is-relayed)). "Always allow" adds a rule to the
+whole folder (see [Codex spawns](permissions.md#codex-spawns)). What a caller
+gets, and how to reach agent-director from a Codex agent's shell, is in
+[Drive a Spawn from another agent](usage.md#drive-a-spawn-from-another-agent).
+
+**The help entry** gives an agent in the folder the verb list at its session
+start, as `inject_help_hook` does for agents agent-director launches. The
+command sets `AGENT_DIRECTOR_AGENT=codex`, which makes `help` print Codex's
+structured form (without it `help` prints the plain list, which Codex
+rejects), and runs the installed path's `help`. `additionalContextLimit` of
+4000 lets Codex deliver the whole list.
+
+```toml
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'AGENT_DIRECTOR_AGENT=codex "$HOME/.config/agent-director/bin/agent-director" help'
+additionalContextLimit = 4000
+```
+
+Codex asks once to review and trust the entry, at the next start of an agent in
+the folder (or in `/hooks`), and asks again whenever the entry changes. When the
+list arrives is in [What `agent-director help` actually
+outputs](hooks.md#what-agent-director-help-actually-outputs). An agent
+agent-director launches in a folder that has this entry while `inject_help_hook`
+is on gets the list twice, once from each entry.
+
+**Removing both.** Delete the `[mcp_servers.agent-director]` table and the
+`[[hooks.SessionStart]]` pair from the folder's `config.toml`. `uninstall.sh`
+leaves both in place. Codex may also keep its own record that you trusted the
+help entry; agent-director does not write or remove it.
 
 ## The five-tier merge
 
