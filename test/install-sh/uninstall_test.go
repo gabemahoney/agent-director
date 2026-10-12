@@ -1148,3 +1148,159 @@ func TestUninstallOtherADirectories(t *testing.T) {
 		}
 	}
 }
+
+// uninstallMCPRun runs uninstall.sh under home with the stand-in claude (the
+// copy in tools, first on PATH) and env, and returns its stdout, stderr and
+// exit code separately.
+func uninstallMCPRun(t *testing.T, home, tools, input string, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	script, err := filepath.Abs(filepath.Join("..", "..", "skills", "install-agent-director", "uninstall.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", append([]string{script}, args...)...)
+	cmd.Env = append([]string{"HOME=" + home, "PATH=" + tools + ":" + os.Getenv("PATH")}, env...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
+	var out, errb strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	var ee *exec.ExitError
+	if err := cmd.Run(); errors.As(err, &ee) {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("uninstall.sh: %v", err)
+	}
+	return out.String(), errb.String(), code
+}
+
+// TestUninstallMCPAlso (b.fom): --mcp-also runs `claude mcp remove
+// agent-director` and tells what came of it. A removal is "deregistered"; a name
+// registered nowhere ("No MCP server named ...") is "nothing to deregister",
+// not a failure; any other failure (the name in several scopes, which Claude
+// Code refuses to remove without -s, or a write that failed) is reported with
+// the command run, its exit status and stderr and the command to run by hand,
+// every later step still runs (also --purge), and the exit status is 6.
+func TestUninstallMCPAlso(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	const failed = "uninstall.sh: deregistering agent-director from MCP failed; nothing was removed from Claude Code."
+	const doneFailed = "uninstall.sh: done, except the MCP deregistration failed (see above); exit 6"
+	const byHand = "  Remove it by hand, in the scope that 'mcp get agent-director' shows (a name registered in several scopes needs -s):\n    claude mcp remove agent-director -s <scope>\n"
+	rows := []struct {
+		name     string
+		args     []string
+		input    string
+		env      []string // CLAUDE_STANDIN_* settings
+		code     int
+		calls    []string // the claude calls (every one is an `mcp remove`, none with -s)
+		stdout   []string
+		noStdout []string
+		stderr   []string // each must be in stderr; "" in the list is ignored
+		purged   bool     // ~/.config/agent-director is gone
+		lastErr  string   // stderr's last line ("" stderr empty)
+	}{
+		{name: "no --mcp-also runs no claude", args: nil, code: 0, calls: nil,
+			noStdout: []string{"from MCP", "deregist"}},
+		{name: "deregistered", args: []string{"--mcp-also"}, code: 0, calls: []string{"mcp remove agent-director"},
+			stdout: []string{"uninstall.sh: deregistered agent-director from MCP\n", "uninstall.sh: done\n"}},
+		{name: "none found is not a failure", args: []string{"--mcp-also"}, env: []string{"CLAUDE_STANDIN_REMOVE_NONE=1"}, code: 0,
+			calls:    []string{"mcp remove agent-director"},
+			stdout:   []string{"uninstall.sh: no agent-director registration found from this directory; nothing to deregister\n", "uninstall.sh: done\n"},
+			noStdout: []string{"deregistered agent-director"}},
+		{name: "the name in several scopes", args: []string{"--mcp-also"}, env: []string{"CLAUDE_STANDIN_REMOVE_MULTI=1"}, code: 6,
+			calls:    []string{"mcp remove agent-director"},
+			stdout:   []string{"uninstall.sh: removed binaries under "},
+			noStdout: []string{"deregistered agent-director", "nothing to deregister", "uninstall.sh: done\n"},
+			stderr: []string{failed,
+				"  command run: claude mcp remove agent-director\n  exit status: 1\n  stderr:\n" +
+					"    MCP server \"agent-director\" exists in multiple scopes:\n" +
+					"      - Local config (private to you in this project) ({HOME}/.claude.json [project: {HOME}/w/a])\n" +
+					"      - User config (available in all your projects) ({HOME}/.claude.json)\n" +
+					"    \n    To remove from a specific scope, use:\n      claude mcp remove agent-director -s local\n      claude mcp remove agent-director -s user\n",
+				byHand},
+			lastErr: doneFailed},
+		{name: "any other failure, stderr empty", args: []string{"--mcp-also"}, env: []string{"CLAUDE_STANDIN_REMOVE_FAIL=1"}, code: 6,
+			calls:    []string{"mcp remove agent-director"},
+			noStdout: []string{"deregistered agent-director", "nothing to deregister"},
+			stderr:   []string{failed, "  exit status: 1\n  stderr:\n    Error: could not write the MCP configuration\n", byHand},
+			lastErr:  doneFailed},
+		{name: "a failure does not stop --purge", args: []string{"--mcp-also", "--purge", "--force"}, env: []string{"CLAUDE_STANDIN_REMOVE_FAIL=1"}, code: 6,
+			calls:   []string{"mcp remove agent-director"},
+			stdout:  []string{"uninstall.sh: purged {HOME}/.config/agent-director\n"},
+			stderr:  []string{failed, byHand},
+			purged:  true,
+			lastErr: doneFailed},
+		{name: "a failure and a declined --purge", args: []string{"--mcp-also", "--purge"}, input: "n\n", env: []string{"CLAUDE_STANDIN_REMOVE_FAIL=1"}, code: 6,
+			calls:    []string{"mcp remove agent-director"},
+			stdout:   []string{"uninstall.sh: --purge aborted\n"},
+			noStdout: []string{"purged"},
+			stderr:   []string{failed, byHand},
+			lastErr:  "    claude mcp remove agent-director -s <scope>"},
+	}
+	for _, set := range ownedSets(t) {
+		capture, err := filepath.Abs(filepath.Join(ownedClaudeDir, set, "old-plain-local"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			t.Run(set+"/"+row.name, func(t *testing.T) {
+				home := t.TempDir()
+				tools := filepath.Join(home, "tools")
+				script, err := os.ReadFile(filepath.Join(ownedClaudeDir, "claude.sh"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeMode(t, filepath.Join(tools, "claude"), string(script), 0o755)
+				root := filepath.Join(home, ".config", "agent-director")
+				writeMode(t, filepath.Join(root, "bin", "agent-director"), "binary", 0o755)
+				writeMode(t, filepath.Join(root, "state.db"), "state", 0o600)
+				log := filepath.Join(home, "claude-calls.log")
+				env := append([]string{"CLAUDE_STANDIN_LOG=" + log, "CLAUDE_STANDIN_CAPTURE=" + capture}, row.env...)
+				fill := strings.NewReplacer("{HOME}", home).Replace
+
+				stdout, stderr, code := uninstallMCPRun(t, home, tools, row.input, env, row.args...)
+
+				if code != row.code {
+					t.Errorf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, row.code, stdout, stderr)
+				}
+				for _, s := range row.stdout {
+					if !strings.Contains(stdout, fill(s)) {
+						t.Errorf("stdout lacks %q:\n%s", fill(s), stdout)
+					}
+				}
+				for _, s := range row.noStdout {
+					if strings.Contains(stdout, s) {
+						t.Errorf("stdout holds %q:\n%s", s, stdout)
+					}
+				}
+				for _, s := range row.stderr {
+					if !strings.Contains(stderr, fill(s)) {
+						t.Errorf("stderr lacks %q:\n%s", fill(s), stderr)
+					}
+				}
+				if lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n"); row.lastErr == "" && stderr != "" && row.code == 0 {
+					t.Errorf("stderr = %q, want it empty", stderr)
+				} else if row.lastErr != "" && lines[len(lines)-1] != row.lastErr {
+					t.Errorf("last stderr line = %q, want %q", lines[len(lines)-1], row.lastErr)
+				}
+				var calls []string
+				for _, c := range ownedCalls(t, &moveHome{Env: map[string]string{"CLAUDE_STANDIN_LOG": log}}) {
+					calls = append(calls, c.line())
+				}
+				if !slices.Equal(calls, row.calls) {
+					t.Errorf("claude calls = %q, want %q", calls, row.calls)
+				}
+				// The binaries go whatever came of the deregistration; the directory only under --purge.
+				if _, err := os.Lstat(filepath.Join(root, "bin", "agent-director")); !os.IsNotExist(err) && !row.purged {
+					t.Errorf("the binary is still there after uninstall.sh: %v", err)
+				}
+				if _, err := os.Lstat(root); os.IsNotExist(err) != row.purged {
+					t.Errorf("%s removed = %v, want %v (%v)", root, os.IsNotExist(err), row.purged, err)
+				}
+			})
+		}
+	}
+}

@@ -2,7 +2,9 @@ package main_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -293,7 +295,11 @@ func advCLIExists(t *testing.T, path string) {
 }
 
 // TestAdviceFollow_H5_ServeUsageRegister: H5 "usage: agent-director serve --stdio
-// ... Register with: claude mcp add agent-director <binary-path> serve --stdio".
+// ... Register with: claude mcp add agent-director -- <binary-path> serve --stdio"
+// (b.fom: Claude Code 2.1.280 and later refuses the form without the `--`). The
+// follow runs the advised `claude mcp add` against the stand-in claude of
+// test/install-sh, which refuses that old form as Claude Code does, then runs
+// the command it registers.
 func TestAdviceFollow_H5_ServeUsageRegister(t *testing.T) {
 	home := t.TempDir()
 	stdout, stderr, code := advCLIRun(t, home, "serve")
@@ -301,20 +307,49 @@ func TestAdviceFollow_H5_ServeUsageRegister(t *testing.T) {
 		t.Fatalf("serve without --stdio: exit=%d stdout=%q; want usage on stderr, exit 0", code, stdout)
 	}
 	for _, want := range []string{"usage: agent-director serve --stdio", "Register with:",
-		"claude mcp add agent-director <binary-path> serve --stdio"} {
+		"claude mcp add agent-director -- <binary-path> serve --stdio"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("usage %q lacks %q", stderr, want)
 		}
 	}
+	advised := strings.Fields(strings.ReplaceAll(advCLIQuoted(t, stderr, "claude ", "\n"), "<binary-path>", binaryPath))
+	standIn, err := filepath.Abs(filepath.Join("..", "..", "test", "install-sh", "testdata", "claude-mcp", "claude.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr2, code := advCLIRunStandInClaude(t, home, standIn, advised...)
+	if code != 0 || !strings.Contains(stdout, "Added stdio MCP server agent-director with command: "+binaryPath+" serve --stdio") {
+		t.Fatalf("the advised `claude %s`: exit=%d stdout=%q stderr=%q; want it accepted", strings.Join(advised, " "), code, stdout, stderr2)
+	}
 	registered := strings.Fields(advCLIQuoted(t, stderr, "<binary-path> ", "\n"))
 
-	stdout, stderr, code, timedOut := runBounded(t, home, nil, mcpInitialize, false, surfaceDeadline, registered...)
+	stdout, stderr2, code, timedOut := runBounded(t, home, nil, mcpInitialize, false, surfaceDeadline, registered...)
 	if timedOut || code != 0 {
-		t.Fatalf("registered command %q: exit=%d timedOut=%v stderr=%q", registered, code, timedOut, stderr)
+		t.Fatalf("registered command %q: exit=%d timedOut=%v stderr=%q", registered, code, timedOut, stderr2)
 	}
 	if !strings.Contains(stdout, `"id":1`) || !strings.Contains(stdout, `"serverInfo"`) {
 		t.Errorf("registered command did not answer initialize: stdout=%q", stdout)
 	}
+}
+
+// advCLIRunStandInClaude runs the stand-in claude script (bash) under home with
+// args, and returns its stdout, stderr and exit status.
+func advCLIRunStandInClaude(t *testing.T, home, script string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errOut strings.Builder
+	cmd := exec.Command("bash", append([]string{script}, args...)...)
+	cmd.Dir = home
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CLAUDE_STANDIN_LOG=" + filepath.Join(home, "claude-calls.log")}
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	code := 0
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("stand-in claude: %v", err)
+		}
+		code = ee.ExitCode()
+	}
+	return out.String(), errOut.String(), code
 }
 
 // TestAdviceFollow_H6_OlderThanDurationForm: H6 "--older-than: invalid duration:

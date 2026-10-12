@@ -13,8 +13,29 @@
 #                              directory's binary (a trap for an installer that
 #                              matches names loosely, such as agent_director)
 #   mcp list                   prints ten servers, agent_director among them
-#   mcp add / mcp remove       succeed, unless CLAUDE_STANDIN_ADD_FAIL /
-#                              CLAUDE_STANDIN_REMOVE_FAIL is set (exit 1)
+#   mcp add                    refuses an option it does not know before the
+#                              `--` (so the form without `--`, `mcp add
+#                              agent-director <path> serve --stdio`) exactly
+#                              as Claude Code 2.1.280 and later does: stderr
+#                              `error: unknown option '--stdio'`, exit 1,
+#                              nothing registered. With the `--` it succeeds
+#                              and prints what Claude Code prints (`Added
+#                              stdio MCP server ... to <scope> config`, scope
+#                              local without -s). CLAUDE_STANDIN_ADD_FAIL
+#                              makes an add that is accepted fail (exit 1, with
+#                              an error on stderr; the value `silent`: none).
+#   mcp remove                 succeeds, unless CLAUDE_STANDIN_REMOVE_FAIL is
+#                              set (exit 1). Without -s,
+#                              CLAUDE_STANDIN_REMOVE_MULTI makes it refuse as
+#                              Claude Code does for a name registered in
+#                              several scopes (the capture
+#                              remove-noscope-multi.stderr beside
+#                              <CLAUDE_STANDIN_CAPTURE>, exit 1);
+#                              CLAUDE_STANDIN_REMOVE_NONE makes it answer a name
+#                              that is registered nowhere with the not-found text
+#                              of `mcp get` (none-found-many-others.stderr
+#                              beside the capture, exit 1; Claude Code builds
+#                              both from one function, not captured for remove)
 #
 # Each call is appended to $CLAUDE_STANDIN_LOG as a line
 #   CALL<TAB>working directory<TAB>new_bin<TAB>kept
@@ -66,18 +87,76 @@ case "$2" in
         done
         ;;
     add)
+        shift 2
+        scope=local
+        name=""
+        after_dashes=0
+        cmd_words=()
+        while [[ $# -gt 0 ]]; do
+            a="$1"
+            shift
+            if [[ "$after_dashes" -eq 1 ]]; then
+                cmd_words+=("$a")
+                continue
+            fi
+            case "$a" in
+                --) after_dashes=1 ;;
+                -s | --scope)
+                    scope="$1"
+                    shift
+                    ;;
+                -e | --env | -t | --transport)
+                    shift
+                    ;;
+                -*)
+                    echo "error: unknown option '$a'" >&2
+                    exit 1
+                    ;;
+                *)
+                    if [[ -z "$name" ]]; then
+                        name="$a"
+                    else
+                        cmd_words+=("$a")
+                    fi
+                    ;;
+            esac
+        done
         if [[ -n "$CLAUDE_STANDIN_ADD_FAIL" ]]; then
-            echo "Error: could not write the MCP configuration" >&2
+            [[ "$CLAUDE_STANDIN_ADD_FAIL" == silent ]] || echo "Error: could not write the MCP configuration" >&2
             exit 1
         fi
-        echo "Added stdio MCP server"
+        echo "Added stdio MCP server $name with command: ${cmd_words[*]} to $scope config"
+        case "$scope" in
+            project) echo "File modified: $PWD/.mcp.json" ;;
+            user) echo "File modified: $HOME/.claude.json" ;;
+            *) echo "File modified: $HOME/.claude.json [project: $PWD]" ;;
+        esac
         ;;
     remove)
+        shift 2
+        scope=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -s | --scope)
+                    scope="$2"
+                    shift
+                    ;;
+            esac
+            shift
+        done
         if [[ -n "$CLAUDE_STANDIN_REMOVE_FAIL" ]]; then
             echo "Error: could not write the MCP configuration" >&2
             exit 1
         fi
-        echo "Removed MCP server"
+        if [[ -z "$scope" && -n "$CLAUDE_STANDIN_REMOVE_MULTI" ]]; then
+            replay "$(dirname "${CLAUDE_STANDIN_CAPTURE:?}")/remove-noscope-multi.stderr" >&2
+            exit 1
+        fi
+        if [[ -n "$CLAUDE_STANDIN_REMOVE_NONE" ]]; then
+            replay "$(dirname "${CLAUDE_STANDIN_CAPTURE:?}")/none-found-many-others.stderr" >&2
+            exit 1
+        fi
+        echo "Removed MCP server agent-director from ${scope:-local} config"
         ;;
 esac
 exit 0

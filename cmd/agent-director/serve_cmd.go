@@ -72,7 +72,7 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	if !stdioFlag {
 		fmt.Fprintln(os.Stderr, "usage: agent-director serve --stdio")
 		fmt.Fprintln(os.Stderr, "  Run the stdio MCP server. Register with:")
-		fmt.Fprintln(os.Stderr, "    claude mcp add agent-director <binary-path> serve --stdio")
+		fmt.Fprintln(os.Stderr, "    claude mcp add agent-director -- <binary-path> serve --stdio")
 		return nil
 	}
 

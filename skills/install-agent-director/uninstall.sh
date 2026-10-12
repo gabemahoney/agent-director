@@ -47,7 +47,12 @@
 #                        directory, asked before anything is removed or
 #                        changed.
 #   --force              Skip the --purge confirmation prompt.
-#   --mcp-also           Also run `claude mcp remove agent-director`.
+#   --mcp-also           Also run `claude mcp remove agent-director`. A
+#                        failure (other than "No MCP server named ...",
+#                        which means there is nothing to remove) is reported
+#                        with the command run, its exit status and its
+#                        stderr; every other step still runs, and the
+#                        script then exits 6.
 #   --symlink-dir <dir>  Look for the PATH symlink at <dir>; default
 #                        is ~/.local/bin.
 
@@ -65,6 +70,7 @@ CLAUDE_PROG=claude
 PURGE=0
 FORCE=0
 MCP_ALSO=0
+MCP_REMOVE_FAILED=0
 SYMLINK_DIR="${HOME}/.local/bin"
 
 while [[ $# -gt 0 ]]; do
@@ -626,8 +632,30 @@ fi
 
 if [[ "$MCP_ALSO" -eq 1 ]]; then
     if command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
-        "$CLAUDE_PROG" mcp remove agent-director 2>/dev/null || true
-        echo "uninstall.sh: deregistered agent-director from MCP"
+        mcp_rc=0
+        mcp_err="$("$CLAUDE_PROG" mcp remove agent-director 2>&1 >/dev/null </dev/null)" || mcp_rc=$?
+        if [[ "$mcp_rc" -eq 0 ]]; then
+            echo "uninstall.sh: deregistered agent-director from MCP"
+        elif [[ "$mcp_err" == "No MCP server named"* ]]; then
+            echo "uninstall.sh: no agent-director registration found from this directory; nothing to deregister"
+        else
+            MCP_REMOVE_FAILED=1
+            {
+                echo "uninstall.sh: deregistering agent-director from MCP failed; nothing was removed from Claude Code. Everything else here went as reported, and --purge (if given) still runs."
+                printf '  command run: %q mcp remove agent-director\n' "$CLAUDE_PROG"
+                echo "  exit status: $mcp_rc"
+                echo "  stderr:"
+                if [[ -z "$mcp_err" ]]; then
+                    echo "    (none)"
+                else
+                    while IFS= read -r mcp_line; do
+                        printf '    %s\n' "$mcp_line"
+                    done <<<"$mcp_err"
+                fi
+                echo "  Remove it by hand, in the scope that 'mcp get agent-director' shows (a name registered in several scopes needs -s):"
+                printf '    %q mcp remove agent-director -s <scope>\n' "$CLAUDE_PROG"
+            } >&2
+        fi
     fi
 fi
 
@@ -656,7 +684,7 @@ done
 
 if [[ "$purge_aborted" -eq 1 ]]; then
     echo "uninstall.sh: --purge aborted"
-    exit 0
+    exit "$(( MCP_REMOVE_FAILED == 1 ? 6 : 0 ))"
 fi
 if [[ "$PURGE" -eq 1 ]]; then
     rm -rf "$DEFAULT_INSTALL_ROOT"
@@ -667,4 +695,8 @@ if [[ "$PURGE" -eq 1 ]]; then
     done
 fi
 
+if [[ "$MCP_REMOVE_FAILED" -eq 1 ]]; then
+    echo "uninstall.sh: done, except the MCP deregistration failed (see above); exit 6" >&2
+    exit 6
+fi
 echo "uninstall.sh: done"

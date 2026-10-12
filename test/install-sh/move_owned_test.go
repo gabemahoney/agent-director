@@ -10,8 +10,10 @@ package installsh_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -30,7 +32,9 @@ type ownedCase struct {
 	// kind: none (not found), oldPlain (the old binary, Args exactly
 	// `serve --stdio`, no Environment: entry (a bare Environment: line is
 	// none), a scope), oldOther (the old directory
-	// but another form, args, environment or no scope) or other (another command).
+	// but another form, args, environment or no scope), current (this install's
+	// binary, Args exactly `serve --stdio`: already registered) or other (another
+	// command).
 	kind string
 	// scope is the `-s` value the capture's remove line holds ("" when it has none).
 	scope string
@@ -48,11 +52,25 @@ var ownedCases = []ownedCase{
 	{"old-plain-empty-env", "oldPlain", "user"},
 	{"old-env", "oldOther", "user"},
 	{"old-args", "oldOther", "project"},
-	{"old-other-form", "oldOther", ""},
+	// An http server: no Command:, so it cannot be read as one to re-point; its
+	// remove line names scope local.
+	{"old-other-form", "oldOther", "local"},
 	{"old-no-scope", "oldOther", ""},
 	{"other-command", "other", "local"},
 	{"other-command-near-old-dir", "other", "user"},
 	{"other-command-extras", "other", "user"},
+	{"current-local", "current", "local"},
+	{"current-project", "current", "project"},
+	{"current-user", "current", "user"},
+}
+
+// ownedExtras are the other captures every set holds: what Claude Code answers
+// an `mcp add` and an `mcp remove` with, which claude.sh must answer alike
+// (TestOwnedStandInAnswersLikeClaudeCode), and the exit status each has.
+var ownedExtras = []struct{ name, exit string }{
+	{"add-no-dashes", "1"},
+	{"add-with-dashes", "0"},
+	{"remove-noscope-multi", "1"},
 }
 
 // ownedSets lists the capture sets (a directory per Claude Code version).
@@ -103,6 +121,21 @@ func TestOwnedCaptureSets(t *testing.T) {
 	kind, exit := ownedIndex(t)
 	seen := map[string]bool{}
 	for _, set := range ownedSets(t) {
+		for _, x := range ownedExtras {
+			key := set + "/" + x.name
+			seen[key] = true
+			for _, ext := range []string{".stdout", ".stderr", ".exit"} {
+				if _, err := os.Stat(filepath.Join(ownedClaudeDir, key+ext)); err != nil {
+					t.Errorf("%s: %v", key, err)
+				}
+			}
+			if k := kind[key]; k != "synthetic" && k != "captured" {
+				t.Errorf("%s: index kind = %q, want synthetic or captured", key, k)
+			}
+			if got := exit[key]; got != x.exit {
+				t.Errorf("%s: index exit = %q, want %q", key, got, x.exit)
+			}
+		}
 		for _, c := range ownedCases {
 			key := set + "/" + c.name
 			seen[key] = true
@@ -227,6 +260,13 @@ func ownedWorkDir(t *testing.T, h *moveHome) {
 
 func ownedCanonical(h *moveHome) string { return filepath.Join(h.New, "bin", "agent-director") }
 
+// ownedPlainAdd is the `mcp add` an install makes with no registration to
+// re-point: the `--` before the command is what Claude Code 2.1.280 and later
+// needs (b.fom).
+func ownedPlainAdd(canon string) string {
+	return fmt.Sprintf("mcp add agent-director -- %s serve --stdio", canon)
+}
+
 // ownedExpect is what an install shows for a capture of the given kind, with
 // and without --register-mcp: the calls after `mcp get agent-director`, and
 // what stdout holds and lacks.
@@ -237,8 +277,8 @@ func ownedExpect(h *moveHome, c ownedCase, register bool) (calls []string, want 
 		scope = "<scope>"
 	}
 	remove := "mcp remove agent-director -s " + scope
-	add := fmt.Sprintf("mcp add -s %s agent-director %s serve --stdio", scope, canon)
-	plain := fmt.Sprintf("mcp add agent-director %s serve --stdio", canon)
+	add := fmt.Sprintf("mcp add agent-director -s %s -- %s serve --stdio", scope, canon)
+	plain := ownedPlainAdd(canon)
 	switch c.kind {
 	case "none":
 		want.NoStdout = []string{"mcp remove", "could not read"}
@@ -253,13 +293,21 @@ func ownedExpect(h *moveHome, c ownedCase, register bool) (calls []string, want 
 		}
 	case "oldOther":
 		want.Stdout = []string{"could not read the registration", remove, add}
+	case "current":
+		// Claude Code refuses a name already registered in its scope, so no add runs.
+		want.NoStdout = []string{"mcp remove", "could not read", "found from this directory", "re-point", "Re-point", "mcp     : registered with claude mcp"}
+		if register {
+			want.Stdout = []string{"  mcp     : already registered with claude mcp for this binary; nothing to add"}
+		} else {
+			want.NoStdout = append(want.NoStdout, "  mcp     :")
+		}
 	case "other":
 		want.NoStdout = []string{"mcp remove", "could not read", "found from this directory", "re-point", "Re-point"}
 		if !register {
 			want.NoStdout = append(want.NoStdout, "  mcp     :")
 		}
 	}
-	if register && c.kind != "oldPlain" {
+	if register && c.kind != "oldPlain" && c.kind != "current" {
 		calls = []string{plain}
 		want.Stdout = append(want.Stdout, "mcp     : registered with claude mcp")
 	}
@@ -337,9 +385,38 @@ func TestOwnedMCPOutcomes(t *testing.T) {
 	}
 }
 
-// TestOwnedMCPFailures covers a remove or add that fails on the way: the
-// install goes on (exit 0) and names the commands that finish the job.
+// ownedFailLast is the last line of an install whose MCP registration failed.
+const ownedFailLast = "install.sh: installed, but the MCP registration failed (see above); exit 6"
+
+// ownedCheckInstalled checks what a failed MCP step leaves alone: the binaries
+// are in place, the move is done, and the steps after the MCP one ran (the
+// admin line it ends on, and the old directory's kept note).
+func ownedCheckInstalled(t *testing.T, h *moveHome, res moveResult) {
+	t.Helper()
+	for _, f := range []string{
+		ownedCanonical(h),
+		filepath.Join(h.New, "admin", "agent-director-admin"),
+	} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s after a failed MCP registration: %v; want it installed", f, err)
+		}
+	}
+	for _, line := range []string{"kept    :", "  admin   : "} {
+		if !strings.Contains(res.Stdout, line) {
+			t.Errorf("stdout lacks %q, so a step did not run after the MCP one:\n%s", line, res.Stdout)
+		}
+	}
+	if res.Last() != ownedFailLast {
+		t.Errorf("last stderr line = %q, want %q", res.Last(), ownedFailLast)
+	}
+}
+
+// TestOwnedMCPFailures covers a remove or add that fails on the way (b.fom):
+// every other step is done, and the install reports the command it ran, its
+// exit status and stderr and the command to run by hand, then exits 6.
 func TestOwnedMCPFailures(t *testing.T) {
+	const canon = "{HOME}/.config/agent-director/bin/agent-director"
+	const claudeErr = "      Error: could not write the MCP configuration"
 	for _, set := range ownedSets(t) {
 		rows := []struct {
 			name, capture string
@@ -350,33 +427,200 @@ func TestOwnedMCPFailures(t *testing.T) {
 			{
 				name: "add-fails-after-the-remove", capture: "old-plain-user", env: map[string]string{"CLAUDE_STANDIN_ADD_FAIL": "1"},
 				calls: func(h *moveHome) []string {
-					return []string{"mcp remove agent-director -s user", fmt.Sprintf("mcp add -s user agent-director %s serve --stdio", ownedCanonical(h))}
+					return []string{"mcp remove agent-director -s user", fmt.Sprintf("mcp add agent-director -s user -- %s serve --stdio", ownedCanonical(h))}
 				},
-				want: moveWant{Stderr: []string{"was removed, but adding it again failed", "mcp add -s user agent-director {HOME}/.config/agent-director/bin/agent-director serve --stdio"},
+				want: moveWant{Code: 6,
+					Stderr: []string{"was removed, but adding it again failed; nothing is registered now",
+						"    command run: claude mcp add agent-director -s user -- " + canon + " serve --stdio\n    exit status: 1\n    stderr:\n" + claudeErr + "\n",
+						"    claude mcp add agent-director -s user -- " + canon + " serve --stdio\n" + ownedFailLast},
 					NoStdout: []string{"re-registered"}},
 			},
 			{
 				name: "remove-fails", capture: "old-plain-project", env: map[string]string{"CLAUDE_STANDIN_REMOVE_FAIL": "1"},
 				calls: func(h *moveHome) []string { return []string{"mcp remove agent-director -s project"} },
-				want: moveWant{Stderr: []string{"removing it failed", "mcp remove agent-director -s project",
-					"mcp add -s project agent-director {HOME}/.config/agent-director/bin/agent-director serve --stdio"},
+				want: moveWant{Code: 6,
+					Stderr: []string{"removing it failed; nothing was added",
+						"    command run: claude mcp remove agent-director -s project\n    exit status: 1\n    stderr:\n" + claudeErr + "\n",
+						"    claude mcp remove agent-director -s project\n    claude mcp add agent-director -s project -- " + canon + " serve --stdio\n"},
 					NoStdout: []string{"re-registered"}},
 			},
 			{
 				name: "the-plain-add-fails", capture: "none-found-many-others", env: map[string]string{"CLAUDE_STANDIN_ADD_FAIL": "1"},
+				calls: func(h *moveHome) []string { return []string{ownedPlainAdd(ownedCanonical(h))} },
+				want: moveWant{Code: 6,
+					Stderr: []string{"registration failed; nothing was registered",
+						"    command run: claude mcp add agent-director -- " + canon + " serve --stdio\n    exit status: 1\n    stderr:\n" + claudeErr + "\n",
+						"    claude mcp add agent-director -- " + canon + " serve --stdio\n" + ownedFailLast},
+					NoStdout: []string{"registered with claude mcp"}},
+			},
+			{
+				// A failed command that said nothing: the report says so, not an empty list.
+				name: "the-plain-add-fails-silently", capture: "none-found-many-others", env: map[string]string{"CLAUDE_STANDIN_ADD_FAIL": "silent"},
+				calls: func(h *moveHome) []string { return []string{ownedPlainAdd(ownedCanonical(h))} },
+				want: moveWant{Code: 6,
+					Stderr:   []string{"    exit status: 1\n    stderr:\n      (none)\n"},
+					NoStdout: []string{"registered with claude mcp"}},
+			},
+			{
+				// An install never runs `mcp remove` without -s, which Claude Code refuses
+				// for a name in several scopes (remove-noscope-multi): the re-point names
+				// its scope and succeeds.
+				name: "a-name-in-several-scopes-is-removed-with-its-scope", capture: "old-plain-local", env: map[string]string{"CLAUDE_STANDIN_REMOVE_MULTI": "1"},
 				calls: func(h *moveHome) []string {
-					return []string{fmt.Sprintf("mcp add agent-director %s serve --stdio", ownedCanonical(h))}
+					return []string{"mcp remove agent-director -s local", fmt.Sprintf("mcp add agent-director -s local -- %s serve --stdio", ownedCanonical(h))}
 				},
-				want: moveWant{Stderr: []string{"registration failed"}, NoStdout: []string{"registered with claude mcp"}},
+				want: moveWant{Code: 0, Stdout: []string{"re-registered with claude mcp (scope local)"}, NoStderr: []string{"exists in multiple scopes"}},
 			},
 		}
 		for _, row := range rows {
 			t.Run(set+"/"+row.name, func(t *testing.T) {
 				t.Parallel()
 				h, res := ownedInstall(t, set, row.capture, true, row.env)
-				row.want.Code = 0
 				row.want.Check(t, h, res)
 				ownedCheckGets(t, h, row.calls(h))
+				if row.want.Code == 6 {
+					ownedCheckInstalled(t, h, res)
+				}
+			})
+		}
+	}
+}
+
+// ownedReadCapture reads a capture file of a set, with @HOME@ filled in.
+func ownedReadCapture(t *testing.T, set, name, ext, home string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(ownedClaudeDir, set, name+ext))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.ReplaceAll(string(b), "@HOME@", home)
+}
+
+// TestOwnedStandInAnswersLikeClaudeCode ties claude.sh to the real Claude Code:
+// given the argv the probe ran, it answers `mcp add` and `mcp remove` with the
+// bytes the real one answered with (stdout, stderr and exit status), in every
+// capture set. The old add form, without the `--` before the command, is
+// refused as Claude Code 2.1.280 and later refuses it (b.fom), so an installer
+// that still uses it fails against the stand-in.
+func TestOwnedStandInAnswersLikeClaudeCode(t *testing.T) {
+	script, err := filepath.Abs(filepath.Join(ownedClaudeDir, "claude.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := filepath.Abs(ownedClaudeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, set := range ownedSets(t) {
+		rows := []struct {
+			capture string
+			env     []string
+			argv    func(home string) []string
+		}{
+			// `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`
+			{"add-no-dashes", nil, func(home string) []string {
+				return []string{"mcp", "add", "agent-director", home + "/.agent-director/bin/agent-director", "serve", "--stdio"}
+			}},
+			// `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`
+			{"add-with-dashes", nil, func(home string) []string {
+				return []string{"mcp", "add", "agent-director", "--", home + "/.agent-director/bin/agent-director", "serve", "--stdio"}
+			}},
+			// `claude mcp remove agent-director`, the name being in the local and user scopes
+			{"remove-noscope-multi", []string{"CLAUDE_STANDIN_REMOVE_MULTI=1", "CLAUDE_STANDIN_CAPTURE=" + filepath.Join(dir, set, "old-plain-local")}, func(string) []string {
+				return []string{"mcp", "remove", "agent-director"}
+			}},
+		}
+		for _, row := range rows {
+			t.Run(set+"/"+row.capture, func(t *testing.T) {
+				home := t.TempDir()
+				work := filepath.Join(home, "w", "a")
+				if err := os.MkdirAll(work, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command("bash", append([]string{script}, row.argv(home)...)...)
+				cmd.Dir = work
+				cmd.Env = append([]string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "CLAUDE_STANDIN_LOG=" + filepath.Join(home, "calls.log")}, row.env...)
+				var stdout, stderr strings.Builder
+				cmd.Stdout, cmd.Stderr = &stdout, &stderr
+				code := 0
+				if err := cmd.Run(); err != nil {
+					var ee *exec.ExitError
+					if !errors.As(err, &ee) {
+						t.Fatal(err)
+					}
+					code = ee.ExitCode()
+				}
+				if want := ownedReadCapture(t, set, row.capture, ".stdout", home); stdout.String() != want {
+					t.Errorf("stdout = %q, want the real Claude Code's %q", stdout.String(), want)
+				}
+				if want := ownedReadCapture(t, set, row.capture, ".stderr", home); stderr.String() != want {
+					t.Errorf("stderr = %q, want the real Claude Code's %q", stderr.String(), want)
+				}
+				if want := strings.TrimSpace(ownedReadCapture(t, set, row.capture, ".exit", home)); strconv.Itoa(code) != want {
+					t.Errorf("exit status = %d, want the real Claude Code's %s", code, want)
+				}
+			})
+		}
+	}
+	t.Run("the old re-point form is refused too", func(t *testing.T) {
+		// What the installer ran before b.fom to re-point: -s before the name, no `--`.
+		home := t.TempDir()
+		cmd := exec.Command("bash", script, "mcp", "add", "-s", "user", "agent-director", home+"/bin/agent-director", "serve", "--stdio")
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "CLAUDE_STANDIN_LOG=" + filepath.Join(home, "calls.log")}
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		var ee *exec.ExitError
+		if err := cmd.Run(); !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			t.Fatalf("the old re-point form: %v, want exit 1", err)
+		}
+		if stderr.String() != "error: unknown option '--stdio'\n" || stdout.String() != "" {
+			t.Errorf("stdout %q, stderr %q; want only error: unknown option '--stdio'", stdout.String(), stderr.String())
+		}
+	})
+}
+
+// TestOwnedMCPOldAddFormIsCaught (b.fom): an install.sh that went back to the
+// add forms without the `--` fails against the stand-in, as it does against
+// Claude Code 2.1.280 and later: exit 6, with Claude Code's refusal in the
+// report. Each row runs a copy of install.sh with one add rewritten to the old
+// form (the real file is not touched); a row's text must be in install.sh, so
+// a change to the add line has to be followed here.
+func TestOwnedMCPOldAddFormIsCaught(t *testing.T) {
+	rows := []struct {
+		name, capture, from, to, headline string
+	}{
+		{"plain-add", "none-found-many-others",
+			`mcp add agent-director -- "$CANONICAL" serve --stdio`, `mcp add agent-director "$CANONICAL" serve --stdio`,
+			"registration failed; nothing was registered"},
+		{"re-point-add", "old-plain-local",
+			`mcp add agent-director -s "$MCP_SCOPE" -- "$CANONICAL" serve --stdio`, `mcp add -s "$MCP_SCOPE" agent-director "$CANONICAL" serve --stdio`,
+			"was removed, but adding it again failed"},
+	}
+	for _, set := range ownedSets(t) {
+		for _, row := range rows {
+			t.Run(set+"/"+row.name, func(t *testing.T) {
+				t.Parallel()
+				h := newMoveHome(t)
+				ownedClaude(t, h, set, row.capture)
+				ownedWorkDir(t, h)
+				src, err := os.ReadFile(h.S.Install)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n := strings.Count(string(src), row.from); n != 1 {
+					t.Fatalf("install.sh holds %q %d times, want once", row.from, n)
+				}
+				mutated := filepath.Join(h.Root, "old-form", "skills", "install-agent-director", "install.sh")
+				h.Write(mutated, strings.Replace(string(src), row.from, row.to, 1), 0o755)
+				shared := *h.S
+				shared.Install = mutated
+				h.S = &shared
+				h.BuildOld(withMoveNoStore())
+
+				res := h.Install("--register-mcp")
+
+				moveWant{Code: 6, Stderr: []string{row.headline, "    exit status: 1\n    stderr:\n      error: unknown option '--stdio'\n"}, NoStdout: []string{"registered with claude mcp"}}.Check(t, h, res)
+				ownedCheckInstalled(t, h, res)
 			})
 		}
 	}
@@ -451,7 +695,7 @@ func TestOwnedMCPNotInPreflight(t *testing.T) {
 		res := h.Install("--register-mcp")
 		moveWant{Code: 0}.Check(t, h, res)
 		mcp := ownedMCPCalls(ownedCalls(t, h))
-		if len(mcp) != 2 || mcp[0].line() != "mcp get agent-director" || !strings.HasPrefix(mcp[1].line(), "mcp add agent-director ") {
+		if len(mcp) != 2 || mcp[0].line() != "mcp get agent-director" || mcp[1].line() != ownedPlainAdd(ownedCanonical(h)) {
 			t.Fatalf("mcp calls = %v, want the get, then the plain add", ownedLines(mcp))
 		}
 		if mcp[0].Pwd != h.Cwd || !mcp[0].NewBin {

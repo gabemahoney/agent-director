@@ -1,0 +1,1 @@
+No MCP server named "agent-director". Did you mean "agent_director"? Run `claude mcp list` to see all. (.mcp.json servers are awaiting approval — run `claude` in this directory to review them.)

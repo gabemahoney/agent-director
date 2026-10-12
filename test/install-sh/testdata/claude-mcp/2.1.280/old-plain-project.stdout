@@ -1,9 +1,9 @@
 agent-director:
   Scope: Project config (shared via .mcp.json)
-  Status: ✓ Connected
+  Status: ⏸ Pending approval (run `claude` to approve)
   Type: stdio
   Command: @HOME@/.agent-director/bin/agent-director
   Args: serve --stdio
   Environment:
 
-To remove this server, run: claude mcp remove "agent-director" -s project
+To remove this server, run: claude mcp remove agent-director -s project

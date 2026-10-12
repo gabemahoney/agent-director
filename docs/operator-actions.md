@@ -487,8 +487,10 @@ does not work.
    command starting with `~/.config/agent-director/bin/agent-director` (written
    out with your home directory). Leave every other entry. Check the result is
    valid JSON.
-6. From the directory the upgrade ran in, remove AD's MCP registration, if
-   there is one, in the scope `claude mcp get agent-director` shows:
+6. From the directory the upgrade ran in (for a `local` registration made
+   inside a git repository, any directory of that repository), remove AD's MCP
+   registration, if there is one, in the scope `claude mcp get agent-director`
+   shows. A name registered in several scopes needs this once per scope:
 
    ```sh
    claude mcp get agent-director

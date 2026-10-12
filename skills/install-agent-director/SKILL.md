@@ -251,8 +251,14 @@ Without `--keep-prior`, re-install the previous tag via
      exposed as a typed tool surface or has to be shelled out to.
    - *Options:*
      - **(a) Register now (`--register-mcp`).** The script runs
-       `claude mcp add agent-director -- <path> serve --stdio`.
-       agent-director's verbs become typed MCP tools in every
+       `claude mcp add agent-director -- <path> serve --stdio`
+       (the `--` is required). If a registration for this install's
+       binary is already there it says so and adds nothing. If the
+       add fails (for example, the name is already registered for
+       another command, which Claude Code refuses), every other
+       install step is still done and install.sh exits 6, showing the
+       command, its exit status, its stderr and the command to run by
+       hand. agent-director's verbs become typed MCP tools in every
        Claude session. Pick this for orchestrator setups, or any
        workflow where you want Claudes to discover agent-director's
        API automatically.
@@ -266,7 +272,7 @@ Without `--keep-prior`, re-install the previous tag via
      lean for operators who don't need it. Easy to flip on later.
    - *Reversibility:* fully reversible. To add it later:
      `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`.
-     To remove: `claude mcp remove agent-director` or
+     To remove: `claude mcp remove agent-director -s <scope>` or
      `uninstall.sh --mcp-also`.
 
 4. **Inject persistent help hooks into `~/.claude/settings.json`? (`--no-hooks`)**
@@ -810,9 +816,14 @@ This skill runs `install.sh` from the same directory. The script:
    summary reports `hooks   : skipped (--no-hooks)`.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
-   `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`.
+   `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`.
    Skipped by default — operators who don't want the MCP server
-   never see it advertised inside Claude.
+   never see it advertised inside Claude. A registration already
+   there for this binary (`serve --stdio`) is left alone ("already
+   registered"). A failed `mcp add` (or the `mcp remove` before a
+   re-add) is reported with the command run, its exit status and its
+   stderr, plus the command to run by hand; every other step still
+   runs and install.sh then exits 6.
 
 8. **Optional PATH symlink.** With `--symlink-dir <dir>`, drops a
    symlink at `<dir>/agent-director` pointing at the canonical
@@ -845,7 +856,7 @@ umask.
 
 ## When install.sh fails
 
-install.sh exits 0 on success. Its own failures exit 2 to 5:
+install.sh exits 0 on success. Its own failures exit 2 to 6:
 
 | Exit | Cause |
 |---|---|
@@ -853,6 +864,7 @@ install.sh exits 0 on success. Its own failures exit 2 to 5:
 | 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, or two version stamps that differ or carry no commit. |
 | 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). |
 | 5 | The config file, or the store open and schema migration. The cause line below names which. |
+| 6 | The MCP registration failed (`--register-mcp`): `claude mcp add`, or the `claude mcp remove` before the re-add, exited non-zero. Every other step is done and kept (binaries, store, hooks, links). stderr shows the command run, its exit status, its stderr and the command to run by hand; the last line says the registration failed. There is no `err_name` line. Fix what the stderr names and run the command by hand; if the name is registered for another command and that registration should go, `claude mcp remove agent-director -s <scope>` first. Do not re-run the install for this. |
 | any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
 
 Each message on stderr says what went wrong and what to do; show it to
@@ -977,11 +989,24 @@ destructive *additions*.
        this if you registered MCP and want a clean
        no-agent-director-at-all state.
    - *Default:* (a). The `claude mcp remove` command is harmless
-     if there's no registration, but defaulting it on would imply
-     the operator registered MCP — which they may not have.
+     if there's no registration (the script says it found none and
+     goes on; that is not a failure), but defaulting it on would
+     imply the operator registered MCP — which they may not have.
+   - *Where it looks:* the command runs from the directory
+     uninstall.sh runs in. A `local` registration made inside a git
+     repository is found from any directory of that repository; made
+     outside one, only from the exact directory. A `project`
+     registration is found from the directory holding its `.mcp.json`
+     and below; a `user` one from anywhere.
+   - *If it fails:* any other failure (a name registered in several
+     scopes included, which `claude mcp remove` without `-s`
+     refuses) is shown with the command, its exit status and its
+     stderr. Every later step, `--purge` included, still runs, and
+     the script ends with exit 6. Run
+     `claude mcp remove agent-director -s <scope>` once per scope.
    - *Reversibility:* completely reversible. Re-register at any
      time with
-     `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`.
+     `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`.
 
 4. **Confirm and execute**
    - Display the assembled `bash uninstall.sh <resolved flags>`.
@@ -1093,7 +1118,11 @@ destructive *additions*.
   - No reply (stdin at its end, as for a bare tool call): exit 1 after
     the prompt, with nothing removed or changed. See question 2 of
     the operator dialog for how to pass the reply, or use `--force`.
-- With `--mcp-also`: runs `claude mcp remove agent-director`.
+- With `--mcp-also`: runs `claude mcp remove agent-director`. "No MCP
+  server named ..." is reported as nothing to deregister, not a failure;
+  any other failure is reported, the later steps still run, and the
+  script exits 6 at the end (also after `--purge aborted`, which
+  otherwise exits 0).
 
 ## Schema migration: the six-step sentinel flow
 

@@ -1,0 +1,7 @@
+MCP server "agent-director" exists in multiple scopes:
+  - Local config (private to you in this project) (@HOME@/.claude.json [project: @HOME@/w/a])
+  - User config (available in all your projects) (@HOME@/.claude.json)
+
+To remove from a specific scope, use:
+  claude mcp remove agent-director -s local
+  claude mcp remove agent-director -s user

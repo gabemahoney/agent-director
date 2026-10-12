@@ -6286,8 +6286,11 @@ claude /install-agent-director (or `bash install.sh`)
     below)
   → MCP registration: read with `claude mcp get agent-director`; a
     registration naming the old binary is re-pointed with --register-mcp,
-    else printed (see "Moving agent-director's directory" below);
-    --register-mcp otherwise adds it
+    else printed (see "Moving agent-director's directory" below); one
+    already naming this binary with `serve --stdio` is left alone;
+    --register-mcp otherwise adds it with
+    `claude mcp add agent-director -- <path> serve --stdio`; a failed
+    add or remove ends the install with exit 6, after every other step
   → print the admin path once, for the human
 ```
 
@@ -6297,7 +6300,11 @@ Pattern B is where the CLI / state / hooks side effects happen.
 (`--help`) lists its exit codes: 2 pre-flight, 3 the source binaries or
 their version stamps and `config_dir`, 4 the `settings.json` hook merge (with hooks on, a
 symlinked `settings.json` it cannot write through included, refused in
-pre-flight), 5 the config file or the store open and schema migration. Exit 5 has causes needing
+pre-flight), 5 the config file or the store open and schema migration, 6 the
+MCP registration (`claude mcp add`, or the `claude mcp remove` before a
+re-add; see "MCP registration" under "Moving agent-director's directory"
+below). Exit 6 is the one status that comes after the work: every other step is
+done and kept, and no `err_name=` line is printed. Exit 5 has causes needing
 different remedies, so every exit-5 path ends with one line on stderr, its
 last, `install.sh: err_name=<Name>`. That line is the contract: a caller
 branches on `<Name>`, never on the English above it. The status stays 5
@@ -7373,21 +7380,62 @@ install writes the new binaries and then, on the path each concerns:
   old-path hook and another hook is removed whole, the other hook with it.
   With `--no-hooks` the file is left and each such entry is printed with its
   fix.
-- **MCP registration.** At the `--register-mcp` step (after the store steps,
-  never in pre-flight) `install.sh` runs `claude mcp get agent-director` in
-  the directory it runs in, because a `local` registration belongs to that
-  directory, and classes the result by stable markers (`ad_mcp_classify`):
-  `none` (non-zero exit), `old_plain` (a `Command:` line naming the old
+- **MCP registration.** At the MCP step (after the store steps, never in
+  pre-flight) `install.sh` runs `claude mcp get agent-director` in the
+  directory it runs in and classes the result by stable markers
+  (`ad_mcp_classify`). What `get` finds depends on the directory, as
+  captured from Claude Code 2.1.280 and 2.1.296: a `local` registration made
+  inside a git repository is found from every directory of that repository
+  (it is keyed to the repository root), made outside one only from the exact
+  directory; `project` from the directory holding `.mcp.json` and below, not
+  a parent; `user` everywhere. With one name in several scopes `get` shows
+  one, `local` before `user` before `project`, so a classification reads that
+  one only. The kinds: `none` (non-zero exit), `old_plain` (a `Command:` line naming the old
   binary with `serve --stdio` and no `Environment:` block), `old_other` (the
   old binary with other arguments or an environment), `unreadable` (any other
-  shape) and `other` (another command; nothing is printed). An `Environment:`
+  shape), `current` (`Command:` is this install's canonical binary and the
+  whole text after `Args:` is `serve --stdio`) and `other` (another command;
+  nothing is printed). An `Environment:`
   block counts only when an indented `KEY=value` line follows the
   `Environment:` line: a bare `Environment:` line, which Claude Code prints
   for `env: {}`, is a plain registration. It ignores the `Status:`, `Issue:`
   and `Timeout:` lines. `old_plain` with
   `--register-mcp` is removed and added again in the same scope; without it
   the two commands are printed. The scope comes from the `-s <scope>` of the
-  remove line.
+  remove line. `current` with `--register-mcp` prints "already registered"
+  and runs no add: Claude Code refuses a name that already exists, so an add
+  would fail every re-run. Any other kind with `--register-mcp` (including
+  `other`, a registration under the name for another command) runs the plain
+  add, which then fails with exit 6 until the human removes the other
+  registration (`claude mcp remove agent-director -s <scope>`).
+  **Every add is `claude mcp add agent-director [-s <scope>] -- <path> serve
+  --stdio`** (the re-add keeps the remove line's scope; the plain add has no
+  `-s`, so Claude Code's default `local` applies): Claude Code 2.1.280 and
+  2.1.296 read `--stdio` after the path as an option of `mcp add`, exit 1
+  with `error: unknown option '--stdio'` and register nothing. Every printed
+  add (`ad_mcp_print_add`, `ad_mcp_print_repoint`) has the same form.
+  **Exit 6.** `ad_mcp_exec` runs each `mcp add` and `mcp remove` with stdin
+  closed, stdout dropped and stderr kept, leaving the status in `MCP_RC` and
+  the stderr in `MCP_ERR`; a non-zero status goes to
+  `ad_mcp_report_failure`, which prints the headline, the command run, the
+  exit status, the stderr (or "(none)") and sets `MCP_FAILED`. The headline
+  differs for a failed plain add, a failed add after a successful remove
+  (nothing is registered now) and a failed remove (nothing was added); each
+  is followed by the by-hand command. The step never exits: every later step
+  runs, and `install.sh` prints its last line on stderr and exits 6 in place
+  of "done". `mcp get` is read with its output parsed and its status
+  classed, so it never fails the install. **Must use:** an `mcp add` or
+  `mcp remove` goes through `ad_mcp_exec`, never `2>/dev/null` or `|| true`,
+  and a new add form keeps the `--`.
+- **`uninstall.sh --mcp-also`.** It runs `claude mcp remove agent-director`
+  (no `-s`) and keeps stderr and the status. Status 0 prints "deregistered";
+  status 1 with stderr starting `No MCP server named` prints "no registration
+  found from this directory; nothing to deregister", which is not a failure;
+  anything else (a name in several scopes included: `remove` without `-s`
+  exits 1 and removes nothing) prints the command, status, stderr and a
+  by-hand `claude mcp remove agent-director -s <scope>` to stderr and sets
+  `MCP_REMOVE_FAILED`. Later steps, `--purge` included, still run; the script
+  exits 6 at the end, also on the `--purge aborted` path.
 - **PATH.** The link `install.sh` manages is re-pointed; every other link
   into the old `bin/` (at `~/.local/bin`, at `--symlink-dir`, where
   `command -v agent-director` leads) and each `$PATH` entry naming it is
@@ -8237,8 +8285,13 @@ annotations print that form for `generate`, `surface-json` and
 ### Registration
 
 ```sh
-claude mcp add agent-director /path/to/agent-director serve --stdio
+claude mcp add agent-director -- /path/to/agent-director serve --stdio
 ```
+
+The `--` ends Claude Code's own options. Without it Claude Code 2.1.280 and
+later reads `--stdio` as an option of `mcp add`, exits 1 with `error: unknown
+option '--stdio'` and registers nothing. With a scope: `claude mcp add
+agent-director -s <scope> -- /path/to/agent-director serve --stdio`.
 
 `serve`'s manifest Description does not carry this command, so `help`
 and the generated CLI and MCP references do not show it. It is stated
@@ -15612,9 +15665,31 @@ way a test builds an old-layout install and runs `install.sh` against it.
   Claude Code version. `INDEX.tsv` lists every case (file, version, exit,
   kind, what); a case's kind is `synthetic` (written from the markers
   `install.sh` reads) until a real capture replaces it, `captured` once it is
-  one. A capture holds `@HOME@` in place of the case's home, so a real one
-  drops in with no test change; every version directory must hold every case
-  (`TestOwnedCaptureSets`).
+  one. The index holds real captures from Claude Code 2.1.280 and 2.1.296:
+  per version, 16 of the 19 cases are `captured` and 3 are `synthetic` (the
+  ones no real Claude Code prints: `old-no-scope`, `other-command-near-old-dir`,
+  `other-command-extras`). The 19 are 16 `get` replies (the `current-*` cases
+  are the `current` kind: this install's binary with `serve --stdio`, one per
+  scope) and three `add`/`remove` captures, `add-no-dashes`, `add-with-dashes`
+  and `remove-noscope-multi`, which `claude.sh` does not replay: a test
+  compares the stand-in's own answers with them. A capture holds `@HOME@` in
+  place of the case's home, so a new one drops in with no test change; every
+  version directory must hold every case (`TestOwnedCaptureSets`).
+- The stand-in's `mcp add` behaves as Claude Code does: an option it does not
+  know before the `--` is refused (so the form without `--`, `mcp add
+  agent-director <path> serve --stdio`, exits 1 with `error: unknown option
+  '--stdio'` and registers nothing), and the form with `--` prints `Added stdio
+  MCP server ... to <scope> config` (scope `local` without `-s`).
+  `TestOwnedStandInAnswersLikeClaudeCode` ties its answers to the real
+  captures, and `TestOwnedMCPOldAddFormIsCaught` runs a copy of `install.sh`
+  with each add rewritten to the old form and expects exit 6, so a regression
+  to the old form fails in the tests. Its `mcp remove`
+  without `-s` refuses like Claude Code when `CLAUDE_STANDIN_REMOVE_MULTI` is
+  set (the name in several scopes), and answers the not-found text when
+  `CLAUDE_STANDIN_REMOVE_NONE` is set; `CLAUDE_STANDIN_ADD_FAIL` and
+  `CLAUDE_STANDIN_REMOVE_FAIL` make an accepted call exit 1 with an error on
+  stderr (`CLAUDE_STANDIN_ADD_FAIL=silent`: none), which is how the exit-6 tests
+  reach the failure paths.
 - `advice_follow.sh` runs only the cases whose name matches the extended
   regular expression in `ADVICE_FOLLOW_ONLY` (cleared by the Go test that
   runs it). J23's link case, both J24 live-row cases and G8 build the

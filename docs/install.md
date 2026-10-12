@@ -37,7 +37,10 @@ migrates `state.db` and installs the SessionStart/SessionEnd help hooks.
 - `--binary <path>`, `--admin-binary <path>`: install from explicit binaries
   of the same build.
 - `--register-mcp`: register the stdio MCP server with Claude Code; by hand:
-  `claude mcp add agent-director ~/.config/agent-director/bin/agent-director serve --stdio`
+  `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`
+  (the `--` before the path is required; without it Claude Code refuses
+  `--stdio` and registers nothing). See
+  [MCP registration](#mcp-registration).
 - `--no-hooks`: leave `~/.claude/settings.json` untouched (see
   [Upgrade](#upgrade) for the old entries it prints).
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
@@ -45,6 +48,45 @@ migrates `state.db` and installs the SessionStart/SessionEnd help hooks.
 - `--keep-prior`: keep each overwritten binary as `<target>.prior` (roll back
   with `mv`). The upgrade that moves the directory makes no snapshot (see
   [Upgrade](#upgrade)).
+
+## MCP registration
+
+With `--register-mcp`, `install.sh` runs
+`claude mcp add agent-director -- <path> serve --stdio` (`-s <scope>` after the
+name when it re-points a registration, below). What it does depends on what
+`claude mcp get agent-director` shows from the directory the install runs in:
+
+- **Nothing registered:** it adds the registration.
+- **Already registered for this install's binary** (its command is this
+  install's `agent-director` and its arguments are `serve --stdio`): it says so
+  and adds nothing, so running the install again with `--register-mcp` is safe.
+- **Registered under the same name for another command:** the add fails, because
+  Claude Code refuses a name that already exists. The install ends with exit 6
+  (below). If that registration should be replaced, remove it, then run the
+  install again or the add by hand:
+
+  ```sh
+  claude mcp remove agent-director -s <scope>
+  ```
+
+- **Naming the old directory's binary** (an upgrade): see [Upgrade](#upgrade).
+
+**Exit 6: the registration failed.** `claude mcp add` (or the `claude mcp remove`
+before a re-add) exited non-zero. Every other step is done and kept: the
+binaries, the store, the hooks and the links. The message on stderr shows the
+command that ran, its exit status, its stderr and the command to run by hand;
+the last line says the registration failed. Fix the cause the stderr names,
+then run that command. The read of an existing registration (`claude mcp get`)
+never fails the install.
+
+**Which directories see a registration.** A `local` registration made inside a
+git repository is found from every directory of that repository (it is kept
+for the repository's root); made outside one, it is found only from the exact
+directory it was made in. A `project` registration is found from the directory
+that holds its `.mcp.json` and every directory below it, not from a parent. A
+`user` registration is found everywhere. When one name is registered in several
+scopes, `claude mcp get` shows one of them: `local` before `user` before
+`project`.
 
 ## Install binaries you downloaded
 
@@ -99,8 +141,9 @@ binary needs the matching release.
   [Stopping a set of agents before a binary change](operator-actions.md#stopping-a-set-of-agents-before-a-binary-change).
   A Claude Code session with agent-director's MCP server registered runs
   `agent-director serve --stdio`, which counts: end that session too.
-- The directory the original install ran in as the working directory: a
-  `local` MCP registration belongs to that directory.
+- The directory the original install ran in as the working directory (or one
+  inside the same git repository): see
+  [which directories see a registration](#mcp-registration).
 - No second agent-director directory, and no link where the move needs a copy.
 - For a store kept outside the directory (`[store] db_path`): a copy of
   `state.db`, `state.db-wal` and `state.db-shm` made first. The upgrade
@@ -195,3 +238,19 @@ and it may hold data.
 
 Without `--purge`, every kept directory is named, with the advice to delete it
 once the upgrade is confirmed.
+
+`--mcp-also` also runs `claude mcp remove agent-director` from the directory
+`uninstall.sh` runs in:
+
+- Removed: it says so.
+- No registration found from that directory (Claude Code answers `No MCP server
+  named ...`): it says so; this is not a failure. See
+  [which directories see a registration](#mcp-registration).
+- Any other failure: stderr gets the command run, its exit status and its
+  stderr, with the command to run by hand. Every later step, `--purge`
+  included, still runs, and `uninstall.sh` then exits 6.
+
+A name registered in several scopes is refused by `claude mcp remove` without a
+scope, so `--mcp-also` reports that failure. Remove each one by hand with
+`claude mcp remove agent-director -s <scope>`, once per scope
+(`claude mcp get agent-director` shows one scope at a time).

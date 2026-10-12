@@ -1,31 +1,44 @@
 # Replayed by claude.sh for `claude mcp get agent-director`. One row per set/case: its .stdout, .stderr (optional) and .exit.
-# kind: synthetic = written from SR-11.7's markers; captured = recorded from the real Claude Code named in the claude column.
+# kind: synthetic = written from SR-11.7's markers (no real capture has the case); captured = recorded from the real Claude Code named in the claude column (probe tickets/Ideas/b.ssz/probe/claude-mcp, `get`/`add`/`remove` steps), /home/node scrubbed to @HOME@.
 # Paths hold @HOME@, which claude.sh replaces with the case's HOME, so a real capture (scrubbed to that placeholder) drops in unchanged.
 # A set is a directory named for a Claude Code version; every set must hold every case.
+# The add-*/remove-* rows are not `get` replies: claude.sh does not replay them, a test compares its own add and remove answers with them.
 file	claude	exit	kind	what
-2.1.280/none-found-many-others	2.1.280	1	synthetic	not found with more than 8 other servers and agent_director configured (message on stdout)
-2.1.296/none-found-many-others	2.1.296	1	synthetic	not found with more than 8 other servers and agent_director configured (message on stderr)
-2.1.280/old-plain-local	2.1.280	0	synthetic	old directory's binary, Args serve --stdio, a bare Environment: line, scope local
-2.1.280/old-plain-project	2.1.280	0	synthetic	old directory's binary, Args serve --stdio, a bare Environment: line, scope project
-2.1.280/old-plain-user	2.1.280	0	synthetic	old directory's binary, Args serve --stdio, no Environment: line, scope user
-2.1.280/old-plain-extras	2.1.280	0	synthetic	old plain registration with extra Status:/Issue:/Timeout: lines and a bare Environment: line
-2.1.280/old-plain-empty-env	2.1.280	0	synthetic	old directory's binary, Args serve --stdio, a bare Environment: line with nothing under it (an empty env), scope user
-2.1.280/old-env	2.1.280	0	synthetic	old binary with an Environment: block
-2.1.280/old-args	2.1.280	0	synthetic	old binary with other Args
-2.1.280/old-other-form	2.1.280	0	synthetic	output in another form (an http server: no Command:, no remove line)
-2.1.280/old-no-scope	2.1.280	0	synthetic	old binary, Args serve --stdio, no remove line (no scope)
-2.1.280/other-command	2.1.280	0	synthetic	another command
-2.1.280/other-command-near-old-dir	2.1.280	0	synthetic	another command in a directory whose name starts like the old one
-2.1.280/other-command-extras	2.1.280	0	synthetic	another command with Status:/Issue:/Timeout: lines and an Environment: block
-2.1.296/old-plain-local	2.1.296	0	synthetic	old directory's binary, Args serve --stdio, a bare Environment: line, scope local
-2.1.296/old-plain-project	2.1.296	0	synthetic	old directory's binary, Args serve --stdio, a bare Environment: line, scope project
-2.1.296/old-plain-user	2.1.296	0	synthetic	old directory's binary, Args serve --stdio, no Environment: line, scope user
-2.1.296/old-plain-extras	2.1.296	0	synthetic	old plain registration with extra Status:/Issue:/Timeout: lines and a bare Environment: line
-2.1.296/old-plain-empty-env	2.1.296	0	synthetic	old directory's binary, Args serve --stdio, a bare Environment: line with nothing under it (an empty env), scope user
-2.1.296/old-env	2.1.296	0	synthetic	old binary with an Environment: block
-2.1.296/old-args	2.1.296	0	synthetic	old binary with other Args
-2.1.296/old-other-form	2.1.296	0	synthetic	output in another form (an http server: no Command:, no remove line)
-2.1.296/old-no-scope	2.1.296	0	synthetic	old binary, Args serve --stdio, no remove line (no scope)
-2.1.296/other-command	2.1.296	0	synthetic	another command
-2.1.296/other-command-near-old-dir	2.1.296	0	synthetic	another command in a directory whose name starts like the old one
-2.1.296/other-command-extras	2.1.296	0	synthetic	another command with Status:/Issue:/Timeout: lines and an Environment: block
+2.1.280/none-found-many-others	2.1.280	1	captured	not found (stderr only, stdout empty) with 10 other servers and the near names agent_director, agent-director-dev, Agent-Director configured
+2.1.280/old-plain-local	2.1.280	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line, scope local
+2.1.280/old-plain-project	2.1.280	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line, Status Pending approval, scope project
+2.1.280/old-plain-user	2.1.280	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line, scope user
+2.1.280/old-plain-extras	2.1.280	0	captured	old plain registration with a failed start: Status Failed to connect and an Issue: line, a bare Environment: line, scope local
+2.1.280/old-plain-empty-env	2.1.280	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line with nothing under it (an empty env), scope user (Claude Code prints no other form of it, so this is user-basic again)
+2.1.280/old-env	2.1.280	0	captured	old binary with an Environment: block (FOO=bar), scope user
+2.1.280/old-args	2.1.280	0	captured	old binary with other Args (serve --stdio --verbose), Status Pending approval, scope project
+2.1.280/old-other-form	2.1.280	0	captured	output in another form (an http server: no Command:, a remove line for scope local)
+2.1.280/old-no-scope	2.1.280	0	synthetic	old binary, Args serve --stdio, no remove line (no scope); Claude Code always prints one, so no real capture has it
+2.1.280/other-command	2.1.280	0	captured	another command (/usr/bin/python3), Failed to connect, scope local
+2.1.280/other-command-near-old-dir	2.1.280	0	synthetic	another command in a directory whose name starts like the old one; no real capture has it
+2.1.280/other-command-extras	2.1.280	0	synthetic	another command with Status:/Issue:/Timeout: lines and an Environment: block; no real capture has the block with another command
+2.1.280/current-local	2.1.280	0	captured	this install's binary (~/.config/agent-director/bin/agent-director), Args serve --stdio, scope local
+2.1.280/current-project	2.1.280	0	captured	this install's binary, Args serve --stdio, Status Pending approval, scope project
+2.1.280/current-user	2.1.280	0	captured	this install's binary, Args serve --stdio, scope user
+2.1.280/add-no-dashes	2.1.280	1	captured	`mcp add agent-director <path> serve --stdio` (the old form): refused, error: unknown option '--stdio', nothing registered
+2.1.280/add-with-dashes	2.1.280	0	captured	`mcp add agent-director -- <path> serve --stdio`: Added stdio MCP server ... to local config
+2.1.280/remove-noscope-multi	2.1.280	1	captured	`mcp remove agent-director` with no -s while the name is in the local and user scopes: refused, exit 1, nothing removed
+2.1.296/none-found-many-others	2.1.296	1	captured	not found (stderr only, stdout empty) with 10 other servers and the near names agent_director, agent-director-dev, Agent-Director configured
+2.1.296/old-plain-local	2.1.296	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line, scope local
+2.1.296/old-plain-project	2.1.296	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line, Status Pending approval, scope project
+2.1.296/old-plain-user	2.1.296	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line, scope user
+2.1.296/old-plain-extras	2.1.296	0	captured	old plain registration with a failed start: Status Failed to connect and an Issue: line, a bare Environment: line, scope local
+2.1.296/old-plain-empty-env	2.1.296	0	captured	old directory's binary, Args serve --stdio, a bare Environment: line with nothing under it (an empty env), scope user (Claude Code prints no other form of it, so this is user-basic again)
+2.1.296/old-env	2.1.296	0	captured	old binary with an Environment: block (FOO=bar), scope user
+2.1.296/old-args	2.1.296	0	captured	old binary with other Args (serve --stdio --verbose), Status Pending approval, scope project
+2.1.296/old-other-form	2.1.296	0	captured	output in another form (an http server: no Command:, a remove line for scope local)
+2.1.296/old-no-scope	2.1.296	0	synthetic	old binary, Args serve --stdio, no remove line (no scope); Claude Code always prints one, so no real capture has it
+2.1.296/other-command	2.1.296	0	captured	another command (/usr/bin/python3), Failed to connect, scope local
+2.1.296/other-command-near-old-dir	2.1.296	0	synthetic	another command in a directory whose name starts like the old one; no real capture has it
+2.1.296/other-command-extras	2.1.296	0	synthetic	another command with Status:/Issue:/Timeout: lines and an Environment: block; no real capture has the block with another command
+2.1.296/current-local	2.1.296	0	captured	this install's binary (~/.config/agent-director/bin/agent-director), Args serve --stdio, scope local
+2.1.296/current-project	2.1.296	0	captured	this install's binary, Args serve --stdio, Status Pending approval, scope project
+2.1.296/current-user	2.1.296	0	captured	this install's binary, Args serve --stdio, scope user
+2.1.296/add-no-dashes	2.1.296	1	captured	`mcp add agent-director <path> serve --stdio` (the old form): refused, error: unknown option '--stdio', nothing registered
+2.1.296/add-with-dashes	2.1.296	0	captured	`mcp add agent-director -- <path> serve --stdio`: Added stdio MCP server ... to local config
+2.1.296/remove-noscope-multi	2.1.296	1	captured	`mcp remove agent-director` with no -s while the name is in the local and user scopes: refused, exit 1, nothing removed

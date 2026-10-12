@@ -62,7 +62,8 @@
 #                        Default: ~/.local/bin if on PATH; otherwise
 #                        no symlink.
 #   --no-symlink         Suppress symlink creation regardless of dir.
-#   --register-mcp       Run `claude mcp add` for the stdio server. Also
+#   --register-mcp       Run `claude mcp add agent-director -- <path> serve
+#                        --stdio` for the stdio server (exit 6 if it fails). Also
 #                        re-points a registration that names the old
 #                        directory's binary (see "The move" below).
 #   --no-hooks           Skip the ~/.claude/settings.json hook
@@ -147,6 +148,14 @@
 #      before any binary is replaced; ErrMoveConflict and ErrAgentsLive are
 #      raised in pre-flight, changing nothing. They are install.sh's own
 #      names, as ErrVersionUnreadable is, not agent-director's.
+#   6  the MCP registration failed (--register-mcp): `claude mcp add` (or the
+#      `claude mcp remove` before the re-add of a registration that names the
+#      old directory's binary) exited non-zero. Every other step is done: the
+#      binaries, the store, the hooks and the links are installed and stay.
+#      stderr gets the command run, its exit status, its stderr and the
+#      command to run by hand, e.g. `claude mcp add agent-director -- <path>
+#      serve --stdio`; the install's last line says so. The check of an earlier
+#      registration (`mcp get`) never fails the install.
 #
 # The move (SR-11.7). An earlier release kept AD's files in
 # ~/.agent-director; this one keeps them in ~/.config/agent-director. When
@@ -178,8 +187,9 @@
 # hooks on, settings.json and config.toml are merged again (no hook is
 # added twice), each after a fresh timestamped .bak. With
 # --register-mcp, `claude mcp add` refuses a name already registered in
-# its scope, so a re-run from the same directory prints
-# "registration failed (continuing anyway)" and still returns 0.
+# its scope, so a re-run from a directory where `mcp get agent-director`
+# already shows this install's binary with `serve --stdio` adds nothing, says
+# so, and still returns 0.
 
 set -euo pipefail
 
@@ -4091,8 +4101,20 @@ fi
 #     an Environment: block, or no            registration, and prints the commands
 #     Command: line, or no scope        that re-point one; --register-mcp
 #                                       adds as before
+#   exit 0, Command: this install's   nothing changes; with --register-mcp one
+#     binary, Args: `serve --stdio`     line says it is already registered and
+#                                       no add runs (Claude Code refuses a
+#                                       name already registered in its scope)
 #   exit 0, any other Command:        nothing changes, nothing printed;
 #                                     --register-mcp adds as before
+#
+# Every add runs as `mcp add agent-director [-s <scope>] -- <path> serve
+# --stdio`: the `--` is needed because Claude Code 2.1.280 and later refuses
+# `--stdio` after the path (unknown option, exit 1, nothing registered). The
+# stderr of every `mcp add` and `mcp remove` the install runs is kept: a
+# failure reports the command run, its exit status and its stderr, prints the
+# command to run by hand, and the install ends with exit 6 after every other
+# step is done.
 # --------------------------------------------------------------------
 
 MCP_KIND=""
@@ -4157,6 +4179,8 @@ ad_mcp_classify() {
         MCP_KIND=old_plain
     elif [[ "$cmd" == "${OLD_INSTALL_ROOT}/"* ]]; then
         MCP_KIND=old_other
+    elif [[ "$cmd" == "$CANONICAL" && "$args" == "serve --stdio" ]]; then
+        MCP_KIND=current
     else
         MCP_KIND=other
     fi
@@ -4166,11 +4190,55 @@ ad_mcp_classify() {
 # registration in <scope>.
 ad_mcp_print_repoint() {
     printf '    %q mcp remove agent-director -s %s\n' "$CLAUDE_PROG" "$1"
-    printf '    %q mcp add -s %s agent-director %q serve --stdio\n' "$CLAUDE_PROG" "$1" "$CANONICAL"
+    ad_mcp_print_add "$1"
+}
+
+# ad_mcp_print_add [scope] — the command that adds the registration, in
+# <scope> or, with none, in Claude Code's default (local) scope. The `--` ends
+# Claude Code's own options: without it Claude Code 2.1.280 and later reads
+# `--stdio` as an option of `mcp add` and refuses (error: unknown option
+# '--stdio', exit 1, nothing registered). -s goes after the name, before `--`.
+ad_mcp_print_add() {
+    if [[ -n "${1:-}" ]]; then
+        printf '    %q mcp add agent-director -s %s -- %q serve --stdio\n' "$CLAUDE_PROG" "$1" "$CANONICAL"
+    else
+        printf '    %q mcp add agent-director -- %q serve --stdio\n' "$CLAUDE_PROG" "$CANONICAL"
+    fi
+}
+
+MCP_RC=0
+MCP_ERR=""
+MCP_FAILED=0
+
+# ad_mcp_exec <command> [args...] — run the command with stdin closed and
+# stdout dropped, and keep its exit status in MCP_RC and its stderr in MCP_ERR.
+ad_mcp_exec() {
+    MCP_RC=0
+    MCP_ERR="$("$@" 2>&1 >/dev/null </dev/null)" || MCP_RC=$?
+}
+
+# ad_mcp_report_failure <headline> <command line as run> — report the failed
+# command last run through ad_mcp_exec on stderr: the headline, the command
+# run, its exit status and its stderr, and mark the install as failed (the
+# script exits 6 at its end; every other step is done by then).
+ad_mcp_report_failure() {
+    local l
+    MCP_FAILED=1
+    echo "  mcp     : $1" >&2
+    echo "    command run: $2" >&2
+    echo "    exit status: $MCP_RC" >&2
+    echo "    stderr:" >&2
+    if [[ -z "$MCP_ERR" ]]; then
+        echo "      (none)" >&2
+    else
+        while IFS= read -r l; do
+            printf '      %s\n' "$l" >&2
+        done <<<"$MCP_ERR"
+    fi
 }
 
 ad_mcp_step() {
-    local plain_add="$REGISTER_MCP" scope
+    local plain_add="$REGISTER_MCP" scope cmdline=""
     if command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
         ad_mcp_classify
         scope="${MCP_SCOPE:-<scope>}"
@@ -4181,14 +4249,20 @@ ad_mcp_step() {
             old_plain)
                 if [[ "$REGISTER_MCP" -eq 1 ]]; then
                     plain_add=0
-                    if ! "$CLAUDE_PROG" mcp remove agent-director -s "$MCP_SCOPE" >/dev/null 2>&1; then
-                        echo "  mcp     : the registration names the old directory's binary, and removing it failed (continuing anyway); re-point it:" >&2
+                    printf -v cmdline '%q mcp remove agent-director -s %s' "$CLAUDE_PROG" "$MCP_SCOPE"
+                    ad_mcp_exec "$CLAUDE_PROG" mcp remove agent-director -s "$MCP_SCOPE"
+                    if [[ "$MCP_RC" -ne 0 ]]; then
+                        ad_mcp_report_failure "the registration (scope $MCP_SCOPE) names the old directory's binary, and removing it failed; nothing was added. The binaries, the store and the other install steps are done and stay in place. Re-point it by hand:" "$cmdline"
                         ad_mcp_print_repoint "$MCP_SCOPE" >&2
-                    elif "$CLAUDE_PROG" mcp add -s "$MCP_SCOPE" agent-director "$CANONICAL" serve --stdio >/dev/null 2>&1; then
-                        echo "  mcp     : re-registered with claude mcp (scope $MCP_SCOPE): it named the old directory's binary"
                     else
-                        echo "  mcp     : the old registration (scope $MCP_SCOPE) was removed, but adding it again failed (continuing anyway); add it with:" >&2
-                        printf '    %q mcp add -s %s agent-director %q serve --stdio\n' "$CLAUDE_PROG" "$MCP_SCOPE" "$CANONICAL" >&2
+                        printf -v cmdline '%q mcp add agent-director -s %s -- %q serve --stdio' "$CLAUDE_PROG" "$MCP_SCOPE" "$CANONICAL"
+                        ad_mcp_exec "$CLAUDE_PROG" mcp add agent-director -s "$MCP_SCOPE" -- "$CANONICAL" serve --stdio
+                        if [[ "$MCP_RC" -eq 0 ]]; then
+                            echo "  mcp     : re-registered with claude mcp (scope $MCP_SCOPE): it named the old directory's binary"
+                        else
+                            ad_mcp_report_failure "the old registration (scope $MCP_SCOPE) was removed, but adding it again failed; nothing is registered now. The binaries, the store and the other install steps are done and stay in place. Add it by hand:" "$cmdline"
+                            ad_mcp_print_add "$MCP_SCOPE" >&2
+                        fi
                     fi
                 else
                     echo "  mcp     : the registration from this directory (scope $MCP_SCOPE) names the old directory's binary, which is kept only until you delete it. Re-point it:"
@@ -4199,15 +4273,26 @@ ad_mcp_step() {
                 echo "  mcp     : could not read the registration from this directory as one this installer can re-point (it names the old directory's binary with other arguments or an environment, or its text was not as expected); it was left as it is. To re-point one that names the old directory (use the scope that 'mcp get agent-director' shows, and keep any arguments or environment you set):"
                 ad_mcp_print_repoint "$scope"
                 ;;
+            current)
+                # Already registered with this binary: `mcp add` would refuse
+                # the name, so a re-run with --register-mcp adds nothing.
+                plain_add=0
+                if [[ "$REGISTER_MCP" -eq 1 ]]; then
+                    echo "  mcp     : already registered with claude mcp for this binary; nothing to add"
+                fi
+                ;;
             *)
                 ;;
         esac
     fi
     if [[ "$plain_add" -eq 1 ]]; then
-        if "$CLAUDE_PROG" mcp add agent-director "$CANONICAL" serve --stdio 2>/dev/null; then
+        printf -v cmdline '%q mcp add agent-director -- %q serve --stdio' "$CLAUDE_PROG" "$CANONICAL"
+        ad_mcp_exec "$CLAUDE_PROG" mcp add agent-director -- "$CANONICAL" serve --stdio
+        if [[ "$MCP_RC" -eq 0 ]]; then
             echo "  mcp     : registered with claude mcp"
         else
-            echo "  mcp     : registration failed (continuing anyway)" >&2
+            ad_mcp_report_failure "registration failed; nothing was registered. The binaries, the store and the other install steps are done and stay in place. Register it by hand:" "$cmdline"
+            ad_mcp_print_add >&2
         fi
     fi
 }
@@ -4215,4 +4300,8 @@ ad_mcp_step() {
 ad_mcp_step
 
 echo "  admin   : $ADMIN_CANONICAL (operator tool, not on PATH; run it only with a human's explicit approval for that run)"
+if [[ "$MCP_FAILED" -eq 1 ]]; then
+    echo "install.sh: installed, but the MCP registration failed (see above); exit 6" >&2
+    exit 6
+fi
 echo "install.sh: done. Try: $CANONICAL help"
