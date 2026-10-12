@@ -451,6 +451,108 @@ copy, and nothing was removed. Run `install.sh` again: it continues from
 `~/.config/agent-director`, with no move due. The kept directory is the old one
 as it was; delete it once the upgrade is confirmed.
 
+## `install.sh` refuses config.toml or a template
+
+`install.sh` (exit 5; `err_name=ErrConfigMalformed` for `config.toml`,
+`err_name=ErrTemplateMalformed` for a template) read `config.toml` or a stored
+template and will not go on. It changed nothing: the message names the file,
+each line to change and what to do, and the install can be run again once the
+file is fixed. While the directory move is due the files are read in the old
+directory (see [Upgrade](install.md#upgrade)): the message names the copy it
+read there, and that copy is the one to fix.
+
+Find the cause by the message's first line.
+
+`config.toml`:
+
+- **`cannot tell which programs agent-director launches (the [launch] table)`.**
+  A `[launch]` line is outside the form `install.sh` reads. Keep `claude_path`
+  and `codex_path` each once, in lower case, under one `[launch]` header, each
+  on one line as `key = "<path>"` or `key = '<path>'`, with no backslash and at
+  most a `#` comment after it. A value is an absolute path or starts with `~/`;
+  `""`, or no line, leaves the key unset. A blank value, a relative path, `~`
+  alone and `~user/...` are refused (see [configuration](configuration.md)).
+- **`config.toml sets the question-tool key more than once under [defaults]`.**
+  The message lists each line that sets the key, under its old name or its new
+  one, `disable_ask_user`. Keep one, named `disable_ask_user`, and delete the
+  others.
+- **`config.toml sets defaults as a key and names ... in it`.** A line before
+  any header sets `defaults` as a key (an inline table, `defaults = { ... }`)
+  and names the old name of the question-tool key, which the rename cannot reach
+  inside it. Remove the line. Set each key it set on its own line under a
+  `[defaults]` header, the question-tool key as `disable_ask_user`, adding the
+  header at the end of the file when there is none. Add no header in the
+  line's place: the lines below it would fall under that header.
+
+A template (only the lines before its first `[table]` header are read; its
+tables never are):
+
+- **`template <file> holds a line the migration cannot read`.** A line there is
+  none of: blank, a `#` comment, or one `name = value` line with a bare name
+  (letters, digits, `_`, `-`) and a value that ends on the line. A quoted or
+  dotted name, or a value that goes on to the next line (a multi-line array or
+  string), is refused. Rewrite it as one bare `name = value` line.
+- **`template <file> sets ... more than once`** (the old name of the arguments
+  key, set on more than one line) and **`template <file> sets both ... and
+  agent_args`** (the old name and `agent_args` both set). Keep one line, named
+  `agent_args`, and delete the others.
+
+Either file:
+
+- **`cannot read <file>, which the agent-rename migration reads`.** Make it
+  readable by the user running the install.
+- **`cannot migrate <file> through its symlink`.** The file is a link the
+  migration cannot write through: its links loop, or the file they reach is in a
+  directory that is missing or cannot be written in (a dotfiles repository not
+  cloned yet, a read-only `/nix/store`). The migration changes the file, with
+  or without `--no-hooks`, so the link has to be fixed to reach a file in a
+  directory you can write in. Or make the change yourself where the file comes
+  from: in `config.toml` the question-tool key is named `disable_ask_user`; in a
+  template the arguments key is named `agent_args`, and a template with no
+  `agent` among the lines before its first `[table]` header gets the line
+  `agent = "claude"` there. A file that needs no change is neither written nor
+  refused.
+
+Run `install.sh` again after the change. It reads the same files again and
+changes nothing until every one is accepted.
+
+## A migration write failed after the binary swap
+
+`install.sh` (exit 1, no `err_name` line) could not write a file of the
+migration of `config.toml` and the templates, after it had installed the new
+binaries and before it opened the store. The message starts `the agent-rename
+migration could not write <file>; stopping before the store is opened`, and its
+`file` and `error` lines name the file and the cause (a full disk, a permission
+that changed since the checks, a failed copy). The same stop, exit 5, comes with
+the message `the agent-rename migration refuses <file>, which pre-flight
+accepted`: the file changed after the checks and now needs the fix in
+"`install.sh` refuses config.toml or a template".
+
+Nothing is lost. That file is as it was, every copy the install made is kept (a
+`<file>.pre-agent-rename.<YYYYmmdd-HHMMSS>` beside each file it had already
+migrated, and the directory the move kept), and the store is not opened. When
+the install moved the directory first, both stops also print, before the ways on,
+the `references:` lines of `config.toml` and the templates that still name the
+old directory: a re-run has no move due and would not print them, so change
+each by hand now (see [Upgrade](install.md#upgrade)). Look at what the message
+names:
+
+```sh
+ls -l <file> <file>.pre-agent-rename.*
+df -h <file>
+```
+
+Then either:
+
+1. Fix the cause the `error` line names (free space on the disk that holds the
+   file, or restore the permission, or fix the link and its target's
+   directory), then run this release's `install.sh` again, from a shell
+   agent-director did not start. It completes the migration: it changes nothing
+   in a file already migrated and makes no new copy of it, and then migrates the
+   store.
+2. Or take the way back to the previous release:
+   [Going back to the previous release](#going-back-to-the-previous-release).
+
 ## Going back to the previous release
 
 Use this when the upgrade to this release must be undone. Whatever was written

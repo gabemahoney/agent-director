@@ -47,16 +47,39 @@
 #                        directory, asked before anything is removed or
 #                        changed.
 #   --force              Skip the --purge confirmation prompt.
-#   --mcp-also           Also run `claude mcp remove agent-director`. A
-#                        failure (other than "No MCP server named ...",
+#   --mcp-also           Also run `claude mcp remove agent-director`
+#                        through the Claude Code program install.sh runs:
+#                        [launch] claude_path in the config.toml of the
+#                        directory this run works on, when it names an
+#                        executable file, else `claude` from PATH. A
+#                        [launch] line it cannot read, or a claude_path
+#                        naming no executable file, gets a note naming it
+#                        and the run uses claude from PATH; it never stops
+#                        or fails the run. With no program the step is
+#                        skipped, with a line saying so, and the exit
+#                        status is unchanged. A failure (other than "No MCP server named ...",
 #                        which means there is nothing to remove) is reported
 #                        with the command run, its exit status and its
 #                        stderr; every other step still runs, and the
 #                        script then exits 6.
 #   --symlink-dir <dir>  Look for the PATH symlink at <dir>; default
 #                        is ~/.local/bin.
+#
+# HOME must be set to the user's home directory, an absolute path: every
+# path above is built from it. With HOME unset, empty or relative the script
+# stops first, before anything is read or written, with exit 2 (the same
+# class as a bad flag).
 
 set -euo pipefail
+
+# HOME first, before anything is read or written (see the header).
+case "${HOME-}" in
+    /*) ;;
+    *)
+        echo "uninstall.sh: HOME is unset, empty or not an absolute path (HOME='${HOME-}'). Run uninstall.sh with HOME set to the user's home directory, for example HOME=/home/alice." >&2
+        exit 2
+        ;;
+esac
 
 # AD's directory, and the one an earlier release kept its files in (SR-11.7).
 # DEFAULT_INSTALL_ROOT, below the helper functions, is the one this run works
@@ -175,8 +198,22 @@ ad_backup_keeping_mode() {
     chmod "$(ad_mode_of "$1")" "$2"
 }
 
-# ad_clean_path <path> — print <path> cleaned as install.sh's ad_clean_path
-# does (Go's filepath.Clean on Unix).
+# The config reader (b.2io, SR-11.4). uninstall.sh reads [launch] claude_path
+# with it, to run `mcp remove` through the Claude Code program install.sh
+# found. The block below is a verbatim copy of install.sh's block of the same
+# name (it holds ad_clean_path as well, so uninstall.sh has no other copy):
+# keep it in step with install.sh's, and change both together. uninstall.sh
+# asks it for the "launch" lines only and never lets its refusal stop the
+# run (see "Optional MCP deregistration" below). It is self-contained (bash
+# 3.2 or later, builtins only), so a test can extract it by its marker lines,
+# as it does install.sh's, and call ad_store_db_path alone.
+
+# >>> ad_store_db_path (b.2io) >>>
+
+# ad_clean_path <path> — print <path> cleaned as Go's filepath.Clean cleans
+# it on Unix: repeated slashes and . elements go, each .. removes the
+# element before it (and is dropped at the root), a trailing slash goes,
+# and an empty result is ".".
 ad_clean_path() {
     local rest="$1" out="" seg root=""
     if [[ "$rest" == /* ]]; then
@@ -200,6 +237,541 @@ ad_clean_path() {
     out="${root}${out}"
     printf '%s\n' "${out:-.}"
 }
+
+# ad_sentinel_path <db> — print where the store looks for the migration
+# sentinel that authorizes <db>: Go's filepath.Join(filepath.Dir(<db>),
+# "migrate-authorized") (internal/store sentinelPath). Unlike dirname, both
+# clean the directory, which matters for an absolute db_path that is not
+# clean.
+ad_sentinel_path() {
+    if [[ "$1" == */* ]]; then
+        ad_clean_path "${1%/*}/migrate-authorized"
+    else
+        printf '%s\n' migrate-authorized
+    fi
+}
+
+# ad_toml_name <part> — print the name agent-director's TOML decoder matches
+# for one key or table-name part, bare, "..." or '...' (re_part below): the
+# part without its quotes, with each U+017F (long s) and U+212A (Kelvin sign)
+# written as the s and k they match, since the decoder compares names with
+# Go's strings.EqualFold. Called only inside ad_store_db_path's subshell.
+ad_toml_name() {
+    local name="$1" long_s=$'\xc5\xbf' kelvin=$'\xe2\x84\xaa'
+    case "$name" in
+        \"*\"|\'*\') name="${name:1:$((${#name} - 2))}" ;;
+    esac
+    name="${name//$long_s/s}"
+    name="${name//$kelvin/k}"
+    printf '%s\n' "$name"
+}
+
+# ad_db_path_refuse <config> <line number> <line> <reason>... — report a
+# config file the reader cannot read, with the offending line (none when
+# <line number> is 0) and <reason>s saying what to change, then exit 1.
+# Called only inside ad_store_db_path's subshell, which sets want_log and
+# about_launch (1 while the refusal is about a [launch] header, key or value,
+# whose headline and closing note name [launch], not the store).
+ad_db_path_refuse() {
+    local config="$1" n="$2" line="$3" reason
+    shift 3
+    if [[ "${about_launch:-0}" -eq 1 ]]; then
+        echo "install.sh: cannot tell which programs agent-director launches (the [launch] table); refusing to install." >&2
+    elif [[ "${want_log:-0}" -eq 1 ]]; then
+        echo "install.sh: cannot tell which store database or error log agent-director opens; refusing to install." >&2
+    else
+        echo "install.sh: cannot tell which store database agent-director opens; refusing to install." >&2
+    fi
+    echo "  config  : $config" >&2
+    if [[ "$n" -gt 0 ]]; then
+        printf '  line %s  : %s\n' "$n" "$line" >&2
+    fi
+    for reason in "$@"; do
+        echo "  $reason" >&2
+    done
+    if [[ "$n" -gt 0 ]]; then
+        if [[ "${about_launch:-0}" -eq 1 ]]; then
+            echo "  install.sh reads [launch] claude_path and codex_path itself, to choose the" >&2
+            echo "  Claude Code program it runs and to see which agents are installed, and" >&2
+            echo "  reads only this form of the file: blank lines, # comments, [name]" >&2
+            echo "  headers and name = value lines, a name being letters, digits, _ and -," >&2
+            echo "  with claude_path and codex_path under [launch] set to a one-line \"...\"" >&2
+            echo "  holding no backslash, or '...', and an optional # comment after it. A" >&2
+            echo "  value is an absolute path or starts with ~/; an empty \"\" counts as unset." >&2
+        elif [[ "${want_log:-0}" -eq 1 ]]; then
+            echo "  install.sh reads [store] db_path and [log] error_log_path itself, to" >&2
+            echo "  check, migrate and verify the database agent-director opens and to move" >&2
+            echo "  the paths with it, and reads only this form of the" >&2
+            echo "  file: blank lines, # comments, [name] headers and name = value lines," >&2
+            echo "  a name being letters, digits, _ and -, with db_path under [store] and" >&2
+            echo "  error_log_path under [log] set to a one-line \"...\" holding no" >&2
+            echo "  backslash, or '...', and an optional # comment after it." >&2
+        else
+            echo "  install.sh reads [store] db_path itself, to check, migrate and verify" >&2
+            echo "  the database agent-director opens, and reads only this form of the" >&2
+            echo "  file: blank lines, # comments, [name] headers and name = value lines," >&2
+            echo "  a name being letters, digits, _ and -, with db_path under [store] set" >&2
+            echo "  to a one-line \"...\" holding no backslash, or '...', and an optional" >&2
+            echo "  # comment after it." >&2
+        fi
+    fi
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    exit 1
+}
+
+# ad_store_db_path <config> <home> <base> [log] [launch] — print the store
+# database agent-director opens for config file <config>, home directory
+# <home> (non-empty) and base directory <base> (the directory the config
+# file's relative paths are joined onto; the caller says which directory that
+# is, so the same reader serves a config file before and after it moves),
+# resolved as above; a missing <config> gives the default. After <base>, the
+# words "log" and "launch" (either, both, in either order) ask for more
+# lines, printed after the store's in this order:
+#   log     [log] error_log_path, resolved the same way: empty when the file
+#           does not set it or sets it empty (there is then nothing to move
+#           or check);
+#   launch  [launch] claude_path, then codex_path, resolved as above: each
+#           empty when unset or empty.
+# Every line is printed, an empty one too, so a caller reads them by
+# position (command substitution drops trailing empty lines: read from a
+# here-string with `|| true` after each read). A '?' is refused in db_path
+# only. On a file the reader cannot read, print why on stderr and return 1,
+# printing nothing on stdout. The body is a subshell under the C locale, so
+# the matching is bytewise whatever the caller's locale.
+ad_store_db_path() (
+    LC_ALL=C
+    local config="$1" home="$2" base="$3" want_log=0 want_launch=0 n=0 line table=""
+    local about_launch=0 seen_store=0 seen_log=0 seen_launch=0 have_value=0 have_log_value=0
+    local have_claude=0 have_codex=0 claude_value="" codex_value=""
+    local value="" log_value="" key rest resolved name t k which parsed seen arg
+    local -a tables=(store)
+    shift 3
+    for arg in "$@"; do
+        case "$arg" in
+            log) want_log=1; tables+=(log) ;;
+            launch) want_launch=1; tables+=(launch) ;;
+        esac
+    done
+    local re_skip='^[[:blank:]]*(#.*)?$'
+    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
+    local re_bracket='^[[:blank:]]*\['
+    local re_keyval='^[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*=[[:blank:]]*(.*)$'
+    # A "..." value's body runs to the next unescaped ", so a backslash
+    # before the first " after the opening one is an escape.
+    local re_escape='^[[:blank:]]*"[^"]*\\'
+    local re_basic='^[[:blank:]]*"([^"]*)"[[:blank:]]*(#.*)?$'
+    local re_literal="^[[:blank:]]*'([^']*)'[[:blank:]]*(#.*)?\$"
+    local re_store='^[Ss][Tt][Oo][Rr][Ee]$'
+    local re_log='^[Ll][Oo][Gg]$'
+    local re_db_path='^[Dd][Bb]_[Pp][Aa][Tt][Hh]$'
+    local re_elp='^[Ee][Rr][Rr][Oo][Rr]_[Ll][Oo][Gg]_[Pp][Aa][Tt][Hh]$'
+    local re_launch='^[Ll][Aa][Uu][Nn][Cc][Hh]$'
+    local re_claude='^[Cc][Ll][Aa][Uu][Dd][Ee]_[Pp][Aa][Tt][Hh]$'
+    local re_codex='^[Cc][Oo][Dd][Ee][Xx]_[Pp][Aa][Tt][Hh]$'
+    local re_cntrl='[[:cntrl:]]'
+    # Only to word a refusal: the line forms the reader refuses, as TOML
+    # writes them. A key or table-name part is a bare name, a "..." holding no
+    # backslash, or a '...' (first part in BASH_REMATCH[1]).
+    local re_part='([A-Za-z0-9_-]+|"[^"\\]*"|'"'[^']*'"')'
+    local re_dot='[[:blank:]]*\.[[:blank:]]*'
+    local re_end='[[:blank:]]*(#.*)?$'
+    local re_bare='^[A-Za-z0-9_-]+$'
+    local re_aot='^[[:blank:]]*\[\[[[:blank:]]*'"$re_part"'('"$re_dot$re_part"')*[[:blank:]]*\]\]'"$re_end"
+    local re_aot_one='^[[:blank:]]*\[\[[[:blank:]]*'"$re_part"'[[:blank:]]*\]\]'"$re_end"
+    local re_header_one='^[[:blank:]]*\[[[:blank:]]*'"$re_part"'[[:blank:]]*\]'"$re_end"
+    local re_header_dotted='^[[:blank:]]*\[[[:blank:]]*'"$re_part"'('"$re_dot$re_part"')+[[:blank:]]*\]'"$re_end"
+    local re_key_one='^[[:blank:]]*'"$re_part"'[[:blank:]]*='
+    local re_key_two='^[[:blank:]]*'"$re_part$re_dot$re_part"'[[:blank:]]*='
+    local re_key_dotted='^[[:blank:]]*'"$re_part"'('"$re_dot$re_part"')+[[:blank:]]*='
+    # Ends the advice for a line before any header that belongs under one. The
+    # line goes under its table's header, or under one added at the end of the
+    # file: a header added in its place would take in every line after it, up
+    # to the next header, and agent-director would then read those lines
+    # differently (ignore a store.db_path = ... line under [defaults], say).
+    local -a not_here=(
+        "Add no header in this line's place: the lines below it, up to the next"
+        "header, would fall under that header too."
+    )
+
+    # is_table <name> <table>: is <name> the table's name in some letter
+    # case; key_of <table>: the key the reader reads under it.
+    # The launch table holds two keys, so is_key takes either of them there,
+    # and key_of names the one the (dynamically scoped) name holds, claude_path
+    # when it is neither; key_of also takes claude and codex, the two launch
+    # keys by their program.
+    is_table() {
+        case "$2" in
+            store) [[ "$1" =~ $re_store ]] ;;
+            log) [[ "$1" =~ $re_log ]] ;;
+            launch) [[ "$1" =~ $re_launch ]] ;;
+        esac
+    }
+    is_key() {
+        case "$2" in
+            store) [[ "$1" =~ $re_db_path ]] ;;
+            log) [[ "$1" =~ $re_elp ]] ;;
+            launch) [[ "$1" =~ $re_claude || "$1" =~ $re_codex ]] ;;
+        esac
+    }
+    key_of() {
+        case "$1" in
+            store) k=db_path ;;
+            log) k=error_log_path ;;
+            claude) k=claude_path ;;
+            codex) k=codex_path ;;
+            launch)
+                if [[ "${name:-}" =~ $re_codex ]]; then k=codex_path; else k=claude_path; fi
+                ;;
+        esac
+    }
+    # set_about <table>: the refusal that follows is about [launch] when <table>
+    # is launch (its headline and closing note then name [launch]).
+    set_about() {
+        if [[ "$1" == launch || "$1" == claude || "$1" == codex ]]; then
+            about_launch=1
+        else
+            about_launch=0
+        fi
+    }
+    # The advice for a table key before any header (store = { ... }), bare or
+    # quoted.
+    refuse_top() {
+        local kdesc="$k" kset="set $k"
+        set_about "$1"
+        if [[ "$1" == launch ]]; then
+            kdesc="claude_path or codex_path"
+            kset="set it"
+        fi
+        local -a reasons=(
+            "This sets $1 as a key (an inline table, say) rather than under a"
+            "[$1] header. Remove this line. If it sets $kdesc, $kset under"
+            "the file's [$1] header instead, adding that header at the end of the"
+            "file if the file has none."
+            "${not_here[@]}"
+        )
+        ad_db_path_refuse "$config" "$n" "$line" "${reasons[@]}"
+    }
+
+    if [[ -e "$config" ]]; then
+        if [[ ! -f "$config" || ! -r "$config" ]]; then
+            ad_db_path_refuse "$config" 0 "" \
+                "It is not a readable file (a directory, say, or a file without read" \
+                "permission), so agent-director cannot load it either. Make it one."
+        fi
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            n=$((n + 1))
+            # The TOML decoder skips a UTF-8 byte-order mark and a CRLF's CR too.
+            if [[ "$n" -eq 1 ]]; then
+                line="${line#$'\xef\xbb\xbf'}"
+            fi
+            line="${line%$'\r'}"
+            if [[ "$line" =~ $re_skip ]]; then
+                continue
+            fi
+            # The decoder also skips a UTF-16 byte-order mark; the reader
+            # does not.
+            if [[ "$n" -eq 1 && ( "$line" == $'\xff\xfe'* || "$line" == $'\xfe\xff'* ) ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order" \
+                    "mark, which install.sh does not read. Remove those two bytes:" \
+                    "agent-director skips them, so it reads the file the same without them."
+            fi
+            if [[ "$line" == *'"""'* || "$line" == *"'''"* ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line holds \"\"\" or ''', which install.sh reads as the start of a" \
+                    "multi-line string. Write each value on one line, as a \"...\" or '...'" \
+                    "string, with no \"\"\" or ''' anywhere on the line."
+            fi
+            if [[ "$line" =~ $re_header ]]; then
+                table="${BASH_REMATCH[1]}"
+                for t in "${tables[@]}"; do
+                    if is_table "$table" "$t"; then
+                        set_about "$t"
+                        if [[ "$table" != "$t" ]]; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "agent-director reads this header as [$t]: its TOML decoder matches" \
+                                "names regardless of letter case. Write it as [$t]."
+                        fi
+                        seen=$seen_store
+                        if [[ "$t" == log ]]; then seen=$seen_log; fi
+                        if [[ "$t" == launch ]]; then seen=$seen_launch; fi
+                        if [[ "$seen" -eq 1 ]]; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "This is a second [$t] header, and agent-director refuses a table" \
+                                "defined twice. Move the lines under it, up to the next header, to" \
+                                "under the first [$t] header, then remove this header."
+                        fi
+                        case "$t" in
+                            log) seen_log=1 ;;
+                            launch) seen_launch=1 ;;
+                            *) seen_store=1 ;;
+                        esac
+                        about_launch=0
+                    fi
+                done
+                continue
+            fi
+            # A refused header is never to be removed alone: the lines under it
+            # would fall under the header before it, [store] perhaps.
+            if [[ "$line" =~ $re_bracket ]]; then
+                if [[ "$line" =~ $re_aot ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    if [[ "$line" =~ $re_aot_one ]]; then
+                        for t in "${tables[@]}"; do
+                            if is_table "$name" "$t"; then
+                                set_about "$t"
+                                ad_db_path_refuse "$config" "$n" "$line" \
+                                    "This makes $t an array of tables ([[name]]), and agent-director" \
+                                    "reads [$t] only as one table, so it refuses the file. Write it" \
+                                    "as [$t]."
+                            fi
+                        done
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This is an array of tables ([[name]]), which agent-director does not" \
+                        "read: it ignores the lines under this header, or refuses the file." \
+                        "Remove the header and the lines under it, up to the next header."
+                fi
+                if [[ "$line" =~ $re_header_one ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        if is_table "$name" "$t"; then
+                            set_about "$t"
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "agent-director reads this header as [$t]: a quoted name is the" \
+                                "same as the bare one, and its TOML decoder matches names regardless" \
+                                "of letter case. Write it as [$t]."
+                        fi
+                    done
+                    if [[ "$name" =~ $re_bare ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "A quoted table name is the same as the bare one. Write it as" \
+                            "[$name], without the quotes."
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "agent-director reads no table with this name, so it ignores the lines" \
+                        "under this header. Remove the header and the lines under it, up to" \
+                        "the next header."
+                fi
+                if [[ "$line" =~ $re_header_dotted ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This header names a table within a table ([a.b]), which" \
+                        "agent-director does not read: it ignores the lines under this header," \
+                        "or refuses the file. Remove the header and the lines under it, up to" \
+                        "the next header."
+                fi
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line starts with [ but is not a table header install.sh can read:" \
+                    "a missing ], say, a quoted name holding an escape (\\), or part of an" \
+                    "array value that spans lines. Correct the header to [name], with the" \
+                    "name bare, or write the array on one line."
+            fi
+            if [[ ! "$line" =~ $re_keyval ]]; then
+                if [[ "$line" =~ $re_key_one ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        key_of "$t"
+                        if [[ -z "$table" ]] && is_table "$name" "$t"; then
+                            refuse_top "$t"
+                        fi
+                        if [[ "$table" == "$t" ]] && is_key "$name" "$t"; then
+                            set_about "$t"
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "agent-director reads this key as $k: a quoted key is the same" \
+                                "as the bare one, and its TOML decoder matches names regardless of" \
+                                "letter case. Write it as $k."
+                        fi
+                    done
+                    if [[ "$name" =~ $re_bare ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "A quoted key is the same as the bare one. Write it as $name, without" \
+                            "the quotes."
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "agent-director reads no key with this name, so it ignores this line." \
+                        "Remove it."
+                fi
+                # Before any header, a.b = value sets b under [a]; under one, a
+                # dotted key sets a key in a table within that table.
+                if [[ -z "$table" && "$line" =~ $re_key_two ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    for t in "${tables[@]}"; do
+                        key_of "$t"
+                        if is_table "$name" "$t"; then
+                            set_about "$t"
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "This sets a $t key as a dotted key ($t.$k = ..., say)" \
+                                "rather than under a [$t] header. Move this line, without the" \
+                                "$t. prefix, to under the file's [$t] header, adding that header" \
+                                "at the end of the file if the file has none." \
+                                "${not_here[@]}"
+                        fi
+                    done
+                    if [[ "$name" =~ $re_bare ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "Before any header, a dotted key a.b = value sets b under [a]. Move this" \
+                            "line, without the $name. prefix, to under the file's [$name] header," \
+                            "adding that header at the end of the file if the file has none." \
+                            "${not_here[@]}"
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "agent-director reads no table with this key's first name, so it" \
+                        "ignores this line. Remove it."
+                fi
+                if [[ "$line" =~ $re_key_dotted ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This dotted key sets a key in a table within a table, which" \
+                        "agent-director does not read: it ignores this line, or refuses the" \
+                        "file. Remove it."
+                fi
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line is not a blank line, a # comment, a [name] header or a" \
+                    "name = value line: part of a value that spans lines (an array, say), a" \
+                    "quoted name holding an escape (\\), or a typo. Write each value on one" \
+                    "line, write the name bare, without quotes or escapes, or correct the" \
+                    "typo."
+            fi
+            key="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+            for t in "${tables[@]}"; do
+                key_of "$t"
+                if [[ -z "$table" ]] && is_table "$key" "$t"; then
+                    refuse_top "$t"
+                fi
+            done
+            which=""
+            if [[ "$table" == store ]] && is_key "$key" store; then
+                which=store
+            elif [[ "$want_log" -eq 1 && "$table" == log ]] && is_key "$key" log; then
+                which=log
+            elif [[ "$want_launch" -eq 1 && "$table" == launch ]]; then
+                if [[ "$key" =~ $re_claude ]]; then
+                    which=claude
+                elif [[ "$key" =~ $re_codex ]]; then
+                    which=codex
+                fi
+            fi
+            if [[ -z "$which" ]]; then
+                continue
+            fi
+            set_about "$which"
+            key_of "$which"
+            if [[ "$key" != "$k" ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "agent-director reads this key as $k: its TOML decoder matches" \
+                    "names regardless of letter case. Write it as $k."
+            fi
+            seen=$have_value
+            case "$which" in
+                log) seen=$have_log_value ;;
+                claude) seen=$have_claude ;;
+                codex) seen=$have_codex ;;
+            esac
+            if [[ "$seen" -eq 1 ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This sets $k a second time. Keep one."
+            fi
+            if [[ "$rest" =~ $re_escape ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "$k's \"...\" value holds a backslash, which starts an escape." \
+                    "Write the path without escapes; in single quotes ('...') a backslash" \
+                    "or a double quote is literal."
+            elif [[ "$rest" =~ $re_basic || "$rest" =~ $re_literal ]]; then
+                parsed="${BASH_REMATCH[1]}"
+            else
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "$k's value is not a one-line \"...\" or '...' string, optionally" \
+                    "followed by a # comment. Write it in that form."
+            fi
+            if [[ "$parsed" =~ $re_cntrl ]]; then
+                if [[ "$about_launch" -eq 1 ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "$k's value holds a control character, such as a tab. install.sh" \
+                        "cannot install with one in the program's path, so remove it." \
+                        "agent-director then launches the path without it."
+                elif [[ "$which" == log ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "$k's value holds a control character, such as a tab. install.sh" \
+                        "cannot install with one in the path, so remove it. agent-director" \
+                        "then uses the path without it, not the file it already keeps at" \
+                        "this one."
+                else
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "$k's value holds a control character, such as a tab. install.sh" \
+                        "cannot install with one in the store path, so remove it. agent-director" \
+                        "then opens the path without it, not any store it already keeps at this" \
+                        "one."
+                fi
+            fi
+            if [[ "$which" == store ]]; then
+                if [[ "$parsed" == *\?* ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "db_path's value holds a '?'. agent-director's store open reads" \
+                        "everything from the first '?' on as SQLite options, so it would not" \
+                        "open this path. Use a path without '?'."
+                fi
+                value="$parsed"
+                have_value=1
+            elif [[ "$which" == log ]]; then
+                log_value="$parsed"
+                have_log_value=1
+            else
+                # Go's config load refuses any launch value but empty, an
+                # absolute path and ~/...: a blank value, a relative path, ~
+                # alone and ~user/... included.
+                case "$parsed" in
+                    ""|/*|"~/"*) ;;
+                    *)
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "$k's value is not an absolute path or a path starting with ~/, which" \
+                            "agent-director refuses (a blank value, a relative path, ~ alone and" \
+                            "~user/... are refused too). Write the program's absolute path, or one" \
+                            "starting with ~/, or remove this line to launch ${which} by its name" \
+                            "on the PATH; an empty \"\" counts as unset."
+                        ;;
+                esac
+                if [[ "$which" == claude ]]; then
+                    claude_value="$parsed"
+                    have_claude=1
+                else
+                    codex_value="$parsed"
+                    have_codex=1
+                fi
+            fi
+            about_launch=0
+        done <"$config"
+    fi
+
+    case "$value" in
+        "")    resolved="$(ad_clean_path "${base}/state.db")" ;;
+        "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
+        /*)    resolved="$value" ;;
+        *)     resolved="$(ad_clean_path "${base}/${value}")" ;;
+    esac
+    printf '%s\n' "$resolved"
+    if [[ "$want_log" -eq 1 ]]; then
+        case "$log_value" in
+            "")    resolved="" ;;
+            "~/"*) resolved="$(ad_clean_path "${home}/${log_value:2}")" ;;
+            /*)    resolved="$log_value" ;;
+            *)     resolved="$(ad_clean_path "${base}/${log_value}")" ;;
+        esac
+        printf '%s\n' "$resolved"
+    fi
+    if [[ "$want_launch" -eq 1 ]]; then
+        # Only "", an absolute path or ~/... got here: an absolute path stays
+        # as written and ~/... is joined onto the home directory.
+        for value in "$claude_value" "$codex_value"; do
+            case "$value" in
+                "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
+                *)     resolved="$value" ;;
+            esac
+            printf '%s\n' "$resolved"
+        done
+    fi
+)
+
+# <<< ad_store_db_path (b.2io) <<<
 
 # --------------------------------------------------------------------
 # Which AD directory this run works on (SR-11.4, SR-11.7).
@@ -630,8 +1202,52 @@ fi
 # Optional MCP deregistration.
 # --------------------------------------------------------------------
 
+# The Claude Code program is the one install.sh runs (SR-11.1): [launch]
+# claude_path from the config.toml of the directory this run works on, when
+# it names an executable file, else `claude` from PATH. The file is read
+# here, before --purge below removes the directory (and after the
+# inject_help_hook edit above, which leaves [launch] alone). A [launch] line
+# the reader cannot read, or a claude_path naming no executable file, never
+# stops uninstall: it gets a note naming the line and the run falls back to
+# `claude` from PATH. With no program at all the step is skipped, with a
+# line saying so, and the exit status is as without the step.
 if [[ "$MCP_ALSO" -eq 1 ]]; then
-    if command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
+    launch_claude=""
+    if launch_out="$(ad_store_db_path "$CONFIG_TOML" "$HOME" "$DEFAULT_INSTALL_ROOT" launch 2>&1)"; then
+        # Lines: the store path, claude_path, codex_path (any may be empty).
+        { IFS= read -r launch_line || true; IFS= read -r launch_claude || true; } <<<"$launch_out"
+    else
+        # The reader's refusal: its headline, then config, line and reason
+        # lines, then a closing paragraph about install.sh that does not
+        # apply here. Name the line and the reason; fall back to PATH.
+        {
+            echo "uninstall.sh: could not read [launch] claude_path from $CONFIG_TOML; using claude from PATH."
+            while IFS= read -r launch_line; do
+                case "$launch_line" in
+                    "install.sh:"*) continue ;;
+                    "  install.sh reads"*|"  Nothing was installed"*) break ;;
+                esac
+                printf '%s\n' "$launch_line"
+            done <<<"$launch_out"
+        } >&2
+    fi
+    mcp_how=path
+    if [[ -n "$launch_claude" ]]; then
+        if [[ -f "$launch_claude" && -x "$launch_claude" ]]; then
+            CLAUDE_PROG="$launch_claude"
+            mcp_how=launch
+        else
+            echo "uninstall.sh: [launch] claude_path = \"$launch_claude\" in $CONFIG_TOML names no executable file; using claude from PATH" >&2
+        fi
+    fi
+    if [[ "$mcp_how" == path ]] && ! command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
+        if [[ -n "$launch_claude" ]]; then
+            launch_why="[launch] claude_path in $CONFIG_TOML names no executable file"
+        else
+            launch_why="[launch] claude_path is not set"
+        fi
+        echo "uninstall.sh: --mcp-also skipped: no Claude Code program was found (claude is not on PATH, and $launch_why), so agent-director was not deregistered from Claude Code"
+    else
         mcp_rc=0
         mcp_err="$("$CLAUDE_PROG" mcp remove agent-director 2>&1 >/dev/null </dev/null)" || mcp_rc=$?
         if [[ "$mcp_rc" -eq 0 ]]; then

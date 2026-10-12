@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // uninstallExit runs uninstall.sh with args under home, under umask unless it is
@@ -1302,5 +1303,175 @@ func TestUninstallMCPAlso(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// uninstallMCPWrapper writes path, a Claude Code program (executable unless
+// mode says otherwise) that records its calls in log through the shared
+// stand-in claude, so each program's calls are told apart by its own log.
+func uninstallMCPWrapper(t *testing.T, path, log string, mode os.FileMode) {
+	t.Helper()
+	script, err := filepath.Abs(filepath.Join(ownedClaudeDir, "claude.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMode(t, path, "#!/bin/bash\nexport CLAUDE_STANDIN_LOG='"+log+"'\nexec bash '"+script+"' \"$@\"\n", mode)
+}
+
+// TestUninstallMCPAlsoProgram (SR-11.4, SR-11.1, b.ssz): --mcp-also runs `mcp
+// remove agent-director` with the program [launch] claude_path names when it
+// names an executable file, else with claude from PATH. A claude_path line
+// outside the reader's form, or one naming no executable file, gets a note
+// naming it and the run uses PATH's claude; with no program at all the step is
+// skipped, with a line saying so. None of it changes the exit status (0) or
+// stops the rest of the run, and without --mcp-also no program is run. A
+// layout never moved gets claude_path from the old config.toml.
+func TestUninstallMCPAlsoProgram(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	if p, err := exec.LookPath("claude"); err == nil {
+		t.Skipf("a claude is on PATH here (%s); the rows with none need a PATH without one", p)
+	}
+	const (
+		removeCall = "mcp remove agent-director"
+		deregister = "uninstall.sh: deregistered agent-director from MCP\n"
+		skipped    = "uninstall.sh: --mcp-also skipped: no Claude Code program was found (claude is not on PATH, and "
+		unreadable = "uninstall.sh: could not read [launch] claude_path from {config}; using claude from PATH.\n"
+		namesNone  = "uninstall.sh: [launch] claude_path = \"{none}\" in {config} names no executable file; using claude from PATH\n"
+	)
+	// A claude_path value is the program in {launch}, a path that names nothing
+	// ({none}) or a file that is not executable ({plain}).
+	const (
+		progNone = "none" // the program run: nothing
+		progPath = "path" // the claude on PATH
+		progConf = "launch"
+	)
+	rows := []struct {
+		name       string
+		oldLayout  bool   // only ~/.agent-director, with its config.toml
+		keys       string // claude_path written by apitest.WriteKeysConfig: "" none, else a path with {launch}, {none} or {plain}
+		raw        string // else config.toml's text as written by hand, with the same placeholders
+		onPath     bool   // a claude on PATH
+		args       []string
+		ran        string   // the program that ran: progConf, progPath or progNone
+		stdout     []string // each in stdout, with {config}, {none} and {home} filled in
+		stderr     []string // each in stderr
+		stderrNone bool     // stderr is empty
+	}{
+		{name: "claude_path beside another claude on PATH", keys: "{launch}", onPath: true, args: []string{"--mcp-also"},
+			ran: progConf, stdout: []string{deregister}, stderrNone: true},
+		{name: "claude_path unset, claude on PATH", onPath: true, args: []string{"--mcp-also"},
+			ran: progPath, stdout: []string{deregister}, stderrNone: true},
+		{name: "claude_path names no executable file, claude on PATH", keys: "{none}", onPath: true, args: []string{"--mcp-also"},
+			ran: progPath, stdout: []string{deregister}, stderr: []string{namesNone}},
+		{name: "claude_path names a file that is not executable, claude on PATH", keys: "{plain}", onPath: true, args: []string{"--mcp-also"},
+			ran: progPath, stdout: []string{deregister}, stderr: []string{strings.ReplaceAll(namesNone, "{none}", "{plain}")}},
+		{name: "[Launch] header, claude on PATH", raw: "[Launch]\nclaude_path = \"{launch}\"\n", onPath: true, args: []string{"--mcp-also"},
+			ran: progPath, stdout: []string{deregister}, stderr: []string{unreadable, "  config  : {config}\n  line 1  : [Launch]\n"}},
+		{name: "backslash escape in claude_path, claude on PATH", raw: "[launch]\nclaude_path = \"{launch}\\n\"\n", onPath: true, args: []string{"--mcp-also"},
+			ran: progPath, stdout: []string{deregister}, stderr: []string{unreadable, "  config  : {config}\n  line 2  : claude_path = \"{launch}\\n\"\n"}},
+		{name: "claude_path names no executable file, no claude on PATH", keys: "{none}", args: []string{"--mcp-also"},
+			ran: progNone, stdout: []string{skipped + "[launch] claude_path in {config} names no executable file), so agent-director was not deregistered from Claude Code\n", "uninstall.sh: done\n"},
+			stderr: []string{namesNone}},
+		{name: "claude_path unset, no claude on PATH", args: []string{"--mcp-also"},
+			ran: progNone, stdout: []string{skipped + "[launch] claude_path is not set), so agent-director was not deregistered from Claude Code\n", "uninstall.sh: done\n"},
+			stderrNone: true},
+		{name: "[Launch] header, no claude on PATH", raw: "[Launch]\nclaude_path = \"{launch}\"\n", args: []string{"--mcp-also"},
+			ran: progNone, stdout: []string{skipped + "[launch] claude_path is not set), so agent-director was not deregistered from Claude Code\n"},
+			stderr: []string{unreadable, "  line 1  : [Launch]\n"}},
+		{name: "layout never moved, claude on PATH", oldLayout: true, keys: "{launch}", onPath: true, args: []string{"--mcp-also"},
+			ran: progConf, stdout: []string{deregister}, stderrNone: true},
+		{name: "layout never moved, no claude on PATH", oldLayout: true, keys: "{launch}", args: []string{"--mcp-also"},
+			ran: progConf, stdout: []string{deregister}, stderrNone: true},
+		{name: "claude_path set, no --mcp-also", keys: "{launch}", onPath: true,
+			ran: progNone, stderrNone: true},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			home := t.TempDir()
+			root := filepath.Join(home, ".config", "agent-director")
+			if row.oldLayout {
+				root = filepath.Join(home, ".agent-director")
+			}
+			config := filepath.Join(root, "config.toml")
+			launch := filepath.Join(home, "launch", "claude-code")
+			none := filepath.Join(home, "nowhere", "claude")
+			plain := filepath.Join(home, "launch", "claude-plain")
+			launchLog, pathLog := filepath.Join(home, "launch-calls.log"), filepath.Join(home, "path-calls.log")
+			tools := filepath.Join(home, "tools")
+			if err := os.MkdirAll(tools, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			uninstallMCPWrapper(t, launch, launchLog, 0o755)
+			uninstallMCPWrapper(t, plain, launchLog, 0o644)
+			if row.onPath {
+				uninstallMCPWrapper(t, filepath.Join(tools, "claude"), pathLog, 0o755)
+			}
+			writeMode(t, filepath.Join(root, "bin", "agent-director"), "binary", 0o755)
+			fill := strings.NewReplacer("{launch}", launch, "{none}", none, "{plain}", plain, "{config}", config, "{home}", home).Replace
+			switch {
+			case row.raw != "":
+				writeMode(t, config, fill(row.raw), 0o600)
+			case row.keys != "":
+				apitest.WriteKeysConfig(t, config, apitest.ConfigKeys{ClaudePath: fill(row.keys)})
+			default:
+				apitest.WriteKeysConfig(t, config, apitest.ConfigKeys{CodexPath: "/opt/codex/codex"})
+			}
+			configBefore, err := os.ReadFile(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			stdout, stderr, code := uninstallMCPRun(t, home, tools, "", nil, row.args...)
+
+			if code != 0 {
+				t.Errorf("exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+			}
+			for _, s := range row.stdout {
+				if !strings.Contains(stdout, fill(s)) {
+					t.Errorf("stdout lacks %q:\n%s", fill(s), stdout)
+				}
+			}
+			for _, s := range row.stderr {
+				if !strings.Contains(stderr, fill(s)) {
+					t.Errorf("stderr lacks %q:\n%s", fill(s), stderr)
+				}
+			}
+			if row.stderrNone && stderr != "" {
+				t.Errorf("stderr = %q, want it empty", stderr)
+			}
+			// Each program's calls are in its own log; only the program that ran has any.
+			wantCalls := map[string][]string{launchLog: nil, pathLog: nil}
+			switch row.ran {
+			case progConf:
+				wantCalls[launchLog] = []string{removeCall}
+			case progPath:
+				wantCalls[pathLog] = []string{removeCall}
+			}
+			for log, want := range wantCalls {
+				var got []string
+				for _, c := range ownedCalls(t, &moveHome{Env: map[string]string{"CLAUDE_STANDIN_LOG": log}}) {
+					got = append(got, c.line())
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("calls recorded in %s = %q, want %q", filepath.Base(log), got, want)
+				}
+			}
+			if row.ran == progNone && len(row.args) == 0 {
+				for _, s := range []string{"from MCP", "deregist", "--mcp-also skipped"} {
+					if strings.Contains(stdout, s) {
+						t.Errorf("stdout of a run without --mcp-also holds %q:\n%s", s, stdout)
+					}
+				}
+			}
+			if after, err := os.ReadFile(config); err != nil || string(after) != string(configBefore) {
+				t.Errorf("config.toml after uninstall.sh = %q, %v; want it unchanged, %q", after, err, configBefore)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "bin", "agent-director")); !os.IsNotExist(err) {
+				t.Errorf("the binary is still there after uninstall.sh: %v", err)
+			}
+		})
 	}
 }

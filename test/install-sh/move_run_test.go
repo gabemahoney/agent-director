@@ -7,6 +7,7 @@ package installsh_test
 // What happens before the move is move_preflight_test.go's.
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,9 +68,43 @@ func moveKeptDir(t *testing.T, h *moveHome) string {
 	return rel
 }
 
+// moveMigratedTemplates are BuildOld's templates as the agent-rename migration
+// leaves them in the new directory, by path under it.
+var moveMigratedTemplates = map[string]string{
+	"templates/worker.toml":   "name = \"worker\"\nagent_args = [\"--model\", \"sonnet\"]\nagent = \"claude\"\n",
+	"templates/reviewer.toml": "name = \"reviewer\"\nagent = \"claude\"\n",
+}
+
+// moveWantMigrated changes wantNew (the original's files, keyed under the new
+// directory) to what the migration leaves there: each template of
+// moveMigratedTemplates holds its migrated bytes in its own mode, and one
+// <file>.pre-agent-rename.<ts> beside it (found in gotNew) is the original.
+func moveWantMigrated(t *testing.T, wantNew, gotNew moveTree) {
+	t.Helper()
+	for rel, text := range moveMigratedTemplates {
+		orig, ok := wantNew[rel]
+		if !ok {
+			t.Fatalf("the original has no %s", rel)
+		}
+		wantNew[rel] = fmt.Sprintf("file %s %x", strings.Fields(orig)[1], sha256.Sum256([]byte(text)))
+		var backups []string
+		for p := range gotNew {
+			if strings.HasPrefix(p, rel+".pre-agent-rename.") {
+				backups = append(backups, p)
+			}
+		}
+		if len(backups) != 1 {
+			t.Errorf("backups of %s = %v, want exactly one", rel, backups)
+			continue
+		}
+		wantNew[backups[0]] = orig
+	}
+}
+
 // moveCheckMoved fails the case unless the home tree is what a move leaves, by
 // SR-14.3's rule: the kept directory is the original; the new one holds every
-// file of the original but bin/, admin/ and the store, the same; the rest of HOME
+// file of the original but bin/, admin/ and the store, the same, except that
+// the migration has changed the templates (moveWantMigrated); the rest of HOME
 // (~/.config aside) is as it was. before is the snapshot taken before the move.
 func moveCheckMoved(t *testing.T, h *moveHome, before moveTree) {
 	t.Helper()
@@ -83,7 +118,9 @@ func moveCheckMoved(t *testing.T, h *moveHome, before moveTree) {
 	skip := []string{"bin", "admin", "state.db", "state.db-wal", "ad-trail.jsonl"}
 	wantNew := moveWithout(original, skip...)
 	wantNew[""] = "dir drwx------"
-	if d := moveDiff(wantNew, moveWithout(moveUnder(got, moveNewRel), skip...)); d != "" {
+	gotNew := moveWithout(moveUnder(got, moveNewRel), skip...)
+	moveWantMigrated(t, wantNew, gotNew)
+	if d := moveDiff(wantNew, gotNew); d != "" {
 		t.Errorf("the new directory differs from the original's files:\n%s", d)
 	}
 	oldTrail, _ := os.ReadFile(filepath.Join(h.Home, moveKeptDir(t, h), "ad-trail.jsonl"))
@@ -513,22 +550,43 @@ func TestMoveOtherReferencesPrinted(t *testing.T) {
 		"  references: these lines still name the old directory. They were left as written;",
 		"    {HOME}/.config/agent-director/config.toml:9:claude_path = \"{HOME}/.agent-director/bin/claude\"",
 		"    {HOME}/.config/agent-director/templates/tooling.toml:2:cwd = \"{HOME}/.agent-director/work\"",
-		"    {HOME}/.config/agent-director/templates/tooling.toml:5:TOOLS = \"~/.agent-director/tools\"",
+		"    {HOME}/.config/agent-director/templates/tooling.toml:6:TOOLS = \"~/.agent-director/tools\"",
 	} {
 		if !strings.Contains(res.Stdout, h.expand(s)) {
 			t.Errorf("stdout lacks %q:\n%s", s, res.Stdout)
 		}
 	}
+	// The references come after the migration (their line numbers are those of
+	// the migrated files), and no backup of a migrated file is listed.
+	refs := strings.Index(res.Stdout, "  references: ")
+	lastMigrate := strings.LastIndex(res.Stdout, "  migrate : ")
+	if refs < 0 {
+		t.Fatalf("stdout has no references block:\n%s", res.Stdout)
+	}
+	if lastMigrate < 0 || refs < lastMigrate {
+		t.Errorf("references at %d, last migrate line at %d; want the references after every migrate line:\n%s", refs, lastMigrate, res.Stdout)
+	}
+	if strings.Contains(res.Stdout[refs:], ".pre-agent-rename.") {
+		t.Errorf("a migration backup is printed as a reference:\n%s", res.Stdout[refs:])
+	}
 	if strings.Contains(res.Stdout, "PLAIN") {
 		t.Errorf("stdout names a line that does not reach the old directory:\n%s", res.Stdout)
 	}
-	// Left as written: the new files are the old ones, byte for byte.
-	for _, f := range []string{"config.toml", "templates/tooling.toml", "templates/worker.toml"} {
-		a, errA := os.ReadFile(filepath.Join(h.New, f))
-		b, errB := os.ReadFile(filepath.Join(h.Home, moveKeptDir(t, h), f))
-		if errA != nil || errB != nil || string(a) != string(b) {
-			t.Errorf("%s changed in the move: %v %v", f, errA, errB)
+	// The move leaves every line as written (config.toml is the old one, byte
+	// for byte); the migration then adds the agent to each template, and the
+	// kept directory's templates are the originals.
+	want := map[string]string{
+		"config.toml":            h.expand(cfg),
+		"templates/tooling.toml": strings.Replace(h.expand(tmpl), "\n\n[extra_env]", "\n\nagent = \"claude\"\n[extra_env]", 1),
+		"templates/worker.toml":  moveMigratedTemplates["templates/worker.toml"],
+	}
+	for f, text := range want {
+		if b, err := os.ReadFile(filepath.Join(h.New, f)); err != nil || string(b) != text {
+			t.Errorf("new %s = %q, %v; want %q", f, b, err, text)
 		}
+	}
+	if b, err := os.ReadFile(filepath.Join(h.Home, moveKeptDir(t, h), "templates/tooling.toml")); err != nil || string(b) != h.expand(tmpl) {
+		t.Errorf("kept tooling.toml = %q, %v; want the original", b, err)
 	}
 }
 

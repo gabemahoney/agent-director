@@ -56,9 +56,12 @@ yet carry the help hook. With this flag set, every Spawn this binary
 creates is self-describing to its first Claude turn regardless of the
 config dir.
 
-`install.sh` toggles the flag in lockstep with the static hook write —
-the Q4 "inject persistent help hooks?" answer drives both halves
-together. `--no-hooks` skips both. `uninstall.sh` reverses both.
+`install.sh` sets the flag whether or not Claude Code is installed, so a
+host with only Codex gets it too. The static hook write in
+`~/.claude/settings.json` happens only with Claude Code installed (see
+[Claude Code and Codex](install.md#claude-code-and-codex)). The Q4 "inject
+persistent help hooks?" answer drives both, and `--no-hooks` skips both.
+`uninstall.sh` reverses both.
 
 The hook command is an absolute path rather than a bare
 `agent-director` because the spawned Claude's PATH may not include

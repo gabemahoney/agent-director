@@ -65,13 +65,17 @@
 #   --register-mcp       Run `claude mcp add agent-director -- <path> serve
 #                        --stdio` for the stdio server (exit 6 if it fails). Also
 #                        re-points a registration that names the old
-#                        directory's binary (see "The move" below).
-#   --no-hooks           Skip the ~/.claude/settings.json hook
-#                        injection step entirely. settings.json is
-#                        left byte-identical (no .bak backup, no
-#                        edit). Default OFF — defaulting to skip
-#                        would defeat install.sh's main value over a
-#                        bare binary copy.
+#                        directory's binary (see "The move" below). Claude
+#                        Code only: Codex gets no registration. With Claude
+#                        Code not installed (see "Agents" below) it is skipped
+#                        with a line saying so, and the install still succeeds.
+#   --no-hooks           Skip the hook injection steps entirely: the
+#                        ~/.claude/settings.json help hooks and the
+#                        inject_help_hook = true merge into config.toml.
+#                        settings.json and config.toml are left
+#                        byte-identical (no .bak backup, no edit). Default
+#                        OFF — defaulting to skip would defeat install.sh's
+#                        main value over a bare binary copy.
 #   --keep-prior         Before overwriting an existing binary,
 #                        snapshot it to <target>.prior (overwriting
 #                        any previous .prior). Roll back with
@@ -94,8 +98,15 @@
 #
 # Exit codes:
 #   0  success
-#   2  pre-flight failure (claude/tmux missing, whitespace in path, a
-#      bad flag, or only one of --sha256 and --admin-sha256)
+#   1  a write of the agent-rename migration failed after the binaries were
+#      installed (a full disk, or permissions changed since pre-flight): see
+#      "The agent-rename migration" below. The file is as it was, every copy
+#      is kept, and the store is not opened.
+#   2  pre-flight failure (tmux, jq, file or sqlite3 missing, neither
+#      Claude Code nor Codex found (see "Agents" below), whitespace in path,
+#      a bad flag, only one of --sha256 and --admin-sha256, or HOME unset,
+#      empty or not an absolute path: checked first, before anything is read
+#      or written; run it with HOME set to the user's home directory)
 #   3  binary source not found / not executable (including a
 #      --from-release release before 0.11.0, which has no
 #      agent-director-admin binary), or the two binaries' version
@@ -106,10 +117,12 @@
 #      install reads no store for the check)
 #   4  hook merge failure (~/.claude/settings.json malformed, or holding
 #      more than one JSON document; an empty one is merged as {}), or
-#      (hooks on) a symlinked settings.json install.sh cannot resolve or
-#      write through: its links loop, or the file they resolve to sits in
-#      a directory that is missing or cannot be written in (refused in
-#      pre-flight, before anything on disk changes)
+#      (hooks on, Claude Code installed) a symlinked settings.json
+#      install.sh cannot resolve or write through: its links loop, or the
+#      file they resolve to sits in a directory that is missing or cannot
+#      be written in (refused in pre-flight, before anything on disk
+#      changes). With Claude Code not installed settings.json is not
+#      touched or checked.
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
 #      existing state.db's user_version unreadable before the open (or
@@ -118,7 +131,14 @@
 #      the migration sentinel (mktemp failed), or post-open
 #      user_version unreadable or != target when a migration was
 #      expected), or a config file whose [store] db_path or
-#      busy_timeout_ms install.sh cannot read, or (hooks on) one that
+#      busy_timeout_ms or [launch] claude_path or codex_path install.sh
+#      cannot read, or, on an install that crosses the agent rename (see
+#      "The agent-rename migration" below), a config.toml that sets the
+#      question-tool key (disable_askuserquestion, disable_ask_user) more
+#      than once under [defaults] or sets defaults as a key on a line that
+#      names disable_askuserquestion, or a template the migration refuses
+#      (ErrTemplateMalformed), or a config.toml or template it will change
+#      that is a symlink it cannot write through, or (hooks on) one that
 #      sets defaults as a key before any header (defaults = { ... }),
 #      which the config.toml merge cannot extend, or (hooks on) a
 #      symlinked config.toml install.sh cannot resolve or write through,
@@ -142,6 +162,8 @@
 #      being the usual cause: the partial new directory was removed and
 #      the old directory is untouched; fix the cause and re-run), or, when
 #      the store open fails another way, agent-director's own err_name.
+#      ErrTemplateMalformed is agent-director's own catalogued name
+#      (errnames.Catalog); fix the template the message names, then re-run.
 #      ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the
 #      move of AD's directory (SR-11.7), which this release makes once on
 #      an upgrade from a release that kept its files in ~/.agent-director,
@@ -156,6 +178,48 @@
 #      command to run by hand, e.g. `claude mcp add agent-director -- <path>
 #      serve --stdio`; the install's last line says so. The check of an earlier
 #      registration (`mcp get`) never fails the install.
+#
+# Agents (SR-11.1). agent-director launches Claude Code and Codex agents,
+# and an install needs at least one of them. Each agent is present when its
+# launch path ([launch] claude_path or codex_path in config.toml, read in
+# pre-flight) names an existing executable file, or its program name (claude,
+# codex) is on PATH; install.sh only looks, and writes no [launch] key.
+# With neither present the install stops, exit 2, naming both agents, their
+# [launch] keys and how to install either; nothing is changed. The Claude
+# Code program is claude_path when it names an executable, else `claude` from
+# PATH; every Claude Code command this script runs (the summary's --version,
+# `mcp get`, `mcp add`, `mcp remove`) goes through it. Codex is never run: the
+# summary prints its program's path, and says it did not run it, because
+# `codex --version` writes files in the Codex folder; install.sh registers
+# nothing with Codex and writes nothing in any Codex folder. With Claude Code
+# not installed the settings.json hook step (the help hooks, and the removal
+# of the old directory's, which --no-hooks would print instead) and
+# --register-mcp are skipped with a line saying "skipped because Claude Code
+# is not installed" (even under --no-hooks), no settings.json symlink
+# check is made, and `mcp get` is not run; the inject_help_hook = true merge
+# into config.toml still runs unless --no-hooks. The summary names each
+# agent's program and version line, "not installed", or that a launch path
+# set names no executable file.
+#
+# The agent-rename migration (SR-11.2). This release renames config.toml's
+# [defaults] key disable_askuserquestion to disable_ask_user and a template's
+# claude_args to agent_args, and gives each template an agent. On an install
+# that crosses the rename (a state.db exists, at the path pre-flight resolves,
+# and its user_version is below AGENT_RENAME_HOP_VERSION, the version of the
+# v8 to v9 store hop), pre-flight checks config.toml and every template
+# (exit 5, ErrConfigMalformed or ErrTemplateMalformed, nothing changed), and
+# after the move and the binary swap, before the store is opened, each file
+# that changes is copied to <file>.pre-agent-rename.<YYYYmmdd-HHMMSS> (mode
+# kept) and replaced whole, byte for byte, with its mode kept and a symlink
+# written through: the key is renamed in place, and a template with no agent
+# gains agent = "claude" before its first [table] header (or last). A write
+# that fails stops the install with exit 1, the file as it was, every copy
+# kept: fix the cause and run this release's install.sh again (it completes
+# the migration, and changes nothing already migrated), or take the way back
+# (docs/operator-actions.md). With no store, or a store at or above that
+# version, no file is read or changed. An unreadable store version stops the
+# install in pre-flight (exit 5, ErrVersionUnreadable). It runs with or
+# without --no-hooks.
 #
 # The move (SR-11.7). An earlier release kept AD's files in
 # ~/.agent-director; this one keeps them in ~/.config/agent-director. When
@@ -182,7 +246,10 @@
 # above) and the same --no-hooks, symlink and --register-mcp choices,
 # ends in the same state and returns 0 on success. Its steps run
 # again: the binaries are copied again (with --keep-prior, not
-# snapshotted: any earlier .prior files are kept), the store is opened
+# snapshotted: any earlier .prior files are kept), config.toml and the
+# templates are migrated only while the store is below the rename's version
+# (a re-run that crosses the rename again changes nothing already migrated
+# and makes no new copy of it), the store is opened
 # (a state.db already at its target version is not migrated) and, with
 # hooks on, settings.json and config.toml are merged again (no hook is
 # added twice), each after a fresh timestamped .bak. With
@@ -192,6 +259,18 @@
 # so, and still returns 0.
 
 set -euo pipefail
+
+# HOME first, before anything is read or written: every path below is built
+# from it, and an empty or relative HOME would put the install root somewhere
+# else (an empty one gives /.config/agent-director). Exit 2, the pre-flight
+# class.
+case "${HOME-}" in
+    /*) ;;
+    *)
+        echo "install.sh: HOME is unset, empty or not an absolute path (HOME='${HOME-}'). Run install.sh with HOME set to the user's home directory, for example HOME=/home/alice." >&2
+        exit 2
+        ;;
+esac
 
 # A umask that removes the owner's own bits (0777, 0222, 0200, ...) also
 # strips them from every file and directory this script creates without a
@@ -334,8 +413,17 @@ fi
 #   ErrVersionUnreadable  a user_version read gave no version
 #                         (ad_fail_unreadable_version): re-run.
 #   ErrConfigMalformed    config.toml refused, by agent-director or by
-#                         install.sh's pre-flight readers, merge check or
-#                         symlink check: fix it, then re-run.
+#                         install.sh's pre-flight readers, merge check,
+#                         symlink check or agent-rename migration checks
+#                         (the question-tool key set twice, or on a line
+#                         that sets defaults as a key): fix it, then re-run.
+#   ErrTemplateMalformed  a stored template refused by the agent-rename
+#                         migration's pre-flight checks (a top-level line
+#                         outside the form, claude_args twice, claude_args
+#                         with agent_args, or a symlink it cannot write
+#                         through): fix the template the message names,
+#                         then re-run. agent-director's own catalogued name
+#                         (errnames.Catalog, config.ErrTemplateMalformed).
 #   ErrSchemaMismatch     state.db newer than this binary (step 4's open):
 #                         install a newer agent-director.
 #   ErrSchemaVerifyFailed step 5 found state.db missing, or not at the
@@ -358,6 +446,9 @@ fi
 # ErrVersionUnreadable, ErrSchemaVerifyFailed, ErrMoveConflict,
 # ErrAgentsLive and ErrMoveFailed are install.sh's own names, not
 # agent-director error names.
+#
+# Exit 1 is the agent-rename migration's failed write (see the header): it
+# ends with no err_name line.
 # --------------------------------------------------------------------
 
 # ad_exit_5 <err_name> — print exit 5's cause line naming <err_name> on
@@ -369,14 +460,14 @@ ad_exit_5() {
 
 # ad_exit_cleanup — the install's EXIT cleanup: remove every temp file this
 # install made and has not moved into place (the staged binary copies, the
-# --from-release downloads, the binary and admin temp copies, and a migration
-# sentinel's temp file that step 3 never moved into place). Every EXIT trap
-# of this script runs it, the move's too (ad_move_on_exit), so the move's
-# traps chain onto it rather than replace it.
+# --from-release downloads, the binary and admin temp copies, a migration
+# sentinel's temp file that step 3 never moved into place, and a migration
+# write's temp file). Every EXIT trap of this script runs it, the move's too
+# (ad_move_on_exit), so the move's traps chain onto it rather than replace it.
 ad_exit_cleanup() {
     local f
     for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
-        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}"; do
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}" "${migrate_tmp:-}"; do
         if [[ -n "$f" ]]; then
             rm -f "$f"
         fi
@@ -415,7 +506,8 @@ case "${uname_s}/${uname_m}" in
         ;;
 esac
 
-# claude + tmux must be on PATH. `file` is required for the --binary
+# tmux must be on PATH (Claude Code and Codex are looked for after the
+# [launch] reader, below: at least one of them is needed). `file` is required for the --binary
 # architecture probe (SR-2.2) — hard requirement; never silent-skip.
 # `sqlite3` is required for the schema-migration flow: it reads the DB's
 # ACTUAL user_version through the WAL (raw header bytes are subtly wrong
@@ -423,13 +515,12 @@ esac
 # needed and to verify the post-open version. Hard requirement — never
 # silent-skip; a bad read would either skip a needed migration or pass a
 # broken install.
-required_tools=(claude tmux jq file sqlite3)
+required_tools=(tmux jq file sqlite3)
 [[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
 for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "install.sh: required tool not found on PATH: $tool" >&2
         case "$tool" in
-            claude)  echo "  Install Claude Code first: https://claude.com/claude-code" >&2 ;;
             tmux)    echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
             jq)      echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
             file)    echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
@@ -442,10 +533,13 @@ done
 
 # The one Claude Code program (SR-11.1): every Claude Code command this
 # script runs (the summary's version line, `mcp get`, `mcp add` and `mcp
-# remove`) goes through "$CLAUDE_PROG", so a later change of which program
-# that is (the pre-flight reader's [launch] claude_path, when it names an
-# existing executable file) is one assignment here and nothing below it.
+# remove`) goes through "$CLAUDE_PROG". It is `claude` (found on PATH) until
+# the agent check below, after the [launch] reader, sets it to claude_path
+# when that names an executable file. CLAUDE_PRESENT is 0 when Claude Code is
+# found neither by claude_path nor on PATH; no Claude Code command runs then.
 CLAUDE_PROG=claude
+CLAUDE_PRESENT=0
+CODEX_PRESENT=0
 
 # --------------------------------------------------------------------
 # Store database: [store] db_path (b.2io)
@@ -504,6 +598,20 @@ CLAUDE_PROG=claude
 # the same line form and with the same refusals, except that a '?' is
 # accepted there (it is no SQLite path); an unset or empty value gives no
 # path.
+#
+# When asked ("launch"), the reader also reads [launch] claude_path and
+# codex_path (SR-5.0, SR-11.1), in the same line form and with the same
+# refusals: one lower-case [launch] header, each key once and in lower case,
+# a one-line "..." holding no backslash, or '...', optionally followed by a
+# # comment, and no control character; a '?' is accepted (it is no SQLite
+# path). A refused launch line gets its own headline ("cannot tell which
+# programs agent-director launches") and says what to change for [launch].
+# A value resolves as Go's config load resolves it, which is not as a path
+# field resolves: empty is unset (printed as an empty line), an absolute path
+# is used unchanged, "~/..." is joined onto $HOME and cleaned, and anything
+# else (a blank value, a relative path, ~ alone, ~user/...) is refused, as
+# Go refuses it with ErrConfigMalformed: a launch path is never joined onto
+# the base directory. Keys under [launch] other than these two are ignored.
 #
 # The block between the >>> and <<< marker lines is self-contained (bash
 # 3.2 or later, builtins only), so a test can extract it with sed and
@@ -571,11 +679,15 @@ ad_toml_name() {
 # ad_db_path_refuse <config> <line number> <line> <reason>... — report a
 # config file the reader cannot read, with the offending line (none when
 # <line number> is 0) and <reason>s saying what to change, then exit 1.
-# Called only inside ad_store_db_path's subshell, which sets want_log.
+# Called only inside ad_store_db_path's subshell, which sets want_log and
+# about_launch (1 while the refusal is about a [launch] header, key or value,
+# whose headline and closing note name [launch], not the store).
 ad_db_path_refuse() {
     local config="$1" n="$2" line="$3" reason
     shift 3
-    if [[ "${want_log:-0}" -eq 1 ]]; then
+    if [[ "${about_launch:-0}" -eq 1 ]]; then
+        echo "install.sh: cannot tell which programs agent-director launches (the [launch] table); refusing to install." >&2
+    elif [[ "${want_log:-0}" -eq 1 ]]; then
         echo "install.sh: cannot tell which store database or error log agent-director opens; refusing to install." >&2
     else
         echo "install.sh: cannot tell which store database agent-director opens; refusing to install." >&2
@@ -588,7 +700,15 @@ ad_db_path_refuse() {
         echo "  $reason" >&2
     done
     if [[ "$n" -gt 0 ]]; then
-        if [[ "${want_log:-0}" -eq 1 ]]; then
+        if [[ "${about_launch:-0}" -eq 1 ]]; then
+            echo "  install.sh reads [launch] claude_path and codex_path itself, to choose the" >&2
+            echo "  Claude Code program it runs and to see which agents are installed, and" >&2
+            echo "  reads only this form of the file: blank lines, # comments, [name]" >&2
+            echo "  headers and name = value lines, a name being letters, digits, _ and -," >&2
+            echo "  with claude_path and codex_path under [launch] set to a one-line \"...\"" >&2
+            echo "  holding no backslash, or '...', and an optional # comment after it. A" >&2
+            echo "  value is an absolute path or starts with ~/; an empty \"\" counts as unset." >&2
+        elif [[ "${want_log:-0}" -eq 1 ]]; then
             echo "  install.sh reads [store] db_path and [log] error_log_path itself, to" >&2
             echo "  check, migrate and verify the database agent-director opens and to move" >&2
             echo "  the paths with it, and reads only this form of the" >&2
@@ -609,28 +729,39 @@ ad_db_path_refuse() {
     exit 1
 }
 
-# ad_store_db_path <config> <home> <base> [log] — print the store database
-# agent-director opens for config file <config>, home directory <home>
-# (non-empty) and base directory <base> (the directory the config file's
-# relative paths are joined onto; the caller says which directory that is,
-# so the same reader serves a config file before and after it moves),
-# resolved as above; a missing <config> gives the default. With a fourth
-# argument "log" it also reads [log] error_log_path and prints it, resolved
-# the same way, as a second line: empty when the file does not set it or sets
-# it empty (there is then nothing to move or check). A '?' is refused in
-# db_path only. On a file the reader cannot read, print why on stderr and
-# return 1, printing nothing on stdout. The body is a subshell under the C
-# locale, so the matching is bytewise whatever the caller's locale.
+# ad_store_db_path <config> <home> <base> [log] [launch] — print the store
+# database agent-director opens for config file <config>, home directory
+# <home> (non-empty) and base directory <base> (the directory the config
+# file's relative paths are joined onto; the caller says which directory that
+# is, so the same reader serves a config file before and after it moves),
+# resolved as above; a missing <config> gives the default. After <base>, the
+# words "log" and "launch" (either, both, in either order) ask for more
+# lines, printed after the store's in this order:
+#   log     [log] error_log_path, resolved the same way: empty when the file
+#           does not set it or sets it empty (there is then nothing to move
+#           or check);
+#   launch  [launch] claude_path, then codex_path, resolved as above: each
+#           empty when unset or empty.
+# Every line is printed, an empty one too, so a caller reads them by
+# position (command substitution drops trailing empty lines: read from a
+# here-string with `|| true` after each read). A '?' is refused in db_path
+# only. On a file the reader cannot read, print why on stderr and return 1,
+# printing nothing on stdout. The body is a subshell under the C locale, so
+# the matching is bytewise whatever the caller's locale.
 ad_store_db_path() (
     LC_ALL=C
-    local config="$1" home="$2" base="$3" want_log=0 n=0 line table=""
-    local seen_store=0 seen_log=0 have_value=0 have_log_value=0
-    local value="" log_value="" key rest resolved name t k which parsed seen
+    local config="$1" home="$2" base="$3" want_log=0 want_launch=0 n=0 line table=""
+    local about_launch=0 seen_store=0 seen_log=0 seen_launch=0 have_value=0 have_log_value=0
+    local have_claude=0 have_codex=0 claude_value="" codex_value=""
+    local value="" log_value="" key rest resolved name t k which parsed seen arg
     local -a tables=(store)
-    if [[ "${4:-}" == log ]]; then
-        want_log=1
-        tables=(store log)
-    fi
+    shift 3
+    for arg in "$@"; do
+        case "$arg" in
+            log) want_log=1; tables+=(log) ;;
+            launch) want_launch=1; tables+=(launch) ;;
+        esac
+    done
     local re_skip='^[[:blank:]]*(#.*)?$'
     local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
     local re_bracket='^[[:blank:]]*\['
@@ -644,6 +775,9 @@ ad_store_db_path() (
     local re_log='^[Ll][Oo][Gg]$'
     local re_db_path='^[Dd][Bb]_[Pp][Aa][Tt][Hh]$'
     local re_elp='^[Ee][Rr][Rr][Oo][Rr]_[Ll][Oo][Gg]_[Pp][Aa][Tt][Hh]$'
+    local re_launch='^[Ll][Aa][Uu][Nn][Cc][Hh]$'
+    local re_claude='^[Cc][Ll][Aa][Uu][Dd][Ee]_[Pp][Aa][Tt][Hh]$'
+    local re_codex='^[Cc][Oo][Dd][Ee][Xx]_[Pp][Aa][Tt][Hh]$'
     local re_cntrl='[[:cntrl:]]'
     # Only to word a refusal: the line forms the reader refuses, as TOML
     # writes them. A key or table-name part is a bare name, a "..." holding no
@@ -671,30 +805,56 @@ ad_store_db_path() (
 
     # is_table <name> <table>: is <name> the table's name in some letter
     # case; key_of <table>: the key the reader reads under it.
+    # The launch table holds two keys, so is_key takes either of them there,
+    # and key_of names the one the (dynamically scoped) name holds, claude_path
+    # when it is neither; key_of also takes claude and codex, the two launch
+    # keys by their program.
     is_table() {
         case "$2" in
             store) [[ "$1" =~ $re_store ]] ;;
             log) [[ "$1" =~ $re_log ]] ;;
+            launch) [[ "$1" =~ $re_launch ]] ;;
         esac
     }
     is_key() {
         case "$2" in
             store) [[ "$1" =~ $re_db_path ]] ;;
             log) [[ "$1" =~ $re_elp ]] ;;
+            launch) [[ "$1" =~ $re_claude || "$1" =~ $re_codex ]] ;;
         esac
     }
     key_of() {
         case "$1" in
             store) k=db_path ;;
             log) k=error_log_path ;;
+            claude) k=claude_path ;;
+            codex) k=codex_path ;;
+            launch)
+                if [[ "${name:-}" =~ $re_codex ]]; then k=codex_path; else k=claude_path; fi
+                ;;
         esac
+    }
+    # set_about <table>: the refusal that follows is about [launch] when <table>
+    # is launch (its headline and closing note then name [launch]).
+    set_about() {
+        if [[ "$1" == launch || "$1" == claude || "$1" == codex ]]; then
+            about_launch=1
+        else
+            about_launch=0
+        fi
     }
     # The advice for a table key before any header (store = { ... }), bare or
     # quoted.
     refuse_top() {
+        local kdesc="$k" kset="set $k"
+        set_about "$1"
+        if [[ "$1" == launch ]]; then
+            kdesc="claude_path or codex_path"
+            kset="set it"
+        fi
         local -a reasons=(
             "This sets $1 as a key (an inline table, say) rather than under a"
-            "[$1] header. Remove this line. If it sets $k, set $k under"
+            "[$1] header. Remove this line. If it sets $kdesc, $kset under"
             "the file's [$1] header instead, adding that header at the end of the"
             "file if the file has none."
             "${not_here[@]}"
@@ -736,6 +896,7 @@ ad_store_db_path() (
                 table="${BASH_REMATCH[1]}"
                 for t in "${tables[@]}"; do
                     if is_table "$table" "$t"; then
+                        set_about "$t"
                         if [[ "$table" != "$t" ]]; then
                             ad_db_path_refuse "$config" "$n" "$line" \
                                 "agent-director reads this header as [$t]: its TOML decoder matches" \
@@ -743,13 +904,19 @@ ad_store_db_path() (
                         fi
                         seen=$seen_store
                         if [[ "$t" == log ]]; then seen=$seen_log; fi
+                        if [[ "$t" == launch ]]; then seen=$seen_launch; fi
                         if [[ "$seen" -eq 1 ]]; then
                             ad_db_path_refuse "$config" "$n" "$line" \
                                 "This is a second [$t] header, and agent-director refuses a table" \
                                 "defined twice. Move the lines under it, up to the next header, to" \
                                 "under the first [$t] header, then remove this header."
                         fi
-                        if [[ "$t" == log ]]; then seen_log=1; else seen_store=1; fi
+                        case "$t" in
+                            log) seen_log=1 ;;
+                            launch) seen_launch=1 ;;
+                            *) seen_store=1 ;;
+                        esac
+                        about_launch=0
                     fi
                 done
                 continue
@@ -762,6 +929,7 @@ ad_store_db_path() (
                     if [[ "$line" =~ $re_aot_one ]]; then
                         for t in "${tables[@]}"; do
                             if is_table "$name" "$t"; then
+                                set_about "$t"
                                 ad_db_path_refuse "$config" "$n" "$line" \
                                     "This makes $t an array of tables ([[name]]), and agent-director" \
                                     "reads [$t] only as one table, so it refuses the file. Write it" \
@@ -778,6 +946,7 @@ ad_store_db_path() (
                     name="$(ad_toml_name "${BASH_REMATCH[1]}")"
                     for t in "${tables[@]}"; do
                         if is_table "$name" "$t"; then
+                            set_about "$t"
                             ad_db_path_refuse "$config" "$n" "$line" \
                                 "agent-director reads this header as [$t]: a quoted name is the" \
                                 "same as the bare one, and its TOML decoder matches names regardless" \
@@ -816,6 +985,7 @@ ad_store_db_path() (
                             refuse_top "$t"
                         fi
                         if [[ "$table" == "$t" ]] && is_key "$name" "$t"; then
+                            set_about "$t"
                             ad_db_path_refuse "$config" "$n" "$line" \
                                 "agent-director reads this key as $k: a quoted key is the same" \
                                 "as the bare one, and its TOML decoder matches names regardless of" \
@@ -838,6 +1008,7 @@ ad_store_db_path() (
                     for t in "${tables[@]}"; do
                         key_of "$t"
                         if is_table "$name" "$t"; then
+                            set_about "$t"
                             ad_db_path_refuse "$config" "$n" "$line" \
                                 "This sets a $t key as a dotted key ($t.$k = ..., say)" \
                                 "rather than under a [$t] header. Move this line, without the" \
@@ -883,22 +1054,30 @@ ad_store_db_path() (
                 which=store
             elif [[ "$want_log" -eq 1 && "$table" == log ]] && is_key "$key" log; then
                 which=log
+            elif [[ "$want_launch" -eq 1 && "$table" == launch ]]; then
+                if [[ "$key" =~ $re_claude ]]; then
+                    which=claude
+                elif [[ "$key" =~ $re_codex ]]; then
+                    which=codex
+                fi
             fi
             if [[ -z "$which" ]]; then
                 continue
             fi
+            set_about "$which"
             key_of "$which"
             if [[ "$key" != "$k" ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "agent-director reads this key as $k: its TOML decoder matches" \
                     "names regardless of letter case. Write it as $k."
             fi
-            if [[ "$which" == log ]]; then
-                if [[ "$have_log_value" -eq 1 ]]; then
-                    ad_db_path_refuse "$config" "$n" "$line" \
-                        "This sets $k a second time. Keep one."
-                fi
-            elif [[ "$have_value" -eq 1 ]]; then
+            seen=$have_value
+            case "$which" in
+                log) seen=$have_log_value ;;
+                claude) seen=$have_claude ;;
+                codex) seen=$have_codex ;;
+            esac
+            if [[ "$seen" -eq 1 ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
                     "This sets $k a second time. Keep one."
             fi
@@ -915,7 +1094,12 @@ ad_store_db_path() (
                     "followed by a # comment. Write it in that form."
             fi
             if [[ "$parsed" =~ $re_cntrl ]]; then
-                if [[ "$which" == log ]]; then
+                if [[ "$about_launch" -eq 1 ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "$k's value holds a control character, such as a tab. install.sh" \
+                        "cannot install with one in the program's path, so remove it." \
+                        "agent-director then launches the path without it."
+                elif [[ "$which" == log ]]; then
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "$k's value holds a control character, such as a tab. install.sh" \
                         "cannot install with one in the path, so remove it. agent-director" \
@@ -938,10 +1122,33 @@ ad_store_db_path() (
                 fi
                 value="$parsed"
                 have_value=1
-            else
+            elif [[ "$which" == log ]]; then
                 log_value="$parsed"
                 have_log_value=1
+            else
+                # Go's config load refuses any launch value but empty, an
+                # absolute path and ~/...: a blank value, a relative path, ~
+                # alone and ~user/... included.
+                case "$parsed" in
+                    ""|/*|"~/"*) ;;
+                    *)
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "$k's value is not an absolute path or a path starting with ~/, which" \
+                            "agent-director refuses (a blank value, a relative path, ~ alone and" \
+                            "~user/... are refused too). Write the program's absolute path, or one" \
+                            "starting with ~/, or remove this line to launch ${which} by its name" \
+                            "on the PATH; an empty \"\" counts as unset."
+                        ;;
+                esac
+                if [[ "$which" == claude ]]; then
+                    claude_value="$parsed"
+                    have_claude=1
+                else
+                    codex_value="$parsed"
+                    have_codex=1
+                fi
             fi
+            about_launch=0
         done <"$config"
     fi
 
@@ -961,9 +1168,444 @@ ad_store_db_path() (
         esac
         printf '%s\n' "$resolved"
     fi
+    if [[ "$want_launch" -eq 1 ]]; then
+        # Only "", an absolute path or ~/... got here: an absolute path stays
+        # as written and ~/... is joined onto the home directory.
+        for value in "$claude_value" "$codex_value"; do
+            case "$value" in
+                "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
+                *)     resolved="$value" ;;
+            esac
+            printf '%s\n' "$resolved"
+        done
+    fi
 )
 
 # <<< ad_store_db_path (b.2io) <<<
+
+# --------------------------------------------------------------------
+# The agent-rename migration (SR-11.2, b.ssz)
+#
+# This release renames config.toml's [defaults] key disable_askuserquestion
+# to disable_ask_user, and a template's claude_args to agent_args, and gives
+# every template an agent (SR-1.2). An install that crosses the rename (a
+# store whose user_version is below the version the rename's store hop
+# produces) rewrites config.toml and every stored template; any other
+# install reads and changes neither.
+#
+# AGENT_RENAME_HOP_VERSION is that version: internal/store's
+# agentRenameHopVersion (the v8 to v9 hop, migrateV8toV9). A Go test beside
+# install_sh_sentinel_path_test.go fails when the two differ, so keep the
+# assignment below on a line of its own, in this form.
+# --------------------------------------------------------------------
+AGENT_RENAME_HOP_VERSION=9
+
+# >>> ad_agent_rename_migrate (b.ssz) >>>
+#
+# The migration's reader and rewriter, for one file. A block of its own (bash
+# 3.2 or later, builtins only, no ad_* helper outside it), so a test can
+# extract it with sed and run it alone, as it does ad_store_db_path's.
+#
+#   ad_agent_rename_migrate <config|template> <file>
+#       config   : <file> is config.toml. The key disable_askuserquestion
+#                  (any letter case) under a [defaults] header (any letter
+#                  case) is renamed disable_ask_user, in place.
+#       template : <file> is a template. Only its top-level part is read,
+#                  the lines before its first table header (the first line
+#                  whose first non-blank character, after a byte-order mark
+#                  on line 1, is "["). A claude_args line (any letter case)
+#                  is renamed agent_args in place, and when the part has no
+#                  agent key (any letter case) the line agent = "claude" is
+#                  added immediately before the first header, or last when
+#                  the file has none (after a missing final line end is
+#                  added). Its tables are never read or changed.
+#       Status 0: the file changes. Its migrated bytes, exact, are all that
+#                 is on stdout (redirect it to a file: a command
+#                 substitution would drop the trailing line ends).
+#       Status 3: nothing to change (also a <file> that is missing). Nothing
+#                 on stdout.
+#       Status 2: refused. The message is on stderr, and the caller exits 5
+#                 with the name ad_agent_rename_err_name prints. Nothing on
+#                 stdout.
+#       Status 4: a write to stdout failed (a full disk, say); the error is
+#                 on stderr. Any other status (1, a redirect that failed)
+#                 is the caller's own write failing: it is never "no change".
+#   ad_agent_rename_err_name <config|template>
+#       prints the err_name of that kind's refusal: ErrConfigMalformed or
+#       ErrTemplateMalformed.
+#
+# The accepted line form is the one ad_store_db_path accepts: blank lines and
+# "#" comment lines; table headers naming one bare key ("[name]", blanks
+# around and inside the brackets, a trailing "#" comment); "name = value"
+# lines whose name is one bare key (letters, digits, "_", "-") and whose
+# value ends on the line, optionally followed by a "#" comment. A UTF-8
+# byte-order mark on line 1 and CRLF line ends are kept. Names match
+# regardless of ASCII letter case. A template's top-level line outside the
+# form is refused; config.toml is held to the form by ad_store_db_path
+# already, so this reads it for the two keys only.
+#
+# The appended or inserted line ends with the file's line end: CRLF when the
+# first line end in the file is CRLF, LF otherwise.
+
+# ad_rn_ci <lowercase word> — set REPLY to a regular expression matching the
+# word in any ASCII letter case ("agent" gives "[aA][gG][eE][nN][tT]").
+ad_rn_ci() {
+    local s="$1" i c pre low=abcdefghijklmnopqrstuvwxyz upper=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+    REPLY=""
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        pre="${low%%"$c"*}"
+        if [[ "$pre" != "$low" ]]; then
+            REPLY="${REPLY}[${c}${upper:${#pre}:1}]"
+        else
+            REPLY="${REPLY}${c}"
+        fi
+    done
+}
+
+# ad_rn_value_ends <text after the "="> — succeed when the value in <text>
+# ends on its line: every string, array and inline table it opens is closed
+# on it, a trailing "#" comment aside. A """ or ''' string closed on the line
+# counts as ended.
+ad_rn_value_ends() {
+    local v="$1" i=0 n c depth=0 state="" rest
+    n=${#v}
+    while [[ "$i" -lt "$n" ]]; do
+        c="${v:i:1}"
+        case "$state" in
+            d)
+                if [[ "$c" == '\' ]]; then
+                    i=$((i + 2))
+                    continue
+                elif [[ "$c" == '"' ]]; then
+                    state=""
+                fi
+                ;;
+            s)
+                if [[ "$c" == "'" ]]; then
+                    state=""
+                fi
+                ;;
+            *)
+                case "$c" in
+                    '"')
+                        if [[ "${v:i:3}" == '"""' ]]; then
+                            rest="${v:i+3}"
+                            [[ "$rest" == *'"""'* ]] || return 1
+                            rest="${rest%%'"""'*}"
+                            i=$((i + 6 + ${#rest}))
+                            continue
+                        fi
+                        state=d
+                        ;;
+                    "'")
+                        if [[ "${v:i:3}" == "'''" ]]; then
+                            rest="${v:i+3}"
+                            [[ "$rest" == *"'''"* ]] || return 1
+                            rest="${rest%%"'''"*}"
+                            i=$((i + 6 + ${#rest}))
+                            continue
+                        fi
+                        state=s
+                        ;;
+                    '[' | '{') depth=$((depth + 1)) ;;
+                    ']' | '}') depth=$((depth - 1)) ;;
+                    '#') break ;;
+                esac
+                ;;
+        esac
+        i=$((i + 1))
+    done
+    [[ -z "$state" && "$depth" -le 0 ]]
+}
+
+ad_agent_rename_err_name() {
+    case "$1" in
+        config) echo ErrConfigMalformed ;;
+        template) echo ErrTemplateMalformed ;;
+    esac
+}
+
+ad_agent_rename_migrate() (
+    LC_ALL=C
+    local kind="$1" file="$2" bom=$'\xef\xbb\xbf' cr=$'\r' eol=$'\n'
+    local count=0 i j line cls key val hname lbom body blanks changed=0 refused=0
+    local in_defaults=0 seen_header=0 hits=0 olds=0 news=0 top_end=0 has_agent=0 insert=0
+    local claude_n=0 agent_args_n=0 claude_at=0
+    local re_skip='^[[:blank:]]*(#.*)?$'
+    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
+    local re_bracket='^[[:blank:]]*\['
+    local re_keyval='^[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*=[[:blank:]]*(.*)$'
+    local re_defaults re_old re_old_any re_new re_claude re_agent_args re_agent
+    local -a raw term hit_at
+    ad_rn_ci defaults; re_defaults="^${REPLY}\$"
+    ad_rn_ci disable_askuserquestion; re_old="^${REPLY}\$"; re_old_any="${REPLY}"
+    ad_rn_ci disable_ask_user; re_new="^${REPLY}\$"
+    ad_rn_ci claude_args; re_claude="^${REPLY}\$"
+    ad_rn_ci agent_args; re_agent_args="^${REPLY}\$"
+    ad_rn_ci agent; re_agent="^${REPLY}\$"
+
+    if [[ ! -f "$file" ]]; then
+        return 3
+    fi
+    # The lines, raw (a byte-order mark and a CR kept), and whether each had
+    # its line end.
+    while :; do
+        if IFS= read -r line; then
+            term[count]=1
+        elif [[ -n "$line" ]]; then
+            term[count]=0
+        else
+            break
+        fi
+        raw[count]="$line"
+        count=$((count + 1))
+    done <"$file"
+    for ((i = 0; i < count; i++)); do
+        if [[ "${term[i]}" -eq 1 ]]; then
+            if [[ "${raw[i]}" == *"$cr" ]]; then
+                eol=$'\r\n'
+            fi
+            break
+        fi
+    done
+
+    # classify <i> — sets lbom (the byte-order mark on line 1), body (the line
+    # without it and without its CR), cls (skip, header, bracket for a header
+    # of another form, keyval, bad), and key, val, hname.
+    classify() {
+        local l="${raw[$1]}"
+        lbom=""
+        if [[ "$1" -eq 0 && "$l" == "$bom"* ]]; then
+            lbom="$bom"
+            l="${l#"$bom"}"
+        fi
+        l="${l%"$cr"}"
+        body="$l"
+        key="" val="" hname=""
+        if [[ "$l" =~ $re_skip ]]; then
+            cls=skip
+        elif [[ "$l" =~ $re_header ]]; then
+            cls=header
+            hname="${BASH_REMATCH[1]}"
+        elif [[ "$l" =~ $re_bracket ]]; then
+            cls=bracket
+        elif [[ "$l" =~ $re_keyval ]]; then
+            cls=keyval
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+        else
+            cls=bad
+        fi
+    }
+    # rename_key <i> <length of the key now> <new key> — put <new key> in
+    # place of the key of line <i>, every other byte kept.
+    rename_key() {
+        local l="${raw[$1]}" b=""
+        if [[ "$1" -eq 0 && "$l" == "$bom"* ]]; then
+            b="$bom"
+            l="${l#"$bom"}"
+        fi
+        [[ "$l" =~ ^[[:blank:]]* ]]
+        blanks="${BASH_REMATCH[0]}"
+        raw[$1]="${b}${blanks}${3}${l:$((${#blanks} + $2))}"
+    }
+    # show_line <i> — one "line N  : text" line of a message, on stderr.
+    show_line() {
+        classify "$1"
+        printf '  line %s  : %s\n' "$(($1 + 1))" "$body" >&2
+    }
+    refuse_tail() {
+        echo '  See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md.' >&2
+        echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    }
+
+    if [[ "$kind" == config ]]; then
+        for ((i = 0; i < count; i++)); do
+            classify "$i"
+            case "$cls" in
+                header)
+                    seen_header=1
+                    in_defaults=0
+                    if [[ "$hname" =~ $re_defaults ]]; then
+                        in_defaults=1
+                    fi
+                    ;;
+                bracket)
+                    seen_header=1
+                    in_defaults=0
+                    ;;
+                keyval)
+                    if [[ "$seen_header" -eq 0 ]]; then
+                        # defaults set as a key before any header, on a line
+                        # that names the old key: the rename cannot reach it.
+                        if [[ "$key" =~ $re_defaults && "$body" =~ $re_old_any ]]; then
+                            if [[ "$refused" -eq 0 ]]; then
+                                echo "install.sh: config.toml sets defaults as a key and names disable_askuserquestion in it; refusing to install." >&2
+                            else
+                                echo "install.sh: config.toml also sets defaults as a key and names disable_askuserquestion in it; refusing to install." >&2
+                            fi
+                            echo "  config  : $file" >&2
+                            show_line "$i"
+                            echo "  This release renames disable_askuserquestion only on its own line under a" >&2
+                            echo "  [defaults] header, and rewrites no table set as a key (an inline table, say)," >&2
+                            echo "  so the file would be refused after the upgrade. Remove this line, and set" >&2
+                            echo "  disable_ask_user on its own line under the file's [defaults] header instead," >&2
+                            echo "  adding that header at the end of the file if the file has none, together" >&2
+                            echo "  with each other key this line sets." >&2
+                            echo "  Add no header in this line's place: the lines below it, up to the next" >&2
+                            echo "  header, would fall under that header too." >&2
+                            refuse_tail
+                            refused=1
+                        fi
+                    elif [[ "$in_defaults" -eq 1 ]]; then
+                        if [[ "$key" =~ $re_old ]]; then
+                            olds=$((olds + 1))
+                            hit_at[hits]="$i"
+                            hits=$((hits + 1))
+                        elif [[ "$key" =~ $re_new ]]; then
+                            news=$((news + 1))
+                            hit_at[hits]="$i"
+                            hits=$((hits + 1))
+                        fi
+                    fi
+                    ;;
+            esac
+        done
+        if [[ "$hits" -gt 1 ]]; then
+            echo "install.sh: config.toml sets the question-tool key more than once under [defaults]; refusing to install." >&2
+            echo "  config  : $file" >&2
+            for ((j = 0; j < hits; j++)); do
+                show_line "${hit_at[j]}"
+            done
+            echo "  This release renamed the key disable_askuserquestion to disable_ask_user and" >&2
+            echo "  reads it once, under the new name. Keep one of these lines, named" >&2
+            echo "  disable_ask_user, and delete the others." >&2
+            refuse_tail
+            refused=1
+        fi
+        if [[ "$refused" -eq 1 ]]; then
+            return 2
+        fi
+        if [[ "$olds" -eq 1 ]]; then
+            rename_key "${hit_at[0]}" 23 disable_ask_user
+            changed=1
+        fi
+    elif [[ "$kind" == template ]]; then
+        top_end=$count
+        for ((i = 0; i < count; i++)); do
+            classify "$i"
+            case "$cls" in
+                skip) ;;
+                header | bracket)
+                    top_end=$i
+                    break
+                    ;;
+                keyval)
+                    if ! ad_rn_value_ends "$val"; then
+                        cls=bad
+                    elif [[ "$key" =~ $re_claude ]]; then
+                        if [[ "$claude_n" -eq 0 ]]; then
+                            claude_at=$i
+                        fi
+                        claude_n=$((claude_n + 1))
+                        hit_at[hits]="$i"
+                        hits=$((hits + 1))
+                    elif [[ "$key" =~ $re_agent_args ]]; then
+                        agent_args_n=$((agent_args_n + 1))
+                        hit_at[hits]="$i"
+                        hits=$((hits + 1))
+                    elif [[ "$key" =~ $re_agent ]]; then
+                        has_agent=1
+                    fi
+                    ;;
+            esac
+            if [[ "$cls" == bad ]]; then
+                echo "install.sh: template $file holds a line the migration cannot read; refusing to install." >&2
+                echo "  template: $file" >&2
+                printf '  line %s  : %s\n' "$((i + 1))" "$body" >&2
+                echo "  The migration reads the lines of a template before its first [table] header" >&2
+                echo "  as blank lines, # comments and name = value lines (a bare name, a value that" >&2
+                echo "  ends on the line), and this line is none of those (a quoted or dotted name," >&2
+                echo "  or a value that goes on to the next line, say). Rewrite it as one bare" >&2
+                echo "  name = value line, then re-run." >&2
+                refuse_tail
+                return 2
+            fi
+        done
+        if [[ "$claude_n" -gt 1 ]]; then
+            echo "install.sh: template $file sets claude_args more than once; refusing to install." >&2
+            echo "  template: $file" >&2
+            for ((j = 0; j < hits; j++)); do
+                classify "${hit_at[j]}"
+                if [[ "$key" =~ $re_claude ]]; then
+                    show_line "${hit_at[j]}"
+                fi
+            done
+            echo "  This release renamed claude_args to agent_args and reads it once. Keep one of" >&2
+            echo "  these lines, named agent_args, and delete the others." >&2
+            refuse_tail
+            refused=1
+        fi
+        if [[ "$claude_n" -ge 1 && "$agent_args_n" -ge 1 ]]; then
+            echo "install.sh: template $file sets both claude_args and agent_args; refusing to install." >&2
+            echo "  template: $file" >&2
+            for ((j = 0; j < hits; j++)); do
+                show_line "${hit_at[j]}"
+            done
+            echo "  This release renamed claude_args to agent_args and reads one of them. Keep one" >&2
+            echo "  line, named agent_args, and delete the other." >&2
+            refuse_tail
+            refused=1
+        fi
+        if [[ "$refused" -eq 1 ]]; then
+            return 2
+        fi
+        if [[ "$claude_n" -eq 1 ]]; then
+            rename_key "$claude_at" 11 agent_args
+            changed=1
+        fi
+        if [[ "$has_agent" -eq 0 ]]; then
+            insert=1
+            changed=1
+        fi
+    else
+        echo "ad_agent_rename_migrate: unknown kind: $kind" >&2
+        return 2
+    fi
+
+    if [[ "$changed" -eq 0 ]]; then
+        return 3
+    fi
+    # emit — the migrated bytes on stdout; it fails when a write does.
+    emit() {
+        for ((i = 0; i < count; i++)); do
+            if [[ "$insert" -eq 1 && "$i" -eq "$top_end" ]]; then
+                if [[ "$i" -eq 0 && "${raw[0]}" == "$bom"* ]]; then
+                    printf '%s' "$bom" || return 1
+                    raw[0]="${raw[0]#"$bom"}"
+                fi
+                printf 'agent = "claude"%s' "$eol" || return 1
+            fi
+            printf '%s' "${raw[i]}" || return 1
+            if [[ "${term[i]}" -eq 1 ]]; then
+                printf '\n' || return 1
+            fi
+        done
+        if [[ "$insert" -eq 1 && "$top_end" -eq "$count" ]]; then
+            if [[ "$count" -gt 0 && "${term[count - 1]}" -eq 0 ]]; then
+                printf '%s' "$eol" || return 1
+            fi
+            printf 'agent = "claude"%s' "$eol" || return 1
+        fi
+    }
+    if ! emit; then
+        return 4
+    fi
+    return 0
+)
+
+# <<< ad_agent_rename_migrate (b.ssz) <<<
 
 # --------------------------------------------------------------------
 # AD's directory moves to ~/.config/agent-director (SR-11.7, b.nx4)
@@ -1359,16 +2001,25 @@ STORE_CLASS=""
 LOG_PHYS=""
 LOG_CLASS=""
 old_error_log=""
+# [launch] claude_path and codex_path as the reader resolved them ("" when
+# unset), read with the store's place from the same file (SR-11.1): the old
+# directory's while the move is due, the new one's otherwise. The move
+# rewrites only db_path and error_log_path, so these stay true after it.
+LAUNCH_CLAUDE_PATH=""
+LAUNCH_CODEX_PATH=""
 if [[ "$MOVE_DUE" -eq 1 ]]; then
-    # While the move is due the reader also reads [log] error_log_path.
-    if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" log)"; then
+    # While the move is due the reader also reads [log] error_log_path. Its
+    # lines come by position (store, error log, claude_path, codex_path), an
+    # empty one included, which command substitution would drop at the end.
+    if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" log launch)"; then
         ad_exit_5 ErrConfigMalformed
     fi
-    state_db="${reader_out%%$'\n'*}"
-    case "$reader_out" in
-        *$'\n'*) old_error_log="${reader_out#*$'\n'}" ;;
-        *) old_error_log="" ;;
-    esac
+    {
+        IFS= read -r state_db || true
+        IFS= read -r old_error_log || true
+        IFS= read -r LAUNCH_CLAUDE_PATH || true
+        IFS= read -r LAUNCH_CODEX_PATH || true
+    } <<<"$reader_out"
     # The two ErrMoveConflict causes that need the keys: a path key whose
     # place cannot be resolved, and a store inside the old directory that is
     # a link ("inside" judged by the store's path before links resolve).
@@ -1393,8 +2044,15 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
     if [[ -n "$old_error_log" ]]; then
         ad_move_refuse_outward_path log error_log_path "$old_error_log"
     fi
-elif ! state_db="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT")"; then
-    ad_exit_5 ErrConfigMalformed
+else
+    if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" launch)"; then
+        ad_exit_5 ErrConfigMalformed
+    fi
+    {
+        IFS= read -r state_db || true
+        IFS= read -r LAUNCH_CLAUDE_PATH || true
+        IFS= read -r LAUNCH_CODEX_PATH || true
+    } <<<"$reader_out"
 fi
 # Messages name the store "state.db" when it is the default one, as
 # before, and by its path when [store] db_path moves it.
@@ -1402,6 +2060,119 @@ state_db_name="state.db"
 if [[ "$state_db" != "$(ad_clean_path "${PREFLIGHT_ROOT}/state.db")" ]]; then
     state_db_name="$state_db"
 fi
+
+# --------------------------------------------------------------------
+# Agents: Claude Code and Codex (SR-11.1)
+#
+# Found here, right after the [launch] reader, before anything on disk
+# changes. An agent is present when its launch path names an existing
+# executable file, or its program name is on PATH. Presence only: nothing is
+# run, and no [launch] key is written. At least one agent must be present, or
+# the install stops (exit 2); that stop (ad_refuse_no_agent) comes after the
+# last pre-flight config read and check, so a config.toml refused for its
+# form stops the install first, exit 5.
+# --------------------------------------------------------------------
+
+# ad_find_agent <name> <launch path> — look for the agent whose program is
+# <name> (claude, codex) and whose [launch] path is <launch path> ("" when
+# unset): its launch path when that names an existing executable file, else
+# <name> on PATH. Sets agent_prog (what to run: the launch path, or the bare
+# name; empty when absent), agent_path (where it is, for messages), agent_how
+# (launch, path or none) and agent_bad (1 when a launch path is set and names
+# no executable file, whether or not PATH then supplies the program).
+ad_find_agent() {
+    local name="$1" lpath="$2" found
+    agent_prog="" agent_path="" agent_how=none agent_bad=0
+    if [[ -n "$lpath" ]]; then
+        if [[ -f "$lpath" && -x "$lpath" ]]; then
+            agent_prog="$lpath"
+            agent_path="$lpath"
+            agent_how=launch
+            return 0
+        fi
+        agent_bad=1
+    fi
+    if found="$(command -v "$name" 2>/dev/null)" && [[ -n "$found" ]]; then
+        agent_prog="$name"
+        agent_path="$found"
+        agent_how=path
+    fi
+    return 0
+}
+
+ad_find_agent claude "$LAUNCH_CLAUDE_PATH"
+CLAUDE_HOW="$agent_how"
+CLAUDE_BAD="$agent_bad"
+CLAUDE_FOUND_PATH="$agent_path"
+if [[ -n "$agent_prog" ]]; then
+    CLAUDE_PRESENT=1
+    CLAUDE_PROG="$agent_prog"
+fi
+ad_find_agent codex "$LAUNCH_CODEX_PATH"
+CODEX_HOW="$agent_how"
+CODEX_BAD="$agent_bad"
+CODEX_FOUND_PATH="$agent_path"
+if [[ -n "$agent_prog" ]]; then
+    CODEX_PRESENT=1
+fi
+
+# ad_agent_absent_reason <name> <key> <launch path> <bad> — one phrase saying
+# why the agent was not found: its launch path names no executable file (when
+# one is set), and its program is not on PATH.
+ad_agent_absent_reason() {
+    if [[ "$4" -eq 1 ]]; then
+        printf '[launch] %s = "%s" names no executable file, and %s is not on PATH' "$2" "$3" "$1"
+    else
+        printf '%s is not on PATH, and [launch] %s is not set' "$1" "$2"
+    fi
+}
+
+# ad_refuse_no_agent — stop the install (exit 2) when neither agent was found.
+# Called after the last pre-flight config read and link check below, so every
+# config-form refusal (exit 5) comes first. The advice names PREFLIGHT_CONFIG,
+# the file pre-flight read (the old directory's while the move is due).
+ad_refuse_no_agent() {
+    if [[ "$CLAUDE_PRESENT" -eq 1 || "$CODEX_PRESENT" -eq 1 ]]; then
+        return 0
+    fi
+    echo "install.sh: neither Claude Code nor Codex was found; refusing to install." >&2
+    echo "  Claude Code: $(ad_agent_absent_reason claude claude_path "$LAUNCH_CLAUDE_PATH" "$CLAUDE_BAD")" >&2
+    echo "  Codex      : $(ad_agent_absent_reason codex codex_path "$LAUNCH_CODEX_PATH" "$CODEX_BAD")" >&2
+    echo "  agent-director launches Claude Code and Codex agents and needs at least one" >&2
+    echo "  of them. Install either, then re-run this install:" >&2
+    echo "    Claude Code: https://claude.com/claude-code, with claude on PATH, or its" >&2
+    echo "      absolute path as claude_path under [launch] in ${PREFLIGHT_CONFIG}." >&2
+    echo "    Codex: see Requirements in docs/install.md" >&2
+    echo "      (https://github.com/${RELEASE_REPO_SLUG}/blob/main/docs/install.md), with codex on PATH," >&2
+    echo "      or its absolute path as codex_path under [launch] in ${PREFLIGHT_CONFIG}." >&2
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    exit 2
+}
+
+# ad_print_agent_summary — the pre-flight summary's line for each agent: the
+# program found and its version line, "not installed", or that a launch path
+# set names no executable file. Claude Code's version comes from running its
+# program. Codex is never run: `codex --version` writes files in the Codex
+# folder (RN-24), so its line gives the program's path and says it was not
+# run, and install.sh touches nothing in any Codex folder.
+ad_print_agent_summary() {
+    if [[ "$CLAUDE_PRESENT" -eq 1 ]]; then
+        if [[ "$CLAUDE_BAD" -eq 1 ]]; then
+            echo "  claude  : [launch] claude_path = \"$LAUNCH_CLAUDE_PATH\" names no executable file; using claude from PATH"
+        fi
+        echo "  claude  : $("$CLAUDE_PROG" --version 2>/dev/null || echo '<unknown>') (program: $CLAUDE_FOUND_PATH)"
+    else
+        echo "  claude  : not installed ($(ad_agent_absent_reason claude claude_path "$LAUNCH_CLAUDE_PATH" "$CLAUDE_BAD"))"
+    fi
+    if [[ "$CODEX_PRESENT" -eq 1 ]]; then
+        if [[ "$CODEX_BAD" -eq 1 ]]; then
+            echo "  codex   : [launch] codex_path = \"$LAUNCH_CODEX_PATH\" names no executable file; using codex from PATH"
+        fi
+        echo "  codex   : $CODEX_FOUND_PATH (version not checked: codex --version writes files in the Codex folder, so install.sh does not run it; check it yourself with: $CODEX_FOUND_PATH --version)"
+    else
+        echo "  codex   : not installed ($(ad_agent_absent_reason codex codex_path "$LAUNCH_CODEX_PATH" "$CODEX_BAD"))"
+    fi
+}
 
 # --------------------------------------------------------------------
 # Store busy timeout: [store] busy_timeout_ms (b.c7f)
@@ -1538,6 +2309,199 @@ if ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "$PREFLIGHT_CONFIG")"; th
 fi
 
 # --------------------------------------------------------------------
+# The agent-rename gate (SR-11.2)
+#
+# The migration of config.toml and the templates (the block above, and the
+# pre-flight checks and the apply step below) runs only on an install that
+# crosses the rename: a store exists at the path pre-flight resolved
+# ($state_db: the old directory's while SR-11.7's move is due, the new one's
+# otherwise) and its user_version is below AGENT_RENAME_HOP_VERSION. With no
+# store, or a store at or above that version, config.toml's question-tool
+# key and every template are neither read nor changed, so a template made
+# after the upgrade survives every later install byte for byte.
+#
+# The version is read from the database file's header when that holds the
+# committed value and reading it touches nothing (ad_header_user_version, just
+# above the gate: a SQLite file with no -wal frames and no hot -journal).
+# Otherwise it is read with the version step's read (ad_user_version, which
+# waits the configured busy timeout), as sqlite3 -readonly: required while
+# the move is due (SR-11.7), and kept always, because a read that is not
+# read-only recovers a store's -wal and removes it, a change on disk that a
+# pre-flight refusal below must not leave. A store whose version cannot be
+# read stops the install here, with exit 5 and ErrVersionUnreadable, before
+# anything changes.
+# --------------------------------------------------------------------
+
+# ad_user_version <db> [readonly] — print the DB's user_version, read through
+# the WAL, and exit with sqlite3's status. With "readonly" the read is
+# sqlite3 -readonly (the agent-rename gate's: the store is opened for reading
+# only, as SR-11.7 requires while the move is due). sqlite3's stderr
+# is printed with its stdout, so the caller holds the whole read in one
+# variable and its status in another, with no file:
+#
+#     rc=0; out="$(ad_user_version "$db")" || rc=$?
+#
+# A nonzero status means the read failed, and the output is sqlite3's own
+# reason, for the report to show (b.n5a). Status 0 with output that is no
+# version means the read printed something else (b.hk7). Use the output as
+# a version only when ad_got_version holds. Call it only on a DB that
+# exists: a failed read never means "no DB".
+#
+# The read waits for a lock up to $store_busy_timeout_ms, the busy timeout
+# every agent-director connection uses ([store] busy_timeout_ms, read in
+# pre-flight, b.c7f; internal/store/store.go openDB). A plain sqlite3 waits
+# 0 ms, so any agent-director process briefly holding state.db's locks
+# (opening, exiting, checkpointing or recovering the WAL) would fail the
+# read at once and the install would misread the store (b.ady).
+#
+# -init /dev/null: the sqlite3 shell otherwise runs the operator's
+# ~/.sqliterc first, and a `.headers on` or `.mode` there changes the
+# output (b.hk7). -batch: with a terminal on stdin, -init makes sqlite3
+# print "-- Loading resources from /dev/null" to stderr, which would join
+# the read's output and make it no version.
+ad_user_version() {
+    if [[ "${2:-}" == readonly ]]; then
+        sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$1" "PRAGMA user_version;" 2>&1
+    else
+        sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$1" "PRAGMA user_version;" 2>&1
+    fi
+}
+
+# ad_is_version <value> — true when <value> is a user_version as sqlite3
+# prints one: a whole number, 0 or more, with no leading zero. Nothing else
+# may reach a printf %d or a version compare (b.hk7). A leading zero would:
+# printf %d reads "010" as octal 8 and fails on "08", and the step-5 string
+# compare holds "04" and "4" different.
+ad_is_version() {
+    [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]
+}
+
+# ad_got_version <status> <output> — true when a user_version read
+# (ad_user_version) exited 0 and printed a version (ad_is_version). Only
+# then may <output> be used as one.
+ad_got_version() {
+    [[ "$1" -eq 0 ]] && ad_is_version "$2"
+}
+
+# ad_show_unreadable_version <output> — print on stderr the <unreadable>
+# line of a user_version read that gave no version, with <output>, all the
+# read printed (sqlite3's own error when it failed), indented under it.
+ad_show_unreadable_version() {
+    echo "  actual   user_version: <unreadable>" >&2
+    if [[ -n "$1" ]]; then
+        printf '%s\n' "$1" | sed 's/^/    /' >&2
+    fi
+}
+
+# ad_fail_unreadable_version <status> <output> <what the install could not
+# do> [<line>...] — finish a user_version read's failure report and exit 5
+# (ErrVersionUnreadable).
+# <status> and <output> are the read's (ad_user_version). It failed when
+# <status> is nonzero or it printed nothing, and otherwise printed <output>,
+# which is not a version (ad_is_version). The caller has already printed
+# the headline. This prints the <unreadable> line, <output> indented under
+# it (on a failed read, sqlite3's own error), the cause, any further
+# <line>s, and the advice.
+#
+# The script cannot tell why a read failed (a lock held past the busy
+# timeout, a broken sqlite3, permissions, a corrupt file), so it shows
+# sqlite3's error and says that a re-run reads again. A lock is a
+# condition time may resolve, so this never sends the operator to a human
+# (b.ady, b.n5a). Output that is not a version is no lock or timing
+# failure, and ~/.sqliterc cannot cause it (ad_user_version): the sqlite3
+# on PATH printed it for this state.db, so a re-run gets the same output
+# until one of the two changes (b.hk7).
+ad_fail_unreadable_version() {
+    local status="$1" output="$2" could_not="$3" failed=0 line
+    shift 3
+    if [[ "$status" -ne 0 || -z "$output" ]]; then
+        failed=1
+    fi
+    ad_show_unreadable_version "$output"
+    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2
+    if [[ "$failed" -eq 1 ]]; then
+        echo "  failed, so the install could not ${could_not}." >&2
+    else
+        echo "  printed the output above, not a whole number (0 or more), so" >&2
+        echo "  the install could not ${could_not}." >&2
+    fi
+    for line in "$@"; do
+        echo "  $line" >&2
+    done
+    if [[ "$failed" -eq 1 ]]; then
+        echo "  Re-running this install retries the read." >&2
+    else
+        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
+        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
+    fi
+    ad_exit_5 ErrVersionUnreadable
+}
+
+# ad_header_user_version <db> — print <db>'s user_version read straight from
+# the database file's header (bytes 60-63, big-endian) and return 0, when
+# that is the committed value and reading it touches nothing: the file starts
+# with SQLite's magic string, no -wal holds frames (none, or an empty one) and
+# no hot -journal waits, and the value is not negative. Otherwise print
+# nothing and return 1: the caller then reads through sqlite3. Opening a
+# WAL-mode store with sqlite3, even -readonly, leaves an empty -wal and a
+# -shm behind it when none was there, and a pre-flight refusal must leave the
+# tree as it found it.
+ad_header_user_version() {
+    local db="$1" bytes magic
+    [[ -f "$db" && -r "$db" ]] || return 1
+    [[ ! -s "${db}-wal" && ! -s "${db}-journal" ]] || return 1
+    bytes=($(od -An -v -tx1 -N64 "$db" 2>/dev/null)) || return 1
+    [[ "${#bytes[@]}" -eq 64 ]] || return 1
+    magic="${bytes[0]}${bytes[1]}${bytes[2]}${bytes[3]}${bytes[4]}${bytes[5]}${bytes[6]}${bytes[7]}${bytes[8]}${bytes[9]}${bytes[10]}${bytes[11]}${bytes[12]}${bytes[13]}${bytes[14]}${bytes[15]}"
+    [[ "$magic" == 53514c69746520666f726d6174203300 ]] || return 1
+    (( 16#${bytes[60]} < 128 )) || return 1
+    printf '%d\n' "$((16#${bytes[60]}${bytes[61]}${bytes[62]}${bytes[63]}))"
+}
+
+# ad_agent_rename_gate [defer] — set AGENT_RENAME_DUE to 1 when a store
+# exists at $state_db and its user_version is below AGENT_RENAME_HOP_VERSION,
+# else 0. A store whose version cannot be read stops the install (exit 5,
+# ErrVersionUnreadable); with "defer" it sets GATE_DEFERRED=1 and returns
+# instead (see below).
+GATE_DEFERRED=0
+AGENT_RENAME_DUE=0
+ad_agent_rename_gate() {
+    local gate_rc=0 gate_version
+    GATE_DEFERRED=0
+    AGENT_RENAME_DUE=0
+    if [[ ! -e "$state_db" ]]; then
+        return 0
+    fi
+    if ! gate_version="$(ad_header_user_version "$state_db")"; then
+        gate_version="$(ad_user_version "$state_db" readonly)" || gate_rc=$?
+    fi
+    if ! ad_got_version "$gate_rc" "$gate_version"; then
+        if [[ "${1:-}" == defer ]]; then
+            GATE_DEFERRED=1
+            return 0
+        fi
+        echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
+        echo "  state.db: $state_db" >&2
+        ad_fail_unreadable_version "$gate_rc" "$gate_version" \
+            "tell whether config.toml and the templates need the agent-rename migration" \
+            "Nothing was installed or changed."
+    fi
+    if [[ "$gate_version" -lt "$AGENT_RENAME_HOP_VERSION" ]]; then
+        AGENT_RENAME_DUE=1
+    fi
+}
+
+# While the move is due (SR-11.7), a store whose version cannot be read is
+# left to the move's live-agents check below, which reads the same store and
+# refuses first (ErrAgentsLive, "the live rows could not be read"): the
+# gate then defers, and runs again once that check has passed.
+if [[ "$MOVE_DUE" -eq 1 ]]; then
+    ad_agent_rename_gate defer
+else
+    ad_agent_rename_gate
+fi
+
+# --------------------------------------------------------------------
 # config.toml merge pre-check (b.whe)
 #
 # With hooks on, install.sh sets inject_help_hook = true under
@@ -1607,6 +2571,93 @@ ad_config_merge_check() (
 if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "$PREFLIGHT_CONFIG"; then
     ad_exit_5 ErrConfigMalformed
 fi
+
+# --------------------------------------------------------------------
+# The agent-rename migration's pre-flight checks (SR-11.2)
+#
+# With the gate open, the migration block runs over config.toml and every
+# templates/*.toml in the directory pre-flight resolves (the old one while
+# the move is due), with or without --no-hooks, before anything on disk
+# changes. A refusal stops the install with exit 5 and its file's err_name:
+# ErrConfigMalformed for config.toml, ErrTemplateMalformed for a template.
+# What will change is kept for the link check below and the apply step.
+# --------------------------------------------------------------------
+
+# ad_migrate_preflight_file <config|template> <file> — run the migration
+# block over <file>, discarding its output. Return 0 when the migration
+# will change <file>, 3 when it will not (or <file> is no file). Exit 5
+# when the block refuses it, or <file> cannot be read.
+ad_migrate_preflight_file() {
+    local kind="$1" file="$2" rc=0
+    if [[ ! -f "$file" ]]; then
+        return 3
+    fi
+    if [[ ! -r "$file" ]]; then
+        echo "install.sh: cannot read $file, which the agent-rename migration reads; refusing to install." >&2
+        echo "  Make it readable by you, then re-run this install." >&2
+        echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+        ad_exit_5 "$(ad_agent_rename_err_name "$kind")"
+    fi
+    ad_agent_rename_migrate "$kind" "$file" >/dev/null || rc=$?
+    case "$rc" in
+        0 | 3) return "$rc" ;;
+        2) ad_exit_5 "$(ad_agent_rename_err_name "$kind")" ;;
+        *)
+            echo "install.sh: reading $file for the agent-rename migration failed (status $rc); refusing to install." >&2
+            echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+            ad_exit_5 "$(ad_agent_rename_err_name "$kind")"
+            ;;
+    esac
+}
+
+# ad_migrate_link_refuse <file> — report a symlinked <file> the migration
+# will change that ad_link_write_check refused, from link_target and
+# link_why, on stderr. The caller exits 5. It never offers --no-hooks: the
+# migration runs with it too.
+ad_migrate_link_refuse() {
+    echo "install.sh: cannot migrate $1 through its symlink; refusing to install." >&2
+    echo "  link    : $1" >&2
+    if [[ -n "$link_target" ]]; then
+        echo "  target  : $link_target" >&2
+    fi
+    echo "  $link_why" >&2
+    echo "  The agent-rename migration rewrites this file (config.toml's" >&2
+    echo "  disable_askuserquestion key, a template's claude_args and agent), with or" >&2
+    echo "  without --no-hooks, writing into the file a symlink resolves to and keeping" >&2
+    echo "  the link. Fix the link so it reaches a file in a directory you can write in." >&2
+    echo "  Or make the rename yourself where the file comes from (your dotfiles or" >&2
+    echo "  home-manager configuration, say): in config.toml, disable_askuserquestion" >&2
+    echo "  becomes disable_ask_user; in a template, claude_args becomes agent_args and" >&2
+    echo '  a line agent = "claude" goes among the lines before its first [table] header' >&2
+    echo "  when it has no agent." >&2
+    echo '  See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md.' >&2
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+}
+
+MIGRATE_CONFIG_CHANGES=0
+MIGRATE_TEMPLATES=()
+# ad_migrate_preflight_all — run the migration block over config.toml and
+# every template (when the gate is open), filling MIGRATE_CONFIG_CHANGES and
+# MIGRATE_TEMPLATES.
+ad_migrate_preflight_all() {
+    local mig_rc mig_f
+    if [[ "$AGENT_RENAME_DUE" -ne 1 ]]; then
+        return 0
+    fi
+    mig_rc=0
+    ad_migrate_preflight_file config "$PREFLIGHT_CONFIG" || mig_rc=$?
+    if [[ "$mig_rc" -eq 0 ]]; then
+        MIGRATE_CONFIG_CHANGES=1
+    fi
+    for mig_f in "${PREFLIGHT_ROOT}/templates"/*.toml; do
+        mig_rc=0
+        ad_migrate_preflight_file template "$mig_f" || mig_rc=$?
+        if [[ "$mig_rc" -eq 0 ]]; then
+            MIGRATE_TEMPLATES+=("$mig_f")
+        fi
+    done
+}
+ad_migrate_preflight_all
 
 # --------------------------------------------------------------------
 # Symlinked settings.json and config.toml pre-check (b.nw5)
@@ -1682,14 +2733,39 @@ ad_link_refuse() {
     echo "  Nothing was installed or changed. Re-run this install after the change." >&2
 }
 
-if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
+# settings.json is edited only with Claude Code installed, so it is checked
+# only then.
+if [[ "$NO_HOOKS" -eq 0 && "$CLAUDE_PRESENT" -eq 1 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; then
     ad_link_refuse "$DEFAULT_SETTINGS_PATH"
     exit 4
 fi
+# The agent-rename migration's own link check (SR-11.2), with or without
+# --no-hooks: it rewrites config.toml (when it holds the old key) and each
+# template it will change, so a link to one that cannot be written through
+# stops the install here. For config.toml it runs before the merge's check
+# below, so the merge's --no-hooks advice is never given for a file the
+# migration writes anyway.
+ad_migrate_link_checks() {
+    local mig_f
+    if [[ "$MIGRATE_CONFIG_CHANGES" -eq 1 ]] && ! ad_link_write_check "$PREFLIGHT_CONFIG"; then
+        ad_migrate_link_refuse "$PREFLIGHT_CONFIG"
+        ad_exit_5 ErrConfigMalformed
+    fi
+    for mig_f in ${MIGRATE_TEMPLATES[@]+"${MIGRATE_TEMPLATES[@]}"}; do
+        if ! ad_link_write_check "$mig_f"; then
+            ad_migrate_link_refuse "$mig_f"
+            ad_exit_5 ErrTemplateMalformed
+        fi
+    done
+}
+ad_migrate_link_checks
 if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$PREFLIGHT_CONFIG"; then
     ad_link_refuse "$PREFLIGHT_CONFIG"
     ad_exit_5 ErrConfigMalformed
 fi
+# The last pre-flight config read and check is done: neither agent found
+# stops the install now (exit 2), after every config-form refusal (exit 5).
+ad_refuse_no_agent
 
 # --------------------------------------------------------------------
 # Links and PATH entries into the old bin directory; nothing running
@@ -1960,8 +3036,18 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
     ad_agents_live_check
 fi
 
+# A gate that deferred to the check above (the store's version was unreadable
+# while the move is due) runs again now that the check read the rows: a
+# version that still cannot be read stops the install, as above, and one that
+# can be read sends the migration's checks through late.
+if [[ "$GATE_DEFERRED" -eq 1 ]]; then
+    ad_agent_rename_gate
+    ad_migrate_preflight_all
+    ad_migrate_link_checks
+fi
+
 echo "install.sh: pre-flight OK"
-echo "  claude  : $("$CLAUDE_PROG" --version 2>/dev/null || echo '<unknown>')"
+ad_print_agent_summary
 echo "  tmux    : $(tmux -V 2>/dev/null || echo '<unknown>')"
 if [[ "$state_db_name" != state.db ]]; then
     echo "  store   : $state_db ([store] db_path in ${PREFLIGHT_CONFIG})"
@@ -3011,10 +4097,12 @@ ad_move_rewrite_config() {
 # ad_move_print_references <kept dir> — print every other reference into the
 # old directory the installer finds in the new config.toml (a [launch]
 # value) or a template (an extra_env value, cwd), each with its fix, left as
-# written.
+# written. Called after the agent-rename migration, which inserts lines, so
+# the file:line printed is right for the files as the install leaves them; the
+# migration's own copies (*.pre-agent-rename.*) are not searched.
 ad_move_print_references() {
     local hits
-    hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
+    hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I --exclude='*.pre-agent-rename.*' -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
     if [[ -n "$hits" ]]; then
         echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):"
         printf '%s\n' "$hits" | sed 's/^/    /'
@@ -3108,7 +4196,6 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
     if [[ -n "$MOVE_NOTES" ]]; then
         printf '%s' "$MOVE_NOTES"
     fi
-    ad_move_print_references "$MOVED_KEPT"
 
     # Every step from here works in the new directory (SR-11.7).
     if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME" "$DEFAULT_INSTALL_ROOT")"; then
@@ -3295,6 +4382,187 @@ if [[ "$MOVED" -eq 1 ]]; then
 fi
 
 # --------------------------------------------------------------------
+# The agent-rename migration, applied (SR-11.2)
+#
+# With the gate open (pre-flight), after SR-11.7's move and the binary swap
+# and before the first step that opens the store, config.toml and every
+# templates/*.toml in AD's directory (DEFAULT_INSTALL_ROOT, the new one
+# after a move) are migrated, each change re-derived here by the migration
+# block from the file as it is now. Each file whose bytes change is first
+# copied beside itself, with its mode, as
+# <file>.pre-agent-rename.<YYYYmmdd-HHMMSS> (a name config.toml's merge
+# backups, config.toml.bak.<ts>, never take, and one that does not end in
+# .toml, so no template lookup reads it), and then replaced whole, byte for
+# byte, with its mode kept and a symlink written through (a 0600 template
+# stays 0600): the new bytes go to <target>.new, written owner-only (umask
+# 077) and then given the target's mode, and mv puts them over the target.
+# A file that needs no change gets neither a write nor a backup, so a re-run
+# that crosses the rename again changes nothing already migrated.
+#
+# A write that fails (a full disk, permissions changed since pre-flight)
+# leaves that file as it was, keeps every backup, removes its temp file and
+# stops the install before the store is opened, with exit 1 and the two ways
+# on (ad_migrate_fail_write). The writes go through the cp (the backup), the
+# chmod and the mv found on PATH, which is how a test fails one of them.
+# --------------------------------------------------------------------
+
+migrate_tmp=""
+
+# ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
+# permission bits, the same way (b.ojn): remove any <bak> first (an earlier
+# run's copy of the same second, at whatever mode it has), copy owner-only
+# (umask 077), then chmod. cp reads through a symlinked <file>, so <bak> is
+# a regular copy of the link's target, beside the link. Not cp -p: GNU cp
+# -p also copies ACLs and xattrs, and fails where the file system cannot
+# take them (NFS homes; Ubuntu LP#2087769), which would stop the install
+# here.
+ad_backup_keeping_mode() {
+    rm -f "$2"
+    (umask 077; cp -f "$1" "$2") || return 1
+    chmod "$(ad_mode_of "$1")" "$2"
+}
+
+# ad_migrate_ways_on — the two ways on after a migration step failed, on
+# stderr.
+ad_migrate_ways_on() {
+    echo "  The new binaries are already installed, and the store is not opened. Either:" >&2
+    echo "    - fix the cause, then run this release's install.sh again. It completes the" >&2
+    echo "      migration: it changes nothing in a file already migrated and makes no new" >&2
+    echo "      backup of one, and then it migrates the store. Or" >&2
+    echo "    - take the way back to the previous release: see \"Going back to the" >&2
+    echo "      previous release\" and \"A migration write failed after the binary swap\" in" >&2
+    echo "      docs/operator-actions.md." >&2
+}
+
+# ad_migrate_fail_write <file> <error> — a migration write failed: remove
+# the temp file, report the file and the error and the two ways on, and exit
+# 1, as the installer's other failed writes do. <file> is as it was before.
+ad_migrate_fail_write() {
+    if [[ -n "$migrate_tmp" ]]; then
+        rm -f "$migrate_tmp"
+        migrate_tmp=""
+    fi
+    echo "install.sh: the agent-rename migration could not write $1; stopping before the store is opened." >&2
+    echo "  file    : $1" >&2
+    printf '%s\n' "$2" | sed '1s/^/  error   : /;2,$s/^/            /' >&2
+    echo "  $1 is as it was, and every copy this install made is kept." >&2
+    ad_migrate_stop_references
+    ad_migrate_ways_on
+    exit 1
+}
+
+# ad_migrate_stop_references — on a stop after the move (MOVED=1), print the
+# move's references into the old directory on stderr, before the stop
+# message's last lines: a re-run has no move due, so it would never print them
+# (SR-11.7). Nothing when no move ran.
+ad_migrate_stop_references() {
+    if [[ "$MOVED" -eq 1 ]]; then
+        ad_move_print_references "$MOVED_KEPT" >&2
+    fi
+}
+
+# ad_migrate_refuse_applied <kind> <file> <error> — the migration refused
+# <file> at apply time, which pre-flight accepted: remove the temp file, report
+# the refusal, the move's references (when moved) and the two ways on, and
+# exit 5 with the kind's err_name. <error> is the migration's output, its last
+# line being the status line.
+ad_migrate_refuse_applied() {
+    if [[ -n "$migrate_tmp" ]]; then
+        rm -f "$migrate_tmp"
+        migrate_tmp=""
+    fi
+    echo "install.sh: the agent-rename migration refuses $2, which pre-flight accepted; stopping before the store is opened." >&2
+    printf '%s\n' "$3" | sed '$d' >&2
+    echo "  $2 changed since pre-flight." >&2
+    ad_migrate_stop_references
+    ad_migrate_ways_on
+    ad_exit_5 "$(ad_agent_rename_err_name "$1")"
+}
+
+# ad_migrate_apply_file <config|template> <file> — migrate <file>. Return 0
+# when it changed, 3 when it needed no change. Exit 1 on a failed write, and
+# exit 5 on a refusal (the file changed since pre-flight).
+ad_migrate_apply_file() {
+    local kind="$1" file="$2" rc=0 target err bak
+    if [[ ! -f "$file" ]]; then
+        return 3
+    fi
+    if ! target="$(ad_resolve_link "$file" 2>&1)"; then
+        ad_migrate_fail_write "$file" "$target"
+    fi
+    # Decide first, with stdout thrown away, whether the file needs a change:
+    # nothing is created beside the target for a file that needs none (it may
+    # sit behind a link into a directory this install cannot write).
+    err="$(ad_agent_rename_migrate "$kind" "$file" 2>&1 >/dev/null)" || rc=$?
+    case "$rc" in
+        0) ;;
+        3) return 3 ;;
+        2)
+            ad_migrate_refuse_applied "$kind" "$file" "$err"
+            ;;
+        *)
+            ad_migrate_fail_write "$file" "$err"
+            ;;
+    esac
+    rc=0
+    migrate_tmp="${target}.new"
+    rm -f "$migrate_tmp" 2>/dev/null || true
+    err="$( (umask 077; ad_agent_rename_migrate "$kind" "$file" >"$migrate_tmp") 2>&1 )" || rc=$?
+    case "$rc" in
+        0) ;;
+        3)
+            rm -f "$migrate_tmp"
+            migrate_tmp=""
+            return 3
+            ;;
+        2)
+            ad_migrate_refuse_applied "$kind" "$file" "$err"
+            ;;
+        *)
+            ad_migrate_fail_write "$file" "$err"
+            ;;
+    esac
+    bak="${file}.pre-agent-rename.${migrate_ts}"
+    if ! err="$(ad_backup_keeping_mode "$file" "$bak" 2>&1)"; then
+        ad_migrate_fail_write "$file" "copying it to $bak failed: $err"
+    fi
+    if ! err="$(chmod "$(ad_mode_of "$target")" "$migrate_tmp" 2>&1)"; then
+        ad_migrate_fail_write "$file" "$err"
+    fi
+    if ! err="$(mv -f "$migrate_tmp" "$target" 2>&1)"; then
+        ad_migrate_fail_write "$file" "$err"
+    fi
+    migrate_tmp=""
+    echo "  migrate : $file migrated for the agent rename (copy: $bak)"
+}
+
+if [[ "$AGENT_RENAME_DUE" -eq 1 ]]; then
+    migrate_ts="$(ad_ts)"
+    migrate_changed=0
+    mig_rc=0
+    ad_migrate_apply_file config "${DEFAULT_INSTALL_ROOT}/config.toml" || mig_rc=$?
+    if [[ "$mig_rc" -eq 0 ]]; then
+        migrate_changed=1
+    fi
+    for mig_f in "${DEFAULT_INSTALL_ROOT}/templates"/*.toml; do
+        mig_rc=0
+        ad_migrate_apply_file template "$mig_f" || mig_rc=$?
+        if [[ "$mig_rc" -eq 0 ]]; then
+            migrate_changed=1
+        fi
+    done
+    if [[ "$migrate_changed" -eq 0 ]]; then
+        echo "  migrate : config.toml and the templates need no agent-rename change"
+    fi
+fi
+
+# The move's other references into the old directory, printed after the
+# migration so their line numbers are those of the files as they now are.
+if [[ "$MOVED" -eq 1 ]]; then
+    ad_move_print_references "$MOVED_KEPT"
+fi
+
+# --------------------------------------------------------------------
 # Schema migration flow (SR-1.7) — six steps.
 #
 # The new binary is already in place (step 1, the atomic mv above). An
@@ -3345,104 +4613,9 @@ fi
 #            it is documented in SKILL.md, not worked around in code.
 # --------------------------------------------------------------------
 
-# ad_user_version <db> — print the DB's user_version, read through the WAL,
-# and exit with sqlite3's status. sqlite3's stderr is printed with its
-# stdout, so the caller holds the whole read in one variable and its status
-# in another, with no file:
-#
-#     rc=0; out="$(ad_user_version "$db")" || rc=$?
-#
-# A nonzero status means the read failed, and the output is sqlite3's own
-# reason, for the report to show (b.n5a). Status 0 with output that is no
-# version means the read printed something else (b.hk7). Use the output as
-# a version only when ad_got_version holds. Call it only on a DB that
-# exists: a failed read never means "no DB".
-#
-# The read waits for a lock up to $store_busy_timeout_ms, the busy timeout
-# every agent-director connection uses ([store] busy_timeout_ms, read in
-# pre-flight, b.c7f; internal/store/store.go openDB). A plain sqlite3 waits
-# 0 ms, so any agent-director process briefly holding state.db's locks
-# (opening, exiting, checkpointing or recovering the WAL) would fail the
-# read at once and the install would misread the store (b.ady).
-#
-# -init /dev/null: the sqlite3 shell otherwise runs the operator's
-# ~/.sqliterc first, and a `.headers on` or `.mode` there changes the
-# output (b.hk7). -batch: with a terminal on stdin, -init makes sqlite3
-# print "-- Loading resources from /dev/null" to stderr, which would join
-# the read's output and make it no version.
-ad_user_version() {
-    sqlite3 -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$1" "PRAGMA user_version;" 2>&1
-}
-
-# ad_is_version <value> — true when <value> is a user_version as sqlite3
-# prints one: a whole number, 0 or more, with no leading zero. Nothing else
-# may reach a printf %d or a version compare (b.hk7). A leading zero would:
-# printf %d reads "010" as octal 8 and fails on "08", and the step-5 string
-# compare holds "04" and "4" different.
-ad_is_version() {
-    [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]
-}
-
-# ad_got_version <status> <output> — true when a user_version read
-# (ad_user_version) exited 0 and printed a version (ad_is_version). Only
-# then may <output> be used as one.
-ad_got_version() {
-    [[ "$1" -eq 0 ]] && ad_is_version "$2"
-}
-
-# ad_show_unreadable_version <output> — print on stderr the <unreadable>
-# line of a user_version read that gave no version, with <output>, all the
-# read printed (sqlite3's own error when it failed), indented under it.
-ad_show_unreadable_version() {
-    echo "  actual   user_version: <unreadable>" >&2
-    if [[ -n "$1" ]]; then
-        printf '%s\n' "$1" | sed 's/^/    /' >&2
-    fi
-}
-
-# ad_fail_unreadable_version <status> <output> <what the install could not
-# do> [<line>...] — finish a user_version read's failure report and exit 5
-# (ErrVersionUnreadable).
-# <status> and <output> are the read's (ad_user_version). It failed when
-# <status> is nonzero or it printed nothing, and otherwise printed <output>,
-# which is not a version (ad_is_version). The caller has already printed
-# the headline. This prints the <unreadable> line, <output> indented under
-# it (on a failed read, sqlite3's own error), the cause, any further
-# <line>s, and the advice.
-#
-# The script cannot tell why a read failed (a lock held past the busy
-# timeout, a broken sqlite3, permissions, a corrupt file), so it shows
-# sqlite3's error and says that a re-run reads again. A lock is a
-# condition time may resolve, so this never sends the operator to a human
-# (b.ady, b.n5a). Output that is not a version is no lock or timing
-# failure, and ~/.sqliterc cannot cause it (ad_user_version): the sqlite3
-# on PATH printed it for this state.db, so a re-run gets the same output
-# until one of the two changes (b.hk7).
-ad_fail_unreadable_version() {
-    local status="$1" output="$2" could_not="$3" failed=0 line
-    shift 3
-    if [[ "$status" -ne 0 || -z "$output" ]]; then
-        failed=1
-    fi
-    ad_show_unreadable_version "$output"
-    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2
-    if [[ "$failed" -eq 1 ]]; then
-        echo "  failed, so the install could not ${could_not}." >&2
-    else
-        echo "  printed the output above, not a whole number (0 or more), so" >&2
-        echo "  the install could not ${could_not}." >&2
-    fi
-    for line in "$@"; do
-        echo "  $line" >&2
-    done
-    if [[ "$failed" -eq 1 ]]; then
-        echo "  Re-running this install retries the read." >&2
-    else
-        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
-        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
-    fi
-    ad_exit_5 ErrVersionUnreadable
-}
+# (ad_user_version, ad_is_version, ad_got_version, ad_show_unreadable_version
+# and ad_fail_unreadable_version are defined above, in the pre-flight section
+# on the agent-rename gate, which reads the store's version first.)
 
 # ad_target_version <stderr> — the schema version THIS binary requires.
 # There is no public "print my schema version" verb (and SR-4 forbids
@@ -3803,19 +4976,8 @@ ad_replace_keeping_mode() {
     mv -f "$tmp" "$target"
 }
 
-# ad_backup_keeping_mode <file> <bak> — copy <file> to <bak> with <file>'s
-# permission bits, the same way (b.ojn): remove any <bak> first (an earlier
-# run's copy of the same second, at whatever mode it has), copy owner-only
-# (umask 077), then chmod. cp reads through a symlinked <file>, so <bak> is
-# a regular copy of the link's target, beside the link. Not cp -p: GNU cp
-# -p also copies ACLs and xattrs, and fails where the file system cannot
-# take them (NFS homes; Ubuntu LP#2087769), which would stop the install
-# here.
-ad_backup_keeping_mode() {
-    rm -f "$2"
-    (umask 077; cp -f "$1" "$2")
-    chmod "$(ad_mode_of "$1")" "$2"
-}
+# (ad_backup_keeping_mode is defined above, with the agent-rename migration's
+# apply step, which copies files first too.)
 
 # The help hooks an earlier release's install.sh wrote name the old
 # directory's binary (SR-11.7). An entry is "ours" the way uninstall.sh tests
@@ -3832,7 +4994,12 @@ OLD_HOOK_OURS_JQ='
         and (.command | startswith($oldprefix)));
 '
 
-if [[ "$NO_HOOKS" -eq 1 ]]; then
+if [[ "$CLAUDE_PRESENT" -eq 0 ]]; then
+    # No Claude Code: settings.json is not touched, the old directory's help
+    # hooks are neither removed nor printed, and this line wins over
+    # --no-hooks' (SR-11.1).
+    echo "  hooks   : skipped because Claude Code is not installed (settings.json is not touched)"
+elif [[ "$NO_HOOKS" -eq 1 ]]; then
     echo "  hooks   : skipped (--no-hooks)"
     # settings.json stays byte-identical; entries naming the old directory's
     # binary are printed with their fix.
@@ -4239,6 +5406,14 @@ ad_mcp_report_failure() {
 
 ad_mcp_step() {
     local plain_add="$REGISTER_MCP" scope cmdline=""
+    if [[ "$CLAUDE_PRESENT" -eq 0 ]]; then
+        # No Claude Code: no `mcp get`, no `mcp add`. --register-mcp says it
+        # was skipped and the install goes on to success.
+        if [[ "$REGISTER_MCP" -eq 1 ]]; then
+            echo "  mcp     : --register-mcp skipped because Claude Code is not installed"
+        fi
+        return 0
+    fi
     if command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
         ad_mcp_classify
         scope="${MCP_SCOPE:-<scope>}"

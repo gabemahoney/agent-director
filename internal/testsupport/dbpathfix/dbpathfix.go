@@ -1,8 +1,11 @@
-// Package dbpathfix runs install.sh's [store] db_path reader (b.2io) and its
-// [store] busy_timeout_ms reader (b.c7f) on their own, and holds the one
-// matrix of config.toml contents and HOME values that the db_path drift guards
-// run through it and through Go's own resolution: pkg/api (config.Load, then
-// resolveStorePath) and internal/store (sentinelPath).
+// Package dbpathfix runs install.sh's [store] db_path reader (b.2io), which
+// also reads [log] error_log_path and [launch] claude_path and codex_path, its
+// [store] busy_timeout_ms reader (b.c7f) and its agent-rename migration
+// (b.ssz) on their own, and holds the matrices of config.toml contents and
+// HOME values that the drift guards run through them and through Go's own
+// resolution: pkg/api (config.Load, then resolveStorePath; LoadTemplate for
+// the migration) and internal/store (sentinelPath). Cases, LogCases and
+// LaunchCases are the reader's; RenameCases are the migration's.
 //
 // The reader takes the base directory its relative paths join onto as an
 // argument (a Base), so a case runs under the new directory (once the move is
@@ -37,6 +40,11 @@ const (
 	// GoRefuses: the reader resolves a path, but config.Load refuses the file,
 	// so the binary's own ErrConfigMalformed stops the install at step 3 or 4.
 	GoRefuses
+	// BothRefuse (LaunchCases): the reader refuses the file as ReaderRefuses
+	// does, and config.Load refuses it too (ErrConfigMalformed), so the
+	// refusal is one the binary would make itself. ReaderRefuses in
+	// LaunchCases is a file config.Load accepts: the reader is stricter.
+	BothRefuse
 )
 
 // Form is how a Case's config file exists on disk.
@@ -346,6 +354,14 @@ func NewReader(t *testing.T, installSh string) *Reader {
 	return newBlockReader(t, installSh, "ad_store_db_path", "b.2io")
 }
 
+// NewUninstallReader extracts the same block from uninstall.sh, which carries a
+// verbatim copy of it (b.ssz) for its [launch] claude_path read. Its Reader
+// runs the same functions as NewReader's; a drift guard runs both.
+func NewUninstallReader(t *testing.T, uninstallSh string) *Reader {
+	t.Helper()
+	return newBlockReader(t, uninstallSh, "ad_store_db_path", "b.2io")
+}
+
 // NewBusyTimeoutReader extracts install.sh's [store] busy_timeout_ms reader,
 // the "# >>> ad_store_busy_timeout_ms" block (b.c7f), as NewReader does. Its
 // Reader runs BusyTimeout.
@@ -456,6 +472,35 @@ func (res Result) Split(t *testing.T) (db, errLog string) {
 	return db, errLog
 }
 
+// ResolveLaunch runs ad_store_db_path <config> <home> <base> launch: the form
+// uninstall.sh and install.sh's non-move pre-flight use. On success Stdout
+// holds three lines, the store path, [launch] claude_path and codex_path (an
+// empty line for a key that is unset or empty); Lines(t, 3) reads them.
+func (r *Reader) ResolveLaunch(t *testing.T, config, home string, b Base) Result {
+	t.Helper()
+	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "launch")
+}
+
+// ResolveLogLaunch runs ad_store_db_path <config> <home> <base> log launch:
+// the pre-flight form while the move is due. On success Stdout holds four
+// lines, the store path, the error-log path, claude_path and codex_path;
+// Lines(t, 4) reads them.
+func (r *Reader) ResolveLogLaunch(t *testing.T, config, home string, b Base) Result {
+	t.Helper()
+	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "log", "launch")
+}
+
+// Lines returns the n lines of a successful result, failing the test when
+// Stdout is not exactly n newline-ended lines (an empty line counts).
+func (res Result) Lines(t *testing.T, n int) []string {
+	t.Helper()
+	lines := strings.Split(res.Stdout, "\n")
+	if len(lines) != n+1 || lines[n] != "" {
+		t.Fatalf("stdout %q is not %d newline-ended lines", res.Stdout, n)
+	}
+	return lines[:n]
+}
+
 // BusyTimeout runs ad_store_busy_timeout_ms <config>.
 func (r *Reader) BusyTimeout(t *testing.T, config string) Result {
 	t.Helper()
@@ -468,6 +513,33 @@ func (r *Reader) Sentinel(t *testing.T, db string) string {
 	res := r.run(t, "ad_sentinel_path", db)
 	if res.Code != 0 || res.Stderr != "" {
 		t.Fatalf("ad_sentinel_path %q: status %d, stderr %q", db, res.Code, res.Stderr)
+	}
+	return strings.TrimSuffix(res.Stdout, "\n")
+}
+
+// NewMigrationReader extracts install.sh's agent-rename migration, the
+// "# >>> ad_agent_rename_migrate" block (b.ssz), as NewReader does. Its Reader
+// runs Migrate and MigrationErrName.
+func NewMigrationReader(t *testing.T, installSh string) *Reader {
+	t.Helper()
+	return newBlockReader(t, installSh, "ad_agent_rename_migrate", "b.ssz")
+}
+
+// Migrate runs ad_agent_rename_migrate <kind> <file>. Stdout holds the
+// migrated bytes, exact, on status 0; the status is 3 for nothing to change
+// (or no such file) and 2 for a refusal, whose message is on Stderr.
+func (r *Reader) Migrate(t *testing.T, kind Kind, file string) Result {
+	t.Helper()
+	return r.run(t, "ad_agent_rename_migrate", string(kind), file)
+}
+
+// MigrationErrName runs ad_agent_rename_err_name <kind>: the err_name the
+// caller reports when Migrate refuses a file of that kind.
+func (r *Reader) MigrationErrName(t *testing.T, kind Kind) string {
+	t.Helper()
+	res := r.run(t, "ad_agent_rename_err_name", string(kind))
+	if res.Code != 0 || res.Stderr != "" {
+		t.Fatalf("ad_agent_rename_err_name %s: status %d, stderr %q", kind, res.Code, res.Stderr)
 	}
 	return strings.TrimSuffix(res.Stdout, "\n")
 }
