@@ -64,7 +64,7 @@ When a verb fails, the harness compares the error envelope fields as follows:
 
 ## Per-verb summary
 
-Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
+Every callable verb in `manifest.CallableVerbs()` is a key (17 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
 
 | Verb | Non-deterministic selectors | Reason |
 |---|---|---|
@@ -77,6 +77,7 @@ Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs who
 | `get-permission` | `.attempted_at`, `.hook_gone_at`, `.request_id`, `.requested_at` | `attempted_at` and `hook_gone_at` are written at call time, as for `decide`. `request_id` and `requested_at` are excluded as the store-assigned columns named in the case's comment (`success_cases.go`): `request_id` is the autoincrement row id, `requested_at` the row's `CURRENT_TIMESTAMP`. Both are written once, when the case seeds its `permission_requests` row, and both store copies carry them, so by the decision tree above they are fixture-derived; the other fields are diffed |
 | `kill` | — | all values fixture-derived |
 | `list` | `.spawns[*].permission_requests[*].attempted_at`, `.spawns[*].permission_requests[*].hook_gone_at` | each request's call-time instants, as for `decide`; every other value is fixture-derived |
+| `list-subagents` | — | all values fixture-derived |
 | `make-template` | `.path` | output path resolved at call time |
 | `pause` | — | all values fixture-derived |
 | `read-pane` | — | all values fixture-derived (`pane_sha256` is the hash of the fixture's pane text) |

@@ -162,6 +162,24 @@ for (const spawn of result.spawns) {
 
 Each row, like `get`'s result, carries `agent` (`"claude"` or `"codex"`), the agent the row runs.
 
+### listSubagents
+
+Read the subagent records of one agent, and whether the agent is tracked.
+
+```sh
+agent-director list-subagents --instance-id <id>
+```
+
+```ts
+const result = await client.listSubagents({ instance_id: "<id>" });
+console.log(result.tracked);
+for (const sub of result.subagents) {
+  console.log(sub.subagent_id, sub.state, sub.subagent_type ?? "unknown type");
+}
+```
+
+`tracked` is `false`, with `subagents` `[]`, for an agent that predates subagent tracking. `subagents` is never null; a field with no known value is `null`, and times are RFC 3339 UTC strings. The fields and values are described in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
+
 ### sendKeys
 
 Send text to the agent's own pane, then one Enter to submit it. An empty

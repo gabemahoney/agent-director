@@ -47,6 +47,7 @@ import type {
   ExpireParams,
   MakeTemplateParams,
   ListParams,
+  ListSubagentsParams,
   PauseParams,
 } from "../types.js";
 
@@ -186,6 +187,8 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildMakeTemplate(params as MakeTemplateParams);
     case "list":
       return buildList(params as ListParams);
+    case "list-subagents":
+      return buildListSubagents(params as ListSubagentsParams);
     case "pause":
       return buildPause(params as PauseParams);
     default: {
@@ -431,6 +434,10 @@ function buildMakeTemplate(p: MakeTemplateParams): string[] {
   }
 
   return f;
+}
+
+function buildListSubagents(p: ListSubagentsParams): string[] {
+  return ["list-subagents", "--instance-id", p.instance_id];
 }
 
 function buildList(p: ListParams): string[] {

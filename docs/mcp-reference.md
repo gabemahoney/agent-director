@@ -435,6 +435,23 @@ Enumerate rows. All filters AND together. Order is unspecified; callers sort.
 - `ErrInvalidFlags`
 - `ErrListInvalidLabel`
 
+## Tool: list-subagents
+
+Return an agent's subagent records and whether they are tracked.
+
+### Input schema
+
+- `instance_id`: type=string, required=true — Id of the Spawn whose subagents to list.
+
+### Output schema
+
+- `tracked`: type=bool — Whether the row's launch registered subagent tracking: false for a row launched before subagent tracking existed, which has no records; true for a row launched since.
+- `subagents`: type=[]object — Every subagent record of the row, across every launch and life of it. Empty array when it has none (never null). Ordered by first_started_at ascending (records with a null first_started_at last), then subagent_id. Each element has all of these keys, a field with no known value null: subagent_id (string) — the subagent's id, unique within its row; instance_id (string) — the row's id; session_id (string?) — the session of the event that created the record, never changed after; subagent_type (string?) — its type; description (string?) — the short description the launching call gave it, never the prompt text; model (string?) — the model it runs; parent_type (string?) — what launched it: agent (the row's own agent, so parent_id is the row's instance_id) or subagent (another subagent, so parent_id is that subagent's subagent_id); parent_id (string?) — as parent_type says; tool_use_id (string?) — the id of the tool call that launched it; run_mode (string?) — background or foreground; first_started_at (timestamp?) — when it first started; started_at (timestamp?) — when its latest run started; stopped_at (timestamp?) — when it last stopped, null if it never has (kept when it runs again); lost_at (timestamp?) — when it was judged lost, null unless it was; state (string) — running (started, neither stopped nor judged lost), stopped (its agent reported it finished) or lost (judged gone without a stop report); close_reason (string?) — why it is no longer running, null exactly while state is running: stop_event (its agent reported it finished), absent_from_snapshot (a snapshot of the agent's running background tasks did not list it) or agent_gone (its agent ended, went missing or began a new launch). Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second).
+
+### Errors
+
+- `ErrSpawnNotFound`
+
 ## Tool: pause
 
 Shut down a waiting row: type `/exit`, wait up to pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof of exit (see find-missing). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).

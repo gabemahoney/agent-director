@@ -312,6 +312,105 @@ func TestDispatch(t *testing.T) {
 		}
 	})
 
+	// seed-subagent writes one subagents row for an existing spawn: every flag
+	// lands in its column, a flag left off keeps SeedSubagent's default (state
+	// running, the rest NULL), and --confirmed=false stores an observation.
+	for _, tc := range []struct {
+		name          string
+		flags         []string
+		wantID        string // "" = generated
+		wantState     string
+		wantConfirmed int64
+		wantCols      map[string]any // by SubagentEntryColumns field name
+	}{
+		{
+			name: "a_success_seed_subagent_every_flag",
+			flags: []string{
+				"--subagent-id", "sa-1", "--state", "lost", "--close-reason", "agent_gone",
+				"--session-id", "sess-1", "--type", "general-purpose", "--description", "d",
+				"--model", "m", "--parent-type", "agent", "--parent-id", "sub-spawn-1",
+				"--tool-use-id", "toolu-1", "--run-mode", "background",
+				"--first-started-at-ms", "1790000000000", "--started-at-ms", "1790000000120",
+				"--stopped-at-ms", "1790000000456", "--lost-at-ms", "1790000001007",
+			},
+			wantID: "sa-1", wantState: "lost", wantConfirmed: 1,
+			wantCols: map[string]any{
+				"CloseReason": "agent_gone", "SessionID": "sess-1", "SubagentType": "general-purpose",
+				"Description": "d", "Model": "m", "ParentType": "agent", "ParentID": "sub-spawn-1",
+				"ToolUseID": "toolu-1", "RunMode": "background",
+				"FirstStartedAt": int64(1790000000000), "StartedAt": int64(1790000000120),
+				"StoppedAt": int64(1790000000456), "LostAt": int64(1790000001007),
+			},
+		},
+		{
+			name:   "a_success_seed_subagent_defaults",
+			wantID: "", wantState: "running", wantConfirmed: 1,
+			wantCols: map[string]any{
+				"CloseReason": nil, "SessionID": nil, "SubagentType": nil, "Description": nil,
+				"Model": nil, "ParentType": nil, "ParentID": nil, "ToolUseID": nil, "RunMode": nil,
+				"FirstStartedAt": nil, "StartedAt": nil, "StoppedAt": nil, "LostAt": nil,
+			},
+		},
+		{
+			name:   "a_success_seed_subagent_unconfirmed",
+			flags:  []string{"--confirmed=false"},
+			wantID: "", wantState: "running", wantConfirmed: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "sub.db")
+			var dummy bytes.Buffer
+			if code := dispatch([]string{
+				"seed-spawn", "--store", dbPath,
+				"--state", "working", "--id", "sub-spawn-1", "--create-store",
+			}, &dummy, &dummy); code != 0 {
+				t.Fatalf("setup seed-spawn failed: %s", dummy.String())
+			}
+
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"seed-subagent", "--store", dbPath, "--instance-id", "sub-spawn-1"}, tc.flags...)
+			if code := dispatch(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("expected empty stderr, got: %s", stderr.String())
+			}
+			var result map[string]string
+			if err := json.Unmarshal([]byte(strings.TrimRight(stdout.String(), "\n")), &result); err != nil {
+				t.Fatalf("stdout not valid JSON: %v", err)
+			}
+			if result["instance_id"] != "sub-spawn-1" || result["subagent_id"] == "" ||
+				(tc.wantID != "" && result["subagent_id"] != tc.wantID) {
+				t.Fatalf("unexpected result fields: %v", result)
+			}
+
+			rows, err := apitest.ReadSubagentRows(dbPath, "sub-spawn-1")
+			if err != nil {
+				t.Fatalf("ReadSubagentRows: %v", err)
+			}
+			if len(rows.Entries) != 1 {
+				t.Fatalf("stored %d subagents rows, want 1", len(rows.Entries))
+			}
+			e := rows.Entries[0]
+			if e.SubagentID != result["subagent_id"] || e.State != tc.wantState || e.Confirmed != tc.wantConfirmed {
+				t.Errorf("stored subagent_id %v state %v confirmed %v; want %s %s %d",
+					e.SubagentID, e.State, e.Confirmed, result["subagent_id"], tc.wantState, tc.wantConfirmed)
+			}
+			got := map[string]any{
+				"CloseReason": e.CloseReason, "SessionID": e.SessionID, "SubagentType": e.SubagentType,
+				"Description": e.Description, "Model": e.Model, "ParentType": e.ParentType,
+				"ParentID": e.ParentID, "ToolUseID": e.ToolUseID, "RunMode": e.RunMode,
+				"FirstStartedAt": e.FirstStartedAt, "StartedAt": e.StartedAt,
+				"StoppedAt": e.StoppedAt, "LostAt": e.LostAt,
+			}
+			for col, want := range tc.wantCols {
+				if got[col] != want {
+					t.Errorf("column %s = %v (%T); want %v (%T)", col, got[col], got[col], want, want)
+				}
+			}
+		})
+	}
+
 	t.Run("a_success_seed_template", func(t *testing.T) {
 		dir := t.TempDir()
 		var stdout, stderr bytes.Buffer
@@ -367,6 +466,46 @@ func TestDispatch(t *testing.T) {
 			t.Fatal("expected error message on stderr")
 		}
 	})
+
+	// seed-subagent refuses a missing required flag, one half of the parent
+	// pair and an unknown instance: non-zero exit, a message on stderr, empty
+	// stdout.
+	for _, tc := range []struct {
+		name  string
+		flags []string
+	}{
+		{"b_missing_flag_seed_subagent", []string{"--store", "STORE"}},
+		{"b_seed_subagent_parent_type_alone", []string{"--store", "STORE", "--instance-id", "sub-spawn-1", "--parent-type", "agent"}},
+		{"b_seed_subagent_unknown_instance", []string{"--store", "STORE", "--instance-id", "no-such-spawn"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "sub-err.db")
+			var dummy bytes.Buffer
+			if code := dispatch([]string{
+				"seed-spawn", "--store", dbPath,
+				"--state", "working", "--id", "sub-spawn-1", "--create-store",
+			}, &dummy, &dummy); code != 0 {
+				t.Fatalf("setup seed-spawn failed: %s", dummy.String())
+			}
+			args := []string{"seed-subagent"}
+			for _, f := range tc.flags {
+				if f == "STORE" {
+					f = dbPath
+				}
+				args = append(args, f)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := dispatch(args, &stdout, &stderr); code == 0 {
+				t.Fatal("expected a non-zero exit")
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected empty stdout on error, got: %s", stdout.String())
+			}
+			if stderr.Len() == 0 {
+				t.Fatal("expected error message on stderr")
+			}
+		})
+	}
 
 	t.Run("c_unknown_subcommand", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
@@ -424,6 +563,7 @@ func TestDispatch(t *testing.T) {
 			"seed-spawn",
 			"seed-parent-child",
 			"seed-permission-request",
+			"seed-subagent",
 			"seed-template",
 			"seed-empty-store",
 			"seed-row-session",

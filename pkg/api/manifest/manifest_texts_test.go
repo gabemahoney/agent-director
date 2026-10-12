@@ -123,7 +123,87 @@ func manifestTextCases() []textCase {
 		def, _ := manifest.Lookup(string(v)) // a missing verb fails at siteText
 		cases = append(cases, textCase{verb: string(v), c: apitest.DescPaneManifest(v, def.ErrorNames)})
 	}
+	cases = append(cases, listSubagentsTextCases()...)
 	return cases
+}
+
+// subagentRecordKeys are the keys of each element of list-subagents'
+// subagents array, with the type and nullability its text states for each
+// (SR-11.4): a "?" marks a key that is null when its value is unknown.
+var subagentRecordKeys = []string{
+	"subagent_id (string)", "instance_id (string)", "session_id (string?)", "subagent_type (string?)",
+	"description (string?)", "model (string?)", "parent_type (string?)", "parent_id (string?)",
+	"tool_use_id (string?)", "run_mode (string?)", "first_started_at (timestamp?)", "started_at (timestamp?)",
+	"stopped_at (timestamp?)", "lost_at (timestamp?)", "state (string)", "close_reason (string?)",
+}
+
+// subagentsTimestampFormat is the sentence naming the format of every
+// timestamp in the subagents text, which the text states once.
+const subagentsTimestampFormat = "Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second)."
+
+// listSubagentsTextCases are list-subagents' own texts: tracked's two values,
+// and the subagents text's every key with its type and nullability, the value
+// sets of state, close_reason, parent_type and run_mode with their meanings,
+// the order, the empty array, the description never being prompt text, and the
+// timestamp format (SR-11.1, SR-11.4, SR-11.5). All three texts are agent
+// neutral: no agent name and no agent-specific hook field or event name.
+func listSubagentsTextCases() []textCase {
+	neutral := apitest.DescCase{Name: "agent neutral", MustNot: []string{
+		"Claude", "Claude Code", "Codex", "SubagentStart", "SubagentStop", "agent_id", "agent_type", "transcript_path", "hook_event_name",
+	}}
+	cases := []textCase{
+		{verb: "list-subagents", c: neutral},
+		{verb: "list-subagents", param: "instance_id", c: neutral},
+		{verb: "list-subagents", field: "tracked", c: neutral},
+		{verb: "list-subagents", field: "subagents", c: neutral},
+		{verb: "list-subagents", field: "tracked", c: tokens("tracked values",
+			"false for a row launched before subagent tracking existed, which has no records", "true for a row launched since")},
+		{verb: "list-subagents", field: "subagents", c: tokens("every record key with type and nullability", subagentRecordKeys...)},
+		{verb: "list-subagents", field: "subagents", c: tokens("never null, even with no records",
+			"Empty array when it has none (never null)", "a field with no known value null")},
+		{verb: "list-subagents", field: "subagents", c: tokens("order",
+			"Ordered by first_started_at ascending (records with a null first_started_at last), then subagent_id")},
+		{verb: "list-subagents", field: "subagents", c: tokens("state values",
+			"running (started, neither stopped nor judged lost)", "stopped (its agent reported it finished)",
+			"lost (judged gone without a stop report)")},
+		{verb: "list-subagents", field: "subagents", c: tokens("close_reason values",
+			"null exactly while state is running", "stop_event (its agent reported it finished)",
+			"absent_from_snapshot (a snapshot of the agent's running background tasks did not list it)",
+			"agent_gone (its agent ended, went missing or began a new launch)")},
+		{verb: "list-subagents", field: "subagents", c: tokens("parent_type values",
+			"agent (the row's own agent, so parent_id is the row's instance_id)",
+			"subagent (another subagent, so parent_id is that subagent's subagent_id)")},
+		{verb: "list-subagents", field: "subagents", c: tokens("run_mode values", "background or foreground")},
+		{verb: "list-subagents", field: "subagents", c: tokens("description is never prompt text", "never the prompt text")},
+		{verb: "list-subagents", field: "subagents", c: tokens("timestamp format", subagentsTimestampFormat)},
+	}
+	return cases
+}
+
+// TestListSubagentsVerbDescription pins list-subagents' Description to one
+// sentence of at most 67 bytes (its help entry's whole size, SR-11.1), naming
+// both what it returns and the tracked flag.
+func TestListSubagentsVerbDescription(t *testing.T) {
+	desc := siteText(t, "list-subagents", "", "")
+	if len(desc) > 67 {
+		t.Errorf("list-subagents Description is %d bytes, want at most 67: %q", len(desc), desc)
+	}
+	if !strings.HasSuffix(desc, ".") || strings.Contains(strings.TrimSuffix(desc, "."), ".") {
+		t.Errorf("list-subagents Description is not exactly one sentence: %q", desc)
+	}
+	apitest.AssertAgentTextCase(t, "list-subagents description", desc, tokens("what it returns", "subagent records", "tracked"))
+}
+
+// TestListSubagentsTimestampFormatOnce pins that the subagents text states the
+// timestamp format once, for every timestamp field, not once per field.
+func TestListSubagentsTimestampFormatOnce(t *testing.T) {
+	text := siteText(t, "list-subagents", "", "subagents")
+	if n := strings.Count(text, "RFC3339"); n != 1 {
+		t.Errorf("subagents text names RFC3339 %d times, want once: %q", n, text)
+	}
+	if n := strings.Count(text, "millisecond precision"); n != 1 {
+		t.Errorf("subagents text states millisecond precision %d times, want once: %q", n, text)
+	}
 }
 
 // TestManifestTextCases runs every manifestTextCases case.

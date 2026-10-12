@@ -25,6 +25,12 @@ type Spawn = store.Spawn
 // It appears in the GetStore and DecideStore interface method signatures.
 type PermissionRow = store.PermissionRow
 
+// SubagentRow is re-exported from internal/store for the same reason. It
+// appears in the ListSubagentsStore interface method signature: one subagent
+// record as the store holds it (nullable fields as nil pointers, times as
+// milliseconds). api.SubagentRecord is its JSON projection.
+type SubagentRow = store.SubagentRow
+
 // ListFilters is re-exported from internal/store for the same reason.
 // It appears in the ListStore interface method signature.
 type ListFilters = store.ListFilters

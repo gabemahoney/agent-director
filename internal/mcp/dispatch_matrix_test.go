@@ -59,6 +59,11 @@ func matrixCases() map[string]matrixCase {
 
 		"status":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 		"get":       {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+
+		// list-subagents: a dropped instance_id tag lists the empty id and
+		// answers ErrSpawnNotFound for the seeded row.
+		"list-subagents": {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+
 		"send-keys": {args: `{"instance_id":"` + matrixID + `","text":"hi"}`, setup: seedEnded("off")},
 		"read-pane": {args: `{"instance_id":"` + matrixID + `","n_lines":1,"ansi":false}`, setup: seedEnded("off")},
 		"kill":      {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},

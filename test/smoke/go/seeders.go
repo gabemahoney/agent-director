@@ -117,6 +117,13 @@ const (
 	// Ours path, sends /exit and Enter by pane id and its wait sees the row
 	// ended (SR-7.2, SR-20.3).
 	seedPause
+
+	// seedSubagentRecord seeds a working row through apitest.SeedSpawn (its
+	// SR-20.3 defaults: the Claude agent, a launch token) and one confirmed
+	// subagent record for it through apitest.SeedSubagent with every field
+	// set, its four times at smokeSubagentMillis (a non-zero millisecond part)
+	// so no AllowEmpty-false value reads as zero. Used by list-subagents.
+	seedSubagentRecord
 )
 
 // smokePaneText is the capture text seedReadPane scripts for the row's own
@@ -134,6 +141,15 @@ const smokeExitText = "/exit"
 // ms since the Unix epoch; its non-zero millisecond part (.123) checks that
 // the verbs keep millisecond precision.
 const smokeLaunchStartMillis int64 = 1790000000123
+
+// smokeSubagentMillis is the time seedSubagentRecord records for each of the
+// seeded record's four times, in ms since the Unix epoch; its non-zero
+// millisecond part (.456) checks that list-subagents keeps millisecond
+// precision.
+const smokeSubagentMillis int64 = 1790000000456
+
+// smokeSubagentID is the subagent_id seedSubagentRecord seeds.
+const smokeSubagentID = "smoke-subagent-1"
 
 // smokeEndedAt is the ended_at seedExpired records: a fixed past time, so the
 // row is old under any retention window.

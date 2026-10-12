@@ -59,6 +59,7 @@ func TestAliasesAreIdentical(t *testing.T) {
 	t.Parallel()
 	for name, pair := range map[string][2]reflect.Type{
 		"Spawn":            {reflect.TypeFor[api.Spawn](), reflect.TypeFor[store.Spawn]()},
+		"SubagentRow":      {reflect.TypeFor[api.SubagentRow](), reflect.TypeFor[store.SubagentRow]()},
 		"PermissionRow":    {reflect.TypeFor[api.PermissionRow](), reflect.TypeFor[store.PermissionRow]()},
 		"ListFilters":      {reflect.TypeFor[api.ListFilters](), reflect.TypeFor[store.ListFilters]()},
 		"ExpireCandidate":  {reflect.TypeFor[api.ExpireCandidate](), reflect.TypeFor[store.ExpireCandidate]()},

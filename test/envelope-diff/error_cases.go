@@ -233,6 +233,23 @@ var errorCases = append(append(append(append(append([]errorCase{
 		},
 	},
 
+	// ── list-subagents / ErrSpawnNotFound ─────────────────────────────────
+	{
+		verb:    "list-subagents",
+		errName: "ErrSpawnNotFound",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			_, dbPath := apitest.SeedErrSpawnNotFound(t)
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"instance_id": "nonexistent-id"}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"list-subagents", "--instance-id", "nonexistent-id"}
+		},
+	},
+
 	// ── send-keys / ErrSpawnNotInteractive ────────────────────────────────
 	// Most representative send-keys error: state check fires before any
 	// tmux interaction, so fake-tmux is not reached.

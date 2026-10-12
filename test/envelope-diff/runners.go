@@ -82,6 +82,7 @@ var dispatch = map[string]clientDispatchFn{
 	"expire":             dispatchExpire,
 	"make-template":      dispatchMakeTemplate,
 	"list":               dispatchList,
+	"list-subagents":     dispatchListSubagents,
 	"pause":              dispatchPause,
 	"version":            dispatchVersion,
 }
@@ -361,6 +362,15 @@ func dispatchStatus(c *api.Client, params map[string]any) ([]byte, bool) {
 func dispatchGet(c *api.Client, params map[string]any) ([]byte, bool) {
 	id := strParam(params, "instance_id")
 	res, err := c.Get(id)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchListSubagents(c *api.Client, params map[string]any) ([]byte, bool) {
+	id := strParam(params, "instance_id")
+	res, err := c.ListSubagents(id)
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

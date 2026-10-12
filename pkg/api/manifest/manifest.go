@@ -24,7 +24,7 @@ type VerbDef struct {
 	// Callable is true when the verb is exposed as a synchronous method on
 	// pkg/api.Client. help (informational/CLI-side), serve (long-running MCP
 	// server), and hook (SRD §3.2 fail-open) are Callable: false.
-	// 16 verbs are Callable: true.
+	// 17 verbs are Callable: true.
 	Callable bool
 
 	// HandleFree is true when the verb can be invoked without a Client handle
@@ -242,6 +242,20 @@ const launchStartLiveSentence = "It follows the row's live state: with [state] s
 // permissionRequestsDescription is the text of the permission_requests field
 // of get's result and of each list row (b.146 rule 15).
 const permissionRequestsDescription = "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request recorded before this release while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set a row can also read any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — the agent's tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock."
+
+// subagentsDescription is the text of list-subagents' subagents field: the
+// record's fields, the value sets of its enumerated fields, and the order.
+// Like the other result texts it reaches surface.json and MCP tools/list, never
+// help.
+const subagentsDescription = "Every subagent record of the row, across every launch and life of it. Empty array when it has none (never null). Ordered by first_started_at ascending (records with a null first_started_at last), then subagent_id. Each element has all of these keys, a field with no known value null: " +
+	"subagent_id (string) — the subagent's id, unique within its row; instance_id (string) — the row's id; session_id (string?) — the session of the event that created the record, never changed after; subagent_type (string?) — its type; " +
+	"description (string?) — the short description the launching call gave it, never the prompt text; model (string?) — the model it runs; " +
+	"parent_type (string?) — what launched it: agent (the row's own agent, so parent_id is the row's instance_id) or subagent (another subagent, so parent_id is that subagent's subagent_id); parent_id (string?) — as parent_type says; " +
+	"tool_use_id (string?) — the id of the tool call that launched it; run_mode (string?) — background or foreground; " +
+	"first_started_at (timestamp?) — when it first started; started_at (timestamp?) — when its latest run started; stopped_at (timestamp?) — when it last stopped, null if it never has (kept when it runs again); lost_at (timestamp?) — when it was judged lost, null unless it was; " +
+	"state (string) — running (started, neither stopped nor judged lost), stopped (its agent reported it finished) or lost (judged gone without a stop report); " +
+	"close_reason (string?) — why it is no longer running, null exactly while state is running: stop_event (its agent reported it finished), absent_from_snapshot (a snapshot of the agent's running background tasks did not list it) or agent_gone (its agent ended, went missing or began a new launch). " +
+	"Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second)."
 
 // deliveryFactFields are a permission request's delivery facts besides
 // delivery itself (b.146 rule 15), as decide and get-permission return them
@@ -1186,6 +1200,30 @@ var Verbs = []VerbDef{
 		ErrorNames: []string{
 			"ErrInvalidFlags",
 			"ErrListInvalidLabel",
+		},
+	},
+	{
+		Name:        "list-subagents",
+		Description: "Return an agent's subagent records and whether they are tracked.",
+		Callable:    true,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{
+				Name:          "instance_id",
+				Type:          "string",
+				Description:   "Id of the Spawn whose subagents to list.",
+				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "tracked", Type: "bool", Description: "Whether the row's launch registered subagent tracking: false for a row launched before subagent tracking existed, which has no records; true for a row launched since.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "subagents", Type: "[]object", Description: subagentsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+		},
+		ErrorNames: []string{
+			"ErrSpawnNotFound",
 		},
 	},
 	{

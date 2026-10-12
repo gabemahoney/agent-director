@@ -104,6 +104,7 @@ func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) ma
 		"kill":               func(args []string) error { return killHandlerWith(client, args) },
 		"pause":              func(args []string) error { return pauseHandlerWith(client, args) },
 		"list":               func(args []string) error { return listHandlerWith(client, args) },
+		"list-subagents":     func(args []string) error { return listSubagentsHandlerWith(client, args) },
 		"make-template":      func(args []string) error { return makeTemplateHandlerWith(client, args) },
 		"decide":             func(args []string) error { return decideHandlerWith(client, args) },
 		"get-permission":     func(args []string) error { return getPermissionHandlerWith(client, args) },

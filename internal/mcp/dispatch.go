@@ -141,6 +141,15 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return d.client.Get(p.InstanceID)
 
+	case "list-subagents":
+		var p struct {
+			InstanceID string `json:"instance_id"`
+		}
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.ListSubagents(p.InstanceID)
+
 	case "send-keys":
 		var p api.SendKeysParams
 		if err := decodeParams(v, args, &p); err != nil {

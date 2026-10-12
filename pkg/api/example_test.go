@@ -1,5 +1,5 @@
 // Package api_test exercises the pkg/api public surface from the outside.
-// This file holds the five runnable ExampleClient_* functions that mirror the
+// This file holds the six runnable ExampleClient_* functions that mirror the
 // README's Verb examples section, and their construction helpers.
 package api_test
 
@@ -221,4 +221,42 @@ func ExampleClient_Kill() {
 
 	// Output:
 	// true
+}
+
+// ExampleClient_ListSubagents demonstrates reading an agent's subagent records.
+// Two confirmed records are seeded with distinct first starts, so the order
+// (first_started_at ascending) and the output are deterministic.
+func ExampleClient_ListSubagents() {
+	c, _, path, _, cleanup := exampleClient()
+	defer cleanup()
+	// Seed a live Spawn and two of its subagents: a stopped one, then a running one.
+	if _, err := apitest.SeedSpawn(path, "claude_2026-05-22T18-23-15", store.StateWorking, "/tmp", "off", "", false); err != nil {
+		panic("ExampleClient_ListSubagents: SeedSpawn: " + err.Error())
+	}
+	for id, opts := range map[string][]apitest.SubagentOption{
+		"agent-explore": {
+			apitest.WithSubagentState(store.SubagentStateStopped), apitest.WithSubagentCloseReason(store.SubagentCloseStopEvent),
+			apitest.WithSubagentFirstStartedAt(1790000000123), apitest.WithSubagentStoppedAt(1790000005000),
+		},
+		"agent-review": {apitest.WithSubagentFirstStartedAt(1790000009000)},
+	} {
+		if err := apitest.SeedSubagent(path, "claude_2026-05-22T18-23-15", id, opts...); err != nil {
+			panic("ExampleClient_ListSubagents: SeedSubagent: " + err.Error())
+		}
+	}
+	// README:start ExampleClient_ListSubagents
+	res, err := c.ListSubagents("claude_2026-05-22T18-23-15")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(res.Tracked)
+	for _, sub := range res.Subagents {
+		fmt.Println(sub.SubagentID, sub.State)
+	}
+	// README:end
+
+	// Output:
+	// true
+	// agent-explore stopped
+	// agent-review running
 }

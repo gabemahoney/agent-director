@@ -186,7 +186,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "pause", "serve", "version", "trail-emit", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -229,12 +229,12 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 }
 
 // TestCallableVerbsOrder asserts the callable subset preserves Verbs-defined
-// order (the 16 callable verbs in the order they appear in Verbs).
+// order (the 17 callable verbs in the order they appear in Verbs).
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
 		"spawn", "status", "get", "send-keys", "read-pane", "kill",
 		"decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire",
-		"make-template", "list", "pause", "version",
+		"make-template", "list", "list-subagents", "pause", "version",
 	}
 	got := manifest.CallableVerbs()
 	if len(got) != len(want) {
@@ -476,6 +476,9 @@ func TestFieldShapes(t *testing.T) {
 		{"spawn", "reuse_finished", "", shape{"bool", false, false, nil}},
 		{"spawn", "", "instance_id", shape{"string", false, false, nil}},
 		{"list", "", "spawns", shape{"[]Spawn", false, true, nil}},
+		{"list-subagents", "instance_id", "", shape{"string", false, false, nil}},
+		{"list-subagents", "", "tracked", shape{"bool", false, true, nil}},
+		{"list-subagents", "", "subagents", shape{"[]object", false, true, nil}},
 		{"get", "", "ended_at", shape{"timestamp?", true, false, nil}},
 		{"get", "", "liveness_unverified_since", shape{"timestamp?", true, false, nil}},
 		{"get", "", "liveness_note", shape{"string?", true, false, nil}},
@@ -534,6 +537,18 @@ func TestFieldShapes(t *testing.T) {
 	}
 	if got := verbOf(t, "expire").ErrorNames; len(got) != 0 {
 		t.Errorf("expire error names = %v; want none", got)
+	}
+	// list-subagents takes the one required instance_id and returns exactly
+	// tracked and subagents, in that order.
+	listSubagents := verbOf(t, "list-subagents")
+	if len(listSubagents.Params) != 1 || !listSubagents.Params[0].Required {
+		t.Errorf("list-subagents params = %+v; want only a required instance_id", listSubagents.Params)
+	}
+	if got := names("list-subagents"); !reflect.DeepEqual(got, []string{"tracked", "subagents"}) {
+		t.Errorf("list-subagents result fields = %v; want tracked, subagents", got)
+	}
+	if !listSubagents.Callable || listSubagents.HandleFree {
+		t.Errorf("list-subagents Callable %t HandleFree %t; want callable and not handle-free", listSubagents.Callable, listSubagents.HandleFree)
 	}
 	for _, verb := range []string{"status", "list"} {
 		if slices.Contains(names(verb), "tmux_socket") {
@@ -600,6 +615,13 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 // shared layer's refusal of a negative limit (b.c4n).
 func TestListHasSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "list", "List", true, "ErrInvalidFlags", "ErrListInvalidLabel")
+}
+
+// TestListSubagentsHasSRDErrorNames pins list-subagents', and
+// Client.ListSubagents' "Errors:" list, to exactly ErrSpawnNotFound: the verb
+// reads one row and changes nothing.
+func TestListSubagentsHasSRDErrorNames(t *testing.T) {
+	assertErrorNames(t, "list-subagents", "ListSubagents", true, "ErrSpawnNotFound")
 }
 
 // TestKillHasSRDErrorNames pins kill's ErrorNames, and Client.Kill's "Errors:"

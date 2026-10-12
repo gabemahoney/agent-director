@@ -167,6 +167,7 @@ func oldIDVerbs() []oldIDVerb {
 	return []oldIDVerb{
 		{verb: "status", state: store.StateWaiting, flags: only("status"), value: rowID},
 		{verb: "get", state: store.StateWaiting, flags: only("get"), value: rowID},
+		{verb: "list-subagents", state: store.StateWaiting, flags: only("list-subagents"), value: rowID},
 		{verb: "read-pane", state: store.StateWaiting, pane: true, flags: only("read-pane"), value: rowID},
 		{verb: "send-keys", state: store.StateWaiting, pane: true, flags: only("send-keys", "--text", "hi"), value: rowID},
 		{verb: "kill", state: store.StateWaiting, pane: true, flags: only("kill"), value: rowID},

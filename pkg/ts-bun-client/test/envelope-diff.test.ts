@@ -419,6 +419,74 @@ describe("get", () => {
   );
 });
 
+// ── list-subagents ────────────────────────────────────────────────────────────
+
+describe("list-subagents", () => {
+  test(
+    "success path: records with nulls and the three time encodings equal the CLI's",
+    async () => {
+      const id = "id-list-subagents-1";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id, state: "working", "create-store": true });
+        runHelper("seed-subagent", {
+          store, "instance-id": id, "subagent-id": "sa-full", state: "lost", "close-reason": "agent_gone",
+          "session-id": "sess-1", type: "general-purpose", description: "find the bug", model: "model-1",
+          "parent-type": "agent", "parent-id": id, "tool-use-id": "toolu-1", "run-mode": "background",
+          "first-started-at-ms": "1790000000000", "started-at-ms": "1790000000120",
+          "stopped-at-ms": "1790000000456", "lost-at-ms": "1790000001007",
+        });
+        runHelper("seed-subagent", { store, "instance-id": id, "subagent-id": "sa-nulls" });
+      });
+      try {
+        const cli = runCli(["list-subagents", "--instance-id", id], cliEnv(homeA));
+        expect(cli.exitCode).toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        const ts = await client.listSubagents({ instance_id: id });
+
+        // Pinned so a time that vanishes from both sides cannot pass the diff.
+        expect(ts.tracked).toBe(true);
+        expect(ts.subagents.map((r) => [r.subagent_id, r.first_started_at, r.started_at, r.stopped_at, r.lost_at])).toEqual([
+          ["sa-full", "2026-09-21T14:13:20Z", "2026-09-21T14:13:20.12Z", "2026-09-21T14:13:20.456Z", "2026-09-21T14:13:21.007Z"],
+          ["sa-nulls", null, null, null, null],
+        ]);
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("list-subagents"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrSpawnNotFound",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const cli = runCli(["list-subagents", "--instance-id", "nonexistent-id"], cliEnv(homeA));
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
+        let tsErr: unknown;
+        try {
+          await client.listSubagents({ instance_id: "nonexistent-id" });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+});
+
 // ── send-keys ─────────────────────────────────────────────────────────────────
 
 describe("send-keys", () => {

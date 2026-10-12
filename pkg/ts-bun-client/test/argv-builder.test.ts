@@ -46,6 +46,7 @@ test.each([
     ["spawn", "--cwd", "/ws", "--extra-env", "my-var=a=b", "--extra-env", "1ST="]],
   ["status", "status", { instance_id: "id-1" }, ["status", ...ID]],
   ["get", "get", { instance_id: "id-1" }, ["get", ...ID]],
+  ["list-subagents", "list-subagents", { instance_id: "id-1" }, ["list-subagents", ...ID]],
   ["kill", "kill", { instance_id: "id-1" }, ["kill", ...ID]],
   ["resume", "resume", { instance_id: "id-1" }, ["resume", ...ID]],
   ["pause", "pause", { instance_id: "id-1" }, ["pause", ...ID]],

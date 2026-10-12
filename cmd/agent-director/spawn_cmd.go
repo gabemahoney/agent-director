@@ -453,6 +453,25 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, res)
 }
 
+// listSubagentsHandlerWith implements `agent-director list-subagents`.
+func listSubagentsHandlerWith(client *pkgapi.Client, args []string) error {
+	var id string
+	fs := flag.NewFlagSet("list-subagents", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&id, "instance-id", "", "id of the row whose subagents to list")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())
+	}
+	if id == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--instance-id is required")
+	}
+	res, err := client.ListSubagents(id)
+	if err != nil {
+		return writeVerbError(err)
+	}
+	return writeJSON(os.Stdout, res)
+}
+
 // getPermissionHandlerWith implements `agent-director get-permission`. The
 // lookup is token-only per SR-3.5 (UUIDv4 is globally selective). Missing
 // rows surface store.ErrPermissionRequestNotFound, which the Catalog maps to

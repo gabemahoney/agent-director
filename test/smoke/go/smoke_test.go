@@ -129,6 +129,26 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 			apitest.WithLaunchStartedAt(smokeLaunchStartMillis)); err != nil {
 			t.Fatalf("runVerbSubtest: seed pending %q: %v", spec.SeedID, err)
 		}
+	case seedSubagentRecord:
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "", "", false); err != nil {
+			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)
+		}
+		if err := apitest.SeedSubagent(storePath, spec.SeedID, smokeSubagentID,
+			apitest.WithSubagentState("lost"),
+			apitest.WithSubagentCloseReason("agent_gone"),
+			apitest.WithSubagentSessionID("smoke-subagent-session"),
+			apitest.WithSubagentType("general-purpose"),
+			apitest.WithSubagentDescription("smoke subagent"),
+			apitest.WithSubagentModel("smoke-model"),
+			apitest.WithSubagentParent("agent", spec.SeedID),
+			apitest.WithSubagentToolUseID("smoke-tool-use"),
+			apitest.WithSubagentRunMode("background"),
+			apitest.WithSubagentFirstStartedAt(smokeSubagentMillis),
+			apitest.WithSubagentStartedAt(smokeSubagentMillis),
+			apitest.WithSubagentStoppedAt(smokeSubagentMillis),
+			apitest.WithSubagentLostAt(smokeSubagentMillis)); err != nil {
+			t.Fatalf("runVerbSubtest: seed subagent %q for %q: %v", smokeSubagentID, spec.SeedID, err)
+		}
 	case seedLiveSession:
 		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "", "", false); err != nil {
 			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)

@@ -246,8 +246,17 @@ func launchStartedAt(state string, millis int64) *time.Time {
 	if state != store.StatePending || millis == 0 {
 		return nil
 	}
-	t := time.UnixMilli(millis).UTC()
+	t := millisToUTC(millis)
 	return &t
+}
+
+// millisToUTC maps integer milliseconds since the epoch, as the store holds a
+// time, to the instant in UTC. It is the one conversion behind
+// launch_started_at and every time field of a subagent record, so they encode
+// alike: RFC3339Nano with the millisecond fraction, trailing zeros dropped, no
+// fraction on a whole second, ending Z.
+func millisToUTC(millis int64) time.Time {
+	return time.UnixMilli(millis).UTC()
 }
 
 // GetStore is the narrow store surface Get needs. Matches the existing

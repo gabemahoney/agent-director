@@ -37,6 +37,7 @@ type Call = (c: Client, params: Record<string, unknown>) => Promise<unknown>;
 const idVerbs: [verb: string, call: Call][] = [
   ["status", (c, p) => c.status(p as never)],
   ["get", (c, p) => c.get(p as never)],
+  ["list-subagents", (c, p) => c.listSubagents(p as never)],
   ["kill", (c, p) => c.kill(p as never)],
   ["resume", (c, p) => c.resume(p as never)],
   ["pause", (c, p) => c.pause(p as never)],

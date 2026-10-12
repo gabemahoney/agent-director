@@ -142,6 +142,7 @@ export type {
   ExpireParams, ExpireResult,
   MakeTemplateParams, MakeTemplateResult,
   ListParams, ListResult,
+  ListSubagentsParams, ListSubagentsResult, SubagentRecord,
   PauseParams, PauseResult,
   VersionParams, VersionResult,
 } from "./types.js";

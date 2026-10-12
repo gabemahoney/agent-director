@@ -53,6 +53,7 @@ import type {
   ExpireParams, ExpireResult,
   MakeTemplateParams, MakeTemplateResult,
   ListParams, ListResult,
+  ListSubagentsParams, ListSubagentsResult,
   PauseParams, PauseResult,
   VersionParams, VersionResult,
 } from "../types.js";
@@ -489,6 +490,15 @@ export class SubprocessClient {
   async list(params: ListParams): Promise<ListResult> {
     this.#assertOpen();
     return this.#enqueue<ListResult>("list", params);
+  }
+
+  /**
+   * listSubagents — whether an agent tracks subagents, and every subagent record of it (every
+   * launch and life of the row). Rejects with ErrSpawnNotFound when no row has the id.
+   */
+  async listSubagents(params: ListSubagentsParams): Promise<ListSubagentsResult> {
+    this.#assertOpen();
+    return this.#enqueue<ListSubagentsResult>("list-subagents", params);
   }
 
   /**

@@ -71,6 +71,162 @@ done
 
 It never sees a turn shorter than the settle time.
 
+## Read an agent's subagent records
+
+`list-subagents` returns the subagents an agent has launched, one record each,
+and whether the agent is tracked. It is `mcp__agent-director__list_subagents`
+over MCP, `Client.ListSubagents` in Go and `listSubagents` in TypeScript (see
+[pkg/api/README.md](../pkg/api/README.md#listsubagents) and
+[pkg/ts-bun-client/README.md](../pkg/ts-bun-client/README.md#listsubagents)).
+Reading changes nothing.
+
+```sh
+agent-director list-subagents --instance-id "$id"
+```
+
+The command prints one line; this is one running foreground record, laid out
+for reading:
+
+```json
+{
+  "tracked": true,
+  "subagents": [
+    {
+      "subagent_id": "ad5f0c1b7e2a94316",
+      "instance_id": "claude_2026-10-11T15-16-58",
+      "session_id": "0b3c2f1e-6d4a-4c1b-9a57-2f8e1d7c5a90",
+      "subagent_type": "Explore",
+      "description": null,
+      "model": null,
+      "parent_type": null,
+      "parent_id": null,
+      "tool_use_id": null,
+      "run_mode": null,
+      "first_started_at": "2026-10-11T15:17:03.12Z",
+      "started_at": "2026-10-11T15:17:03.12Z",
+      "stopped_at": null,
+      "lost_at": null,
+      "state": "running",
+      "close_reason": null
+    }
+  ]
+}
+```
+
+`(instance_id, subagent_id)` identifies a record for good: a caller that
+reads the list again can match records by it.
+
+### When an agent is tracked
+
+`tracked` is `true` when the agent's current launch registered its subagent
+start and stop events, so its subagents are recorded. It is `false`, with
+`subagents` `[]`, for an agent that predates subagent tracking; it becomes
+`true` when that agent is next resumed or its id is reused. The hooks that
+write the records are in [Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
+
+`subagents` is never null. It holds the records of every launch the agent has
+had, ordered by `first_started_at` ascending (records with a null
+`first_started_at` last), then by `subagent_id`.
+
+### The record's fields
+
+Every record carries all of these keys, in this order. A field that nothing
+supplied is `null`, never a guess.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `subagent_id` | string | The subagent's id, unique within its agent. |
+| `instance_id` | string | The id of the agent the subagent belongs to. |
+| `session_id` | string or null | The session of the first event recorded for the subagent. It never changes, so after a conversation clear it depends on which event came first. |
+| `subagent_type` | string or null | The subagent's type. |
+| `description` | string or null | The short description the launching call gave it, taken only from that call's own result. Never the prompt text. |
+| `model` | string or null | The model it runs. |
+| `parent_type` | string or null | What launched it: `agent` or `subagent`. |
+| `parent_id` | string or null | The launcher's id: the agent's `instance_id` for `agent`, the launching subagent's `subagent_id` for `subagent`. A null parent belongs to the record's `instance_id`. |
+| `tool_use_id` | string or null | The id of the tool call that launched it. |
+| `run_mode` | string or null | `background` or `foreground`. |
+| `first_started_at` | time or null | When it first started. |
+| `started_at` | time or null | When its latest run started. |
+| `stopped_at` | time or null | When it last stopped; null while it never has. A record that runs again keeps this time until its next stop. |
+| `lost_at` | time or null | When it was judged lost; null unless it was. |
+| `state` | string | `running`, `stopped` or `lost`. |
+| `close_reason` | string or null | Why it is no longer running; null exactly while `state` is `running`. |
+
+The values of the enumerated fields are fixed:
+
+- `state`: `running` (started, neither stopped nor judged lost), `stopped`
+  (its agent reported it finished) or `lost` (judged gone without a stop
+  report).
+- `close_reason`: `stop_event` (its agent reported it finished),
+  `absent_from_snapshot` (a snapshot of the agent's running background tasks
+  did not list it) or `agent_gone` (its agent ended, went missing or began a
+  new launch).
+- `parent_type`: `agent` (the agent itself launched it) or `subagent` (another
+  subagent launched it, or an in-process teammate, which has no record; see
+  [Subagents and in-process teammates](hooks.md#subagents-and-in-process-teammates)).
+- `run_mode`: `background` (it runs beside the agent's own turn) or
+  `foreground` (the agent waits for it).
+
+Until a foreground subagent finishes, its record holds only what its start
+carried: `session_id`, `subagent_type` and the start times. `description`,
+`model`, `parent_type`, `parent_id`, `tool_use_id` and `run_mode` stay null
+until its launch result arrives, and no other launch's value fills them. A
+foreground subagent known only from its finished launch result has no start
+times.
+
+### Times
+
+A time is the moment agent-director received the event, never a time from the
+event's payload. It is RFC 3339 in UTC, ending in `Z`, with millisecond
+precision: trailing zeros are dropped and a whole second has no fraction (for
+example `2026-10-11T15:17:03.12Z` and `2026-10-11T15:17:03Z`). A pending row's
+`launch_started_at` has the same form. Hooks that race can put a time off by a
+few milliseconds. A stop event's time replaces the time of a finished launch
+result.
+
+### Which subagents show as records
+
+A subagent shows as a record once a launch result or a launch it matches
+confirms it. These cases show a record late or oddly:
+
+- A foreground subagent shows only when it finishes if its launching call named
+  it, if it was launched with no type, or if its start finds no open launch of
+  its type.
+- A start confirms through any open launch of its type, not necessarily its own
+  call; the record's fields still come from the subagent's own launch result.
+- A teammate whose type equals that of a running launch can show as one
+  record.
+- A subagent launched by an in-process teammate has `parent_type` `subagent`
+  and the teammate's id as `parent_id`, with no record of that teammate.
+
+### How long a record reads running
+
+A record of any run mode stays `running` until a stop signal arrives: a stop
+event, or for a foreground subagent its finished launch result. It stays
+`running` when its agent ends, goes missing or is relaunched, when its subagent
+ends with no stop event (for example when the user interrupts it), and when its
+stop event and its launch result are both over the 1 MiB payload limit (see [Fail-open invariant](hooks.md#fail-open-invariant)).
+No record is written `lost`: `lost`, `absent_from_snapshot` and `agent_gone`
+are in the fixed value sets, but nothing writes them.
+
+A start for a `stopped` subagent runs its record again. While another stop
+hook blocks a stop, the record reads `stopped` although the subagent keeps
+running; the real stop then updates `stopped_at`.
+
+### Limits and retention
+
+Each string field holds at most 1 KiB, cut at a whole character. Only the
+agent's own hooks write records, and no prompt, message or tool output is
+stored.
+
+An agent keeps at most 300 entries: its records plus starts that nothing has
+confirmed, which are never shown. When a new entry arrives at the limit, one is
+evicted first: a closed unconfirmed start, else a closed record, else a
+`running` entry only when nothing closed remains; within each, the one changed
+longest ago goes first. A `resume` or reuse keeps the records. They are
+deleted with the row (see [Maintenance](maintenance.md) for `expire` and
+[Operator actions](operator-actions.md) for `agent-director-admin delete`).
+
 ## Intercept permission prompts
 
 With `--relay-mode=on`, an agent permission prompt moves the row to

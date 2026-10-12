@@ -23,6 +23,7 @@
     ".spawns[*].permission_requests[*].attempted_at",
     ".spawns[*].permission_requests[*].hook_gone_at"
   ],
+  "list-subagents": [],
   "make-template": [
     ".path"
   ],

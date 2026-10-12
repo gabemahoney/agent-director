@@ -940,6 +940,74 @@ export interface ListResult {
     /** Matching Spawn rows. Empty array when none match. */
     spawns: ListRow[];
 }
+/** Mirrors the `list-subagents` verb's `instance_id` param (pkg/api.Client.ListSubagents arg). */
+export interface ListSubagentsParams {
+    /** Id of the Spawn whose subagents to list. */
+    instance_id: string;
+}
+/**
+ * Mirrors pkg/api/list_subagents.go::SubagentRecord. Every key is always present; a field with
+ * no known value is `null`. Each time is an RFC3339 UTC string with millisecond precision
+ * (trailing zeros dropped, no fraction on a whole second), exactly as the CLI prints it.
+ */
+export interface SubagentRecord {
+    /** The subagent's id, unique within its row. */
+    subagent_id: string;
+    /** The id of the row (agent) the subagent belongs to. */
+    instance_id: string;
+    /** The session of the event that created the record; never changed after. */
+    session_id: string | null;
+    /** The subagent's type. */
+    subagent_type: string | null;
+    /** The short description the launching call gave the subagent; never the prompt text. */
+    description: string | null;
+    /** The model the subagent runs. */
+    model: string | null;
+    /**
+     * What launched the subagent: `"agent"` (the row's own agent, so `parent_id` is the row's
+     * instance_id) or `"subagent"` (another subagent, so `parent_id` is that subagent's id).
+     */
+    parent_type: "agent" | "subagent" | null;
+    /** The instance_id or the parent subagent's id, as `parent_type` says. */
+    parent_id: string | null;
+    /** The id of the tool call that launched the subagent. */
+    tool_use_id: string | null;
+    /** `"background"` or `"foreground"`. */
+    run_mode: "background" | "foreground" | null;
+    /** When the subagent first started. */
+    first_started_at: string | null;
+    /** When the subagent's latest run started. */
+    started_at: string | null;
+    /** When the subagent last stopped; null if it never has (kept when it runs again). */
+    stopped_at: string | null;
+    /** When the subagent was judged lost; null unless it was. */
+    lost_at: string | null;
+    /**
+     * `"running"` (started, neither stopped nor judged lost), `"stopped"` (its agent reported it
+     * finished) or `"lost"` (judged gone without a stop report).
+     */
+    state: string;
+    /**
+     * Why the subagent is no longer running; null exactly while `state` is `"running"`:
+     * `"stop_event"` (its agent reported it finished), `"absent_from_snapshot"` (a snapshot of the
+     * agent's running background tasks did not list it) or `"agent_gone"` (its agent ended, went
+     * missing or began a new launch).
+     */
+    close_reason: "stop_event" | "absent_from_snapshot" | "agent_gone" | null;
+}
+/** Mirrors pkg/api/list_subagents.go::ListSubagentsResult */
+export interface ListSubagentsResult {
+    /**
+     * Whether the row's launch registered subagent tracking: false for a row launched before
+     * subagent tracking existed, which has no records; true for a row launched since.
+     */
+    tracked: boolean;
+    /**
+     * Every subagent record of the row, ordered by `first_started_at` ascending (a null one last),
+     * then `subagent_id`. Empty array when it has none.
+     */
+    subagents: SubagentRecord[];
+}
 /** Mirrors pkg/api.PauseParams (json tags). */
 export interface PauseParams {
     /** Id of the Spawn to pause gracefully. */

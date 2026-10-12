@@ -381,7 +381,9 @@ entry becomes a record once an Agent call or a launch result confirms
 it; an entry that nothing confirms is an observation, and is not a
 record. An open Agent call is a note that the agent called its `Agent`
 tool and no subagent has yet been matched to the call. An entry belongs
-to one launch of the row: a `resume` or a `reuse` starts a new one.
+to one launch of the row: a `resume` or a `reuse` starts a new one. A
+consumer reads the records with `list-subagents`; its output and fields are in
+[usage.md](usage.md#read-an-agents-subagent-records).
 
 Only the row's own agent's hooks write entries and open Agent calls. Each
 write carries the same gate as every hook (see "Only the row's own agent
@@ -389,7 +391,7 @@ moves the row"), so a hook from any other process writes none, and so
 does a hook for a row that is `ended` or `missing`. Entries are written
 only for a launch whose `--settings` register `SubagentStart` and
 `SubagentStop`; whether a launch is such a one, as a consumer sees it
-(`tracked`), is in [usage.md](usage.md). Every time written is the moment
+(`tracked`), is in [usage.md](usage.md#when-an-agent-is-tracked). Every time written is the moment
 the hook started.
 
 - **`SubagentStart`**, with `agent_id` (without one it is the soft refresh
@@ -416,7 +418,8 @@ the hook started.
   true (the real stop after another stop hook blocked the first one) or the
   earlier time came from a launch result; the new stop's time replaces
   it. What a consumer sees of a record that reads stopped while another
-  stop hook blocks the real stop is in [usage.md](usage.md).
+  stop hook blocks the real stop is in
+  [usage.md](usage.md#how-long-a-record-reads-running).
 - **The launch request**, a `PreToolUse` for the `Agent` tool. It opens an
   open Agent call holding the `tool_use_id`, the type from
   `tool_input.subagent_type` and the time. It opens none when the call has
@@ -467,7 +470,8 @@ finds no entry. A start that either one fires can leave an
 observation, which stays one. The residual: a teammate whose type equals
 that of a running launch's open Agent call can claim that call with the
 start that creates its entry, and then shows as one record. The residuals
-a consumer meets are in [usage.md](usage.md).
+a consumer meets are in
+[usage.md](usage.md#which-subagents-show-as-records).
 
 Nothing of a subagent's content is read or stored: not the prompt, the
 messages, the result text, an error, usage counters, an output file or
@@ -494,7 +498,7 @@ it does not apply:
 - Payload over 1 MiB → exit 0, log entry. The payload is dropped whole:
   nothing is written, subagent entries included. When both stop signals of
   a subagent exceed 1 MiB, its record is left `running`; see
-  [usage.md](usage.md).
+  [usage.md](usage.md#how-long-a-record-reads-running).
 - Config malformed → exit 0, log entry.
 - Store open failure → exit 0, log entry.
 - No usable `HOME` (unset or empty) → exit 0, log entry (normally on

@@ -72,6 +72,20 @@ func init() {
 		},
 	}
 
+	// ── list-subagents ────────────────────────────────────────────────────
+	seeders["list-subagents"] = seederSpec{
+		Manifest: mustVerb("list-subagents"),
+		SeedKind: seedSubagentRecord,
+		SeedID:   "smoke-list-subagents-id",
+		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
+			return c.ListSubagents(id)
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			_, err := c.ListSubagents(bogusID)
+			return err
+		},
+	}
+
 	// ── decide ────────────────────────────────────────────────────────────
 	seeders["decide"] = seederSpec{
 		Manifest: mustVerb("decide"),

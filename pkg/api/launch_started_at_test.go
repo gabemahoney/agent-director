@@ -20,13 +20,17 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// The seeded launch starts: one with a non-zero millisecond fraction and one
-// on a whole second, with the strings Go's time.Time JSON encoding gives them.
+// The seeded launch starts: one with a non-zero millisecond fraction, one whose
+// fraction ends in a zero (the zero is dropped) and one on a whole second, with
+// the strings Go's time.Time JSON encoding gives them. list-subagents' times
+// (list_subagents_test.go) are checked against the same pairs.
 const (
-	launchFracMillis  = int64(1790000000123)
-	launchFracJSON    = "2026-09-21T14:13:20.123Z"
-	launchWholeMillis = int64(1790000000000)
-	launchWholeJSON   = "2026-09-21T14:13:20Z"
+	launchFracMillis      = int64(1790000000123)
+	launchFracJSON        = "2026-09-21T14:13:20.123Z"
+	launchTrailZeroMillis = int64(1790000000120)
+	launchTrailZeroJSON   = "2026-09-21T14:13:20.12Z"
+	launchWholeMillis     = int64(1790000000000)
+	launchWholeJSON       = "2026-09-21T14:13:20Z"
 )
 
 // launchShape is one seeded row: its state, seed options, and the launch
@@ -58,6 +62,7 @@ func launchShapes() []launchShape {
 	beforeYear0Millis := firstMillis - 1
 	shapes := []launchShape{
 		{"pending ms fraction", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(launchFracMillis)}, launchFracMillis, launchFracJSON},
+		{"pending ms fraction ending in zero", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(launchTrailZeroMillis)}, launchTrailZeroMillis, launchTrailZeroJSON},
 		{"pending whole second", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(launchWholeMillis)}, launchWholeMillis, launchWholeJSON},
 		{"pending first in range", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(firstMillis)}, firstMillis, firstJSON},
 		{"pending last in range", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(lastMillis)}, lastMillis, lastJSON},

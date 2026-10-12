@@ -11,6 +11,7 @@ CLI and MCP server; no subprocess or network hop required.
   - [Spawn](#spawn)
   - [Status](#status)
   - [List](#list)
+  - [ListSubagents](#listsubagents)
   - [SendKeys](#sendkeys)
   - [ReadPane](#readpane)
   - [Kill](#kill)
@@ -238,6 +239,40 @@ on the settled state each row reports (see Status). `Limit` caps the rows
 returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.
+
+---
+
+### ListSubagents
+
+Return the subagent records of one agent and whether the agent is tracked.
+
+```bash
+agent-director list-subagents \
+  --instance-id claude_2026-05-22T18-23-15
+```
+
+```go
+res, err := c.ListSubagents("claude_2026-05-22T18-23-15")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(res.Tracked)
+for _, sub := range res.Subagents {
+    fmt.Println(sub.SubagentID, sub.State)
+}
+```
+
+Returns `ListSubagentsResult` (`.Tracked`, and `.Subagents []SubagentRecord`,
+never nil: `[]` when the agent has none). A `SubagentRecord` field with no
+known value is a nil pointer and encodes as JSON `null`; its times are UTC
+`*time.Time`, encoded like `launch_started_at`. `Tracked` is false, with no
+records, for an agent that predates subagent tracking. Sentinel error:
+`ErrSpawnNotFound`; every error returns `Tracked` false and an empty slice.
+The package-level `api.ListSubagents(ListSubagentsStore, id)` reads a store
+you pass in and takes no `RelayView`. The records, their fields and their
+values are described in
+[Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
+See `(*Client).ListSubagents` godoc.
 
 ---
 

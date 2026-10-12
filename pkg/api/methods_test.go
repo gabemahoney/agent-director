@@ -64,7 +64,7 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 }
 
 // TestAllVerbsReturnErrClientClosedAfterClose: every verb on a closed Client
-// returns ErrClientClosed before any param is read; the Get, List,
+// returns ErrClientClosed before any param is read; the Get, List, ListSubagents,
 // FindMissing, Expire and Delete results still encode their lists as [] and
 // maps as {}, never null (b.hbt, b.4nt).
 func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
@@ -78,29 +78,31 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 	}
 	ctx := context.Background()
 	emptyJSON := map[string]string{
-		"Get":         emptyGetJSON,
-		"List":        `{"spawns":[]}`,
-		"FindMissing": `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
-		"Expire":      `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`,
-		"Delete":      `{"results":{}}`,
+		"Get":           emptyGetJSON,
+		"List":          `{"spawns":[]}`,
+		"ListSubagents": emptySubagentsJSON,
+		"FindMissing":   `{"count":0,"ids":[],"unverified":0,"unverified_ids":[]}`,
+		"Expire":        `{"count":0,"ids":[],"kept":0,"kept_ids":[]}`,
+		"Delete":        `{"results":{}}`,
 	}
 	for name, call := range map[string]func() (any, error){
-		"Version":      func() (any, error) { return c.Version() },
-		"Spawn":        func() (any, error) { return c.Spawn(api.SpawnParams{Agent: "claude"}) },
-		"Status":       func() (any, error) { return c.Status("") },
-		"Get":          func() (any, error) { return c.Get("") },
-		"List":         func() (any, error) { return c.List(api.ListParams{}) },
-		"SendKeys":     func() (any, error) { return c.SendKeys(api.SendKeysParams{}) },
-		"ReadPane":     func() (any, error) { return c.ReadPane(api.ReadPaneParams{}) },
-		"Kill":         func() (any, error) { return c.Kill(api.KillParams{}) },
-		"Pause":        func() (any, error) { return c.Pause(ctx, api.PauseParams{}) },
-		"Decide":       func() (any, error) { return c.Decide(api.DecideParams{}) },
-		"Resume":       func() (any, error) { return c.Resume(api.ResumeParams{}) },
-		"FindMissing":  func() (any, error) { return c.FindMissing(ctx) },
-		"Expire":       func() (any, error) { return c.Expire(nil) },
-		"Delete":       func() (any, error) { return adminapi.Delete(c, nil) },
-		"KillFinished": func() (any, error) { return adminapi.KillFinished(c, "") },
-		"MakeTemplate": func() (any, error) { return c.MakeTemplate(api.MakeTemplateParams{Agent: "claude"}) },
+		"Version":       func() (any, error) { return c.Version() },
+		"Spawn":         func() (any, error) { return c.Spawn(api.SpawnParams{Agent: "claude"}) },
+		"Status":        func() (any, error) { return c.Status("") },
+		"Get":           func() (any, error) { return c.Get("") },
+		"List":          func() (any, error) { return c.List(api.ListParams{}) },
+		"ListSubagents": func() (any, error) { return c.ListSubagents("") },
+		"SendKeys":      func() (any, error) { return c.SendKeys(api.SendKeysParams{}) },
+		"ReadPane":      func() (any, error) { return c.ReadPane(api.ReadPaneParams{}) },
+		"Kill":          func() (any, error) { return c.Kill(api.KillParams{}) },
+		"Pause":         func() (any, error) { return c.Pause(ctx, api.PauseParams{}) },
+		"Decide":        func() (any, error) { return c.Decide(api.DecideParams{}) },
+		"Resume":        func() (any, error) { return c.Resume(api.ResumeParams{}) },
+		"FindMissing":   func() (any, error) { return c.FindMissing(ctx) },
+		"Expire":        func() (any, error) { return c.Expire(nil) },
+		"Delete":        func() (any, error) { return adminapi.Delete(c, nil) },
+		"KillFinished":  func() (any, error) { return adminapi.KillFinished(c, "") },
+		"MakeTemplate":  func() (any, error) { return c.MakeTemplate(api.MakeTemplateParams{Agent: "claude"}) },
 	} {
 		res, err := call()
 		if !errors.Is(err, api.ErrClientClosed) {
@@ -183,6 +185,11 @@ func TestClientVerbsDelegate(t *testing.T) {
 			r, err := empty.List(api.ListParams{})
 			return unless(r.Spawns != nil && len(r.Spawns) == 0, err, "Spawns = %#v; want a non-nil []", r.Spawns)
 		}, nil},
+		{"ListSubagents", func() error {
+			r, err := rows.ListSubagents("id-waiting")
+			return unless(r.Tracked && r.Subagents != nil && len(r.Subagents) == 0, err, "ListSubagents = %+v; want tracked true and a non-nil empty []", r)
+		}, nil},
+		{"ListSubagents of an unknown id", func() error { _, err := empty.ListSubagents("absent"); return err }, store.ErrSpawnNotFound},
 		{"List with an invalid label", func() error { _, err := empty.List(api.ListParams{Labels: []string{"noequalssign"}}); return err },
 			api.ErrListInvalidLabel},
 		{"SendKeys to an unknown id", func() error { _, err := empty.SendKeys(api.SendKeysParams{InstanceID: "absent"}); return err },

@@ -19,6 +19,11 @@
 //	seed-permission-request  Insert an open permission request for a spawn
 //	                     (--created-ago-seconds backdates it,
 //	                     --hook-gone-ago-seconds records hook_gone_at).
+//	seed-subagent        Insert one subagent record for an existing spawn
+//	                     (--state, --close-reason, the four *-ms times, the
+//	                     string fields and --confirmed pick its columns; a
+//	                     column no flag names keeps apitest.SeedSubagent's
+//	                     default; --subagent-id is generated if empty).
 //	seed-template        Write a .toml template file.
 //	seed-empty-store     Initialise a fresh SQLite store.
 //	seed-row-session     Write a seeded row's own labelled session and pane
@@ -57,6 +62,7 @@ var availableSubcmds = []string{
 	"seed-spawn",
 	"seed-parent-child",
 	"seed-permission-request",
+	"seed-subagent",
 	"seed-template",
 	"seed-empty-store",
 	"seed-row-session",
@@ -83,6 +89,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedParentChild(args[1:], stdout, stderr)
 	case "seed-permission-request":
 		return cmdSeedPermissionRequest(args[1:], stdout, stderr)
+	case "seed-subagent":
+		return cmdSeedSubagent(args[1:], stdout, stderr)
 	case "seed-template":
 		return cmdSeedTemplate(args[1:], stdout, stderr)
 	case "seed-empty-store":
@@ -266,6 +274,111 @@ func cmdSeedPermissionRequest(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// ---- seed-subagent ---------------------------------------------------------
+
+func cmdSeedSubagent(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("seed-subagent", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var (
+		storePath    = fs.String("store", "", "path to SQLite store file (required)")
+		instanceID   = fs.String("instance-id", "", "instance_id of an existing spawn (required)")
+		subagentID   = fs.String("subagent-id", "", "subagent_id; auto-generated if empty")
+		state        = fs.String("state", "", "state (running|stopped|lost); empty keeps SeedSubagent's running")
+		closeReason  = fs.String("close-reason", "", "close_reason (stop_event|absent_from_snapshot|agent_gone); empty leaves it NULL")
+		sessionID    = fs.String("session-id", "", "session_id; empty leaves it NULL")
+		subagentType = fs.String("type", "", "subagent_type; empty leaves it NULL")
+		description  = fs.String("description", "", "description; empty leaves it NULL")
+		model        = fs.String("model", "", "model; empty leaves it NULL")
+		parentType   = fs.String("parent-type", "", "parent_type (agent|subagent); needs --parent-id")
+		parentID     = fs.String("parent-id", "", "parent_id; needs --parent-type")
+		toolUseID    = fs.String("tool-use-id", "", "tool_use_id; empty leaves it NULL")
+		runMode      = fs.String("run-mode", "", "run_mode (background|foreground); empty leaves it NULL")
+		firstStarted = fs.Int64("first-started-at-ms", 0, "first_started_at, Unix milliseconds; unset leaves it NULL")
+		startedAt    = fs.Int64("started-at-ms", 0, "started_at, Unix milliseconds; unset leaves it NULL")
+		stoppedAt    = fs.Int64("stopped-at-ms", 0, "stopped_at, Unix milliseconds; unset leaves it NULL")
+		lostAt       = fs.Int64("lost-at-ms", 0, "lost_at, Unix milliseconds; unset leaves it NULL")
+		confirmed    = fs.Bool("confirmed", true, "true stores a record, false an unconfirmed observation (list-subagents never returns one)")
+	)
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	var missing []string
+	if *storePath == "" {
+		missing = append(missing, "--store")
+	}
+	if *instanceID == "" {
+		missing = append(missing, "--instance-id")
+	}
+	if len(missing) > 0 {
+		printError(stderr, fmt.Errorf("%s: required", strings.Join(missing, ", ")))
+		return 1
+	}
+	if (*parentType == "") != (*parentID == "") {
+		printError(stderr, errors.New("--parent-type and --parent-id go together"))
+		return 1
+	}
+	if *subagentID == "" {
+		*subagentID = uuid.NewString()
+	}
+
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
+	opts := []apitest.SubagentOption{apitest.WithSubagentConfirmed(*confirmed)}
+	strOpts := []struct {
+		val string
+		opt func(string) apitest.SubagentOption
+	}{
+		{*state, apitest.WithSubagentState},
+		{*closeReason, apitest.WithSubagentCloseReason},
+		{*sessionID, apitest.WithSubagentSessionID},
+		{*subagentType, apitest.WithSubagentType},
+		{*description, apitest.WithSubagentDescription},
+		{*model, apitest.WithSubagentModel},
+		{*toolUseID, apitest.WithSubagentToolUseID},
+		{*runMode, apitest.WithSubagentRunMode},
+	}
+	for _, so := range strOpts {
+		if so.val != "" {
+			opts = append(opts, so.opt(so.val))
+		}
+	}
+	if *parentType != "" {
+		opts = append(opts, apitest.WithSubagentParent(*parentType, *parentID))
+	}
+	msOpts := []struct {
+		flagName string
+		val      int64
+		opt      func(int64) apitest.SubagentOption
+	}{
+		{"first-started-at-ms", *firstStarted, apitest.WithSubagentFirstStartedAt},
+		{"started-at-ms", *startedAt, apitest.WithSubagentStartedAt},
+		{"stopped-at-ms", *stoppedAt, apitest.WithSubagentStoppedAt},
+		{"lost-at-ms", *lostAt, apitest.WithSubagentLostAt},
+	}
+	for _, mo := range msOpts {
+		if given[mo.flagName] {
+			opts = append(opts, mo.opt(mo.val))
+		}
+	}
+
+	if err := apitest.SeedSubagent(*storePath, *instanceID, *subagentID, opts...); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+
+	if err := printResult(stdout, map[string]string{
+		"instance_id": *instanceID,
+		"subagent_id": *subagentID,
+	}); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	return 0
+}
+
 // ---- seed-template ---------------------------------------------------------
 
 func cmdSeedTemplate(args []string, stdout, stderr io.Writer) int {
@@ -358,6 +471,10 @@ var resultSchemas = map[string]map[string]string{
 	"seed-permission-request": {
 		"request_id":    "number",
 		"request_token": "string",
+	},
+	"seed-subagent": {
+		"instance_id": "string",
+		"subagent_id": "string",
 	},
 	"seed-template": {
 		"path": "string",
