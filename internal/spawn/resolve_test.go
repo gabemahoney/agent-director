@@ -146,6 +146,42 @@ func TestResolveAgentAndArgsOwnership(t *testing.T) {
 	}
 }
 
+// TestResolveCarriesDisableAskUser: the question-tool setting reaches Validate
+// through Resolve (with or without a template), so a codex spawn's argument
+// that turns the question tool back on is refused while the setting is on, and
+// a claude spawn is not affected (SR-2.3, Q1).
+func TestResolveCarriesDisableAskUser(t *testing.T) {
+	withTemplates(t, map[string]apitest.TemplateFields{
+		"codex-question": {CWD: "/tmp", Agent: "codex", AgentArgs: []string{"--enable", "default_mode_request_user_input"}},
+	})
+	enable := []string{"--enable", "default_mode_request_user_input"}
+	cases := []struct {
+		name string
+		p    spawn.SpawnParams
+		on   bool
+		want error
+	}{
+		{"setting on refuses a codex call's enable", spawn.SpawnParams{CWD: "/tmp", Agent: "codex", AgentArgs: enable}, true, spawn.ErrSpawnDeniedFlag},
+		{"setting off passes it", spawn.SpawnParams{CWD: "/tmp", Agent: "codex", AgentArgs: enable}, false, nil},
+		{"setting on refuses an inherited template's enable", spawn.SpawnParams{Template: "codex-question"}, true, spawn.ErrSpawnDeniedFlag},
+		{"setting off passes an inherited template's enable", spawn.SpawnParams{Template: "codex-question"}, false, nil},
+		{"setting on does not touch claude", spawn.SpawnParams{CWD: "/tmp", Agent: "claude", AgentArgs: enable}, true, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Defaults.DisableAskUser = tc.on
+			r, err := spawn.Resolve(tc.p, cfg)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if got := spawn.Validate(&r); !errors.Is(got, tc.want) || (tc.want == nil) != (got == nil) {
+				t.Errorf("Validate = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveTemplateNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if _, err := spawn.Resolve(spawn.SpawnParams{Template: "nope"}, config.Default()); !errors.Is(err, config.ErrTemplateNotFound) {

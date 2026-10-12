@@ -9,6 +9,19 @@ A `spawn` names its agent, `claude` or `codex`, with `--agent` on the call or
 through its [template](#templates); with neither it is refused. The rules
 for combining the two are in [Settings](settings.md#templates-and-per-call-merge).
 
+A Codex spawn passes Codex's own arguments after `--`. This one starts the
+agent on a first prompt, one argument:
+
+```sh
+agent-director spawn --cwd "$PWD" --agent codex -- "Fix the failing test in pkg/widget"
+```
+
+A few arguments are refused, for either agent, because the supervisor must own
+them. For Codex they include a subcommand as the first word that is neither
+an option nor an option's value, `--remote`, and `-c` keys that touch its
+hooks or typing setting; an option is refused even after the `--`. The full list is in
+[Caller contract](caller-contract.md#spawn-and-template-input-refusals).
+
 ## Spawn states
 
 A row is `pending` while its launch is in progress and its agent has not
@@ -30,10 +43,12 @@ the `SessionEnd` that `/exit` sends leaves the row's state as it is. After Codex
 read `working` until the next prompt. The events and the limits are in
 [Hooks](hooks.md#hooks-from-a-codex-agent).
 
-`spawn` marks the folder as trusted so the agent does not stop at Claude
-Code's folder-trust prompt. `--no-pre-trust` keeps the prompt, and holds for
-every `resume` of the id: none marks the folder, so the agent may wait at the
-prompt.
+`spawn` marks the folder as trusted so the agent does not stop at its
+folder-trust prompt, Claude Code's or Codex's. `--no-pre-trust` keeps the
+prompt, and holds for every `resume` of the id: none marks the folder, so the
+agent may wait at the prompt. What the mark is for each agent, and what the
+reported `pre_trust` outcome means, is in
+[Settings](settings.md#pre-trust-for-codex).
 
 ## Naming the tmux session
 
@@ -137,8 +152,9 @@ start and stop events, so its subagents are recorded. It is `false`, with
 `subagents` `[]`, for an agent that predates subagent tracking; it becomes
 `true` when that agent is next resumed or its id is reused. The hooks that
 write the records are in [Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
-A Codex agent's hooks write no records, so its `subagents` stays `[]`
-whatever `tracked` reads.
+A Codex agent's hooks write no records, so its row reads `tracked: false` and
+its `subagents` stays `[]`, from its spawn and after every resume or reuse of
+its id.
 
 `subagents` is never null. It holds the records of every launch the agent has
 had, ordered by `first_started_at` ascending (records with a null
@@ -487,6 +503,9 @@ The template names its agent, so that `spawn` needs no `--agent`.
 
 `pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
 it under the same id with its transcript, so the conversation carries on.
+A Codex agent carries on the same conversation, and `resume` replays the
+arguments the `spawn` stored, with today's settings winning over the ones
+stored. `resume` refuses none of them, even one a new `spawn` would refuse.
 A resumed Claude row reads `waiting` at once. A resumed Codex row reports in
 only at its first prompt, so it reads `pending` until then and `pause` and
 `send-keys` without `allow_pending` are refused (see

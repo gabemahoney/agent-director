@@ -1,0 +1,75 @@
+{
+ "name": "codex-hook-trust-format",
+ "purpose": "How Codex identifies and hashes a per-launch hook entry (-c hooks.<Event>=[...]) for hooks.state trust (RN-5). For internal/spawn/testdata/. Verified against Codex's own hooks/list on 0.156.0, 0.159.2 and 0.162.1 (identical): 633 listed entries (211 per version), 0 mismatches with golden/recompute.py.",
+ "versionsChecked": ["0.156.0", "0.159.2", "0.162.1"],
+ "key": {
+  "layout": "<source>:<event_label>:<group_index>:<handler_index>",
+  "source": "/<session-flags>/config.toml",
+  "sourceNote": "the literal string, angle brackets included: the synthetic config layer that -c / --config flags form",
+  "eventLabel": {
+   "SessionStart": "session_start", "UserPromptSubmit": "user_prompt_submit", "PreToolUse": "pre_tool_use", "PostToolUse": "post_tool_use",
+   "PermissionRequest": "permission_request", "Stop": "stop", "Interrupt": "interrupt", "SessionEnd": "session_end",
+   "SubagentStart": "subagent_start", "SubagentStop": "subagent_stop", "PreCompact": "pre_compact", "PostCompact": "post_compact"
+  },
+  "groupIndex": "0-based position of the matcher group inside the event's array (hooks.<Event>=[ {group}, {group} ])",
+  "handlerIndex": "0-based position of the handler inside the group's hooks array",
+  "example": "/<session-flags>/config.toml:session_start:0:1",
+  "stateSetting": "-c 'hooks.state={\"<key>\"={trusted_hash=\"sha256:<hex>\"},...}'  (inline-table form; the table merges across config layers)"
+ },
+ "identity": {
+  "description": "The JSON object that is hashed: one per HANDLER (not per group). Its fields, after normalisation:",
+  "fields": {
+   "event_name": "the event label (snake_case, as in the key); always present",
+   "matcher": "present only when the group has a matcher AND the event takes one; omitted otherwise. The empty string counts as a matcher (it hashes differently from none)",
+   "hooks": "an array of exactly ONE handler object: {type, command, timeout, async} plus optional additionalContextLimit"
+  },
+  "handlerFields": {
+   "type": "\"command\" (the only type AD uses)",
+   "command": "the command string exactly as given in the -c value (after TOML decoding), byte for byte",
+   "timeout": "integer seconds, ALWAYS present: the value given, or the default when none given (see normalisation)",
+   "async": "false (AD never sets it)",
+   "additionalContextLimit": "present only when the setting is given, is not 2500, and the event honours it (see normalisation)",
+   "statusMessage": "present only when set (AD does not set it; not probed here)"
+  },
+  "normalisation": {
+   "timeoutDefault": {"SessionStart": 600, "UserPromptSubmit": 600, "PreToolUse": 600, "PostToolUse": 600, "PermissionRequest": 600, "Stop": 600, "SubagentStart": 600, "SubagentStop": 600, "SessionEnd": 1, "Interrupt": 1},
+   "timeoutClamp": "SessionEnd and Interrupt: the value is clamped into 1..3 (0 -> 1, 600 -> 3; Codex logs 'clamping <Event> hook timeout to 3s'). Other events: the value as given (RN-9: no cap; hooks/list timeoutSec equals the value given, e.g. the 86400 relay window). Values <= 0 on other events were not probed",
+   "helpEntryTimeout": "the help entry passes no timeout, so it hashes timeout 600 (SessionStart)",
+   "matcherDropped": "UserPromptSubmit, Stop and Interrupt ignore a matcher: it is not hashed (Stop with matcher '*' hashes like Stop with none). PreToolUse, PostToolUse, PermissionRequest hash it when set ('*' and 'Bash' and '' each give a different hash from none)",
+   "additionalContextLimit": {
+    "honouredBy": ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart"],
+    "ignoredBy": "every other event: not hashed (Codex logs 'ignoring additionalContextLimit for <Event> hook'; Stop with limit 4000 hashes like Stop with none)",
+    "defaultNotHashed": "a value of exactly 2500 (Codex's default) is left out: hashes like no setting. 0, 3790, 4000 and 100000 are all hashed (each its own hash)"
+   }
+  }
+ },
+ "serialisation": {
+  "form": "compact JSON, object keys sorted ascending at every level, separators ',' and ':' with no spaces, non-ASCII characters written as themselves (not \\uXXXX escaped), UTF-8",
+  "example": "{\"event_name\":\"permission_request\",\"hooks\":[{\"async\":false,\"command\":\"exec '/x' hook --agent codex --timeout 5\",\"timeout\":5,\"type\":\"command\"}]}",
+  "keyOrderOfHandler": ["additionalContextLimit", "async", "command", "statusMessage", "timeout", "type"],
+  "keyOrderOfIdentity": ["event_name", "hooks", "matcher"]
+ },
+ "hash": {
+  "algorithm": "SHA-256 over the serialised UTF-8 bytes",
+  "text": "\"sha256:\" + lowercase hex digest (64 characters)",
+  "listedAs": "hooks/list currentHash; the value to put in hooks.state trusted_hash",
+  "trustedWhen": "hooks.state[<key>].trusted_hash equals currentHash: hooks/list reports trustStatus 'trusted', no 'Hooks need review' dialog, and the hook runs, with NO --dangerously-bypass-hook-trust"
+ },
+ "commandForms": {
+  "quoting": "SR-5.3: the path goes inside single quotes; each ' is written '\\'' and each \\ is written '\\\\'",
+  "hook": "exec <quoted binary path> hook --agent codex      (PermissionRequest: ... --agent codex --timeout <relay window seconds>)",
+  "help": "exec <quoted installed path> help"
+ },
+ "adEntries": {
+  "timeoutsPassed": {"SessionStart": 600, "PreToolUse": "relay window (default 86400, max 2147483)", "PermissionRequest": "relay window", "SessionEnd": 3, "Interrupt": 3, "UserPromptSubmit": null, "PostToolUse": null, "Stop": null, "SubagentStart": null, "SubagentStop": null},
+  "matcher": "none on every event (RN-15: no matcher is the recommended form)",
+  "helpEntry": {"event": "SessionStart", "timeoutPassed": null, "additionalContextLimit": 4000, "layouts": ["same-group (group 0, handler 1)", "own-group (group 1, handler 0)"]},
+  "noCompactionHelpEntry": "no hook on PreCompact or PostCompact (RN-3)"
+ },
+ "rn15": {
+  "choice": "no matcher on PreToolUse, PostToolUse and PermissionRequest",
+  "why": "Same behaviour as '*' (RN-15: both match every tool on all three versions), one identity shape for every event (no matcher field on any entry, so the hash does not depend on a per-event matcher rule), and it is today's AD form",
+  "otherFormHash": "'*' gives a DIFFERENT hash and the key is unchanged: switching forms later changes three hashes (golden scenario plain-same-group-matcher-star vs plain-same-group-limit4000)"
+ },
+ "keyStability": "a hash does not depend on layout (group and handler indices are in the key only; verified for both paths); for a given layout the keys are identical on all three versions; moving the help entry from same-group to own-group changes only the help entry's key (session_start:0:1 -> session_start:1:0) and puts the AD entry alone in group 0; the help-first layouts swap the indices of the two SessionStart handlers"
+}

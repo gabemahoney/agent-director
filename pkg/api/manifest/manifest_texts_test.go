@@ -32,8 +32,12 @@ func tokens(name string, phrases ...string) apitest.DescCase {
 // preTrustField is SR-22.6's pre_trust text, skippedWhy saying why pre-trust
 // was off for the launch.
 func preTrustField(skippedWhy string) apitest.DescCase {
-	return tokens("pre_trust values", "ok = the folder-trust entry was written", "skipped = pre-trust was off for this launch",
+	c := tokens("pre_trust values",
+		"ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass)",
+		"skipped = pre-trust was off for this launch",
 		skippedWhy, "nothing was attempted", "failed = pre-trust was attempted", "entry was not written", "launch still proceeds")
+	c.Forbid = []string{"ok = the folder-trust entry was written"}
+	return c
 }
 
 // manifestTextCases lists the texts and their cases: find-missing (SR-18.9,
@@ -68,11 +72,22 @@ func manifestTextCases() []textCase {
 		{verb: "spawn", param: "instance_id", c: apitest.DescInstanceIDCollision(apitest.CollisionSite{})},
 		{verb: "spawn", param: "no_pre_trust", c: tokens("recorded for the life", "recorded on the row for its life",
 			"every resume of that life follows it")},
+		{verb: "spawn", param: "no_pre_trust", c: tokens("both agents' pre-trust", "For a claude agent, pre-trust pre-writes",
+			"For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file")},
 		{verb: "spawn", param: "reuse_finished", c: apitest.DescReuseFinishedParam()},
 		{verb: "resume", c: tokens("pre-trust", "best-effort pre-trust", "unless the spawn that began the row's life",
 			"no_pre_trust", "pre-trust failure never fails the resume")},
 		{verb: "spawn", field: "pre_trust", c: preTrustField("the caller passed no_pre_trust")},
 		{verb: "resume", field: "pre_trust", c: preTrustField("the spawn that began the row's life turned it off with no_pre_trust")},
+		{verb: "spawn", field: "pre_trust", c: tokens("codex failed", "for a claude agent, the .claude.json file is missing",
+			"for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute",
+			"the launch carries neither the folder trust nor the hook-trust bypass", "(Claude Code's or Codex's)")},
+		{verb: "resume", field: "pre_trust", c: tokens("codex failed", "for a claude agent, the .claude.json file is missing",
+			"for a codex agent, the row's extra_env sets CODEX_HOME to a path that is not absolute",
+			"the launch carries neither the folder trust nor the hook-trust bypass", "(Claude Code's or Codex's)")},
+		{verb: "get", field: "jsonl_path", c: tokens("codex path never built",
+			"resume of a claude row composes the path on demand from cwd + session_id", "A codex row's path is the one its hooks report",
+			"resume never builds one for it")},
 		{verb: "status", field: "launch_started_at", c: apitest.DescLaunchStartedAtField(false)},
 		{verb: "get", field: "launch_started_at", c: apitest.DescLaunchStartedAtField(false)},
 		{verb: "list", field: "spawns", c: apitest.DescLaunchStartedAtField(true)},
@@ -97,9 +112,18 @@ func manifestTextCases() []textCase {
 			"otherwise spawn with reuse_finished (--reuse-finished on the CLI) and the row's agent, which get shows; callers whose ids agent-director mints spawn fresh.")},
 		{verb: "make-template", param: "agent_args", c: apitest.DescCase{Name: "per-call spelling",
 			Require: []string{"Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES"}, Forbid: []string{"--agent-args", "--claude-args"}}},
-		{verb: "spawn", param: "agent_args", c: tokens("after the supervisor's flags", "after the supervisor's own flags")},
-		{verb: "get", field: "agent_args", c: apitest.DescCase{Name: "after the supervisor's flags",
-			Require: []string{"after the supervisor's own flags"}, Forbid: []string{"--settings"}}},
+		{verb: "spawn", param: "agent_args", c: apitest.DescCase{Name: "pass-through for both agents",
+			Require: []string{"Pass-through argv to the agent program, one argument per array element", "For a claude agent, refused: --settings"},
+			Forbid:  []string{"after the supervisor's own flags"}}},
+		{verb: "spawn", param: "agent_args", c: tokens("codex refusals",
+			"For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position", "--remote, --remote-auth-token-env",
+			"-c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks", "and --disable hooks",
+			"with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys")},
+		{verb: "spawn", param: "agent_args", c: apitest.DescCase{Name: "no second flag added, repeats not dropped",
+			Require: []string{"agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat."},
+			Forbid:  []string{"is dropped", "A repeated --no-daemon"}}},
+		{verb: "get", field: "agent_args", c: apitest.DescCase{Name: "verbatim argv, no placement claim",
+			Require: []string{"Verbatim argv passed through to the agent program."}, Forbid: []string{"--settings", "after the supervisor's own flags"}}},
 	}
 	for _, p := range []string{"allow", "deny", "ask"} {
 		cases = append(cases, textCase{verb: "spawn", param: p, c: apitest.DescCase{Name: "array, repeatable flag on the CLI",
@@ -157,7 +181,8 @@ func listSubagentsTextCases() []textCase {
 		{verb: "list-subagents", field: "tracked", c: neutral},
 		{verb: "list-subagents", field: "subagents", c: neutral},
 		{verb: "list-subagents", field: "tracked", c: tokens("tracked values",
-			"false for a row launched before subagent tracking existed, which has no records", "true for a row launched since")},
+			"false for a row launched before subagent tracking existed, which has no records",
+			"false for a row whose launch registers no subagent events", "true for any other row")},
 		{verb: "list-subagents", field: "subagents", c: tokens("every record key with type and nullability", subagentRecordKeys...)},
 		{verb: "list-subagents", field: "subagents", c: tokens("never null, even with no records",
 			"Empty array when it has none (never null)", "a field with no known value null")},

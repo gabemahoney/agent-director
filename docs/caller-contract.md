@@ -95,6 +95,34 @@ template's `agent_args` combine is in
 - `ErrPermissionsUnsupported`: a `codex` spawn or template carries an `allow`,
   `deny` or `ask` entry. Drop the lists; see
   [Permissions](permissions.md#codex-spawns).
+- `ErrSpawnDeniedFlag`: the `agent_args` hold an argument the supervisor must
+  own. Remove it and re-issue; the error names the argument.
+  - A `claude` spawn: `--settings`, `--resume`, `--continue`, `--print` and
+    `--output-format`.
+  - A `codex` spawn: a Codex subcommand or its alias as the first word
+    before any `--` that is neither an option nor an option's value (`exec`,
+    `resume`, `fork`, `login` and the rest). The `--` meant is one inside
+    `agent_args`; on the CLI that is a second `--`. A word after it is the
+    prompt and passes. `-i` or `--image` takes every word up to the next
+    option, so `-i a.png exec` passes (`exec` is a value) and `--image=a exec`
+    is refused (the `=` form takes one value, so `exec` is in command
+    position). `--remote` and
+    `--remote-auth-token-env`; `-c` or `--config` with a key at, above or
+    under `hooks`, `tui.disable_paste_burst` or `features.hooks`;
+    and `--disable hooks`. While `disable_ask_user` is on, also
+    `--enable default_mode_request_user_input` and `-c` keys at, above or under
+    `features.default_mode_request_user_input` or
+    `tools.experimental_request_user_input` (see
+    [Permissions](permissions.md#disable_ask_user-config)). Every spelling of
+    a value is read (the next word, after `=`, or attached to a short flag),
+    and an option is refused even after the `--`. A repeat of a flag the
+    supervisor adds is not refused or removed: when the arguments already
+    carry `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust `ok`) or
+    `--enable write_stdin_approval` before any `--`, the supervisor adds no
+    second one, and Codex itself rejects a flag the arguments repeat (see
+    [Codex's layers](settings.md#codexs-layers)).
+  - `resume` never refuses the arguments it replays, for either agent: a
+    stored argument that a `spawn` would now refuse still runs.
 
 ## Permission relay
 

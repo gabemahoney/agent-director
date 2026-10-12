@@ -3,8 +3,8 @@ package api_test
 // advice_follow_agent_test.go follows, literally, the advice the agent
 // refusals give (SR-4.4, SR-14.4): trigger the refusal, pin its description,
 // do what it says as an automated caller would, and check the promised
-// outcome. A claude agent launches; a codex agent that passes every check
-// reaches the Codex composition stop, writing nothing (SR-5.5). The refusals
+// outcome. A claude and a codex agent that pass every check both launch
+// (SR-5.1, SR-5.5). The refusals
 // and their order are covered in spawn_agent_test.go and
 // make_template_agent_test.go.
 
@@ -24,27 +24,23 @@ import (
 // advAgentFollow is one followed spawn: the agent the advice leads to.
 type advAgentFollow struct {
 	name  string
-	agent string // "claude" launches; "codex" reaches the composition stop
+	agent string // the agent the followed spawn launches
 }
 
 // advAgentFollows are the two agents a caller can follow the advice with.
 var advAgentFollows = []advAgentFollow{{"claude", "claude"}, {"codex", "codex"}}
 
-// advAgentSpawn runs p on env, expecting the followed spawn's outcome for agent: a launch of a claude agent
-// (one create, a pending row recording claude) or, for codex, the composition stop with no row and no tmux call.
+// advAgentSpawn runs p on env, expecting the followed spawn's outcome for agent: one create launching it and a
+// pending row recording it.
 func advAgentSpawn(t *testing.T, env spawnEnv, p api.SpawnParams, agent string) {
 	t.Helper()
 	res, err := env.c.Spawn(p)
-	if agent == "codex" {
-		advAssertCodexStop(t, err, "the followed spawn")
-		assertNoTmuxCalls(t, env.rec)
-		if ids := listIDs(t, env.c); len(ids) != 0 {
-			t.Errorf("List ids = %q after the codex stop; want no row", ids)
-		}
-		return
-	}
 	if err != nil {
 		t.Fatalf("followed spawn: %v; want it launched", err)
+	}
+	if agent == "codex" {
+		assertCodexLaunch(t, env.rec.SocketCallsOf(tmux.CallCreate), env.dbPath, res.InstanceID, codexProgram)
+		return
 	}
 	if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Command[0] != "claude" {
 		t.Errorf("creates = %+v; want one, launching claude", creates)
@@ -55,7 +51,7 @@ func advAgentSpawn(t *testing.T, env spawnEnv, p api.SpawnParams, agent string) 
 }
 
 // TestAdviceFollow_A16_AgentMissingPassAgent: a spawn naming no agent whose template names none is refused;
-// passing agent claude or codex, as the advice says, launches or reaches the Codex stop; so does putting the
+// passing agent claude or codex, as the advice says, launches; so does putting the
 // agent in the template.
 // A16 (SR-4.4): "pass agent claude or codex (--agent on the CLI), or put agent in the template"
 func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
@@ -93,7 +89,7 @@ func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
 
 // TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex: a spawn naming an agent that is neither claude nor codex
 // (any other word, or another case) is refused with its value quoted; the call again with claude or codex, as
-// the advice says, launches or reaches the Codex stop.
+// the advice says, launches.
 // A17 (SR-4.4): "agent \"gemini\" (want claude or codex)"
 func TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
@@ -219,7 +215,7 @@ func TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs(t *testing.
 
 // TestAdviceFollow_A21_PermissionsUnsupportedDropTheLists: a codex spawn carrying allow, deny or ask entries is
 // refused; the same spawn without the lists, as the advice says (the rules and Codex's own controls are the
-// operator's, outside any call), reaches the Codex composition stop, writing nothing.
+// operator's, outside any call), launches codex.
 // A21 (SR-5.5): "a codex agent takes no allow, deny or ask entries; set permission rules in the rules/ folder of the group's Codex folder and use Codex's own permission controls"
 func TestAdviceFollow_A21_PermissionsUnsupportedDropTheLists(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
@@ -294,15 +290,14 @@ func TestAdviceFollow_A22_MakeTemplatePermissionsUnsupportedDropTheLists(t *test
 
 // TestAdviceFollow_B13_CodexPendingRowSpawnWithReuse: resume of a pending codex row with no session id is refused
 // naming agent codex in its spawn-again step; find-missing past the grace period marks it missing; the spawn
-// the advice describes, with the reuse opt-in and agent codex, passes every check and stops at composition,
-// leaving the row as it was.
+// the advice describes, with the reuse opt-in and agent codex, launches the row's next life as codex.
 // B13 (SR-4.4): "... spawn the id again with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent codex (--agent codex on the CLI); nothing was written"
 func TestAdviceFollow_B13_CodexPendingRowSpawnWithReuse(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	c, _ := e.client(t)
 	r := reuseRow{resumeRow: e.seedOnServer(t, killRowSpec{State: store.StatePending, Agent: agentGone, NoSession: true,
-		Opts: []apitest.SpawnOption{apitest.WithAgent("codex"), apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli())}}, e.seedRow)}
+		Opts: codexRowOpts(apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli()))}, e.seedRow)}
 	id := r.ID
 	before := e.columns(t, id)
 
@@ -323,9 +318,11 @@ func TestAdviceFollow_B13_CodexPendingRowSpawnWithReuse(t *testing.T) {
 	p.Agent = "codex"
 	_, _, err := e.reuse(t, p)
 
-	advAssertCodexStop(t, err, "the followed spawn")
-	if n := len(e.rec.SocketCallsOf(tmux.CallCreate)) - creates; n != 0 {
-		t.Errorf("creates by the followed spawn = %d; want 0", n)
+	if err != nil {
+		t.Fatalf("the followed spawn: %v; want it launched", err)
 	}
-	e.assertRowUnchanged(t, id, missing)
+	assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate)[creates:], e.dbPath, id, codexProgram)
+	if cols := e.columns(t, id); cols.LifeNumber != advSpawnNextLife(missing) {
+		t.Errorf("life = %v after the followed spawn; want the next life %v", cols.LifeNumber, advSpawnNextLife(missing))
+	}
 }

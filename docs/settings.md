@@ -1,17 +1,22 @@
 # Settings
 
-How agent-director's per-Spawn `--settings` payload layers over Claude
-Code's settings files. This document is the operator's reference for
-predicting what permissions, hooks, and scalars a Spawn will actually
-see — Claude Code does the merge itself, and agent-director's behavior
-is a direct consequence of that merge.
+How agent-director's per-Spawn settings layer over the agent's own. For
+Claude Code that is the `--settings` payload over Claude Code's settings
+files; for Codex it is a per-launch block on Codex's command line (see
+[What a Codex launch carries](#what-a-codex-launch-carries)). This document
+is the operator's reference for predicting what permissions, hooks, and
+scalars a Spawn will actually see: the agent does the merge itself, and
+agent-director's behavior is a direct consequence of that merge.
 
 For Claude Code's own description of settings, see the upstream docs:
 <https://docs.claude.com/en/docs/claude-code/settings>.
 
+The Claude Code merge sections below describe `claude` Spawns; the
+template and `inject_help_hook` sections cover both agents.
+
 ## What `--settings` carries
 
-Every `spawn` call synthesizes a single inline JSON document and hands
+Every `spawn` of a Claude agent synthesizes a single inline JSON document and hands
 it to `claude` via `--settings <inline-json>`. The JSON is delivered as
 a direct argv element to `tmux new-session` (no shell parsing — see
 `reference/tmux-direct-argv-research.md`), so the payload arrives
@@ -33,6 +38,79 @@ agent-director never writes hooks or permissions to disk on behalf of a
 Spawn. The synthesized JSON exists only for the lifetime of the tmux
 session, and no cleanup is needed.
 
+## What a Codex launch carries
+
+Every launch of a Codex agent (`spawn`, a reuse and `resume`) adds a block of
+settings to Codex's command line. The block exists only for that launch:
+agent-director writes it to no Codex folder, no file in the Spawn's cwd and no
+project `.codex/`, and it needs no cleanup. It holds:
+
+- **No shared background service.** The agent runs alone; a shared Codex
+  service that is already running is left alone and unused.
+- **Hook entries and their trust.** Eight hook entries (see
+  [Hooks](hooks.md#the-codex-entry-set)), each trusted by its own hash, so
+  Codex shows no hook-review dialog for them in any launch, `no_pre_trust` and
+  a failed pre-trust included.
+- **The typing setting.** Enter submits at once, so a multi-line text arrives
+  as one prompt.
+- **The question tool, off.** While `disable_ask_user` is on, Codex's question
+  tool is turned off for the launch (see
+  [Permissions](permissions.md#disable_ask_user-config)).
+- **Approval of input to a running command, on.** Text sent to a command that
+  is already running asks for approval like any other command. A caller's own
+  `--disable write_stdin_approval` turns it off again.
+- **`BASH_ENV` set to empty.** The agent's shell then reads no startup file
+  through `BASH_ENV`. A `BASH_ENV` in the spawn's `extra_env` (or its
+  template's) wins. The agent's own commands run without a `BASH_ENV` file
+  unless you set one; one that prints reaches the hooks too (see
+  [The shell between Codex and the hook](hooks.md#the-shell-between-codex-and-the-hook)).
+- **Folder trust and the hook-review bypass,** only when pre-trust is `ok`
+  (see [Pre-trust for Codex](#pre-trust-for-codex)). The folder-trust setting
+  replaces any `projects` table the caller passes for that launch.
+
+### Codex's layers
+
+Codex reads its own settings in layers, lowest first: the user's, the group's
+Codex folder and the project's. agent-director's per-launch block is one more
+layer after them and wins over every pass-through argument at `spawn` and every replayed
+argument at `resume`: it stands after the last of those arguments and before
+any `--`, so what follows a `--` is the prompt, as Codex reads it. At `resume`
+the block comes after `resume <id>` and the replayed arguments.
+
+agent-director never adds a second `--no-daemon`, a second
+`--dangerously-bypass-hook-trust` (with pre-trust `ok`) or a second
+`--enable write_stdin_approval` when the caller's own arguments already carry
+one. Codex itself rejects a flag repeated in the caller's arguments.
+
+The arguments that would fight the block are refused at `spawn` with
+`ErrSpawnDeniedFlag` (see the
+[caller contract](caller-contract.md#spawn-and-template-input-refusals)).
+
+### Pre-trust for Codex
+
+Pre-trust for a Codex agent marks only the Spawn's cwd, for that launch only.
+It writes no file, takes no lock and touches no Codex folder. The outcome is
+`pre_trust` on the result:
+
+- `ok`: the launch carries the folder trust and the bypass of Codex's hook
+  review, so Codex does not stop at its folder-trust or hook-review dialog.
+- `skipped`: `no_pre_trust` is set, on the spawn or, for `resume`, on the row.
+  The launch carries neither. Codex asks about the folder, and about the user's,
+  the group's and the project's own hooks, as it finds them, with the trust it
+  recorded for them. agent-director's own hooks stay trusted.
+- `failed`: `CODEX_HOME` in `extra_env` is not an absolute path (see
+  [Multi-Account](multi-account.md#codex-group-folders)). One warning line goes
+  to stderr, the launch goes ahead as for `skipped`, and the agent may stop at
+  Codex's folder-trust prompt.
+
+`-C` / `--cd` or `--worktree` in the agent's arguments moves Codex's working
+root away from the Spawn's cwd, so the trusted folder may not be the one Codex
+works in and Codex may ask.
+
+**Folder trust lasts one launch only.** A later Codex run by hand in that
+folder asks for trust again. Claude Code's pre-trust, by contrast, persists in
+its file. Answer Codex's prompt when running it by hand.
+
 ## `defaults.inject_help_hook` config
 
 `config.toml`:
@@ -42,19 +120,22 @@ session, and no cleanup is needed.
 inject_help_hook = true
 ```
 
-Off by default. When true, every Spawn's synthesized `--settings`
+Off by default. When true, every Claude Spawn's synthesized `--settings`
 appends one extra `SessionStart` hook entry whose command is the
 absolute install path `~/.config/agent-director/bin/agent-director help`
 (post `~` expansion). The state-tracking SessionStart entry is unchanged
-and fires alongside it. A hand-made hook or MCP entry that names the old
+and fires alongside it. Every Codex launch carries a help entry of its own in
+its per-launch block while the setting is on (see
+[Hooks](hooks.md#what-agent-director-help-actually-outputs)), and none when it
+is off; the persistent pair described there is Claude-only. A hand-made hook or MCP entry that names the old
 directory needs the new path (see [Upgrade](install.md#upgrade)).
 
 The flag exists to cover the dynamic case the operator's static
 `~/.claude/settings.json` injection cannot reach: a Spawn that inherits
 (or is given) a fresh `CLAUDE_CONFIG_DIR` whose `settings.json` does not
 yet carry the help hook. With this flag set, every Spawn this binary
-creates is self-describing to its first Claude turn regardless of the
-config dir.
+creates is self-describing to its first turn regardless of the config
+dir, Codex Spawns included.
 
 `install.sh` sets the flag whether or not Claude Code is installed, so a
 host with only Codex gets it too. The static hook write in
@@ -270,9 +351,11 @@ Resulting per-spawn merge:
 
 ## Where to go next
 
-- `hooks.md` — per-event state-tracking + fail-open invariant.
-- `permissions.md` — how the `permissions` block accumulates.
-- `multi-account.md` — running Spawns against a different Claude account.
+- `hooks.md` — per-event state-tracking + fail-open invariant, for either agent.
+- `permissions.md` — how the `permissions` block accumulates, and the
+  question-tool setting for either agent.
+- `multi-account.md` — running Spawns against a different Claude or Codex
+  account.
 - `architecture.md` — package layout, state machine, parameter pipeline.
 
 ## References

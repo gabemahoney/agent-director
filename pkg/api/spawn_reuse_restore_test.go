@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -111,8 +112,8 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					e := newKillEnv(t)
 					// The old life opted out of pre-trust and the call does not: the restore brings 1 back. A missing
 					// row's NULL ended_at is restored as the failure time, read from the Client clock. The call launches
-					// Claude, so a codex row's agent column is the one the reset moved and the restore brings back.
-					spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true, Opts: []apitest.SpawnOption{apitest.WithAgent(rowAgent)}}
+					// Claude, so a codex row's agent column and its subagent_tracking 0 are the ones the reset moved and the restore brings back.
+					spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true, Opts: agentRowOpts(rowAgent)}
 					if prior == store.StateMissing {
 						spec.EndedAt = endedNull
 					}
@@ -147,6 +148,41 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestSpawnReuseAsCodexRestoreAfterLaunchFailure (SR-10.4, SR-5.8): a reuse as
+// codex whose create fails, onto a claude and a codex row each seeded with an
+// end report, restores the agent, the arguments, the extra_env, the end report
+// and the subagent_tracking flag it had, byte for byte, with the reuse's
+// create having run codex.
+func TestSpawnReuseAsCodexRestoreAfterLaunchFailure(t *testing.T) {
+	t.Parallel()
+	for _, rowAgent := range []string{"claude", "codex"} {
+		t.Run("a "+rowAgent+" row", func(t *testing.T) {
+			t.Parallel()
+			e := newKillEnv(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour,
+				Opts: agentRowOpts(rowAgent, apitest.WithEndReportedAt(e.clock.Now().Add(-time.Hour).UnixMilli()), apitest.WithExtraEnv(map[string]string{"OLD": "life"}))})
+			before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
+			if before.EndReportedAt == nil || before.Agent != rowAgent {
+				t.Fatalf("seeded row: agent %v, end report %v; want %s, one set", before.Agent, before.EndReportedAt, rowAgent)
+			}
+			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
+			p := reuseParams(t, r, reuseRequest{Args: []string{"--model", "gpt"}, Env: map[string]string{"TEAM": "new"}})
+			p.Agent = "codex"
+
+			_, _, err := e.reuse(t, p)
+
+			assertLaunchSentinel(t, err, tmux.ErrTmuxSessionCreate)
+			c := rlOneCreate(t, e, r.Socket, tmux.CallLookup, tmux.CallCreate)
+			if l := codexfix.Split(t, c.Command); l.Program != codexProgram || !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) {
+				t.Errorf("the failed create ran %q; want codex --model gpt", c.Command)
+			}
+			want := before // every column restored but the launch start, cleared, two versions on (reset, restore)
+			want.LaunchStartedAt, want.RowVersion = nil, before.RowVersion.(int64)+2
+			rrAssertRestored(t, e, r, want, hist, "ErrTmuxSessionCreate")
+		})
 	}
 }
 

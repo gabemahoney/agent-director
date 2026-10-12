@@ -414,7 +414,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Pass-through argv to the agent program after the supervisor's own flags, one argument per array element (on the CLI, the arguments after --). For a claude agent, refused: --settings, --resume, --continue, --print, --output-format.",
+				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). For a claude agent, refused: --settings, --resume, --continue, --print, --output-format. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks, and --disable hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -423,7 +423,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no_pre_trust",
 				Type:          "bool",
-				Description:   "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row for its life, and every resume of that life follows it: no pre-trust is attempted over an opt-out. " + olderServeUndecoded + ".",
+				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (pre-trust IS performed so the agent skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row for its life, and every resume of that life follows it: no pre-trust is attempted over an opt-out. " + olderServeUndecoded + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -460,7 +460,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written, or extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
+				Description:   "What the launch's folder-trust pre-trust did. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -555,9 +555,9 @@ var Verbs = []VerbDef{
 			{Name: "agent", Type: "string", Description: "The agent the row runs: claude (Claude Code) or codex (Codex). Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex"}},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tmux_socket", Type: "string?", Description: "The tmux socket the row's launch uses; omitted for a row from before this release.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
-			{Name: "agent_args", Type: "[]string", Description: "Verbatim argv passed through to the agent program after the supervisor's own flags.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "agent_args", Type: "[]string", Description: "Verbatim argv passed through to the agent program.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "relay_mode", Type: "string", Description: "on / off.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"on", "off"}},
-			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + session_id.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume of a claude row composes the path on demand from cwd + session_id (under CLAUDE_CONFIG_DIR when its extra_env sets one). A codex row's path is the one its hooks report; resume never builds one for it, so an empty one leaves only the recorded paths of the visible history to try.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "session_id", Type: "string", Description: "Agent session id, recorded from the agent's hooks: Claude's is its transcript file's name, Codex's the session_id its hooks report. Empty until the first SessionStart.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "labels", Type: "map[string]string", Description: "Caller-supplied labels.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "started_at", Type: "timestamp", Description: "Row insert time.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
@@ -956,7 +956,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written, or the row's extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
+				Description:   "What the launch's folder-trust pre-trust did. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or the row's extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, the row's extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -1219,7 +1219,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "tracked", Type: "bool", Description: "Whether the row's launch registered subagent tracking: false for a row launched before subagent tracking existed, which has no records; true for a row launched since.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "tracked", Type: "bool", Description: "Whether the row's launch registered subagent tracking: false for a row launched before subagent tracking existed, which has no records, and false for a row whose launch registers no subagent events; true for any other row.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "subagents", Type: "[]object", Description: subagentsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{

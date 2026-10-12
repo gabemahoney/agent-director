@@ -35,6 +35,12 @@ a Codex agent's permission rules in the `rules/` folder of the group's Codex
 folder, and use Codex's own permission controls. The `disable_ask_user`
 setting below is not such an entry and never makes a spawn refused.
 
+Codex's own permission controls, such as its approval and sandbox options, and
+its hook-trust bypass, reach Codex unchanged through the spawn's arguments.
+Every Codex launch also turns on approval of input to a running command (the
+`write_stdin_approval` feature), so text sent to a command already running asks
+as any command does. A caller's `--disable write_stdin_approval` turns it off.
+
 ## Per-tier concatenation
 
 Each tier's `permissions.allow` / `deny` / `ask` arrays are concatenated
@@ -75,7 +81,10 @@ A Spawn launched with `deny` `["Bash(npm publish)"]`
 disable_ask_user = true
 ```
 
-When true, every `spawn` call adds `"AskUserQuestion"` to the
+The setting covers both agents.
+
+**Claude agent.** When true, every `spawn` of a Claude agent adds
+`"AskUserQuestion"` to the
 synthesized `permissions.deny` array. The string `"AskUserQuestion"` is
 a bare tool name — Claude Code's matcher treats it as "deny every use
 of the AUQ tool" *and* removes the tool from the deferred-tool registry
@@ -91,6 +100,32 @@ To re-enable AUQ for a specific Spawn while keeping the global config
 off, either flip the config (affects every Spawn) or use a separate
 config file via `AGENT_DIRECTOR_CONFIG` (not yet wired; tracked for a
 future Epic), or run that Spawn on a tmux server of its own, as below.
+
+**Codex agent.** Every launch of a Codex agent (`spawn`, a reuse and
+`resume`) is affected as follows.
+
+- With the setting on, Codex's question tool is off for the launch, whatever
+  the user's, the group's, the profile's or the project's Codex config says,
+  and its asynchronous question tool is denied as well, so a call to it is
+  blocked with a reason the agent reads. The agent has to put its question in
+  its reply.
+- At `spawn`, an argument that turns the tool back on, or that sets a Codex
+  config key at, above or under the tool's keys, is refused with
+  `ErrSpawnDeniedFlag` (see the
+  [caller contract](caller-contract.md#spawn-and-template-input-refusals)).
+- At `resume`, the setting as it stands now wins over the stored arguments, and
+  `resume` refuses nothing for them. A row spawned with the setting off and
+  resumed with it on gets the tool off; the reverse gets it as Codex's config
+  leaves it.
+- With the setting off, agent-director adds nothing: the tool is as the user's,
+  the group's and the project's config leave it. A question that waits does not
+  move the row: no Codex tool reads `ask_user`, so the row reads `working`
+  while it waits.
+
+**A question tool turned on in a group's config.** With the setting off, a
+group's Codex config can turn the question tool on, and an agent that uses it
+sits at its question with the row reading `working`. Turn the setting on, or
+keep the tool off in that group's config.
 
 ### One Spawn under another `HOME` or store
 

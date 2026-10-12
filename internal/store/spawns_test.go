@@ -16,7 +16,8 @@ import (
 // TestInsertPendingRoundTrip: an inserted row reads back pending with its
 // fields, extra env included, through GetSpawn and ListSpawns alike; a nil
 // extra env is stored '{}' and reads as an empty map; the v3 columns read as
-// stored; every insert stores subagent_tracking 1 (the column default is 0); a
+// stored; an insert stores subagent_tracking by the row's agent, 1 for claude
+// and 0 for codex (the column default is 0); a
 // repeated id or a parent naming no row fails the insert; an absent
 // id is ErrSpawnNotFound.
 func TestInsertPendingRoundTrip(t *testing.T) {
@@ -41,7 +42,14 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 		t.Errorf("GetSpawn = %+v; want the inserted pending row", got)
 	}
 	if !got.SubagentTracking || !mustGetSpawn(t, s, "bare").SubagentTracking {
-		t.Error("an inserted row reads SubagentTracking false; want true (the insert stores 1)")
+		t.Error("an inserted claude row reads SubagentTracking false; want true (the insert stores 1)")
+	}
+	codex := Spawn{InstanceID: "bare-codex", Agent: AgentCodex, CWD: "/tmp", TmuxSessionName: "cd-bare-codex", RelayMode: "on"}
+	if err := s.InsertPending(codex); err != nil {
+		t.Fatalf("InsertPending(%s): %v", codex.InstanceID, err)
+	}
+	if mustGetSpawn(t, s, codex.InstanceID).SubagentTracking {
+		t.Error("an inserted codex row reads SubagentTracking true; want false (the insert stores 0)")
 	}
 
 	var raw sql.NullString
@@ -60,8 +68,8 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 		t.Errorf("populated v3 columns read as %+v", b)
 	}
 	listed, err := s.ListSpawns(ListFilters{})
-	if err != nil || len(listed) != 2 {
-		t.Fatalf("ListSpawns = %d rows, %v; want 2", len(listed), err)
+	if err != nil || len(listed) != 3 {
+		t.Fatalf("ListSpawns = %d rows, %v; want 3", len(listed), err)
 	}
 	for _, l := range listed {
 		if g := mustGetSpawn(t, s, l.InstanceID); !reflect.DeepEqual(l, g) {

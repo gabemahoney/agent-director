@@ -11,7 +11,6 @@ import (
 	"errors"
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -341,7 +340,7 @@ func advResumeRow(t *testing.T, e *killEnv, id string) (cols apitest.SpawnColumn
 
 // advResumeRecourse resumes r, a row of agent, refused with want and writing nothing, then follows the Go
 // doc's recourse: spawn r's id again with the reuse opt-in and the row's agent. A claude row starts a new
-// life; a codex row's spawn passes every check and stops at composition, writing nothing.
+// life, as the row's agent.
 func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error, agent string) {
 	t.Helper()
 	before := e.snapshotResume(t, r.resumeRow)
@@ -351,18 +350,12 @@ func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error, agent s
 
 	p := reuseParams(t, r, reuseRequest{})
 	p.Agent = agent
-	if agent == "codex" {
-		snap := e.snapshotReuse(t, r)
-		_, logs, err := e.reuse(t, p)
-		if err == nil || !strings.Contains(err.Error(), codexStopText) {
-			t.Fatalf("spawn of %s with the reuse opt-in and agent codex = %v (log %q); want the Codex composition stop", r.ID, err, logs)
-		}
-		e.assertWroteNothing(t, snap)
-		return
-	}
 	res, logs, err := e.reuse(t, p)
 	if err != nil || res.InstanceID != r.ID {
 		t.Fatalf("spawn of %s with the reuse opt-in = %+v, %v (log %q); want it launched", r.ID, res, err, logs)
+	}
+	if agent == "codex" {
+		assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate), e.dbPath, r.ID, codexProgram)
 	}
 	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != any(reuseLife+1) || cols.Agent != agent {
 		t.Errorf("row after the reuse {state %v, life %#v, agent %v}; want pending in life %d, agent %s", cols.State, cols.LifeNumber, cols.Agent, reuseLife+1, agent)
@@ -377,7 +370,7 @@ func TestAdviceFollow_B4_NoSessionIdSpawnWithReuse(t *testing.T) {
 	for _, agent := range advResumeRowAgents {
 		t.Run(agent+" row", func(t *testing.T) {
 			e := newKillEnv(t)
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), NoSessionID: true, Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), NoSessionID: true, Opts: agentRowOpts(agent)})
 			advResumeRecourse(t, e, r, api.ErrNoSessionId, agent)
 		})
 	}
@@ -391,7 +384,7 @@ func TestAdviceFollow_B5_JsonlMissingSpawnWithReuse(t *testing.T) {
 	for _, agent := range advResumeRowAgents {
 		t.Run(agent+" row", func(t *testing.T) {
 			e := newKillEnv(t)
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Opts: agentRowOpts(agent)})
 			if err := os.Remove(r.JSONLPath); err != nil {
 				t.Fatalf("remove transcript: %v", err)
 			}
@@ -409,7 +402,7 @@ func TestAdviceFollow_B6_JsonlNeverWrittenSpawnWithReuse(t *testing.T) {
 		t.Run(agent+" row", func(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Bare: true,
-				Opts: []apitest.SpawnOption{apitest.WithJsonlPath(""), apitest.WithAgent(agent)}})
+				Opts: agentRowOpts(agent, apitest.WithJsonlPath(""))})
 			if err := os.Remove(r.JSONLPath); err != nil {
 				t.Fatalf("remove transcript: %v", err)
 			}

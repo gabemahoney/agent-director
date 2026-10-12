@@ -355,9 +355,10 @@ func nullIfZero[T comparable](v T) any {
 }
 
 // WithNoSubagentTracking stores 0 as the row's schema-v9 subagent_tracking: a
-// row from before the upgrade, whose current launch registered no subagent
-// events. Without it a seeded row is tracked (1), as InsertPending stores for
-// every launch.
+// row whose current launch registered no subagent events, one from before the
+// upgrade or a Codex launch (InsertPending stores 0 for a codex agent and 1 for
+// a claude one). Without it a seeded row is tracked (1) whatever its agent, so
+// a codex seed passes it to look as a Codex launch stored it.
 func WithNoSubagentTracking() SpawnOption {
 	return func(o *spawnOpts) { o.set("subagent_tracking", int64(0)) }
 }

@@ -67,7 +67,8 @@ type SubagentRecord struct {
 type ListSubagentsResult struct {
 	// Tracked is whether the agent's launch registered subagent tracking. It
 	// is false for a row launched before subagent tracking existed, which has
-	// no records; a row launched since is true.
+	// no records, and for a row whose launch registers no subagent events; any
+	// other row is true.
 	Tracked bool `json:"tracked"`
 	// Subagents is every subagent record of the agent, every launch and life
 	// of it, ordered by first_started_at ascending (records with no
@@ -150,7 +151,8 @@ func ListSubagents(s ListSubagentsStore, instanceID string) (ListSubagentsResult
 
 // ListSubagents returns the subagent records of one agent: whether the agent
 // tracks subagents (tracked; false for a row launched before subagent tracking
-// existed, which has none) and every subagent of it, every launch and life of
+// existed, which has none, and for a row whose launch registers no subagent
+// events) and every subagent of it, every launch and life of
 // the row, ordered by first_started_at (unknown last), then subagent_id. Each
 // record carries subagent_id, instance_id, session_id, subagent_type,
 // description, model, parent_type, parent_id, tool_use_id, run_mode,

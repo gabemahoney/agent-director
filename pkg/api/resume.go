@@ -127,15 +127,19 @@ type ResumeResult struct {
 	InstanceID string `json:"instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
 	// of three values (SR-22.6):
-	//   - "ok": the folder-trust entry was written.
+	//   - "ok": the folder trust took effect (a claude agent: the entry was
+	//     written to .claude.json; a codex agent: the launch carries the
+	//     folder trust and the hook-trust bypass).
 	//   - "skipped": pre-trust was off for this launch because the row
 	//     records that the spawn that began its life turned it off
 	//     (SpawnParams.NoPreTrust); nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
-	//     (the .claude.json file is missing, or could not be read, parsed or
-	//     written, or the row's extra env sets CLAUDE_CONFIG_DIR to a path
-	//     that is not absolute); the agent may stop at Claude Code's
-	//     folder-trust prompt.
+	//     (a claude agent: the .claude.json file is missing, or could not be
+	//     read, parsed or written, or the row's extra env sets
+	//     CLAUDE_CONFIG_DIR to a path that is not absolute; a codex agent: the
+	//     row's extra env sets CODEX_HOME to a path that is not absolute, and
+	//     the launch carries neither the folder trust nor the hook-trust
+	//     bypass); the agent may stop at its folder-trust prompt.
 	//
 	// A pre-trust failure never fails the resume.
 	PreTrust string `json:"pre_trust"`
@@ -277,6 +281,12 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     was once recorded/composed and has rotted). Both messages report
 //     each path tried with its source (persisted / fallback / history)
 //     and its stat error; every one of them is from the current life.
+//     A codex row's candidates are only the persisted jsonl_path and each
+//     visible-history entry's recorded path, newest first: no path is ever
+//     built from the cwd and the session id, and neither CLAUDE_CONFIG_DIR
+//     nor ~/.claude is looked under (so step b and the recomputed half of c
+//     do not apply to it). The session id of the candidate that wins goes to
+//     the relaunch, as for a claude row.
 //
 // The winning candidate's session id is the one `claude --resume` names;
 // the launch itself (resumeAfterJsonl) always works from the row as read.
@@ -339,6 +349,12 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		}
 	}
 
+	// A Codex row never recomputes a path: Codex's transcript path is not
+	// derived from the cwd and the session id, and there is no Claude config
+	// dir to look under. Its candidates are the persisted jsonl_path and each
+	// visible-history entry's recorded path, newest first (SR-7.4).
+	codex := row.Agent == store.AgentCodex
+
 	// Fallback: recompute from the persisted CLAUDE_CONFIG_DIR (bug b.1ba)
 	// — fall back to ~/.claude via spawn.JsonlPath when the value is not
 	// usable.
@@ -354,22 +370,24 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	// resolves to ~/.claude via spawn.JsonlPath. Only what each does with
 	// an unusable value differs: this read path falls back, while
 	// pre-trust, which writes, refuses it and writes nothing.
-	var fallback string
-	var ferr error
-	if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
-		fallback, ferr = spawn.JsonlPathIn(dir, row.CWD, row.SessionID)
-	} else {
-		fallback, ferr = spawn.JsonlPath(row.CWD, row.SessionID)
-	}
-	if ferr != nil {
-		return ResumeResult{}, fmt.Errorf("resume: resolve jsonl: %w", ferr)
-	}
-	if _, err := os.Stat(fallback); err == nil {
-		return resumeAfterJsonl(d, row, row.SessionID)
-	} else {
-		attempts = append(attempts, jsonlAttempt{
-			source: "fallback", path: fallback, statErr: err,
-		})
+	if !codex {
+		var fallback string
+		var ferr error
+		if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
+			fallback, ferr = spawn.JsonlPathIn(dir, row.CWD, row.SessionID)
+		} else {
+			fallback, ferr = spawn.JsonlPath(row.CWD, row.SessionID)
+		}
+		if ferr != nil {
+			return ResumeResult{}, fmt.Errorf("resume: resolve jsonl: %w", ferr)
+		}
+		if _, err := os.Stat(fallback); err == nil {
+			return resumeAfterJsonl(d, row, row.SessionID)
+		} else {
+			attempts = append(attempts, jsonlAttempt{
+				source: "fallback", path: fallback, statErr: err,
+			})
+		}
 	}
 
 	// b.v2c AC6: a session rotation (a new session id reported for the row)
@@ -411,6 +429,12 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 					source: "history", path: h.JSONLPath, statErr: err,
 				})
 			}
+		}
+
+		// A Codex entry has no recomputed path: its recorded path was the only
+		// candidate, so go on to the next, older entry.
+		if codex {
+			continue
 		}
 
 		// Step 2: recompute the config-dir-aware path for this session id and
@@ -509,6 +533,9 @@ type jsonlAttempt struct {
 // joined by "; ". Callers map ErrJsonlMissing by name (unchanged); this
 // is the human/log detail that tells them which paths were tried.
 func formatJsonlAttempts(attempts []jsonlAttempt) string {
+	if len(attempts) == 0 {
+		return "no transcript path was ever recorded"
+	}
 	parts := make([]string, 0, len(attempts))
 	for _, a := range attempts {
 		parts = append(parts, fmt.Sprintf("%s %s (%v)", a.source, a.path, a.statErr))
@@ -550,18 +577,21 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     ErrSpawnNotResumable is returned instead, and if the row was removed,
 //     the move's ErrSpawnNotFound (SR-8.6).
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
-//     the environment, settings and argv (spawn.ComposeRelaunch), all before
-//     the move, so a failure writes nothing.
-//  5. Pre-trust (spawn.PreTrust, SR-8.1 step 4, SR-22.6): after every check
+//     the environment, settings and argv (spawn.ComposeRelaunch, for the row's
+//     agent), all before the move, so a failure writes nothing.
+//  5. Pre-trust (spawn.RunPreTrust, SR-8.1 step 4, SR-22.6): after every check
 //     above that can refuse without a write and immediately before the move,
-//     for the row's cwd and extra env (so CLAUDE_CONFIG_DIR resolves the file
-//     a spawn of the row used), off when the row records the opt-out of the
-//     spawn that began its life (row.NoPreTrust, which the move and the
-//     restore keep, so a retry after a restored failure follows it too),
-//     waiting for a held lock on .claude.json for at most the config's
-//     effective pre_trust.lock_wait_seconds (b.kr4). Best effort: its
-//     outcome never changes resume's control flow or error, and a failure
-//     prints the "pre-trust failed" line and the launch proceeds.
+//     for the row's cwd and extra env, off when the row records the opt-out of
+//     the spawn that began its life (row.NoPreTrust, which the move and the
+//     restore keep, so a retry after a restored failure follows it too). For a
+//     claude row it is spawn.PreTrust: CLAUDE_CONFIG_DIR resolves the file a
+//     spawn of the row used, waiting for a held lock on .claude.json for at
+//     most the config's effective pre_trust.lock_wait_seconds (b.kr4). For a
+//     codex row it touches no file: it reports the outcome the composition
+//     carried (the argv was built for it), and prints the one warning only for
+//     failed (CODEX_HOME not absolute), after the composition succeeded. Best
+//     effort: the outcome never changes resume's control flow or error, and a
+//     failure prints the "pre-trust failed" line and the launch proceeds.
 //     The outcome is reported as ResumeResult.PreTrust on success.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
@@ -630,7 +660,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	if err != nil {
 		return ResumeResult{}, fmt.Errorf("resume of instance %s: the launch could not be recorded (%v), so nothing was written and nothing was launched", id, err)
 	}
-	req, err := spawn.ComposeRelaunch(spawn.RelaunchInput{
+	composed, err := spawn.ComposeRelaunch(spawn.RelaunchInput{
 		Row:       row,
 		SessionID: sessionID,
 		Socket:    socket,
@@ -640,9 +670,10 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	if err != nil {
 		return ResumeResult{}, err
 	}
+	req := composed.Create
 
 	// A failure never fails the launch; the outcome goes into the result.
-	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
+	preTrust := spawn.RunPreTrust(row.Agent, composed.PreTrust, row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
 
 	parent := spawn.ParentIDFromEnv()
 	owner := spawn.CurrentLaunchOwner(d.pc)

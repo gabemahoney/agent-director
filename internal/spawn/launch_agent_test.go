@@ -6,59 +6,127 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// TestClaudeLaunchProgram (SR-5.0): a Claude launch's argv starts with
-// [launch] claude_path when set, as one unchanged argument, else with claude;
-// the path is read from the config at each launch and never stored on the row.
-func TestClaudeLaunchProgram(t *testing.T) {
-	paths := []struct{ name, path, want string }{
-		{"unset", "", "claude"},
-		{"absolute path", "/opt/claude/bin/claude", "/opt/claude/bin/claude"},
-		{"spaces", "/opt/with space/claude", "/opt/with space/claude"},
-		{"quotes and a flag-like tail", `/opt/q"uote's/claude --verbose`, `/opt/q"uote's/claude --verbose`},
+// launchProgramPaths are the [launch] claude_path / codex_path values the
+// program tests set, by agent name; "unset" is the empty path.
+var launchProgramPaths = []struct {
+	name string
+	path func(agent string) string
+}{
+	{"unset", func(string) string { return "" }},
+	{"absolute path", func(a string) string { return "/opt/" + a + "/bin/" + a }},
+	{"spaces", func(a string) string { return "/opt/with space/" + a }},
+	{"quotes and a flag-like tail", func(a string) string { return `/opt/q"uote's/` + a + " --verbose" }},
+}
+
+// setLaunchPath sets the config's launch path for agent.
+func setLaunchPath(cfg *config.Config, agent, path string) {
+	if agent == store.AgentCodex {
+		cfg.Launch.CodexPath = path
+	} else {
+		cfg.Launch.ClaudePath = path
 	}
+}
+
+// TestLaunchProgram (SR-5.0): a launch's argv starts with the agent's
+// [launch] path when set, as one unchanged argument, else with the program
+// named claude or codex; the path is read from the config at each launch and
+// never stored on the row. Reuse composes through ComposeLaunch, as spawn
+// does (pkg/api/spawn_reuse.go).
+func TestLaunchProgram(t *testing.T) {
 	launches := []struct {
-		name   string
-		next   string // the argument after the program
-		create func(t *testing.T, claudePath string) (argv []string, rowText string)
+		name string
+		// next is the argument after the program, by agent.
+		next   map[string]string
+		create func(t *testing.T, agent, path string) (argv []string, rowText string)
 	}{
-		{"spawn", "--settings", func(t *testing.T, claudePath string) ([]string, string) {
+		{"spawn", map[string]string{"claude": "--settings", "codex": "--no-daemon"}, func(t *testing.T, agent, path string) ([]string, string) {
 			e := newLaunchEnv(t)
-			e.cfg.Launch.ClaudePath = claudePath
+			e.r.Agent, e.r.AgentArgs = agent, nil
+			setLaunchPath(&e.cfg, agent, path)
 			id := e.mustLaunch()
 			return e.onlyCreate().Command, fmt.Sprintf("%+v", e.row(id))
 		}},
-		{"resume", "--resume", func(t *testing.T, claudePath string) ([]string, string) {
+		{"reuse", map[string]string{"claude": "--settings", "codex": "--no-daemon"}, func(t *testing.T, agent, path string) ([]string, string) {
+			e := newLaunchEnv(t)
+			e.r.Agent, e.r.AgentArgs = agent, nil
+			setLaunchPath(&e.cfg, agent, path)
+			c, err := ComposeLaunch(e.r, e.cfg)
+			if err != nil {
+				t.Fatalf("ComposeLaunch: %v", err)
+			}
+			return c.Create.Command, fmt.Sprintf("%+v", c.Row)
+		}},
+		{"resume", map[string]string{"claude": "--resume", "codex": "resume"}, func(t *testing.T, agent, path string) ([]string, string) {
 			e := newRelaunchEnv(t)
-			e.cfg.Launch.ClaudePath = claudePath
+			e.row.Agent, e.row.AgentArgs = agent, nil
+			setLaunchPath(&e.cfg, agent, path)
 			if out := e.relaunch("session-program-1"); out.Kind != CreateLabelled {
 				t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 			}
 			return e.onlyCreate().Command, fmt.Sprintf("%+v", e.row)
 		}},
 	}
-	for _, l := range launches {
-		for _, p := range paths {
-			t.Run(l.name+"/"+p.name, func(t *testing.T) {
-				argv, rowText := l.create(t, p.path)
-				if len(argv) < 2 || argv[0] != p.want || argv[1] != l.next {
-					t.Errorf("create argv starts %q; want program %q (one argument) then %q", argv[:min(2, len(argv))], p.want, l.next)
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		for _, l := range launches {
+			for _, p := range launchProgramPaths {
+				path := p.path(agent)
+				want := path
+				if path == "" {
+					want = agent
 				}
-				if p.path != "" && strings.Contains(rowText, p.path) {
-					t.Errorf("row = %s; want nothing about the launch path on it", rowText)
-				}
-			})
+				t.Run(agent+"/"+l.name+"/"+p.name, func(t *testing.T) {
+					argv, rowText := l.create(t, agent, path)
+					if len(argv) < 2 || argv[0] != want || argv[1] != l.next[agent] {
+						t.Errorf("create argv starts %q; want program %q (one argument) then %q", argv[:min(2, len(argv))], want, l.next[agent])
+					}
+					if path != "" && strings.Contains(rowText, path) {
+						t.Errorf("row = %s; want nothing about the launch path on it", rowText)
+					}
+				})
+			}
 		}
 	}
 }
 
-// TestComposeStopsForUnlaunchableAgents: ComposeLaunch and ComposeRelaunch
-// stop before composing for a codex agent (a Codex launch is not available in
-// this build, an uncatalogued error) and for an empty or unknown row agent
-// (store.ErrRowAgentInvalid, quoting the value).
-func TestComposeStopsForUnlaunchableAgents(t *testing.T) {
+// TestResumeProgramFollowsTheConfigAtResume (SR-5.0): a row resumed after
+// [launch] claude_path or codex_path changed is launched with the new path,
+// and one resumed after the key is removed with the program on PATH again.
+func TestResumeProgramFollowsTheConfigAtResume(t *testing.T) {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+		t.Run(agent, func(t *testing.T) {
+			e := newRelaunchEnv(t)
+			e.row.Agent = agent
+			program := func() string {
+				c, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: "s1", Socket: e.socket, Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
+				if err != nil {
+					t.Fatalf("ComposeRelaunch: %v", err)
+				}
+				return c.Create.Command[0]
+			}
+			setLaunchPath(&e.cfg, agent, "/opt/one/"+agent)
+			if got := program(); got != "/opt/one/"+agent {
+				t.Errorf("program with the first path = %q", got)
+			}
+			setLaunchPath(&e.cfg, agent, "/opt/two dir/"+agent)
+			if got := program(); got != "/opt/two dir/"+agent {
+				t.Errorf("program after the path changed = %q; want the new one", got)
+			}
+			setLaunchPath(&e.cfg, agent, "")
+			if got := program(); got != agent {
+				t.Errorf("program after the key was removed = %q; want %q", got, agent)
+			}
+		})
+	}
+}
+
+// TestComposeRefusesUnknownAgents: ComposeLaunch and ComposeRelaunch stop
+// before composing for an empty or unknown row agent (store.ErrRowAgentInvalid,
+// quoting the value) and return the zero value.
+func TestComposeRefusesUnknownAgents(t *testing.T) {
 	composers := []struct {
 		name    string
 		compose func(t *testing.T, agent string) error
@@ -75,59 +143,50 @@ func TestComposeStopsForUnlaunchableAgents(t *testing.T) {
 		{"ComposeRelaunch", func(t *testing.T, agent string) error {
 			e := newRelaunchEnv(t)
 			e.row.Agent = agent
-			req, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: "s1", Socket: e.socket, Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
-			if err != nil && len(req.Command) != 0 {
-				t.Errorf("ComposeRelaunch returned %+v with its error; want the zero value", req)
+			c, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: "s1", Socket: e.socket, Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
+			if err != nil && (len(c.Create.Command) != 0 || c.PreTrust != "") {
+				t.Errorf("ComposeRelaunch returned %+v with its error; want the zero value", c)
 			}
 			return err
 		}},
 	}
-	agents := []struct {
-		name, agent, want string
-		rowInvalid        bool
-	}{
-		{"codex", "codex", "a Codex launch is not available in this build", false},
-		{"empty", "", `: ""`, true},
-		{"unknown", "gemini", `: "gemini"`, true},
-		{"wrong case", "Claude", `: "Claude"`, true},
+	agents := []struct{ name, agent, want string }{
+		{"empty", "", `: ""`},
+		{"unknown", "gemini", `: "gemini"`},
+		{"wrong case", "Codex", `: "Codex"`},
 	}
 	for _, c := range composers {
 		for _, a := range agents {
 			t.Run(c.name+"/"+a.name, func(t *testing.T) {
 				err := c.compose(t, a.agent)
-				if err == nil || errors.Is(err, store.ErrRowAgentInvalid) != a.rowInvalid || !strings.Contains(err.Error(), a.want) {
-					t.Fatalf("%s(agent %q) err = %v; want one carrying %q (ErrRowAgentInvalid: %v)", c.name, a.agent, err, a.want, a.rowInvalid)
-				}
-				if !a.rowInvalid && err.Error() != a.want {
-					t.Errorf("err = %q; want exactly %q", err.Error(), a.want)
+				if !errors.Is(err, store.ErrRowAgentInvalid) || !strings.Contains(err.Error(), a.want) {
+					t.Fatalf("%s(agent %q) err = %v; want ErrRowAgentInvalid carrying %q", c.name, a.agent, err, a.want)
 				}
 			})
 		}
 	}
 }
 
-// TestLaunchStopsForCodexBeforeAnyWrite: a codex launch stops at composition,
-// so no row is inserted, no cwd is pre-trusted and no tmux session is created.
-func TestLaunchStopsForCodexBeforeAnyWrite(t *testing.T) {
+// TestCodexLaunchWritesNoClaudeJSON: a codex launch inserts one pending row,
+// makes one create and leaves ~/.claude.json untouched (no Claude pre-trust).
+func TestCodexLaunchWritesNoClaudeJSON(t *testing.T) {
 	const seed = `{"projects":{}}`
 	e := newLaunchEnv(t)
 	stub := withStubClaudeJSON(t)
 	seedFile(t, stub, seed)
-	e.r.Agent = "codex"
+	e.r.Agent = store.AgentCodex
 
-	_, _, err := e.launch()
+	id, outcome := e.mustLaunchOutcome()
 
-	if err == nil || err.Error() != "a Codex launch is not available in this build" {
-		t.Fatalf("Launch err = %v; want the Codex-unavailable error", err)
+	if row := e.row(id); row.State != store.StatePending || row.Agent != store.AgentCodex {
+		t.Errorf("row = {state %q, agent %q}; want pending codex", row.State, row.Agent)
 	}
-	if _, err := e.s.GetSpawn(e.r.InstanceID); !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Errorf("GetSpawn after the stop = %v; want ErrSpawnNotFound (no row written)", err)
+	if outcome != PreTrustOK {
+		t.Errorf("pre-trust outcome = %q; want ok", outcome)
 	}
-	if calls := e.rec.SocketCalls(); len(calls) != 0 {
-		t.Errorf("tmux calls = %+v; want none", calls)
-	}
+	e.onlyCreate()
 	if got := mustReadFile(t, stub); string(got) != seed {
-		t.Errorf("claude.json = %q; want untouched (no pre-trust)", got)
+		t.Errorf("claude.json = %q; want untouched (no pre-trust of a Claude file)", got)
 	}
 }
 

@@ -6,6 +6,7 @@ package api_test
 // unwritable one, are internal/spawn's pre-trust tests'.
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -106,6 +107,64 @@ func TestResumePreTrust(t *testing.T) {
 			cmd := cs[len(cs)-1].Command
 			if i := slices.Index(cmd, "--resume"); i < 0 || i+1 >= len(cmd) || cmd[i+1] != r.SessionID {
 				t.Errorf("argv = %q; want --resume %s", cmd, r.SessionID)
+			}
+		})
+	}
+}
+
+// TestResumeCodexPreTrust (SR-5.4, SR-5.6): a resume of a Codex row decides
+// pre_trust from the row's recorded no_pre_trust and its stored extra_env's
+// CODEX_HOME, the call carrying neither: the same ok, skipped and failed as a
+// spawn's, the failed warning printed once to the caller and the others none.
+// The row is launched, and neither the Codex folder's tree nor the row's
+// .claude.json is touched.
+func TestResumeCodexPreTrust(t *testing.T) {
+	// Serial: it sets HOME and the working directory with t.Setenv, and redirects stderr.
+	for _, tc := range codexPreTrustCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newResumeEnv(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			homeJSON := filepath.Join(home, ".claude.json")
+			if err := os.WriteFile(homeJSON, []byte("{}"), 0o600); err != nil {
+				t.Fatalf("write home .claude.json: %v", err)
+			}
+			folder := tc.seed(t, home)
+			env := apitest.WithExtraEnv(folder.extraEnv())
+			if tc.give != nil {
+				env = apitest.WithExtraEnv(tc.give)
+			}
+			opts := codexRowOpts(env)
+			if tc.noPreTrust {
+				opts = append(opts, apitest.WithNoPreTrust())
+			}
+			r := e.seedResumable(t, store.StateEnded, opts...)
+
+			var res api.ResumeResult
+			var err error
+			warn := captureStderr(t, func() { res, err = e.resume(r.ID) })
+
+			if err != nil {
+				t.Fatalf("resume: %v", err)
+			}
+			if res.PreTrust != tc.wantPreTrust {
+				t.Errorf("ResumeResult.PreTrust = %q; want %q", res.PreTrust, tc.wantPreTrust)
+			}
+			checkPreTrustJSON(t, res, tc.wantPreTrust)
+			if warn != tc.warning() {
+				t.Errorf("warning = %q; want %q", warn, tc.warning())
+			}
+			got := e.columns(t, r.ID)
+			if got.State != store.StatePending || got.NoPreTrust != r.Before.NoPreTrust || got.Agent != "codex" {
+				t.Errorf("row after the resume: state %v, no_pre_trust %#v, agent %q; want pending, %#v, codex",
+					got.State, got.NoPreTrust, got.Agent, r.Before.NoPreTrust)
+			}
+			if n := len(e.rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
+				t.Errorf("creates = %d; want 1", n)
+			}
+			folder.assertUnchanged(t, "after the resume")
+			if b, err := os.ReadFile(homeJSON); err != nil || string(b) != "{}" {
+				t.Errorf("home .claude.json = %q (err %v); want untouched {}", b, err)
 			}
 		})
 	}

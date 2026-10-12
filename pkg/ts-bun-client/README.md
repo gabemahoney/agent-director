@@ -178,7 +178,7 @@ for (const sub of result.subagents) {
 }
 ```
 
-`tracked` is `false`, with `subagents` `[]`, for an agent that predates subagent tracking. `subagents` is never null; a field with no known value is `null`, and times are RFC 3339 UTC strings. The fields and values are described in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
+`tracked` is `false`, with `subagents` `[]`, for a `"codex"` agent (from its spawn, and after every `resume` or reuse of its id) and for a `"claude"` agent that predates subagent tracking (it becomes `true` when that agent is next resumed or its id is reused). `subagents` is never null; a field with no known value is `null`, and times are RFC 3339 UTC strings. The fields and values are described in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
 
 ### sendKeys
 
@@ -618,7 +618,7 @@ These 61 classes are generated one-to-one from the shared `err_name` catalog ([`
 | Error | When it fires |
 |---|---|
 | `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
-| `ErrSpawnDeniedFlag` | The `agent_args` of a `claude` spawn contain a flag the supervisor must own (`--settings`, `--resume`, `--continue`, `--print`, `--output-format`). The refused set applies to `claude` spawns only. |
+| `ErrSpawnDeniedFlag` | The `agent_args` of a `spawn` contain an argument the supervisor must own; nothing is written, and the description names it. A `"claude"` spawn: `--settings`, `--resume`, `--continue`, `--print` or `--output-format`. A `"codex"` spawn: a Codex subcommand as the first word that is neither an option nor an option's value, `--remote`, `--remote-auth-token-env`, a `-c` / `--config` key at, above or under `hooks`, `tui.disable_paste_burst` or `features.hooks`, `--disable hooks`, and, while `disable_ask_user` is on, `--enable default_mode_request_user_input` and the question-tool keys. `resume` never refuses the arguments it replays. The forms are in [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals). |
 | `ErrAgentMissing` | `spawn` got no `agent` and its template names none; nothing is written. Pass `agent` (`"claude"` or `"codex"`), or put one in the template. |
 | `ErrAgentInvalid` | `agent` is neither `"claude"` nor `"codex"` (the value is case-sensitive); nothing is written. |
 | `ErrAgentArgsMismatch` | The template's `agent_args` are for another agent than the one this spawn resolves to, so they are not inherited; nothing is written. Spawn that agent, or pass this call's own non-empty `agent_args`, which replace the template's. |
@@ -645,7 +645,7 @@ These 61 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry the pause; the agent may still be running. |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. If that launch was abandoned or failed, `find-missing` marks the row `missing` once the pending grace period has passed; then a row with a `session_id` (typically a resume's launch) can be resumed, and one without (typically a spawn's or reuse's launch), if `get` still shows no `session_id`, is spawned again with `reuse_finished: true` and the row's `agent` (`get` shows it), as the error says. An agent that reports in late records a `session_id`, and its row, once `missing`, can be resumed instead. Also returned when the row changed after `resume` examined it; nothing is written. |
 | `ErrNoSessionId` | The spawn has no `session_id` (killed before its first SessionStart, or a spawn's or reuse's launch that never reported in and that `find-missing` marked `missing`), so there is nothing to resume — spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. |
-| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. |
+| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path (for a Codex agent, only the paths recorded for it) — spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
 | `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
 

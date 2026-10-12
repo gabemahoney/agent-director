@@ -187,3 +187,16 @@ func (f *v5Store) assertStartReopens(id, token string, ms int64) {
 		}
 	}
 }
+
+// assertStartReopensNothing applies a SubagentStart at ms for the mix's closed
+// record, as id's own agent, and checks it reopens or changes no entry and no
+// claimable launch: a row whose launch is not tracked (subagent_tracking 0) keeps
+// them as they were (the hook itself may still apply, for the row's own state).
+func (f *v5Store) assertStartReopensNothing(id string, ms int64) {
+	f.t.Helper()
+	before := f.subagentRowsOf(id)
+	storefix.ApplySubagentStart(f.t, f.s, id, store.SubagentLifecycleEvent{SubagentID: cmRecord, ReceivedMs: ms})
+	if after := f.subagentRowsOf(id); !reflect.DeepEqual(after, before) {
+		f.t.Errorf("a start on an untracked row changed the entries or claimable launches:\n before %+v\n after  %+v", before, after)
+	}
+}

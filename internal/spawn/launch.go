@@ -16,13 +16,6 @@ import (
 // monkey-patching the spawn flow.
 var claudeBinary = "claude"
 
-// errCodexLaunchUnavailable is what ComposeLaunch and ComposeRelaunch return
-// for a codex agent: this build composes no Codex launch. It is deliberately
-// neither exported nor catalogued, so it reaches callers as ErrInternal, and
-// it is returned before any store write, pre-trust, tmux call or reset, so a
-// codex spawn, reuse or resume that passed every check changes nothing.
-var errCodexLaunchUnavailable = errors.New("a Codex launch is not available in this build")
-
 // claudeProgram is the program a Claude launch (spawn, reuse, resume) puts
 // first in the pane command: [launch] claude_path from the config in force at
 // this launch when set, as one unchanged argument, else the program named
@@ -35,16 +28,13 @@ func claudeProgram(cfg config.Config) string {
 	return claudeBinary
 }
 
-// launchAgentError is the composition stop for an agent this build cannot
-// launch: errCodexLaunchUnavailable for codex, and the row-agent error
-// (store.ErrRowAgentInvalid) for anything that is not claude or codex. nil
-// for claude.
+// launchAgentError is the composition stop for an agent that is neither claude
+// nor codex: the row-agent error (store.ErrRowAgentInvalid). nil for both
+// launchable agents.
 func launchAgentError(agent string) error {
 	switch agent {
-	case store.AgentClaude:
+	case store.AgentClaude, store.AgentCodex:
 		return nil
-	case store.AgentCodex:
-		return errCodexLaunchUnavailable
 	}
 	return fmt.Errorf("%w: %q", store.ErrRowAgentInvalid, agent)
 }
@@ -61,12 +51,15 @@ func launchAgentError(agent string) error {
 //     refused socket directory (ErrTmuxNotAvailable) or a token failure
 //     writes nothing and launches nothing (SR-20.6).
 //  2. Composes the launch through ComposeLaunch: the session environment,
-//     the synthesized --settings, the claude argv, the parent id and the
-//     row's request fields. A composition failure writes nothing.
-//  3. Pre-trusts the cwd through PreTrust, off when NoPreTrust, waiting for
-//     a held lock on .claude.json for at most cfg's effective
-//     pre_trust.lock_wait_seconds (best effort; a failure never fails the
-//     spawn, SR-22.6).
+//     the agent's argv (the synthesized --settings of a claude agent; for a
+//     codex agent the per-launch settings on its command line and the pre-trust
+//     outcome the argv was built for), the parent id and the row's request
+//     fields. A composition failure writes nothing.
+//  3. Pre-trusts the cwd through RunPreTrust, off when NoPreTrust: for a claude
+//     agent PreTrust, waiting for a held lock on .claude.json for at most
+//     cfg's effective pre_trust.lock_wait_seconds; for a codex agent the
+//     outcome step 2 carried, with no file touched (best effort; a failure
+//     never fails the spawn, SR-22.6).
 //  4. INSERTs step 2's row with the launch start (one read of now, in
 //     milliseconds), the token, the socket and the launch owner, this
 //     process as CurrentLaunchOwner reads it through pc (b.kdf); the row
@@ -112,12 +105,12 @@ func launchAgentError(agent string) error {
 // (the TOCTOU fallback of the pre-check).
 //
 // On success Launch returns the instance id and the outcome of the step 3
-// pre-trust exactly as PreTrust reported it: PreTrustSkipped when
+// pre-trust exactly as RunPreTrust reported it: PreTrustSkipped when
 // NoPreTrust is set (no file touched), otherwise PreTrustOK or
 // PreTrustFailed (SR-22.6 "The field"). Every error path returns its error
 // and no outcome.
 //
-// Launch does not wait for Claude to come up: the row stays pending until
+// Launch does not wait for the agent to come up: the row stays pending until
 // the first SessionStart hook moves it.
 func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minted bool, cfg config.Config, now func() time.Time, lg *log.Logger) (string, PreTrustOutcome, error) {
 	socket, err := ResolveLaunchSocket()
@@ -135,7 +128,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	}
 
 	// A failure never fails the spawn; the outcome is returned on success.
-	preTrust := PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust, cfg.PreTrust)
+	preTrust := RunPreTrust(r.Agent, c.PreTrust, r.CWD, r.ExtraEnv, r.NoPreTrust, cfg.PreTrust)
 
 	// Read once, so a held-name outcome carries exactly what the insert wrote.
 	launchStart := now().UnixMilli()

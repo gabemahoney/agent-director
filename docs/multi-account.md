@@ -1,7 +1,8 @@
 # Multi-Account
 
-Launching a Spawn against a different Claude account than the
-operator's default. This page covers spawns whose agent is `claude`.
+Launching a Spawn against a different Claude or Codex account than the
+operator's default. Everything up to "Codex group folders" covers spawns whose
+agent is `claude`; that section covers `codex`.
 agent-director's `extra_env` parameter is the
 single mechanism for this — no file mounts, no profile directories.
 If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, it must be an
@@ -155,6 +156,56 @@ fighting over a shared credential file. Each Spawn gets a fresh
   Claude sessions sharing one OAuth token are fine for env-var auth
   (no contention) but share the same usage / rate-limit pool. Use
   separate accounts (one operator, one Spawn) for clean accounting.
+
+## Codex group folders
+
+A Codex agent keeps its login, its rules and its sessions in a Codex folder,
+and `CODEX_HOME` moves it. Agents that share an account share a group folder.
+
+- **`CODEX_HOME` is an ordinary `extra_env` key**, from the call or a template:
+
+  ```sh
+  agent-director spawn --cwd /work/project-foo --agent codex \
+    --extra-env CODEX_HOME=/work/codex-team-a
+  ```
+
+  agent-director never sets or copies it. A spawn that names none leaves Codex
+  to its default folder, and a parent agent's folder is not passed to a spawn
+  it makes.
+- **The value must be an absolute path.** A relative, `~`-prefixed or
+  whitespace-only value is passed to Codex as it is, which resolves it against
+  the pane's cwd. Pre-trust then reports `pre_trust: failed` with one warning,
+  and the launch goes ahead (the agent may stop at Codex's folder-trust prompt).
+- **Any number of agents may run on one folder at once.** agent-director takes
+  no lock on it.
+- **No agent-director command writes, moves, links or deletes anything in a
+  Codex folder,** and agent-director never logs in or out. `spawn`, `pause`,
+  `resume`, `kill` and `expire` leave the folder as they found it.
+- **`resume` finds a Codex transcript only by the paths recorded for the row:**
+  its own `jsonl_path` and those of its earlier sessions, newest first. It
+  never builds a path from the cwd and the session id, and never looks under a
+  Claude config directory.
+
+### Setting up a group folder
+
+- **One login per folder.** Sign each folder in once, by hand, before an agent
+  uses it (add `--device-auth` on a host with no browser). An API-key login is
+  set up once in the folder the same way, with Codex's own key login:
+
+  ```sh
+  CODEX_HOME=/work/codex-team-a codex login
+  printenv OPENAI_API_KEY | CODEX_HOME=/work/codex-team-a codex login --with-api-key
+  ```
+- **An API key in `extra_env` does not sign Codex in.** Codex reads its login
+  only from its folder, so a key passed as `--extra-env` is ignored for signing
+  in. Sign the folder in once with the key.
+- **Never copy a login between folders.** A copy can sign the original out,
+  because a refresh of one copy's token invalidates the other.
+- **Some settings still apply from outside a folder:** the `~/.agents` skills
+  and plugins, `/etc/codex`, the project's own `.codex/` and MCP tokens kept in
+  the system keyring.
+- **A first start on a new folder can be slower** than later ones, while Codex
+  sets the folder up.
 
 ## References
 

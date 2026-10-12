@@ -34,6 +34,15 @@ func HandleNoExecForm(ctx context.Context, raw []byte, hc HandleConfig) bool {
 	return true
 }
 
+// PayloadEventName reads raw as a hook payload: a JSON object whose
+// `hook_event_name` is a non-empty string. It returns that name. Anything else
+// is not a hook payload (ok false). It accepts no alias of the key, unlike
+// PeekEventName.
+func PayloadEventName(raw []byte) (event string, ok bool) {
+	event, _, ok = noExecFormPayload(raw)
+	return event, ok
+}
+
 // noExecFormPayload reads raw as a no-verb run's hook payload: it must be a
 // JSON object whose `hook_event_name` is a non-empty string. It returns that
 // name and the payload's `transcript_path` ("" when absent or not a string).

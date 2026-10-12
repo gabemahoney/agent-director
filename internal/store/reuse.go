@@ -263,7 +263,7 @@ const resetForReuseSQL = `UPDATE spawns
         launch_owner_pidns        = ?,
         agent                     = ?,
         end_reported_at           = NULL,
-        subagent_tracking         = ` + subagentTrackedSQL + `,
+        subagent_tracking         = ` + subagentTrackedParamSQL + `,
         life_number               = life_number + 1,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
@@ -312,9 +312,9 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     fresh.LaunchOwner (zero = NULL; the reuse records itself as the owner
 //     of the launch it begins, b.kdf); agent fresh.Agent, which must be claude
 //     or codex (checked before anything is written: ErrRowAgentInvalid) and
-//     end_reported_at NULL; subagent_tracking 1, the flag of the launch it
-//     begins (subagentTrackedSQL, SR-9; no parameter), including over a row
-//     that held 0; life_number and row_version each
+//     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
+//     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
+//     for codex, over whatever the row held; life_number and row_version each
 //     advanced by one. The store reads no clock: the caller supplies
 //     fresh.StartedAt and fresh.LaunchStartedAtMillis.
 //   - Permission requests: every request of the id, decided or not, is
@@ -419,7 +419,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
 	)
 	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
-	resetArgs = append(resetArgs, fresh.Agent)
+	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent)
 	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
 	resetArgs = append(resetArgs, snapshotMatchArgs(examined)...)

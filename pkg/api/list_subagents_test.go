@@ -123,7 +123,7 @@ func assertRecordJSON(t *testing.T, got, want map[string]string) {
 }
 
 // TestListSubagentsTracked: tracked is the row's flag, with no records either
-// way, and an untracked row reads exactly {"tracked":false,"subagents":[]}.
+// way, and an untracked row (a codex one included) reads exactly {"tracked":false,"subagents":[]}.
 func TestListSubagentsTracked(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -133,6 +133,7 @@ func TestListSubagentsTracked(t *testing.T) {
 	}{
 		{"a row launched since", nil, `{"tracked":true,"subagents":[]}`},
 		{"a row from before subagent tracking", []apitest.SpawnOption{apitest.WithNoSubagentTracking()}, emptySubagentsJSON},
+		{"a codex row, launched with no subagent events registered", codexRowOpts(), emptySubagentsJSON},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

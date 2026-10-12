@@ -218,13 +218,25 @@ func TestPayloadFixtureParses(t *testing.T) {
 	}
 }
 
-// TestPayloadFixtureEventsMatchRegistered: every event internal/spawn
-// registers for Claude has a fixture, every Claude fixture's event is
-// registered, and every fixture file, Codex's included, is in payloadFixtures.
-// (The Codex registered-events check is E4-T2's.)
+// codexNotRegistered are the events Codex sends that agent-director does not
+// register on a Codex launch yet, with the reason; each has a fixture.
+var codexNotRegistered = map[string]string{
+	"SubagentStart": "subagent tracking for Codex is Epic 5",
+	"SubagentStop":  "subagent tracking for Codex is Epic 5",
+}
+
+// TestPayloadFixtureEventsMatchRegistered: for each agent, every event
+// internal/spawn registers (hookEvents for Claude, codexHookEvents for Codex)
+// has a fixture, and every fixture's event is registered (a Codex event may
+// instead be in codexNotRegistered, which must itself name a fixture event that
+// is not registered); every fixture file is in payloadFixtures.
 func TestPayloadFixtureEventsMatchRegistered(t *testing.T) {
-	registered := registeredHookEvents(t)
-	fixtureEvents, fixtureFiles, tableFiles := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	lists := map[string]map[string]bool{
+		"claude": registeredHookEvents(t, "hookEvents"),
+		"codex":  registeredHookEvents(t, "codexHookEvents"),
+	}
+	fixtureEvents := map[string]map[string]bool{"claude": {}, "codex": {}}
+	fixtureFiles, tableFiles := map[string]bool{}, map[string]bool{}
 	for dir, agent := range map[string]string{"hook-payloads": "claude", "codex-hook-payloads": "codex"} {
 		files, err := filepath.Glob(filepath.Join("testdata", dir, "*.json"))
 		if err != nil || len(files) == 0 {
@@ -233,18 +245,33 @@ func TestPayloadFixtureEventsMatchRegistered(t *testing.T) {
 		for _, f := range files {
 			name := fixtureName(agent, filepath.Base(f))
 			fixtureFiles[name] = true
-			if agent == "claude" {
-				fixtureEvents[hook.PeekEventName(readPayloadFixture(t, name))] = true
-			}
+			fixtureEvents[agent][hook.PeekEventName(readPayloadFixture(t, name))] = true
 		}
 	}
 	for _, tc := range payloadFixtures {
 		tableFiles[fixtureName(tc.agent, tc.file)] = true
 	}
+	deferred := map[string]bool{}
+	for ev := range codexNotRegistered {
+		deferred[ev] = true
+	}
+	// A Codex fixture event is registered or deferred, never both.
+	codexAccounted := map[string]bool{}
+	for ev := range lists["codex"] {
+		codexAccounted[ev] = true
+	}
+	for ev := range deferred {
+		codexAccounted[ev] = true
+	}
 	for what, got := range map[string][]string{
-		"registered events without a fixture":        missingFrom(registered, fixtureEvents),
-		"fixture events not registered":              missingFrom(fixtureEvents, registered),
-		"fixture files missing from payloadFixtures": missingFrom(fixtureFiles, tableFiles),
+		"claude: registered events without a fixture":                        missingFrom(lists["claude"], fixtureEvents["claude"]),
+		"claude: fixture events not registered":                              missingFrom(fixtureEvents["claude"], lists["claude"]),
+		"codex: registered events without a fixture":                         missingFrom(lists["codex"], fixtureEvents["codex"]),
+		"codex: fixture events neither registered nor in codexNotRegistered": missingFrom(fixtureEvents["codex"], codexAccounted),
+		"codex: codexNotRegistered events without a fixture":                 missingFrom(deferred, fixtureEvents["codex"]),
+		"codex: codexNotRegistered events that are registered":               intersect(deferred, lists["codex"]),
+		"fixture files missing from payloadFixtures":                         missingFrom(fixtureFiles, tableFiles),
+		"payloadFixtures rows without a file":                                missingFrom(tableFiles, fixtureFiles),
 	} {
 		if len(got) != 0 {
 			t.Errorf("%s: %v", what, got)
@@ -264,40 +291,56 @@ func missingFrom(a, b map[string]bool) []string {
 	return out
 }
 
-// registeredHookEvents reads spawn's unexported hookEvents list (and the
-// string constants it names) from internal/spawn/settings.go's source.
-func registeredHookEvents(t *testing.T) map[string]bool {
-	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", "spawn", "settings.go"), nil, 0)
-	if err != nil {
-		t.Fatalf("parse spawn settings: %v", err)
+// intersect returns the sorted keys in both a and b.
+func intersect(a, b map[string]bool) []string {
+	var out []string
+	for k := range a {
+		if b[k] {
+			out = append(out, k)
+		}
 	}
+	sort.Strings(out)
+	return out
+}
+
+// registeredHookEvents reads the unexported event list named list
+// (hookEvents, codexHookEvents) and the string constants it names from
+// internal/spawn's settings.go and codexsettings.go source: spawn exports no
+// list of its own.
+func registeredHookEvents(t *testing.T, list string) map[string]bool {
+	t.Helper()
 	consts := map[string]string{}
 	var names []string
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok {
-			continue
+	for _, file := range []string{"settings.go", "codexsettings.go"} {
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join("..", "spawn", file), nil, 0)
+		if err != nil {
+			t.Fatalf("parse spawn %s: %v", file, err)
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
 			if !ok {
 				continue
 			}
-			for i, n := range vs.Names {
-				if i >= len(vs.Values) {
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				switch v := vs.Values[i].(type) {
-				case *ast.BasicLit:
-					if gd.Tok == token.CONST && v.Kind == token.STRING {
-						consts[n.Name], _ = strconv.Unquote(v.Value)
+				for i, n := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
 					}
-				case *ast.CompositeLit:
-					if n.Name == "hookEvents" {
-						for _, e := range v.Elts {
-							if id, ok := e.(*ast.Ident); ok {
-								names = append(names, id.Name)
+					switch v := vs.Values[i].(type) {
+					case *ast.BasicLit:
+						if gd.Tok == token.CONST && v.Kind == token.STRING {
+							consts[n.Name], _ = strconv.Unquote(v.Value)
+						}
+					case *ast.CompositeLit:
+						if n.Name == list {
+							for _, e := range v.Elts {
+								if id, ok := e.(*ast.Ident); ok {
+									names = append(names, id.Name)
+								}
 							}
 						}
 					}
@@ -306,13 +349,13 @@ func registeredHookEvents(t *testing.T) map[string]bool {
 		}
 	}
 	if len(names) == 0 {
-		t.Fatal("hookEvents not found in internal/spawn/settings.go")
+		t.Fatalf("%s not found in internal/spawn", list)
 	}
 	events := map[string]bool{}
 	for _, n := range names {
 		v, ok := consts[n]
 		if !ok {
-			t.Fatalf("hookEvents names %s, which is not a string constant in settings.go", n)
+			t.Fatalf("%s names %s, which is not a string constant in internal/spawn", list, n)
 		}
 		events[v] = true
 	}

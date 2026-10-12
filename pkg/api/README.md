@@ -128,10 +128,21 @@ and no agent: give it one; `MakeTemplate` returns it too) and
 `ErrPermissionsUnsupported` (a `"codex"` spawn or template carrying an allow,
 deny or ask entry; `MakeTemplate` returns it too).
 
+`ErrSpawnDeniedFlag` refuses an `AgentArgs` entry the supervisor must own,
+before anything is written: for `"claude"` five flags (`--settings`,
+`--resume`, `--continue`, `--print`, `--output-format`), for `"codex"` a Codex
+subcommand as the first word that is neither an option nor an option's value,
+`--remote`, and a `-c` key or feature that
+would override agent-director's hooks, typing setting or, while
+`disable_ask_user` is on, question-tool setting. The refused forms are in
+[docs/caller-contract.md](../../docs/caller-contract.md#spawn-and-template-input-refusals).
+`Resume` never refuses the `AgentArgs` it replays.
+
 Returns `SpawnResult` (`.InstanceID`, `.PreTrust`). `.PreTrust` is
-`"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did (a
-failed pre-trust never fails the spawn; see the `SpawnResult.PreTrust`
-godoc). Most-likely sentinel errors:
+`"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
+either agent (a failed pre-trust never fails the spawn; see the
+`SpawnResult.PreTrust` godoc and
+[docs/settings.md](../../docs/settings.md#pre-trust-for-codex)). Most-likely sentinel errors:
 `ErrCwdNotFound`, `ErrCwdNotADirectory`, `ErrRelayModeInvalid`,
 `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
 session-creating call timed out, here or in `Resume`: the row stays
@@ -266,7 +277,9 @@ Returns `ListSubagentsResult` (`.Tracked`, and `.Subagents []SubagentRecord`,
 never nil: `[]` when the agent has none). A `SubagentRecord` field with no
 known value is a nil pointer and encodes as JSON `null`; its times are UTC
 `*time.Time`, encoded like `launch_started_at`. `Tracked` is false, with no
-records, for an agent that predates subagent tracking. Sentinel error:
+records, for a `"codex"` agent (from its spawn, and after every `Resume` or
+reuse of its id) and for a `"claude"` agent that predates subagent tracking
+(it turns true when that agent is next resumed or its id is reused). Sentinel error:
 `ErrSpawnNotFound`; every error returns `Tracked` false and an empty slice.
 The package-level `api.ListSubagents(ListSubagentsStore, id)` reads a store
 you pass in and takes no `RelayView`. The records, their fields and their

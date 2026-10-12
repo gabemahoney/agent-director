@@ -1,6 +1,10 @@
 package spawn
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/gabemahoney/agent-director/internal/config"
+)
 
 // composeEnv builds the env-var map handed to tmux's -e flags (SRD §7.4
 // step 1). The result is deterministic given identical inputs — order is
@@ -15,6 +19,8 @@ import "strings"
 //     value so the hook can fail-closed without a DB read (SRD §6.5).
 //   - AGENT_DIRECTOR_LABEL_<UPPER_KEY> — one per caller label, with the
 //     key normalized to env-var form (uppercase, non-alphanumeric → '_').
+//   - AGENT_DIRECTOR_AGENT=codex and BASH_ENV= (empty) — a codex agent only
+//     (SR-10.1, Q5(c)); a BASH_ENV in ExtraEnv wins.
 //   - everything in ExtraEnv — including auth env vars (ANTHROPIC_API_KEY,
 //     CLAUDE_CODE_OAUTH_TOKEN). The validation step has already rejected
 //     every key whose env-var name (the part before the first '=', the name
@@ -31,6 +37,17 @@ func composeEnv(r Resolved) map[string]string {
 	out["AGENT_DIRECTOR_RELAY_MODE"] = r.RelayMode
 	for k, v := range r.AgentDirectorLabels {
 		out["AGENT_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v
+	}
+	if r.Agent == config.AgentCodex {
+		// A Codex launch only (a Claude launch's environment is unchanged).
+		// The variable tells `agent-director help` the caller is a Codex
+		// agent (EnvAgent). BASH_ENV is set empty so a startup file the
+		// caller's shell would source never prints into the stdout a hook's
+		// shell command writes (Q5(c)); a BASH_ENV in extra_env overwrites it
+		// in the loop below. CODEX_HOME is never set here: it comes only from
+		// extra_env, never from agent-director's own environment.
+		out[EnvAgent] = EnvAgentCodex
+		out["BASH_ENV"] = ""
 	}
 	for k, v := range r.ExtraEnv {
 		out[k] = v

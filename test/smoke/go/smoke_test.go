@@ -79,6 +79,24 @@ func TestSmokeAllVerbs(t *testing.T) {
 	}
 }
 
+// TestSmokeCodexLaunch runs the Codex rows of the launch verbs (codexSeeders:
+// spawn and resume) through the same driver as TestSmokeAllVerbs: the result
+// matches the manifest, pre_trust is "ok" with no .claude.json in HOME, the
+// launch made one create running codex, the row records agent codex, and the
+// Error closure's refusal is one the verb declares.
+func TestSmokeCodexLaunch(t *testing.T) {
+	for _, name := range []string{"spawn", "resume"} {
+		spec, ok := codexSeeders[name]
+		if !ok {
+			t.Errorf("TestSmokeCodexLaunch: no Codex seeder for %q — add an entry to seeders_codex.go", name)
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			runVerbSubtest(t, spec.Manifest, spec)
+		})
+	}
+}
+
 // runVerbSubtest is the per-verb driver. Each invocation gets a fresh
 // store, recorder, and Client; cleanup is registered via t.Cleanup so
 // resources are released even when assertions fail mid-test.
@@ -115,7 +133,11 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	case seedCheckPermission:
 		storefix.SeedCheckPermission(t, st, spec.SeedID)
 	case seedResumable:
-		storefix.SeedResumable(t, st, spec.SeedID)
+		if spec.Agent != "" {
+			storefix.SeedResumable(t, st, spec.SeedID, storefix.WithResumableAgent(spec.Agent))
+		} else {
+			storefix.SeedResumable(t, st, spec.SeedID)
+		}
 	case seedExpired:
 		// The row records apitest.TestSocket, whose server holds only
 		// another, unlabelled session: the lookup reads Gone.
@@ -201,9 +223,10 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
-	// Launch verbs pre-trust into HOME/.claude.json; without one they
-	// report "failed", so plant one lacking the entry to pin "ok".
-	if spec.PreTrust != nil {
+	// Claude launch verbs pre-trust into HOME/.claude.json; without one they
+	// report "failed", so plant one lacking the entry to pin "ok". A Codex
+	// launch reads none, so its row plants none: "ok" without one.
+	if spec.PreTrust != nil && spec.Agent == "" {
 		plantClaudeJSON(t, home)
 	}
 
@@ -241,9 +264,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	}
 	if spec.PreTrust != nil {
 		if got := spec.PreTrust(result); got != "ok" {
-			t.Errorf("%s: pre_trust = %q; want \"ok\" (.claude.json planted in HOME)",
-				vd.Name, got)
+			t.Errorf("%s: pre_trust = %q; want \"ok\" (%s)",
+				vd.Name, got, preTrustReason(spec))
 		}
+	}
+	if spec.Agent != "" {
+		assertCodexLaunched(t, vd.Name, rec, home, storePath, spec)
 	}
 
 	// ── Error path (when declared) ──────────────────────────────────────
@@ -252,6 +278,39 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		defer errCancel()
 		err := spec.Error(c, errCtx)
 		AssertExpectedError(t, vd, err)
+	}
+}
+
+// preTrustReason says why a launch's pre_trust is expected "ok".
+func preTrustReason(spec seederSpec) string {
+	if spec.Agent != "" {
+		return "a " + spec.Agent + " launch needs no .claude.json"
+	}
+	return ".claude.json planted in HOME"
+}
+
+// assertCodexLaunched checks a Codex row's launch: rec saw exactly one create,
+// running the codex program (the first word of its command), the seeded row
+// records the agent and is not tracked for subagents, and no .claude.json was
+// written under home.
+func assertCodexLaunched(t *testing.T, verb string, rec *tmuxfix.Recorder, home, dbPath string, spec seederSpec) {
+	t.Helper()
+	creates := rec.SocketCallsOf(api.TmuxCallCreate)
+	if len(creates) != 1 {
+		t.Fatalf("%s: %d creates; want 1, running %s (calls: %+v)", verb, len(creates), spec.Agent, rec.SocketCalls())
+	}
+	if cmd := creates[0].Command; len(cmd) == 0 || cmd[0] != spec.Agent {
+		t.Errorf("%s: create runs %q; want the %s program first", verb, cmd, spec.Agent)
+	}
+	cols, err := apitest.ReadSpawnColumns(dbPath, spec.SeedID)
+	if err != nil {
+		t.Fatalf("%s: read row %s: %v", verb, spec.SeedID, err)
+	}
+	if cols.Agent != spec.Agent || cols.SubagentTracking != int64(0) {
+		t.Errorf("%s: row agent %v, subagent_tracking %v; want %s, 0", verb, cols.Agent, cols.SubagentTracking, spec.Agent)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s: .claude.json under HOME after a %s launch (stat err %v); want none written", verb, spec.Agent, err)
 	}
 }
 

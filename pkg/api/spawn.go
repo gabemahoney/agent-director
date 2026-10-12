@@ -23,14 +23,18 @@ type SpawnResult struct {
 	InstanceID string `json:"instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
 	// of three values (SR-22.6):
-	//   - "ok": the folder-trust entry was written.
+	//   - "ok": the folder trust took effect (a claude agent: the entry was
+	//     written to .claude.json; a codex agent: the launch carries the
+	//     folder trust and the hook-trust bypass).
 	//   - "skipped": pre-trust was off for this launch because the caller
 	//     passed SpawnParams.NoPreTrust; nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
-	//     (the .claude.json file is missing, or could not be read, parsed or
-	//     written, or the extra env sets CLAUDE_CONFIG_DIR to a path that is
-	//     not absolute); the agent may stop at Claude Code's folder-trust
-	//     prompt.
+	//     (a claude agent: the .claude.json file is missing, or could not be
+	//     read, parsed or written, or the extra env sets CLAUDE_CONFIG_DIR to
+	//     a path that is not absolute; a codex agent: the extra env sets
+	//     CODEX_HOME to a path that is not absolute, and the launch carries
+	//     neither the folder trust nor the hook-trust bypass); the agent may
+	//     stop at its folder-trust prompt.
 	//
 	// A pre-trust failure never fails the spawn.
 	PreTrust string `json:"pre_trust"`
@@ -196,10 +200,11 @@ func hasControlChar(id string) bool {
 // a template belong to the template's agent: a spawn of another agent that
 // supplies no AgentArgs of its own is refused with ErrAgentArgsMismatch, and a
 // supplied list, an empty one included, replaces the template's and is never
-// refused for its owner. A codex agent is accepted and every refusal below is
-// built for it, but a codex spawn that passes them all stops at launch
-// composition with ErrInternal (a Codex launch is not available in this
-// build), before any write, pre-trust or tmux call.
+// refused for its owner. A codex agent launches the interactive Codex program
+// in the same tmux session, with the same row, labels and delivery contract as
+// a claude one; every refusal below applies to it, and agent-director's own
+// per-launch settings (hooks, hook trust, the typing setting) are passed on its
+// command line, never written to a Codex folder.
 //
 // With an explicit InstanceID that has no row, Spawn first makes one
 // tmux lookup for a session of this agent-director store still labelled with
@@ -242,8 +247,12 @@ func hasControlChar(id string) bool {
 //   - ErrAgentInvalid: Agent is neither claude nor codex (case-sensitive).
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent
 //     than this spawn's and the call supplies no AgentArgs of its own.
-//   - ErrSpawnDeniedFlag: a denied claude flag was passed in AgentArgs of a
-//     claude spawn (a codex spawn has no refused-argument set).
+//   - ErrSpawnDeniedFlag: a refused argument was passed in AgentArgs: for a
+//     claude spawn a denied claude flag; for a codex spawn a Codex subcommand
+//     in command position, --remote, or a setting agent-director owns (a
+//     -c/--config key at, above or under hooks, tui.disable_paste_burst or
+//     features.hooks, --disable hooks, and while disable_ask_user is on the
+//     question-tool keys and --enable default_mode_request_user_input).
 //   - ErrPermissionsUnsupported: a codex spawn carries Permissions allow,
 //     deny or ask entries (merged with the template's).
 //   - ErrReservedEnvKey: ExtraEnv (merged with the template's) contains a

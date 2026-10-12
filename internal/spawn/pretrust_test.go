@@ -210,6 +210,97 @@ func TestPreTrustOutcome(t *testing.T) {
 	}
 }
 
+// TestCodexPreTrust pins SR-5.4: a codex launch's pre-trust is a pure outcome of
+// the opt-out and the extra env's CODEX_HOME. Off is skipped; unset, empty or
+// absolute is ok; relative, "~"-prefixed or whitespace-only is failed.
+func TestCodexPreTrust(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		off  bool
+		want PreTrustOutcome
+	}{
+		{"nil env", nil, false, PreTrustOK},
+		{"CODEX_HOME unset", map[string]string{"OTHER": "x"}, false, PreTrustOK},
+		{"CODEX_HOME empty", map[string]string{"CODEX_HOME": ""}, false, PreTrustOK},
+		{"CODEX_HOME absolute", map[string]string{"CODEX_HOME": "/abs/codex"}, false, PreTrustOK},
+		{"CODEX_HOME absolute with a trailing space", map[string]string{"CODEX_HOME": "/abs/codex "}, false, PreTrustOK},
+		{"CODEX_HOME relative", map[string]string{"CODEX_HOME": "rel/codex"}, false, PreTrustFailed},
+		{"CODEX_HOME dot-relative", map[string]string{"CODEX_HOME": "./codex"}, false, PreTrustFailed},
+		{"CODEX_HOME tilde", map[string]string{"CODEX_HOME": "~/codex"}, false, PreTrustFailed},
+		{"CODEX_HOME whitespace only", map[string]string{"CODEX_HOME": "   "}, false, PreTrustFailed},
+		{"off, nil env", nil, true, PreTrustSkipped},
+		{"off outranks a relative CODEX_HOME", map[string]string{"CODEX_HOME": "rel"}, true, PreTrustSkipped},
+		{"a CLAUDE_CONFIG_DIR is not read", map[string]string{"CLAUDE_CONFIG_DIR": "rel"}, false, PreTrustOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			warn := capturePreTrustWarn(t)
+			if got := CodexPreTrust(tc.env, tc.off); got != tc.want {
+				t.Errorf("CodexPreTrust = %q; want %q", got, tc.want)
+			}
+			if warn.Len() != 0 {
+				t.Errorf("warning = %q; want CodexPreTrust to print nothing", warn.String())
+			}
+		})
+	}
+}
+
+// TestRunPreTrustCodex pins SR-5.4's step for a codex launch: it reports the
+// outcome the composed launch carries, prints the one pinned warning only for
+// failed, and takes no lock, waits for none and writes no .claude.json, even
+// with that file's lock held and a long lock_wait_seconds.
+func TestRunPreTrustCodex(t *testing.T) {
+	const failedLine = "agent-director: pre-trust failed (CODEX_HOME %q is not an absolute path); the agent may stop at Codex's folder-trust prompt\n"
+	cases := []struct {
+		name    string
+		carried PreTrustOutcome
+		home    string
+		want    string // warning
+	}{
+		{"ok prints nothing", PreTrustOK, "/abs/codex", ""},
+		{"skipped prints nothing", PreTrustSkipped, "rel", ""},
+		{"failed relative", PreTrustFailed, "rel/codex", fmt.Sprintf(failedLine, "rel/codex")},
+		{"failed tilde", PreTrustFailed, "~/codex", fmt.Sprintf(failedLine, "~/codex")},
+		{"failed whitespace only", PreTrustFailed, "   ", fmt.Sprintf(failedLine, "   ")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := withFakeLockClock(t, 0)
+			env, path := seedConfigDir(t)
+			held := holdLock(t, path, clock.now.Add(-time.Hour)) // stale: a Claude launch would break it
+			env["CODEX_HOME"] = tc.home
+			warn := capturePreTrustWarn(t)
+
+			if got := RunPreTrust("codex", tc.carried, "/tmp/codex-cwd", env, false, config.PreTrust{LockWaitSeconds: 3600}); got != tc.carried {
+				t.Errorf("RunPreTrust = %q; want the carried %q", got, tc.carried)
+			}
+			if warn.String() != tc.want {
+				t.Errorf("warning = %q; want %q", warn.String(), tc.want)
+			}
+			if clock.slept != 0 {
+				t.Errorf("waited %s; want no wait for the held lock", clock.slept)
+			}
+			assertSeedKept(t, path)
+			assertLockKept(t, path, held)
+		})
+	}
+}
+
+// TestRunPreTrustClaude: RunPreTrust for a claude agent is PreTrust, whatever
+// outcome is carried in.
+func TestRunPreTrustClaude(t *testing.T) {
+	const cwd = "/tmp/run-pretrust-claude"
+	env, path := seedConfigDir(t)
+	warn := capturePreTrustWarn(t)
+	if got := RunPreTrust("claude", PreTrustSkipped, cwd, env, false, config.PreTrust{}); got != PreTrustOK {
+		t.Fatalf("RunPreTrust = %q; want ok", got)
+	}
+	if !trusts(readClaudeJSON(t, path), cwd) || warn.Len() != 0 {
+		t.Errorf("claude.json trusts %s = false or warning %q; want the entry written silently", cwd, warn.String())
+	}
+}
+
 // TestPreTrustFailedWithoutConfigDir: with no CLAUDE_CONFIG_DIR a missing home
 // file is named and not created; an unresolvable home still warns once.
 func TestPreTrustFailedWithoutConfigDir(t *testing.T) {

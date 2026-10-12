@@ -23,6 +23,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
@@ -469,6 +470,11 @@ type helpResult struct {
 // helpHandler implements the help verb. `help` is Callable:false in the
 // manifest — it does NOT route through the Client facade. It calls
 // pkg/api.Help() directly.
+//
+// It prints the plain form: the help JSON on one line. Only when the caller is
+// a Codex agent's SessionStart hook (codexSessionStartHook) does it print the
+// structured form Codex accepts as SessionStart output, with the plain form as
+// its additionalContext. Every other case prints the plain form, unchanged.
 func helpHandler(_ *pkgapi.Client, _ []string) error {
 	verbs, err := pkgapi.Help()
 	if err != nil {
@@ -486,10 +492,56 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 		}
 		return errDispatch
 	}
-	if _, err := fmt.Fprintln(os.Stdout, string(payload)); err != nil {
+	out := string(payload)
+	if codexSessionStartHook(os.Getenv, os.Stdin, noVerbStdinDeadline) {
+		structured, merr := json.Marshal(codexHelpOutput{HookSpecificOutput: codexHelpSpecific{
+			HookEventName:     "SessionStart",
+			AdditionalContext: out,
+		}})
+		if merr == nil {
+			out = string(structured)
+		}
+	}
+	if _, err := fmt.Fprintln(os.Stdout, out); err != nil {
 		return err
 	}
 	return nil
+}
+
+// codexHelpOutput is the structured SessionStart output of `help` for a Codex
+// agent: {"hookSpecificOutput":{"hookEventName":"SessionStart",
+// "additionalContext":"<the plain help output>"}}.
+type codexHelpOutput struct {
+	HookSpecificOutput codexHelpSpecific `json:"hookSpecificOutput"`
+}
+
+// codexHelpSpecific is the hookSpecificOutput object of codexHelpOutput.
+type codexHelpSpecific struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext"`
+}
+
+// codexSessionStartHook reports whether `help` was run by a Codex agent's
+// SessionStart hook: the launch's signal (spawn.EnvAgent equal to
+// spawn.EnvAgentCodex, set on every Codex launch and never on a Claude one)
+// AND a hook payload on stdin whose hook_event_name is SessionStart, any
+// source included (compact too). A Codex agent that runs `agent-director help`
+// in its own shell has the signal but no such payload, so it gets the plain
+// form. It reads stdin only when the signal is set, through the bounded reader
+// (not a terminal, hook.MaxPayloadBytes, deadline), so it never blocks past
+// the deadline and writes nothing. Every failure (a terminal, empty input,
+// input held open past the deadline, not JSON, another event, no signal)
+// reports false: the caller prints the plain form.
+func codexSessionStartHook(getenv func(string) string, stdin *os.File, deadline time.Duration) bool {
+	if getenv(spawn.EnvAgent) != spawn.EnvAgentCodex {
+		return false
+	}
+	raw, ok := readNoVerbStdin(stdin, deadline)
+	if !ok {
+		return false
+	}
+	event, ok := hook.PayloadEventName(raw)
+	return ok && event == "SessionStart"
 }
 
 // versionHandler implements the `version` verb. Prints
@@ -607,7 +659,10 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // carries a hook payload (read with a 1 MiB cap and a 1 s deadline), it prints
 // nothing, exits 0 and writes one ad.hook.ignored no_exec_form to the trail
 // under the (possibly --home) home, with no config load and no store
-// (noVerbHookIgnored). `help`, `version` and their aliases never read stdin.
+// (noVerbHookIgnored). `version` and its aliases never read stdin. `help` and
+// its aliases read it only when AGENT_DIRECTOR_AGENT is codex (a Codex launch's
+// environment), with the same bounded reader, to print a Codex SessionStart
+// hook's structured form (codexSessionStartHook); otherwise they never read it.
 //
 // A verb alias (verbAliases: --help, -h, --version, -v) as the first argument
 // after the global flags is replaced with its verb right after the global

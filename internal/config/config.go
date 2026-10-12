@@ -455,7 +455,7 @@ type Launch struct {
 	// ("" when unset).
 	ClaudePath string `toml:"claude_path"`
 	// CodexPath is the program Codex launches run, as Load resolved it ("" when
-	// unset). It is loaded and validated only; no Codex launch exists yet.
+	// unset). A Codex launch runs it in place of codex.
 	CodexPath string `toml:"codex_path"`
 }
 

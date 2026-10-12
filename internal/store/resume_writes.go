@@ -51,7 +51,7 @@ const moveToPendingSQL = `UPDATE spawns
         pane_pid                  = NULL,
         pane_starttime            = NULL,
         end_reported_at           = NULL,
-        subagent_tracking         = ` + subagentTrackedSQL + `,
+        subagent_tracking         = ` + subagentTrackedColumnSQL + `,
         launch_started_at         = ?,
         launch_token              = ?,
         tmux_socket               = ?,
@@ -83,10 +83,10 @@ const moveToPendingSQL = `UPDATE spawns
 // written as NULL; and advances row_version by one. Every other column
 // (session_id, jsonl_path, life_number, no_pre_trust, started_at,
 // last_seen_at, agent and the request fields) is unchanged, and session_history
-// is not touched. It also sets subagent_tracking to 1, the flag of the launch
-// it begins (subagentTrackedSQL, SR-9; no parameter: every launch on this build
-// registers the subagent events), including over a row that held 0. The statement
-// itself touches no subagent entry; the close below does.
+// is not touched. It also sets subagent_tracking, the flag of the launch it
+// begins (SR-9; subagentTrackedColumnSQL, no parameter): from the row's own
+// agent, which the move keeps, 1 for claude and 0 for codex, over whatever the
+// row held. The statement itself touches no subagent entry; the close below does.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request
 // of the row that still awaits an answer gets closed_at, an undecided one

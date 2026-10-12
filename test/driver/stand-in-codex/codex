@@ -1,0 +1,84 @@
+#!/bin/bash
+# Stand-in `codex` for the Docker harness (SRD SR-5.0, SR-14.3, SR-22.9).
+#
+# agent-director launches `codex` from the PATH of the process that spawns,
+# or the program named in [launch] codex_path. This file stands in for it.
+# It records the arguments and the environment the launch gave it where a
+# case can read them, then ends as an interactive bash under the same pid, so
+# the shell IS the pane process tmux reported at the create and a hook typed
+# into it (see ../pane-hook.sh) has the shell as its parent, as with
+# ../stand-in-claude/claude.
+#
+# Use: put this directory first on the PATH of the agent-director process
+# that launches the session, or name this file in [launch] codex_path:
+#
+#   PATH=/opt/driver/stand-in-codex:$PATH agent-director spawn --agent codex --cwd /tmp
+#
+# (tmux looks `codex` up on the PATH of the tmux client that runs
+# new-session, which is agent-director's own PATH; `--extra-env PATH=...`
+# does NOT select this file.)
+#
+# What it records, in ${AD_CODEX_RECORD_DIR:-/tmp/stand-in-codex}/<id>/ where
+# <id> is AGENT_DIRECTOR_INSTANCE_ID (nothing is recorded when it is unset or
+# not [A-Za-z0-9._-]+):
+#
+#   argv   the arguments, each followed by a NUL byte (the program itself is
+#          not in it; read it with `tr '\0' '\n' <argv`, or in Go split on NUL)
+#   env    the environment, `env -0`: NAME=value entries, each followed by a
+#          NUL byte (an empty BASH_ENV shows as `BASH_ENV=`)
+#   cwd    the working directory, `pwd -P`
+#   pid    this process's pid, written last: the record is complete once it
+#          exists
+#
+# Running a hook the way Codex does is opt-in: with AD_CODEX_HOOK set to a
+# non-empty value, the stand-in waits (bounded, 30 s) for the file go in its
+# record directory, then runs the command in hookcmd with the account's login
+# shell and -c, the payload in payload.json on stdin: `bash -c` or `zsh -c`,
+# whichever the account's passwd entry names, otherwise bash, never $SHELL.
+# `exec <path> hook --agent codex` therefore leaves the hook process a direct
+# child of this process, the pane process. Its stdout, stderr and exit status
+# go to hook.out, hook.err and hook.exit (written last). A case that wants
+# this passes AD_CODEX_HOOK, and writes hookcmd, payload.json and go itself;
+# the default is no hook, and the shell below is all that runs.
+#
+# Every launch argument is ignored. --noprofile --norc: nothing from the
+# image's dotfiles runs; -i: the shell reads commands from the pane's
+# terminal.
+#
+# The block between the two "shared" markers is the same text as the realtmux
+# stand-in's (test/realtmux/codex_standin_test.go); a realtmux test compares
+# them, so change both together.
+
+# >>> shared with test/realtmux/codex_standin_test.go
+id="${AGENT_DIRECTOR_INSTANCE_ID:-}"
+dir=""
+if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    dir="${AD_CODEX_RECORD_DIR:-/tmp/stand-in-codex}/$id"
+    mkdir -p "$dir"
+    : >"$dir/argv"
+    for a in "$@"; do
+        printf '%s\0' "$a" >>"$dir/argv"
+    done
+    env -0 >"$dir/env"
+    pwd -P >"$dir/cwd"
+    printf '%s\n' "$$" >"$dir/pid"
+fi
+if [[ -n "$dir" && -n "${AD_CODEX_HOOK:-}" ]]; then
+    for _ in {1..1500}; do
+        [[ -e "$dir/go" ]] && break
+        sleep 0.02
+    done
+    [[ -e "$dir/go" ]] || exit 1
+    shell="$(getent passwd "$(id -u)" | cut -d: -f7)"
+    case "${shell##*/}" in
+        bash | zsh) ;;
+        *) shell=bash ;;
+    esac
+    printf '%s\n' "$shell" >"$dir/shell"
+    "$shell" -c "$(cat "$dir/hookcmd")" <"$dir/payload.json" >"$dir/hook.out" 2>"$dir/hook.err"
+    printf '%s\n' "$?" >"$dir/hook.exit.tmp"
+    mv "$dir/hook.exit.tmp" "$dir/hook.exit"
+fi
+# <<< shared with test/realtmux/codex_standin_test.go
+
+exec bash --noprofile --norc -i

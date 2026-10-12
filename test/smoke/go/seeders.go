@@ -169,6 +169,14 @@ type seederSpec struct {
 	// references this same id when calling the verb method.
 	SeedID string
 
+	// Agent, when non-empty ("codex"), marks a Codex row of codexSeeders: a
+	// seedResumable row is seeded as that agent's (storefix.WithResumableAgent)
+	// and the driver plants no .claude.json (a Codex launch reads none), then
+	// checks pre_trust is "ok" without one, that the launch made one create
+	// running codex and that the row records the agent. Empty for the Claude
+	// rows of seeders.
+	Agent string
+
 	// HappyCtxDeadline, when non-zero, bounds the context the driver passes
 	// to verbs that take one (pause, find-missing); zero means 5s. Pause
 	// uses a short one so a wait that never sees the row ended fails the
@@ -234,6 +242,11 @@ type seederSpec struct {
 // seeders_tmux.go, so each entry can reference the verb's own VerbDef from
 // manifest.Lookup (mustVerb) next to the verb name string.
 var seeders = map[string]seederSpec{}
+
+// codexSeeders holds the Codex rows of the launch verbs, spawn and resume,
+// beside their Claude rows of seeders: the same specs for a codex agent, run by
+// TestSmokeCodexLaunch. It is populated by the init of seeders_codex.go.
+var codexSeeders = map[string]seederSpec{}
 
 // bogusID is the instance_id used in error-path Happy/Error closures
 // — chosen to be very unlikely to collide with any seeded row.

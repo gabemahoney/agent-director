@@ -210,8 +210,12 @@ type Spawn struct {
 	// fills it; true only for the integer 1 (1 means tracked), and false for 0
 	// and any other stored value (any other value reads as untracked), so no stored value
 	// fails a read (see decodeSubagentTracking). InsertPending, ResetForReuse
-	// and MoveToPending each write 1 for the launch they begin
-	// (subagentTrackedSQL), taking nothing from a Spawn; a row from before the
+	// and MoveToPending each write it for the launch they begin, from the
+	// launch's agent and taking nothing else from a Spawn: 1 for a claude
+	// launch, whose synthesized settings register the subagent events, and 0
+	// for a codex launch, whose settings register none until Codex's
+	// subagent events are registered (subagentTrackedParamSQL,
+	// subagentTrackedColumnSQL); a row from before the
 	// v9 migration reads false until its next launch. Never on SpawnRow,
 	// ListRow or any verb output.
 	SubagentTracking bool
@@ -225,12 +229,18 @@ type Spawn struct {
 	ReportedState string
 }
 
-// subagentTrackedSQL is the SQL literal of the tracking flag every launch write
-// stores (b.xjn, SR-9): on this build every launch is a Claude launch, whose
-// synthesized settings always register SubagentStart and SubagentStop, so
-// InsertPending, MoveToPending and ResetForReuse each write 1 and take no new
-// parameter.
-const subagentTrackedSQL = "1"
+// The tracking flag every launch write stores (b.xjn, SR-9): the launch's
+// agent decides it. A claude launch's synthesized settings always register
+// SubagentStart and SubagentStop, so it stores 1; a codex launch's settings
+// register neither, so it stores 0, until Codex's subagent events are
+// registered. InsertPending and ResetForReuse state the
+// launch's agent as one parameter of the statement (subagentTrackedParamSQL, the
+// agent the statement writes: ResetForReuse can change it); MoveToPending keeps
+// the row's agent, so it reads the column (subagentTrackedColumnSQL).
+const (
+	subagentTrackedParamSQL  = "CASE ? WHEN '" + AgentClaude + "' THEN 1 ELSE 0 END"
+	subagentTrackedColumnSQL = "CASE agent WHEN '" + AgentClaude + "' THEN 1 ELSE 0 END"
+)
 
 // boolInt is a bool as the integer a 0/1 column stores.
 func boolInt(b bool) int {
@@ -272,8 +282,9 @@ func boolInt(b bool) int {
 // it begins. The new row starts at row_version 0 (the column default). It is
 // an immediate write (b.3ie): settled_state is pending and state_changed_ms
 // the statement's own clock, so the new row reports pending at once whatever
-// the settle time. It also writes subagent_tracking 1 (subagentTrackedSQL, SR-9),
-// the flag of the launch it begins, whatever the caller passes.
+// the settle time. It also writes subagent_tracking (SR-9), the flag of the
+// launch it begins, from sp.Agent: 1 for claude, 0 for codex
+// (subagentTrackedParamSQL).
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -300,7 +311,7 @@ func (s *Store) InsertPending(sp Spawn) error {
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
             settled_state, state_changed_ms, agent, subagent_tracking
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedSQL + `)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -321,7 +332,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending, sp.Agent)
+	args = append(args, StatePending, sp.Agent, sp.Agent)
 	_, err = s.db.Exec(stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error

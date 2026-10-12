@@ -9,8 +9,8 @@ import (
 // resume read, the session to resume, and the launch's socket, token and
 // store id.
 //
-// SessionID is the session_id the `claude --resume <session id>` argv
-// element names: the row's own, or an earlier session of the visible history
+// SessionID is the session_id the `claude --resume <session id>` (or `codex
+// resume <session id>`) argv element names: the row's own, or an earlier session of the visible history
 // whose transcript resume recovered. Socket is the launch's socket
 // (ResolveRowLaunchSocket), Token the new launch token (NewLaunchToken) and
 // StoreID this store's id ((*store.Store).StoreID(), read by the caller when
@@ -23,6 +23,16 @@ type RelaunchInput struct {
 	StoreID   string
 }
 
+// ComposedRelaunch is a composed resume launch: the create request Relaunch
+// runs and the pre-trust outcome a codex launch was composed for (CodexPreTrust
+// of the row's extra env and recorded opt-out; "" for a claude launch, whose
+// pre-trust is a file write that follows composition). The caller hands it to
+// RunPreTrust.
+type ComposedRelaunch struct {
+	Create   CreateRequest
+	PreTrust PreTrustOutcome
+}
+
 // ComposeRelaunch composes a resume launch without any tmux call or store
 // write, so resume can run it before its move to pending and a composition
 // failure writes nothing (SR-8.1, SR-8.3). It returns the create request
@@ -31,18 +41,24 @@ type RelaunchInput struct {
 //
 //	claude --resume <session id> --settings <inline-json> [row agent_args]
 //
-// (claude is [launch] claude_path when set, from cfg), composed for the row's
-// recorded agent. A row whose agent is codex is the composition stop: an
-// uncatalogued error (a Codex launch is not available in this build) comes
-// back before anything else, so resume writes and launches nothing; a row
-// whose agent is neither claude nor codex gets store.ErrRowAgentInvalid.
+// for a claude row (claude is [launch] claude_path when set, from cfg), or
 //
-// on in.Socket, labelled with in.Token, the row's instance id and in.StoreID.
+//	codex resume <session id> [row agent_args before --] <per-launch settings> [-- and what follows]
 //
-// The environment and the synthesized settings (the same hooks as a fresh
-// spawn) are composed from the row. ExtraEnv is restored from the persisted
+// for a codex row (codex is [launch] codex_path when set, from cfg): nothing of
+// agent-director's stands before `resume`, the replayed arguments follow the
+// id, and the settings come last before any `--`, so the config's
+// question-tool setting wins over stored arguments; resume refuses none of the
+// stored arguments. It writes nothing in any Codex folder. A row whose agent
+// is neither claude nor codex gets store.ErrRowAgentInvalid.
+//
+// The create is on in.Socket, labelled with in.Token, the row's instance id and
+// in.StoreID.
+//
+// The environment and the settings (the same hooks as a fresh spawn) are
+// composed from the row. ExtraEnv is restored from the persisted
 // row (in.Row.ExtraEnv, decoded by GetSpawn) so a resumed spawn keeps its
-// original env — including CLAUDE_CONFIG_DIR and any auth vars. This is the
+// original env, including CLAUDE_CONFIG_DIR, CODEX_HOME and any auth vars. This is the
 // persist-all posture: those values may sit at rest in the DB, but the store
 // file is already forced 0600 in a 0700 dir on every open, so restoring them
 // here opens no new exposure tier. Permissions, by contrast, is NOT stored,
@@ -50,9 +66,9 @@ type RelaunchInput struct {
 // propagates auth via tmux's default behavior for anything not captured in
 // ExtraEnv. AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
-func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error) {
+func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, error) {
 	if err := launchAgentError(in.Row.Agent); err != nil {
-		return CreateRequest{}, err
+		return ComposedRelaunch{}, err
 	}
 	// Synthesize a Resolved for the env/settings helpers. Permissions is
 	// intentionally nil: it isn't stored on the row, so a resume can't carry
@@ -69,23 +85,36 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error)
 	}}
 
 	envs := composeEnv(r)
-	settings, err := synthesizeSettings(r, cfg)
-	if err != nil {
-		return CreateRequest{}, err
+	var command []string
+	var carried PreTrustOutcome
+	if r.Agent == store.AgentCodex {
+		carried = CodexPreTrust(r.ExtraEnv, in.Row.NoPreTrust)
+		var err error
+		command, err = composeCodexResumeCommand(in.SessionID, r.AgentArgs, r.CWD, carried, cfg)
+		if err != nil {
+			return ComposedRelaunch{}, err
+		}
+	} else {
+		settings, err := synthesizeSettings(r, cfg)
+		if err != nil {
+			return ComposedRelaunch{}, err
+		}
+		command = []string{claudeProgram(cfg), "--resume", in.SessionID, "--settings", settings}
+		command = append(command, r.AgentArgs...)
 	}
 
-	command := []string{claudeProgram(cfg), "--resume", in.SessionID, "--settings", settings}
-	command = append(command, r.AgentArgs...)
-
-	return CreateRequest{
-		Socket:     in.Socket,
-		Name:       r.TmuxSessionName,
-		CWD:        r.CWD,
-		Env:        envs,
-		Command:    command,
-		Token:      in.Token,
-		InstanceID: r.InstanceID,
-		StoreID:    in.StoreID,
+	return ComposedRelaunch{
+		Create: CreateRequest{
+			Socket:     in.Socket,
+			Name:       r.TmuxSessionName,
+			CWD:        r.CWD,
+			Env:        envs,
+			Command:    command,
+			Token:      in.Token,
+			InstanceID: r.InstanceID,
+			StoreID:    in.StoreID,
+		},
+		PreTrust: carried,
 	}, nil
 }
 

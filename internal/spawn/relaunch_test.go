@@ -54,12 +54,12 @@ func newRelaunchEnv(t *testing.T) *relaunchEnv {
 // Recorder, failing the test on a composition error.
 func (e *relaunchEnv) relaunch(sessionID string) CreateOutcome {
 	e.t.Helper()
-	req, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: sessionID, Socket: e.socket,
+	c, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: sessionID, Socket: e.socket,
 		Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
 	if err != nil {
 		e.t.Fatalf("ComposeRelaunch: %v", err)
 	}
-	return Relaunch(e.rec, req)
+	return Relaunch(e.rec, c.Create)
 }
 
 // onlyCreate returns the one create Relaunch made.

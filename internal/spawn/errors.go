@@ -31,10 +31,17 @@ var ErrCwdNotADirectory = errors.New("ErrCwdNotADirectory")
 // other than "on" / "off" / "" (empty falls back to the config default).
 var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 
-// ErrSpawnDeniedFlag is returned when the agent_args of a claude spawn contain
-// a flag the supervisor must own (--settings, --resume, --continue, --print,
-// --output-format). The match handles both --flag VALUE and --flag=VALUE
-// forms; --setting-sources is deliberately not on this list (SRD §19 Q5).
+// ErrSpawnDeniedFlag is returned when the agent_args of a spawn contain an
+// argument the supervisor must own. For a claude spawn: --settings, --resume,
+// --continue, --print, --output-format; the match handles both --flag VALUE
+// and --flag=VALUE forms, and --setting-sources is deliberately not on this
+// list (SRD §19 Q5). For a codex spawn (CheckCodexArgs): a Codex subcommand in
+// command position, --remote, --remote-auth-token-env, a -c/--config key at,
+// above or under hooks, tui.disable_paste_burst or features.hooks, and
+// --disable hooks; while disable_ask_user is on, also --enable
+// default_mode_request_user_input and a -c/--config key at, above or under
+// features.default_mode_request_user_input or
+// tools.experimental_request_user_input.
 var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 
 // ErrReservedEnvKey is returned when extra_env contains a key whose env-var

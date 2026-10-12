@@ -22,10 +22,24 @@ const (
 	moveSocket             = "/tmp/ad-move-test/new-sock"
 	moveSessionID          = "sess-move-cur"
 	// moveEndReported is the seeded row's end report (end_reported_at, Unix
-	// ms), which the move clears; moveAgent is its agent, which it keeps.
+	// ms), which the move clears; moveAgent is its agent unless a case names
+	// one, which the move keeps.
 	moveEndReported int64 = 1767225611000
 	moveAgent             = store.AgentCodex
 )
+
+// moveAgents are the agents the move is checked for: it stores subagent_tracking
+// by the row's agent (SR-9).
+var moveAgents = []string{store.AgentClaude, store.AgentCodex}
+
+// launchTracking is the subagent_tracking a launch of agent stores: 1 for a
+// claude agent, 0 for a codex one (a Codex launch registers no subagent events).
+func launchTracking(agent string) int64 {
+	if agent == store.AgentCodex {
+		return 0
+	}
+	return 1
+}
 
 // moveIdentity is the seeded row's previous launch identity, every field set.
 func moveIdentity() store.LaunchIdentity {
@@ -37,6 +51,7 @@ func moveIdentity() store.LaunchIdentity {
 // moveSpec overrides seedMoveRow's full ended row.
 type moveSpec struct {
 	state string                // "" = ended
+	agent string                // "" = moveAgent
 	opts  []apitest.SpawnOption // after the defaults; a later option wins
 }
 
@@ -48,15 +63,19 @@ type moveRow struct {
 	history  []apitest.HistoryEntry // session_history after seeding
 }
 
-// seedMoveRow seeds a codex row with a value in every column the move clears
-// or keeps (non-default layouts, raw text, an end report), untracked
-// (subagent_tracking 0, which the move sets), two subagent entries and a
-// claimable launch, a parent and a history entry.
+// seedMoveRow seeds a row (a codex one unless spec names its agent) with a value
+// in every column the move clears or keeps (non-default layouts, raw text, an
+// end report), subagent_tracking the opposite of what the move stores for its
+// agent (0 for claude, 1 for codex), two subagent entries and a claimable
+// launch, a parent and a history entry.
 func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 	t.Helper()
-	state := spec.state
+	state, agent := spec.state, spec.agent
 	if state == "" {
 		state = store.StateEnded
+	}
+	if agent == "" {
+		agent = moveAgent
 	}
 	opts := []apitest.SpawnOption{
 		apitest.WithStartedAt("2026-03-04T05:06:07.250+02:00"), apitest.WithEndedAt("2026-09-29T01:02:03.5Z"),
@@ -66,9 +85,12 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 		apitest.WithTmuxSessionName("move-ts"), apitest.WithRawLabels(`{"team":  "a", "b":"2"}`),
 		apitest.WithRawAgentArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
 		apitest.WithJsonlPath("/tmp/ad-move-test/cur.jsonl"), apitest.WithPID(4242),
-		apitest.WithAgent(moveAgent), apitest.WithEndReportedAt(moveEndReported), apitest.WithNoSubagentTracking(),
+		apitest.WithAgent(agent), apitest.WithEndReportedAt(moveEndReported),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
 			Life: 2, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
+	}
+	if launchTracking(agent) == 1 {
+		opts = append(opts, apitest.WithNoSubagentTracking()) // a seeded row is tracked unless told otherwise
 	}
 	id := f.seed(state, moveSessionID, append(opts, spec.opts...)...)
 	if err := apitest.SeedParentChild(f.path, f.seed(store.StateWaiting, ""), id); err != nil {
@@ -104,9 +126,10 @@ func requireSet(t *testing.T, cols map[string]any) {
 }
 
 // TestMoveToPendingApplied checks the applied move on an ended and a missing
-// row: the returned version is stored; pid, process start, ended_at, the end
-// report, liveness and the server and pane identity are NULL; subagent_tracking
-// is 1 over the seeded 0; the launch start, token, socket
+// row of each agent: the returned version is stored; pid, process start,
+// ended_at, the end report, liveness and the server and pane identity are NULL;
+// subagent_tracking is the agent's (claude 1 over the seeded 0, codex 0 over
+// the seeded 1); the launch start, token, socket
 // and parent (NULL for "") are the move's, also over a row with no token; every
 // kept column (the agent included) and the history are byte for byte unchanged.
 // The move closes the row's close mix at the launch start it records: every
@@ -123,50 +146,61 @@ func TestMoveToPendingApplied(t *testing.T) {
 		{"empty parent id stores NULL", moveSpec{}, false},
 		{"row with no token or socket", moveSpec{opts: []apitest.SpawnOption{apitest.WithNoLaunchToken()}}, true},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newV5Store(t)
-			r := seedMoveRow(t, f, tc.spec)
-			requireSet(t, moveKept(r.before))
-			requireSet(t, map[string]any{"end_reported_at": r.before.EndReportedAt})
-			if r.before.SubagentTracking != int64(0) {
-				t.Fatalf("seeded subagent_tracking = %v; want 0, or the move's write is vacuous", r.before.SubagentTracking)
-			}
-			mix := f.seedCloseMix(r.id)
-			var parent any
-			parentID := ""
-			if tc.parent {
-				parentID = f.seed(store.StateWaiting, "")
-				parent = parentID
-			}
-			res, v, err := f.move(r, parentID)
-			if err != nil || res != store.CondApplied {
-				t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
-			}
-			after := f.rawColumns(r.id)
-			want := map[string]any{"state": store.StatePending, "row_version": r.examined.Snapshot.RowVersion + 1,
-				"launch_started_at": moveLaunchMillis, "launch_token": moveToken, "tmux_socket": moveSocket, "parent_id": parent,
-				"pid": nil, "proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
-				"end_reported_at": nil, "subagent_tracking": int64(1)}
-			for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
-				want[col] = w
-			}
-			got := identityColumns(after)
-			for col, g := range map[string]any{"state": after.State, "row_version": after.RowVersion, "launch_started_at": after.LaunchStartedAt,
-				"launch_token": after.LaunchToken, "tmux_socket": after.TmuxSocket, "parent_id": after.ParentID, "pid": after.PID,
-				"proc_starttime": after.ProcStarttime, "ended_at": after.EndedAt, "liveness_unverified_since": after.LivenessUnverifiedSince,
-				"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt, "subagent_tracking": after.SubagentTracking} {
-				got[col] = g
-			}
-			if !reflect.DeepEqual(got, want) || v != r.examined.Snapshot.RowVersion+1 {
-				t.Errorf("moved version %d, columns:\n got  %v\n want %v", v, got, want)
-			}
-			if !reflect.DeepEqual(moveKept(after), moveKept(r.before)) || !reflect.DeepEqual(f.historyAllLives(r.id), r.history) {
-				t.Errorf("kept columns or history changed:\n before %v\n after  %v", moveKept(r.before), moveKept(after))
-			}
-			f.assertMixClosedAt(mix, moveLaunchMillis)
-		})
+	for _, agent := range moveAgents {
+		for _, tc := range cases {
+			t.Run(agent+", "+tc.name, func(t *testing.T) {
+				tc.spec.agent = agent
+				testMoveToPendingApplied(t, tc.spec, tc.parent)
+			})
+		}
 	}
+}
+
+// testMoveToPendingApplied runs one case of TestMoveToPendingApplied: the move
+// of spec's row, with a live parent when withParent is set.
+func testMoveToPendingApplied(t *testing.T, spec moveSpec, withParent bool) {
+	t.Helper()
+	f := newV5Store(t)
+	r := seedMoveRow(t, f, spec)
+	requireSet(t, moveKept(r.before))
+	requireSet(t, map[string]any{"end_reported_at": r.before.EndReportedAt})
+	wantTracking := launchTracking(r.before.Agent.(string))
+	if r.before.SubagentTracking != 1-wantTracking {
+		t.Fatalf("seeded subagent_tracking = %v; want %d, or the move's write is vacuous", r.before.SubagentTracking, 1-wantTracking)
+	}
+	mix := f.seedCloseMix(r.id)
+	var parent any
+	parentID := ""
+	if withParent {
+		parentID = f.seed(store.StateWaiting, "")
+		parent = parentID
+	}
+	res, v, err := f.move(r, parentID)
+	if err != nil || res != store.CondApplied {
+		t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
+	}
+	after := f.rawColumns(r.id)
+	want := map[string]any{"state": store.StatePending, "row_version": r.examined.Snapshot.RowVersion + 1,
+		"launch_started_at": moveLaunchMillis, "launch_token": moveToken, "tmux_socket": moveSocket, "parent_id": parent,
+		"pid": nil, "proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
+		"end_reported_at": nil, "subagent_tracking": wantTracking}
+	for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
+		want[col] = w
+	}
+	got := identityColumns(after)
+	for col, g := range map[string]any{"state": after.State, "row_version": after.RowVersion, "launch_started_at": after.LaunchStartedAt,
+		"launch_token": after.LaunchToken, "tmux_socket": after.TmuxSocket, "parent_id": after.ParentID, "pid": after.PID,
+		"proc_starttime": after.ProcStarttime, "ended_at": after.EndedAt, "liveness_unverified_since": after.LivenessUnverifiedSince,
+		"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt, "subagent_tracking": after.SubagentTracking} {
+		got[col] = g
+	}
+	if !reflect.DeepEqual(got, want) || v != r.examined.Snapshot.RowVersion+1 {
+		t.Errorf("moved version %d, columns:\n got  %v\n want %v", v, got, want)
+	}
+	if !reflect.DeepEqual(moveKept(after), moveKept(r.before)) || !reflect.DeepEqual(f.historyAllLives(r.id), r.history) {
+		t.Errorf("kept columns or history changed:\n before %v\n after  %v", moveKept(r.before), moveKept(after))
+	}
+	f.assertMixClosedAt(mix, moveLaunchMillis)
 }
 
 // TestMoveToPendingNotAppliedClosesNothing checks a move that applies nothing
@@ -244,19 +278,29 @@ func TestMoveToPendingWithoutLaunchInstantFails(t *testing.T) {
 
 // TestMoveToPendingRowComesBack checks a moved row, once its relaunch records
 // the pane again, keeps every closed entry closed until a SubagentStart names it
-// (SR-8.3): the start reopens the entry in the new launch, and nothing else.
+// (SR-8.3): for a claude agent (tracked, SR-9) the start reopens the entry in
+// the new launch, and nothing else; for a codex agent (untracked) it reopens
+// nothing, and no entry changes.
 func TestMoveToPendingRowComesBack(t *testing.T) {
-	f := newV5Store(t)
-	r := seedMoveRow(t, f, moveSpec{})
-	mix := f.seedCloseMix(r.id)
-	res, v, err := f.move(r, "")
-	if err != nil || res != store.CondApplied {
-		t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
+	for _, agent := range moveAgents {
+		t.Run(agent, func(t *testing.T) {
+			f := newV5Store(t)
+			r := seedMoveRow(t, f, moveSpec{agent: agent})
+			mix := f.seedCloseMix(r.id)
+			res, v, err := f.move(r, "")
+			if err != nil || res != store.CondApplied {
+				t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
+			}
+			f.assertMixClosedAt(mix, moveLaunchMillis)
+			if res, err := f.s.RecordLaunchIdentity(r.id, v, moveToken, moveIdentity()); err != nil || res != store.CondApplied {
+				t.Fatalf("RecordLaunchIdentity = %v, %v; want CondApplied", res, err)
+			}
+			f.assertMixClosedAt(mix, moveLaunchMillis)
+			if agent == store.AgentCodex {
+				f.assertStartReopensNothing(r.id, moveLaunchMillis+60_000)
+				return
+			}
+			f.assertStartReopens(r.id, moveToken, moveLaunchMillis+60_000)
+		})
 	}
-	f.assertMixClosedAt(mix, moveLaunchMillis)
-	if res, err := f.s.RecordLaunchIdentity(r.id, v, moveToken, moveIdentity()); err != nil || res != store.CondApplied {
-		t.Fatalf("RecordLaunchIdentity = %v, %v; want CondApplied", res, err)
-	}
-	f.assertMixClosedAt(mix, moveLaunchMillis)
-	f.assertStartReopens(r.id, moveToken, moveLaunchMillis+60_000)
 }

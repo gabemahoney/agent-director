@@ -1,12 +1,17 @@
 # Hooks
 
 How agent-director's per-Spawn state-tracking hooks coexist with the
-operator's own Claude Code hooks. Each Claude Spawn gets eleven hook entries
-synthesized into its `--settings`; they fire on every Claude lifecycle
-event and write the row update that powers `status` / `get` / `list`,
+operator's own hooks. Each Claude Spawn gets eleven hook entries
+synthesized into its `--settings`. Each Codex Spawn gets eight on Codex's
+command line (see "The Codex entry set" below), plus a help entry and a
+question-tool deny entry while their settings are on. They fire on every
+lifecycle event of their agent and write the row update that powers
+`status` / `get` / `list`,
 but only for the row's own agent (see "Only the row's own agent moves
-the row" below). Some of them also write the agent's subagent records
-(see "What the hooks write for subagent records" below). A Codex agent's
+the row" below). A Claude Spawn's also write the agent's subagent records
+(see "What the hooks write for subagent records" below); a Codex launch
+registers no subagent events, so its agent has no records (see
+[usage.md](usage.md#when-an-agent-is-tracked)). A Codex agent's
 hooks run the same `hook` verb with `--agent codex` and map Codex's events
 to states by their own table (see "Hooks from a Codex agent" below).
 
@@ -47,8 +52,10 @@ note. A no-verb run checks stdin for this case:
   or input that is not a hook payload.
 - A run with only global flags counts as a no-verb run. With `--home`,
   the record goes under that home.
-- `help`, `version` and their aliases (`--help`, `-h`, `--version`, `-v`)
-  never read stdin.
+- `version` and its aliases (`--version`, `-v`) never read stdin. `help` and
+  its aliases (`--help`, `-h`) read it only in a Codex agent's environment,
+  with the same cap and deadline (see "What `agent-director help` actually
+  outputs" below).
 
 The `no_exec_form` record has the fields every `ad.hook.ignored` record
 has (see "The `ad.hook.ignored` reasons" below). Because it reads no
@@ -170,6 +177,46 @@ A Codex hook passes the same gate as a Claude one: it applies only when its
 parent process is the row's recorded pane process (see "Only the row's own
 agent moves the row"). Only the table that maps an event to a state differs.
 
+### The Codex entry set
+
+Every Codex launch (`spawn`, a reuse and `resume`) registers these entries on
+Codex's command line, in no file:
+
+| Event | Time limit |
+| --- | --- |
+| `SessionStart` | 600 s |
+| `PreToolUse` | the relay window (`[relay] timeout_seconds`) |
+| `PermissionRequest` | the relay window; the entry also tells the hook the window, as `--timeout <N>` |
+| `SessionEnd`, `Interrupt` | 3 s |
+| `UserPromptSubmit`, `PostToolUse`, `Stop` | Codex's default |
+
+Each entry has no matcher and its command is the running binary in exec form:
+`exec '<abs-path>/agent-director' hook --agent codex`. Codex runs it through a
+shell (see "The shell between Codex and the hook" below), and `exec` leaves the
+hook as Codex's child. A Codex launch registers no `Notification`,
+`PostToolUseFailure`, `SubagentStart` or `SubagentStop` entry.
+
+Two more entries come with their settings:
+
+- While `inject_help_hook` is on, a help entry on `SessionStart`:
+  `exec '<install path>' help`, with Codex's limit for the text it adds raised
+  to 4000 (Codex counts about four bytes per unit; its default,
+  2500, is too small for the list). It uses the installed path, not the running binary's (see
+  [Settings](settings.md#defaultsinject_help_hook-config)). It is absent when
+  the setting is off.
+- While `disable_ask_user` is on, a `PreToolUse` entry that matches
+  Codex's asynchronous question tool by name and blocks it, writing its reason
+  to stderr (see [Permissions](permissions.md#disable_ask_user-config)).
+
+agent-director's hooks run from the agent's first event with no hook-review
+dialog in every launch, `no_pre_trust` and a failed pre-trust included (see
+[Settings](settings.md#what-a-codex-launch-carries)). They are a separate layer:
+they never replace or disable the user's, the group's or the project's own
+Codex hooks, and the trust Codex recorded for those is kept. A Codex config
+that turns hooks off, or allows managed hooks only, stops agent-director's hooks
+too: the row then never reports in and stays `pending` (see "A SessionStart
+that never writes" below).
+
 ### The Codex states
 
 | Event | Resulting state |
@@ -254,7 +301,9 @@ the own-agent check needs. This holds for every account shell.
 
 Keep the shell's startup files silent on stdout: for zsh `-c` that is
 `.zshenv` (the only file it reads), for bash the file `BASH_ENV` names (a
-bash `-c` reads no other). Text they print reaches the hook's stdout ahead of
+bash `-c` reads no other). agent-director launches Codex with `BASH_ENV` empty
+(see [Settings](settings.md#what-a-codex-launch-carries)), so only a `BASH_ENV`
+the caller sets in `extra_env`, or a zsh `.zshenv`, prints. Text they print reaches the hook's stdout ahead of
 the hook's own output, and Codex reads the whole as the hook's output. The
 model sees it from the `SessionStart` and `UserPromptSubmit` hooks, and an
 `Interrupt` hook shows "Hook failed" in the pane. Text on stderr does no harm.
@@ -799,7 +848,9 @@ fi
 ```
 
 This lets the operator opt-out per Spawn surface without flipping
-`--setting-sources project,local` at every `spawn` call.
+`--setting-sources project,local` at every `spawn` call. The same guard works
+in a Codex user, group or project hook: it runs in the agent's environment,
+which carries the variable.
 
 ## Persistent hooks (the `help`-on-SessionStart pair)
 
@@ -818,9 +869,10 @@ session. Mirrors the `bees sting` pattern.
 Both entries are in shell form (`"command": "<install path> help"`, no
 `args`) and name the `help` verb explicitly. A Claude Code that does not
 run exec-form hooks still runs `agent-director help`, so the no-verb
-`no_exec_form` check never applies to them. The same holds for the
-per-Spawn `inject_help_hook` SessionStart entry, which is also shell
-form.
+`no_exec_form` check never applies to them. The same holds for a Claude
+Spawn's per-Spawn `inject_help_hook` SessionStart entry, which is in shell form
+too. A Codex agent has no persistent pair: its help entry is per launch (see
+"The Codex entry set" above).
 
 ### Why both events
 
@@ -866,6 +918,17 @@ manifest-driven verb list as JSON. Claude Code captures the hook's
 stdout and injects it as a system-message tool-availability hint
 in the new conversation. The model sees the same surface a script
 reading the CLI's `--help` would.
+
+A Codex agent's help entry gets the whole list in Codex's structured form: one
+JSON object whose `hookSpecificOutput` names the event `SessionStart` and
+carries the list as its `additionalContext`. `help` prints it only when the
+launch marked the agent as Codex and the hook payload on stdin is a
+`SessionStart`; in every other case, a Codex agent's own `agent-director help`
+in its shell included, it prints the plain list as before. In a Codex agent
+`help` reads stdin for this with the 1 MiB cap and 1-second deadline of a
+no-verb run, and prints the plain list when the read fails. The whole list
+reaches the agent at every session start: its first prompt, and the next
+prompt after `/clear`, `/new`, `/resume` or `/fork`.
 
 ### Caveat — install fail-closed gap
 

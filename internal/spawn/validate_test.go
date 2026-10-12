@@ -91,6 +91,18 @@ func TestValidateOrder(t *testing.T) {
 		{"claude's denied flags do not apply to codex", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"--print", "--settings={}"}}, nil, "", false, ""},
 		{"codex still refuses a reserved extra_env key", SpawnParams{CWD: cwdGood, Agent: "codex",
 			ExtraEnv: map[string]string{"AGENT_DIRECTOR_FOO": "bar", "CODEX_HOME": "/x"}}, ErrReservedEnvKey, `ErrReservedEnvKey: "AGENT_DIRECTOR_FOO"`, false, ""},
+		{"codex refuses a subcommand", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec", "hello"}}, ErrSpawnDeniedFlag, "codex subcommand exec", false, ""},
+		{"codex refuses a hooks override", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"-c", "hooks.Stop=[]"}}, ErrSpawnDeniedFlag, "-c hooks.Stop", false, ""},
+		{"codex arguments pass through", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"-m", "exec", "--", "a", "b"}}, nil, "", false, ""},
+		{"codex's refused arguments do not apply to claude", SpawnParams{CWD: cwdGood, AgentArgs: []string{"exec", "--remote", "x", "-c", "hooks.Stop=[]", "--disable", "hooks"}}, nil, "", false, ""},
+		{"relay_mode outranks codex's refused arguments", SpawnParams{CWD: cwdGood, RelayMode: "bogus", Agent: "codex", AgentArgs: []string{"exec"}}, ErrRelayModeInvalid, "", false, ""},
+		{"an invalid agent outranks codex's refused arguments", SpawnParams{CWD: cwdGood, Agent: "gemini", AgentArgs: []string{"exec"}}, ErrAgentInvalid, "", false, ""},
+		{"ownership outranks codex's refused arguments", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec"}}, ErrAgentArgsMismatch, "", false, "claude"},
+		{"codex's refused arguments outrank its permissions", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec"}, Permissions: codexAllow}, ErrSpawnDeniedFlag, "", false, ""},
+		{"codex's refused arguments outrank the extra_env checks", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec"},
+			ExtraEnv: map[string]string{"HOME": "/x"}}, ErrSpawnDeniedFlag, "", false, ""},
+		{"codex's refused arguments outrank the session name", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec"},
+			TmuxSessionName: "bad:name", TmuxSessionNameSupplied: true}, ErrSpawnDeniedFlag, "", false, ""},
 		{"happy path", SpawnParams{CWD: cwdGood}, nil, "", false, ""},
 	}
 	for _, flag := range []string{"--settings", "--resume", "--continue", "--print", "--output-format"} {

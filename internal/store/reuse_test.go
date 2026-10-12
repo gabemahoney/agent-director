@@ -36,6 +36,7 @@ type reuseSpec struct {
 	state     string                // "" = ended
 	noSession bool                  // NULL session_id
 	preTrust  bool                  // no_pre_trust 0 instead of the opt-out
+	tracked   bool                  // subagent_tracking 1 instead of 0
 	opts      []apitest.SpawnOption // after the defaults; a later option wins
 }
 
@@ -51,7 +52,8 @@ type reuseRow struct {
 
 // seedReuseRow seeds a finished codex row with a non-default value in every
 // column the reset clears, sets or keeps (an end report included), untracked
-// (subagent_tracking 0, which the reset sets), two subagent entries and a
+// (subagent_tracking 0, or 1 when spec says tracked: the reset sets the flag of
+// its fresh agent, so a case seeds the other one), two subagent entries and a
 // claimable launch, an older history entry, a parent, a child and two
 // permission requests (one decided),
 // read as reuse would.
@@ -71,12 +73,15 @@ func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 		apitest.WithLaunchStartedAt(1767225600999), apitest.WithLifeNumber(reuseLife), apitest.WithTmuxSessionName("reuse-ts"),
 		apitest.WithRawLabels(`{"team":  "a", "b":"2"}`), apitest.WithRawAgentArgs(`["--model",   "opus"]`),
 		apitest.WithRawExtraEnv(`{"K":  "v"}`), apitest.WithEndedAt("2026-09-29T01:02:03.5Z"), apitest.WithJsonlPath(reuseJsonl),
-		apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(reuseEndReported), apitest.WithNoSubagentTracking(),
+		apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(reuseEndReported),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-reuse-old", JSONLPath: "/tmp/ad-reuse-test/old.jsonl",
 			Life: 1, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
 	if !spec.preTrust {
 		opts = append(opts, apitest.WithNoPreTrust())
+	}
+	if !spec.tracked {
+		opts = append(opts, apitest.WithNoSubagentTracking())
 	}
 	id := f.seed(state, session, append(opts, spec.opts...)...)
 	r := reuseRow{id: id, parent: f.seed(store.StateWaiting, ""), child: f.seed(store.StateWaiting, "")}
@@ -184,8 +189,8 @@ func TestReuseReadForReuse(t *testing.T) {
 
 // TestReuseResetApplied checks the applied reset on ended and missing rows:
 // the archived session, cleared and fresh columns (the agent the fresh spawn
-// names, either way between claude and codex, no end report, and
-// subagent_tracking 1 over the seeded 0), life and
+// names, each way between claude and codex, no end report, and subagent_tracking
+// of that agent, claude 1 over the seeded 0 and codex 0 over the seeded 1), life and
 // version each +1, the pre-trust choice either way, an empty parent stored NULL; every request
 // of the id deleted (another id's kept), the child and older history kept; a
 // row with no session archives nothing. The reset closes the row's close mix at
@@ -208,10 +213,17 @@ func TestReuseResetApplied(t *testing.T) {
 		{"ended codex row reset as claude (the seed's agent changes)", reuseSpec{}, true, false, 0, store.AgentClaude},
 		{"ended claude row reset as codex", reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}, true, false, 0, store.AgentCodex},
 		{"ended claude row reset as claude", reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}, true, false, 0, store.AgentClaude},
+		{"ended codex row reset as codex", reuseSpec{}, true, false, 0, store.AgentCodex},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
+			wantAgent := store.AgentClaude
+			if tc.freshAgent != "" {
+				wantAgent = tc.freshAgent
+			}
+			wantTracking := launchTracking(wantAgent)
+			tc.spec.tracked = wantTracking == 0 // seeded the other way, so the reset's write is not vacuous
 			r := seedReuseRow(t, f, tc.spec)
 			mix := f.seedCloseMix(r.id)
 			seedRequest(t, f, r.parent)
@@ -228,13 +240,12 @@ func TestReuseResetApplied(t *testing.T) {
 			}
 
 			fresh := reuseFresh(parentID, tc.noPreTrust)
-			wantAgent := store.AgentClaude
 			if tc.freshAgent != "" {
-				fresh.Agent, wantAgent = tc.freshAgent, tc.freshAgent
+				fresh.Agent = tc.freshAgent
 			}
-			if r.before.EndReportedAt != reuseEndReported || r.before.SubagentTracking != int64(0) {
-				t.Fatalf("seeded end_reported_at = %v, subagent_tracking = %v; want %d and 0, or the checks are vacuous",
-					r.before.EndReportedAt, r.before.SubagentTracking, reuseEndReported)
+			if r.before.EndReportedAt != reuseEndReported || r.before.SubagentTracking != 1-wantTracking {
+				t.Fatalf("seeded end_reported_at = %v, subagent_tracking = %v; want %d and %d, or the checks are vacuous",
+					r.before.EndReportedAt, r.before.SubagentTracking, reuseEndReported, 1-wantTracking)
 			}
 
 			res, archived, v, err := f.reuseReset(r, fresh)
@@ -260,7 +271,7 @@ func TestReuseResetApplied(t *testing.T) {
 				"labels": `{"team":"z"}`, "extra_env": `{"NEW":"1"}`, "parent_id": parent, "launch_token": "a1b2c3d4e5f60718",
 				"tmux_socket": "/tmp/ad-reuse-test/new-sock", "session_id": nil, "jsonl_path": nil, "pid": nil,
 				"proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
-				"agent": wantAgent, "end_reported_at": nil, "subagent_tracking": int64(1)}
+				"agent": wantAgent, "end_reported_at": nil, "subagent_tracking": wantTracking}
 			for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
 				want[col] = w
 			}

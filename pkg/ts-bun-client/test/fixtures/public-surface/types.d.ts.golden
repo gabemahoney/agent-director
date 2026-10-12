@@ -339,12 +339,24 @@ export interface SpawnParams {
      * nothing is launched.
      */
     extra_env?: Record<string, string>;
-    /** Pass-through argv to the agent's program after the supervisor's own flags. */
+    /**
+     * Pass-through argv to the agent's program. For claude, `--settings`, `--resume`,
+     * `--continue`, `--print` and `--output-format` are refused. For codex, a Codex subcommand in
+     * command position, `--remote`, `--remote-auth-token-env`, `-c`/`--config` keys at, above or
+     * under `hooks`, `tui.disable_paste_burst` or `features.hooks`, and `--disable hooks` are
+     * refused (`ErrSpawnDeniedFlag`); with `disable_ask_user` on, `--enable
+     * default_mode_request_user_input` and the question-tool keys are refused too. agent-director
+     * adds no second `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust ok) or
+     * `--enable write_stdin_approval` when the arguments already carry one before any `--`;
+     * Codex rejects a flag the arguments themselves repeat.
+     */
     agent_args?: string[];
     /**
-     * Skip pre-writing the folder-trust entry for `cwd` (into
-     * `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets `CLAUDE_CONFIG_DIR`,
-     * otherwise `~/.claude.json`). The choice is recorded on the row for its life,
+     * Skip the folder pre-trust for `cwd`. For a claude agent, that is pre-writing the
+     * folder-trust entry (into `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets
+     * `CLAUDE_CONFIG_DIR`, otherwise `~/.claude.json`). For a codex agent, it is putting the
+     * folder trust and the hook-trust bypass on the launch's command line (no file is
+     * written). The choice is recorded on the row for its life,
      * and every `resume` of that life follows it. The result then reports
      * `pre_trust: "skipped"`. Default false.
      */
@@ -370,13 +382,16 @@ export interface SpawnResult {
     /** The id the new Spawn is tracked under. */
     instance_id: string;
     /**
-     * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was
-     * written. `"skipped"`: pre-trust was off for this launch because the caller passed
+     * What the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
+     * (claude: the entry was written to `.claude.json`; codex: the launch carries the folder
+     * trust and the hook-trust bypass). `"skipped"`: pre-trust was off for this launch because the caller passed
      * `no_pre_trust`; nothing was attempted. `"failed"`: pre-trust was attempted and the
-     * entry was not written (the `.claude.json` file is missing, or could not be read,
-     * parsed or written, or `extra_env` sets `CLAUDE_CONFIG_DIR` to a path that is not
-     * absolute); the agent may stop at Claude Code's folder-trust prompt. A pre-trust
-     * failure never fails the spawn.
+     * entry was not written (a claude agent: the `.claude.json` file is missing, or could not
+     * be read, parsed or written, or `extra_env` sets `CLAUDE_CONFIG_DIR` to a path that is
+     * not absolute; a codex agent: `extra_env` sets `CODEX_HOME` to a path that is not
+     * absolute, and the launch carries neither the folder trust nor the hook-trust bypass);
+     * the agent may stop at its folder-trust prompt. A pre-trust failure never fails the
+     * spawn.
      */
     pre_trust: "ok" | "skipped" | "failed";
 }
@@ -441,6 +456,13 @@ export interface GetResult {
     tmux_socket?: string | null;
     agent_args: string[];
     relay_mode: string;
+    /**
+     * Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty.
+     * When empty, `resume` of a claude row composes the path on demand from `cwd` + `session_id`
+     * (under `CLAUDE_CONFIG_DIR` when its environment sets one). A codex row's path is the one its
+     * hooks report; `resume` never builds one for it, so an empty one leaves only the recorded
+     * paths of the visible history to try.
+     */
     jsonl_path: string;
     session_id: string;
     labels: Record<string, string>;
@@ -773,13 +795,16 @@ export interface ResumeResult {
     /** Same id that was passed in (resume preserves it). */
     instance_id: string;
     /**
-     * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was
-     * written. `"skipped"`: pre-trust was off for this launch because the row records that
+     * What the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
+     * (claude: the entry was written to `.claude.json`; codex: the launch carries the folder
+     * trust and the hook-trust bypass). `"skipped"`: pre-trust was off for this launch because the row records that
      * the spawn that began its life turned it off (`no_pre_trust`); nothing was attempted.
-     * `"failed"`: pre-trust was attempted and the entry was not written (the `.claude.json`
-     * file is missing, or could not be read, parsed or written, or the row's `extra_env`
-     * sets `CLAUDE_CONFIG_DIR` to a path that is not absolute); the agent may stop at
-     * Claude Code's folder-trust prompt. A pre-trust failure never fails the resume.
+     * `"failed"`: pre-trust was attempted and the entry was not written (a claude agent: the
+     * `.claude.json` file is missing, or could not be read, parsed or written, or the row's
+     * `extra_env` sets `CLAUDE_CONFIG_DIR` to a path that is not absolute; a codex agent: the
+     * row's `extra_env` sets `CODEX_HOME` to a path that is not absolute, and the launch
+     * carries neither the folder trust nor the hook-trust bypass); the agent may stop at its
+     * folder-trust prompt. A pre-trust failure never fails the resume.
      */
     pre_trust: "ok" | "skipped" | "failed";
 }
@@ -999,7 +1024,8 @@ export interface SubagentRecord {
 export interface ListSubagentsResult {
     /**
      * Whether the row's launch registered subagent tracking: false for a row launched before
-     * subagent tracking existed, which has no records; true for a row launched since.
+     * subagent tracking existed, which has no records, and false for a row whose launch
+     * registers no subagent events; true for any other row.
      */
     tracked: boolean;
     /**

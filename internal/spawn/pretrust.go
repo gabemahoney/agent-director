@@ -14,23 +14,78 @@ import (
 
 // PreTrustOutcome is what one pre-trust step did for a launch (SR-22.6 "The
 // field"). Its values are the words of the public pre_trust result field.
+//
+// For a claude agent the step writes the folder-trust entry into .claude.json
+// (PreTrust). For a codex agent it writes nothing: the outcome is decided
+// from the launch's inputs alone (CodexPreTrust) and the folder trust travels
+// on the launch's command line.
 type PreTrustOutcome string
 
 const (
-	// PreTrustOK: the folder-trust entry was written, so Claude Code should
-	// not show its folder-trust prompt for the directory.
+	// PreTrustOK: Claude Code's folder-trust entry was written, so it should
+	// not show its folder-trust prompt for the directory; or, for Codex, the
+	// launch carries the folder trust and the bypass of Codex's hook review
+	// on its command line, so Codex should not stop at its folder-trust prompt.
 	PreTrustOK PreTrustOutcome = "ok"
 	// PreTrustSkipped: pre-trust was off for this launch (the spawn caller's
 	// opt-out, or for resume the opt-out the row records), so nothing was
-	// attempted.
+	// attempted and, for Codex, the launch carries neither the folder trust
+	// nor the bypass.
 	PreTrustSkipped PreTrustOutcome = "skipped"
-	// PreTrustFailed: pre-trust was attempted and did not write the entry
-	// (the .claude.json file is missing, or could not be read, parsed or
-	// written, its lock held by another process included, or the extra
-	// env's CLAUDE_CONFIG_DIR is set but not usable, see ConfigDirUsable).
-	// The launch proceeds; the agent may stop at the prompt.
+	// PreTrustFailed: pre-trust was attempted and did not take effect. For
+	// Claude: the .claude.json file is missing, or could not be read, parsed
+	// or written, its lock held by another process included, or the extra
+	// env's CLAUDE_CONFIG_DIR is set but not usable (see ConfigDirUsable). For
+	// Codex: the extra env's CODEX_HOME is set but not an absolute path (see
+	// CodexPreTrust), and the launch carries neither the folder trust nor the
+	// bypass. The launch proceeds; the agent may stop at the prompt.
 	PreTrustFailed PreTrustOutcome = "failed"
 )
+
+// CodexPreTrust is the pre-trust step of a codex launch (SR-5.4, SR-4.4): a
+// pure function of the launch's inputs that reads and writes no file and takes
+// no lock, so a Codex launch leaves ~/.claude.json and every Codex folder as
+// they were. off is whether pre-trust is off for the launch (the spawn
+// caller's NoPreTrust, or for resume the row's recorded one).
+//
+//   - off: PreTrustSkipped.
+//   - extraEnv sets CODEX_HOME to a value that is not absolute (an empty value
+//     counts as unset): PreTrustFailed. Codex would resolve a relative value
+//     against its pane's cwd, which agent-director cannot name for the caller.
+//   - otherwise PreTrustOK.
+//
+// It prints nothing; the warning for a failed outcome is RunPreTrust's, printed
+// only after the launch's composition succeeded.
+func CodexPreTrust(extraEnv map[string]string, off bool) PreTrustOutcome {
+	if off {
+		return PreTrustSkipped
+	}
+	if dir := extraEnv[envCodexHome]; dir != "" && !filepath.IsAbs(dir) {
+		return PreTrustFailed
+	}
+	return PreTrustOK
+}
+
+// envCodexHome is the variable that moves Codex's folder.
+const envCodexHome = "CODEX_HOME"
+
+// RunPreTrust is the pre-trust step of every launch (spawn, reuse, resume),
+// run after the launch's composition succeeded. For a claude agent it is
+// PreTrust. For a codex agent it does nothing but report carried, the outcome
+// the composed launch carries (ComposedLaunch.PreTrust, ComposedRelaunch.PreTrust),
+// so the outcome reported is exactly the one the composed argv was built for;
+// for PreTrustFailed it prints one warning line to preTrustWarn naming
+// CODEX_HOME and its value and saying the agent may stop at Codex's folder-trust
+// prompt. It never returns an error and never fails a launch.
+func RunPreTrust(agent string, carried PreTrustOutcome, cwd string, extraEnv map[string]string, off bool, cfg config.PreTrust) PreTrustOutcome {
+	if agent != config.AgentCodex {
+		return PreTrust(cwd, extraEnv, off, cfg)
+	}
+	if carried == PreTrustFailed {
+		fmt.Fprintf(preTrustWarn, "agent-director: pre-trust failed (%s %q is not an absolute path); the agent may stop at Codex's folder-trust prompt\n", envCodexHome, extraEnv[envCodexHome])
+	}
+	return carried
+}
 
 // preTrustWarn is where PreTrust prints its one warning line for a failed
 // attempt, for humans at the CLI. Held as a var so tests can capture it
@@ -38,8 +93,9 @@ const (
 // error envelope).
 var preTrustWarn io.Writer = os.Stderr
 
-// PreTrust is the one best-effort folder-trust pre-trust step every launch
-// runs (SR-22.6): plain spawn (Launch) before its insert, spawn with reuse
+// PreTrust is the one best-effort folder-trust pre-trust step every claude
+// launch runs (SR-22.6; a codex launch's is CodexPreTrust, and RunPreTrust
+// picks by agent): plain spawn (Launch) before its insert, spawn with reuse
 // before its reset, and resume before its move to pending. off is whether
 // pre-trust is off for this launch: the spawn caller's NoPreTrust, or for
 // resume the row's recorded NoPreTrust. cfg is the loaded config's

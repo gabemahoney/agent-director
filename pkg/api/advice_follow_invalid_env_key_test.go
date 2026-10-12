@@ -70,7 +70,7 @@ func TestAdviceFollow_A15_InvalidEnvKeyNameTheVariable(t *testing.T) {
 
 // TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse: the reuse that keeps the key is refused alike and
 // writes nothing; the one naming the agent's folder variable as its own key launches a claude row's next
-// life, pre-trusting that directory, and a codex row's reaches the Codex composition stop, writing nothing.
+// life, pre-trusting that directory, and a codex row's launches as codex.
 // B12 (b.vpb): "to run the agent again, spawn the id with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI) and an extra_env without \"CLAUDE_CONFIG_DIR=...\" (...)"
 func TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
@@ -81,7 +81,7 @@ func TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse(t *testing.T) {
 			cfg := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
 			bad := a.variable + "=" + cfg.dir
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e),
-				Opts: []apitest.SpawnOption{apitest.WithAgent(a.agent), apitest.WithExtraEnv(map[string]string{bad: ""})}})
+				Opts: agentRowOpts(a.agent, apitest.WithExtraEnv(map[string]string{bad: ""}))})
 			before := e.snapshotResume(t, r.resumeRow)
 
 			_, err := e.resume(r.ID)
@@ -102,13 +102,15 @@ func TestAdviceFollow_B12_InvalidEnvKeySpawnWithReuse(t *testing.T) {
 			p = reuseParams(t, r, reuseRequest{Env: map[string]string{a.variable: cfg.dir}})
 			p.Agent = a.agent
 			res, logs, err := e.reuse(t, p)
-			if a.agent == "codex" {
-				advAssertCodexStop(t, err, "the followed spawn")
-				e.assertWroteNothing(t, kept)
-				return
-			}
 			if err != nil {
 				t.Fatalf("spawn of %s with the reuse opt-in and %s as its own key = %v (log %q); want it launched", r.ID, a.variable, err, logs)
+			}
+			if a.agent == "codex" {
+				assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate), e.dbPath, r.ID, codexProgram)
+				if res.PreTrust != "ok" {
+					t.Errorf("pre_trust = %q; want ok for the absolute CODEX_HOME", res.PreTrust)
+				}
+				return
 			}
 			advSpawnLaunched(t, e.dbPath, r.ID, advSpawnNextLife(before.cols), res, err)
 			cfg.check(t, r.CWD, true, "after the followed reuse")

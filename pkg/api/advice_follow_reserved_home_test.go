@@ -7,13 +7,11 @@ package api_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -50,34 +48,9 @@ func advResumeHome(a advHomeAgent) string {
 		a.agent + " (--agent " + a.agent + " on the CLI) and an extra_env without HOME (a reused id starts a new life with no memory of this conversation), and " + a.alternative
 }
 
-// advAssertCodexStop fails unless err is the Codex composition stop (a followed spawn of a codex agent that
-// passed every check).
-func advAssertCodexStop(t *testing.T, err error, what string) {
-	t.Helper()
-	assertOneName(t, err, "ErrInternal")
-	if err == nil || !strings.Contains(err.Error(), codexStopText) {
-		t.Errorf("%s = %v; want the Codex composition stop %q", what, err, codexStopText)
-	}
-}
-
-// advAssertOnlyLookups fails unless the only tmux calls rec saw are lookups: a spawn that names its id looks
-// for a session of that id before composing, and the Codex stop that follows creates nothing.
-func advAssertOnlyLookups(t *testing.T, rec *tmuxfix.Recorder) {
-	t.Helper()
-	if n := len(rec.Calls()); n != 0 {
-		t.Errorf("name-based tmux calls = %d; want none", n)
-	}
-	for _, k := range callKinds(rec) {
-		if k != tmux.CallLookup {
-			t.Errorf("tmux calls = %v; want lookups only (nothing created)", callKinds(rec))
-			return
-		}
-	}
-}
-
 // TestAdviceFollow_A14_ReservedHomeSetConfigDir: the same spawn with HOME removed and the agent's absolute
-// folder variable set launches a claude agent, pre-trusting that directory; a codex agent reaches the
-// Codex composition stop, writing nothing.
+// folder variable set launches the agent: a claude one pre-trusting that directory, a codex one with
+// pre_trust ok and no trust file written.
 // A14 (b.nas): "remove \"HOME\" from extra_env, and to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead" (Codex: "its own Codex config, set an absolute CODEX_HOME")
 func TestAdviceFollow_A14_ReservedHomeSetConfigDir(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
@@ -101,8 +74,14 @@ func TestAdviceFollow_A14_ReservedHomeSetConfigDir(t *testing.T) {
 			p.ExtraEnv[a.variable] = cfg.dir
 			res, err := env.c.Spawn(p)
 			if a.agent == "codex" {
-				advAssertCodexStop(t, err, "the followed spawn")
-				advAssertOnlyLookups(t, env.rec)
+				if err != nil {
+					t.Fatalf("the followed spawn: %v; want it launched", err)
+				}
+				creates := env.rec.SocketCallsOf(tmux.CallCreate)
+				assertCodexLaunch(t, creates, env.dbPath, id, codexProgram)
+				if res.PreTrust != "ok" || creates[0].Envs["CODEX_HOME"] != cfg.dir {
+					t.Errorf("pre_trust %q, create env CODEX_HOME %q; want ok, %q (an absolute CODEX_HOME)", res.PreTrust, creates[0].Envs["CODEX_HOME"], cfg.dir)
+				}
 				cfg.check(t, "", false, "after the followed spawn")
 				return
 			}
@@ -116,8 +95,7 @@ func TestAdviceFollow_A14_ReservedHomeSetConfigDir(t *testing.T) {
 }
 
 // TestAdviceFollow_B11_ReservedHomeSpawnWithReuse: the reuse that keeps HOME is refused alike and writes
-// nothing; the one without it launches a claude row's next life, and a codex row's reaches the Codex
-// composition stop, writing nothing.
+// nothing; the one without it launches the row's next life as the agent the advice names.
 // B11 (b.nas): "to run the agent again, spawn the id with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent claude (--agent claude on the CLI) and an extra_env without HOME (...)"
 func TestAdviceFollow_B11_ReservedHomeSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
@@ -127,7 +105,7 @@ func TestAdviceFollow_B11_ReservedHomeSpawnWithReuse(t *testing.T) {
 			e := newKillEnv(t)
 			home := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e),
-				Opts: []apitest.SpawnOption{apitest.WithAgent(a.agent), apitest.WithExtraEnv(map[string]string{"HOME": home.dir})}})
+				Opts: agentRowOpts(a.agent, apitest.WithExtraEnv(map[string]string{"HOME": home.dir}))})
 			before := e.snapshotResume(t, r.resumeRow)
 
 			_, err := e.resume(r.ID)
@@ -145,13 +123,15 @@ func TestAdviceFollow_B11_ReservedHomeSpawnWithReuse(t *testing.T) {
 			p = reuseParams(t, r, reuseRequest{}) // extra env: r's absolute CLAUDE_CONFIG_DIR, no HOME
 			p.Agent = a.agent
 			res, logs, err := e.reuse(t, p)
-			if a.agent == "codex" {
-				advAssertCodexStop(t, err, "the followed spawn")
-				e.assertWroteNothing(t, kept)
-				return
-			}
 			if err != nil {
 				t.Fatalf("spawn of %s with the reuse opt-in and no HOME = %v (log %q); want it launched", r.ID, err, logs)
+			}
+			if a.agent == "codex" {
+				assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate), e.dbPath, r.ID, codexProgram)
+				if cols := e.columns(t, r.ID); cols.LifeNumber != advSpawnNextLife(before.cols) {
+					t.Errorf("life = %v; want the next life %v", cols.LifeNumber, advSpawnNextLife(before.cols))
+				}
+				return
 			}
 			advSpawnLaunched(t, e.dbPath, r.ID, advSpawnNextLife(before.cols), res, err)
 			r.Trust.check(t, r.CWD, true, "after the followed reuse")

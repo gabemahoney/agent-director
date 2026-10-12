@@ -24,8 +24,7 @@ const advTemplateHomeDoc = "Set the agent's absolute folder variable instead to 
 const advTemplateHomeBoth = "to give the agent its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) in extra_env instead"
 
 // TestAdviceFollow_A14_MakeTemplateReservedHomeSetConfigDir: the same template with HOME removed and the
-// advised folder variable set saves and, for a claude template, launches; a codex template's spawn reaches the
-// Codex composition stop; with no agent the advice names both variables and the template saves with either.
+// advised folder variable set saves and its spawn launches; with no agent the advice names both variables and the template saves with either.
 // A14 (b.66q): "remove \"HOME\" from extra_env, and to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead" (Codex: "its own Codex config, set an absolute CODEX_HOME"; no agent: "its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)")
 func TestAdviceFollow_A14_MakeTemplateReservedHomeSetConfigDir(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
@@ -54,7 +53,7 @@ func TestAdviceFollow_A15_MakeTemplateInvalidEnvKeyNameTheVariable(t *testing.T)
 // adviceFollowTemplateEnvKey: make-template of a's template (a.agent "": no agent) with key=value is
 // ErrReservedEnvKey, its description carrying phrase (which refusal it is) and advice; without key and with
 // a.variable=cfg.dir it saves, and a spawn with it launches a claude agent with that variable, pre-trusting
-// cfg, reaches the Codex composition stop for a codex agent, and for no agent (a spawn naming claude) launches.
+// cfg, launches a codex agent with that variable, and for no agent (a spawn naming claude) launches claude.
 func adviceFollowTemplateEnvKey(t *testing.T, env spawnEnv, cfg trustConfig, a advHomeAgent, key, value, phrase, advice string) {
 	t.Helper()
 	cwd, err := filepath.EvalSymlinks(t.TempDir())
@@ -79,8 +78,14 @@ func adviceFollowTemplateEnvKey(t *testing.T, env spawnEnv, cfg trustConfig, a a
 	}
 	res, err := env.c.Spawn(sp)
 	if a.agent == "codex" {
-		advAssertCodexStop(t, err, "a spawn with the saved template")
-		advAssertOnlyLookups(t, env.rec)
+		if err != nil {
+			t.Fatalf("a spawn with the saved template = %v; want it launched", err)
+		}
+		creates := env.rec.SocketCallsOf(tmux.CallCreate)
+		assertCodexLaunch(t, creates, env.dbPath, id, codexProgram)
+		if creates[0].Envs["CODEX_HOME"] != cfg.dir || res.PreTrust != "ok" {
+			t.Errorf("create env CODEX_HOME %q, pre_trust %q; want %q, ok", creates[0].Envs["CODEX_HOME"], res.PreTrust, cfg.dir)
+		}
 		return
 	}
 	advSpawnLaunched(t, env.dbPath, id, nil, res, err)

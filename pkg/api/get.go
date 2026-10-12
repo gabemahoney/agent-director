@@ -81,9 +81,12 @@ type SpawnRow struct {
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
 	// permission-relay flow.
 	RelayMode string `json:"relay_mode"`
-	// JSONLPath is the last known JSONL transcript path, persisted by the
-	// SessionStart hook; legacy rows may be empty. When empty, resume composes
-	// the path on demand from cwd + session_id.
+	// JSONLPath is the last known transcript path, persisted by the
+	// SessionStart hook; legacy rows may be empty. When empty, resume of a
+	// claude row composes the path on demand from cwd + session_id (under
+	// CLAUDE_CONFIG_DIR when its extra env sets one). A codex row's path is
+	// the transcript path its hooks report; resume never builds one for it, so
+	// an empty one leaves only the visible history's recorded paths to try.
 	JSONLPath string `json:"jsonl_path"`
 	// SessionID is the agent's session id, recorded from its hooks: a Claude
 	// Code session's is the basename of the hook's transcript_path, a Codex

@@ -60,9 +60,12 @@ type SpawnParams struct {
 	// config key or environment variable supplies it (SR-1.1).
 	Agent string
 
-	// AgentArgs is the verbatim argv passed through to the agent program
-	// after the supervisor's own flags. For claude the denied-flag check
-	// rejects supervisor-owned flags. Nil means not supplied (a template's
+	// AgentArgs is the verbatim argv passed through to the agent program.
+	// For claude they follow the supervisor's own flags and the denied-flag
+	// check rejects supervisor-owned flags. For codex they precede
+	// agent-director's per-launch settings block, which sits before the
+	// first "--"; CheckCodexArgs refuses what would fight those settings.
+	// Nil means not supplied (a template's
 	// are inherited); a supplied empty list inherits nothing.
 	AgentArgs []string
 
@@ -79,9 +82,12 @@ type SpawnParams struct {
 	// <CLAUDE_CONFIG_DIR>/.claude.json when the spawn's extra env sets
 	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise; a CLAUDE_CONFIG_DIR
 	// that is set but not an absolute path (ConfigDirUsable) gets no
-	// pre-write at all, and PreTrust reports it failed. Default false
+	// pre-write at all, and PreTrust reports it failed. A codex agent has no
+	// file: its pre-trust puts the cwd's trust and the hook-trust bypass on
+	// the launch's command line (CodexPreTrust), and a CODEX_HOME in the
+	// extra env that is set but not absolute reports it failed. Default false
 	// (= pre-trust IS performed) marks the cwd trusted so the agent skips
-	// Claude Code's folder-trust prompt. True attempts no pre-trust, so the
+	// its folder-trust prompt. True attempts no pre-trust, so the
 	// prompt must be answered for an unseen cwd. The choice is recorded on
 	// the row (no_pre_trust) for its life, and every resume of that life
 	// follows it: no resume pre-trusts over an opt-out (SR-22.6).
@@ -129,6 +135,14 @@ type Resolved struct {
 	// own list, an empty one included). Validate refuses a value that differs
 	// from the resolved agent (ErrAgentArgsMismatch, SR-2.1).
 	InheritedArgsAgent string
+
+	// DisableAskUser is cfg.Defaults.DisableAskUser as Resolve saw it: when
+	// true, Codex's question tool is kept off, so Validate refuses a Codex
+	// argument that would turn it back on (CheckCodexArgs). The Codex launch
+	// composition adds the deny group and the tool-off setting from
+	// cfg.Defaults.DisableAskUser; both values come from the same loaded
+	// config. It has no effect on a Claude spawn.
+	DisableAskUser bool
 }
 
 // Resolve folds template values into per-call params per SRD §7.1.
@@ -156,9 +170,9 @@ type Resolved struct {
 // When p.Template is empty (the common path for ad-hoc spawns) Resolve
 // is a near no-op: it returns the params verbatim wrapped in Resolved.
 // The function never mutates p.
-func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
+func Resolve(p SpawnParams, cfg config.Config) (Resolved, error) {
 	if p.Template == "" {
-		return Resolved{SpawnParams: p}, nil
+		return Resolved{SpawnParams: p, DisableAskUser: cfg.Defaults.DisableAskUser}, nil
 	}
 
 	tmpl, err := config.LoadTemplate(p.Template)
@@ -217,7 +231,7 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 		}
 	}
 
-	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent}, nil
+	return Resolved{SpawnParams: merged, InheritedArgsAgent: inheritedArgsAgent, DisableAskUser: cfg.Defaults.DisableAskUser}, nil
 }
 
 // mergeStringMap layers `over` on top of `base`. Per-call wins on

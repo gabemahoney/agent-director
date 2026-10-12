@@ -27,21 +27,31 @@ func ParentIDFromEnv() string {
 //
 //	claude --settings <inline-json> [agent args]
 //
-// (claude is [launch] claude_path when set)
+// for a claude agent (claude is [launch] claude_path when set), or
 //
+//	codex [agent args before --] <per-launch settings> [-- and what follows]
+//
+// for a codex agent (codex is [launch] codex_path when set; codexlaunch.go),
 // and instance id; its Socket, Token and StoreID are zero, for the caller
 // to fill with the launch's socket, token and this store's id.
 //
 // Row carries the request fields the row records (instance id, cwd, session
-// name, Claude args, relay mode, labels, extra env), the request's
-// NoPreTrust (the choice the caller passes to PreTrust, so the row records
+// name, agent args, relay mode, labels, extra env), the request's
+// NoPreTrust (the choice the caller passes to RunPreTrust, so the row records
 // what the launch did, SR-22.6) and the parent id from the caller's
 // AGENT_DIRECTOR_INSTANCE_ID ("" is stored as NULL). Its launch start, start
 // time and Identity (token, socket) are zero, for the caller to fill from
 // the launch.
+//
+// PreTrust is the pre-trust outcome a codex launch was composed for (the folder
+// trust and the hook-review bypass are in its argv only on PreTrustOK), decided
+// by CodexPreTrust before composition; "" for a claude launch, whose pre-trust
+// is a file write that follows composition. The caller hands it to RunPreTrust,
+// so the outcome reported is the one the argv carries.
 type ComposedLaunch struct {
-	Create CreateRequest
-	Row    store.Spawn
+	Create   CreateRequest
+	Row      store.Spawn
+	PreTrust PreTrustOutcome
 }
 
 // ComposeLaunch composes the launch of r, a resolved, validated and
@@ -56,22 +66,35 @@ type ComposedLaunch struct {
 // entry carries it too and the client drops the environment's copy, so it
 // reaches the create argv exactly once (tmux.NewSession).
 //
-// The argv starts with the Claude launch path (claudeProgram). A codex agent
-// is the composition stop: ComposeLaunch returns an uncatalogued error (a
-// Codex launch is not available in this build) before anything else, so no
-// row is written, nothing is pre-trusted and no session is created.
+// The argv starts with the agent's launch path (claudeProgram, codexProgram).
+// A codex agent's composition also writes nothing in any Codex folder: its
+// settings travel on the command line, and its pre-trust outcome is decided
+// here (CodexPreTrust) because the folder trust is in the argv only on ok. An
+// agent that is neither claude nor codex gets store.ErrRowAgentInvalid.
 func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	if err := launchAgentError(r.Agent); err != nil {
 		return ComposedLaunch{}, err
 	}
-	settings, err := synthesizeSettings(r, cfg)
-	if err != nil {
-		return ComposedLaunch{}, err
+	var command []string
+	var carried PreTrustOutcome
+	if r.Agent == store.AgentCodex {
+		carried = CodexPreTrust(r.ExtraEnv, r.NoPreTrust)
+		var err error
+		command, err = composeCodexCommand(r, carried, cfg)
+		if err != nil {
+			return ComposedLaunch{}, err
+		}
+	} else {
+		settings, err := synthesizeSettings(r, cfg)
+		if err != nil {
+			return ComposedLaunch{}, err
+		}
+		command = []string{claudeProgram(cfg), "--settings", settings}
+		command = append(command, r.AgentArgs...)
 	}
-	command := []string{claudeProgram(cfg), "--settings", settings}
-	command = append(command, r.AgentArgs...)
 
 	return ComposedLaunch{
+		PreTrust: carried,
 		Create: CreateRequest{
 			Name:       r.TmuxSessionName,
 			CWD:        r.CWD,

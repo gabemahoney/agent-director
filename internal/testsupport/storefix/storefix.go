@@ -16,6 +16,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/writefailfix"
 )
 
@@ -93,13 +94,37 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	return row
 }
 
+// ResumableOption changes what SeedResumable seeds.
+type ResumableOption func(*resumableConfig)
+
+type resumableConfig struct{ agent string }
+
+// WithResumableAgent seeds a row of agent (store.AgentClaude, the default, or
+// store.AgentCodex) instead of a Claude one. A codex row is seeded as a Codex
+// launch stores it (subagent_tracking 0) and records its rollout, a file
+// under a fresh temporary Codex folder (codexfix.TempRolloutPath, never a real
+// ~/.codex), as its jsonl_path, since resume never composes a Codex path.
+func WithResumableAgent(agent string) ResumableOption {
+	return func(c *resumableConfig) { c.agent = agent }
+}
+
 // SeedResumable inserts a Spawn in StateEnded with a session_id
 // (recorded by the agent's gated writes through a seed pane, removed
-// afterwards, as for SeedCheckPermission; row_version 2) and a placeholder transcript at spawn.JsonlPath under HOME,
-// which must be a temp directory, so resume's pre-flight passes. s must come
-// from OpenTempStore.
-func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
+// afterwards, as for SeedCheckPermission; row_version 2) and a placeholder
+// transcript so resume's pre-flight passes. For the default Claude row the
+// transcript is at spawn.JsonlPath under HOME, which must be a temp directory;
+// for a WithResumableAgent(store.AgentCodex) row it is a rollout under a
+// temporary Codex folder, recorded as the row's jsonl_path by the session
+// record. s must come from OpenTempStore.
+func SeedResumable(t *testing.T, s *store.Store, id string, opts ...ResumableOption) store.Spawn {
 	t.Helper()
+	cfg := resumableConfig{agent: store.AgentClaude}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if cfg.agent == store.AgentCodex {
+		return seedResumableCodex(t, s, id)
+	}
 	sp := defaultSpawn(id)
 	if err := s.InsertPending(sp); err != nil {
 		t.Fatalf("storefix.SeedResumable: InsertPending(%q): %v", id, err)
@@ -126,6 +151,41 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	row, err := s.GetSpawn(id)
 	if err != nil {
 		t.Fatalf("storefix.SeedResumable: GetSpawn(%q): %v", id, err)
+	}
+	return row
+}
+
+// seedResumableCodex is SeedResumable for a codex row: the row as InsertPending
+// stores a codex agent, its session recorded together with the rollout path
+// (the one hook write that records a jsonl_path, on a row with no session id
+// yet), then the gated transition to ended.
+func seedResumableCodex(t *testing.T, s *store.Store, id string) store.Spawn {
+	t.Helper()
+	sp := defaultSpawn(id)
+	sp.Agent = store.AgentCodex
+	if err := s.InsertPending(sp); err != nil {
+		t.Fatalf("storefix.SeedResumable: InsertPending(%q): %v", id, err)
+	}
+	sessionID := "sess-" + id
+	rollout := codexfix.TempRolloutPath(t, sessionID, true)
+	dbPath := StorePath(t, s, "storefix.SeedResumable")
+	if err := WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+		g := gate
+		g.SessionID = sessionID
+		applied, err := s.ApplyHookTransition(id, g, "", true, SeedTrigger, rollout, true)
+		if err := seedWriteErr("record session id "+sessionID+" and its rollout", applied, err); err != nil {
+			return err
+		}
+		return SeedAgentWrites(s, gate, id, "", store.StateEnded)
+	}); err != nil {
+		t.Fatalf("storefix.SeedResumable(%q): %v", id, err)
+	}
+	row, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("storefix.SeedResumable: GetSpawn(%q): %v", id, err)
+	}
+	if row.JSONLPath != rollout || row.SubagentTracking {
+		t.Fatalf("storefix.SeedResumable(%q): codex row has jsonl_path %q, subagent_tracking %v; want %q, false", id, row.JSONLPath, row.SubagentTracking, rollout)
 	}
 	return row
 }

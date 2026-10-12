@@ -94,7 +94,10 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //  4. Argument ownership (SR-2.1): inherited template agent_args belong to
 //     the resolved agent, else ErrAgentArgsMismatch.
 //  5. agent_args contains no denied flag (both --flag VALUE and
-//     --flag=VALUE forms); Claude's set only, Codex has none yet.
+//     --flag=VALUE forms). Claude's set is deniedClaudeArgs; Codex's is
+//     CheckCodexArgs (subcommands, --remote, and the hooks, paste-burst and
+//     question-tool settings agent-director owns), which reads the
+//     question-tool setting from r.DisableAskUser.
 //  6. A codex spawn carries no allow, deny or ask entry
 //     (ErrPermissionsUnsupported).
 //  7. extra_env contains no key whose env-var name (the part before the
@@ -116,8 +119,13 @@ func Validate(r *Resolved) error {
 	if err := validateArgsOwnership(r); err != nil {
 		return err
 	}
-	if r.Agent == config.AgentClaude {
+	switch r.Agent {
+	case config.AgentClaude:
 		if err := validateClaudeArgs(r.AgentArgs); err != nil {
+			return err
+		}
+	case config.AgentCodex:
+		if err := CheckCodexArgs(r.AgentArgs, r.DisableAskUser); err != nil {
 			return err
 		}
 	}
